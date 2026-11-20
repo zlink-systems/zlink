@@ -1,7 +1,23 @@
-import type { Type, ZLinkEntrySpot, ZLinkSpot, ZLinkRelocationStore } from '../../contracts';
+import type {
+  Type,
+  ZLinkEntrySpot,
+  ZLinkLocationStore,
+  ZLinkSpot,
+  ZLinkRelocationStore
+} from '../../contracts';
 import { ZLINK_MAX_ROUTING_ID_BYTES } from '../Common/CoreTypes';
 import { ZLinkConfigurationException } from './ConfigurationException';
 export const MAX_LISTENER_PORT = 65_535;
+
+export function registerLocationStore(
+  options: { storeInstance?: ZLinkLocationStore },
+  store: ZLinkLocationStore
+): void {
+  if (options.storeInstance !== undefined) {
+    throw new ZLinkConfigurationException('Location Store is already registered.');
+  }
+  options.storeInstance = store;
+}
 
 export function registerRelocationStore(
   options: { relocationStoreInstance?: ZLinkRelocationStore },
