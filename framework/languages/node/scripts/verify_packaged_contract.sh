@@ -302,7 +302,7 @@ void diagnosticsLevels;
 void etcdStore;
 void locations.findActorLocation('actor-a');
 void locations.findSpotLocation('spot-a');
-void send.timeout(1);
+void send.metadata('trace', 'packed').compress(true);
 void createFromSpotTurn;
 void ZLinkFrameworkErrorKind.NotConfigured;
 void ZLinkPacket('FixturePacket');
