@@ -382,6 +382,13 @@ export class RawServiceMeshRuntime {
     this.notifyPeerRouteChanged(nodeRoutingId);
   }
 
+  forgetPeerExpectation(nodeRoutingId: string, lifecycleGeneration: bigint): void {
+    if (this.expectedPeers.get(nodeRoutingId)?.lifecycleGeneration !== lifecycleGeneration) return;
+    this.expectedPeers.delete(nodeRoutingId);
+    this.notifyPeerRouteChanged(nodeRoutingId);
+    this.notifyPeerConnectionIntentRemoved(nodeRoutingId);
+  }
+
   connectPeerEndpoint(endpoint: string): void {
     this.requireStarted().connect(endpoint);
     this.endpointOnlyPeers.add(endpoint);
