@@ -9,7 +9,9 @@
 
 #include <zlink.h>
 
+#include <atomic>
 #include <cerrno>
+#include <mutex>
 
 namespace zlink
 {
@@ -84,7 +86,8 @@ monitor_status_t make_monitor_status (const zlink_monitor_status_t &native_)
 
 struct socket_monitor_t::impl
 {
-    void *handle = nullptr;
+    std::atomic<void *> handle{nullptr};
+    std::mutex close_mutex;
 };
 
 namespace detail
@@ -92,12 +95,12 @@ namespace detail
 
 void *monitor_access_t::native_handle (socket_monitor_t &monitor_) noexcept
 {
-    return monitor_._impl ? monitor_._impl->handle : nullptr;
+    return monitor_._impl ? monitor_._impl->handle.load () : nullptr;
 }
 
 const void *monitor_access_t::native_handle (const socket_monitor_t &monitor_) noexcept
 {
-    return monitor_._impl ? monitor_._impl->handle : nullptr;
+    return monitor_._impl ? monitor_._impl->handle.load () : nullptr;
 }
 
 } // namespace detail
@@ -164,9 +167,13 @@ monitor_status_t socket_monitor_t::status () const
 
 void socket_monitor_t::close ()
 {
-    if (!_impl || !_impl->handle)
+    if (!_impl)
         return;
-    void *monitor = _impl->handle;
+    // One closer at a time; a failed close leaves the monitor open.
+    std::lock_guard<std::mutex> lock (_impl->close_mutex);
+    void *monitor = _impl->handle.load ();
+    if (!monitor)
+        return;
     const close_result_t result = static_cast<close_result_t> (zlink_monitor_close (&monitor));
     if (result != close_result_t::ok)
         throw close_error_t (result, zlink_errno ());
@@ -175,9 +182,12 @@ void socket_monitor_t::close ()
 
 void socket_monitor_t::close_noexcept () noexcept
 {
-    if (!_impl || !_impl->handle)
+    if (!_impl)
         return;
-    void *monitor = _impl->handle;
+    std::lock_guard<std::mutex> lock (_impl->close_mutex);
+    void *monitor = _impl->handle.load ();
+    if (!monitor)
+        return;
     (void) zlink_monitor_close (&monitor);
     _impl->handle = nullptr;
 }
