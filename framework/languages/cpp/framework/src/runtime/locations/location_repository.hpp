@@ -717,10 +717,12 @@ class location_repository_t
             const auto spot = runtime::decode_direct_user_spot_authority_payload (current->payload);
             if (!spot)
                 co_return false;
+            // Membership lives in Actor authority records, so the snapshot reads the Actor kind
+            // prefix only (location runtime §3.4).
             std::optional<authority_scan_cursor_t> cursor;
             do {
-                const auto scanned =
-                  co_await list_authorities ("", cursor, location_page_item_limit, cancellation);
+                const auto scanned = co_await list_authorities (
+                  "zla1:a:", cursor, location_page_item_limit, cancellation);
                 const auto *page = std::get_if<authority_page_t> (&scanned);
                 if (!page)
                     co_return false;
