@@ -52,6 +52,10 @@ final class CompletionNativeFixture {
         new java.util.concurrent.atomic.AtomicInteger();
     final java.util.concurrent.atomic.AtomicInteger ctxTermInterrupted =
         new java.util.concurrent.atomic.AtomicInteger();
+    /** Holds each ctx_term call so concurrent closers overlap. */
+    volatile long ctxTermDelayMs;
+    /** Only the first term reaches Core; later calls return OK without it. */
+    volatile boolean ctxTermForwardFirstOnly;
     private MethodHandle corePollerDestroy;
     private MethodHandle corePollerWait;
     private MethodHandle coreCtxTerm;
@@ -351,7 +355,11 @@ final class CompletionNativeFixture {
     }
 
     private int ctxTerm(MemorySegment ctx) throws Throwable {
-        ctxTermCalls.incrementAndGet();
+        int call = ctxTermCalls.incrementAndGet();
+        if (ctxTermDelayMs > 0)
+            Thread.sleep(ctxTermDelayMs);
+        if (ctxTermForwardFirstOnly && call > 1)
+            return CloseResult.OK.value();
         if (ctxTermInterrupted.getAndUpdate(count -> Math.max(0, count - 1)) > 0) {
             errno(NativeErrno.EINTR);
             return CloseResult.INTERNAL_ERROR.value();
