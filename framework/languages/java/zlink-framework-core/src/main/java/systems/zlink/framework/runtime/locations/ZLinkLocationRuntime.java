@@ -17,7 +17,6 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepositor
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationStoreFailure;
 import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor;
 import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey;
-import systems.zlink.framework.runtime.internal.locations.ZLinkObjectServerDescriptorPublisher;
 import systems.zlink.framework.runtime.internal.locations.ZLinkObjectServerDescriptorPublisher.UnconfirmedPublicationException;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimed;
@@ -1873,10 +1872,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
             return frameworkFailure.kind() == ZLinkFrameworkErrorKind.UNAVAILABLE;
         return error instanceof TimeoutException
                 || error instanceof CancellationException
-                || error instanceof RecoveryUnconfirmedException
-                || error
-                        instanceof
-                        ZLinkObjectServerDescriptorPublisher.UnconfirmedPublicationException;
+                || error instanceof RecoveryUnconfirmedException;
     }
 
     private static ZLinkAuthoritySnapshot snapshot(ZLinkAuthorityStored stored) {
