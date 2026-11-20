@@ -147,6 +147,9 @@ struct stream_host_shutdown_test_hooks_t
 struct stream_host_service_test_access_t
 {
 #ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
+    static std::size_t active_session_count (stream_host_service_t &service);
+    static std::function<bool ()> probe_core_session_gate (stream_host_service_t &service,
+                                                           const zlink::routing_id_t &rid);
     static std::function<void ()> observe_shutdown (stream_host_service_t &service,
                                                     stream_host_shutdown_test_hooks_t hooks);
 #endif
