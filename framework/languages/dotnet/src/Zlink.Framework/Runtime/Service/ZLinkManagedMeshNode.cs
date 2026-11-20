@@ -2889,8 +2889,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         RecvFlags flags = RecvFlags.None
     ) => AwaitStateLane(DrainReadyAsync(domains, batch, flags));
 
-    // The ready registry reserves each owner once. Its mailbox lane captures and
-    // drains the FIFO prefix together on the first receive.
+    // The ready registry reserves a take once. The mailbox owns its claim policy
+    // and restores readiness when the take leaves more independent records.
     public ValueTask<bool> DrainReadyAsync(
         MeshReadyDomains domains,
         MeshReadyBatch batch,
@@ -2921,25 +2921,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 var key = entries[index].Key;
                 if (!_readyMailboxes.TryUpdate(key, false, true))
                     continue;
-                // Keep the captured mailbox inside this scope: a full output
-                // batch must return before the compiler allocates its closure.
-                {
-                    if (!_ownedMailboxes.TryGetValue(key, out var mailbox))
-                        continue;
-                    entries[count++] = new(
-                        key,
-                        new MeshClaim
-                        {
-                            Receiver = (receiveBatch, receiveFlags) =>
-                                mailbox.ClaimAndDrainAsync(
-                                    receiveBatch,
-                                    Math.Min(ReceiveBatchSize, receiveBatch.MaximumRecords)
-                                ),
-                            Releaser = () => mailbox.Release(),
-                        },
-                        index
-                    );
-                }
+                if (!_ownedMailboxes.TryGetValue(key, out var mailbox))
+                    continue;
+                entries[count++] = new(key, mailbox.CreateClaim(key.OwnerKind), index);
             }
             return ValueTask.FromResult(false);
         }
@@ -13203,13 +13187,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             recordsRemain =>
             {
                 if (recordsRemain)
-                {
                     _readyMailboxes[key] = true;
-                    SignalReadyIfNeeded();
-                }
                 else
                     _readyMailboxes.TryRemove(key, out _);
-            }
+            },
+            SignalReadyIfNeeded
         );
 
     private void RecordOwnedRecordEnqueued(ulong pendingBytes)
