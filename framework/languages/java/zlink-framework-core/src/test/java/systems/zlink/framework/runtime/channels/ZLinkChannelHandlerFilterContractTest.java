@@ -62,8 +62,8 @@ final class ZLinkChannelHandlerFilterContractTest {
                                         request.dataBuffer())
                                 .toCompletableFuture()
                                 .join()) {
-            assertEquals("owned", reply.toUtf8String());
-            Assertions.assertSame(codec.output, reply);
+            assertEquals("owned", reply.get(0).toUtf8String());
+            Assertions.assertSame(codec.output, reply.get(0));
         }
     }
 
@@ -87,7 +87,7 @@ final class ZLinkChannelHandlerFilterContractTest {
                         List.of());
         Message request = text("request");
 
-        Message reply =
+        var reply =
                 invoker.invokeRequestHandler(
                                 "channel-a",
                                 new ChannelRequestHandlerRegistration(
@@ -100,7 +100,7 @@ final class ZLinkChannelHandlerFilterContractTest {
                         .toCompletableFuture()
                         .join();
         try {
-            assertEquals("BASE", reply.toUtf8String());
+            assertEquals("BASE", reply.get(0).toUtf8String());
         } finally {
             request.close();
             reply.close();

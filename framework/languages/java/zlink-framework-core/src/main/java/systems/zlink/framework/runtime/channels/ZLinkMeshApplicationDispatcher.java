@@ -620,7 +620,7 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                     () -> {
                         traceFlow(ZLinkMessageFlowOutcome.ADMITTED, record, packetName);
                         try {
-                            CompletionStage<Message> invocation =
+                            CompletionStage<ZLinkFrameworkMultipartView> invocation =
                                     route != null
                                             ? invoker.executeHandler(
                                                     () ->
