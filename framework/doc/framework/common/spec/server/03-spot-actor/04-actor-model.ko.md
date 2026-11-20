@@ -506,6 +506,20 @@ Framework는 다음 순서로 destroy를 진행한다.
 
 Framework는 current `ActorRef`를 다시 찾아 새 incarnation을 종료하지 않는다.
 
+Destroy는 Actor의 owner node만 실행한다. Owner가 아닌 node에서 destroy를 호출하면 그 node는
+authority record가 가리키는 owner에게 command 27 `actorDestroy`
+([wire command 표](../02-channel-transport/06-wire-protocol.ko.md#3-command-space))를 보낸다.
+이 command는 응답이 없는 infrastructure command이며, body는 `correlation`과 `ActorRef`의 ActorId·generation·owner fence를 담은 actor route fence다(규범 schema의 `actorDestroy`).
+Owner는 받은 incarnation에 대해 위 순서의 destroy를 시작하거나, 같은 incarnation의 destroy가
+진행 중이면 그 destroy에 합류한다. Generation이 다르거나 seal 상태인 경우의 처리는 위 표와 같다.
+
+호출한 node는 owner의 응답을 기다리지 않고 Location Store의 authority로 terminal을 관찰한다.
+같은 generation의 authority가 없어지면 `true`로 끝난다. Authority가 다른 generation이면
+`InvalidOperation`, seal 상태이면 `Unavailable`로 끝난다. 이 관찰은 호출의 기존 deadline 안에서만
+기다린다. 호출한 node가 Location Store의 authority를 직접 지우지 않는다 — destroy 단계의 소유자는
+owner 하나다. Owner가 없거나 owner lease가 끝난 Actor record는
+[Location runtime §6.1](../05-location-relocation/01-location-runtime.ko.md#61-read와-cas)의 해제 규칙을 따른다.
+
 ## 7. Session binding
 
 Session binding은 Actor와 현재 STREAM session 사이의 runtime 관계다. Binding token은
