@@ -41,6 +41,9 @@ public final class NativePoller implements Poller {
     private final List<PollItem> items = new ArrayList<>();
     private final Map<Long, Integer> socketIndexes = new HashMap<>();
     private volatile MemorySegment handle;
+    // Core releases a handle once; one owner at a time runs the native close
+    // and later callers observe its outcome.
+    private final Object closeLock = new Object();
     private Arena waitArena;
     private volatile MemorySegment waitEvents = MemorySegment.NULL;
     private MemorySegment waitErrorOut = MemorySegment.NULL;
@@ -312,12 +315,15 @@ public final class NativePoller implements Poller {
 
     @Override
     public void close() {
-        if (handle == null || handle.address() == 0)
-            return;
-        int result = Native.pollerDestroy(handle);
-        if (result != CloseResult.OK.value())
-            throw new ZlinkCloseException(CloseResult.fromValue(result), Native.errno());
-        finishClosed();
+        synchronized (closeLock) {
+            MemorySegment current = handle;
+            if (current == null || current.address() == 0)
+                return;
+            int result = Native.pollerDestroy(current);
+            if (result != CloseResult.OK.value())
+                throw new ZlinkCloseException(CloseResult.fromValue(result), Native.errno());
+            finishClosed();
+        }
     }
 
     private void finishClosed() {
