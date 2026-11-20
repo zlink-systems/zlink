@@ -138,7 +138,8 @@ jobs:
           for version_file in framework/languages/*/VERSION; do
             echo "ZLINK_FRAMEWORK_VERSION=${FRAMEWORK_VERSION}" >"${version_file}"
           done
-          bash scripts/local-package/build-wsl.sh --sync-versions
+          python3 scripts/local-package/sync-version.py --write --local-packages
+          python3 scripts/local-package/sync-version.py --check
 
       - uses: actions/setup-java@v5
         if: matrix.package == 'java'
@@ -206,6 +207,7 @@ jobs:
             && cd "$(dirname "${pin#file:}")" && pwd -P)"
           npm pack framework/languages/node/packages/http-client --pack-destination "${dest}"
           test -f "${dest}/$(basename "${pin#file:}")"
+          python3 scripts/local-package/sync-version.py --write --local-packages
           mkdir -p "${PACKAGES_DIR}/npm"
           cd framework/languages/node
           npm ci
@@ -250,7 +252,8 @@ jobs:
           for version_file in framework/languages/*/VERSION; do
             echo "ZLINK_FRAMEWORK_VERSION=${FRAMEWORK_VERSION}" >"${version_file}"
           done
-          bash scripts/local-package/build-wsl.sh --sync-versions
+          python3 scripts/local-package/sync-version.py --write --local-packages
+          python3 scripts/local-package/sync-version.py --check
 
       - uses: actions/setup-node@v5
         with:

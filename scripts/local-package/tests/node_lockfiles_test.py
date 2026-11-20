@@ -123,7 +123,7 @@ class NodeLockfileTests(unittest.TestCase):
                                        r'("@zlink-systems/zlink"\s*:\s*")(?P<version>[0-9]+\.[0-9]+\.[0-9]+)(")'),
         )}).start()
         patch.object(sync_version, 'template_directories', return_value=[TEMPLATE]).start()
-        patch.object(sync_version, 'TEMPLATE_NODE_LOCKS', {TEMPLATE: (3, (FRAMEWORK, REDIS))}).start()
+        patch.object(sync_version, 'TEMPLATE_NODE_LOCKS', (TEMPLATE,)).start()
         patch.object(sync_version, 'TEMPLATE_DOCUMENTS', ()).start()
         patch.object(sync_version, 'TEMPLATE_DOCUMENT_MENTIONS', {TEMPLATE: ()}).start()
         manifest = {'name': 'fixture-consumer', 'version': '1.0.0', 'dependencies': {
@@ -160,6 +160,11 @@ class NodeLockfileTests(unittest.TestCase):
         self.assertIn(f'node_modules/{LEAF}', packages)
         self.assertIn('integrity', framework)
         self.assertFalse((self.game / 'node_modules').exists())
+        before = self.lock_path.read_bytes()
+        self.assertEqual(sync_version.synchronize_template_versions(False)[1], [])
+        self.assertEqual(self.lock_path.read_bytes(), before)
+        sync_version.synchronize_template_versions(True)
+        self.assertEqual(self.lock_path.read_bytes(), before)
         result = subprocess.run(
             [NPM, 'ci', '--ignore-scripts', '--no-audit', '--no-fund'],
             cwd=self.game, text=True, capture_output=True,
@@ -169,10 +174,13 @@ class NodeLockfileTests(unittest.TestCase):
 
     def test_check_rejects_installed_package_dependency_mismatch_without_writing(self):
         # First synchronize only the old metadata, exactly as a stale committed lock can look.
-        source = self.lock_path.read_text(encoding='utf-8')
-        self.lock_path.write_text(sync_version.update_template_node_lock(
-            source, {'framework': '9.9.1', 'binding': '8.8.0'}, LOCK, 3, (FRAMEWORK, REDIS)
-        ), encoding='utf-8')
+        lock = json.loads(self.lock_path.read_text(encoding='utf-8'))
+        lock['packages']['']['dependencies'][FRAMEWORK] = '9.9.1'
+        lock['packages']['']['dependencies'][REDIS] = '9.9.1'
+        lock['packages'][f'node_modules/{FRAMEWORK}']['version'] = '9.9.1'
+        lock['packages'][f'node_modules/{REDIS}']['version'] = '9.9.1'
+        lock['packages'][f'node_modules/{REDIS}']['dependencies'][FRAMEWORK] = '9.9.1'
+        write_json(self.lock_path, lock)
         manifest = json.loads((self.game / 'package.json').read_text(encoding='utf-8'))
         manifest['dependencies'][FRAMEWORK] = manifest['dependencies'][REDIS] = '9.9.1'
         write_json(self.game / 'package.json', manifest)
@@ -183,6 +191,65 @@ class NodeLockfileTests(unittest.TestCase):
         before = self.lock_path.read_bytes()
         with self.assertRaisesRegex(sync_version.SyncError, 'dependenc'):
             sync_version.synchronize_template_versions(False)
+        self.assertEqual(self.lock_path.read_bytes(), before)
+
+    def test_check_rejects_missing_required_graph_entry(self):
+        sync_version.synchronize_template_versions(True)
+        lock = json.loads(self.lock_path.read_text(encoding='utf-8'))
+        del lock['packages'][f'node_modules/{DEPENDENCY}']
+        write_json(self.lock_path, lock)
+        before = self.lock_path.read_bytes()
+        with self.assertRaisesRegex(sync_version.SyncError, 'dependency.*fixture-protobuf'):
+            sync_version.synchronize_template_versions(False)
+        self.assertEqual(self.lock_path.read_bytes(), before)
+
+    def test_local_mode_does_not_contact_registry_for_unpublished_version(self):
+        with patch.object(sync_version.subprocess, 'run', side_effect=AssertionError('npm called')):
+            sync_version.synchronize_template_versions(True, local_packages=True)
+        self.assertFalse((self.game / 'node_modules').exists())
+
+    def test_npm_failure_restores_the_lock(self):
+        before = self.lock_path.read_bytes()
+        failure = subprocess.CompletedProcess([], 1, '', 'fixture registry unavailable')
+        with patch.object(sync_version.subprocess, 'run', return_value=failure):
+            with self.assertRaisesRegex(sync_version.SyncError, 'fixture registry unavailable'):
+                sync_version.synchronize_node_lock(sync_version.Synchronizer(True), LOCK)
+        self.assertEqual(self.lock_path.read_bytes(), before)
+
+    def test_local_tarball_regeneration_reads_new_dependencies(self):
+        archive = self.game / 'framework.tgz'
+        archive.write_bytes(self.registry.responses['/tarballs/framework-9.9.1.tgz'])
+        manifest = {'name': 'archive-consumer', 'version': '1.0.0',
+                    'dependencies': {FRAMEWORK: 'file:framework.tgz'}}
+        write_json(self.game / 'package.json', manifest)
+        write_json(self.lock_path, {'name': 'archive-consumer', 'version': '1.0.0',
+                                   'lockfileVersion': 3, 'packages': {
+                                       '': manifest,
+                                       f'node_modules/{FRAMEWORK}': {
+                                           'version': '9.9.1', 'resolved': 'file:framework.tgz',
+                                           'dependencies': {},
+                                       },
+                                   }})
+        before = self.lock_path.read_bytes()
+        with self.assertRaisesRegex(sync_version.SyncError, 'dependencies differ'):
+            sync_version.synchronize_node_lock(sync_version.Synchronizer(False), LOCK)
+        self.assertEqual(self.lock_path.read_bytes(), before)
+        sync_version.synchronize_node_lock(sync_version.Synchronizer(True), LOCK)
+        packages = json.loads(self.lock_path.read_text(encoding='utf-8'))['packages']
+        self.assertEqual(packages[f'node_modules/{FRAMEWORK}']['dependencies'][DEPENDENCY], '1.0.0')
+        self.assertIn(f'node_modules/{LEAF}', packages)
+        self.assertEqual(packages[f'node_modules/{FRAMEWORK}']['resolved'], 'file:framework.tgz')
+
+    def test_check_rejects_local_archive_of_another_package(self):
+        self.registry.package('fixture-wrong-package', '9.9.0')
+        archive = self.game / 'framework.tgz'
+        archive.write_bytes(self.registry.responses['/tarballs/fixture-wrong-package-9.9.0.tgz'])
+        lock = json.loads(self.lock_path.read_text(encoding='utf-8'))
+        lock['packages'][f'node_modules/{FRAMEWORK}']['resolved'] = 'file:framework.tgz'
+        write_json(self.lock_path, lock)
+        before = self.lock_path.read_bytes()
+        with self.assertRaisesRegex(sync_version.SyncError, 'name/version differs'):
+            sync_version.synchronize_node_lock(sync_version.Synchronizer(False), LOCK)
         self.assertEqual(self.lock_path.read_bytes(), before)
 
 
