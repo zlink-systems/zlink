@@ -8288,10 +8288,12 @@ async function drainOne(backend: ZLinkNodeRawMeshBackend, domain: number): Promi
   const result = claim.recvBatch(receive);
   assert.equal(result.ok, true);
   assert.equal(result.records.length, 1);
+  // Received records belong to the receive batch; take the record before closing it.
+  const record = result.records[0]!;
   claim.release();
   receive.close();
   ready.close();
-  return result.records[0]!;
+  return record;
 }
 
 async function pollUntil(condition: () => boolean): Promise<void> {
