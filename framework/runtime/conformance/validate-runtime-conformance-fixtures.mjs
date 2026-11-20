@@ -3963,8 +3963,8 @@ function validateLoginAdmission(fixture) {
       MaxConcurrentAuthentications: 'effectiveCpuCores * 8',
       AuthenticationRetryDelay: 500
     },
-    retryMetadataKey: '$zlink.admission.retryAfter',
-    retryValueFormat: 'utcUnixEpochMillisecondsDecimalString',
+    retryMetadataKey: '$zlink.admission.retryAfterMs',
+    retryValueFormat: 'relativeMillisecondsDecimalString',
     errorBody: { code: 'unavailable', message: 'Authentication admission is full.' },
     connector: {
       maxAdmissionWaitDefault: 'effectiveRequestTimeout',
@@ -3992,7 +3992,7 @@ function validateLoginAdmission(fixture) {
     const given = scenario.given;
     positiveInteger(given.effectiveCpuCores);
     positiveInteger(given.authenticationRetryDelayMs);
-    positiveInteger(given.nowEpochMs);
+    assert.ok(given.authenticationRetryDelayMs <= 2 ** 31 - 1, scenario.name);
     assert.ok(given.authenticationPacketName === null
       || (typeof given.authenticationPacketName === 'string' && given.authenticationPacketName.length > 0));
     const limit = given.maxConcurrentAuthentications ?? given.effectiveCpuCores * 8;
@@ -4032,7 +4032,7 @@ function validateLoginAdmission(fixture) {
             kind: 'Error', packetName: '', requestSeq: event.requestSeq,
             body: fixture.contract.errorBody,
             metadata: {
-              [fixture.contract.retryMetadataKey]: String(given.nowEpochMs + given.authenticationRetryDelayMs)
+              [fixture.contract.retryMetadataKey]: String(given.authenticationRetryDelayMs)
             },
             connectionClosed: false
           } : null
@@ -4100,10 +4100,11 @@ function validateLoginAdmission(fixture) {
   assert.deepEqual(fixture.connectorScenarios.map(({ name }) => name).sort(), [
     'automatic-retry-then-success', 'maximum-admission-wait-exceeded',
     'original-deadline-not-extended', 'repeated-rejection-single-operation',
-    'past-retry-time-jitter', 'unavailable-without-admission-metadata', 'malformed-retry-metadata'
+    'zero-retry-delay-jitter', 'unavailable-without-admission-metadata', 'malformed-retry-metadata',
+    'negative-sign-retry-metadata', 'positive-sign-retry-metadata',
+    'leading-zero-retry-metadata', 'out-of-range-retry-metadata'
   ].sort());
   for (const { name, given, expect } of fixture.connectorScenarios) {
-    positiveInteger(given.startEpochMs);
     positiveInteger(given.requestTimeoutMs);
     const maximumWait = given.maxAdmissionWaitMs ?? given.requestTimeoutMs;
     positiveInteger(maximumWait);
@@ -4128,13 +4129,13 @@ function validateLoginAdmission(fixture) {
         continue;
       }
       assert.equal(response.kind, 'Error', name);
-      const retryAfter = response.retryAfter;
-      if (retryAfter !== null && (typeof retryAfter !== 'string'
-        || !/^[1-9][0-9]*$/.test(retryAfter) || !Number.isSafeInteger(Number(retryAfter)))) {
+      const retryAfterMs = response.retryAfterMs;
+      if (retryAfterMs !== null && (typeof retryAfterMs !== 'string'
+        || !/^(0|[1-9][0-9]*)$/.test(retryAfterMs) || Number(retryAfterMs) > 2 ** 31 - 1)) {
         result = 'FrameDecodeFailed';
         continue;
       }
-      if (response.remoteCode !== 'unavailable' || retryAfter === null) {
+      if (response.remoteCode !== 'unavailable' || retryAfterMs === null) {
         result = 'RemoteError';
         continue;
       }
@@ -4144,8 +4145,7 @@ function validateLoginAdmission(fixture) {
       firstWaitingAt ??= response.atElapsedMs;
       waitingCallbacks += 1;
       deadline = Math.min(deadline, firstWaitingAt + maximumWait);
-      const retryAt = Math.max(response.atElapsedMs, Number(retryAfter) - given.startEpochMs)
-        + response.jitterMs;
+      const retryAt = response.atElapsedMs + Number(retryAfterMs) + response.jitterMs;
       if (retryAt >= deadline) {
         result = 'RequestTimeout';
         continue;
@@ -4189,18 +4189,21 @@ for (const [name, corrupt] of [
   ['same-session-only capacity case', (f) => {
     f.serverScenarios[1].steps[2].sessionId = f.serverScenarios[1].steps[0].sessionId;
   }],
-  ['relative retry format', (f) => { f.contract.retryValueFormat = 'relativeMilliseconds'; }],
+  ['absolute retry format', (f) => { f.contract.retryValueFormat = 'utcUnixEpochMillisecondsDecimalString'; }],
+  ['old retry metadata key', (f) => { f.contract.retryMetadataKey = '$zlink.admission.retryAfter'; }],
   ['wrong default limit', (f) => { f.serverScenarios.at(-1).expectedEffectiveLimit = 8; }],
   ['handler on rejection', (f) => { f.serverScenarios[1].steps[2].expect.handlerCallsForRequest = 1; }],
   ['zero permit reservations', (f) => { f.serverScenarios[1].steps[2].expect.permitReservations = 0; }],
   ['queued rejection', (f) => { f.serverScenarios[1].steps[2].expect.applicationQueuedJobs = 1; }],
-  ['wrong retry timestamp', (f) => {
-    f.serverScenarios[1].steps[2].expect.error.metadata['$zlink.admission.retryAfter'] = '500';
+  ['absolute retry timestamp', (f) => {
+    f.serverScenarios[1].steps[2].expect.error.metadata['$zlink.admission.retryAfterMs'] = '1800000000500';
   }],
   ['wrong error sequence', (f) => { f.serverScenarios[1].steps[2].expect.error.requestSeq = '3'; }],
   ['missing lease return', (f) => { f.serverScenarios[2].steps[4].expect.inFlight = 1; }],
   ['duplicate lease return', (f) => { f.serverScenarios[2].steps[5].expect.leaseReturns = 2; }],
   ['timeout releases running lease', (f) => { f.serverScenarios[2].steps[2].expect.inFlight = 0; }],
+  ['out-of-range server delay', (f) => { f.serverScenarios[0].given.authenticationRetryDelayMs = 2 ** 31; }],
+  ['retry ignores receipt time', (f) => { f.connectorScenarios[0].expect.sendAtElapsedMs[1] = 525; }],
   ['early retry', (f) => { f.connectorScenarios[0].expect.sendAtElapsedMs[1] = 499; }],
   ['jitter outside range', (f) => { f.connectorScenarios[0].given.responses[0].jitterMs = 51; }],
   ['changed correlation', (f) => { f.connectorScenarios[0].expect.correlationPreserved = false; }],
@@ -4208,7 +4211,11 @@ for (const [name, corrupt] of [
   ['duplicate final callback', (f) => { f.connectorScenarios[0].expect.requestCallbacks = 2; }],
   ['send after maximum wait', (f) => { f.connectorScenarios[1].expect.sendAtElapsedMs.push(1000); }],
   ['extended original deadline', (f) => { f.connectorScenarios[2].expect.terminalAtElapsedMs = 2010; }],
-  ['retry malformed metadata', (f) => { f.connectorScenarios[6].expect.result = 'success'; }]
+  ...['malformed', 'negative-sign', 'positive-sign', 'leading-zero', 'out-of-range'].map((kind) => [
+    `retry ${kind} metadata`, (f) => {
+      f.connectorScenarios.find(({ name }) => name === `${kind}-retry-metadata`).expect.result = 'success';
+    }
+  ])
 ]) {
   const invalid = structuredClone(loginAdmission);
   corrupt(invalid);

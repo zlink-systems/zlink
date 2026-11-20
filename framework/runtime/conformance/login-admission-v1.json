@@ -8,8 +8,8 @@
       "MaxConcurrentAuthentications": "effectiveCpuCores * 8",
       "AuthenticationRetryDelay": 500
     },
-    "retryMetadataKey": "$zlink.admission.retryAfter",
-    "retryValueFormat": "utcUnixEpochMillisecondsDecimalString",
+    "retryMetadataKey": "$zlink.admission.retryAfterMs",
+    "retryValueFormat": "relativeMillisecondsDecimalString",
     "errorBody": {
       "code": "unavailable",
       "message": "Authentication admission is full."
@@ -41,8 +41,7 @@
         "authenticationPacketName": "Login",
         "maxConcurrentAuthentications": 2,
         "effectiveCpuCores": 2,
-        "authenticationRetryDelayMs": 500,
-        "nowEpochMs": 1800000000000
+        "authenticationRetryDelayMs": 500
       },
       "steps": [
         {
@@ -93,8 +92,7 @@
         "authenticationPacketName": "Login",
         "maxConcurrentAuthentications": 1,
         "effectiveCpuCores": 2,
-        "authenticationRetryDelayMs": 500,
-        "nowEpochMs": 1800000000000
+        "authenticationRetryDelayMs": 500
       },
       "steps": [
         {
@@ -141,7 +139,7 @@
                 "message": "Authentication admission is full."
               },
               "metadata": {
-                "$zlink.admission.retryAfter": "1800000000500"
+                "$zlink.admission.retryAfterMs": "500"
               },
               "connectionClosed": false
             },
@@ -163,8 +161,7 @@
         "authenticationPacketName": "Login",
         "maxConcurrentAuthentications": 1,
         "effectiveCpuCores": 2,
-        "authenticationRetryDelayMs": 500,
-        "nowEpochMs": 1800000000000
+        "authenticationRetryDelayMs": 500
       },
       "steps": [
         {
@@ -255,8 +252,7 @@
         "authenticationPacketName": "Login",
         "maxConcurrentAuthentications": 1,
         "effectiveCpuCores": 2,
-        "authenticationRetryDelayMs": 500,
-        "nowEpochMs": 1800000000000
+        "authenticationRetryDelayMs": 500
       },
       "steps": [
         {
@@ -347,8 +343,7 @@
         "authenticationPacketName": "Login",
         "maxConcurrentAuthentications": 1,
         "effectiveCpuCores": 2,
-        "authenticationRetryDelayMs": 500,
-        "nowEpochMs": 1800000000000
+        "authenticationRetryDelayMs": 500
       },
       "steps": [
         {
@@ -439,8 +434,7 @@
         "authenticationPacketName": "Login",
         "maxConcurrentAuthentications": 1,
         "effectiveCpuCores": 2,
-        "authenticationRetryDelayMs": 500,
-        "nowEpochMs": 1800000000000
+        "authenticationRetryDelayMs": 500
       },
       "steps": [
         {
@@ -531,8 +525,7 @@
         "authenticationPacketName": "Login",
         "maxConcurrentAuthentications": 1,
         "effectiveCpuCores": 2,
-        "authenticationRetryDelayMs": 500,
-        "nowEpochMs": 1800000000000
+        "authenticationRetryDelayMs": 500
       },
       "steps": [
         {
@@ -596,8 +589,7 @@
         "authenticationPacketName": "Login",
         "maxConcurrentAuthentications": 1,
         "effectiveCpuCores": 2,
-        "authenticationRetryDelayMs": 500,
-        "nowEpochMs": 1800000000000
+        "authenticationRetryDelayMs": 500
       },
       "steps": [
         {
@@ -688,8 +680,7 @@
         "authenticationPacketName": "Login",
         "maxConcurrentAuthentications": 1,
         "effectiveCpuCores": 2,
-        "authenticationRetryDelayMs": 500,
-        "nowEpochMs": 1800000000000
+        "authenticationRetryDelayMs": 500
       },
       "steps": [
         {
@@ -780,8 +771,7 @@
         "authenticationPacketName": "Login",
         "maxConcurrentAuthentications": 1,
         "effectiveCpuCores": 2,
-        "authenticationRetryDelayMs": 500,
-        "nowEpochMs": 1800000000000
+        "authenticationRetryDelayMs": 500
       },
       "steps": [
         {
@@ -853,8 +843,7 @@
         "authenticationPacketName": null,
         "maxConcurrentAuthentications": null,
         "effectiveCpuCores": 2,
-        "authenticationRetryDelayMs": 500,
-        "nowEpochMs": 1800000000000
+        "authenticationRetryDelayMs": 500
       },
       "steps": [
         {
@@ -896,8 +885,7 @@
         "authenticationPacketName": "Login",
         "maxConcurrentAuthentications": null,
         "effectiveCpuCores": 2,
-        "authenticationRetryDelayMs": 500,
-        "nowEpochMs": 1800000000000
+        "authenticationRetryDelayMs": 500
       },
       "steps": [
         {
@@ -923,7 +911,6 @@
     {
       "name": "automatic-retry-then-success",
       "given": {
-        "startEpochMs": 1800000000000,
         "requestTimeoutMs": 3000,
         "maxAdmissionWaitMs": null,
         "packetName": "Login",
@@ -938,11 +925,11 @@
             "kind": "Error",
             "requestSeq": "1",
             "remoteCode": "unavailable",
-            "retryAfter": "1800000000500",
+            "retryAfterMs": "500",
             "jitterMs": 25
           },
           {
-            "atElapsedMs": 530,
+            "atElapsedMs": 540,
             "kind": "Response",
             "requestSeq": "2"
           }
@@ -951,7 +938,7 @@
       "expect": {
         "sendAtElapsedMs": [
           0,
-          525
+          535
         ],
         "requestSeqs": [
           "1",
@@ -970,7 +957,6 @@
     {
       "name": "maximum-admission-wait-exceeded",
       "given": {
-        "startEpochMs": 1800000000000,
         "requestTimeoutMs": 3000,
         "maxAdmissionWaitMs": 300,
         "packetName": "Login",
@@ -985,7 +971,7 @@
             "kind": "Error",
             "requestSeq": "1",
             "remoteCode": "unavailable",
-            "retryAfter": "1800000001000",
+            "retryAfterMs": "1000",
             "jitterMs": 0
           }
         ]
@@ -1011,7 +997,6 @@
     {
       "name": "original-deadline-not-extended",
       "given": {
-        "startEpochMs": 1800000000000,
         "requestTimeoutMs": 400,
         "maxAdmissionWaitMs": 2000,
         "packetName": "Login",
@@ -1026,7 +1011,7 @@
             "kind": "Error",
             "requestSeq": "1",
             "remoteCode": "unavailable",
-            "retryAfter": "1800000000500",
+            "retryAfterMs": "500",
             "jitterMs": 0
           }
         ]
@@ -1052,7 +1037,6 @@
     {
       "name": "repeated-rejection-single-operation",
       "given": {
-        "startEpochMs": 1800000000000,
         "requestTimeoutMs": 3000,
         "maxAdmissionWaitMs": 2000,
         "packetName": "Login",
@@ -1067,7 +1051,7 @@
             "kind": "Error",
             "requestSeq": "1",
             "remoteCode": "unavailable",
-            "retryAfter": "1800000000500",
+            "retryAfterMs": "500",
             "jitterMs": 0
           },
           {
@@ -1075,11 +1059,11 @@
             "kind": "Error",
             "requestSeq": "2",
             "remoteCode": "unavailable",
-            "retryAfter": "1800000001000",
+            "retryAfterMs": "500",
             "jitterMs": 50
           },
           {
-            "atElapsedMs": 1060,
+            "atElapsedMs": 1070,
             "kind": "Response",
             "requestSeq": "3"
           }
@@ -1088,8 +1072,8 @@
       "expect": {
         "sendAtElapsedMs": [
           0,
-          500,
-          1050
+          510,
+          1060
         ],
         "requestSeqs": [
           "1",
@@ -1107,9 +1091,8 @@
       }
     },
     {
-      "name": "past-retry-time-jitter",
+      "name": "zero-retry-delay-jitter",
       "given": {
-        "startEpochMs": 1800000000000,
         "requestTimeoutMs": 3000,
         "maxAdmissionWaitMs": 2000,
         "packetName": "Login",
@@ -1124,7 +1107,7 @@
             "kind": "Error",
             "requestSeq": "1",
             "remoteCode": "unavailable",
-            "retryAfter": "1799999999999",
+            "retryAfterMs": "0",
             "jitterMs": 50
           },
           {
@@ -1156,7 +1139,6 @@
     {
       "name": "unavailable-without-admission-metadata",
       "given": {
-        "startEpochMs": 1800000000000,
         "requestTimeoutMs": 3000,
         "maxAdmissionWaitMs": 2000,
         "packetName": "Login",
@@ -1171,7 +1153,7 @@
             "kind": "Error",
             "requestSeq": "1",
             "remoteCode": "unavailable",
-            "retryAfter": null,
+            "retryAfterMs": null,
             "jitterMs": 0
           }
         ]
@@ -1196,7 +1178,6 @@
     {
       "name": "malformed-retry-metadata",
       "given": {
-        "startEpochMs": 1800000000000,
         "requestTimeoutMs": 3000,
         "maxAdmissionWaitMs": 2000,
         "packetName": "Login",
@@ -1211,7 +1192,163 @@
             "kind": "Error",
             "requestSeq": "1",
             "remoteCode": "unavailable",
-            "retryAfter": "500ms",
+            "retryAfterMs": "500ms",
+            "jitterMs": 0
+          }
+        ]
+      },
+      "expect": {
+        "sendAtElapsedMs": [
+          0
+        ],
+        "requestSeqs": [
+          "1"
+        ],
+        "result": "FrameDecodeFailed",
+        "waitingCallbacks": 0,
+        "requestCallbacks": 1,
+        "replyReceivedHooks": 1,
+        "requestSendingHooks": 1,
+        "payloadPreserved": true,
+        "applicationMetadataPreserved": true,
+        "correlationPreserved": true
+      }
+    },
+    {
+      "name": "negative-sign-retry-metadata",
+      "given": {
+        "requestTimeoutMs": 3000,
+        "maxAdmissionWaitMs": 2000,
+        "packetName": "Login",
+        "payloadBase64": "eyJ1c2VyIjoidGVzdCJ9",
+        "applicationMetadata": {
+          "locale": "ko"
+        },
+        "correlationId": "login-4546",
+        "responses": [
+          {
+            "atElapsedMs": 10,
+            "kind": "Error",
+            "requestSeq": "1",
+            "remoteCode": "unavailable",
+            "retryAfterMs": "-1",
+            "jitterMs": 0
+          }
+        ]
+      },
+      "expect": {
+        "sendAtElapsedMs": [
+          0
+        ],
+        "requestSeqs": [
+          "1"
+        ],
+        "result": "FrameDecodeFailed",
+        "waitingCallbacks": 0,
+        "requestCallbacks": 1,
+        "replyReceivedHooks": 1,
+        "requestSendingHooks": 1,
+        "payloadPreserved": true,
+        "applicationMetadataPreserved": true,
+        "correlationPreserved": true
+      }
+    },
+    {
+      "name": "positive-sign-retry-metadata",
+      "given": {
+        "requestTimeoutMs": 3000,
+        "maxAdmissionWaitMs": 2000,
+        "packetName": "Login",
+        "payloadBase64": "eyJ1c2VyIjoidGVzdCJ9",
+        "applicationMetadata": {
+          "locale": "ko"
+        },
+        "correlationId": "login-4546",
+        "responses": [
+          {
+            "atElapsedMs": 10,
+            "kind": "Error",
+            "requestSeq": "1",
+            "remoteCode": "unavailable",
+            "retryAfterMs": "+1",
+            "jitterMs": 0
+          }
+        ]
+      },
+      "expect": {
+        "sendAtElapsedMs": [
+          0
+        ],
+        "requestSeqs": [
+          "1"
+        ],
+        "result": "FrameDecodeFailed",
+        "waitingCallbacks": 0,
+        "requestCallbacks": 1,
+        "replyReceivedHooks": 1,
+        "requestSendingHooks": 1,
+        "payloadPreserved": true,
+        "applicationMetadataPreserved": true,
+        "correlationPreserved": true
+      }
+    },
+    {
+      "name": "leading-zero-retry-metadata",
+      "given": {
+        "requestTimeoutMs": 3000,
+        "maxAdmissionWaitMs": 2000,
+        "packetName": "Login",
+        "payloadBase64": "eyJ1c2VyIjoidGVzdCJ9",
+        "applicationMetadata": {
+          "locale": "ko"
+        },
+        "correlationId": "login-4546",
+        "responses": [
+          {
+            "atElapsedMs": 10,
+            "kind": "Error",
+            "requestSeq": "1",
+            "remoteCode": "unavailable",
+            "retryAfterMs": "01",
+            "jitterMs": 0
+          }
+        ]
+      },
+      "expect": {
+        "sendAtElapsedMs": [
+          0
+        ],
+        "requestSeqs": [
+          "1"
+        ],
+        "result": "FrameDecodeFailed",
+        "waitingCallbacks": 0,
+        "requestCallbacks": 1,
+        "replyReceivedHooks": 1,
+        "requestSendingHooks": 1,
+        "payloadPreserved": true,
+        "applicationMetadataPreserved": true,
+        "correlationPreserved": true
+      }
+    },
+    {
+      "name": "out-of-range-retry-metadata",
+      "given": {
+        "requestTimeoutMs": 3000,
+        "maxAdmissionWaitMs": 2000,
+        "packetName": "Login",
+        "payloadBase64": "eyJ1c2VyIjoidGVzdCJ9",
+        "applicationMetadata": {
+          "locale": "ko"
+        },
+        "correlationId": "login-4546",
+        "responses": [
+          {
+            "atElapsedMs": 10,
+            "kind": "Error",
+            "requestSeq": "1",
+            "remoteCode": "unavailable",
+            "retryAfterMs": "2147483648",
             "jitterMs": 0
           }
         ]
