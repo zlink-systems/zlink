@@ -33,6 +33,7 @@ on:
     paths:
       - 'framework/languages/*/templates/**'
       - 'scripts/templates/**'
+      - 'scripts/ci/gradle/**'
       - '.github/workflows/framework-templates.yml'
 
 # A new commit on the same PR cancels the older run.
@@ -375,17 +376,47 @@ jobs:
           echo "TEMPLATE_WORK=${RUNNER_TEMP}/framework-templates-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB}-${{ matrix.lang }}-${{ matrix.template }}" >>"${GITHUB_ENV}"
           echo "PACKAGES_DIR=${RUNNER_TEMP}/framework-templates-packages-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB}-${{ matrix.lang }}-${{ matrix.template }}" >>"${GITHUB_ENV}"
 
-      # Two dozen Java and Kotlin templates resolving the same dependencies from Maven
-      # Central at once got HTTP 429 (merge queue draft #3637); reuse the Gradle cache.
       - uses: actions/setup-java@v5
         if: matrix.package == 'java'
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
-          cache: gradle
-          cache-dependency-path: |
-            ${{ matrix.path }}/**/*.gradle*
-            ${{ matrix.path }}/gradle/wrapper/gradle-wrapper.properties
+
+      - name: Select CI Gradle home
+        if: matrix.package == 'java'
+        run: echo "GRADLE_USER_HOME=${RUNNER_TEMP}/template-gradle/host" >> "${GITHUB_ENV}"
+
+      # Fork code receives neither the trusted cache nor a save post step.
+      # Register cache save before cache dance so extraction runs before saving.
+      - name: Restore main-owned Gradle caches
+        if: matrix.package == 'java' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        id: gradle-cache
+        uses: ./.github/actions/main-cache
+        with:
+          path: |
+            ${{ runner.temp }}/template-gradle/host/caches
+            ${{ runner.temp }}/template-gradle/host/wrapper
+            ${{ runner.temp }}/template-gradle/docker
+          key: template-gradle-${{ runner.os }}-${{ runner.arch }}-jdk${{ env.JAVA_VERSION }}-${{ matrix.lang }}-${{ hashFiles(format('{0}/**/*.gradle*', matrix.path), format('{0}/**/gradle-wrapper.properties', matrix.path), format('{0}/**/libs.versions.toml', matrix.path), 'scripts/ci/gradle/**') }}-v1
+          restore-keys: template-gradle-${{ runner.os }}-${{ runner.arch }}-jdk${{ env.JAVA_VERSION }}-${{ matrix.lang }}-
+
+      - name: Create isolated template builder
+        if: matrix.package == 'java'
+        id: gradle-builder
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          buildkitd-config-inline: |
+            [worker.oci]
+              max-parallelism = 1
+
+      - name: Import and export the Gradle cache mount
+        if: matrix.package == 'java'
+        uses: reproducible-containers/buildkit-cache-dance@e475a9cbcb5052f85fd3830f1266fa0c91ef8595
+        with:
+          builder: ${{ steps.gradle-builder.outputs.name }}
+          cache-map: '{"${{ runner.temp }}/template-gradle/docker": {"target": "/root/.gradle", "sharing": "locked"}}'
+          scratch-dir: ${{ runner.temp }}/gradle-cache-dance
+          skip-extraction: ${{ github.ref != 'refs/heads/main' || steps.gradle-cache.outputs.cache-hit == 'true' }}
 
       - uses: actions/setup-dotnet@v5
         if: matrix.package == 'dotnet'
@@ -410,6 +441,7 @@ jobs:
           TEMPLATE_NAME: ${{ matrix.template }}
           TEMPLATE_PATH: ${{ matrix.path }}
           PACKAGE_NAME: ${{ matrix.package }}
+          BUILDX_BUILDER: ${{ steps.gradle-builder.outputs.name }}
           ZLINK_DEBUG_FRAMEWORK_RELOCATION: ${{ matrix.package == 'node' && '1' || '0' }}
         run: bash scripts/templates/run-template.sh "${LANG_NAME}" "${TEMPLATE_NAME}" "${TEMPLATE_PATH}" "${PACKAGE_NAME}"
 
