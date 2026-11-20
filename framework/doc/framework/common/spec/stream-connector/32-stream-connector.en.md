@@ -516,6 +516,28 @@ mode (§7). The reply received hook follows the dispatch mode like any other cal
   failure (§7).
 - The per-language document owns the names of the hooks and their contexts.
 
+### 5.8 Admission Wait and Automatic Retry
+
+When the server rejects an authentication request at admission
+([Authentication admission §1.3](../server/04-session/03-authentication-admission.en.md#13-rejection-result)), the connector sends
+that request again on the same connection automatically. Applications don't build their own retry loop.
+
+- An admission rejection is only an Error packet with code `unavailable` whose header metadata carries
+  `$zlink.admission.retryAfter`. An `unavailable` without this metadata ends the request with `RemoteError` as today.
+- If the `$zlink.admission.retryAfter` value isn't a decimal UTC epoch millisecond string with no sign and no leading
+  zeros, the request ends with `FrameDecodeFailed` and isn't sent again.
+- The resend time is `retryAfter` plus a random delay of 0–50 ms. If `retryAfter` has already passed, the request is
+  sent after that random delay from now.
+- A resend uses the same packet name, payload, application metadata, and correlation, and only takes a new request
+  sequence.
+- The application's `OnAdmissionWaiting` callback is called once for each rejection received. The request hooks (§5.7)
+  for sending and receiving, and the request callback, run once per operation regardless of retries.
+- The wait ends at the earlier of the original request deadline and `first rejection time + MaxAdmissionWait`; the
+  original deadline is never extended. If the request hasn't succeeded by then, it ends with `RequestTimeout`, and
+  nothing is sent after that point. `MaxAdmissionWait` defaults to the request's effective request timeout.
+- If the connection drops, a waiting request ends by the existing connection lifecycle rules (§6). Reconnecting
+  doesn't restore a waiting request.
+
 ## 6. Connection Lifecycle
 
 The following C# excerpt is a non-normative example to explain how
