@@ -103,14 +103,16 @@ final class ZLinkSpotCloseConformanceTest {
             failureRelease = CompletableFuture.completedFuture(null);
             String spotId = "route-close-" + UUID.randomUUID();
             FaultStore store = new FaultStore(new ZLinkInMemoryLocationStore(), spotId);
-            try (var source = startReady(routeCacheOptions(store, "source-" + spotId))) {
+            try (var source = startReady(routeCacheOptions(store, "source-" + spotId, !remote))) {
                 source.actorManager()
                         .getOrCreate(ACTOR_ID, "player")
                         .submit()
                         .toCompletableFuture()
                         .get(WAIT_SECONDS, TimeUnit.SECONDS);
                 try (var owner =
-                        remote ? startReady(routeCacheOptions(store, "owner-" + spotId)) : null) {
+                        remote
+                                ? startReady(routeCacheOptions(store, "owner-" + spotId, true))
+                                : null) {
                     var target = remote ? owner : source;
                     var spot =
                             target.spotManager()
@@ -120,9 +122,14 @@ final class ZLinkSpotCloseConformanceTest {
                                     .get(WAIT_SECONDS, TimeUnit.SECONDS)
                                     .spot();
                     var routes = ZLinkFrameworkRuntimeTestAccess.storeLocationResolvers(source);
-                    routes.resolveSpot(spotId)
-                            .toCompletableFuture()
-                            .get(WAIT_SECONDS, TimeUnit.SECONDS);
+                    var warmRoute =
+                            routes.resolveSpot(spotId)
+                                    .toCompletableFuture()
+                                    .get(WAIT_SECONDS, TimeUnit.SECONDS);
+                    assertEquals(
+                            RoutingId.from((remote ? "owner-" : "source-") + spotId),
+                            warmRoute.nodeRid(),
+                            "fixture owner, iteration=" + iteration);
                     assertTrue(closeStage(target, spot).get(WAIT_SECONDS, TimeUnit.SECONDS));
                     int reads = store.spotReads.get();
                     var first = joinFailure(source, spotId);
@@ -169,7 +176,7 @@ final class ZLinkSpotCloseConformanceTest {
             failureRelease = new CompletableFuture<>();
             String spotId = "route-race-" + UUID.randomUUID();
             FaultStore store = new FaultStore(new ZLinkInMemoryLocationStore(), spotId);
-            try (var host = startReady(routeCacheOptions(store, spotId))) {
+            try (var host = startReady(routeCacheOptions(store, spotId, true))) {
                 var spot =
                         host.spotManager()
                                 .getOrCreate(spotId, SPOT_TYPE)
@@ -250,8 +257,8 @@ final class ZLinkSpotCloseConformanceTest {
                                                 true, iteration)));
     }
 
-    private static DefaultZLinkFrameworkOptions routeCacheOptions(FaultStore store, String nodeId)
-            throws Exception {
+    private static DefaultZLinkFrameworkOptions routeCacheOptions(
+            FaultStore store, String nodeId, boolean hostSpot) throws Exception {
         var options = new DefaultZLinkFrameworkOptions();
         options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         options.configureDispatch()
@@ -265,8 +272,11 @@ final class ZLinkSpotCloseConformanceTest {
         node.listen("tcp://127.0.0.1:" + port).setRoutingId(RoutingId.from(nodeId));
         var objects = node.objects().server();
         objects.addEntrySpot(FailureEntry.class);
-        objects.addSpotFactory(
-                SPOT_TYPE, FailureRoom.class, factory -> factory.disableRelocation());
+        // A remote fixture must have one eligible Spot owner; GetOrCreate selects placement.
+        if (hostSpot) {
+            objects.addSpotFactory(
+                    SPOT_TYPE, FailureRoom.class, factory -> factory.disableRelocation());
+        }
         objects.addActorFactory(
                 "player",
                 FailurePlayer.class,
