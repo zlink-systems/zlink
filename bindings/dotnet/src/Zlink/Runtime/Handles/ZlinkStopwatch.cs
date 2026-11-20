@@ -18,26 +18,39 @@ internal sealed class ZlinkStopwatch : NativeOwner, IZlinkStopwatch
 
     public ulong Stop()
     {
-        EnsureNotDisposed();
-        ulong elapsed = NativeMethods.zlink_stopwatch_stop(_handle).Value;
-        MarkClosed();
+        if (!TryBeginClose())
+            throw new ObjectDisposedException(nameof(ZlinkStopwatch));
+        ulong elapsed;
+        try
+        {
+            elapsed = NativeMethods.zlink_stopwatch_stop(_handle).Value;
+            MarkClosed();
+        }
+        finally
+        {
+            EndClose();
+        }
         GC.SuppressFinalize(this);
         return elapsed;
     }
 
     public void Dispose()
     {
-        if (IsClosed)
-            return;
-        try
+        if (TryBeginClose())
         {
-            NativeMethods.zlink_stopwatch_stop(_handle);
+            try
+            {
+                NativeMethods.zlink_stopwatch_stop(_handle);
+            }
+            catch
+            {
+            }
+            finally
+            {
+                MarkClosed();
+                EndClose();
+            }
         }
-        catch
-        {
-        }
-
-        MarkClosed();
         GC.SuppressFinalize(this);
     }
 
