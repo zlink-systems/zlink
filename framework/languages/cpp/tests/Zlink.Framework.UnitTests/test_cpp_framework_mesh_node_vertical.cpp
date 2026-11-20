@@ -3058,8 +3058,10 @@ int run_cross_process_delivery ()
         node.start ().result ().value ();
         auto target_spot = node.get_or_create_spot_async ("target-spot").result ().value ();
         auto target_actor = node.create_actor ("vertical.actor", "target-actor", {}, 5s);
-        const std::uint64_t formal_descriptors[2]{target_spot.status ().lifecycle_generation (),
-                                                  target_actor.ref ().object_generation ()};
+        // The Actor send names the target node generation its authority resolved.
+        const std::uint64_t formal_descriptors[3]{target_spot.status ().lifecycle_generation (),
+                                                  target_actor.ref ().object_generation (),
+                                                  node.status ().lifecycle_generation ()};
         if (write (formal_descriptor_pipe[1], formal_descriptors, sizeof (formal_descriptors))
             != sizeof (formal_descriptors)) {
             _exit (8);
@@ -3164,7 +3166,7 @@ int run_cross_process_delivery ()
     if (!read_node_endpoint)
         return 1;
     const std::string endpoint = *read_node_endpoint;
-    std::uint64_t formal_descriptors[2]{};
+    std::uint64_t formal_descriptors[3]{};
     assert (read (formal_descriptor_pipe[0], formal_descriptors, sizeof (formal_descriptors))
             == sizeof (formal_descriptors));
     close (formal_descriptor_pipe[0]);
@@ -3292,7 +3294,8 @@ int run_cross_process_delivery ()
           zlink::framework::runtime::host::public_host_runtime_t::remote_actor_ref (
             zlink::routing_id_t::from (std::string ("vertical-b")), "target-actor",
             formal_descriptors[1]),
-          actor_parts, zlink::framework::detail::mesh_metadata_codec_t::encode (metadata), 1, 1);
+          actor_parts, zlink::framework::detail::mesh_metadata_codec_t::encode (metadata), 1, 1,
+          std::nullopt, formal_descriptors[2]);
     }));
     char actor_ack = 0;
     assert (read (formal_ack_pipe[0], &actor_ack, sizeof (actor_ack)) == sizeof (actor_ack));
