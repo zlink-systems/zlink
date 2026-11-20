@@ -745,8 +745,7 @@ receiver MUST NOT require a bound Session to admit a canonical `actorJoin`(28).
   four runtimes are bumped together.
 - A target's effective inbound chunk-byte limit is negotiated in the admission-accept
   reply's `receiveChunkLimitBytes` field, or via host preflight where that reply is
-  unavailable. Where no negotiation path exists (`JoinEntrySpot`), the effective limit is
-  32 KiB — the general Compact data lower bound. This shape and its bounds are pinned by
+  unavailable. This shape and its bounds are pinned by
   the `actor-join-reply-tail` golden fixture
   (`framework/runtime/protocol/golden/actor-join-reply-v1.json`), which all four runtimes
   (cpp, dotnet, java, node) decode identically. **All four runtimes** originate a canonical
