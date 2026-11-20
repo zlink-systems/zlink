@@ -25,6 +25,8 @@ internal sealed record ZLinkSessionBindingEntry(
     ZLinkServiceWireCodec.SessionRelocationRouteRecord? AppliedCanonicalRelocationRoute = null
 )
 {
+    internal ZLinkStateLane EgressLane { get; } = new();
+
     internal ulong ObjectGeneration => Route.Ref.ObjectGeneration;
     internal ulong AuthorityOwnerGeneration => Route.AuthorityOwnerGeneration;
     internal string MeshName => Route.MeshName.Value;
@@ -570,28 +572,38 @@ internal sealed class ZLinkSessionActorBindingTable
         Func<ZlinkStreamHeader, Task> submit
     )
     {
+        Task? queuedSubmission = null;
+        Func<Task>? unboundSubmission = null;
         await _lane
-            .RunAsync(async () =>
+            .RunAsync(() =>
             {
-                var current =
-                    header.ActorSlot is not { } slot
-                    || _entries.Values.Any(bindings =>
-                        bindings.Current is { } entry
-                        && ReferenceEquals(entry.Context, context)
-                        && entry.ActorRef.Slot == slot
+                var binding = header.ActorSlot is { } slot
+                    ? _entries
+                        .Values.Select(static bindings => bindings.Current)
+                        .FirstOrDefault(entry =>
+                            entry is not null
+                            && ReferenceEquals(entry.Context, context)
+                            && entry.ActorRef.Slot == slot
+                        )
+                    : null;
+                var submittedHeader =
+                    header.ActorSlot is null || binding is not null
+                        ? header
+                        : header with
+                        {
+                            ActorSlot = null,
+                            Flags = header.Flags & ~ZlinkStreamHeaderFlags.HasActorSlot,
+                        };
+                if (binding is not null)
+                    queuedSubmission = QueueBindingEgress(
+                        binding,
+                        () => new ValueTask(submit(submittedHeader))
                     );
-                await submit(
-                        current
-                            ? header
-                            : header with
-                            {
-                                ActorSlot = null,
-                                Flags = header.Flags & ~ZlinkStreamHeaderFlags.HasActorSlot,
-                            }
-                    )
-                    .ConfigureAwait(false);
+                else
+                    unboundSubmission = () => submit(submittedHeader);
             })
             .ConfigureAwait(false);
+        await (queuedSubmission ?? unboundSubmission!()).ConfigureAwait(false);
     }
 
     internal async ValueTask<ZLinkSessionOutboundAdmission> AdmitOutboundAsync(
@@ -601,8 +613,9 @@ internal sealed class ZLinkSessionActorBindingTable
     {
         ArgumentNullException.ThrowIfNull(frame);
         ZLinkSessionOutboundAdmission result = default;
+        Task? queuedSubmission = null;
         await _lane
-            .RunAsync(async () =>
+            .RunAsync(() =>
             {
                 var actorId = ZLinkActorId.FromBoundary(tenure.ActorId, nameof(tenure.ActorId));
                 if (!TryGetCurrentEntry(actorId, out var entry))
@@ -620,18 +633,27 @@ internal sealed class ZLinkSessionActorBindingTable
                     return;
                 }
 
-                var delivery = await ZLinkSessionOutboundSubmission
-                    .SubmitAsync(
-                        entry.Context,
-                        ZLinkStreamActorFrames.WithActorSlot(frame, entry.ActorRef.Slot)
-                    )
-                    .ConfigureAwait(false);
-                result = new ZLinkSessionOutboundAdmission(
-                    ZLinkSessionOutboundAdmissionKind.Immediate,
-                    delivery
+                var frameWithActorSlot = ZLinkStreamActorFrames.WithActorSlot(
+                    frame,
+                    entry.ActorRef.Slot
+                );
+                queuedSubmission = QueueBindingEgress(
+                    entry,
+                    async () =>
+                    {
+                        var delivery = await ZLinkSessionOutboundSubmission
+                            .SubmitAsync(entry.Context, frameWithActorSlot)
+                            .ConfigureAwait(false);
+                        result = new ZLinkSessionOutboundAdmission(
+                            ZLinkSessionOutboundAdmissionKind.Immediate,
+                            delivery
+                        );
+                    }
                 );
             })
             .ConfigureAwait(false);
+        if (queuedSubmission is not null)
+            await queuedSubmission.ConfigureAwait(false);
         return result;
     }
 
@@ -642,8 +664,9 @@ internal sealed class ZLinkSessionActorBindingTable
     )
     {
         ZLinkSessionOutboundAdmission result = default;
+        Task? queuedSubmission = null;
         await _lane
-            .RunAsync(async () =>
+            .RunAsync(() =>
             {
                 var key = ZLinkSessionBindingKey.FromBoundary(actorId, expected.BindingToken);
                 if (!TryGetEntry(key, out var entry))
@@ -667,20 +690,32 @@ internal sealed class ZLinkSessionActorBindingTable
                     return;
                 }
 
-                var delivery = await ZLinkSessionOutboundSubmission
-                    .SubmitAsync(
-                        entry.Context,
-                        ZLinkStreamActorFrames.WithActorSlot(frame, entry.ActorRef.Slot)
-                    )
-                    .ConfigureAwait(false);
-                result = new ZLinkSessionOutboundAdmission(
-                    ZLinkSessionOutboundAdmissionKind.Immediate,
-                    delivery
+                var frameWithActorSlot = ZLinkStreamActorFrames.WithActorSlot(
+                    frame,
+                    entry.ActorRef.Slot
+                );
+                queuedSubmission = QueueBindingEgress(
+                    entry,
+                    async () =>
+                    {
+                        var delivery = await ZLinkSessionOutboundSubmission
+                            .SubmitAsync(entry.Context, frameWithActorSlot)
+                            .ConfigureAwait(false);
+                        result = new ZLinkSessionOutboundAdmission(
+                            ZLinkSessionOutboundAdmissionKind.Immediate,
+                            delivery
+                        );
+                    }
                 );
             })
             .ConfigureAwait(false);
+        if (queuedSubmission is not null)
+            await queuedSubmission.ConfigureAwait(false);
         return result;
     }
+
+    private static Task QueueBindingEgress(ZLinkSessionBindingEntry entry, Func<ValueTask> work) =>
+        entry.EgressLane.RunAsync(work).AsTask();
 
     private static bool MatchesPhysicalSession(
         ZLinkSessionBindingEntry entry,
@@ -1874,7 +1909,8 @@ internal sealed class ZLinkSessionActorBindingTable
         cancellationToken.ThrowIfCancellationRequested();
         // Admission and the start of close share the binding aggregate's turn.
         // The returned terminal excludes disconnect callbacks and their cleanup.
-        var terminal = await _lane
+        Task? queuedClose = null;
+        await _lane
             .RunAsync(() =>
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -1902,10 +1938,17 @@ internal sealed class ZLinkSessionActorBindingTable
                         ZLinkFrameworkErrorKind.Unavailable,
                         "The requested session binding is no longer current."
                     );
-                return entry.Context.CloseAsync().AsTask();
+                queuedClose = QueueBindingEgress(
+                    entry,
+                    async () =>
+                    {
+                        if (!cancellationToken.IsCancellationRequested)
+                            await entry.Context.CloseAsync().ConfigureAwait(false);
+                    }
+                );
             })
             .ConfigureAwait(false);
-        await terminal.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await queuedClose!.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public ValueTask<ZLinkSessionBindingEntry?> GetExactRetiredBindingAsync(

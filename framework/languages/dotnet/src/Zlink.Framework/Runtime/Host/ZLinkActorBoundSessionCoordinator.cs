@@ -797,35 +797,35 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         var state = _getState(actorId);
         if (state.TryGetBoundSessionForOutbound(out var session))
         {
+            byte[]? localFrame = null;
             Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"bound_session_send actor={actorId} session_node={session.SessionNodeRid} session_rid={session.SessionRid} binding={session.BindingToken} parts={parts.Count}"
             );
-            if (
-                AwaitStateLane(_sessionBindings.GetContextAsync(OutboundTenure(actorId, session)))
-                is not null
-            )
+            if (parts.Count == 1)
             {
-                if (parts.Count != 1)
-                    throw new InvalidOperationException(
-                        "A local actor bound-session send requires one encoded stream frame."
-                    );
-                Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"bound_session_send_local actor={actorId}"
-                );
+                localFrame = ConcatParts(parts);
                 var admission = AwaitStateLane(
                     _sessionBindings.AdmitOutboundAsync(
                         OutboundTenure(actorId, session),
-                        ConcatParts(parts)
+                        localFrame
                     )
                 );
-                return admission.Kind switch
+                if (admission.Kind == ZLinkSessionOutboundAdmissionKind.Immediate)
                 {
-                    ZLinkSessionOutboundAdmissionKind.Immediate => admission.Delivery
-                        == ZLinkSessionOutboundDelivery.Delivered,
-                    _ => false,
-                };
+                    Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
+                        $"bound_session_send_local actor={actorId}"
+                    );
+                    return admission.Delivery == ZLinkSessionOutboundDelivery.Delivered;
+                }
             }
-            if (TryRelayRemotePush(actorId, session, ConcatParts(parts)))
+            else if (
+                AwaitStateLane(_sessionBindings.GetContextAsync(OutboundTenure(actorId, session)))
+                is not null
+            )
+                throw new InvalidOperationException(
+                    "A local actor bound-session send requires one encoded stream frame."
+                );
+            if (TryRelayRemotePush(actorId, session, localFrame ?? ConcatParts(parts)))
             {
                 Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
                     $"bound_session_send_remote_submitted actor={actorId}"
@@ -895,33 +895,34 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
             $"bound_session_send_async actor={actorId} session_node={session.SessionNodeRid} session_rid={session.SessionRid} binding={session.BindingToken} binding_gen={session.BindingGeneration} parts={parts.Count}"
         );
-        if (
-            await _sessionBindings
-                .GetContextAsync(OutboundTenure(actorId, session))
-                .ConfigureAwait(false)
-            is not null
-        )
+        byte[]? localFrame = null;
+        if (parts.Count == 1)
         {
-            if (parts.Count != 1)
-                throw new InvalidOperationException(
-                    "A local actor bound-session send requires one encoded stream frame."
-                );
+            localFrame = ConcatParts(parts);
             var admission = await _sessionBindings
-                .AdmitOutboundAsync(OutboundTenure(actorId, session), ConcatParts(parts))
+                .AdmitOutboundAsync(OutboundTenure(actorId, session), localFrame)
                 .ConfigureAwait(false);
-            var status = admission.Kind switch
+            if (admission.Kind == ZLinkSessionOutboundAdmissionKind.Immediate)
             {
-                ZLinkSessionOutboundAdmissionKind.Immediate => admission.Delivery switch
+                var status = admission.Delivery switch
                 {
                     ZLinkSessionOutboundDelivery.Delivered => ZLinkOneWaySubmitStatus.Submitted,
                     ZLinkSessionOutboundDelivery.Backpressured =>
                         ZLinkOneWaySubmitStatus.Backpressured,
                     _ => ZLinkOneWaySubmitStatus.TargetNotFound,
-                },
-                _ => ZLinkOneWaySubmitStatus.TargetNotFound,
-            };
-            return new ZLinkOneWaySubmitResult(status);
+                };
+                return new ZLinkOneWaySubmitResult(status);
+            }
         }
+        else if (
+            await _sessionBindings
+                .GetContextAsync(OutboundTenure(actorId, session))
+                .ConfigureAwait(false)
+            is not null
+        )
+            throw new InvalidOperationException(
+                "A local actor bound-session send requires one encoded stream frame."
+            );
 
         if (
             RemotePushRelayAsync is { } relay
@@ -930,7 +931,12 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             && _getNodeForMesh(session.MeshName.Value) is { } localNode
             && !sessionNodeRid.Equals(localNode.RoutingId)
         )
-            return await relay(actorId, session, ConcatParts(parts), cancellationToken)
+            return await relay(
+                    actorId,
+                    session,
+                    localFrame ?? ConcatParts(parts),
+                    cancellationToken
+                )
                 .ConfigureAwait(false);
 
         if (!ZLinkActorBoundSessionBindingToken.IsNative(session.BindingToken))

@@ -14,6 +14,7 @@ using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Contracts.Spots;
 using Zlink.Framework.Contracts.Streams;
 using Zlink.Framework.Runtime.Execution;
+using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Messaging;
 using Zlink.Framework.Runtime.Streams;
@@ -46,6 +47,9 @@ public sealed class BoundSessionDisconnectTests
         });
         using var app = builder.Build();
         await app.StartAsync();
+        var bindingTable = app
+            .Services.GetRequiredService<ZLinkFrameworkRuntime>()
+            ._actorBoundSessionCoordinator._sessionBindings;
         var traceDirectory = Environment.GetEnvironmentVariable("ZLINK_TEST_FLOW_DIRECTORY");
         using var flow = traceDirectory is null
             ? null
@@ -80,9 +84,7 @@ public sealed class BoundSessionDisconnectTests
                     Assert.Equal(new ZlinkStreamRequestSeq(1), login.Value.Header.RequestSeq);
                     break;
                 }
-                // Stop the continuation after the Actor turn and finish the next handler's
-                // close before resuming. Raw reads measure frame/EOF order independently
-                // of connector callback scheduling.
+                // Raw reads measure frame/EOF order independently of connector callbacks.
                 DSession.BeforeReplyCompletion = push
                     ? null
                     : () =>
@@ -92,47 +94,136 @@ public sealed class BoundSessionDisconnectTests
                             .AsTask()
                             .GetAwaiter()
                             .GetResult();
-                await SendRawRequestAsync(stream, new DOrdered(push), 2, deadline.Token);
-                var events = new List<string>();
-                while (await ReadRawFrameAsync(stream, deadline.Token) is { } received)
+                var pushSubmission = new TaskCompletionSource<Task>(
+                    TaskCreationOptions.RunContinuationsAsynchronously
+                );
+                var disconnectSubmission = new TaskCompletionSource<Task>(
+                    TaskCreationOptions.RunContinuationsAsynchronously
+                );
+                var pushReached = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously
+                );
+                var continuePush = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously
+                );
+                DOrderedHandler.PushSubmitted = push
+                    ? task => pushSubmission.TrySetResult(task)
+                    : null;
+                DOrderedHandler.DisconnectSubmitted = push
+                    ? task => disconnectSubmission.TrySetResult(task)
+                    : null;
+                DOrderedHandler.BeforePush = push
+                    ? async cancellationToken =>
+                    {
+                        pushReached.TrySetResult();
+                        await continuePush.Task.WaitAsync(cancellationToken);
+                    }
+                    : null;
+                Task? laneHold = null;
+                TaskCompletionSource? releaseLane = null;
+                try
                 {
-                    if (received.Header.Kind == ZlinkStreamMessageKind.Control)
-                        continue;
-                    if (
-                        received.Header.Kind == ZlinkStreamMessageKind.Send
-                        && received.Header.Name == nameof(Pong)
-                    )
+                    await SendRawRequestAsync(stream, new DOrdered(push), 2, deadline.Token);
+                    if (push)
                     {
-                        Assert.NotNull(
-                            ZLinkFrameworkJsonPayloadCodec.Deserialize<Pong>(received.Payload)
+                        await pushReached.Task.WaitAsync(deadline.Token);
+                        var enteredLane = new TaskCompletionSource(
+                            TaskCreationOptions.RunContinuationsAsynchronously
                         );
-                        events.Add("push");
+                        var release = new TaskCompletionSource(
+                            TaskCreationOptions.RunContinuationsAsynchronously
+                        );
+                        releaseLane = release;
+                        laneHold = bindingTable
+                            ._lane.RunAsync(async () =>
+                            {
+                                enteredLane.TrySetResult();
+                                await release.Task;
+                            })
+                            .AsTask();
+                        await enteredLane.Task.WaitAsync(deadline.Token);
+                        continuePush.TrySetResult();
+                        await pushSubmission.Task.WaitAsync(deadline.Token);
+                        await disconnectSubmission.Task.WaitAsync(deadline.Token);
+                        while (bindingTable._lane.QueuedWorkCount < 2)
+                            await Task.Delay(1, deadline.Token);
+                        releaseLane!.TrySetResult();
+                        await laneHold!.WaitAsync(deadline.Token);
                     }
-                    else if (
-                        received.Header.Kind == ZlinkStreamMessageKind.Response
-                        && received.Header.RequestSeq == new ZlinkStreamRequestSeq(2)
-                    )
+                    var events = new List<string>();
+                    while (await ReadRawFrameAsync(stream, deadline.Token) is { } received)
                     {
-                        Assert.NotNull(
-                            ZLinkFrameworkJsonPayloadCodec.Deserialize<Pong>(received.Payload)
-                        );
-                        events.Add("reply");
+                        if (received.Header.Kind == ZlinkStreamMessageKind.Control)
+                            continue;
+                        if (
+                            received.Header.Kind == ZlinkStreamMessageKind.Send
+                            && received.Header.Name == nameof(Pong)
+                        )
+                        {
+                            Assert.NotNull(
+                                ZLinkFrameworkJsonPayloadCodec.Deserialize<Pong>(received.Payload)
+                            );
+                            events.Add("push");
+                        }
+                        else if (
+                            received.Header.Kind == ZlinkStreamMessageKind.Response
+                            && received.Header.RequestSeq == new ZlinkStreamRequestSeq(2)
+                        )
+                        {
+                            Assert.NotNull(
+                                ZLinkFrameworkJsonPayloadCodec.Deserialize<Pong>(received.Payload)
+                            );
+                            events.Add("reply");
+                        }
+                        else
+                            events.Add(received.Header.Kind.ToString());
                     }
-                    else
-                        events.Add(received.Header.Kind.ToString());
+                    events.Add("eof");
+                    var expected = push ? "push" : "reply";
+                    var expectedPosition = events.IndexOf(expected);
+                    var eofPosition = events.IndexOf("eof");
+                    if (expectedPosition < 0 || eofPosition < 0 || expectedPosition >= eofPosition)
+                        failures.Add(
+                            $"iteration={iteration} expected={expected} before eof actual={string.Join(',', events)}"
+                        );
+                    if (push)
+                    {
+                        try
+                        {
+                            var send = await pushSubmission.Task.WaitAsync(deadline.Token);
+                            await send.WaitAsync(deadline.Token);
+                            var disconnect = await disconnectSubmission.Task.WaitAsync(
+                                deadline.Token
+                            );
+                            await disconnect.WaitAsync(deadline.Token);
+                        }
+                        catch (Exception error)
+                        {
+                            failures.Add(
+                                $"iteration={iteration} push/disconnect terminal: {error.GetType().Name}: {error.Message}"
+                            );
+                        }
+                    }
                 }
-                events.Add("eof");
-                var expected = push ? "push" : "reply";
-                if (events.Count < 2 || events[0] != expected || events[^1] != "eof")
-                    failures.Add(
-                        $"iteration={iteration} expected={expected},eof actual={string.Join(',', events)}"
-                    );
+                finally
+                {
+                    continuePush.TrySetResult();
+                    releaseLane?.TrySetResult();
+                    if (laneHold is not null)
+                        await laneHold.WaitAsync(TimeSpan.FromSeconds(5));
+                }
                 DSession.BeforeReplyCompletion = null;
+                DOrderedHandler.BeforePush = null;
+                DOrderedHandler.PushSubmitted = null;
+                DOrderedHandler.DisconnectSubmitted = null;
             }
         }
         finally
         {
             DSession.BeforeReplyCompletion = null;
+            DOrderedHandler.BeforePush = null;
+            DOrderedHandler.PushSubmitted = null;
+            DOrderedHandler.DisconnectSubmitted = null;
             await app.StopAsync();
         }
         Assert.True(failures.Count == 0, string.Join(Environment.NewLine, failures));
@@ -539,6 +630,10 @@ public sealed class DDropHandler : IZLinkSpotActorRequestHandler<DRoom, DActor, 
 public sealed class DOrderedHandler
     : IZLinkEntrySpotActorRequestHandler<DEntry, DActor, DOrdered, Pong>
 {
+    public static Func<CancellationToken, ValueTask>? BeforePush { get; set; }
+    public static Action<Task>? PushSubmitted { get; set; }
+    public static Action<Task>? DisconnectSubmitted { get; set; }
+
     public async ValueTask<Pong> HandleAsync(
         DEntry spot,
         DActor actor,
@@ -549,8 +644,12 @@ public sealed class DOrderedHandler
     {
         if (request.Push)
         {
-            await actor.Context.BoundSession.Send(new Pong()).Async();
-            await actor.Context.BoundSession.DisconnectAsync(ct);
+            if (BeforePush is { } beforePush)
+                await beforePush(ct);
+            var send = actor.Context.BoundSession.Send(new Pong()).Async().AsTask();
+            PushSubmitted?.Invoke(send);
+            var disconnect = actor.Context.BoundSession.DisconnectAsync(ct).AsTask();
+            DisconnectSubmitted?.Invoke(disconnect);
         }
         return new();
     }
