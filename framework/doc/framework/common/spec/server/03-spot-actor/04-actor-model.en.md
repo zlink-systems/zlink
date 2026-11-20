@@ -569,6 +569,22 @@ The framework proceeds with destroy in the following order.
 The framework doesn't re-find the current `ActorRef` and terminate a new
 incarnation.
 
+Only the Actor's owner node runs a destroy. When destroy is called on a node that isn't the owner,
+that node sends command 27 `actorDestroy`
+([wire command table](../02-channel-transport/06-wire-protocol.en.md#3-command-space)) to the owner the
+authority record names. This command is an infrastructure command with no reply. Its body is `correlation` and the actor
+route fence carrying the `ActorRef`'s ActorId, generation, and owner fence (`actorDestroy` in the normative schema). The owner starts the destroy above for the received incarnation, or
+joins the destroy of the same incarnation if one is in progress. A different generation or a sealed
+Actor is handled as in the table above.
+
+The calling node doesn't wait for a reply from the owner; it observes the terminal through the authority
+in the Location Store. When the authority of the same generation is gone, the call ends with `true`. If
+the authority has a different generation, it ends with `InvalidOperation`; if it's sealed, with
+`Unavailable`. This observation waits only within the call's existing deadline. The calling node doesn't
+delete the authority in the Location Store itself — the owner is the single owner of the destroy steps.
+An Actor record with no owner, or whose owner lease has ended, follows the release rule of
+[Location runtime §6.1](../05-location-relocation/01-location-runtime.en.md#61-read-and-cas).
+
 ## 7. Session Binding
 
 Session binding is the runtime relationship between an Actor and the current
