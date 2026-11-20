@@ -1468,11 +1468,11 @@ void zlink::pipe_t::flush_unlocked (pipe_write_observer_fn observer_, void *obse
             // public send scope releases its socket turn.
             command_t cmd = {};
             cmd.type = command_t::activate_read;
-            if (prepare_pipe_command (peer, cmd)) {
-                const bool deferred =
-                  observer_ (this, observer_userdata_, pipe_write_observer_defer_command, &cmd);
-                zlink_assert (deferred);
-            }
+            // A second flush in the same submit scope finds the observer slot
+            // taken; that wake goes out now so no reader is left sleeping.
+            if (prepare_pipe_command (peer, cmd)
+                && !observer_ (this, observer_userdata_, pipe_write_observer_defer_command, &cmd))
+                send_prepared_command (cmd);
         }
     }
     if (publish_pending_controls && !_session_pipe)
