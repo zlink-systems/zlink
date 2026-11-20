@@ -426,7 +426,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       }
       if (
         record.snapshot.allocation.state !== 'active' ||
-        (record.visibleStoreVersion ?? current.value.version.value) !== expectedStoreVersion.value
+        current.value.version.value !== expectedStoreVersion.value
       ) {
         return { kind: 'conflict', current: snapshot };
       }
@@ -844,8 +844,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         if (
           record.aggregate !== undefined ||
           record.snapshot.allocation.state !== 'active' ||
-          (record.visibleStoreVersion ?? current.value.version.value) !==
-            participant.expectedStoreVersion.value
+          current.value.version.value !== participant.expectedStoreVersion.value
         ) {
           await this.clearAggregateMarkers(fence, installed, signal);
           await this.abortAggregateStaging(fence, signal);
@@ -894,7 +893,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
                 bytes: encodeAuthorityRecord({
                   ...record,
                   aggregate: marker,
-                  visibleStoreVersion: record.visibleStoreVersion ?? current.value.version.value
+                  visibleStoreVersion: current.value.version.value
                 } satisfies AuthorityRecord)
               },
               ...(reservingOwnerGenerationBlock
@@ -3641,13 +3640,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   ): Promise<ZLinkAuthoritySnapshot> {
     const marker = record.aggregate;
     if (marker === undefined) {
-      return authoritySnapshot(
-        record.snapshot,
-        record.visibleStoreVersion === undefined
-          ? version
-          : ({ value: record.visibleStoreVersion } as ZLinkStoreVersion),
-        storeNow
-      );
+      return authoritySnapshot(record.snapshot, version, storeNow);
     }
     const aggregateRead = await this.provider.read(
       aggregateKey(aggregateFence(aggregateId(marker.aggregateId), marker.aggregateGeneration)),
@@ -3918,7 +3911,8 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
               key,
               bytes: encodeAuthorityRecord({
                 ...record,
-                aggregate: undefined
+                aggregate: undefined,
+                visibleStoreVersion: undefined
               } satisfies AuthorityRecord)
             }
           ]
@@ -4616,9 +4610,8 @@ function encodeAuthorityRecord(record: AuthorityRecord): Uint8Array {
             requestEncodedSize: Number(snapshot.pendingCreation.requestEncodedSize)
           }
   };
-  // These fields gate Node-only creation/aggregate recovery.  They are absent
-  // from normal authority values (including the golden vector), while the
-  // interoperable envelope above remains byte-canonical.
+  // Aggregate progress shares the authority envelope across languages
+  // (Location runtime §3.4). Normal authority records omit both progress fields.
   if (record.terminal !== undefined) envelope.terminal = record.terminal;
   if (record.aggregate !== undefined) envelope.aggregate = canonicalize(record.aggregate);
   if (record.visibleStoreVersion !== undefined)
