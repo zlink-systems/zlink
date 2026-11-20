@@ -173,8 +173,10 @@ final class ZLinkStaleSpotOwnerIntegrationTest {
         }
 
         @Bean
-        public ZLinkFrameworkConfigurer framework(ZLinkRedisRelocationStore relocationStore) {
+        public ZLinkFrameworkConfigurer framework(
+                ZLinkLocationStore store, ZLinkRedisRelocationStore relocationStore) {
             return options -> {
+                options.addLocationStore(store);
                 renewInterval = options.configureLocations().ownerLeaseRenewInterval();
                 options.addRelocationStore(relocationStore);
                 options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);

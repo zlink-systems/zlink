@@ -26,27 +26,29 @@ import systems.zlink.samples.kotlin.deliverydispatch.server.configuration.Sample
 )
 class TrackingServerApplication {
     @Bean
-    fun trackingFramework(): ZLinkFrameworkConfigurer = ZLinkFrameworkConfigurer { options ->
-        options.useCoroutineHandlers(Dispatchers.Default)
-        options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
+    fun trackingFramework(locations: ZLinkRedisLocationStore): ZLinkFrameworkConfigurer =
+        ZLinkFrameworkConfigurer { options ->
+            options.addLocationStore(locations)
+            options.useCoroutineHandlers(Dispatchers.Default)
+            options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
 
-        // #895: configuration package scanning has no Kotlin form in the spec.
-        options.addHandlersFromPackageOf<TrackingServerApplication>()
-        val trackingSpot =
+            // #895: configuration package scanning has no Kotlin form in the spec.
+            options.addHandlersFromPackageOf<TrackingServerApplication>()
+            val trackingSpot =
+                options
+                    .addRouteMesh(SampleNames.CustomerSpotMesh)
+                    .listen(SampleTopology.TrackingSpotEndpoint)
+                    .setRoutingIdPrefix("delivery-tracking")
+            trackingSpot.objects().client()
+            val trackingEndpoint = URI.create(SampleTopology.TrackingChannelEndpoint)
             options
-                .addRouteMesh(SampleNames.CustomerSpotMesh)
-                .listen(SampleTopology.TrackingSpotEndpoint)
-                .setRoutingIdPrefix("delivery-tracking")
-        trackingSpot.objects().client()
-        val trackingEndpoint = URI.create(SampleTopology.TrackingChannelEndpoint)
-        options
-            .addClientServerChannel(SampleNames.TrackingChannel)
-            .server()
-            .setBindHost(trackingEndpoint.host)
-            .setAdvertiseHost(trackingEndpoint.host)
-            .listen(trackingEndpoint.port)
-            .addHandlerGroup("tracking")
-    }
+                .addClientServerChannel(SampleNames.TrackingChannel)
+                .server()
+                .setBindHost(trackingEndpoint.host)
+                .setAdvertiseHost(trackingEndpoint.host)
+                .listen(trackingEndpoint.port)
+                .addHandlerGroup("tracking")
+        }
 
     @Bean fun locationStore(): ZLinkRedisLocationStore = SampleLocationStore.create()
 
