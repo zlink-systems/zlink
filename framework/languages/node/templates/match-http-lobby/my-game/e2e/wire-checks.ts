@@ -1,11 +1,20 @@
 import 'reflect-metadata';
 import '../.zlink-framework-json-schemas.cjs';
 import assert from 'node:assert/strict';
-import { createServer } from 'node:net';
 import { Injectable } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { zlinkFramework, zlinkModule, ZLinkModule } from '@zlink-systems/nestjs';
-import type { ZLinkSession, ZLinkSessionContext, ZLinkSessionFactory } from '@zlink-systems/framework';
+import {
+  zlinkFramework,
+  zlinkModule,
+  ZLinkModule,
+  ZLINK_FRAMEWORK_RUNTIME
+} from '@zlink-systems/nestjs';
+import type {
+  ZLinkFrameworkRuntime,
+  ZLinkSession,
+  ZLinkSessionContext,
+  ZLinkSessionFactory
+} from '@zlink-systems/framework';
 import type { ZlinkStreamEncodedPayload } from '@zlink-systems/stream-connector';
 import {
   ActionRejected,
@@ -71,16 +80,8 @@ export async function runWireChecks(): Promise<void> {
   const { zlinkStreamConnectorFactory, ZlinkStreamDispatchMode } = await import(
     '@zlink-systems/stream-connector'
   );
-  const reservation = createServer();
-  await new Promise<void>((resolve) => reservation.listen(0, '127.0.0.1', resolve));
-  const address = reservation.address();
-  assert(address && typeof address === 'object');
-  const endpoint = `ws://127.0.0.1:${address.port}`;
-  await new Promise<void>((resolve, reject) =>
-    reservation.close((error) => (error ? reject(error) : resolve()))
-  );
   const builder = zlinkFramework();
-  builder.addStreamNode('wire-check').bind(endpoint).registerSession(WireSessionFactory);
+  builder.addStreamNode('wire-check').bind('ws://127.0.0.1:0').registerSession(WireSessionFactory);
   class WireHost {}
   zlinkModule({
     providerDiscovery: [],
@@ -91,6 +92,9 @@ export async function runWireChecks(): Promise<void> {
     logger: ['error'],
     abortOnError: false
   });
+  const endpoint = app
+    .get<ZLinkFrameworkRuntime>(ZLINK_FRAMEWORK_RUNTIME)
+    .getListenerStatus('stream', 'wire-check').endpoint;
   const client = zlinkStreamConnectorFactory.create({
     endpoint,
     dispatchMode: ZlinkStreamDispatchMode.Immediate,
