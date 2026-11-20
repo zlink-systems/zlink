@@ -1,4 +1,4 @@
-import { AsyncLocalStorage } from 'node:async_hooks';
+import { FrameworkContextField } from '../framework-context';
 import type { ZLinkExecutionPolicy } from '../admission';
 import type { ApplicationJobPermitPort } from '../application-jobs/contracts';
 import {
@@ -79,7 +79,7 @@ interface ZLinkSerialAdmissionLane {
   readonly records: Array<SerialWorkRecord<unknown>>;
 }
 
-const currentLifecycleOperation = new AsyncLocalStorage<ZLinkSerialWorkRecord<unknown>>();
+const currentLifecycleOperation = new FrameworkContextField<ZLinkSerialWorkRecord<unknown>>();
 
 /**
  * One event-loop serial execution queue per Spot, Actor mailbox, or Stream session.
