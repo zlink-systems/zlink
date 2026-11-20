@@ -245,3 +245,76 @@ for (const stage of ['initial authentication', 'authentication rejection']) {
     }
   );
 }
+
+// Spec 07 §9.2 client bounds, checked at the exact serialized message size.
+const authenticate = Object.values(definitions.Auth.service).find(
+  (method) => method.path === '/etcdserverpb.Auth/Authenticate'
+);
+
+test('etcd send limit accepts exactly 16 MiB and fails one byte more before dispatch', async () => {
+  const limit = 16 * 1024 * 1024;
+  // Both password lengths need a four-byte varint, so the field overhead is the same.
+  const probe = { name: 'u', password: 'p'.repeat(limit) };
+  const overhead = authenticate.requestSerialize(probe).length - limit;
+  let calls = 0;
+  const server = new grpc.Server({ 'grpc.max_receive_message_length': -1 });
+  server.addService(definitions.Auth.service, {
+    authenticate(_call, callback) {
+      calls++;
+      callback(null, { token: 'token' });
+    }
+  });
+  const port = await serve(server);
+  const client = new EtcdClient({ endpoints: [`http://127.0.0.1:${port}`], namespace: 'limit' });
+  try {
+    for (const excess of [-1, 0, 1]) {
+      const request = { name: 'u', password: 'p'.repeat(limit + excess - overhead) };
+      assert.equal(authenticate.requestSerialize(request).length, limit + excess);
+      const response = client.rpc('Auth', 'authenticate', request, client.operation());
+      if (excess <= 0) assert.equal((await response).token, 'token');
+      else
+        await assert.rejects(
+          response,
+          (error) => error.kind === 'storeFailure' && error.code === grpc.status.RESOURCE_EXHAUSTED
+        );
+      assert.equal(calls, excess === -1 ? 1 : 2, `server calls after ${limit + excess} bytes`);
+    }
+  } finally {
+    client.close();
+    server.forceShutdown();
+  }
+});
+
+test('etcd receive limit accepts exactly 8 MiB and fails one byte more', async () => {
+  const limit = 8 * 1024 * 1024;
+  // Both token lengths need a four-byte varint, so the field overhead is the same.
+  const overhead = authenticate.responseSerialize({ token: 't'.repeat(limit) }).length - limit;
+  let token = '';
+  let calls = 0;
+  const server = new grpc.Server();
+  server.addService(definitions.Auth.service, {
+    authenticate(_call, callback) {
+      calls++;
+      callback(null, { token });
+    }
+  });
+  const port = await serve(server);
+  const client = new EtcdClient({ endpoints: [`http://127.0.0.1:${port}`], namespace: 'limit' });
+  try {
+    for (const excess of [-1, 0, 1]) {
+      token = 't'.repeat(limit + excess - overhead);
+      assert.equal(authenticate.responseSerialize({ token }).length, limit + excess);
+      const response = client.rpc('Auth', 'authenticate', { name: 'u' }, client.operation());
+      if (excess <= 0) assert.equal((await response).token.length, token.length);
+      else
+        await assert.rejects(
+          response,
+          (error) => error.kind === 'storeFailure' && error.code === grpc.status.RESOURCE_EXHAUSTED
+        );
+    }
+    assert.equal(calls, 3);
+  } finally {
+    client.close();
+    server.forceShutdown();
+  }
+});
