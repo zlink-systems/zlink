@@ -78,6 +78,30 @@ final class ZLinkActorRouteCacheTriggerTest {
         assertEquals(3, reads.get());
     }
 
+    @Test
+    void publicFindDoesNotCacheTheOwnerItObserved() {
+        var current = new AtomicReference<>(row("v1", "source", 1));
+        var reads = new AtomicInteger();
+        var resolver = resolver(current, reads);
+        var coordinator = new ZLinkActorLocationCoordinator(ignored -> "player");
+        coordinator.setResolvers(resolver);
+        assertEquals(
+                RoutingId.from("source"),
+                coordinator
+                        .findStoredActorRefExact("actor")
+                        .toCompletableFuture()
+                        .join()
+                        .orElseThrow()
+                        .nodeRid());
+        current.set(row("v2", "target", 2));
+        var route = resolver.resolveActor("actor").toCompletableFuture().join();
+        assertEquals(
+                RoutingId.from("target"),
+                route.nodeRid(),
+                "a request after relocation commit must not use the owner Find observed before it");
+        assertEquals(2, reads.get());
+    }
+
     private static ZLinkStoreLocationResolvers resolver(
             AtomicReference<ZLinkAuthoritySnapshot> current, AtomicInteger reads) {
         var store =

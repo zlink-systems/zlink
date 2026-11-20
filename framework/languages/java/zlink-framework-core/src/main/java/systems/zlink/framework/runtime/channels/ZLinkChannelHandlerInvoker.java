@@ -1,7 +1,6 @@
 package systems.zlink.framework.runtime.channels;
 
 import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.ZLinkHandlerDispatchKind;
 import systems.zlink.framework.ZLinkHandlerFilter;
 import systems.zlink.framework.ZLinkMessageContext;
@@ -16,6 +15,7 @@ import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistra
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
 
 import java.nio.ByteBuffer;
@@ -134,7 +134,7 @@ final class ZLinkChannelHandlerInvoker {
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
-    CompletionStage<Message> invokeRequestHandler(
+    CompletionStage<ZLinkFrameworkMultipartView> invokeRequestHandler(
             String channelName,
             ChannelRequestHandlerRegistration registration,
             ByteBuffer payload) {
@@ -142,7 +142,7 @@ final class ZLinkChannelHandlerInvoker {
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
-    CompletionStage<Message> invokeRequestHandler(
+    CompletionStage<ZLinkFrameworkMultipartView> invokeRequestHandler(
             String channelName,
             ChannelRequestHandlerRegistration registration,
             ByteBuffer payload,
@@ -151,7 +151,7 @@ final class ZLinkChannelHandlerInvoker {
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
-    CompletionStage<Message> invokeRequestHandler(
+    CompletionStage<ZLinkFrameworkMultipartView> invokeRequestHandler(
             String channelName,
             ChannelRequestHandlerRegistration registration,
             ByteBuffer payload,
@@ -161,7 +161,7 @@ final class ZLinkChannelHandlerInvoker {
                 channelName, registration, payload, metadata, wireContentType, null);
     }
 
-    CompletionStage<Message> invokeRequestHandler(
+    CompletionStage<ZLinkFrameworkMultipartView> invokeRequestHandler(
             String channelName,
             ChannelRequestHandlerRegistration registration,
             ByteBuffer payload,
@@ -193,7 +193,7 @@ final class ZLinkChannelHandlerInvoker {
                             Function.identity())
                     .thenApply(
                             reply ->
-                                    ZLinkMessagePayloads.message(
+                                    ZLinkMessagePayloads.retained(
                                             serializer, reply, registration.replyType()));
         } catch (RuntimeException ex) {
             return CompletableFuture.failedFuture(ex);
@@ -320,7 +320,7 @@ final class ZLinkChannelHandlerInvoker {
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
-    CompletionStage<Message> invokeRouteRequestHandler(
+    CompletionStage<ZLinkFrameworkMultipartView> invokeRouteRequestHandler(
             String channelName,
             ChannelRouteRequestHandlerRegistration registration,
             RoutingId sourceRoutingId,
@@ -330,7 +330,7 @@ final class ZLinkChannelHandlerInvoker {
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
-    CompletionStage<Message> invokeRouteRequestHandler(
+    CompletionStage<ZLinkFrameworkMultipartView> invokeRouteRequestHandler(
             String channelName,
             ChannelRouteRequestHandlerRegistration registration,
             RoutingId sourceRoutingId,
@@ -341,7 +341,7 @@ final class ZLinkChannelHandlerInvoker {
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
-    CompletionStage<Message> invokeRouteRequestHandler(
+    CompletionStage<ZLinkFrameworkMultipartView> invokeRouteRequestHandler(
             String channelName,
             ChannelRouteRequestHandlerRegistration registration,
             RoutingId sourceRoutingId,
@@ -358,7 +358,7 @@ final class ZLinkChannelHandlerInvoker {
                 null);
     }
 
-    CompletionStage<Message> invokeRouteRequestHandler(
+    CompletionStage<ZLinkFrameworkMultipartView> invokeRouteRequestHandler(
             String channelName,
             ChannelRouteRequestHandlerRegistration registration,
             RoutingId sourceRoutingId,
@@ -392,7 +392,7 @@ final class ZLinkChannelHandlerInvoker {
                     stage ->
                             stage.thenApply(
                                     reply ->
-                                            ZLinkMessagePayloads.message(
+                                            ZLinkMessagePayloads.retained(
                                                     serializer, reply, registration.replyType())));
         } catch (RuntimeException ex) {
             return CompletableFuture.failedFuture(ex);

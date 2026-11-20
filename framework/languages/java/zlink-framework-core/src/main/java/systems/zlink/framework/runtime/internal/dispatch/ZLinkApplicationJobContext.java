@@ -13,8 +13,9 @@ import java.util.concurrent.CompletableFuture;
  */
 public final class ZLinkApplicationJobContext {
     private static final ThreadLocal<State> CURRENT = new ThreadLocal<>();
-    // Restores an empty context; shared because it captures nothing.
-    private static final Scope CLEAR = CURRENT::remove;
+    // Restores an empty context; shared because it captures nothing. It stores null instead of
+    // removing the entry: a later get() on this thread then finds the slot and allocates nothing.
+    private static final Scope CLEAR = () -> CURRENT.set(null);
 
     private ZLinkApplicationJobContext() {}
 
