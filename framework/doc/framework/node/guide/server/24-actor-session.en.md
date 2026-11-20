@@ -99,25 +99,6 @@ An Actor knows the connection bound to it. This is not a reply but **a notificat
     language's asynchronous completion mechanism. The code above has already completed the rename
     before pushing, so it discards **only that failure**.
 
-### 3.4 Bind notification
-
-An Actor can receive its committed binding through the optional `onSessionBound(incoming, signal)`
-callback. `incoming` is a `ZLinkSessionBindingIdentity` containing the session owner node RID,
-lifecycle generation, and binding generation. The callback runs once for each successful bind,
-including the first bind and a resubmission from the same physical Session.
-
-```typescript
-onSessionBound(incoming: ZLinkSessionBindingIdentity, signal: AbortSignal): void | Promise<void>
-```
-
-The Framework commits the binding and sends the success reply before invoking the callback in
-the same Actor handler order. Omitting the callback performs no work; a bind without callbacks
-does not wait for the Actor gate. A rejected duplicate bind does not trigger this notification.
-
-Callback failures leave the bind result intact and are reported once as runtime task exceptions.
-After `sessionReplacementCallbackTimeoutMs` (default `30000 ms`), the Framework cancels `signal`
-and reports the timeout once. Cancellation caused by Actor or runtime shutdown is not reported.
-
 ## 4. The Attaching Side — a Client Outside the Mesh
 
 !!! info "The attaching process"
