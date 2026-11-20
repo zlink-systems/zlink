@@ -262,13 +262,13 @@ internal readonly record struct ZLinkSessionOutboundAdmission(
 
 internal static class ZLinkSessionOutboundSubmission
 {
-    internal static ZLinkSessionOutboundDelivery Submit(ZLinkSessionContext context, byte[] frame)
-    {
-        var message = Message.From(frame);
-        return context.Write(message)
+    internal static async ValueTask<ZLinkSessionOutboundDelivery> SubmitAsync(
+        ZLinkSessionContext context,
+        byte[] frame
+    ) =>
+        await context.SubmitOutboundAsync(Message.From(frame)).ConfigureAwait(false)
             ? ZLinkSessionOutboundDelivery.Delivered
             : ZLinkSessionOutboundDelivery.Backpressured;
-    }
 }
 
 internal readonly record struct ZLinkSessionBindingTombstone(
@@ -570,8 +570,8 @@ internal sealed class ZLinkSessionActorBindingTable
         Func<ZlinkStreamHeader, Task> submit
     )
     {
-        var submission = await _lane
-            .RunAsync(() =>
+        await _lane
+            .RunAsync(async () =>
             {
                 var current =
                     header.ActorSlot is not { } slot
@@ -580,81 +580,107 @@ internal sealed class ZLinkSessionActorBindingTable
                         && ReferenceEquals(entry.Context, context)
                         && entry.ActorRef.Slot == slot
                     );
-                return submit(
-                    current
-                        ? header
-                        : header with
-                        {
-                            ActorSlot = null,
-                            Flags = header.Flags & ~ZlinkStreamHeaderFlags.HasActorSlot,
-                        }
-                );
+                await submit(
+                        current
+                            ? header
+                            : header with
+                            {
+                                ActorSlot = null,
+                                Flags = header.Flags & ~ZlinkStreamHeaderFlags.HasActorSlot,
+                            }
+                    )
+                    .ConfigureAwait(false);
             })
             .ConfigureAwait(false);
-        await submission.ConfigureAwait(false);
     }
 
-    internal ValueTask<ZLinkSessionOutboundAdmission> AdmitOutboundAsync(
+    internal async ValueTask<ZLinkSessionOutboundAdmission> AdmitOutboundAsync(
         ZLinkSessionOutboundTenure tenure,
         byte[] frame
     )
     {
         ArgumentNullException.ThrowIfNull(frame);
-        return _lane.RunAsync(() =>
-        {
-            var actorId = ZLinkActorId.FromBoundary(tenure.ActorId, nameof(tenure.ActorId));
-            if (!TryGetCurrentEntry(actorId, out var entry))
-                return new ZLinkSessionOutboundAdmission(
-                    ZLinkSessionOutboundAdmissionKind.NoBinding
-                );
-            if (!MatchesPhysicalSession(entry, tenure))
-                return new ZLinkSessionOutboundAdmission(
-                    ZLinkSessionOutboundAdmissionKind.WrongSession
-                );
+        ZLinkSessionOutboundAdmission result = default;
+        await _lane
+            .RunAsync(async () =>
+            {
+                var actorId = ZLinkActorId.FromBoundary(tenure.ActorId, nameof(tenure.ActorId));
+                if (!TryGetCurrentEntry(actorId, out var entry))
+                {
+                    result = new ZLinkSessionOutboundAdmission(
+                        ZLinkSessionOutboundAdmissionKind.NoBinding
+                    );
+                    return;
+                }
+                if (!MatchesPhysicalSession(entry, tenure))
+                {
+                    result = new ZLinkSessionOutboundAdmission(
+                        ZLinkSessionOutboundAdmissionKind.WrongSession
+                    );
+                    return;
+                }
 
-            var delivery = ZLinkSessionOutboundSubmission.Submit(
-                entry.Context,
-                ZLinkStreamActorFrames.WithActorSlot(frame, entry.ActorRef.Slot)
-            );
-            return new ZLinkSessionOutboundAdmission(
-                ZLinkSessionOutboundAdmissionKind.Immediate,
-                delivery
-            );
-        });
+                var delivery = await ZLinkSessionOutboundSubmission
+                    .SubmitAsync(
+                        entry.Context,
+                        ZLinkStreamActorFrames.WithActorSlot(frame, entry.ActorRef.Slot)
+                    )
+                    .ConfigureAwait(false);
+                result = new ZLinkSessionOutboundAdmission(
+                    ZLinkSessionOutboundAdmissionKind.Immediate,
+                    delivery
+                );
+            })
+            .ConfigureAwait(false);
+        return result;
     }
 
-    internal ValueTask<ZLinkSessionOutboundAdmission> DeliverReplyAsync(
+    internal async ValueTask<ZLinkSessionOutboundAdmission> DeliverReplyAsync(
         string actorId,
         ZLinkSessionBindingEntry expected,
         byte[] frame
-    ) =>
-        _lane.RunAsync(() =>
-        {
-            var key = ZLinkSessionBindingKey.FromBoundary(actorId, expected.BindingToken);
-            if (!TryGetEntry(key, out var entry))
-                return new ZLinkSessionOutboundAdmission(
-                    TryGetCurrentEntry(key.ActorId, out _)
-                        ? ZLinkSessionOutboundAdmissionKind.WrongSession
-                        : ZLinkSessionOutboundAdmissionKind.NoBinding
-                );
-            if (
-                entry.ObjectGeneration != expected.ObjectGeneration
-                || entry.BindingGeneration != expected.BindingGeneration
-                || entry.Context.RoutingId != expected.Context.RoutingId
-            )
-                return new ZLinkSessionOutboundAdmission(
-                    ZLinkSessionOutboundAdmissionKind.WrongSession
-                );
+    )
+    {
+        ZLinkSessionOutboundAdmission result = default;
+        await _lane
+            .RunAsync(async () =>
+            {
+                var key = ZLinkSessionBindingKey.FromBoundary(actorId, expected.BindingToken);
+                if (!TryGetEntry(key, out var entry))
+                {
+                    result = new ZLinkSessionOutboundAdmission(
+                        TryGetCurrentEntry(key.ActorId, out _)
+                            ? ZLinkSessionOutboundAdmissionKind.WrongSession
+                            : ZLinkSessionOutboundAdmissionKind.NoBinding
+                    );
+                    return;
+                }
+                if (
+                    entry.ObjectGeneration != expected.ObjectGeneration
+                    || entry.BindingGeneration != expected.BindingGeneration
+                    || entry.Context.RoutingId != expected.Context.RoutingId
+                )
+                {
+                    result = new ZLinkSessionOutboundAdmission(
+                        ZLinkSessionOutboundAdmissionKind.WrongSession
+                    );
+                    return;
+                }
 
-            var delivery = ZLinkSessionOutboundSubmission.Submit(
-                entry.Context,
-                ZLinkStreamActorFrames.WithActorSlot(frame, entry.ActorRef.Slot)
-            );
-            return new ZLinkSessionOutboundAdmission(
-                ZLinkSessionOutboundAdmissionKind.Immediate,
-                delivery
-            );
-        });
+                var delivery = await ZLinkSessionOutboundSubmission
+                    .SubmitAsync(
+                        entry.Context,
+                        ZLinkStreamActorFrames.WithActorSlot(frame, entry.ActorRef.Slot)
+                    )
+                    .ConfigureAwait(false);
+                result = new ZLinkSessionOutboundAdmission(
+                    ZLinkSessionOutboundAdmissionKind.Immediate,
+                    delivery
+                );
+            })
+            .ConfigureAwait(false);
+        return result;
+    }
 
     private static bool MatchesPhysicalSession(
         ZLinkSessionBindingEntry entry,
@@ -1851,6 +1877,7 @@ internal sealed class ZLinkSessionActorBindingTable
         var terminal = await _lane
             .RunAsync(() =>
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var session = request.Session;
                 var sessionOwnerNodeRid = RoutingId.From(session.SessionOwnerNodeRid.Value);
                 if (

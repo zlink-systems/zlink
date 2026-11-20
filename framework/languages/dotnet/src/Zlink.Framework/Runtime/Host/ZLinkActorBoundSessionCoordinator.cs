@@ -863,16 +863,6 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             .SendActorBoundSession(actorRef, parts);
     }
 
-    public bool SendIfBoundTo(
-        string actorId,
-        string expectedBindingToken,
-        IReadOnlyList<Message> parts
-    )
-    {
-        var state = _getState(actorId);
-        return state.TryUseBoundSession(expectedBindingToken, _ => Send(actorId, parts));
-    }
-
     public ValueTask<ZLinkOneWaySubmitResult> SendIfBoundToAsync(
         string actorId,
         string expectedBindingToken,
@@ -886,9 +876,7 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             || !string.Equals(session.BindingToken, expectedBindingToken, StringComparison.Ordinal)
         )
         {
-            //  Designed stale-binding drop (same contract as the sync
-            //  SendIfBoundTo path), reported honestly: nothing was
-            //  submitted, so this must not read as a delivery signal.
+            // Nothing was submitted for this stale binding, so report the drop explicitly.
             return ValueTask.FromResult(
                 new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.SkippedNotBound)
             );
