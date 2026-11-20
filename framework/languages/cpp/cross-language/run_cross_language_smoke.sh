@@ -2452,8 +2452,7 @@ stage_java_source_cpp_target_user_spot_join
 stage_cpp_source_java_target_user_spot_join
 for outage_order in descriptor-first cas-first; do
   stage_outage_relocation node dotnet "${outage_order}"
-  # dotnet -> java runs only as its own stage until the Java target serves its first
-  # request right after relocation commit: https://github.com/zlink-systems/zlink/issues/4743
+  stage_outage_relocation dotnet java "${outage_order}"
   stage_outage_relocation java cpp "${outage_order}"
   # cpp -> node runs only as its own stage until the C++ source stops running
   # requests after relocation commit: https://github.com/zlink-systems/zlink/issues/4730

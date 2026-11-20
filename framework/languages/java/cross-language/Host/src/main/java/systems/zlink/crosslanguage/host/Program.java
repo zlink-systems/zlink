@@ -624,34 +624,30 @@ public final class Program {
             Thread.currentThread().interrupt();
             return;
         }
-        long deadlineNanos = System.nanoTime() + Duration.ofSeconds(90).toNanos();
-        String lastFailure = "none";
-        while (System.nanoTime() < deadlineNanos) {
-            try {
-                UserSpotProbeRes reply = actorClient
-                    .requestToActor(actorId, new UserSpotProbeReq("target-owner-probe"))
-                    .timeout(Duration.ofSeconds(5))
-                    .submit(UserSpotProbeRes.class)
-                    .toCompletableFuture()
-                    .get(7, TimeUnit.SECONDS);
-                if (targetNodeRid.equals(reply.nodeRid())) {
-                    sink.append("user-spot-probe|nodeRid=" + reply.nodeRid()
-                        + "|targetRid=" + targetNodeRid
-                        + "|actor=" + reply.actorId()
-                        + "|stateVersion=" + reply.stateVersion());
-                    return;
-                }
-                lastFailure = "unexpected-owner:" + reply.nodeRid();
-            } catch (ExecutionException | TimeoutException error) {
-                lastFailure = describe(error);
-            } catch (InterruptedException error) {
-                Thread.currentThread().interrupt();
+        // One request right after joined: a retry loop would hide a first request that fails (#4743).
+        String failure;
+        try {
+            UserSpotProbeRes reply = actorClient
+                .requestToActor(actorId, new UserSpotProbeReq("target-owner-probe"))
+                .timeout(Duration.ofSeconds(5))
+                .submit(UserSpotProbeRes.class)
+                .toCompletableFuture()
+                .get(7, TimeUnit.SECONDS);
+            if (targetNodeRid.equals(reply.nodeRid())) {
+                sink.append("user-spot-probe|nodeRid=" + reply.nodeRid()
+                    + "|targetRid=" + targetNodeRid
+                    + "|actor=" + reply.actorId()
+                    + "|stateVersion=" + reply.stateVersion());
                 return;
             }
-            sleepQuietly(500);
+            failure = "unexpected-owner:" + reply.nodeRid();
+        } catch (ExecutionException | TimeoutException error) {
+            failure = describe(error);
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            return;
         }
-        sink.append("user-spot-probe-timeout|targetRid=" + targetNodeRid
-            + "|failure=" + lastFailure);
+        sink.append("user-spot-probe-timeout|targetRid=" + targetNodeRid + "|failure=" + failure);
     }
 
     private static void startDaemon(String name, Runnable body) {
