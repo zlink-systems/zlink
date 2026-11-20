@@ -268,7 +268,11 @@ int zlink::make_fdpair (fd_t *r_, fd_t *w_)
         goto try_tcpip;
     }
 
-    create_ipc_wildcard_address (dirname, filename);
+    rc = create_ipc_wildcard_address (dirname, filename);
+    if (rc != 0) {
+        ipc_fallback_on_tcpip = false;
+        goto error_closelistener;
+    }
 
     //  Initialise the address structure.
     rc = address.resolve (filename.c_str ());
