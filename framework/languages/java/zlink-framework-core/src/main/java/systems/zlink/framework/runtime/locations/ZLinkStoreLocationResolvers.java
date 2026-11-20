@@ -84,11 +84,25 @@ public final class ZLinkStoreLocationResolvers
 
     /** Reads current authority directly; a failed read preserves the positive route cache. */
     public CompletionStage<ActorRoute> readActor(String actorId) {
+        return readActor(actorId, actorRoutes);
+    }
+
+    /**
+     * Reads current authority for a public {@code Find}. The result is an observation: it neither
+     * stores nor removes a positive route, so only a request resolution decides which owner later
+     * requests use (04-actor-model §6.6, 08-routing §2.2).
+     */
+    public CompletionStage<ActorRoute> findActor(String actorId) {
+        return readActor(actorId, null);
+    }
+
+    private CompletionStage<ActorRoute> readActor(
+            String actorId, Map<String, CachedRoute<ActorRoute>> cache) {
         routeReadAdmission.run();
         return observeAuthorityRead(
                         stores.unifiedStore()
                                 .read(ZLinkAuthorityKeyCodec.actor(actorId), () -> false))
-                .thenCompose(read -> resolveReadyActor(actorId, read));
+                .thenCompose(read -> resolveReadyActor(actorId, read, cache));
     }
 
     @Override
@@ -269,11 +283,12 @@ public final class ZLinkStoreLocationResolvers
                 snapshot.storeVersion());
     }
 
-    private CompletionStage<ActorRoute> resolveReadyActor(String actorId, Object read) {
+    private CompletionStage<ActorRoute> resolveReadyActor(
+            String actorId, Object read, Map<String, CachedRoute<ActorRoute>> cache) {
         if (!(read instanceof ZLinkAuthoritySnapshot snapshot)
                 || snapshot.allocation().state() != ZLinkPlacementAllocationState.ACTIVE
                 || snapshot.allocation().objectKind() != ZLinkPlacementObjectKind.ACTOR) {
-            actorRoutes.remove(actorId);
+            forget(cache, actorId);
             return CompletableFuture.completedFuture(null);
         }
         var authority = actorAuthorityCodec.decode(snapshot.payload()).orElse(null);
@@ -284,11 +299,11 @@ public final class ZLinkStoreLocationResolvers
                 || authority.ownerLeaseGeneration() != snapshot.ownerLeaseGeneration()) {
             ActorRoute canonical = projectCanonicalActor(snapshot, actorId);
             if (canonical == null) {
-                actorRoutes.remove(actorId);
+                forget(cache, actorId);
                 return CompletableFuture.completedFuture(null);
             }
             return admitPositiveRoute(
-                    actorRoutes,
+                    cache,
                     actorId,
                     canonical,
                     snapshot.ownerId(),
@@ -311,7 +326,7 @@ public final class ZLinkStoreLocationResolvers
                         snapshot.authorityOwnerGeneration(),
                         snapshot.ownerLeaseGeneration());
         return admitPositiveRoute(
-                actorRoutes,
+                cache,
                 actorId,
                 route,
                 snapshot.ownerId(),
@@ -371,7 +386,7 @@ public final class ZLinkStoreLocationResolvers
                                                 ZLinkFrameworkErrorKind.UNAVAILABLE,
                                                 "location owner lease is unavailable: " + ownerId));
                             }
-                            if (!routeCacheMaxAge.isZero()) {
+                            if (cache != null && !routeCacheMaxAge.isZero()) {
                                 Duration lifetime =
                                         remaining.compareTo(routeCacheMaxAge) < 0
                                                 ? remaining
@@ -388,6 +403,12 @@ public final class ZLinkStoreLocationResolvers
                             }
                             return CompletableFuture.completedFuture(value);
                         });
+    }
+
+    private static <V> void forget(Map<String, CachedRoute<V>> cache, String key) {
+        if (cache != null) {
+            cache.remove(key);
+        }
     }
 
     private static <V> V cached(Map<String, CachedRoute<V>> cache, String key) {

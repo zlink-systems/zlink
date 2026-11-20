@@ -381,6 +381,12 @@ process에 있어도 같은 판정을 거친다. Session owner의 binding aggreg
 검증하며, Session owner는 Actor authority를 다시 조회하지 않는다. Relocation seal과 route 적용은 유효한 current binding의
 close를 지연시키지 않는다.
 
+**Close는 같은 binding으로 먼저 제출된 reply와 push 뒤에 수행한다.** Actor owner는 close 요청을 그 binding의
+reply·push와 같은 순서로 Session owner에 보내고, Session owner는 먼저 받은 reply·push를 Core에 제출한 뒤 physical
+connection close를 시작한다. 이 순서를 위한 별도 timer·ack·재전송은 두지 않으며, 먼저 제출된 송신이 끝나지 않으면
+command 54의 기존 deadline으로 끝난다. Core에 수락된 write의 완료는
+[STREAM session §4.1](01-stream-session.ko.md#41-transport-종료-경계)이 소유한다.
+
 Close reply는 transport close terminal을 전달하며, 이 close가 일으킨 §7의 disconnect callback·tombstone·local cleanup
 완료를 기다리지 않는다. Binding 정리와 Actor 통지는 §7이 한 번 수행하며, close 요청 경로는 binding을 따로 해제하지
 않는다. Command 54의 request/reply는 기존 correlation·deadline·취소·오류 terminal 계약을 따른다.
@@ -994,6 +1000,8 @@ lane 정책 타입, 검증 지점 하나)은 [§10](#10-실행과-수명)·[§11
 - `NotifyDisconnected`와 physical disconnect가 경쟁해도 같은 binding에 대한 callback은 최대 한
   번이다.
 - Disconnect 통지 뒤에도 Actor는 destroy되지 않고 Spot membership도 그대로다.
+- Actor가 reply를 반환한 뒤 다음 handler 순서에서 close를 요청하면 client는 그 reply를 받은 뒤 연결 종료를
+  관찰한다. push 뒤 close도 같다.
 - Client가 재접속하면 이전 binding이 복원되지 않고 새 bind가 필요하다.
 - Session owner와 Actor owner가 다른 언어여도 disconnect 통지는 §7의 본문 형식으로 같은 binding
   identity를 전하며, Actor owner는 같은 binding이면 callback을 실행하고 다른 current binding이 있으면

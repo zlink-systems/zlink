@@ -82,6 +82,62 @@ public sealed partial class StreamConnectorTests
     }
 
     /// <summary>
+    ///     Stream-connector spec §9: a transport read failure ends the connection before its
+    ///     error is published. While the Immediate error handler runs, the connector is not
+    ///     connected and a Request fails with Disconnected without a write to the ended
+    ///     transport. The ending publishes one error.
+    /// </summary>
+    [Fact]
+    public async Task AReadFailureEndsTheConnectionBeforeItsErrorHandlerRuns()
+    {
+        var connection = new ScriptedConnection { FailWriteNumber = 1 };
+        var connector = CreateConnectorOn(connection, ZlinkStreamDispatchMode.Immediate);
+        var seen = new TaskCompletionSource<(ZlinkStreamError Error, bool Connected)>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        using var release = new ManualResetEventSlim();
+        var errors = 0;
+        connector.OnErrorReceived(
+            (error, _) =>
+            {
+                Interlocked.Increment(ref errors);
+                if (seen.TrySetResult((error, connector.IsConnected)))
+                    release.Wait(EndingWait);
+                return ValueTask.CompletedTask;
+            }
+        );
+        try
+        {
+            await connector.Connect.Async();
+            connection.FailRead(new IOException("The connection was reset."));
+            var first = await seen.Task.WaitAsync(EndingWait);
+
+            var request = await Assert.ThrowsAsync<ZlinkStreamException>(async () =>
+                await connector
+                    .Request(EndingPayload())
+                    .PacketName("next")
+                    .Timeout(TimeSpan.FromSeconds(30))
+                    .Async()
+                    .AsTask()
+                    .WaitAsync(EndingWait)
+            );
+
+            Assert.Equal(ZlinkStreamErrorCode.Disconnected, first.Error.Code);
+            Assert.False(first.Connected);
+            Assert.Equal(ZlinkStreamErrorCode.Disconnected, request.Error.Code);
+            Assert.Equal(0, connection.WriteAttempts);
+            Assert.Equal(ZlinkStreamCloseReason.TransportError, connector.CloseReason);
+        }
+        finally
+        {
+            release.Set();
+            await connector.DisposeAsync().AsTask().WaitAsync(EndingWait);
+        }
+
+        Assert.Equal(1, Volatile.Read(ref errors));
+    }
+
+    /// <summary>
     ///     Stream-connector spec §6.2, §9: the heartbeat decides HeartbeatTimeout where it
     ///     detects the silence, and the pending request fails with Disconnected.
     /// </summary>
@@ -708,6 +764,8 @@ public sealed partial class StreamConnectorTests
         public int FailWriteNumber { get; init; }
 
         public IReadOnlyCollection<ZlinkStreamFrame> Written => _written;
+
+        public int WriteAttempts => Volatile.Read(ref _writeCount);
 
         public void Deliver(byte[] bytes) => _inbound.Writer.TryWrite(bytes);
 

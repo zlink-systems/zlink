@@ -457,6 +457,13 @@ lifecycle. A mismatch ends with `Unavailable` and never retargets another bindin
 existing transport and authority boundaries verify the Actor route's sender authority; the Session owner does not look
 up Actor authority again. Relocation seal and route application do not delay the close of a valid current binding.
 
+**Close runs after the replies and pushes already submitted on the same binding.** The Actor owner sends the close
+request to the Session owner in the same order as that binding's replies and pushes, and the Session owner submits the
+replies and pushes it received first to Core before it starts the physical connection close. No separate timer, ack or
+retransmission exists for this order; if an earlier submission does not finish, the close ends with command 54's
+existing deadline. [STREAM session §4.1](01-stream-session.en.md#41-transport-operation-teardown-boundary) owns the
+completion of writes Core has accepted.
+
 The close reply carries the transport close terminal and does not wait for the §7 disconnect callback, tombstone or
 local cleanup that this close triggers. Binding cleanup and the Actor notification come once from §7; the close request
 path does not release the binding separately. Command 54's request/reply follows the existing correlation, deadline,
@@ -1219,6 +1226,9 @@ here.
   callback for the same binding runs at most once.
 - After a disconnect notification, the Actor isn't destroyed and Spot
   membership stays the same.
+- When an Actor returns a reply and then requests a close in its next
+  handler turn, the client observes the reply before the connection ends.
+  The same holds for a push followed by a close.
 - When a client reconnects, the previous binding isn't restored and a new
   bind is required.
 - Even when the Session owner and the Actor owner use different languages, the

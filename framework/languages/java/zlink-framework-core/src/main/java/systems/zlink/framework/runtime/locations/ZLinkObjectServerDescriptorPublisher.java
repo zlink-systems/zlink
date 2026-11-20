@@ -21,7 +21,6 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /** Publishes MeshNode discovery descriptors under the host owner lease. */
@@ -32,7 +31,12 @@ public final class ZLinkObjectServerDescriptorPublisher {
     private final Map<String, ZLinkInternalMeshNode> nodes;
     private final AtomicLong revision = new AtomicLong(1);
     private final Map<String, Claim> claims = new ConcurrentHashMap<>();
-    private final AtomicBoolean changed = new AtomicBoolean();
+    // Option changes recorded and option changes a publication has confirmed. A publication reads
+    // the node values after it samples the change count, so a confirmed count never covers a value
+    // the Store has not received; a failed publication confirms nothing and the next renewal
+    // retries.
+    private final AtomicLong changes = new AtomicLong();
+    private final AtomicLong confirmed = new AtomicLong();
 
     public ZLinkObjectServerDescriptorPublisher(
             ZLinkLocationRepository store,
@@ -47,7 +51,7 @@ public final class ZLinkObjectServerDescriptorPublisher {
 
     /** Records that a runtime option changed a value every descriptor reads. */
     public void markChanged() {
-        changed.set(true);
+        changes.incrementAndGet();
     }
 
     /**
@@ -55,20 +59,14 @@ public final class ZLinkObjectServerDescriptorPublisher {
      * it, so the next owner lease renewal publishes it again.
      */
     public CompletionStage<Void> publishChanged(ZLinkFrameworkRuntimeState state) {
-        return changed.get() ? publish(state) : CompletableFuture.completedFuture(null);
+        return changes.get() != confirmed.get()
+                ? publish(state)
+                : CompletableFuture.completedFuture(null);
     }
 
     public CompletionStage<Void> publish(ZLinkFrameworkRuntimeState state) {
-        boolean carried = changed.getAndSet(false);
-        CompletionStage<Void> publication = publishDescriptors(state);
-        return carried
-                ? publication.whenComplete(
-                        (ignored, failure) -> {
-                            if (failure != null) {
-                                changed.set(true);
-                            }
-                        })
-                : publication;
+        long seen = changes.get();
+        return publishDescriptors(state).thenRun(() -> confirmed.accumulateAndGet(seen, Math::max));
     }
 
     private CompletionStage<Void> publishDescriptors(ZLinkFrameworkRuntimeState state) {
