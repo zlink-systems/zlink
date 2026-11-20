@@ -21,7 +21,10 @@ import java.util.Objects;
 import java.util.Optional;
 
 public final class NativeMonitorSocket implements SocketMonitor {
-    private MemorySegment handle;
+    private volatile MemorySegment handle;
+    // Core releases a handle once; one owner at a time runs the native close
+    // and later callers observe its outcome.
+    private final Object closeLock = new Object();
     private final boolean own;
 
     static {
@@ -84,12 +87,15 @@ public final class NativeMonitorSocket implements SocketMonitor {
 
     @Override
     public void close() {
-        if (handle == null || handle.address() == 0)
-            return;
-        if (own) {
-            Native.monitorClose(handle);
+        synchronized (closeLock) {
+            MemorySegment current = handle;
+            if (current == null || current.address() == 0)
+                return;
+            if (own) {
+                Native.monitorClose(current);
+            }
+            handle = MemorySegment.NULL;
         }
-        handle = MemorySegment.NULL;
     }
 
     private void ensureOpen() {
