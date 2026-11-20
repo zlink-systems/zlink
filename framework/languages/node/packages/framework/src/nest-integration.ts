@@ -11,6 +11,7 @@ export type * from './contracts';
 export { ZLinkSpotActorSend, ZLinkSpotActorRequest } from './contracts/Handlers/Attributes';
 export {
   registerActorFactory,
+  registerLocationStore,
   registerRelocationStore,
   validateRoutingIdPrefix,
   registerEntrySpot,
