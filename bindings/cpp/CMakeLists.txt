@@ -527,6 +527,7 @@ if(ZLINK_CPP_BUILD_TESTS)
     test_cpp_contract_optimization_guard.cpp
     test_cpp_contract_flow_state.cpp
     test_cpp_contract_lifecycle_rules.cpp
+    test_cpp_contract_concurrent_close.cpp
     test_cpp_contract_router_selected_route.cpp
     test_cpp_perf_application_ready_queue.cpp
   )
@@ -572,6 +573,10 @@ if(ZLINK_CPP_BUILD_TESTS)
         "LINKER:--wrap=zlink_request"
         "LINKER:--wrap=zlink_completion_recv")
     endforeach()
+    target_link_options(test_cpp_contract_concurrent_close PRIVATE
+      "LINKER:--wrap=zlink_ctx_term"
+      "LINKER:--wrap=zlink_timer_destroy"
+      "LINKER:--wrap=zlink_monitor_close")
     target_link_options(test_cpp_contract_lifecycle_rules PRIVATE
       "LINKER:--wrap=zlink_poller_destroy"
       "LINKER:--wrap=zlink_poller_wait"
