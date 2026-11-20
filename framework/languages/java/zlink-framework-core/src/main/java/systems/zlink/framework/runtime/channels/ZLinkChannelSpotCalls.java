@@ -354,6 +354,7 @@ final class RouteSpotSendCall implements ZLinkSpotSendCall, Runnable {
                             address.targetNodeRid(),
                             address.spotId(),
                             address.spotGeneration(),
+                            address.targetNodeGeneration(),
                             address.authorityOwnerGeneration(),
                             address.ownerLeaseGeneration(),
                             sendParts)

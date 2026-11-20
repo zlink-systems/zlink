@@ -2653,10 +2653,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             RoutingId targetNodeRid,
             String targetSpotId,
             long targetSpotGeneration,
+            long targetNodeGeneration,
             byte[] metadata,
             List<Message> parts) {
-        Optional<ZLinkServiceTopologyRegistry.Peer> peer =
-                topology == null ? Optional.empty() : topology.peerFromOwner(targetNodeRid);
         ZLinkJavaRawSpotNode spots = (ZLinkJavaRawSpotNode) spotNode();
         long authorityOwnerGeneration =
                 spots.spotAuthorityOwnerGeneration(
@@ -2669,7 +2668,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 || ownerLeaseGeneration <= 0) {
             return CompletableFuture.failedFuture(new ZlinkSubmitException(SubmitResult.NOT_FOUND));
         }
-        if (peer.isEmpty() || !isReadyPeer(peer.orElseThrow())) {
+        if (!readyTargetPeer(targetNodeRid, targetNodeGeneration)) {
             return CompletableFuture.failedFuture(
                     new ZlinkSubmitException(SubmitResult.NOT_CONNECTED));
         }
@@ -2689,7 +2688,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                 targetSpotId,
                                 targetSpotGeneration,
                                 targetNodeRid,
-                                peer.orElseThrow().descriptor().lifecycleGeneration(),
+                                targetNodeGeneration,
                                 authorityOwnerGeneration,
                                 ownerLeaseGeneration));
         return port.sendMessages(
@@ -2877,10 +2876,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     CompletionStage<Void> sendActor(
             ZLinkServiceM6BWireCodec.ActorRouteFence target, List<Message> parts) {
         ZLinkBackendActorRef actor = target.actor();
-        Optional<ZLinkServiceTopologyRegistry.Peer> peer =
-                topology == null ? Optional.empty() : topology.peerFromOwner(actor.nodeRid());
-        if (peer.isEmpty() || !isReadyPeer(peer.orElseThrow())) {
-
+        if (!readyTargetPeer(actor.nodeRid(), target.targetNodeGeneration())) {
             return CompletableFuture.failedFuture(
                     new ZlinkSubmitException(SubmitResult.NOT_CONNECTED));
         }
@@ -2912,7 +2908,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         Objects.requireNonNull(parts, "parts");
         Consumer<Throwable> onFailure = failure == null ? ignored -> {} : failure;
         if (stale.messageFollowHopCount() >= ZLinkServiceMessageFollowWireCodec.MAX_HOP_COUNT
-                || !readyRelocationPeer(target.targetNodeRid(), target.targetNodeGeneration())) {
+                || !readyTargetPeer(target.targetNodeRid(), target.targetNodeGeneration())) {
             return false;
         }
         List<byte[]> frames = new ArrayList<>();
@@ -2972,7 +2968,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                             systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE,
                             "Message Follow hop limit exceeded"));
         }
-        if (!readyRelocationPeer(target.actor().nodeRid(), target.targetNodeGeneration())) {
+        if (!readyTargetPeer(target.actor().nodeRid(), target.targetNodeGeneration())) {
             parts.forEach(Message::close);
             return CompletableFuture.failedFuture(
                     new systems.zlink.framework.errors.ZLinkFrameworkException(
@@ -3041,7 +3037,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         return replyFrames.size() < 2 ? List.of() : decodeApplicationMessages(replyFrames.get(1));
     }
 
-    private boolean readyRelocationPeer(RoutingId targetNodeRid, long targetNodeGeneration) {
+    private boolean readyTargetPeer(RoutingId targetNodeRid, long targetNodeGeneration) {
         Optional<ZLinkServiceTopologyRegistry.Peer> peer =
                 topology == null ? Optional.empty() : topology.peerFromOwner(targetNodeRid);
         return peer.isPresent()
@@ -3152,15 +3148,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             long sourceBindingGeneration,
             long sourceSessionSequence,
             List<Message> parts) {
-        Optional<ZLinkServiceTopologyRegistry.Peer> peer =
-                topology == null ? Optional.empty() : topology.peerFromOwner(actor.nodeRid());
         ZLinkJavaRawSpotNode spots = (ZLinkJavaRawSpotNode) spotNode();
         long authorityOwnerGeneration = spots.actorAuthorityOwnerGeneration(actor);
         long ownerLeaseGeneration = spots.actorAuthorityOwnerLeaseGeneration(actor);
         if (actor.generation() <= 0 || authorityOwnerGeneration <= 0 || ownerLeaseGeneration <= 0) {
             return CompletableFuture.failedFuture(new ZlinkSubmitException(SubmitResult.NOT_FOUND));
         }
-        if (peer.isEmpty() || !isReadyPeer(peer.orElseThrow())) {
+        long targetNodeGeneration = spots.actorAuthorityNodeGeneration(actor);
+        if (!readyTargetPeer(actor.nodeRid(), targetNodeGeneration)) {
             return CompletableFuture.failedFuture(
                     new ZlinkSubmitException(SubmitResult.NOT_CONNECTED));
         }
@@ -3179,7 +3174,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                 null,
                                 new ZLinkServiceM6BWireCodec.ActorRouteFence(
                                         actor,
-                                        peer.orElseThrow().descriptor().lifecycleGeneration(),
+                                        targetNodeGeneration,
                                         authorityOwnerGeneration,
                                         ownerLeaseGeneration),
                                 new ZLinkServiceM6BWireCodec.BoundSessionTail(
