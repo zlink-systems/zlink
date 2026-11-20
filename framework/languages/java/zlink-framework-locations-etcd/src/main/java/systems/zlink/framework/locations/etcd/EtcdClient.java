@@ -214,8 +214,8 @@ final class EtcdClient implements AutoCloseable {
     private <Q extends MessageLite, R> CompletableFuture<R> invoke(
             MethodDescriptor<Q, R> method, Q request, Operation operation, boolean authenticated) {
         operation.start();
-        if (request.getSerializedSize() > MAX_SEND_MESSAGE_BYTES)
-            throw new IllegalArgumentException("Store request exceeds its transport bound.");
+        // An oversized request is a Store failure, like the gRPC bound below, and sends nothing.
+        if (request.getSerializedSize() > MAX_SEND_MESSAGE_BYTES) throw EtcdEncoding.failure();
         int index = endpoint.get();
         Channel channel = channels.get(index);
         String current = token;

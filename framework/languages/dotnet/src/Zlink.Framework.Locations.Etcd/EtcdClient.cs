@@ -179,6 +179,7 @@ internal sealed class EtcdClient : IDisposable
         {
             HttpHandler = handler,
             DisposeHttpClient = false,
+            DisableResolverServiceConfig = true,
             MaxSendMessageSize = MaxSendMessageBytes,
             MaxReceiveMessageSize = MaxReceiveMessageBytes,
         };
