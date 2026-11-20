@@ -13,7 +13,7 @@ merge_queue:
 
 queue_rules:
   - name: default
-    batch_size: 8
+    batch_size: 16
     merge_method: squash
     # The C++ check runs on GitHub-hosted runners by default (ops/ci); a batch
     # that rebuilds the C++ runtime takes 55-80 min there. The automatic timeout
@@ -28,11 +28,10 @@ queue_rules:
       - or:
           - author=zlink-systems
           - label=reviewed
+      # Entering the queue waits only for the quick checks. The batch runs the full
+      # suites once for all its PRs, so waiting for each PR's own full run first
+      # doubled the CI load and held the queue behind the PR runs (2026-11-21).
       - check-success=core-release / Core release exists
-      - check-success=framework-dotnet / dotnet-release-gate
-      - check-success=framework-node / node-release-gate
-      - check-success=framework-java / linux-x64 / Java 25
-      - check-success=framework-cpp / Framework C++ unit and contract tests
       - check-success=framework-format / Framework source format
     merge_conditions:
       - check-success=dotnet-release-gate

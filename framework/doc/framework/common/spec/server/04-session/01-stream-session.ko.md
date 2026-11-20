@@ -223,7 +223,11 @@ connector는 connector instance별 typed codec option
 | Application handler 예외 | Transport 오류가 아니므로 session 오류 callback을 실행하지 않고 handler 예외 처리 경로를 사용한다. |
 
 Session 오류 callback은 monitor에서 관찰 가능한 transport 오류를 session 단위로 다시
-올려주는 축으로만 제한한다.
+올려주는 축으로만 제한한다. Core monitor의 `DISCONNECTED` event로 연결이 끝나면 Framework는 네 언어 모두
+session 오류 callback을 `TransportError` 종류로 한 번 실행한 뒤 기존 연결 종료 처리를 한다. 이 오류는 Core가
+그 event의 `value`로 알린 `zlink_disconnect_reason_t` 값을 선택 필드(언어별 이름은 각 exact interface의
+`disconnectReason`·`DisconnectReason`·`disconnect_reason()`)에 그대로 담는다. 이 필드는 `DISCONNECTED`로 생긴
+오류에만 있고, `UNKNOWN`(0)도 값이 있는 것으로 본다([Core monitoring §3.2](../../../../../../../core/doc/spec/core/06-monitoring.ko.md#32-value와-flags)). Framework는 이 값을 해석하거나 다른 종료 사유로 바꾸지 않는다.
 
 서버 STREAM session의 liveness는 [Stream Connector §6](../../stream-connector/32-stream-connector.ko.md#6-연결-생명주기)의 heartbeat 규칙을 따른다. Heartbeat interval과 timeout의 기본값은 그 절의 기본값이며 Stream node 설정으로 바꿀 수 있다. 서버에서 무수신 timeout의 결과는 reconnect가 아니라 `heartbeat_timeout`으로 session을 닫는 것이다.
 
@@ -234,7 +238,7 @@ Heartbeat interval과 timeout은 양수이고 timeout이 interval보다 커야 �
 세션이 닫힐 때의 종료 사유는
 [Stream Connector §6.2](../../stream-connector/32-stream-connector.ko.md#62-종료-사유)의
 닫힌 집합과 정합하며, 계기는
-[runtime-metrics §4](../06-observability/02-runtime-metrics.ko.md)가 소유한다.
+[runtime-metrics §6](../06-observability/02-runtime-metrics.ko.md)가 소유한다.
 
 ## 8. Session에서 Actor로
 
@@ -338,6 +342,8 @@ STREAM packet과 cross-node Session record가 공유하는 host permit 규칙은
   매칭해 정상 완료한다.
 - Handshake 실패와 socket 단위 오류는 session 오류 callback을 실행하지 않고 runtime monitoring에만
   기록된다.
+- Core `DISCONNECTED` event로 끝난 session의 오류 callback에서 그 event의 `zlink_disconnect_reason_t`
+  값을 읽을 수 있고, 값은 Core가 알린 값과 같다.
 
 **Actor로 이어지는 경로**
 
