@@ -1781,7 +1781,11 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
 
         @Override
         public CompletionStage<Void> sendToSpot(
-                RoutingId targetNodeRid, String spotId, long spotGeneration, List<Message> parts) {
+                RoutingId targetNodeRid,
+                String spotId,
+                long spotGeneration,
+                long targetNodeGeneration,
+                List<Message> parts) {
             record("sendToSpot." + targetNodeRid + "." + spotId + "." + firstPart(parts));
             return CompletableFuture.completedFuture(null);
         }
@@ -1791,10 +1795,11 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
                 RoutingId targetNodeRid,
                 String spotId,
                 long spotGeneration,
+                long targetNodeGeneration,
                 byte[] metadata,
                 List<Message> parts) {
             owner.captureApplicationMetadata(metadata);
-            return sendToSpot(targetNodeRid, spotId, spotGeneration, parts);
+            return sendToSpot(targetNodeRid, spotId, spotGeneration, targetNodeGeneration, parts);
         }
 
         @Override

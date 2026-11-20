@@ -109,7 +109,14 @@ final class ZLinkChannelSpotCallsOwnershipTest {
                     new ZLinkChannelCallRuntime(
                             flow(),
                             null,
-                            (channel, node, spot, generation, authority, lease, parts) -> {
+                            (channel,
+                                    node,
+                                    spot,
+                                    generation,
+                                    nodeGeneration,
+                                    authority,
+                                    lease,
+                                    parts) -> {
                                 submitted.set(parts);
                                 return terminal;
                             },

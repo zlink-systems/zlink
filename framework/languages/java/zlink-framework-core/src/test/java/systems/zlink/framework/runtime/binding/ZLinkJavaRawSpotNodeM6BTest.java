@@ -440,6 +440,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                 nodeRid,
                                 targetRid.toString(),
                                 target.lifecycleGeneration() + 1,
+                                0L,
                                 List.of(stale))
                         .toCompletableFuture()
                         .join();
@@ -449,6 +450,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                 nodeRid,
                                 targetRid.toString(),
                                 target.lifecycleGeneration(),
+                                0L,
                                 List.of(current))
                         .toCompletableFuture()
                         .join();
@@ -490,6 +492,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                 nodeRid,
                                 target.spotId(),
                                 target.lifecycleGeneration(),
+                                0L,
                                 List.of(payload));
                 try {
                     assertTrue(send.toCompletableFuture().isDone());
@@ -520,6 +523,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                 nodeRid,
                                 target.spotId(),
                                 target.lifecycleGeneration(),
+                                0L,
                                 List.of(packet, payload, contentType))
                         .toCompletableFuture()
                         .join();
@@ -1752,6 +1756,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                 leftRid,
                                 targetRid.toString(),
                                 target.lifecycleGeneration(),
+                                left.lifecycleGeneration(),
                                 List.of(message))
                         .toCompletableFuture()
                         .get(2, TimeUnit.SECONDS);
@@ -1932,6 +1937,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                 leftRid,
                                 targetSpotId,
                                 target.lifecycleGeneration(),
+                                left.lifecycleGeneration(),
                                 sendMetadata,
                                 List.of(head, body))
                         .toCompletableFuture()
@@ -4183,6 +4189,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                 nodeRid,
                                 target.spotId(),
                                 target.lifecycleGeneration(),
+                                0L,
                                 List.of(accepted))
                         .toCompletableFuture()
                         .join();
@@ -4198,6 +4205,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                                         nodeRid,
                                                         target.spotId(),
                                                         target.lifecycleGeneration(),
+                                                        0L,
                                                         List.of(rejected))
                                                 .toCompletableFuture()
                                                 .join());
@@ -4248,6 +4256,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                 nodeRid,
                                 target.spotId(),
                                 target.lifecycleGeneration(),
+                                0L,
                                 List.of(held))
                         .toCompletableFuture()
                         .join();
