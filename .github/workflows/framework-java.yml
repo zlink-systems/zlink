@@ -265,8 +265,10 @@ jobs:
           path: |
             .artifacts/framework-java-results/${{ matrix.target.name }}/**
             framework/languages/java/*/build/test-results/**/*.xml
+            framework/languages/java/*/build/test-events/**/*.log
+            framework/languages/java/*/build/jvm-crashes/**/hs_err_pid*.log
           retention-days: 14
-          if-no-files-found: error
+          if-no-files-found: ignore
           overwrite: true
 
       - name: Stop Redis for Redis-backed tests
