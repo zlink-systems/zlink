@@ -136,8 +136,20 @@ class stream_host_service_t final : public hosted_service_t, public hosted_servi
     std::thread _liveness_thread;
 };
 
+#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
+struct stream_host_shutdown_test_hooks_t
+{
+    std::function<void (std::weak_ptr<void>, std::weak_ptr<void>)> registered;
+    std::function<void (bool)> before_terminate;
+};
+#endif
+
 struct stream_host_service_test_access_t
 {
+#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
+    static std::function<void ()> observe_shutdown (stream_host_service_t &service,
+                                                    stream_host_shutdown_test_hooks_t hooks);
+#endif
     static std::shared_ptr<void> retain_connection (service_provider_t &services,
                                                     stream_t stream,
                                                     host::public_host_runtime_t &node);
