@@ -1,3 +1,4 @@
+import { relocationDebug, relocationDebugTerminal } from '../diagnostics';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
@@ -105,6 +106,10 @@ export class ZLinkManagedStream implements ZLinkStream {
     return this.nativeActorBindings.get(actorId)?.binding;
   }
 
+  get shutdownTransportClosed(): boolean {
+    return this.transportClosed;
+  }
+
   private isTransportClosed(): boolean {
     return this.transportClosed;
   }
@@ -162,7 +167,21 @@ export class ZLinkManagedStream implements ZLinkStream {
   async close(signal?: AbortSignal): Promise<void> {
     throwIfAborted(signal);
     this.markTransportClosed();
-    this.socket.disconnectPeer(this.backendRoutingId());
+
+    relocationDebug('closeForDrain.disconnectPeer.start', { sessionId: this.sessionId });
+    let failure: { error: unknown } | undefined;
+    try {
+      this.socket.disconnectPeer(this.backendRoutingId());
+    } catch (error) {
+      failure = { error };
+      throw error;
+    } finally {
+      relocationDebugTerminal(
+        'closeForDrain.disconnectPeer.terminal',
+        { sessionId: this.sessionId },
+        failure
+      );
+    }
   }
 
   async closeForDrain(signal?: AbortSignal): Promise<void> {
@@ -183,15 +202,55 @@ export class ZLinkManagedStream implements ZLinkStream {
     diagnostic: string,
     signal?: AbortSignal
   ): Promise<void> {
-    throwIfAborted(signal);
-    this.markTransportClosed();
-    const closing = NativeMessage.from(encodeSessionClosingFrame(diagnostic, reason));
+    relocationDebug('closeForDrain.enter', { sessionId: this.sessionId, reason, diagnostic });
+    let failure: { error: unknown } | undefined;
     try {
-      await this.socket.submit(this.backendRoutingId(), closing);
+      throwIfAborted(signal);
+      this.markTransportClosed();
+      const closing = NativeMessage.from(encodeSessionClosingFrame(diagnostic, reason));
+      try {
+        relocationDebug('closeForDrain.submit.start', { sessionId: this.sessionId });
+        let failure: { error: unknown } | undefined;
+        try {
+          await this.socket.submit(this.backendRoutingId(), closing);
+        } catch (error) {
+          failure = { error };
+          throw error;
+        } finally {
+          relocationDebugTerminal(
+            'closeForDrain.submit.terminal',
+            { sessionId: this.sessionId },
+            failure
+          );
+        }
+      } finally {
+        closing.close();
+      }
+
+      relocationDebug('closeForDrain.disconnectPeer.start', { sessionId: this.sessionId });
+      let failure: { error: unknown } | undefined;
+      try {
+        this.socket.disconnectPeer(this.backendRoutingId());
+      } catch (error) {
+        failure = { error };
+        throw error;
+      } finally {
+        relocationDebugTerminal(
+          'closeForDrain.disconnectPeer.terminal',
+          { sessionId: this.sessionId },
+          failure
+        );
+      }
+    } catch (error) {
+      failure = { error };
+      throw error;
     } finally {
-      closing.close();
+      relocationDebugTerminal(
+        'closeForDrain.exit',
+        { sessionId: this.sessionId, reason, diagnostic },
+        failure
+      );
     }
-    this.socket.disconnectPeer(this.backendRoutingId());
   }
 
   async bindActor(
