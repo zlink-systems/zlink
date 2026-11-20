@@ -836,6 +836,8 @@ reason, or the reconnect condition.
 | `DecompressionFailed` | Only that receive packet or pending request fails | Kept | None | Not done |
 | `UserCallbackFailed`, `RemoteError` | Delivered as an error event or the related callback/request | Kept | None | Not done |
 
+When a connection ends because the transport dropped, the heartbeat timed out, a transport write failed, or a frame was `FrameDecodeFailed` or `FrameTooLarge`, the connector delivers that cause as an error event **once**, right after it confirms the ending. A cause observed late on a connection that already ended isn't delivered again. Inside an error handler under `Immediate` dispatch the connector isn't connected, and an operation started there ends with `Disconnected`.
+
 If the transport close fails during close handling, the connection is confirmed closed, the close reason and automatic reconnect policy of the cause that started the close are kept, and the close failure is delivered as a `Disconnected` error event. An explicit close call that finished its cleanup doesn't fail because of the close failure.
 
 ### 9.1 The Closed Error Code Set

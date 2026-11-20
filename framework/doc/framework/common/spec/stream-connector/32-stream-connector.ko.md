@@ -698,6 +698,8 @@ terminal 여부, 종료 사유와 reconnect 조건을 바꾸지 않는다.
 | `DecompressionFailed` | 해당 수신 packet 또는 pending request만 실패 | 유지 | 없음 | 안 함 |
 | `UserCallbackFailed`, `RemoteError` | 오류 event 또는 관련 callback/request로 전달 | 유지 | 없음 | 안 함 |
 
+transport 끊김, heartbeat timeout, transport write 실패, `FrameDecodeFailed`·`FrameTooLarge`로 연결이 끝나면 connector는 종료를 확정한 직후 그 원인을 오류 event로 **한 번** 전달한다. 이미 끝난 연결에서 늦게 관측한 같은 원인은 다시 전달하지 않는다. `Immediate` dispatch의 오류 handler 안에서 connector는 연결되지 않은 상태이며, 그 안에서 시작한 operation은 `Disconnected`로 끝난다.
+
 종료 처리 중 transport close가 실패하면 연결은 닫힌 것으로 확정하고, 종료를 시작한 원인의 종료 사유와 자동 reconnect 정책을 유지하며, close 실패는 `Disconnected` 오류 event로 전달한다. 정리를 마친 명시적 close 호출의 결과는 close 실패 때문에 실패가 되지 않는다.
 
 ### 9.1 닫힌 오류 코드 집합
