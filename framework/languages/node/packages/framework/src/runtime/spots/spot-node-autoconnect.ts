@@ -215,7 +215,15 @@ class ZLinkSpotNodeAutoConnectExecutor implements IZLinkAutoConnectExecutor {
     );
   }
 
-  expectPeers(targets: readonly ZLinkAutoConnectTarget[]): void {
+  expectPeers(
+    targets: readonly ZLinkAutoConnectTarget[],
+    previous: readonly ZLinkAutoConnectTarget[]
+  ): void {
+    const currentKeys = new Set(targets.map((target) => target.targetKey));
+    for (const target of previous) {
+      if (target.nodeRid === undefined || currentKeys.has(target.targetKey)) continue;
+      this.node.forgetPeer?.(String(target.nodeRid), target.lifecycleGeneration);
+    }
     for (const target of targets) {
       if (target.nodeRid === undefined) continue;
       this.node.expectPeer?.({
