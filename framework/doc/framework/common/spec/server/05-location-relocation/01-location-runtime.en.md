@@ -1769,6 +1769,11 @@ JCS bytes, the same content gives the same check value whichever language wrote 
   values of the pages below, this value fixes the whole inventory.
 - The aggregate record's `inventoryDigestSha256` is the same value as the root's `digestSha256`.
   It isn't computed separately or recorded twice.
+- The authority's `aggregate.relocation.sourceInventorySha256` is also the same value as the
+  `digestSha256` of the participant inventory root fixed at the seal. Because an entry's
+  `expectedStoreVersion` is the value read at preparation, this value doesn't change after
+  `preparing`. A move of a single Actor with no aggregate record uses the root `digestSha256` of an
+  inventory whose only entry is that Actor.
 
 The inventory root, pages, and participant change records aren't modified once written. Records
 of the same `(aggregateId, aggregateGeneration)` aren't rewritten with different content; different

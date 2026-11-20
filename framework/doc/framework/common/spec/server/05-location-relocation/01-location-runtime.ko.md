@@ -1583,6 +1583,10 @@ Canonical authority key의 최대 길이 때문에 항목 1,024개 page는 1 MiB
   목록 전체를 고정한다.
 - Aggregate 기록의 `inventoryDigestSha256`은 root의 `digestSha256`과 같은 값이다. 확인값을 따로
   계산해 두 번 기록하지 않는다.
+- Authority의 `aggregate.relocation.sourceInventorySha256`도 seal 때 고정한 이동 대상 목록 root의
+  `digestSha256`과 같은 값이다. 항목의 `expectedStoreVersion`은 준비 때 읽은 값이므로 이 값은 `preparing`
+  뒤에 바뀌지 않는다. Aggregate 기록이 없는 Actor 하나의 이동은 그 Actor 하나를 항목으로 가진 목록의
+  root `digestSha256`을 쓴다.
 
 목록 root, page와 participant 변경 bytes record는 한 번 쓰면 바꾸지 않는다. 같은
 `(aggregateId, aggregateGeneration)`의 record를 다른 내용으로 다시 쓰지 않으며, 다른 내용이 필요하면
