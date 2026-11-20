@@ -126,11 +126,16 @@ final class ZLinkProviderOwnerLeaseRepository {
                                                                     key, found.value().version())),
                                                     List.of(new ZLinkStoreDelete(key))),
                                             cancellation)
-                                    .thenApply(
+                                    .thenCompose(
+                                            // STALE means the token no longer holds the lease. A
+                                            // version conflict on the same generation is a renewal
+                                            // of this token that landed first, so read again.
                                             result ->
                                                     result instanceof ZLinkStoreWriteApplied
-                                                            ? ZLinkOwnerLeaseReleaseResult.RELEASED
-                                                            : ZLinkOwnerLeaseReleaseResult.STALE);
+                                                            ? completed(
+                                                                    ZLinkOwnerLeaseReleaseResult
+                                                                            .RELEASED)
+                                                            : release(token, cancellation));
                         });
     }
 
