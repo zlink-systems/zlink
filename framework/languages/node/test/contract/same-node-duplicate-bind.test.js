@@ -180,8 +180,23 @@ for (const callbackName of ['onDuplicateBind', 'onSessionBound']) {
   }
 }
 
-for (const scenario of cases) {
+for (const scenario of [
+  ...cases,
+  ...['throw', 'reject', 'timeout'].map((notificationFailure) => ({
+    name: `notification-${notificationFailure}`,
+    notificationFailure,
+    callbackCount: 1,
+    accepted: true,
+    replacementCount: 1
+  }))
+]) {
   test(`public same-node duplicate bind: ${scenario.name}`, { timeout: 20000 }, async (t) => {
+    const notificationError = new Error('session bound notification failed');
+    const reports = [];
+    let reported;
+    const notificationReported = new Promise((resolve) => {
+      reported = resolve;
+    });
     let callbacks = 0;
     const notifications = [];
     let replacements = 0;
@@ -197,6 +212,14 @@ for (const scenario of cases) {
       onSessionBound(incoming, signal) {
         assert.equal(signal.aborted, false);
         notifications.push(incoming);
+        if (notifications.length !== 1) return;
+        if (scenario.notificationFailure === 'throw') throw notificationError;
+        if (scenario.notificationFailure === 'reject') return Promise.reject(notificationError);
+        if (scenario.notificationFailure === 'timeout') {
+          return new Promise((_resolve, reject) => {
+            signal.addEventListener('abort', () => reject(notificationError), { once: true });
+          });
+        }
       }
       async onDuplicateBind() {
         callbacks++;
@@ -249,6 +272,7 @@ for (const scenario of cases) {
       .zlinkFramework()
       .addLocationStore(new framework.ZLinkInMemoryProviderLocationStore());
     builder.configureDispatch().messageFlow('normal');
+    if (scenario.notificationFailure) builder.setSessionReplacementCallbackTimeout(100);
     builder
       .addRouteMesh('binding')
       .listen('tcp://127.0.0.1:0')
@@ -274,6 +298,17 @@ for (const scenario of cases) {
       for (const client of clients.reverse()) await client.close();
       await app.close();
     });
+    const runtime = app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME);
+    if (scenario.notificationFailure) {
+      t.mock.method(
+        runtime.runtimeOrPreStartErrorSink,
+        'reportRuntimeTaskException',
+        (task, error) => {
+          reports.push({ task, error });
+          reported();
+        }
+      );
+    }
     const actors = app.get(nestjs.ZLINK_ACTOR_MANAGER);
     await actors.create('same-node-player', 'player').inMesh('binding').submit();
     const actor = await actors.find('same-node-player');
@@ -301,13 +336,27 @@ for (const scenario of cases) {
       await client.connect();
       return { client, session: await sessionReady, bound, disconnected };
     }
+    const originalPlayer = player;
+    const originalState = runtime.actorManager.getState('same-node-player');
     const current = await open();
     await current.session.context.actors.bind(actor);
     const oldActor = await current.bound;
+    if (scenario.notificationFailure) await notificationReported;
     assert.equal(
       await oldActor.request({ value: 'before' }).packetName('Probe').submit(),
       'before'
     );
+    if (scenario.notificationFailure) {
+      assert.equal(player, originalPlayer);
+      assert.equal(runtime.actorManager.getState('same-node-player'), originalState);
+      assert.equal(originalState.isSteadyReady, true, 'notification must leave the Actor ready');
+      assert.deepEqual(await actors.find('same-node-player'), actor);
+      assert.equal(reports.length, 1);
+      assert.equal(reports[0].task, "session bound callback 'same-node-player'");
+      if (scenario.notificationFailure === 'timeout') {
+        assert.match(String(reports[0].error), /Session bound callback timed out/);
+      } else assert.equal(reports[0].error, notificationError);
+    }
     const incoming = await open();
     if (scenario.accepted) {
       await incoming.session.context.actors.bind(actor);
@@ -347,6 +396,12 @@ for (const scenario of cases) {
     }
     assert.equal(notifications.length, scenario.accepted ? 2 : 1);
     assert.ok(notifications.every((identity) => identity.bindingGeneration !== 0n));
+    if (scenario.notificationFailure) {
+      assert.equal(player, originalPlayer);
+      assert.equal(originalState.isSteadyReady, true);
+      assert.equal(runtime.actorManager.getState('same-node-player'), originalState);
+      assert.equal(reports.length, 1, 'late callback failure must not be reported again');
+    }
     assert.equal(callbacks, scenario.callbackCount);
     assert.equal(replacements, scenario.replacementCount);
   });
