@@ -381,6 +381,9 @@ export interface StreamSessionActorAuthorityFence {
 }
 
 export interface StreamSessionService {
+  captureSubmission(
+    binding: ServiceStreamSessionBinding
+  ): (<T>(submit: () => Promise<T>) => Promise<T>) | undefined;
   start(): void;
   shutdown(timeoutMs: number): RequestResult;
   close(): void;
