@@ -1817,7 +1817,7 @@ result. A previous payload that's no longer referenced after a replacement is de
 
 After a Store error or a dropped connection during delivery, the target sends the `pending` entries of the payload `reference` points to again on the current route, within the same execution. What happens after the target's execution ends follows the failure contract of [Host relocation and shutdown](05-host-relocation-flow.en.md). A runtime that later obtains that object's authority by CAS and activates it sends only the reply bytes of the `pending` entries again, before activation. It doesn't run the handler, Restore, unfinished queue work, or target selection again.
 
-If adding a result would make the encoded payload exceed the common blob limit of the [Relocation Store](03-relocation-store-redis.en.md), the Framework stores a `ResourceExhausted` failure reply as that entry's `reply` instead of the request's reply bytes. Entries already stored don't change, and the relocation doesn't become a failure.
+If adding a result would make the encoded payload exceed the common blob limit of the [Relocation Store](03-relocation-store-redis.en.md), the Framework stores an `InternalFailure` failure reply (failure code `requestFailed`, [Framework error model §2](../00-foundation/07-framework-error-model.en.md)) as that entry's `reply` instead of the request's reply bytes. The request already ran and only its result bytes couldn't be kept, so no new error kind is added. Entries already stored don't change, and the relocation doesn't become a failure.
 
 `Completed` is only recorded when the accepted request count equals the completion
 result count and the delivery-pending count is 0. Otherwise it's a recovery error.
