@@ -7,12 +7,14 @@
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
 #include "runtime_failure_fixture.hpp"
 #include <service_wire_codec.hpp>
+#include <zlink/framework/contracts/detail/handler_invocation.hpp>
 #include <future>
 
 #include <atomic>
 #include <array>
 #include <cstdint>
 #include <iostream>
+#include <latch>
 #include <stdexcept>
 #include <thread>
 
@@ -130,6 +132,184 @@ bool dispatch (host::public_host_runtime_t &target,
              .value ())
         handled = true;
     return handled;
+}
+
+void verify_claim_storage_cost ()
+{
+    const auto measure = [] (bool inject) {
+        mesh::service_mailbox_t mailbox;
+        std::vector<zlink::message_t> parts;
+        parts.push_back (zlink::message_t::from ("control"));
+        constexpr auto infrastructure = mesh::service_mailbox_domain_t::infrastructure;
+        require (mailbox.try_enqueue (mesh::service_mailbox_record_t::from_parts (
+                   "control", infrastructure, std::move (parts))),
+                 "claim storage fixture enqueue failed");
+        std::shared_ptr<mesh::service_mailbox_claim_t> claim;
+        std::shared_ptr<int> injected;
+        const auto cost = tests::measure_allocations ([&] {
+            claim = mailbox.try_claim_owner (infrastructure, "control", 1,
+                                             runtime::dispatch_limits::receive_batch_bytes);
+            if (inject)
+                injected = std::make_shared<int> (1);
+        });
+        require (claim && claim->claimed_messages == 1 && claim->outstanding () == 1,
+                 "claim storage measurement lost its credit");
+        require (mailbox.release (*claim) && !mailbox.release (*claim)
+                   && claim->outstanding () == 0,
+                 "claim storage measurement did not settle exactly once");
+        return cost;
+    };
+    // One owning claim and one array of slot references, byte costs and credits.
+    // Each slot's bookkeeping shares that slot's storage.
+    constexpr std::size_t allocation_limit = 2;
+    const auto normal = measure (false);
+    const auto injected = measure (true);
+    std::cout << "claim-storage count=" << normal.count << " bytes=" << normal.bytes
+              << " limit=" << allocation_limit << " injected-count=" << injected.count
+              << " injected-rejected=" << (injected.count > allocation_limit) << std::endl;
+    require (injected.count > normal.count && injected.count > allocation_limit,
+             "claim storage guard accepted an injected allocation");
+    require (normal.count <= allocation_limit,
+             "claim storage allocates separate per-slot bookkeeping");
+}
+
+void verify_reply_storage_cost ()
+{
+    serializer_registry_t serializers;
+    const auto serializer = serializers.get<int> ();
+    auto codecs = std::make_shared<detail::handler_codec_plan_t<int, int>> ();
+    codecs->reply = serializer;
+    for (const bool planned : {false, true}) {
+        const auto measure = [&] (bool invoke, bool inject) {
+            std::optional<task_t<zlink::message_t>> reply;
+            std::shared_ptr<int> injected;
+            const auto cost = tests::measure_allocations ([&] {
+                if (invoke) {
+                    reply.emplace (planned
+                                     ? detail::serialize_handler_result (17, serializers, codecs)
+                                     : detail::serialize_handler_result (17, serializers));
+                } else {
+                    auto encoded = planned ? codecs->serialize (serializers, 17)
+                                           : serializers.get<int> ().serialize (17);
+                    reply.emplace (result_t<zlink::message_t>::success (
+                      detail::encoded_payload_to_raw (std::move (encoded))));
+                }
+                if (inject)
+                    injected = std::make_shared<int> (1);
+            });
+            require (reply->await_ready () && reply->result ().has_value (),
+                     "synchronous reply did not complete inline");
+            require (
+              serializer.deserialize (detail::encoded_payload_from_raw (reply->result ().value ()))
+                == 17,
+              "synchronous reply changed its typed payload");
+            return cost;
+        };
+        const auto baseline = measure (false, false);
+        const auto normal = measure (true, false);
+        const auto injected = measure (true, true);
+        std::cout << "reply-storage planned=" << planned << " baseline=" << baseline.count
+                  << " count=" << normal.count << " injected-count=" << injected.count
+                  << " injected-rejected=" << (injected.count > baseline.count) << std::endl;
+        require (injected.count > normal.count && injected.count > baseline.count,
+                 "reply storage guard accepted an injected allocation");
+        require (normal.count <= baseline.count,
+                 "synchronous reply allocates a coroutine completion");
+    }
+}
+
+void verify_reply_completion ()
+{
+    const completion_owner_t completion_owner;
+    serializer_registry_t serializers;
+    const auto serializer = serializers.get<int> ();
+    auto codecs = std::make_shared<detail::handler_codec_plan_t<int, int>> ();
+    codecs->reply = serializer;
+    for (const bool planned : {false, true}) {
+        task_completion_source_t<int> pending;
+        auto task = pending.task ();
+        auto reply = planned
+                       ? detail::serialize_handler_result (std::move (task), serializers, codecs)
+                       : detail::serialize_handler_result (std::move (task), serializers);
+        require (!reply.await_ready (), "reply bypassed an incomplete handler");
+        pending.complete (result_t<int>::success (17));
+        require (
+          serializer.deserialize (detail::encoded_payload_from_raw (reply.result ().value ()))
+            == 17,
+          "asynchronous reply changed completion or typed payload");
+    }
+    serializer_registry_t failing;
+    failing.add<int> (
+      [] (const int &) -> encoded_payload_t {
+          throw framework_exception_t (framework_error_kind_t::protocol_error, "reply failure");
+      },
+      [] (const encoded_payload_t &) { return 0; });
+    auto failing_codecs = std::make_shared<detail::handler_codec_plan_t<int, int>> ();
+    failing_codecs->reply = failing.get<int> ();
+    for (const bool planned : {false, true}) {
+        auto reply = planned ? detail::serialize_handler_result (17, failing, failing_codecs)
+                             : detail::serialize_handler_result (17, failing);
+        require (reply.await_ready () && !reply.result ()
+                   && reply.result ().error_kind () == framework_error_kind_t::protocol_error,
+                 "reply serialization failure escaped its task or changed kind");
+    }
+}
+
+void verify_claim_settlement ()
+{
+    constexpr auto infrastructure = mesh::service_mailbox_domain_t::infrastructure;
+    for (const std::size_t count : {1u, 63u, 64u, 65u}) {
+        mesh::service_mailbox_t mailbox;
+        for (std::size_t index = 0; index != count + 1; ++index) {
+            std::vector<zlink::message_t> parts;
+            parts.push_back (zlink::message_t::from ("credit"));
+            require (mailbox.try_enqueue (mesh::service_mailbox_record_t::from_parts (
+                       "control", infrastructure, std::move (parts))),
+                     "settlement fixture enqueue failed");
+        }
+        auto claim = mailbox.try_claim_owner (infrastructure, "control", count,
+                                              runtime::dispatch_limits::receive_batch_bytes);
+        const auto claimed = count;
+        require (claim && claim->claimed_messages == claimed && claim->outstanding () == claimed,
+                 "claim changed its caller's budget or lost a credit");
+        std::vector<mesh::service_mailbox_record_t> originals;
+        for (std::size_t index = 0; index != claimed; ++index) {
+            auto original = mailbox.take ({claim, index});
+            require (original.has_value (), "settlement fixture lost an original");
+            originals.push_back (std::move (*original));
+        }
+        require (!mailbox.try_claim_owner (infrastructure, "control", 1,
+                                           runtime::dispatch_limits::receive_batch_bytes),
+                 "ordered owner released its successor before settlement");
+        std::atomic_size_t settled{0};
+        std::latch ready{3};
+        std::latch start{1};
+        std::vector<std::thread> contenders;
+        for (int worker = 0; worker != 3; ++worker)
+            contenders.emplace_back ([&] {
+                ready.count_down ();
+                start.wait ();
+                for (const auto &original : originals)
+                    if (original.transferred ())
+                        settled.fetch_add (1, std::memory_order_relaxed);
+            });
+        ready.wait ();
+        start.count_down ();
+        for (auto &thread : contenders)
+            thread.join ();
+        require (settled.load () == claimed && claim->outstanding () == 0
+                   && !mailbox.release (*claim),
+                 "concurrent settlement duplicated a credit or failed to finish");
+        require (mailbox.pending_messages (infrastructure) == 1,
+                 "settlement removed a following unclaimed record");
+        auto next = mailbox.try_claim_owner (infrastructure, "control", 1,
+                                             runtime::dispatch_limits::receive_batch_bytes);
+        require (next && next->claimed_messages == 1 && mailbox.release (*next)
+                   && mailbox.pending_messages (infrastructure) == 0,
+                 "claim did not preserve its successor");
+        std::cout << "claim-settlement budget=" << count << " claimed=" << claimed
+                  << " unique-settlements=" << settled.load () << std::endl;
+    }
 }
 
 bool verify_cost (host::public_host_runtime_t &target, bool channel, bool owning_callback = false)
@@ -919,6 +1099,16 @@ void verify_suspended_actor (bool local)
 int main (int argc, char **argv)
 {
     try {
+        if (argc == 2 && std::string_view (argv[1]) == "--reply-storage-only") {
+            verify_reply_completion ();
+            verify_reply_storage_cost ();
+            return 0;
+        }
+        if (argc == 2 && std::string_view (argv[1]) == "--claim-storage-only") {
+            verify_claim_storage_cost ();
+            verify_claim_settlement ();
+            return 0;
+        }
         if (argc == 2 && std::string_view (argv[1]) == "--permit-failure-only") {
             verify_failure_permit ();
             return 0;
@@ -934,6 +1124,10 @@ int main (int argc, char **argv)
             verify_inline_permit (true, false);
             return 0;
         }
+        verify_claim_storage_cost ();
+        verify_claim_settlement ();
+        verify_reply_completion ();
+        verify_reply_storage_cost ();
         measure_permit_ownership_cost ();
         auto target = make_host ();
         verify_retained_batch (*target);
