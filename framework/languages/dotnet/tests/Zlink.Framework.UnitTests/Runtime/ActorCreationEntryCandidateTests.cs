@@ -1,7 +1,9 @@
 using System.Text.Json;
 using Systems.Zlink.Framework.Runtime.Protocol;
+using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Actors;
+using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Configuration;
 using Zlink.Framework.Runtime.Configuration.Builders;
 using Zlink.Framework.Runtime.Locations;
@@ -179,10 +181,10 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
-    public void ActorJoinCandidate_DoesNotRequireAnEntrySpotThatAcceptsTheActorType()
+    public void ActorEntryJoinCandidate_RequiresAnEntrySpotThatAcceptsTheActorType()
     {
-        //  A node without an accepting Entry Spot still hosts joins and
-        //  relocations of existing Actors (Actor model §6.3).
+        // Membership §4 applies the Entry acceptance requirement to target
+        // selection for Entry Spot Join as well as new Actor placement.
         var framework = new ZLinkFrameworkRegistration();
         var descriptor = CreateNodeDescriptor(
             framework,
@@ -190,7 +192,358 @@ public sealed partial class EntrySpotActorDispatchTests
             entrySpotType: typeof(ProbeEntrySpot)
         );
 
-        Assert.True(ZLinkActorManagerService.IsEligibleCandidate(descriptor, "probe"));
+        Assert.False(ZLinkActorManagerService.IsEligibleCandidate(descriptor, "probe"));
+    }
+
+    [Theory]
+    [InlineData("entry-not-accepted", true)]
+    [InlineData("entry-not-accepted", false)]
+    [InlineData("not-serving", true)]
+    [InlineData("wrong-type", true)]
+    [InlineData("wrong-kind", true)]
+    [InlineData("client-role", true)]
+    [InlineData("no-entry", true)]
+    [InlineData("zero-weight", true)]
+    [InlineData("active-full", true)]
+    [InlineData("pending-full", true)]
+    [InlineData("empty", true)]
+    [InlineData("expired-owner", true)]
+    public async Task EntryJoinSelection_NoEligibleTargetIsUnavailableAndPreservesMembership(
+        string excludedCondition,
+        bool inUserSpot
+    )
+    {
+        var node = new CapturingSpotNode();
+        var time = new ManualTimeProvider();
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            locationTimeProvider: time,
+            entrySpotType: typeof(AcceptingProbeEntrySpot),
+            userSpotType: typeof(EntryReturnSourceSpot),
+            meshResolverWrapper: resolver => new EntryJoinDescriptors(
+                resolver,
+                descriptors =>
+                    excludedCondition == "empty"
+                        ? []
+                        : descriptors
+                            .Select(descriptor =>
+                                excludedCondition switch
+                                {
+                                    "expired-owner" => descriptor.Rid == AcceptingNodeRid
+                                        ? descriptor
+                                        : descriptor with
+                                        {
+                                            PlacementWeight = 0,
+                                        },
+                                    "entry-not-accepted" => descriptor with
+                                    {
+                                        ObjectCapabilities = descriptor
+                                            .ObjectCapabilities.Select(capability =>
+                                                capability with
+                                                {
+                                                    EntryAccepted = false,
+                                                }
+                                            )
+                                            .ToArray(),
+                                    },
+                                    "not-serving" => descriptor with
+                                    {
+                                        State = ZLinkFrameworkRuntimeState.Draining,
+                                    },
+                                    "wrong-type" => descriptor with
+                                    {
+                                        ObjectCapabilities = descriptor
+                                            .ObjectCapabilities.Select(capability =>
+                                                capability with
+                                                {
+                                                    StableType = "other",
+                                                }
+                                            )
+                                            .ToArray(),
+                                    },
+                                    "wrong-kind" => descriptor with
+                                    {
+                                        ObjectCapabilities = descriptor
+                                            .ObjectCapabilities.Select(capability =>
+                                                capability with
+                                                {
+                                                    ObjectKind = ZLinkPlacementObjectKind.UserSpot,
+                                                }
+                                            )
+                                            .ToArray(),
+                                    },
+                                    "client-role" => descriptor with
+                                    {
+                                        ObjectRole = ZLinkMeshNodeObjectRole.Client,
+                                    },
+                                    "no-entry" => descriptor with { EntrySpotId = null },
+                                    "zero-weight" => descriptor with { PlacementWeight = 0 },
+                                    "active-full" => descriptor with
+                                    {
+                                        Capacity = descriptor.Capacity with
+                                        {
+                                            Actors = new(1, 0, 1),
+                                        },
+                                    },
+                                    "pending-full" => descriptor with
+                                    {
+                                        Capacity = descriptor.Capacity with
+                                        {
+                                            Actors = new(0, 1, 1),
+                                        },
+                                    },
+                                    _ => throw new ArgumentOutOfRangeException(
+                                        nameof(excludedCondition)
+                                    ),
+                                }
+                            )
+                            .ToArray()
+            )
+        );
+        try
+        {
+            var actor = RegisterProbeActor(runtime, actorRef);
+            var state = runtime.GetOrCreateActorState(actorRef.ActorId);
+            if (inUserSpot)
+            {
+                var created = await runtime.CreateAsync<EntryReturnSourceSpot>();
+                var source = Assert.Single(
+                    runtime.GetSpotNodeRuntime("entry").Catalog.Spots,
+                    spot => spot.SpotId == created.Spot.SpotId
+                );
+                await source.JoinActorAsync(actor, ZLinkMessage.Empty, CancellationToken.None);
+            }
+            if (excludedCondition == "expired-owner")
+            {
+                var store = RequireLocationStore(runtime);
+                var owner = await store.ClaimLiveOwnerAsync(
+                    "expired-entry-owner",
+                    TimeSpan.FromSeconds(1)
+                );
+                var descriptor = CreateNodeDescriptor(
+                    runtime.Registration,
+                    AcceptingNodeRid,
+                    typeof(AcceptingProbeEntrySpot)
+                ) with
+                {
+                    OwnerId = owner.OwnerId,
+                    LeaseGeneration = owner.LeaseGeneration,
+                };
+                Assert.Equal(
+                    ZLinkLocationWriteStatus.Stored,
+                    (
+                        await store.UpdateMeshNodeAsync(
+                            descriptor,
+                            ZLinkLocationWriteIntent.NewClaim
+                        )
+                    ).Status
+                );
+                time.Advance(TimeSpan.FromSeconds(2));
+                Assert.Contains(
+                    (await store.ListMeshNodesAsync("entry", new ZLinkPageRequest(100))).Items,
+                    candidate => candidate.Rid == AcceptingNodeRid
+                );
+            }
+            var previous = state.LiveActivation;
+            var native = state.NativeActorRef;
+            if (inUserSpot)
+            {
+                var exception = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                    await runtime.JoinActorEntrySpotAsync(actor, ZLinkMessage.Empty, null)
+                );
+                Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, exception.Kind);
+            }
+            else
+            {
+                // An Actor already in Entry has the separate no-op contract (§4).
+                Assert.IsType<ZLinkActorJoinResult.Accepted>(
+                    await runtime.JoinActorEntrySpotAsync(actor, ZLinkMessage.Empty, null)
+                );
+            }
+            Assert.Same(previous, state.LiveActivation);
+            Assert.Equal(native, state.NativeActorRef);
+            Assert.Equal(0, node.NodeRequestAttempts);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Theory]
+    [InlineData(true, 2, 6)]
+    [InlineData(false, 8, 0)]
+    public async Task EntryJoinSelection_CurrentNodeHasNoPriorityAndUsesRelativeWeights(
+        bool remoteAcceptsActor,
+        int expectedLocal,
+        int expectedRemote
+    )
+    {
+        var node = new CapturingSpotNode();
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            entrySpotType: typeof(AcceptingProbeEntrySpot),
+            userSpotType: typeof(EntryReturnSourceSpot),
+            meshResolverWrapper: resolver => new EntryJoinDescriptors(
+                resolver,
+                descriptors =>
+                {
+                    var local = Assert.Single(descriptors);
+                    return
+                    [
+                        local with
+                        {
+                            PlacementWeight = 1,
+                        },
+                        local with
+                        {
+                            Rid = AcceptingNodeRid,
+                            PlacementWeight = 3,
+                            ObjectCapabilities = local
+                                .ObjectCapabilities.Select(capability =>
+                                    capability with
+                                    {
+                                        EntryAccepted = remoteAcceptsActor,
+                                    }
+                                )
+                                .ToArray(),
+                        },
+                    ];
+                }
+            )
+        );
+        try
+        {
+            var actor = RegisterProbeActor(runtime, actorRef);
+            var state = runtime.GetOrCreateActorState(actorRef.ActorId);
+            var native = state.NativeActorRef;
+            var created = await runtime.CreateAsync<EntryReturnSourceSpot>();
+            var source = Assert.Single(
+                runtime.GetSpotNodeRuntime("entry").Catalog.Spots,
+                spot => spot.SpotId == created.Spot.SpotId
+            );
+            runtime.Registration.SpotNodes["entry"].ActorRelocations.Clear();
+            var localSelections = 0;
+            var remoteSelections = 0;
+            for (var index = 0; index < 8; index++)
+            {
+                if (state.LiveActivation is null)
+                    await source.JoinActorAsync(actor, ZLinkMessage.Empty, CancellationToken.None);
+                try
+                {
+                    var result = await runtime.JoinActorEntrySpotAsync(
+                        actor,
+                        ZLinkMessage.Empty,
+                        null
+                    );
+                    Assert.IsType<ZLinkActorJoinResult.Accepted>(result);
+                    Assert.Null(state.LiveActivation);
+                    localSelections++;
+                }
+                catch (ZLinkFrameworkException exception)
+                {
+                    // This fixture disables relocation. Selecting the remote node must
+                    // reach that policy rejection without changing the source Actor.
+                    Assert.Equal(ZLinkFrameworkErrorKind.Rejected, exception.Kind);
+                    Assert.Contains("relocation policy", exception.Message);
+                    Assert.Same(source, state.LiveActivation);
+                    remoteSelections++;
+                }
+                Assert.Equal(native, state.NativeActorRef);
+            }
+            Assert.Equal(expectedLocal, localSelections);
+            Assert.Equal(expectedRemote, remoteSelections);
+            Assert.Equal(0, node.NodeRequestAttempts);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task EntryJoinSelection_TargetRejectPreservesSourceWithoutSelectingAgain()
+    {
+        var replies = 0;
+        CanonicalJoinSpotNode node = null!;
+        node = new CanonicalJoinSpotNode
+        {
+            CanonicalActorJoinHandler = (callback, _) =>
+            {
+                replies++;
+                callback(
+                    new ZLinkBackendActorJoinResult(
+                        RequestResult.Ok,
+                        1,
+                        node.CanonicalRequest.Actor with
+                        {
+                            NodeRid = AcceptingNodeRid,
+                        },
+                        node.CanonicalRequest.TargetSpotId,
+                        0,
+                        0,
+                        JoinedSpotGeneration: node.CanonicalRequest.TargetSpotGeneration
+                    ),
+                    Array.Empty<Message>()
+                );
+            },
+        };
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            entrySpotType: typeof(AcceptingProbeEntrySpot),
+            userSpotType: typeof(EntryReturnSourceSpot),
+            meshResolverWrapper: resolver => new EntryJoinDescriptors(
+                resolver,
+                descriptors =>
+                    descriptors
+                        .Select(descriptor =>
+                            descriptor with
+                            {
+                                Rid = AcceptingNodeRid,
+                                EntrySpotId = "remote-entry",
+                            }
+                        )
+                        .ToArray()
+            )
+        );
+        try
+        {
+            var actor = RegisterProbeActor(runtime, actorRef);
+            var state = runtime.GetOrCreateActorState(actorRef.ActorId);
+            var native = state.NativeActorRef;
+            var created = await runtime.CreateAsync<EntryReturnSourceSpot>();
+            var source = Assert.Single(
+                runtime.GetSpotNodeRuntime("entry").Catalog.Spots,
+                spot => spot.SpotId == created.Spot.SpotId
+            );
+            await source.JoinActorAsync(actor, ZLinkMessage.Empty, CancellationToken.None);
+            var previous = state.LiveActivation;
+            var result = await runtime.JoinActorEntrySpotAsync(actor, ZLinkMessage.Empty, null);
+
+            Assert.IsType<ZLinkActorJoinResult.Rejected>(result);
+            Assert.Equal(1, replies);
+            Assert.Equal(native, state.NativeActorRef);
+            Assert.Same(previous, state.LiveActivation);
+            Assert.Empty(node.DestroyedActors);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    private sealed class EntryJoinDescriptors(
+        IZLinkMeshNodeLocationResolver inner,
+        Func<
+            IReadOnlyList<ZLinkMeshNodeDescriptor>,
+            IReadOnlyList<ZLinkMeshNodeDescriptor>
+        > transform
+    ) : IZLinkMeshNodeLocationResolver
+    {
+        public async ValueTask<IReadOnlyList<ZLinkMeshNodeDescriptor>> ListLiveMeshNodesAsync(
+            string meshName,
+            CancellationToken cancellationToken = default
+        ) => transform(await inner.ListLiveMeshNodesAsync(meshName, cancellationToken));
     }
 
     private static void AdmitAcceptingPeer(CapturingSpotNode node) =>
