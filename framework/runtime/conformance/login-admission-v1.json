@@ -1,0 +1,1237 @@
+{
+  "fixture": "zlink.framework.login-admission",
+  "version": 1,
+  "status": "approved-design-fixture-runtime-not-yet-implemented",
+  "contract": {
+    "settings": {
+      "AuthenticationPacketName": null,
+      "MaxConcurrentAuthentications": "effectiveCpuCores * 8",
+      "AuthenticationRetryDelay": 500
+    },
+    "retryMetadataKey": "$zlink.admission.retryAfter",
+    "retryValueFormat": "utcUnixEpochMillisecondsDecimalString",
+    "errorBody": {
+      "code": "unavailable",
+      "message": "Authentication admission is full."
+    },
+    "connector": {
+      "maxAdmissionWaitDefault": "effectiveRequestTimeout",
+      "jitterMinMs": 0,
+      "jitterMaxMs": 50,
+      "correlation": "preserved",
+      "requestSequence": "newPerAttempt",
+      "waitingCallback": "OnAdmissionWaiting",
+      "deadline": "min(originalRequestDeadline, firstWaitingAt + maxAdmissionWait)"
+    },
+    "serviceWireChanges": false
+  },
+  "terminalReasons": [
+    "replySuccess",
+    "replyFailure",
+    "handlerException",
+    "cancellation",
+    "enqueueRejected",
+    "callbackWithoutReply",
+    "shutdown"
+  ],
+  "serverScenarios": [
+    {
+      "name": "below-limit-accepted",
+      "given": {
+        "authenticationPacketName": "Login",
+        "maxConcurrentAuthentications": 2,
+        "effectiveCpuCores": 2,
+        "authenticationRetryDelayMs": 500,
+        "nowEpochMs": 1800000000000
+      },
+      "steps": [
+        {
+          "action": "receive",
+          "requestId": "a",
+          "packetName": "Login",
+          "kind": "Request",
+          "requestSeq": "1",
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 1,
+            "handlerCalls": 0,
+            "decision": "accepted",
+            "error": null
+          },
+          "sessionId": "session-a"
+        },
+        {
+          "action": "receive",
+          "requestId": "b",
+          "packetName": "Login",
+          "kind": "Request",
+          "requestSeq": "2",
+          "expect": {
+            "inFlight": 2,
+            "heldPermits": 2,
+            "handlerCalls": 0,
+            "decision": "accepted",
+            "error": null
+          },
+          "sessionId": "session-b"
+        },
+        {
+          "action": "handlerStart",
+          "requestId": "a",
+          "expect": {
+            "inFlight": 2,
+            "heldPermits": 1,
+            "handlerCalls": 1
+          }
+        }
+      ],
+      "expectedEffectiveLimit": 2
+    },
+    {
+      "name": "over-limit-rejected-before-handler",
+      "given": {
+        "authenticationPacketName": "Login",
+        "maxConcurrentAuthentications": 1,
+        "effectiveCpuCores": 2,
+        "authenticationRetryDelayMs": 500,
+        "nowEpochMs": 1800000000000
+      },
+      "steps": [
+        {
+          "action": "receive",
+          "requestId": "a",
+          "packetName": "Login",
+          "kind": "Request",
+          "requestSeq": "1",
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 1,
+            "handlerCalls": 0,
+            "decision": "accepted",
+            "error": null
+          },
+          "sessionId": "session-a"
+        },
+        {
+          "action": "handlerStart",
+          "requestId": "a",
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 0,
+            "handlerCalls": 1
+          }
+        },
+        {
+          "action": "receive",
+          "requestId": "b",
+          "packetName": "Login",
+          "kind": "Request",
+          "requestSeq": "2",
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 0,
+            "handlerCalls": 1,
+            "decision": "rejected",
+            "error": {
+              "kind": "Error",
+              "packetName": "",
+              "requestSeq": "2",
+              "body": {
+                "code": "unavailable",
+                "message": "Authentication admission is full."
+              },
+              "metadata": {
+                "$zlink.admission.retryAfter": "1800000000500"
+              },
+              "connectionClosed": false
+            },
+            "permitReservations": 1,
+            "permitReturns": 1,
+            "applicationQueuedJobs": 0,
+            "handlerCallsForRequest": 0,
+            "actorCreates": 0,
+            "storeWrites": 0
+          },
+          "sessionId": "session-b"
+        }
+      ],
+      "expectedEffectiveLimit": 1
+    },
+    {
+      "name": "terminal-releases-replySuccess",
+      "given": {
+        "authenticationPacketName": "Login",
+        "maxConcurrentAuthentications": 1,
+        "effectiveCpuCores": 2,
+        "authenticationRetryDelayMs": 500,
+        "nowEpochMs": 1800000000000
+      },
+      "steps": [
+        {
+          "action": "receive",
+          "requestId": "a",
+          "packetName": "Login",
+          "kind": "Request",
+          "requestSeq": "1",
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 1,
+            "handlerCalls": 0,
+            "decision": "accepted",
+            "error": null
+          },
+          "sessionId": "session-a"
+        },
+        {
+          "action": "handlerStart",
+          "requestId": "a",
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 0,
+            "handlerCalls": 1
+          }
+        },
+        {
+          "action": "clientTimeout",
+          "requestId": "a",
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 0,
+            "handlerCalls": 1
+          }
+        },
+        {
+          "action": "await",
+          "requestId": "a",
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 0,
+            "handlerCalls": 1
+          }
+        },
+        {
+          "action": "terminal",
+          "requestId": "a",
+          "reason": "replySuccess",
+          "expect": {
+            "inFlight": 0,
+            "heldPermits": 0,
+            "handlerCalls": 1,
+            "leaseReturns": 1
+          }
+        },
+        {
+          "action": "terminal",
+          "requestId": "a",
+          "reason": "replySuccess",
+          "expect": {
+            "inFlight": 0,
+            "heldPermits": 0,
+            "handlerCalls": 1,
+            "leaseReturns": 1
+          }
+        },
+        {
+          "action": "receive",
+          "requestId": "b",
+          "packetName": "Login",
+          "kind": "Request",
+          "requestSeq": "2",
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 1,
+            "handlerCalls": 1,
+            "decision": "accepted",
+            "error": null
+          },
+          "sessionId": "session-b"
+        }
+      ],
+      "expectedEffectiveLimit": 1
+    },
+    {
+      "name": "terminal-releases-replyFailure",
+      "given": {
+        "authenticationPacketName": "Login",
+        "maxConcurrentAuthentications": 1,
+        "effectiveCpuCores": 2,
+        "authenticationRetryDelayMs": 500,
+        "nowEpochMs": 1800000000000
+      },
+      "steps": [
+        {
+          "action": "receive",
+          "requestId": "a",
+          "packetName": "Login",
+          "kind": "Request",
+          "requestSeq": "1",
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 1,
+            "handlerCalls": 0,
+            "decision": "accepted",
+            "error": null
+          },
+          "sessionId": "session-a"
+        },
+        {
+          "action": "handlerStart",
+          "requestId": "a",
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 0,
+            "handlerCalls": 1
+          }
+        },
+        {
+          "action": "clientTimeout",
+          "requestId": "a",
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 0,
+            "handlerCalls": 1
+          }
+        },
+        {
+          "action": "await",
+          "requestId": "a",
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 0,
+            "handlerCalls": 1
+          }
+        },
+        {
+          "action": "terminal",
+          "requestId": "a",
+          "reason": "replyFailure",
+          "expect": {
+            "inFlight": 0,
+            "heldPermits": 0,
+            "handlerCalls": 1,
+            "leaseReturns": 1
+          }
+        },
+        {
+          "action": "terminal",
+          "requestId": "a",
+          "reason": "replyFailure",
+          "expect": {
+            "inFlight": 0,
+            "heldPermits": 0,
+            "handlerCalls": 1,
+            "leaseReturns": 1
+          }
+        },
+        {
+          "action": "receive",
+          "requestId": "b",
+          "packetName": "Login",
+          "kind": "Request",
+          "requestSeq": "2",
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 1,
+            "handlerCalls": 1,
+            "decision": "accepted",
+            "error": null
+          },
+          "sessionId": "session-b"
+        }
+      ],
+      "expectedEffectiveLimit": 1
+    },
+    {
+      "name": "terminal-releases-handlerException",
+      "given": {
+        "authenticationPacketName": "Login",
+        "maxConcurrentAuthentications": 1,
+        "effectiveCpuCores": 2,
+        "authenticationRetryDelayMs": 500,
+        "nowEpochMs": 1800000000000
+      },
+      "steps": [
+        {
+          "action": "receive",
+          "requestId": "a",
+          "packetName": "Login",
+          "kind": "Request",
+          "requestSeq": "1",
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 1,
+            "handlerCalls": 0,
+            "decision": "accepted",
+            "error": null
+          },
+          "sessionId": "session-a"
+        },
+        {
+          "action": "handlerStart",
+          "requestId": "a",
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 0,
+            "handlerCalls": 1
+          }
+        },
+        {
+          "action": "clientTimeout",
+          "requestId": "a",
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 0,
+            "handlerCalls": 1
+          }
+        },
+        {
+          "action": "await",
+          "requestId": "a",
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 0,
+            "handlerCalls": 1
+          }
+        },
+        {
+          "action": "terminal",
+          "requestId": "a",
+          "reason": "handlerException",
+          "expect": {
+            "inFlight": 0,
+            "heldPermits": 0,
+            "handlerCalls": 1,
+            "leaseReturns": 1
+          }
+        },
+        {
+          "action": "terminal",
+          "requestId": "a",
+          "reason": "handlerException",
+          "expect": {
+            "inFlight": 0,
+            "heldPermits": 0,
+            "handlerCalls": 1,
+            "leaseReturns": 1
+          }
+        },
+        {
+          "action": "receive",
+          "requestId": "b",
+          "packetName": "Login",
+          "kind": "Request",
+          "requestSeq": "2",
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 1,
+            "handlerCalls": 1,
+            "decision": "accepted",
+            "error": null
+          },
+          "sessionId": "session-b"
+        }
+      ],
+      "expectedEffectiveLimit": 1
+    },
+    {
+      "name": "terminal-releases-cancellation",
+      "given": {
+        "authenticationPacketName": "Login",
+        "maxConcurrentAuthentications": 1,
+        "effectiveCpuCores": 2,
+        "authenticationRetryDelayMs": 500,
+        "nowEpochMs": 1800000000000
+      },
+      "steps": [
+        {
+          "action": "receive",
+          "requestId": "a",
+          "packetName": "Login",
+          "kind": "Request",
+          "requestSeq": "1",
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 1,
+            "handlerCalls": 0,
+            "decision": "accepted",
+            "error": null
+          },
+          "sessionId": "session-a"
+        },
+        {
+          "action": "handlerStart",
+          "requestId": "a",
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 0,
+            "handlerCalls": 1
+          }
+        },
+        {
+          "action": "clientTimeout",
+          "requestId": "a",
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 0,
+            "handlerCalls": 1
+          }
+        },
+        {
+          "action": "await",
+          "requestId": "a",
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 0,
+            "handlerCalls": 1
+          }
+        },
+        {
+          "action": "terminal",
+          "requestId": "a",
+          "reason": "cancellation",
+          "expect": {
+            "inFlight": 0,
+            "heldPermits": 0,
+            "handlerCalls": 1,
+            "leaseReturns": 1
+          }
+        },
+        {
+          "action": "terminal",
+          "requestId": "a",
+          "reason": "cancellation",
+          "expect": {
+            "inFlight": 0,
+            "heldPermits": 0,
+            "handlerCalls": 1,
+            "leaseReturns": 1
+          }
+        },
+        {
+          "action": "receive",
+          "requestId": "b",
+          "packetName": "Login",
+          "kind": "Request",
+          "requestSeq": "2",
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 1,
+            "handlerCalls": 1,
+            "decision": "accepted",
+            "error": null
+          },
+          "sessionId": "session-b"
+        }
+      ],
+      "expectedEffectiveLimit": 1
+    },
+    {
+      "name": "terminal-releases-enqueueRejected",
+      "given": {
+        "authenticationPacketName": "Login",
+        "maxConcurrentAuthentications": 1,
+        "effectiveCpuCores": 2,
+        "authenticationRetryDelayMs": 500,
+        "nowEpochMs": 1800000000000
+      },
+      "steps": [
+        {
+          "action": "receive",
+          "requestId": "a",
+          "packetName": "Login",
+          "kind": "Request",
+          "requestSeq": "1",
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 1,
+            "handlerCalls": 0,
+            "decision": "accepted",
+            "error": null
+          },
+          "sessionId": "session-a"
+        },
+        {
+          "action": "terminal",
+          "requestId": "a",
+          "reason": "enqueueRejected",
+          "expect": {
+            "inFlight": 0,
+            "heldPermits": 0,
+            "handlerCalls": 0,
+            "leaseReturns": 1
+          }
+        },
+        {
+          "action": "terminal",
+          "requestId": "a",
+          "reason": "enqueueRejected",
+          "expect": {
+            "inFlight": 0,
+            "heldPermits": 0,
+            "handlerCalls": 0,
+            "leaseReturns": 1
+          }
+        },
+        {
+          "action": "receive",
+          "requestId": "b",
+          "packetName": "Login",
+          "kind": "Request",
+          "requestSeq": "2",
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 1,
+            "handlerCalls": 0,
+            "decision": "accepted",
+            "error": null
+          },
+          "sessionId": "session-b"
+        }
+      ],
+      "expectedEffectiveLimit": 1
+    },
+    {
+      "name": "terminal-releases-callbackWithoutReply",
+      "given": {
+        "authenticationPacketName": "Login",
+        "maxConcurrentAuthentications": 1,
+        "effectiveCpuCores": 2,
+        "authenticationRetryDelayMs": 500,
+        "nowEpochMs": 1800000000000
+      },
+      "steps": [
+        {
+          "action": "receive",
+          "requestId": "a",
+          "packetName": "Login",
+          "kind": "Request",
+          "requestSeq": "1",
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 1,
+            "handlerCalls": 0,
+            "decision": "accepted",
+            "error": null
+          },
+          "sessionId": "session-a"
+        },
+        {
+          "action": "handlerStart",
+          "requestId": "a",
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 0,
+            "handlerCalls": 1
+          }
+        },
+        {
+          "action": "clientTimeout",
+          "requestId": "a",
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 0,
+            "handlerCalls": 1
+          }
+        },
+        {
+          "action": "await",
+          "requestId": "a",
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 0,
+            "handlerCalls": 1
+          }
+        },
+        {
+          "action": "terminal",
+          "requestId": "a",
+          "reason": "callbackWithoutReply",
+          "expect": {
+            "inFlight": 0,
+            "heldPermits": 0,
+            "handlerCalls": 1,
+            "leaseReturns": 1
+          }
+        },
+        {
+          "action": "terminal",
+          "requestId": "a",
+          "reason": "callbackWithoutReply",
+          "expect": {
+            "inFlight": 0,
+            "heldPermits": 0,
+            "handlerCalls": 1,
+            "leaseReturns": 1
+          }
+        },
+        {
+          "action": "receive",
+          "requestId": "b",
+          "packetName": "Login",
+          "kind": "Request",
+          "requestSeq": "2",
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 1,
+            "handlerCalls": 1,
+            "decision": "accepted",
+            "error": null
+          },
+          "sessionId": "session-b"
+        }
+      ],
+      "expectedEffectiveLimit": 1
+    },
+    {
+      "name": "terminal-releases-shutdown",
+      "given": {
+        "authenticationPacketName": "Login",
+        "maxConcurrentAuthentications": 1,
+        "effectiveCpuCores": 2,
+        "authenticationRetryDelayMs": 500,
+        "nowEpochMs": 1800000000000
+      },
+      "steps": [
+        {
+          "action": "receive",
+          "requestId": "a",
+          "packetName": "Login",
+          "kind": "Request",
+          "requestSeq": "1",
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 1,
+            "handlerCalls": 0,
+            "decision": "accepted",
+            "error": null
+          },
+          "sessionId": "session-a"
+        },
+        {
+          "action": "handlerStart",
+          "requestId": "a",
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 0,
+            "handlerCalls": 1
+          }
+        },
+        {
+          "action": "clientTimeout",
+          "requestId": "a",
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 0,
+            "handlerCalls": 1
+          }
+        },
+        {
+          "action": "await",
+          "requestId": "a",
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 0,
+            "handlerCalls": 1
+          }
+        },
+        {
+          "action": "terminal",
+          "requestId": "a",
+          "reason": "shutdown",
+          "expect": {
+            "inFlight": 0,
+            "heldPermits": 0,
+            "handlerCalls": 1,
+            "leaseReturns": 1
+          }
+        },
+        {
+          "action": "terminal",
+          "requestId": "a",
+          "reason": "shutdown",
+          "expect": {
+            "inFlight": 0,
+            "heldPermits": 0,
+            "handlerCalls": 1,
+            "leaseReturns": 1
+          }
+        },
+        {
+          "action": "receive",
+          "requestId": "b",
+          "packetName": "Login",
+          "kind": "Request",
+          "requestSeq": "2",
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 1,
+            "handlerCalls": 1,
+            "decision": "accepted",
+            "error": null
+          },
+          "sessionId": "session-b"
+        }
+      ],
+      "expectedEffectiveLimit": 1
+    },
+    {
+      "name": "non-authentication-packets-unaffected",
+      "given": {
+        "authenticationPacketName": "Login",
+        "maxConcurrentAuthentications": 1,
+        "effectiveCpuCores": 2,
+        "authenticationRetryDelayMs": 500,
+        "nowEpochMs": 1800000000000
+      },
+      "steps": [
+        {
+          "action": "receive",
+          "requestId": "a",
+          "packetName": "Login",
+          "kind": "Request",
+          "requestSeq": "1",
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 1,
+            "handlerCalls": 0,
+            "decision": "accepted",
+            "error": null
+          },
+          "sessionId": "session-a"
+        },
+        {
+          "action": "receive",
+          "requestId": "b",
+          "packetName": "Profile",
+          "kind": "Request",
+          "requestSeq": "2",
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 2,
+            "handlerCalls": 0,
+            "decision": "accepted",
+            "error": null
+          },
+          "sessionId": "session-b"
+        },
+        {
+          "action": "receive",
+          "requestId": "c",
+          "packetName": "Login",
+          "kind": "Send",
+          "requestSeq": null,
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 3,
+            "handlerCalls": 0,
+            "decision": "accepted",
+            "error": null
+          },
+          "sessionId": "session-c"
+        },
+        {
+          "action": "receive",
+          "requestId": "d",
+          "packetName": "Heartbeat",
+          "kind": "Heartbeat",
+          "requestSeq": null,
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 3,
+            "handlerCalls": 0,
+            "decision": "infrastructure",
+            "error": null
+          },
+          "sessionId": "session-d"
+        }
+      ],
+      "expectedEffectiveLimit": 1
+    },
+    {
+      "name": "unnamed-authentication-disabled",
+      "given": {
+        "authenticationPacketName": null,
+        "maxConcurrentAuthentications": null,
+        "effectiveCpuCores": 2,
+        "authenticationRetryDelayMs": 500,
+        "nowEpochMs": 1800000000000
+      },
+      "steps": [
+        {
+          "action": "receive",
+          "requestId": "a",
+          "packetName": "Login",
+          "kind": "Request",
+          "requestSeq": "1",
+          "expect": {
+            "inFlight": 0,
+            "heldPermits": 1,
+            "handlerCalls": 0,
+            "decision": "accepted",
+            "error": null
+          },
+          "sessionId": "session-a"
+        },
+        {
+          "action": "receive",
+          "requestId": "b",
+          "packetName": "Login",
+          "kind": "Request",
+          "requestSeq": "2",
+          "expect": {
+            "inFlight": 0,
+            "heldPermits": 2,
+            "handlerCalls": 0,
+            "decision": "accepted",
+            "error": null
+          },
+          "sessionId": "session-b"
+        }
+      ],
+      "expectedEffectiveLimit": 16
+    },
+    {
+      "name": "default-limit-effective-cores-times-eight",
+      "given": {
+        "authenticationPacketName": "Login",
+        "maxConcurrentAuthentications": null,
+        "effectiveCpuCores": 2,
+        "authenticationRetryDelayMs": 500,
+        "nowEpochMs": 1800000000000
+      },
+      "steps": [
+        {
+          "action": "receive",
+          "requestId": "a",
+          "packetName": "Login",
+          "kind": "Request",
+          "requestSeq": "1",
+          "expect": {
+            "inFlight": 1,
+            "heldPermits": 1,
+            "handlerCalls": 0,
+            "decision": "accepted",
+            "error": null
+          },
+          "sessionId": "session-a"
+        }
+      ],
+      "expectedEffectiveLimit": 16
+    }
+  ],
+  "connectorScenarios": [
+    {
+      "name": "automatic-retry-then-success",
+      "given": {
+        "startEpochMs": 1800000000000,
+        "requestTimeoutMs": 3000,
+        "maxAdmissionWaitMs": null,
+        "packetName": "Login",
+        "payloadBase64": "eyJ1c2VyIjoidGVzdCJ9",
+        "applicationMetadata": {
+          "locale": "ko"
+        },
+        "correlationId": "login-4546",
+        "responses": [
+          {
+            "atElapsedMs": 10,
+            "kind": "Error",
+            "requestSeq": "1",
+            "remoteCode": "unavailable",
+            "retryAfter": "1800000000500",
+            "jitterMs": 25
+          },
+          {
+            "atElapsedMs": 530,
+            "kind": "Response",
+            "requestSeq": "2"
+          }
+        ]
+      },
+      "expect": {
+        "sendAtElapsedMs": [
+          0,
+          525
+        ],
+        "requestSeqs": [
+          "1",
+          "2"
+        ],
+        "result": "success",
+        "waitingCallbacks": 1,
+        "requestCallbacks": 1,
+        "replyReceivedHooks": 1,
+        "requestSendingHooks": 1,
+        "payloadPreserved": true,
+        "applicationMetadataPreserved": true,
+        "correlationPreserved": true
+      }
+    },
+    {
+      "name": "maximum-admission-wait-exceeded",
+      "given": {
+        "startEpochMs": 1800000000000,
+        "requestTimeoutMs": 3000,
+        "maxAdmissionWaitMs": 300,
+        "packetName": "Login",
+        "payloadBase64": "eyJ1c2VyIjoidGVzdCJ9",
+        "applicationMetadata": {
+          "locale": "ko"
+        },
+        "correlationId": "login-4546",
+        "responses": [
+          {
+            "atElapsedMs": 10,
+            "kind": "Error",
+            "requestSeq": "1",
+            "remoteCode": "unavailable",
+            "retryAfter": "1800000001000",
+            "jitterMs": 0
+          }
+        ]
+      },
+      "expect": {
+        "sendAtElapsedMs": [
+          0
+        ],
+        "requestSeqs": [
+          "1"
+        ],
+        "result": "RequestTimeout",
+        "waitingCallbacks": 1,
+        "requestCallbacks": 1,
+        "replyReceivedHooks": 1,
+        "requestSendingHooks": 1,
+        "payloadPreserved": true,
+        "applicationMetadataPreserved": true,
+        "correlationPreserved": true,
+        "terminalAtElapsedMs": 310
+      }
+    },
+    {
+      "name": "original-deadline-not-extended",
+      "given": {
+        "startEpochMs": 1800000000000,
+        "requestTimeoutMs": 400,
+        "maxAdmissionWaitMs": 2000,
+        "packetName": "Login",
+        "payloadBase64": "eyJ1c2VyIjoidGVzdCJ9",
+        "applicationMetadata": {
+          "locale": "ko"
+        },
+        "correlationId": "login-4546",
+        "responses": [
+          {
+            "atElapsedMs": 10,
+            "kind": "Error",
+            "requestSeq": "1",
+            "remoteCode": "unavailable",
+            "retryAfter": "1800000000500",
+            "jitterMs": 0
+          }
+        ]
+      },
+      "expect": {
+        "sendAtElapsedMs": [
+          0
+        ],
+        "requestSeqs": [
+          "1"
+        ],
+        "result": "RequestTimeout",
+        "waitingCallbacks": 1,
+        "requestCallbacks": 1,
+        "replyReceivedHooks": 1,
+        "requestSendingHooks": 1,
+        "payloadPreserved": true,
+        "applicationMetadataPreserved": true,
+        "correlationPreserved": true,
+        "terminalAtElapsedMs": 400
+      }
+    },
+    {
+      "name": "repeated-rejection-single-operation",
+      "given": {
+        "startEpochMs": 1800000000000,
+        "requestTimeoutMs": 3000,
+        "maxAdmissionWaitMs": 2000,
+        "packetName": "Login",
+        "payloadBase64": "eyJ1c2VyIjoidGVzdCJ9",
+        "applicationMetadata": {
+          "locale": "ko"
+        },
+        "correlationId": "login-4546",
+        "responses": [
+          {
+            "atElapsedMs": 10,
+            "kind": "Error",
+            "requestSeq": "1",
+            "remoteCode": "unavailable",
+            "retryAfter": "1800000000500",
+            "jitterMs": 0
+          },
+          {
+            "atElapsedMs": 510,
+            "kind": "Error",
+            "requestSeq": "2",
+            "remoteCode": "unavailable",
+            "retryAfter": "1800000001000",
+            "jitterMs": 50
+          },
+          {
+            "atElapsedMs": 1060,
+            "kind": "Response",
+            "requestSeq": "3"
+          }
+        ]
+      },
+      "expect": {
+        "sendAtElapsedMs": [
+          0,
+          500,
+          1050
+        ],
+        "requestSeqs": [
+          "1",
+          "2",
+          "3"
+        ],
+        "result": "success",
+        "waitingCallbacks": 2,
+        "requestCallbacks": 1,
+        "replyReceivedHooks": 1,
+        "requestSendingHooks": 1,
+        "payloadPreserved": true,
+        "applicationMetadataPreserved": true,
+        "correlationPreserved": true
+      }
+    },
+    {
+      "name": "past-retry-time-jitter",
+      "given": {
+        "startEpochMs": 1800000000000,
+        "requestTimeoutMs": 3000,
+        "maxAdmissionWaitMs": 2000,
+        "packetName": "Login",
+        "payloadBase64": "eyJ1c2VyIjoidGVzdCJ9",
+        "applicationMetadata": {
+          "locale": "ko"
+        },
+        "correlationId": "login-4546",
+        "responses": [
+          {
+            "atElapsedMs": 10,
+            "kind": "Error",
+            "requestSeq": "1",
+            "remoteCode": "unavailable",
+            "retryAfter": "1799999999999",
+            "jitterMs": 50
+          },
+          {
+            "atElapsedMs": 65,
+            "kind": "Response",
+            "requestSeq": "2"
+          }
+        ]
+      },
+      "expect": {
+        "sendAtElapsedMs": [
+          0,
+          60
+        ],
+        "requestSeqs": [
+          "1",
+          "2"
+        ],
+        "result": "success",
+        "waitingCallbacks": 1,
+        "requestCallbacks": 1,
+        "replyReceivedHooks": 1,
+        "requestSendingHooks": 1,
+        "payloadPreserved": true,
+        "applicationMetadataPreserved": true,
+        "correlationPreserved": true
+      }
+    },
+    {
+      "name": "unavailable-without-admission-metadata",
+      "given": {
+        "startEpochMs": 1800000000000,
+        "requestTimeoutMs": 3000,
+        "maxAdmissionWaitMs": 2000,
+        "packetName": "Login",
+        "payloadBase64": "eyJ1c2VyIjoidGVzdCJ9",
+        "applicationMetadata": {
+          "locale": "ko"
+        },
+        "correlationId": "login-4546",
+        "responses": [
+          {
+            "atElapsedMs": 10,
+            "kind": "Error",
+            "requestSeq": "1",
+            "remoteCode": "unavailable",
+            "retryAfter": null,
+            "jitterMs": 0
+          }
+        ]
+      },
+      "expect": {
+        "sendAtElapsedMs": [
+          0
+        ],
+        "requestSeqs": [
+          "1"
+        ],
+        "result": "RemoteError",
+        "waitingCallbacks": 0,
+        "requestCallbacks": 1,
+        "replyReceivedHooks": 1,
+        "requestSendingHooks": 1,
+        "payloadPreserved": true,
+        "applicationMetadataPreserved": true,
+        "correlationPreserved": true
+      }
+    },
+    {
+      "name": "malformed-retry-metadata",
+      "given": {
+        "startEpochMs": 1800000000000,
+        "requestTimeoutMs": 3000,
+        "maxAdmissionWaitMs": 2000,
+        "packetName": "Login",
+        "payloadBase64": "eyJ1c2VyIjoidGVzdCJ9",
+        "applicationMetadata": {
+          "locale": "ko"
+        },
+        "correlationId": "login-4546",
+        "responses": [
+          {
+            "atElapsedMs": 10,
+            "kind": "Error",
+            "requestSeq": "1",
+            "remoteCode": "unavailable",
+            "retryAfter": "500ms",
+            "jitterMs": 0
+          }
+        ]
+      },
+      "expect": {
+        "sendAtElapsedMs": [
+          0
+        ],
+        "requestSeqs": [
+          "1"
+        ],
+        "result": "FrameDecodeFailed",
+        "waitingCallbacks": 0,
+        "requestCallbacks": 1,
+        "replyReceivedHooks": 1,
+        "requestSendingHooks": 1,
+        "payloadPreserved": true,
+        "applicationMetadataPreserved": true,
+        "correlationPreserved": true
+      }
+    }
+  ]
+}
