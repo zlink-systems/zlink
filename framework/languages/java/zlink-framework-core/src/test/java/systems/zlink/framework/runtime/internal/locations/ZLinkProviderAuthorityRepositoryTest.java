@@ -349,6 +349,153 @@ final class ZLinkProviderAuthorityRepositoryTest {
     }
 
     @Test
+    void abortedRelocationIsUnorderedTerminalForPublishedAdvance() throws Exception {
+        var id = java.util.UUID.fromString("0f1e2d3c-4b5a-4968-8778-a1b2c3d4e5f6");
+        var fixture = preparedFixture(1, id, 7);
+        var json = new com.fasterxml.jackson.databind.ObjectMapper();
+        com.fasterxml.jackson.databind.JsonNode golden;
+        try (var input =
+                getClass().getResourceAsStream("/authority-aggregate-relocation-v1.json")) {
+            golden = json.readTree(input).path("cases");
+        }
+        var value =
+                java.util.stream.StreamSupport.stream(golden.spliterator(), false)
+                        .filter(
+                                vector ->
+                                        vector.path("name")
+                                                .asText()
+                                                .equals("activated-with-completion"))
+                        .findFirst()
+                        .orElseThrow()
+                        .path("aggregate")
+                        .path("relocation");
+        var withId = ((com.fasterxml.jackson.databind.node.ObjectNode) value.deepCopy());
+        withId.put("relocationId", id.toString());
+        var relocation = new ZLinkAuthorityRelocation(withId).phase("prepared");
+        var participant = fixture.request().participants().getFirst();
+        var before =
+                (ZLinkAuthoritySnapshot)
+                        fixture.repository()
+                                .read(participant.authorityKey(), () -> false)
+                                .toCompletableFuture()
+                                .join();
+        var stored =
+                assertInstanceOf(
+                        ZLinkAuthorityStored.class,
+                        fixture.repository()
+                                .compareExchange(
+                                        participant.authorityKey(),
+                                        new ZLinkAuthorityExpectFound(before.storeVersion()),
+                                        ZLinkAuthorityPut.relocation(before.payload(), relocation),
+                                        () -> false)
+                                .toCompletableFuture()
+                                .join());
+        var request =
+                new ZLinkAggregatePrepareRequest(
+                        id,
+                        7,
+                        List.of(
+                                new ZLinkAggregateParticipant(
+                                        participant.authorityKey(),
+                                        participant.objectGeneration(),
+                                        participant.sourceAuthorityOwnerGeneration(),
+                                        stored.storeVersion(),
+                                        participant.ownerTransition(),
+                                        participant.authorityPayload(),
+                                        participant.membershipMutation())),
+                        fixture.request().inventoryDigest(),
+                        fixture.request().targetDescriptor(),
+                        fixture.request().targetDescriptorLifecycleGeneration(),
+                        fixture.request().capacityBundle(),
+                        fixture.request().targetOwner());
+        assertInstanceOf(
+                ZLinkAggregatePrepared.class,
+                fixture.repository()
+                        .prepareAggregate(request, () -> false)
+                        .toCompletableFuture()
+                        .join());
+        var raw =
+                (ZLinkStoreReadFound)
+                        fixture.store()
+                                .read(authorityKey(participant.authorityKey()), () -> false)
+                                .toCompletableFuture()
+                                .join();
+        var prepared = json.readTree(raw.value().bytes());
+        assertEquals(relocation.json(), prepared.path("aggregate").path("relocation"));
+        assertEquals(id.toString(), prepared.path("aggregate").path("aggregateId").asText());
+        assertEquals(stored.storeVersion(), prepared.path("visibleStoreVersion").asText());
+        assertEquals(
+                ZLinkAggregateCommitResult.COMMITTED,
+                fixture.repository()
+                        .commitAggregate(new ZLinkAggregateFence(id, 7), () -> false)
+                        .toCompletableFuture()
+                        .join());
+        var committed =
+                (ZLinkAuthoritySnapshot)
+                        fixture.repository()
+                                .read(participant.authorityKey(), () -> false)
+                                .toCompletableFuture()
+                                .join();
+        assertEquals(relocation.phase("committed"), committed.relocation());
+
+        var aborted = relocation.phase("aborted");
+        assertTrue(aborted.hasReached("aborted"));
+        for (var phase : List.of("preparing", "prepared", "activated", "completed")) {
+            assertFalse(aborted.hasReached(phase), phase);
+        }
+        assertFalse(relocation.phase("completed").hasReached("aborted"));
+        // advancePublished runs after the target owner generation advanced; model that read.
+        var published =
+                new ZLinkAuthoritySnapshot(
+                        committed.storeVersion(),
+                        committed.payload(),
+                        committed.objectGeneration(),
+                        committed.authorityOwnerGeneration() + 1,
+                        committed.ownerId(),
+                        committed.ownerLeaseGeneration(),
+                        committed.allocation(),
+                        committed.pendingCreation(),
+                        committed.storeNow(),
+                        aborted,
+                        committed.aggregateGeneration());
+        var writes = new java.util.concurrent.atomic.AtomicInteger();
+        var repository =
+                (ZLinkLocationRepository)
+                        java.lang.reflect.Proxy.newProxyInstance(
+                                ZLinkLocationRepository.class.getClassLoader(),
+                                new Class<?>[] {ZLinkLocationRepository.class},
+                                (proxy, method, args) -> {
+                                    if (method.getName().equals("read"))
+                                        return CompletableFuture.completedFuture(published);
+                                    writes.incrementAndGet();
+                                    throw new AssertionError("unexpected " + method.getName());
+                                });
+        var coordinator = new ZLinkAggregateRelocationCoordinator(repository);
+        var expected =
+                List.of(
+                        new ZLinkAggregateRelocationCoordinator.ExpectedParticipant(
+                                participant.authorityKey(),
+                                committed.objectGeneration(),
+                                committed.authorityOwnerGeneration()));
+        var fence = new ZLinkAggregateFence(id, 7);
+        var failure =
+                assertThrows(
+                        java.util.concurrent.CompletionException.class,
+                        () ->
+                                coordinator
+                                        .advancePublished(expected, fence, "activated", () -> false)
+                                        .toCompletableFuture()
+                                        .join());
+        assertInstanceOf(IllegalStateException.class, failure.getCause());
+        assertEquals("Relocation was aborted", failure.getCause().getMessage());
+        coordinator
+                .advancePublished(expected, fence, "aborted", () -> false)
+                .toCompletableFuture()
+                .join();
+        assertEquals(0, writes.get());
+    }
+
+    @Test
     void sourcePhasesUseCanonicalJsonCasAndTerminalCleanup() throws Exception {
         var fixture = reincarnationFixture("json-source");
         fixture.repository()

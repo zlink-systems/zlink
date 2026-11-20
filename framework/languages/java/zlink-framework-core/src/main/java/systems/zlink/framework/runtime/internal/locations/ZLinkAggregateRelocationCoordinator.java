@@ -681,6 +681,12 @@ public final class ZLinkAggregateRelocationCoordinator {
                                                             return failed(
                                                                     new IllegalStateException(
                                                                             "Relocation phase authority differs"));
+                                                        if (snapshot.relocation() != null
+                                                                && snapshot.relocation().aborted()
+                                                                && !phase.equals("aborted"))
+                                                            return failed(
+                                                                    new IllegalStateException(
+                                                                            "Relocation was aborted"));
                                                         if (snapshot.relocation() == null
                                                                 || snapshot.relocation()
                                                                         .hasReached(phase))

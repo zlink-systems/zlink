@@ -76,8 +76,18 @@ public final class ZLinkAuthorityRelocation {
         return PHASES.indexOf(phase()) + 1;
     }
 
+    /**
+     * Ordered progress check. {@code aborted} is an unordered terminal: an aborted relocation has
+     * reached only {@code aborted}, and no ordered phase reaches {@code aborted}.
+     */
     public boolean hasReached(String phase) {
+        if (!PHASES.contains(phase)) throw new IllegalArgumentException("Unknown relocation phase");
+        if (aborted() || phase.equals("aborted")) return aborted() && phase.equals("aborted");
         return phaseOrdinal() >= PHASES.indexOf(phase) + 1;
+    }
+
+    public boolean aborted() {
+        return phase().equals("aborted");
     }
 
     public String phase() {
