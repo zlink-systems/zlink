@@ -10,7 +10,10 @@ import systems.zlink.runtime.nativeapi.Native;
 import java.lang.foreign.MemorySegment;
 
 final class NativeAtomicCounter implements AtomicCounter {
-    private MemorySegment handle;
+    private volatile MemorySegment handle;
+    // Core releases a handle once; one owner at a time runs the native close
+    // and later callers observe its outcome.
+    private final Object closeLock = new Object();
 
     NativeAtomicCounter() {
         this.handle = Native.atomicCounterNew();
@@ -41,11 +44,14 @@ final class NativeAtomicCounter implements AtomicCounter {
 
     @Override
     public void close() {
-        if (handle == null || handle.address() == 0) {
-            return;
+        synchronized (closeLock) {
+            MemorySegment current = handle;
+            if (current == null || current.address() == 0) {
+                return;
+            }
+            Native.atomicCounterDestroy(current);
+            handle = MemorySegment.NULL;
         }
-        Native.atomicCounterDestroy(handle);
-        handle = MemorySegment.NULL;
     }
 
     private void ensureOpen() {
