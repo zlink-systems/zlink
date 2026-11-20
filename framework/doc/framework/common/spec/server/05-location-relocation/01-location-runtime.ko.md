@@ -496,6 +496,8 @@ field는 다른 record의 generation field와 마찬가지로 JSON number가 아
 | `pendingCreation` | 생성 진행 상태다(§7). 없으면 `null`이다. 있으면 `reservationId`, `requestContentReference`, `requestSha256`(hex, 64자)과 `requestEncodedSize`(정수)를 포함한다. `requestContentReference`의 형식은 `inline-v1:{base64url}`이며, `{base64url}`은 생성 요청 bytes를 `A-Z a-z 0-9 - _` 알파벳으로 인코딩한 값으로 padding `=`을 붙이지 않는다. 다른 형식은 인식하지 않는다. |
 | `aggregate` | 이 record가 참여 중인 aggregate 변경의 진행 정보다(§8.1). 없으면 field를 쓰지 않는다. 있으면 `aggregateId`(lowercase canonical UUID), `aggregateGeneration`(문자열 정수), `index`(JSON number, 참여 목록 안의 위치), `expectedStoreVersion`, `ownerTransition`(`preserve \| newOwner`), `targetAuthorityOwnerGeneration`(문자열 정수), `authorityPayloadSha256`·`membershipMutationSha256`(hex 64자)를 포함한다. |
 | `visibleStoreVersion` | `aggregate`가 있는 동안 Framework가 공개 `StoreVersion`으로 내놓는 값이다. Aggregate 준비가 이 record를 다시 써도 공개 `StoreVersion`은 준비 전 값으로 유지한다. `aggregate`가 없으면 field를 쓰지 않는다. |
+| `aggregate.relocation` | 이 authority record의 relocation 진행 정보다(§9.1). `relocationId`(lowercase canonical UUID), `phase`(`preparing \| captured \| prepared \| committed \| activating \| activated \| cleaning \| completed \| aborted`), `source`, `target`, `coordinator`, `sourceInventorySha256`(hex 64자), `applicationVersion`(문자열 정수)을 포함한다. `source`·`target`은 `nodeRid`, `nodeGeneration`, `ownerId`, `ownerLeaseGeneration`을 담고 `target`은 `attemptGeneration`도 담는다. `target`은 `preparing`·`captured`에서 `null`이고 `prepared`부터 전체 값을 갖는다. 64-bit 정수는 문자열로 쓴다. |
+| `aggregate.relocation.coordinator.expectedStoreVersion` | 이동을 시작한 coordinator가 읽은 원래 authority StoreVersion이다. Opaque 문자열이며 같은 값인지만 비교한다. Phase CAS의 현재 expected StoreVersion과 구분한다. |
 
 생성을 실행하는 node는 `requestContentReference`를 decode한 뒤 그 bytes의 길이가
 `requestEncodedSize`와 같고 SHA-256이 `requestSha256`과 같은지 확인한다. 어느 하나라도
@@ -509,6 +511,10 @@ field는 다른 record의 generation field와 마찬가지로 JSON number가 아
 두지 않는다 — 한 언어만 읽는 field에 예약 정보를 담으면 다른 언어가 그 record를 갱신할 때
 그 정보가 남지 않는다. Aggregate·relocation 진행도 별도 lock record가 아니라 이 record의 상태다. 진행 여부와 commit 전 값은
 `aggregate`·`visibleStoreVersion` 두 field만으로 판정한다. Aggregate 기록의 key는 `{prefix}aggregate:{aggregateId}:{aggregateGeneration}`이다.
+
+`aggregate` field는 aggregate marker field와 선택적인 `relocation` field를 담는다. Aggregate marker가 아직 materialize되지 않은 relocation에서는 `aggregate`에 `relocation`만 기록할 수 있으며, 이 형태는 aggregate transaction marker가 준비되었음을 뜻하지 않는다. `aggregate`가 있으면 marker field는 전부 있거나 전부 없어야 하고, 빈 object는 유효하지 않다. Aggregate marker를 materialize하거나 갱신하는 authority 변경은 기존 `aggregate.relocation`을 보존하며, 그동안 `visibleStoreVersion`은 aggregate 준비 전 공개 StoreVersion을 유지한다. Relocation 진행 정보는 기존 terminal cleanup의 조건부 authority 변경에서 제거하고, 제거 뒤 marker도 없으면 `aggregate` field를 쓰지 않는다.
+
+`aggregate.relocation`은 이 record의 durable relocation phase와 source·target·coordinator fence를 소유한다. 같은 사실을 `payload`나 `visibleStoreVersion`에 중복 기록하지 않으며, `payload`는 application 정의 opaque bytes로 유지한다. 이전 언어별 relocation 표현은 호환 reader의 입력으로만 읽고 새 writer는 이 표현 하나만 쓴다. 이 field는 `recordVersion` 1의 선택적 확장이다. Field가 없는 기존 record는 그대로 읽되 그 부재로 relocation이 없다고 추측하지 않는다. 이 field를 쓰는 runtime으로 올리기 전에 진행 중인 relocation을 끝내고, 이 field가 남은 record가 있으면 이전 버전으로 되돌리지 않는다.
 
 Relocation Store가 보관하는 payload(cold activation envelope, 완료 기록)는 이 opaque
 record를 사용하지 않는다. 별도로 버전을 매긴 key 공간과 raw bytes 저장 형식을
