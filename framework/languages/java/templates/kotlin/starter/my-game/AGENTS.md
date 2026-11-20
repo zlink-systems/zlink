@@ -100,3 +100,7 @@ For supplementary STREAM connector tracing in the e2e runner, set `ZLINK_JAVA_ST
 ## Defect reporting
 
 Compare public API usage with the guide and a working sample first. Preserve the pinned versions, OS, reproduction command, first node failure, and flow/correlation records. Check existing [ZLink issues](https://github.com/zlink-systems/zlink/issues) and record the matching issue number in README Known issues. If a coding agent prepares a new public issue, show its body to the developer before publication. Remove credentials and personal information from attached logs.
+
+## Client connection
+
+[README: Client connection](README.md#client-connection) owns the endpoint, initial flow, installation choices, and Kotlin example. Keep it aligned with this template's config, startup READY output, DTOs, and e2e client. Use the `frameworkVersion` pin in `build.gradle.kts` for connector dependencies; do not hard-code a release in documentation. Register push handlers before sending, preserve cleanup, and distinguish pushes from correlated replies. This starter accepts connections but registers no application packets.

@@ -1,5 +1,9 @@
 # MyGame development guide
 
+## Client connection
+
+[README Client connection](README.md#client-connection) owns the client endpoint, first flow, connector choices and C++ example. Keep it consistent with this template's `server/config`, startup readiness, `e2e/client.hpp`, `e2e/scenarios.hpp` and DTOs. Use `bootstrap.cmake` key `ZLINK_FRAMEWORK_CPP_VERSION` for release matching; do not hardcode a release in these documents. Preserve the first operation and send/push semantics, and verify examples against the public connector API.
+
 ## Rules for AI
 
 Every server process in this project is a stateful ZLink node. Before writing code, decide which kind you are editing.
