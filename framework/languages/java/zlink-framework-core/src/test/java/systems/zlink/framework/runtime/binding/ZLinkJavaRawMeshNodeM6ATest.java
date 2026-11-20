@@ -679,7 +679,8 @@ final class ZLinkJavaRawMeshNodeM6ATest {
     }
 
     @Test
-    void securityIdentityMismatchRejectKeepsAdmittedPeer() throws Exception {
+    void securityIdentityMismatchRejectRequiresAdmissionBeforeApplicationRecords()
+            throws Exception {
         var targetRid = RoutingId.from("wire-reject-target");
         var peerRid = RoutingId.from("wire-reject-peer");
         var codec = new ZLinkServiceM6AWireCodec();
@@ -713,6 +714,40 @@ final class ZLinkJavaRawMeshNodeM6ATest {
                     .get(2, TimeUnit.SECONDS);
             try (var packet = Message.from("wire-reject-marker");
                     var payload = Message.from(new byte[] {1})) {
+                port.send(
+                                peer,
+                                targetRid,
+                                List.of(
+                                        codec.encodeNodeSendHeader(0),
+                                        ZLinkServiceM6AWireCodec.encodeFrameworkMultipartFrame(
+                                                List.of(packet, payload))))
+                        .toCompletableFuture()
+                        .get(2, TimeUnit.SECONDS);
+            }
+            // This HELLO is ordered after REJECT and the unadmitted application record.
+            // Its ADMIT response proves that both earlier records have been processed.
+            port.send(
+                            peer,
+                            targetRid,
+                            List.of(
+                                    codec.encodeAdmission(
+                                            ServiceWireConstants.COMMAND_HELLO,
+                                            descriptor(peerRid))))
+                    .toCompletableFuture()
+                    .get(2, TimeUnit.SECONDS);
+            while (true) {
+                try (var admitted = receiveServiceControl(port, peer, descriptor(peerRid))) {
+                    int command = codec.decodeHeader(admitted.frames().getFirst()).command();
+                    // The prior admission can already have queued descriptor or probe controls.
+                    if (command == ServiceWireConstants.COMMAND_UPDATE
+                            || command == ServiceWireConstants.COMMAND_LIVENESS_PROBE) continue;
+                    assertEquals(ServiceWireConstants.COMMAND_ADMIT, command);
+                    break;
+                }
+            }
+            assertFalse(received.isDone(), "REJECT must revoke admission before the next record");
+            try (var packet = Message.from("wire-readmitted-marker");
+                    var payload = Message.from(new byte[] {2})) {
                 port.send(
                                 peer,
                                 targetRid,
