@@ -452,9 +452,10 @@ int publish_pending_request_completion (
     zlink::socket_completion::reservation_t *const reservation =
       pending_->pull_completion;
     pending_->pull_completion = NULL;
+    bool became_ready = false;
     const int rc = zlink::socket_completion::publish_request (
       &state_->socket->completion_runtime (), reservation, result_, parts_,
-      part_count_);
+      part_count_, &became_ready);
     if (rc != 0) {
         const int saved_errno = errno;
         zlink::socket_completion::release (
@@ -463,7 +464,10 @@ int publish_pending_request_completion (
         return -1;
     }
 
-    state_->socket->notify_request_completion ();
+    // The queue mutex orders this edge with the last dequeue. An owner
+    // already draining ready records needs no additional mailbox command.
+    if (became_ready)
+        state_->socket->notify_request_completion ();
     errno = 0;
     return 0;
 }
