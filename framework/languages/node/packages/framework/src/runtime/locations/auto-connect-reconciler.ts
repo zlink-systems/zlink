@@ -58,7 +58,7 @@ export class ZLinkAutoConnectReconciler {
   private storeFailedValue = false;
   private storeFailureStartedAtMs: number | undefined;
   private recoveryDeferUntilMs = 0;
-  private lastDesired = new Map<string, ZLinkAutoConnectTarget>();
+  private lastPeers: readonly ZLinkPeerLocation[] = [];
   private meshMemberRidHexes?: ReadonlySet<string>;
 
   constructor(options: ZLinkAutoConnectReconcilerOptions) {
@@ -159,8 +159,22 @@ export class ZLinkAutoConnectReconciler {
           .map((nodeRid) => encodeRoutingIdHex(nodeRid))
       );
     });
-    const candidates = ZLinkAutoConnectPlanner.computeCandidates(this.local, rows);
-    this.executor.expectPeers?.([...candidates.values()]);
+    const previous = ZLinkAutoConnectPlanner.computeCandidates(this.local, this.lastPeers);
+    if (this.monotonicNowMs() < (await this.lane.run(() => this.recoveryDeferUntilMs))) {
+      const candidates = ZLinkAutoConnectPlanner.computeCandidates(this.local, rows);
+      rows = [
+        ...this.lastPeers.filter((row) => {
+          const key = ZLinkAutoConnectPlanner.targetKeyOf(row);
+          return previous.has(key) && !candidates.has(key);
+        }),
+        ...rows
+      ];
+    }
+    this.executor.expectPeers?.(
+      [...ZLinkAutoConnectPlanner.computeCandidates(this.local, rows).values()],
+      [...previous.values()]
+    );
+    this.lastPeers = [...rows];
     this.executor.replaceNotRequired?.(
       ZLinkAutoConnectPlanner.computeNotRequired(this.local, rows)
     );
@@ -180,17 +194,6 @@ export class ZLinkAutoConnectReconciler {
     for (const [key, target] of existingTargets) {
       if (activeKeys.has(key)) desired.set(key, target);
     }
-    const deferringMissingTargets =
-      this.monotonicNowMs() < (await this.lane.run(() => this.recoveryDeferUntilMs));
-    if (deferringMissingTargets) {
-      const lastDesired = await this.lane.run(() => [...this.lastDesired]);
-      for (const [key, target] of lastDesired) {
-        if (!desired.has(key)) desired.set(key, target);
-      }
-    }
-    await this.lane.run(() => {
-      this.lastDesired = new Map(desired);
-    });
     const connectedEndpoints: string[] = [];
     const disconnectedEndpoints: string[] = [];
     for (const [key, target] of desired) {
@@ -289,6 +292,11 @@ export class ZLinkAutoConnectReconciler {
   }
 
   disconnectPeers(): void {
+    this.executor.expectPeers?.(
+      [],
+      [...ZLinkAutoConnectPlanner.computeCandidates(this.local, this.lastPeers).values()]
+    );
+    this.lastPeers = [];
     for (const target of this.active.values()) {
       this.disconnectIfNeeded(target);
     }
@@ -447,7 +455,7 @@ export class ZLinkAutoConnectReconciler {
     ) {
       return undefined;
     }
-    return [...this.lastDesired].filter(
+    return [...ZLinkAutoConnectPlanner.computeDesired(this.local, this.lastPeers)].filter(
       ([key, target]) => !this.active.has(key) && !this.failedEndpoints.has(target.endpoint)
     );
   }
