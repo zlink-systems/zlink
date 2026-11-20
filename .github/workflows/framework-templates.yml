@@ -355,8 +355,8 @@ jobs:
       - name: Prepare the work directories
         shell: bash
         run: |
-          echo "TEMPLATE_WORK=${RUNNER_TEMP}/framework-templates" >>"${GITHUB_ENV}"
-          echo "PACKAGES_DIR=${RUNNER_TEMP}/framework-templates-packages" >>"${GITHUB_ENV}"
+          echo "TEMPLATE_WORK=${RUNNER_TEMP}/framework-templates-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB}-${{ matrix.lang }}-${{ matrix.template }}" >>"${GITHUB_ENV}"
+          echo "PACKAGES_DIR=${RUNNER_TEMP}/framework-templates-packages-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB}-${{ matrix.lang }}-${{ matrix.template }}" >>"${GITHUB_ENV}"
 
       # Two dozen Java and Kotlin templates resolving the same dependencies from Maven
       # Central at once got HTTP 429 (merge queue draft #3637); reuse the Gradle cache.
@@ -432,9 +432,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "TEMPLATE_WORK=${RUNNER_TEMP}/framework-templates" >>"${GITHUB_ENV}"
-          echo "PACKAGES_DIR=${RUNNER_TEMP}/framework-templates-packages" >>"${GITHUB_ENV}"
-          rm -rf "${RUNNER_TEMP}/framework-templates" "${RUNNER_TEMP}/framework-templates-packages"
+          echo "TEMPLATE_WORK=${RUNNER_TEMP}/framework-templates-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB}-${{ matrix.lang }}-${{ matrix.template }}" >>"${GITHUB_ENV}"
+          echo "PACKAGES_DIR=${RUNNER_TEMP}/framework-templates-packages-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB}-${{ matrix.lang }}-${{ matrix.template }}" >>"${GITHUB_ENV}"
+          rm -rf "${RUNNER_TEMP}/framework-templates-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB}-${{ matrix.lang }}-${{ matrix.template }}" "${RUNNER_TEMP}/framework-templates-packages-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB}-${{ matrix.lang }}-${{ matrix.template }}"
 
       - name: Install Linux build tools
         shell: bash
