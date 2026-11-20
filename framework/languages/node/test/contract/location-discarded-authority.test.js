@@ -562,6 +562,25 @@ for (const provider of [false, true])
     });
   }
 
+test('discarded User Spot membership snapshot reads only Actor authorities', async (t) => {
+  const s = await cleanupFixture(t, true, 'user_spot');
+  await s.addActor('unrelated-actor');
+  s.runtime.discardExecution(s.execution);
+  const scan = s.store.listAuthorities.bind(s.store);
+  const prefixes = [];
+  let items = 0;
+  s.store.listAuthorities = async (prefix, cursor, limit, signal) => {
+    prefixes.push(prefix);
+    const page = await scan(prefix, cursor, limit, signal);
+    if (page.kind === 'page') items += page.items.length;
+    return page;
+  };
+  await s.runtime.reclaimOwnerAuthorities();
+  assert.equal((await s.store.readAuthority(s.key)).kind, 'missing');
+  assert.deepEqual(prefixes, ['zla1:a:']);
+  assert.equal(items, 1);
+});
+
 test('discarded User Spot retains another node member and does not treat failed or expired scans as empty', async (t) => {
   const s = await cleanupFixture(t, true, 'user_spot');
   await s.addActor('first-nonmember');
