@@ -2,14 +2,16 @@
 
 package systems.zlink.runtime.eventing;
 
-import systems.zlink.contracts.eventing.ZlinkTimer;
-
-import systems.zlink.contracts.errors.ZlinkConfigException;
+import systems.zlink.contracts.errors.CloseResult;
 import systems.zlink.contracts.errors.ConfigResult;
+import systems.zlink.contracts.errors.ZlinkCloseException;
+import systems.zlink.contracts.errors.ZlinkConfigException;
 import systems.zlink.contracts.errors.ZlinkRecvException;
+import systems.zlink.contracts.eventing.ZlinkTimer;
 import systems.zlink.contracts.sockets.RecvResult;
 import systems.zlink.runtime.nativeapi.InternalAccess;
 import systems.zlink.runtime.nativeapi.Native;
+
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
@@ -18,22 +20,25 @@ import java.util.Objects;
 
 public final class NativeTimer implements ZlinkTimer {
     private final boolean ownsHandle;
-    private MemorySegment handle;
-    private boolean closed;
+    private volatile MemorySegment handle;
+    // Core releases a handle once; one owner at a time runs the native close
+    // and later callers observe its outcome.
+    private final Object closeLock = new Object();
 
     static {
-        InternalAccess.register((InternalAccess.TimerAccess)
-            new InternalAccess.TimerAccess() {
-                @Override
-                public MemorySegment handle(ZlinkTimer timer) {
-                    return ((NativeTimer) timer).handle();
-                }
+        InternalAccess.register(
+                (InternalAccess.TimerAccess)
+                        new InternalAccess.TimerAccess() {
+                            @Override
+                            public MemorySegment handle(ZlinkTimer timer) {
+                                return ((NativeTimer) timer).handle();
+                            }
 
-                @Override
-                public ZlinkTimer fromBorrowedHandle(MemorySegment handle) {
-                    return NativeTimer.fromBorrowedHandle(handle);
-                }
-            });
+                            @Override
+                            public ZlinkTimer fromBorrowedHandle(MemorySegment handle) {
+                                return NativeTimer.fromBorrowedHandle(handle);
+                            }
+                        });
     }
 
     public static ZlinkTimer create() {
@@ -104,14 +109,18 @@ public final class NativeTimer implements ZlinkTimer {
 
     @Override
     public void close() {
-        if (closed || handle == null || handle.address() == 0) {
-            return;
+        synchronized (closeLock) {
+            if (handle == null || handle.address() == 0) {
+                return;
+            }
+            if (ownsHandle) {
+                int result = Native.timerDestroy(handle);
+                if (result != CloseResult.OK.value()) {
+                    throw new ZlinkCloseException(CloseResult.fromValue(result), Native.errno());
+                }
+            }
+            handle = MemorySegment.NULL;
         }
-        closed = true;
-        if (ownsHandle) {
-            Native.timerDestroy(handle);
-        }
-        handle = MemorySegment.NULL;
     }
 
     private void ensureOpen() {
@@ -119,5 +128,4 @@ public final class NativeTimer implements ZlinkTimer {
             throw new IllegalStateException("timer is closed");
         }
     }
-
 }
