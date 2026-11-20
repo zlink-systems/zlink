@@ -3,6 +3,12 @@
 
 #include <nlohmann/json.hpp>
 #include <zlink/json.hpp>
+#include <zlink/detail/json_profile/string_primitives.hpp>
+#include <zlink/detail/json_profile/engine.hpp>
+#include <cstdlib>
+#include <cstring>
+#include <memory>
+#include <utility>
 #include <algorithm>
 #include <array>
 #include <charconv>
@@ -28,7 +34,7 @@ namespace zlink::detail::json_profile
 
 inline constexpr char content_type[] = "application/json";
 inline constexpr char empty_object[] = "{}";
-inline constexpr std::size_t initial_output_capacity = 256;
+inline constexpr std::size_t initial_output_capacity = 512;
 inline constexpr std::size_t initial_frame_capacity = 4;
 inline constexpr std::size_t field_mask_bits = std::numeric_limits<std::uint64_t>::digits;
 
@@ -266,6 +272,7 @@ inline constexpr auto base64_values = [] {
         values[static_cast<unsigned char> (base64_alphabet[i])] = static_cast<unsigned char> (i);
     return values;
 }();
+
 inline bool decode_bytes (std::string_view text, std::vector<std::byte> &bytes)
 {
     if (text.size () % 4)
@@ -301,37 +308,13 @@ inline bool decode_bytes (std::string_view text, std::vector<std::byte> &bytes)
 inline bool valid_utf8 (std::string_view text)
 {
     for (std::size_t i = 0; i < text.size ();) {
-        const auto first = static_cast<unsigned char> (text[i++]);
-        if (first < 0x80)
-            continue;
-        unsigned count = 0, value = 0, minimum = 0;
-        if (first >= 0xc2 && first <= 0xdf) {
-            count = 1;
-            value = first & 0x1f;
-            minimum = 0x80;
-        } else if (first >= 0xe0 && first <= 0xef) {
-            count = 2;
-            value = first & 0x0f;
-            minimum = 0x800;
-        } else if (first >= 0xf0 && first <= 0xf4) {
-            count = 3;
-            value = first & 7;
-            minimum = 0x10000;
-        } else
-            return false;
-        if (count > text.size () - i)
-            return false;
-        while (count--) {
-            const auto next = static_cast<unsigned char> (text[i++]);
-            if ((next & 0xc0) != 0x80)
-                return false;
-            value = (value << 6) | (next & 0x3f);
-        }
-        if (value < minimum || value > 0x10ffff || (value >= 0xd800 && value <= 0xdfff))
+        const auto lead = static_cast<unsigned char> (text[i++]);
+        if (lead >= 0x80 && !consume_utf8 (text, i, lead))
             return false;
     }
     return true;
 }
+
 inline bool has_valid_strings (const nlohmann::json &value)
 {
     if (value.is_string ())
@@ -364,19 +347,29 @@ class byte_output
     {
         bytes.insert (bytes.end (), value.begin (), value.end ());
     }
-    void append (const char *begin, const char *end) { bytes.insert (bytes.end (), begin, end); }
+    void append (const char *begin, std::size_t count)
+    {
+        bytes.insert (bytes.end (), begin, begin + count);
+    }
 };
+
+// Grow the output by count bytes and return where they start. Writing one
+// token through one extension keeps the per-call growth check out of the loop.
+template <typename Output> char *extend (Output &out, std::size_t count)
+{
+    const auto start = out.size ();
+    const auto end = start + count;
+    if (end > out.capacity ())
+        out.reserve (std::max (end + initial_output_capacity, out.capacity () * 2));
+    out.resize (end);
+    return reinterpret_cast<char *> (out.data ()) + start;
+}
 
 // Generated RFC 4648 symbols need no JSON escaping or UTF-8 validation.
 template <typename Output> void write_bytes (const std::vector<std::byte> &bytes, Output &out)
 {
-    const auto start = out.size ();
     const auto length = (bytes.size () / 3 + (bytes.size () % 3 != 0)) * 4;
-    const auto end = start + length + 2;
-    if (end > out.capacity ())
-        out.reserve (std::max (end + initial_output_capacity, out.capacity () * 2));
-    out.resize (end);
-    auto *text = out.data () + start;
+    auto *text = extend (out, length + 2);
     *text++ = '"';
     std::size_t i = 0;
     for (; bytes.size () - i >= 3; i += 3) {
@@ -401,54 +394,21 @@ template <typename Output> void write_bytes (const std::vector<std::byte> &bytes
     *text = '"';
 }
 
-template <typename Output>
-bool write_string (std::string_view value, Output &out, std::string *error)
-{
-    if (!valid_utf8 (value))
-        return fail (error, "invalid UTF-8 string");
-    constexpr char hex[] = "0123456789abcdef";
-    out += '"';
-    for (const unsigned char ch : value) {
-        switch (ch) {
-            case '"':
-                out += "\\\"";
-                break;
-            case '\\':
-                out += "\\\\";
-                break;
-            case '\b':
-                out += "\\b";
-                break;
-            case '\f':
-                out += "\\f";
-                break;
-            case '\n':
-                out += "\\n";
-                break;
-            case '\r':
-                out += "\\r";
-                break;
-            case '\t':
-                out += "\\t";
-                break;
-            default:
-                if (ch < 0x20) {
-                    out += "\\u00";
-                    out += hex[ch >> 4];
-                    out += hex[ch & 15];
-                } else
-                    out += static_cast<char> (ch);
-        }
-    }
-    out += '"';
-    return true;
-}
-
 template <typename T, typename Output> void write_integer (T value, Output &out)
 {
     char buffer[32];
     auto result = std::to_chars (buffer, buffer + sizeof buffer, value);
-    out.append (buffer, result.ptr);
+    out.append (buffer, static_cast<std::size_t> (result.ptr - buffer));
+}
+
+// A 64-bit integer is a JSON string; one append writes quotes and digits.
+template <typename T, typename Output> void write_quoted_integer (T value, Output &out)
+{
+    char buffer[32];
+    buffer[0] = '"';
+    auto result = std::to_chars (buffer + 1, buffer + sizeof buffer - 1, value);
+    *result.ptr++ = '"';
+    out.append (buffer, static_cast<std::size_t> (result.ptr - buffer));
 }
 
 template <typename T> bool read_decimal (std::string_view text, T &out, std::string *error)
@@ -517,8 +477,145 @@ template <typename Output> void write_float (double value, Output &out)
     }
     char buffer[64];
     const auto converted = std::to_chars (buffer, buffer + sizeof buffer, value);
-    out.append (buffer, converted.ptr);
+    out.append (buffer, static_cast<std::size_t> (converted.ptr - buffer));
 }
+
+// Field names are compile-time constants; a name that needs no escaping is
+// laid out once as `<lead>"name":` and written with a single append.
+constexpr bool plain_key (std::string_view name)
+{
+    for (const char ch : name)
+        if (static_cast<unsigned char> (ch) < 0x20 || static_cast<unsigned char> (ch) >= 0x80
+            || ch == '"' || ch == '\\')
+            return false;
+    return true;
+}
+template <std::size_t N>
+constexpr std::array<char, N + 4> key_prefix (std::string_view name, char lead)
+{
+    std::array<char, N + 4> text{};
+    text[0] = lead;
+    text[1] = '"';
+    for (std::size_t i = 0; i < N; ++i)
+        text[i + 2] = name[i];
+    text[N + 2] = '"';
+    text[N + 3] = ':';
+    return text;
+}
+
+// Word at a time through the shared primitive; the tail runs byte by byte so a
+// short string never pays for a variable-length copy.
+inline std::size_t plain_run (const char *text, std::size_t size)
+{
+    std::size_t index = 0;
+    for (; size - index >= 8; index += 8) {
+        std::uint64_t word;
+        std::memcpy (&word, text + index, sizeof word);
+        const auto count = plain_ascii_prefix (word);
+        if (count != 8)
+            return index + count;
+    }
+    for (; index < size; ++index) {
+        const auto byte = static_cast<unsigned char> (text[index]);
+        if (byte < 0x20 || byte >= 0x80 || byte == '"' || byte == '\\')
+            break;
+    }
+    return index;
+}
+
+// One traversal validates the UTF-8 and sizes the escapes, so the write that
+// follows extends the output exactly once.
+inline bool measure_escapes (std::string_view value, std::size_t &extra)
+{
+    const char *const text = value.data ();
+    const std::size_t size = value.size ();
+    extra = 0;
+    for (std::size_t index = 0; index < size;) {
+        index += plain_run (text + index, size - index);
+        if (index == size)
+            break;
+        const auto lead = static_cast<unsigned char> (text[index++]);
+        if (lead >= 0x80) {
+            if (!consume_utf8 (value, index, lead))
+                return false;
+        } else
+            extra += lead == '"' || lead == '\\' || lead == '\b' || lead == '\f' || lead == '\n'
+                         || lead == '\r' || lead == '\t'
+                       ? 1
+                       : 5;
+    }
+    return true;
+}
+
+template <typename Output>
+bool write_string (std::string_view value, Output &out, std::string *error)
+{
+    std::size_t extra;
+    if (!measure_escapes (value, extra))
+        return fail (error, "invalid UTF-8 string");
+    const char *const text = value.data ();
+    const std::size_t size = value.size ();
+    auto *destination = extend (out, size + extra + 2);
+    *destination++ = '"';
+    if (extra == 0) {
+        if (size != 0)
+            std::memcpy (destination, text, size);
+        destination += size;
+    } else {
+        constexpr char hex[] = "0123456789abcdef";
+        std::size_t copied = 0;
+        for (std::size_t index = 0; index < size;) {
+            index += plain_run (text + index, size - index);
+            if (index == size)
+                break;
+            const auto byte = static_cast<unsigned char> (text[index]);
+            if (byte >= 0x80) {
+                ++index;
+                continue;
+            }
+            if (index != copied) {
+                std::memcpy (destination, text + copied, index - copied);
+                destination += index - copied;
+            }
+            copied = ++index;
+            *destination++ = '\\';
+            switch (byte) {
+                case '"':
+                case '\\':
+                    *destination++ = static_cast<char> (byte);
+                    break;
+                case '\b':
+                    *destination++ = 'b';
+                    break;
+                case '\f':
+                    *destination++ = 'f';
+                    break;
+                case '\n':
+                    *destination++ = 'n';
+                    break;
+                case '\r':
+                    *destination++ = 'r';
+                    break;
+                case '\t':
+                    *destination++ = 't';
+                    break;
+                default:
+                    *destination++ = 'u';
+                    *destination++ = '0';
+                    *destination++ = '0';
+                    *destination++ = hex[byte >> 4];
+                    *destination++ = hex[byte & 15];
+            }
+        }
+        if (size != copied) {
+            std::memcpy (destination, text + copied, size - copied);
+            destination += size - copied;
+        }
+    }
+    *destination = '"';
+    return true;
+}
+
 template <typename T, typename Output>
 bool write_value (const T &value, Output &out, std::string *error)
 {
@@ -537,10 +634,9 @@ bool write_value (const T &value, Output &out, std::string *error)
         out += value ? "true" : "false";
     else if constexpr (std::is_integral_v<T>) {
         if constexpr (sizeof (T) == 8)
-            out += '"';
-        write_integer (value, out);
-        if constexpr (sizeof (T) == 8)
-            out += '"';
+            write_quoted_integer (value, out);
+        else
+            write_integer (value, out);
     } else if constexpr (std::is_floating_point_v<T>) {
         if (!valid_float (value))
             return fail (error, "non-finite number");
@@ -587,19 +683,25 @@ bool write_value (const T &value, Output &out, std::string *error)
         out += '}';
     } else {
         using layout = dto_layout<T>;
-        out += '{';
         const auto write_field = [&]<std::size_t Position> () {
             constexpr auto field = std::get<layout::order[Position]> (layout::fields);
-            if constexpr (Position != 0)
-                out += ',';
-            if (!write_string (field.name, out, error))
-                return false;
-            out += ':';
+            if constexpr (plain_key (field.name)) {
+                constexpr auto prefix =
+                  key_prefix<field.name.size ()> (field.name, Position == 0 ? '{' : ',');
+                out.append (prefix.data (), prefix.size ());
+            } else {
+                out += Position == 0 ? '{' : ',';
+                if (!write_string (field.name, out, error))
+                    return false;
+                out += ':';
+            }
             return write_value (value.*(field.member), out, error);
         };
-        if (![&]<std::size_t... I> (std::index_sequence<I...>) {
-                return (write_field.template operator()<I> () && ...);
-            }(std::make_index_sequence<layout::count>{}))
+        if constexpr (layout::count == 0)
+            out += '{';
+        else if (![&]<std::size_t... I> (std::index_sequence<I...>) {
+                     return (write_field.template operator()<I> () && ...);
+                 }(std::make_index_sequence<layout::count>{}))
             return false;
         out += '}';
     }
@@ -627,7 +729,8 @@ struct sax_event
     std::string_view text{};
 };
 
-class typed_sax final : public nlohmann::json_sax<nlohmann::json>
+
+class typed_sax final
 {
     struct destination
     {
@@ -641,7 +744,6 @@ class typed_sax final : public nlohmann::json_sax<nlohmann::json>
         destination (*child) (frame &);
         bool (*finish) (typed_sax &, frame &);
         std::vector<std::string> keys;
-        bool pending_key = false;
         bool (*key) (frame &, std::string_view) = &remember_key;
         destination next{nullptr, &skip_value};
         std::uint64_t seen = 0;
@@ -702,25 +804,37 @@ class typed_sax final : public nlohmann::json_sax<nlohmann::json>
             return parent.next;
         }
     }
+    static bool remember_key (frame &parent, std::string_view key, std::size_t index)
+    {
+        const bool known = index != std::numeric_limits<std::size_t>::max ();
+        auto *word = known ? &parent.seen_word (index / field_mask_bits) : nullptr;
+        const auto bit = std::uint64_t{1} << (index % field_mask_bits);
+        const bool duplicate =
+          known ? ((*word & bit) != 0)
+                : std::find (parent.keys.begin (), parent.keys.end (), key) != parent.keys.end ();
+        if (duplicate)
+            return false;
+        if (known)
+            *word |= bit;
+        else
+            parent.keys.emplace_back (key);
+        return true;
+    }
     static bool remember_key (frame &parent, std::string_view key)
     {
-        if (std::find (parent.keys.begin (), parent.keys.end (), key) != parent.keys.end ())
-            return false;
-        parent.keys.emplace_back (key);
-        return true;
+        return remember_key (parent, key, std::numeric_limits<std::size_t>::max ());
     }
     template <typename T> static bool dto_key (frame &parent, std::string_view key)
     {
         using layout = dto_layout<T>;
         const auto index = layout::find (key);
         parent.next = {nullptr, &skip_value};
-        if (index == layout::count)
-            return remember_key (parent, key);
-        auto &word = parent.seen_word (index / field_mask_bits);
-        const auto bit = std::uint64_t{1} << (index % field_mask_bits);
-        if (word & bit)
+        if (!remember_key (parent, key,
+                           index == layout::count ? std::numeric_limits<std::size_t>::max ()
+                                                  : index))
             return false;
-        word |= bit;
+        if (index == layout::count)
+            return true;
         using select = destination (*) (T &);
         static constexpr auto targets = []<std::size_t... I> (std::index_sequence<I...>) {
             return std::array<select, layout::count>{
@@ -803,21 +917,21 @@ class typed_sax final : public nlohmann::json_sax<nlohmann::json>
             if constexpr (sizeof (T) == 8) {
                 if (event.kind != sax_kind::string)
                     return in.reject ("expected 64-bit decimal string");
-                return read_decimal (event.text, out, in.error);
+                return in.healthy = read_decimal (event.text, out, in.error);
             } else {
-                if (event.kind == sax_kind::unsigned_integer) {
-                    if (event.unsigned_integer
-                        > static_cast<std::uint64_t> (std::numeric_limits<T>::max ()))
+                using integer_type = std::conditional_t<std::is_signed_v<T>, std::make_signed_t<T>,
+                                                        std::make_unsigned_t<T>>;
+                const auto assign = [&] (auto value) {
+                    if (!std::in_range<integer_type> (value))
                         return in.reject ("integer out of range");
-                    out = static_cast<T> (event.unsigned_integer);
-                } else if (event.kind == sax_kind::integer) {
-                    if (event.integer < static_cast<std::int64_t> (std::numeric_limits<T>::min ())
-                        || event.integer
-                             > static_cast<std::int64_t> (std::numeric_limits<T>::max ()))
-                        return in.reject ("integer out of range");
-                    out = static_cast<T> (event.integer);
-                } else
-                    return in.reject ("expected integer number");
+                    out = static_cast<T> (value);
+                    return true;
+                };
+                if (event.kind == sax_kind::unsigned_integer)
+                    return assign (event.unsigned_integer);
+                if (event.kind == sax_kind::integer)
+                    return assign (event.integer);
+                return in.reject ("expected integer number");
             }
         } else if constexpr (std::is_floating_point_v<T>) {
             double value{};
@@ -829,7 +943,9 @@ class typed_sax final : public nlohmann::json_sax<nlohmann::json>
                 value = event.floating;
             else
                 return in.reject ("expected finite number");
-            if (!valid_float<T> (value))
+            // Number tokens have already passed the reader's finite decision.
+            if (value < -static_cast<double> (std::numeric_limits<T>::max ())
+                || value > static_cast<double> (std::numeric_limits<T>::max ()))
                 return in.reject ("floating point out of range");
             out = static_cast<T> (value);
         } else if constexpr (std::is_enum_v<T>) {
@@ -857,24 +973,15 @@ class typed_sax final : public nlohmann::json_sax<nlohmann::json>
             return false;
         destination next = root;
         if (frames.empty ()) {
-            if (started)
-                return reject ("trailing JSON value");
             started = true;
         } else {
             auto &parent = frames.back ();
-            if (parent.kind == sax_kind::object) {
-                if (!parent.pending_key)
-                    return reject ("missing property name");
-                parent.pending_key = false;
-            }
             next = parent.child (parent);
         }
         return next.accept (*this, next.value, event);
     }
-    bool end (sax_kind kind)
+    bool end ()
     {
-        if (frames.empty () || frames.back ().kind != kind)
-            return reject ("unexpected container end");
         if (!frames.back ().finish (*this, frames.back ()))
             return false;
         frames.pop_back ();
@@ -888,64 +995,134 @@ class typed_sax final : public nlohmann::json_sax<nlohmann::json>
         frames.reserve (initial_frame_capacity);
     }
     bool complete () const { return healthy && started && frames.empty (); }
-    bool null () override { return dispatch ({sax_kind::null}); }
-    bool boolean (bool value) override
+    bool syntax_error () { return !healthy ? false : reject ("invalid JSON"); }
+    bool null () { return dispatch ({sax_kind::null}); }
+    bool boolean (bool value)
     {
         sax_event e{sax_kind::boolean};
         e.boolean = value;
         return dispatch (e);
     }
-    bool number_integer (number_integer_t value) override
+    bool number_integer (std::int64_t value)
     {
         sax_event e{sax_kind::integer};
         e.integer = value;
         return dispatch (e);
     }
-    bool number_unsigned (number_unsigned_t value) override
+    bool number_unsigned (std::uint64_t value)
     {
         sax_event e{sax_kind::unsigned_integer};
         e.unsigned_integer = value;
         return dispatch (e);
     }
-    bool number_float (number_float_t value, const string_t &) override
+    bool number_float (double value)
     {
-        if (!valid_float (value))
-            return reject ("non-finite number");
         sax_event e{sax_kind::floating};
         e.floating = value;
         return dispatch (e);
     }
-    bool string (string_t &value) override
+    bool borrowed_string (std::string_view value)
     {
         sax_event e{sax_kind::string};
         e.text = value;
         return dispatch (e);
     }
-    bool binary (binary_t &) override { return reject ("expected JSON value"); }
-    bool start_object (std::size_t) override { return dispatch ({sax_kind::object}); }
-    bool key (string_t &value) override
+    bool borrowed_key (std::string_view value)
     {
-        if (frames.empty () || frames.back ().kind != sax_kind::object)
-            return reject ("unexpected property name");
         auto &parent = frames.back ();
         if (!parent.key (parent, value))
             return reject ("framework-json-v1 rejects duplicate properties");
-        parent.pending_key = true;
         return true;
     }
-    bool end_object () override { return end (sax_kind::object); }
-    bool start_array (std::size_t) override { return dispatch ({sax_kind::array}); }
-    bool end_array () override { return end (sax_kind::array); }
-    bool parse_error (std::size_t, const std::string &, const nlohmann::json::exception &) override
-    {
-        return reject ("invalid JSON");
-    }
+    bool start_object () { return dispatch ({sax_kind::object}); }
+    bool end_object () { return end (); }
+    bool start_array () { return dispatch ({sax_kind::array}); }
+    bool end_array () { return end (); }
 };
+// Walk every parsed value, including unknown properties, through typed_sax.
+// Tokens are in document order with child counts, so an explicit stack of
+// open containers replaces recursion and nesting depth never grows the call stack.
+struct open_token_container
+{
+    std::size_t remaining;
+    bool object;
+};
+inline thread_local std::vector<open_token_container> open_token_containers;
+
+inline bool visit_tokens (const token_buffer &buffer, typed_sax &handler)
+{
+    auto &open = open_token_containers;
+    open.clear ();
+    std::size_t cursor = 0;
+    do {
+        if (cursor == buffer.tokens.size ())
+            return false;
+        const token &entry = buffer.tokens[cursor++];
+        if (!open.empty ()) {
+            --open.back ().remaining;
+            if (open.back ().object
+                && !handler.borrowed_key (
+                  {buffer.strings.data () + entry.key_offset, entry.key_length}))
+                return false;
+        }
+        bool accepted = false;
+        switch (entry.kind) {
+            case token_kind::null: accepted = handler.null (); break;
+            case token_kind::boolean: accepted = handler.boolean (entry.boolean); break;
+            case token_kind::integer: accepted = handler.number_integer (entry.integer); break;
+            case token_kind::unsigned_integer:
+                accepted = handler.number_unsigned (entry.unsigned_integer);
+                break;
+            case token_kind::floating:
+                accepted = std::isfinite (entry.floating) && handler.number_float (entry.floating);
+                break;
+            case token_kind::string:
+                accepted = handler.borrowed_string (
+                  {buffer.strings.data () + entry.text_offset, entry.text_length});
+                break;
+            case token_kind::object:
+                accepted = handler.start_object ();
+                open.push_back ({entry.child_count, true});
+                break;
+            case token_kind::array:
+                accepted = handler.start_array ();
+                open.push_back ({entry.child_count, false});
+                break;
+            case token_kind::raw_number:
+            case token_kind::raw_json: break;
+        }
+        if (!accepted)
+            return false;
+        while (!open.empty () && open.back ().remaining == 0) {
+            const bool object = open.back ().object;
+            open.pop_back ();
+            if (!(object ? handler.end_object () : handler.end_array ()))
+                return false;
+        }
+    } while (!open.empty ());
+    return cursor == buffer.tokens.size ();
+}
+
+inline bool read_json (std::string_view text, typed_sax &handler)
+{
+    // Preserve the existing reader's NUL-as-EOF behavior.
+    text = text.substr (0, text.find ('\0'));
+    auto &buffer = reusable_tokens;
+    if (!parse_tokens (text, buffer))
+        return false;
+    return visit_tokens (buffer, handler);
+}
+
 template <typename T>
 std::optional<std::string> try_encode (const T &value, std::string *error = nullptr)
 {
+    static_assert (validate_type<T> ());
     std::string out;
-    out.reserve (initial_output_capacity);
+    // A top-level byte array has a known RFC 4648 length, so one allocation holds it.
+    if constexpr (std::is_same_v<T, std::vector<std::byte>>)
+        out.reserve ((value.size () + 2) / 3 * 4 + 2);
+    else
+        out.reserve (initial_output_capacity);
     if (!write_value (value, out, error))
         return std::nullopt;
     return out;
@@ -964,8 +1141,13 @@ std::optional<T> try_decode (Iterator begin, Iterator end, std::string *error)
     }
     T value{};
     typed_sax handler (value, error);
-    if (!nlohmann::json::sax_parse (begin, end, &handler) || !handler.complete ())
+    if (!read_json ({reinterpret_cast<const char *> (std::to_address (begin)),
+                     static_cast<std::size_t> (end - begin)},
+                    handler)
+        || !handler.complete ()) {
+        handler.syntax_error ();
         return std::nullopt;
+    }
     return value;
 }
 

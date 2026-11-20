@@ -21,6 +21,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /** Publishes MeshNode discovery descriptors under the host owner lease. */
@@ -31,6 +32,7 @@ public final class ZLinkObjectServerDescriptorPublisher {
     private final Map<String, ZLinkInternalMeshNode> nodes;
     private final AtomicLong revision = new AtomicLong(1);
     private final Map<String, Claim> claims = new ConcurrentHashMap<>();
+    private final AtomicBoolean changed = new AtomicBoolean();
 
     public ZLinkObjectServerDescriptorPublisher(
             ZLinkLocationRepository store,
@@ -43,7 +45,33 @@ public final class ZLinkObjectServerDescriptorPublisher {
         this.nodes = Map.copyOf(nodes);
     }
 
+    /** Records that a runtime option changed a value every descriptor reads. */
+    public void markChanged() {
+        changed.set(true);
+    }
+
+    /**
+     * Publishes a recorded option change; the change stays recorded until a publication confirms
+     * it, so the next owner lease renewal publishes it again.
+     */
+    public CompletionStage<Void> publishChanged(ZLinkFrameworkRuntimeState state) {
+        return changed.get() ? publish(state) : CompletableFuture.completedFuture(null);
+    }
+
     public CompletionStage<Void> publish(ZLinkFrameworkRuntimeState state) {
+        boolean carried = changed.getAndSet(false);
+        CompletionStage<Void> publication = publishDescriptors(state);
+        return carried
+                ? publication.whenComplete(
+                        (ignored, failure) -> {
+                            if (failure != null) {
+                                changed.set(true);
+                            }
+                        })
+                : publication;
+    }
+
+    private CompletionStage<Void> publishDescriptors(ZLinkFrameworkRuntimeState state) {
         ZLinkLocationOwnerToken owner;
         try {
             owner = runtime.currentOwnerToken();
