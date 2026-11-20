@@ -91,18 +91,24 @@ internal sealed class Timer : NativeOwner, IZlinkTimer
 
     private void Destroy(bool throwOnError)
     {
-        if (IsClosed)
+        if (!TryBeginClose())
             return;
-
-        if (!_ownsHandle)
+        try
         {
-            DestroyRecvPoller(throwOnError);
-            MarkClosed();
-            return;
-        }
+            if (!_ownsHandle)
+            {
+                DestroyRecvPoller(throwOnError);
+                MarkClosed();
+                return;
+            }
 
-        DestroyRecvPoller(throwOnError);
-        _ = DestroyHandle(NativeMethods.zlink_timer_destroy, throwOnError);
+            DestroyRecvPoller(throwOnError);
+            _ = DestroyClaimed(NativeMethods.zlink_timer_destroy, throwOnError);
+        }
+        finally
+        {
+            EndClose();
+        }
     }
 
     private bool PollReadyNoWait()

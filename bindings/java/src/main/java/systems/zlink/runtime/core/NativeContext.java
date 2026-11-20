@@ -33,7 +33,10 @@ import java.util.List;
 
 final class NativeContext implements Context {
     private final ContextOptions options;
-    private MemorySegment handle;
+    private volatile MemorySegment handle;
+    // Core releases a handle once; one owner at a time runs the native close
+    // and later callers observe its outcome.
+    private final Object closeLock = new Object();
 
     static {
         InternalAccess.register(new InternalAccess.ContextAccess() {
@@ -259,16 +262,19 @@ final class NativeContext implements Context {
 
     @Override
     public void close() {
-        if (handle == null || handle.address() == 0) {
-            return;
+        synchronized (closeLock) {
+            MemorySegment current = handle;
+            if (current == null || current.address() == 0) {
+                return;
+            }
+            int shutdown = Native.ctxShutdown(current);
+            if (shutdown != 0)
+                throw new ZlinkCloseException(CloseResult.fromValue(shutdown), Native.errno());
+            int term = Native.ctxTerm(current);
+            if (term != 0)
+                throw new ZlinkCloseException(CloseResult.fromValue(term), Native.errno());
+            handle = MemorySegment.NULL;
         }
-        int shutdown = Native.ctxShutdown(handle);
-        if (shutdown != 0)
-            throw new ZlinkCloseException(CloseResult.fromValue(shutdown), Native.errno());
-        int term = Native.ctxTerm(handle);
-        if (term != 0)
-            throw new ZlinkCloseException(CloseResult.fromValue(term), Native.errno());
-        handle = MemorySegment.NULL;
     }
 
     private void setOption(ContextOption option, int value) {
