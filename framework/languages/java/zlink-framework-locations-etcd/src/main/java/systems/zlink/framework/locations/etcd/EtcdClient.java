@@ -36,9 +36,7 @@ final class EtcdClient implements AutoCloseable {
         final ErrorKind kind;
 
         CallFailure(ErrorKind kind) {
-            super(
-                    new java.io.IOException(
-                            "The Location Store operation failed; its write outcome may be unknown."));
+            super(new java.io.IOException(EtcdEncoding.FAILURE_MESSAGE));
             this.kind = kind;
         }
     }
@@ -209,8 +207,8 @@ final class EtcdClient implements AutoCloseable {
     private <Q extends MessageLite, R> CompletableFuture<R> invoke(
             MethodDescriptor<Q, R> method, Q request, Operation operation, boolean authenticated) {
         operation.start();
-        if (request.getSerializedSize() > 16 * 1024 * 1024)
-            throw new IllegalArgumentException("Store request exceeds its transport bound.");
+        // Reject before gRPC queues serialization; transport overflow is a Store failure.
+        if (request.getSerializedSize() > 16 * 1024 * 1024) throw EtcdEncoding.failure();
         int index = endpoint.get();
         Channel channel = channels.get(index);
         String current = token;
@@ -225,11 +223,7 @@ final class EtcdClient implements AutoCloseable {
         Context previous = operation.context.attach();
         try {
             ClientCall<Q, R> call =
-                    channel.newCall(
-                            method,
-                            CallOptions.DEFAULT
-                                    .withDeadline(operation.deadline)
-                                    .withMaxOutboundMessageSize(16 * 1024 * 1024));
+                    channel.newCall(method, CallOptions.DEFAULT.withDeadline(operation.deadline));
             ClientCalls.asyncUnaryCall(
                     call,
                     request,

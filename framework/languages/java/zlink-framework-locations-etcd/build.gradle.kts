@@ -35,6 +35,10 @@ tasks.register<Sync>("installProviderAdapterDist") {
 
 description = "ZLink Java etcd location store extension"
 
+dependencyLocking {
+    lockAllConfigurations()
+}
+
 tasks.withType<Javadoc>().configureEach { exclude("**/internal/**") }
 val etcdLicenses = copySpec {
     from(rootProject.file("../../runtime/protocol/etcd/v3.6.16/licenses")) {
