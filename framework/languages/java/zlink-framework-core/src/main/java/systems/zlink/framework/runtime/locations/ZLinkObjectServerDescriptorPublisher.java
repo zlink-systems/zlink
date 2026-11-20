@@ -33,7 +33,8 @@ public final class ZLinkObjectServerDescriptorPublisher {
     private final Map<String, Claim> claims = new ConcurrentHashMap<>();
     // Option changes recorded and option changes a publication has confirmed. A publication reads
     // the node values after it samples the change count, so a confirmed count never covers a value
-    // the Store has not received; a failed publication confirms nothing and the next renewal retries.
+    // the Store has not received; a failed publication confirms nothing and the next renewal
+    // retries.
     private final AtomicLong changes = new AtomicLong();
     private final AtomicLong confirmed = new AtomicLong();
 
@@ -65,8 +66,7 @@ public final class ZLinkObjectServerDescriptorPublisher {
 
     public CompletionStage<Void> publish(ZLinkFrameworkRuntimeState state) {
         long seen = changes.get();
-        return publishDescriptors(state)
-                .thenRun(() -> confirmed.accumulateAndGet(seen, Math::max));
+        return publishDescriptors(state).thenRun(() -> confirmed.accumulateAndGet(seen, Math::max));
     }
 
     private CompletionStage<Void> publishDescriptors(ZLinkFrameworkRuntimeState state) {
