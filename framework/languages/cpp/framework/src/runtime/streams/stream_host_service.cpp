@@ -1078,9 +1078,17 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
      * connection would later be re-labeled by the liveness loop. */
     void force_close_sessions (stream_close_reason_t reason, std::string_view diagnostic)
     {
-        auto sessions = _active_streams_lane.run ([this] { return _active_streams; }).get ();
-        for (auto &entry : sessions)
-            entry.request_terminate (reason, std::string (diagnostic));
+        _active_streams_lane
+          .run ([this, reason, diagnostic = std::string (diagnostic)] {
+#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
+              if (_shutdown_test_hooks.before_terminate)
+                  _shutdown_test_hooks.before_terminate (state_lane_t::current ()
+                                                         == &_active_streams_lane);
+#endif
+              for (auto &entry : _active_streams)
+                  entry.request_terminate (reason, diagnostic);
+          })
+          .get ();
     }
 
     template <typename Close>
@@ -3328,26 +3336,34 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
             }
             connected_session = true;
             record_connection_opened ();
-            const auto close = [this, connection] (stream_close_reason_t) {
-                request_close (*connection);
-            };
+            const auto close =
+              [this, weak = std::weak_ptr<TStream> (connection)] (stream_close_reason_t) {
+                  if (const auto connection = weak.lock ())
+                      request_close (*connection);
+              };
             register_active_stream (
               stream,
               [this, weak = std::weak_ptr<tcp_connection_t> (owner), stream, liveness, close] {
                   if (const auto owner = weak.lock ())
-                      asio::post (owner->io, [this, stream, liveness, close] () mutable {
-                          evaluate_liveness (stream, liveness, close);
+                      asio::post (owner->io, [this, weak, stream, liveness, close] () mutable {
+                          if (const auto owner = weak.lock ())
+                              evaluate_liveness (stream, liveness, close);
                       });
               },
               [this, weak = std::weak_ptr<tcp_connection_t> (owner), stream, liveness,
                close] (stream_close_reason_t reason, std::string diagnostic) {
                   if (const auto owner = weak.lock ())
-                      asio::post (owner->io, [this, stream, liveness, close, reason,
+                      asio::post (owner->io, [this, weak, stream, liveness, close, reason,
                                               diagnostic = std::move (diagnostic)] () mutable {
-                          terminate_session (stream, liveness, close, reason, diagnostic);
+                          if (const auto owner = weak.lock ())
+                              terminate_session (stream, liveness, close, reason, diagnostic);
                       });
               },
               liveness->next_due ());
+#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
+            if (_shutdown_test_hooks.registered)
+                _shutdown_test_hooks.registered (shared_from_this (), owner);
+#endif
             auto receive_lease = _receive_scheduler.register_connection ();
             while (
               !_stop->load (std::memory_order_acquire)
@@ -3519,8 +3535,8 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
             }
             _runtime.mark_disconnected (stream);
             unregister_active_stream (stream);
-            // The registry lane barrier prevents further sweep submissions.
-            // Settle owner work queued before it before reading the close reason.
+            // The registry lane barrier excludes both sweep and forced-close submissions.
+            // Settle their queued owner work before reading the close reason.
             owner->io.restart ();
             owner->io.run ();
             const auto forced = liveness->forced ();
@@ -3686,6 +3702,9 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
     std::map<std::string, retiring_session_t> _retiring_sessions;
     std::condition_variable _core_sessions_changed;
     std::uint64_t _core_sessions_revision = 0;
+#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
+    stream_host_shutdown_test_hooks_t _shutdown_test_hooks;
+#endif
     stream_receive_scheduler_t _receive_scheduler;
     std::mutex _workers_mutex;
     std::vector<std::thread> _workers;
@@ -3696,6 +3715,19 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
     bool _start_failed = false;
     std::string _start_error;
 };
+
+#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
+std::function<void ()>
+stream_host_service_test_access_t::observe_shutdown (stream_host_service_t &service,
+                                                     stream_host_shutdown_test_hooks_t hooks)
+{
+    auto listener = service._listeners.at (0);
+    listener->_shutdown_test_hooks = std::move (hooks);
+    return [listener] {
+        listener->force_close_sessions (stream_close_reason_t::server_drain, "shutdown race test");
+    };
+}
+#endif
 
 std::shared_ptr<void> stream_host_service_test_access_t::retain_connection (
   service_provider_t &services, stream_t stream, host::public_host_runtime_t &node)
