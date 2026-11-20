@@ -299,16 +299,20 @@ public final class ZLinkObjectServerDescriptorPublisher {
                                 if (failure == null) {
                                     continue;
                                 }
-                                if (failure instanceof UnconfirmedPublicationException
+                                if (!(failure instanceof UnconfirmedPublicationException
                                         || failure instanceof TimeoutException
                                         || failure
                                                         instanceof
                                                         ZLinkFrameworkException frameworkFailure
                                                 && frameworkFailure.kind()
-                                                        == ZLinkFrameworkErrorKind.UNAVAILABLE) {
-                                    unavailable = failure;
-                                } else {
+                                                        == ZLinkFrameworkErrorKind.UNAVAILABLE)) {
                                     return CompletableFuture.failedFuture(failure);
+                                }
+                                // A Store failure gives the caller the cause of an unconfirmed
+                                // write.
+                                if (unavailable == null
+                                        || unavailable instanceof TimeoutException) {
+                                    unavailable = failure;
                                 }
                             }
                             return unavailable == null
@@ -337,7 +341,8 @@ public final class ZLinkObjectServerDescriptorPublisher {
      * and publishes again at the next owner lease renewal. A definite Store result is reported as a
      * {@link systems.zlink.framework.errors.ZLinkConfigurationException} instead.
      */
-    public static final class UnconfirmedPublicationException extends IllegalStateException {
+    public static final class UnconfirmedPublicationException extends IllegalStateException
+            implements ZLinkLocationStoreFailure {
         UnconfirmedPublicationException(Throwable cause) {
             super("MeshNode descriptor publication is not confirmed: " + cause.getMessage(), cause);
         }
