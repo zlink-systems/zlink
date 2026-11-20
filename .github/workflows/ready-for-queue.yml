@@ -30,7 +30,8 @@ jobs:
       java: ${{ steps.paths.outputs.java }}
       node: ${{ steps.paths.outputs.node }}
       core_version_changed: ${{ steps.paths.outputs.core_version_changed }}
-    runs-on: ${{ vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04' }}
+    # Light control job: keep it on hosted runners so it never waits behind the test jobs it manages.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
         with:
@@ -89,41 +90,10 @@ jobs:
     with:
       core_version_changed: ${{ needs.gate.outputs.core_version_changed }}
 
-  framework-cpp:
-    name: framework-cpp
-    needs: gate
-    uses: ./.github/workflows/framework-cpp.yml
-    with:
-      skip_tests: ${{ needs.gate.outputs.cpp != 'true' }}
-      queue_checks_only: true
-      concurrency_key: framework-cpp
-
-  framework-dotnet:
-    name: framework-dotnet
-    needs: gate
-    uses: ./.github/workflows/framework-dotnet.yml
-    with:
-      skip_tests: ${{ needs.gate.outputs.dotnet != 'true' }}
-      queue_checks_only: true
-      concurrency_key: framework-dotnet
-
-  framework-java:
-    name: framework-java
-    needs: gate
-    uses: ./.github/workflows/framework-java.yml
-    with:
-      skip_tests: ${{ needs.gate.outputs.java != 'true' }}
-      queue_checks_only: true
-      concurrency_key: framework-java
-
-  framework-node:
-    name: framework-node
-    needs: gate
-    uses: ./.github/workflows/framework-node.yml
-    with:
-      skip_tests: ${{ needs.gate.outputs.node != 'true' }}
-      queue_checks_only: true
-      concurrency_key: framework-node
+  # Language suites are not queue entry conditions (#5050). They run once per
+  # merge queue batch, so running them here only competed with batches for the
+  # self-hosted runners (11-21: 14 PRs' checks held all six runners).
+  # Run a language workflow by workflow_dispatch when a PR needs it before review.
 
   framework-format:
     name: framework-format
