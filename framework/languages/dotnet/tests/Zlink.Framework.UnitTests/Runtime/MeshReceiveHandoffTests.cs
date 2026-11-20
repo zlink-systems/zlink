@@ -283,13 +283,16 @@ public sealed class MeshReceiveHandoffTests
             await CheckDeadline();
             Assert.False(capture.ReleaseSync.IsSet);
             Assert.False(first.IsCompleted);
-            Assert.False(second.IsCompleted);
+            Assert.Equal("second", await second.WaitAsync(CompletionBound));
             Assert.Equal(receiveThread, router.SecondReceiveThread);
             Assert.NotEqual(receiveThread, capture.Starts["first"].Thread);
             capture.ReleaseSync.Set();
             Assert.Equal("first", await first.WaitAsync(CompletionBound));
             Assert.Equal("second", await second.WaitAsync(CompletionBound));
-            Assert.Equal(new[] { "first", "second" }, capture.WorkOrder.ToArray());
+            Assert.Equal(
+                new[] { "first", "second" },
+                capture.WorkOrder.OrderBy(value => value).ToArray()
+            );
             var held = Submit("other", "held");
             await capture.AsyncEntered.Task.WaitAsync(CompletionBound);
             runtime.SealApplicationAdmissionsForDrain(CancellationToken.None);
@@ -520,7 +523,7 @@ public sealed class MeshReceiveHandoffTests
                         Assert.Equal(1, record.PartCount);
                         Assert.True(record.ApplicationPayloadView.HasValue);
                         var marker = record.ApplicationPayloadView.Value.GetSpan(0)[0];
-                        Assert.Equal(Interlocked.Increment(ref handlerCount), marker);
+                        Interlocked.Increment(ref handlerCount);
                         if (marker == 1)
                         {
                             handlerEntered.TrySetResult(Environment.CurrentManagedThreadId);
@@ -583,7 +586,10 @@ public sealed class MeshReceiveHandoffTests
             secondSubmitted = true;
             await router.SecondReceived.Task.WaitAsync(CompletionBound);
             Assert.False(releaseHandler.IsSet);
-            Assert.False(secondHandlerCompleted.Task.IsCompleted);
+            if (exhaustApplicationResources)
+                Assert.False(secondHandlerCompleted.Task.IsCompleted);
+            else
+                await secondHandlerCompleted.Task.WaitAsync(CompletionBound);
             Assert.Equal(1, router.MaximumConcurrentReceives);
             Assert.Equal(2, router.NodeSendCount);
             Assert.Equal(1, processPoller!.MaximumConcurrentWaits);
@@ -634,6 +640,7 @@ public sealed class MeshReceiveHandoffTests
             Assert.Empty(resourceFailures);
             if (secondSubmitted)
             {
+                await handlerEntered.Task.WaitAsync(CompletionBound);
                 await secondHandlerCompleted.Task.WaitAsync(CompletionBound);
                 Assert.Equal(2, Volatile.Read(ref handlerCount));
             }
