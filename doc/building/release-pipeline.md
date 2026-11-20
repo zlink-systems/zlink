@@ -169,6 +169,8 @@ likewise outside the framework build, CI and releases; they are verified only by
 | `examples-smoke.yml` | builds and runs the exported examples trees in jobs with no checkout, from the README commands alone (quickstart build, tutorial start and verify, one sample end to end); called by `examples-mirror.yml` before the push and rerun daily on the newest framework tag | ubuntu-24.04 for all five languages; windows-2022 for dotnet, java and kotlin |
 | `docs.yml` | documentation site build and deploy | ubuntu |
 
+The `framework-java-results-<platform>` artifact from `framework-java.yml` collects each Java module's `build/test-events/<task>.log` (per-test STARTED, ENDED and result) and `build/jvm-crashes/<task>/hs_err_pid*.log` (JVM crash reports), including when tests fail.
+
 `framework-dotnet.yml` and `framework-node.yml` are the only two that build and test on Windows.
 `framework-cpp.yml` is ubuntu-only, and the Java framework tests run only in the ubuntu job of
 `pr-verify.yml`. The windows-2022 job in `pr-verify.yml` runs just the static contract check in
