@@ -1686,7 +1686,14 @@ and `level` are decimal integers without leading zeros.
 | A participant's new authority payload | `{prefix}aggregate-inventory:{aggregateId}:{aggregateGeneration}:participant:{index}:authorityPayload` |
 | A participant's membership change | `{prefix}aggregate-inventory:{aggregateId}:{aggregateGeneration}:participant:{index}:membershipMutation` |
 
-**Common body rules.** Every body is a UTF-8 JSON object, stored exactly as the bytes produced by
+**Participant change bytes.** A participant's new authority payload record and membership change
+record store bytes as they are, not JSON. The new authority payload record is the
+application-defined opaque bytes that become the participant authority's `payload` at commit, and
+the membership change record is the body bytes of the normative schema's
+`aggregate-participant-mutation-bytes`. The common body rules below don't apply to these two records.
+
+**Common body rules.** The bodies of the aggregate record and the inventory root and pages are UTF-8
+JSON objects, stored exactly as the bytes produced by
 [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785) (JSON Canonicalization Scheme, JCS). 64-bit
 integers (generations) are decimal strings, counts and positions (32-bit range) are JSON numbers,
 and SHA-256 values are 64 lowercase hex characters. A record that has a field not in the tables
@@ -1714,6 +1721,21 @@ participant ID is `index + 1` (the normative schema's `saved-work-vector`). A le
 holds entries, and a page at level 1 or above holds references to pages one level below. One page
 holds at most 1,024 entries or references and at most 1 MiB encoded
 ([02 §4](02-location-store-redis.en.md#4-conditional-atomic-batch)).
+
+Pages are split by count only, regardless of content, so the same inventory gives the same pages
+and check values whichever language wrote it.
+
+1. Level-0 page `i` holds the entries with `index` from `1024 × i` to `1024 × i + 1023`, in `index`
+   order. Only the last page may hold fewer than 1,024.
+2. When a level has two or more pages, the level above is built. Page `j` of level `L + 1` holds the
+   references to pages `1024 × j` to `1024 × j + 1023` of level `L`, in page `index` order.
+3. The level with exactly one page is the top level. The root's `topLevel` is that level, and
+   `topPages` is the reference to that one page.
+4. With zero entries no page is created. The root has `totalCount` 0, `topLevel` 0, and an empty
+   `topPages`.
+
+Because of the maximum length of a canonical authority key, a page of 1,024 entries doesn't exceed
+1 MiB.
 
 | Record and field | Format | Meaning |
 |---|---|---|

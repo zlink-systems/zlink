@@ -1508,7 +1508,12 @@ lowercase canonical UUID(8-4-4-4-12)이고 `aggregateGeneration`과 `index`·`le
 | Participant의 새 authority payload | `{prefix}aggregate-inventory:{aggregateId}:{aggregateGeneration}:participant:{index}:authorityPayload` |
 | Participant의 membership 변경 | `{prefix}aggregate-inventory:{aggregateId}:{aggregateGeneration}:participant:{index}:membershipMutation` |
 
-**본문 공통 규칙.** 모든 본문은 UTF-8 JSON object이며
+**Participant 변경 bytes.** Participant의 새 authority payload record와 membership 변경 record는
+JSON이 아니라 bytes를 그대로 저장한다. 새 authority payload record는 commit 때 그 participant의
+authority `payload`가 될 application 정의 opaque bytes이고, membership 변경 record는 규범 schema의
+`aggregate-participant-mutation-bytes` 본문 bytes다. 아래 본문 공통 규칙은 이 두 record에 적용하지 않는다.
+
+**본문 공통 규칙.** Aggregate 기록, 목록 root와 page의 본문은 UTF-8 JSON object이며
 [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785)(JSON Canonicalization Scheme, JCS)로
 직렬화한 bytes를 그대로 저장한다. 64-bit 정수(generation)는 10진 문자열, 개수·위치(32-bit 범위)는
 JSON number, SHA-256은 lowercase hex 64자다. 아래 표에 없는 field가 있거나 표의 field가 빠진
@@ -1534,6 +1539,18 @@ record는 손상된 record로 취급한다. 형식 version field는 두지 않�
 `saved-work-vector`). Level 0 page(leaf)는 항목을 담고, level 1 이상 page는 바로 아래 level의
 page reference를 담는다. Page 하나에는 항목이나 reference를 최대 1,024개, encoded 크기 최대 1 MiB까지
 담는다([02 §4](02-location-store-redis.ko.md#4-conditional-atomic-batch)).
+
+Page 분할은 내용과 관계없이 개수로만 정해서, 같은 목록은 어느 언어가 써도 같은 page와 확인값이 된다.
+
+1. Level 0 page `i`는 `index`가 `1024 × i`부터 `1024 × i + 1023`까지인 항목을 `index` 순서로 담는다.
+   마지막 page만 1,024개보다 적을 수 있다.
+2. 한 level의 page가 둘 이상이면 그 위 level을 만든다. Level `L + 1`의 page `j`는 level `L`의 page
+   `1024 × j`부터 `1024 × j + 1023`까지의 reference를 page `index` 순서로 담는다.
+3. Page가 하나뿐인 level이 가장 위 level이다. Root의 `topLevel`은 그 level이고 `topPages`는 그 page
+   하나의 reference다.
+4. 항목이 0개이면 page를 만들지 않는다. Root는 `totalCount` 0, `topLevel` 0, 빈 `topPages`다.
+
+Canonical authority key의 최대 길이 때문에 항목 1,024개 page는 1 MiB를 넘지 않는다.
 
 | Record·field | 형식 | 의미 |
 |---|---|---|
