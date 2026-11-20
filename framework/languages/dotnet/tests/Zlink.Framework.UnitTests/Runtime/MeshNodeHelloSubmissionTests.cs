@@ -674,6 +674,200 @@ public sealed class MeshNodeHelloSubmissionTests
         Assert.Equal(0, time.ActiveTimerCount);
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Reject_ClearsAdmissionAndRetriesHelloUntilReadmitted(
+        bool admitted,
+        bool knownRoutingId
+    )
+    {
+        var time = new ControllableTimeProvider();
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var peer = context.CreateRouterSocket();
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            MeshName,
+            deadlineTimeProvider: time
+        );
+        using var poller = Systems.Zlink.Zlink.CreatePoller();
+        var suffix = Guid.NewGuid().ToString("N");
+        var peerRid = RoutingId.From($"reject-peer-{suffix}");
+        var endpoint = $"inproc://reject-peer-{suffix}";
+        peer.SetRoutingId(peerRid);
+        peer.Bind(endpoint);
+        poller.Add(peer, PollEventFlags.PollIn, 1);
+        node.AddChannel(MeshName);
+        node.SetRoutingId(RoutingId.From($"reject-local-{suffix}"));
+        node.Start();
+        var intent = node.ConnectPeer(endpoint, knownRoutingId ? peerRid : null);
+        var firstHello = ReceiveAdmission(peer, poller);
+        Assert.Equal(ServiceWireConstants.Command.Hello, firstHello.Command);
+        await CompleteSubmissions(node);
+        var generation = node.ObservePeerRoute(peerRid).SelectedGeneration;
+        var bytes = ZLinkServiceWireCodec.EncodeRouteAdmission(
+            ServiceWireConstants.Command.Hello,
+            MeshName,
+            endpoint,
+            17,
+            1,
+            new Dictionary<string, uint> { [MeshName] = 100 }
+        );
+        Assert.True(
+            ZLinkServiceWireCodec.TryDecodeRouteAdmission(bytes, out _, out var descriptor, out _)
+        );
+        node.ProcessAdmission(
+            peerRid,
+            generation,
+            ServiceWireConstants.Command.Hello,
+            descriptor,
+            node._socket!.Send(peerRid)
+        );
+        await CompleteSubmissions(node);
+        Assert.Equal(ServiceWireConstants.Command.Admit, ReceiveAdmission(peer, poller).Command);
+        if (admitted)
+            node.ProcessAdmission(
+                peerRid,
+                generation,
+                ServiceWireConstants.Command.Admit,
+                descriptor,
+                null
+            );
+        Assert.Equal(admitted, node.ObservePeerRoute(peerRid).ReadyGeneration != 0);
+        Assert.Equal(
+            admitted,
+            await node._lane.RunAsync(() => node._peersByRid[peerRid].Liveness is not null)
+        );
+
+        var reject = ServiceWireCodec.EncodeReject3Header(
+            new ServiceWireCodec.Reject3(0, ServiceWireCodec.RejectReason.RuntimeNotServing),
+            ServiceWireCodec.DecodeContext.Empty
+        );
+        Assert.False(ProcessReject(node, peerRid, generation, reject[..^1]));
+        Assert.False(ProcessReject(node, peerRid, generation, reject, extraPart: true));
+        Assert.Equal(admitted, node.ObservePeerRoute(peerRid).ReadyGeneration != 0);
+        Assert.True(ProcessReject(node, peerRid, generation + 1, reject));
+        Assert.Equal(admitted, node.ObservePeerRoute(peerRid).ReadyGeneration != 0);
+        Assert.True(ProcessReject(node, peerRid, generation, reject));
+        Assert.Equal(0UL, node.ObservePeerRoute(peerRid).ReadyGeneration);
+        await node._lane.RunAsync(() =>
+        {
+            var current = node._peersByRid[peerRid];
+            Assert.False(current.Admitted);
+            Assert.Null(current.Liveness);
+            Assert.Equal(MeshPeerState.Connecting, current.State);
+            Assert.Equal(generation, current.RouteGeneration);
+        });
+        Assert.Equal(generation, node.ObservePeerRoute(peerRid).SelectedGeneration);
+        Assert.Equal(intent, Assert.Single(node.Peers()).ConnectionIntentId);
+        Assert.Single(peer.RoutesSnapshot());
+        // An already pending exchange keeps its cadence. An admitted route starts
+        // the ordinary unanswered-HELLO exchange again on the management turn.
+        ManagementTurn(node);
+        await CompleteSubmissions(node);
+        if (admitted)
+            Assert.Equal(
+                ServiceWireConstants.Command.Hello,
+                ReceiveAdmission(peer, poller).Command
+            );
+        else
+            AssertNoHello(peer);
+        time.AdvanceMonotonic(ZLinkServiceLiveness.ProbeInterval - TimeSpan.FromTicks(1));
+        ManagementTurn(node);
+        await CompleteSubmissions(node);
+        AssertNoHello(peer);
+        time.AdvanceMonotonic(TimeSpan.FromTicks(1));
+        ManagementTurn(node);
+        await CompleteSubmissions(node);
+        var retry = ReceiveAdmission(peer, poller);
+        Assert.Equal(ServiceWireConstants.Command.Hello, retry.Command);
+        if (!admitted)
+            Assert.Equal(firstHello.Bytes, retry.Bytes);
+        // Repeated REJECT is idempotent and does not restart the existing cadence.
+        Assert.True(ProcessReject(node, peerRid, generation, reject));
+        ManagementTurn(node);
+        await CompleteSubmissions(node);
+        AssertNoHello(peer);
+        node.ProcessAdmission(
+            peerRid,
+            generation,
+            ServiceWireConstants.Command.Admit,
+            descriptor,
+            null
+        );
+        Assert.Equal(generation, node.ObservePeerRoute(peerRid).ReadyGeneration);
+        time.AdvanceMonotonic(ZLinkServiceLiveness.ProbeInterval);
+        ManagementTurn(node);
+        await CompleteSubmissions(node);
+        AssertNoHello(peer);
+        Assert.Equal(0, time.ActiveTimerCount);
+        // Removing the original intent still works after rejection and recovery.
+        node.RemovePeerConnection(intent);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Reject_InboundRouteRetainsPeerWithoutCreatingConnectionIntent(bool hasPeer)
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        var rid = RoutingId.From("reject-inbound");
+        var current = new ZLinkMeshPeer(1)
+        {
+            RoutingId = rid,
+            PhysicalRoutingId = rid,
+            RouteGeneration = 7,
+            State = MeshPeerState.Admitted,
+            Admitted = true,
+            Liveness = new ZLinkServiceLiveness(Stopwatch.GetTimestamp()),
+        };
+        var peers = new Dictionary<RoutingId, ZLinkMeshPeer>();
+        if (hasPeer)
+            peers.Add(rid, current);
+        await using var node = new ZLinkManagedMeshNode(context, MeshName, peersByRid: peers);
+        var reject = ServiceWireCodec.EncodeReject3Header(
+            new ServiceWireCodec.Reject3(0, ServiceWireCodec.RejectReason.RuntimeNotServing),
+            ServiceWireCodec.DecodeContext.Empty
+        );
+        Assert.True(ProcessReject(node, rid, 7, reject));
+        await node._lane.RunAsync(() =>
+        {
+            Assert.Equal(hasPeer ? 1 : 0, peers.Count);
+            if (hasPeer)
+            {
+                Assert.Same(current, peers[rid]);
+                Assert.False(current.Admitted);
+                Assert.Null(current.Liveness);
+                Assert.Equal(MeshPeerState.Connecting, current.State);
+                Assert.Equal(7UL, current.RouteGeneration);
+            }
+        });
+        Assert.Equal(hasPeer ? 1 : 0, node.Peers().Length);
+    }
+
+    private static bool ProcessReject(
+        ZLinkManagedMeshNode node,
+        RoutingId peerRid,
+        ulong generation,
+        byte[] head,
+        bool extraPart = false
+    )
+    {
+        using var message = Message.From(head);
+        return node.ProcessInfrastructureControl(
+            peerRid,
+            generation,
+            17,
+            null,
+            extraPart ? [message, message] : [message],
+            head,
+            () => throw new Xunit.Sdk.XunitException("REJECT must not capture a reply."),
+            () => throw new Xunit.Sdk.XunitException("REJECT must not capture a send.")
+        );
+    }
+
     private static TimeSpan ReadWaitDeadline(ZLinkManagedMeshNode node) =>
         node.ReadOperationWaitDeadline();
 
