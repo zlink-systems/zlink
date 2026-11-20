@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: Apache-2.0 */
+/* SPDX-License-Identifier: Elastic-2.0 */
 #include <zlink/json_profile.hpp>
 
 #include <cstdio>
