@@ -47,6 +47,7 @@ import {
 import { ZLinkSessionLocalActorBindings } from './session-local-actors';
 
 export interface ZLinkSessionContextStream extends ZLinkStream {
+  captureBoundSessionSubmission?(actorId: string): (payload: Message) => Promise<ZLinkSubmitResult>;
   writeRaw(payload: Message, flags?: number): boolean;
   submitRaw(payload: Message): Promise<ZLinkSubmitResult>;
   enqueueActorBound?(actorSlot: number, actorId: string): Promise<void>;
