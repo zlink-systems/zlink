@@ -1,10 +1,13 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 #include <zlink/stream_connector.hpp>
 #include <boost/asio.hpp>
+#include <atomic>
 #include <barrier>
 #include <chrono>
+#include <cstdlib>
 #include <iostream>
 #include <future>
+#include <optional>
 #include <string>
 #include <thread>
 
@@ -100,6 +103,59 @@ int main (int argc, char **argv)
         server.join ();
         return require (result && callback_seen && connect_rejected,
                         "F16: connect after a callback requests close must be rejected")
+                 ? 0
+                 : 1;
+    }
+    if (mode == "immediate_error_send") {
+        boost::asio::io_context io;
+        boost::asio::ip::tcp::acceptor acceptor (io, {boost::asio::ip::address_v4::loopback (), 0});
+        std::promise<void> release;
+        auto released = release.get_future ();
+        std::thread server ([&] {
+            boost::asio::ip::tcp::socket socket (io);
+            acceptor.accept (socket);
+            released.wait ();
+        });
+        sc::connector_options_t options;
+        options.endpoint = "tcp://127.0.0.1:" + std::to_string (acceptor.local_endpoint ().port ());
+        options.dispatch_mode = sc::dispatch_mode_t::immediate;
+        options.heartbeat.enabled = false;
+        options.reconnect.enabled = false;
+        auto connector = sc::connector_factory_t::create (options);
+        struct observed_t
+        {
+            bool connected;
+            std::optional<sc::error_code_t> send_code;
+        };
+        std::promise<observed_t> handler_done;
+        auto handled = handler_done.get_future ();
+        std::atomic<bool> handler_entered{false};
+        std::optional<sc::error_code_t> send_code;
+        auto subscription = connector.on_error ([&] (const sc::error_t &error) {
+            if (handler_entered.exchange (true)) {
+                // A failed send is an error event: the send below reports here.
+                send_code = error.code;
+                return;
+            }
+            const bool connected = connector.is_connected ();
+            connector.send (sc::packet_t{.name = "after.end", .payload = {1}}).submit ();
+            handler_done.set_value (observed_t{connected, send_code});
+        });
+        const auto result = connector.connect ();
+        release.set_value ();
+        server.join ();
+        if (handled.wait_for (std::chrono::seconds (5)) != std::future_status::ready) {
+            // The handler thread cannot be joined while it waits for the lock.
+            std::cerr << "a send from an Immediate error handler did not return (entered="
+                      << handler_entered.load () << ")\n";
+            std::_Exit (1);
+        }
+        const auto observed = handled.get ();
+        connector.close ();
+        return require (result && !observed.connected
+                          && observed.send_code == sc::error_code_t::disconnected,
+                        "stream-connector 9: an Immediate error handler must run after the ending "
+                        "is recorded and outside the connector lock")
                  ? 0
                  : 1;
     }
