@@ -17,6 +17,48 @@ final class ContextCloseContractTest {
         CompletionNativeFixture.runProbe(TermProbe.class);
     }
 
+    @Test
+    void concurrentCloseCallsTermOnce() throws Exception {
+        TestSupport.assumeNative();
+        CompletionNativeFixture.runProbe(ConcurrentTermProbe.class);
+    }
+
+    public static final class ConcurrentTermProbe {
+        public static void main(String[] args) throws Throwable {
+            CompletionNativeFixture core = new CompletionNativeFixture();
+            core.ctxTermDelayMs = 2;
+            core.ctxTermForwardFirstOnly = true;
+            int threads = 16;
+            for (int i = 0; i < 100; i++) {
+                Context context = Zlink.createContext();
+                int before = core.ctxTermCalls.get();
+                java.util.concurrent.CyclicBarrier start =
+                    new java.util.concurrent.CyclicBarrier(threads);
+                java.util.concurrent.atomic.AtomicReference<Throwable> error =
+                    new java.util.concurrent.atomic.AtomicReference<>();
+                Thread[] workers = new Thread[threads];
+                for (int t = 0; t < threads; t++) {
+                    workers[t] = new Thread(() -> {
+                        try {
+                            start.await();
+                            context.close();
+                        } catch (Throwable ex) {
+                            error.compareAndSet(null, ex);
+                        }
+                    });
+                    workers[t].start();
+                }
+                for (Thread worker : workers)
+                    worker.join();
+                assertNull(error.get());
+                assertEquals(1, core.ctxTermCalls.get() - before);
+                context.close();
+                assertEquals(1, core.ctxTermCalls.get() - before);
+            }
+            System.exit(0);
+        }
+    }
+
     public static final class TermProbe {
         public static void main(String[] args) throws Throwable {
             CompletionNativeFixture core = new CompletionNativeFixture();
