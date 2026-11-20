@@ -4,10 +4,15 @@
 #include "testutil_unity.hpp"
 
 #include <boost/asio.hpp>
+#ifdef ZLINK_HAVE_TLS
+#include <boost/asio/ssl.hpp>
+#endif
 #include <boost/beast/core.hpp>
 #include <boost/beast/websocket.hpp>
+#include <algorithm>
 #include <array>
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <set>
 #include <string>
@@ -281,12 +286,170 @@ void run_delivery (bool websocket_, bool local_close_)
     TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_monitor_close (&monitor));
     test_context_socket_close_zero_linger (server);
 }
+
+// Read only after disconnect_rid has returned. Small transport buffers force
+// accepted frames to remain outside the peer's receive buffer at disconnect.
+template <typename Stream>
+void expect_disconnect_drain (
+  void *server_, void *monitor_, net::io_context &io_, Stream &client_, bool tls_ = false)
+{
+    const zlink_monitor_event_t ready = receive_edge (monitor_, ZLINK_EVENT_CONNECTION_READY);
+    TEST_ASSERT_EQUAL_UINT64 (ZLINK_EVENT_CONNECTION_READY, ready.event);
+    const size_t frame_size = 65536;
+    const size_t tail_size = 4095;
+    std::string expected;
+    for (unsigned int sequence = 0; sequence != 65; ++sequence) {
+        const std::string bytes (sequence == 64 ? tail_size : frame_size,
+                                 static_cast<char> (sequence));
+        zlink_msg_t part;
+        TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_init_size (&part, bytes.size ()));
+        memcpy (zlink_msg_data (&part), bytes.data (), bytes.size ());
+        zlink_completion_id_t id = UINT64_MAX;
+        TEST_ASSERT_EQUAL_INT (ZLINK_SUBMIT_OK,
+                               zlink_send_rid (server_, &ready.routing_id, &part, 1,
+                                               ZLINK_SEND_FLAGS_DONTWAIT, NULL, &id));
+        TEST_ASSERT_EQUAL_UINT64 (0, id);
+        TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_msg_close (&part));
+        expected += bytes;
+    }
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_disconnect_rid (server_, &ready.routing_id));
+
+    std::string received;
+    std::array<char, 65536> buffer;
+    boost::system::error_code terminal;
+    bool ended = false;
+    std::function<void ()> read;
+    read = [&] () {
+        client_.async_read_some (net::buffer (buffer),
+                                 [&] (boost::system::error_code ec_, size_t n_) {
+                                     received.append (buffer.data (), n_);
+                                     if (ec_) {
+                                         terminal = ec_;
+                                         ended = true;
+                                     } else
+                                         read ();
+                                 });
+    };
+    // This pause supplies backpressure; EOF remains the completion condition.
+    net::steady_timer pause (io_, std::chrono::milliseconds (50));
+    pause.async_wait ([&] (boost::system::error_code ec_) {
+        if (!ec_)
+            read ();
+    });
+    io_.run_for (std::chrono::seconds (10));
+    const bool eof = terminal == net::error::eof || terminal == ws::error::closed
+#ifdef ZLINK_HAVE_TLS
+                     || (tls_ && terminal == net::ssl::error::stream_truncated)
+#endif
+      ;
+    (void) tls_;
+    boost::system::error_code ignored;
+    beast::get_lowest_layer (client_).close (ignored);
+    io_.restart ();
+    io_.run ();
+    const zlink_monitor_event_t disconnected = receive_edge (monitor_, ZLINK_EVENT_DISCONNECTED);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_monitor_close (&monitor_));
+    test_context_socket_close_zero_linger (server_);
+    printf ("disconnect drain: accepted=65 bytes=%zu received_frames=%zu "
+            "received_bytes=%zu ended=%d terminal=%s\n",
+            expected.size (),
+            std::min (size_t (64), received.size () / frame_size)
+              + (received.size () == expected.size () ? 1 : 0),
+            received.size (), ended, terminal.message ().c_str ());
+    TEST_ASSERT_EQUAL_UINT64 (ZLINK_EVENT_DISCONNECTED, disconnected.event);
+    TEST_ASSERT_EQUAL_UINT64 (ready.connection_id, disconnected.connection_id);
+    TEST_ASSERT_EQUAL_MEMORY (ready.routing_id.data, disconnected.routing_id.data, 4);
+    TEST_ASSERT_TRUE_MESSAGE (ended && eof, "transport did not reach EOF");
+    TEST_ASSERT_EQUAL_UINT64 (expected.size (), received.size ());
+    TEST_ASSERT_EQUAL_MEMORY (expected.data (), received.data (), expected.size ());
+}
+
+void run_disconnect_drain (const char *transport_)
+{
+    if (!zlink_has (transport_))
+        TEST_IGNORE_MESSAGE ("transport unavailable");
+    const bool tls = strcmp (transport_, "tls") == 0;
+    const bool ipc = strcmp (transport_, "ipc") == 0;
+    void *server = test_context_socket (ZLINK_SOCKET_STREAM);
+    const uint64_t hwm = 8u * 1024u * 1024u;
+    const int sndbuf = 4096;
+    const zlink_stream_recv_mode_t mode = ZLINK_STREAM_RECV_MODE_RAW;
+    TEST_ASSERT_EQUAL_INT (
+      ZLINK_CONFIG_OK,
+      zlink_set_stream_option (server, ZLINK_STREAM_OPT_RECV_MODE, &mode, sizeof (mode)));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_set_option (server, ZLINK_OPT_SNDHWM, &hwm, sizeof (hwm)));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_set_option (server, ZLINK_OPT_SNDBUF, &sndbuf, sizeof (sndbuf)));
+#ifdef ZLINK_HAVE_TLS
+    tls_test_files_t files;
+    if (tls) {
+        files = make_tls_test_files ();
+        TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_set_option (server, ZLINK_OPT_TLS_CERT,
+                                                                  files.server_cert.data (),
+                                                                  files.server_cert.size ()));
+        TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, zlink_set_option (server, ZLINK_OPT_TLS_KEY,
+                                                                  files.server_key.data (),
+                                                                  files.server_key.size ()));
+    }
+#endif
+    zlink_socket_monitor_open_options_t options = {};
+    options.events = ZLINK_EVENT_CONNECTION_READY | ZLINK_EVENT_DISCONNECTED;
+    void *monitor = zlink_socket_monitor_open (server, &options);
+    TEST_ASSERT_NOT_NULL (monitor);
+    const std::string bind_address = ipc ? "ipc://*" : std::string (transport_) + "://127.0.0.1:*";
+    TEST_ASSERT_EQUAL_INT (ZLINK_BIND_OK, zlink_bind (server, bind_address.c_str ()));
+    char endpoint[256];
+    size_t size = sizeof (endpoint);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_get_option (server, ZLINK_OPT_LAST_ENDPOINT, endpoint, &size));
+    net::io_context io;
+#ifdef ZLINK_HAVE_IPC
+    if (ipc) {
+        net::local::stream_protocol::socket client (io);
+        client.connect (net::local::stream_protocol::endpoint (endpoint + 6));
+        client.set_option (net::socket_base::receive_buffer_size (65536));
+        expect_disconnect_drain (server, monitor, io, client);
+        return;
+    }
+#endif
+    unsigned int port = 0;
+    TEST_ASSERT_EQUAL_INT (1, sscanf (strrchr (endpoint, ':') + 1, "%u", &port));
+    const tcp::endpoint address (net::ip::make_address ("127.0.0.1"), port);
+    tcp::socket socket (io);
+    socket.open (tcp::v4 ());
+    socket.set_option (net::socket_base::receive_buffer_size (65536));
+    socket.connect (address);
+#ifdef ZLINK_HAVE_TLS
+    if (tls) {
+        net::ssl::context context (net::ssl::context::tls_client);
+        context.load_verify_file (files.ca_cert);
+        net::ssl::stream<tcp::socket> client (std::move (socket), context);
+        client.set_verify_mode (net::ssl::verify_peer);
+        client.handshake (net::ssl::stream_base::client);
+        cleanup_tls_test_files (files);
+        expect_disconnect_drain (server, monitor, io, client, true);
+        return;
+    }
+#endif
+    if (strcmp (transport_, "ws") == 0) {
+        ws::stream<tcp::socket> client (std::move (socket));
+        client.handshake ("127.0.0.1", "/");
+        expect_disconnect_drain (server, monitor, io, client);
+    } else
+        expect_disconnect_drain (server, monitor, io, socket);
+}
 }
 
 void test_stream_tcp_peer_close_delivery () { run_delivery (false, false); }
 void test_stream_tcp_disconnect_delivery () { run_delivery (false, true); }
 void test_stream_ws_peer_close_delivery () { run_delivery (true, false); }
 void test_stream_ws_disconnect_delivery () { run_delivery (true, true); }
+
+void test_stream_tcp_disconnect_drain () { run_disconnect_drain ("tcp"); }
+void test_stream_tls_disconnect_drain () { run_disconnect_drain ("tls"); }
+void test_stream_ws_disconnect_drain () { run_disconnect_drain ("ws"); }
+void test_stream_ipc_disconnect_drain () { run_disconnect_drain ("ipc"); }
 
 int main ()
 {
@@ -299,6 +462,10 @@ int main ()
     RUN_SELECTED (test_stream_tcp_disconnect_delivery);
     RUN_SELECTED (test_stream_ws_peer_close_delivery);
     RUN_SELECTED (test_stream_ws_disconnect_delivery);
+    RUN_SELECTED (test_stream_tcp_disconnect_drain);
+    RUN_SELECTED (test_stream_tls_disconnect_drain);
+    RUN_SELECTED (test_stream_ws_disconnect_drain);
+    RUN_SELECTED (test_stream_ipc_disconnect_drain);
 #undef RUN_SELECTED
     return UNITY_END ();
 }
