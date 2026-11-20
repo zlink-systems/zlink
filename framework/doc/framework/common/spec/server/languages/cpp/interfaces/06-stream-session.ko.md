@@ -19,6 +19,13 @@ enum class stream_session_error_t {
     transport_error = 1
 };
 
+enum class disconnect_reason_t : std::uint32_t {
+    unknown = 0,
+    handshake_failed = 3,
+    transport_error = 4,
+    context_terminated = 5
+};
+
 enum class stream_close_reason_t : std::uint8_t {
     client_close = 1,
     idle_timeout = 2,
@@ -50,6 +57,7 @@ public:
 
     stream_session_error_t error() const noexcept;
     std::string_view message() const noexcept;
+    std::optional<disconnect_reason_t> disconnect_reason() const noexcept;
 };
 
 struct session_message_context_t {
@@ -170,7 +178,9 @@ message에는 적용하지 않는다. `0`은 별도 Framework 상한을 사용�
 거부하고 server가 해당 연결을 종료한다. Server callback에는 부분 message를 전달하지 않으며, raw
 client는 wire error code를 받지 않고 연결 종료를 관측한다.
 
-`stream_error_t`는 provider-neutral error 종류와 설명만 공개한다. Native transport error code는
+`stream_error_t`는 provider-neutral error 종류와 설명을 공개한다. Core `DISCONNECTED`로 끝난 session의
+오류에서만 `disconnect_reason()`이 Core의 `zlink_disconnect_reason_t` 값을 담고, 그 밖에는 `std::nullopt`다
+([STREAM session §7](../../../04-session/01-stream-session.ko.md#7-오류-경계)). Native transport error code(errno)는
 runtime 내부 진단 정보이며 public contract에 포함하지 않는다.
 
 `on_actor_binding_replaced(...)`는 같은 Actor가 새 session에 bind된 경우 이전 session에서 한 번 실행되는
