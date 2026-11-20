@@ -50,6 +50,10 @@ export enum ZlinkStreamCloseReasonCode {
 export type ZlinkStreamCloseReason = keyof typeof ZlinkStreamCloseReasonCode;
 
 const unicodeWhiteSpaceOnly = /^\p{White_Space}*$/u;
+const utf8Encoder = new TextEncoder();
+// Each non-streaming decode resets its state, including after invalid input.
+const utf8Decoder = new TextDecoder();
+const controlTextDecoder = new TextDecoder('utf-8', { fatal: true });
 
 const validMessageKinds = new Set(
   Object.values(ZlinkStreamMessageKind).filter((value) => typeof value === 'number')
@@ -197,7 +201,7 @@ export function decodeStreamWireSessionClosing(payload: Uint8Array): {
 }
 
 function decodeControlText(value: Uint8Array): string {
-  return new TextDecoder('utf-8', { fatal: true }).decode(value);
+  return controlTextDecoder.decode(value);
 }
 
 export function splitStreamWireFrames(chunk: Uint8Array): readonly Uint8Array[] {
@@ -623,11 +627,11 @@ export function lz4UnpicklePayload(payload: Uint8Array, maxDecompressedSize?: nu
 }
 
 export function utf8Encode(value: string): Uint8Array {
-  return new TextEncoder().encode(value);
+  return utf8Encoder.encode(value);
 }
 
 export function utf8Decode(value: Uint8Array): string {
-  return new TextDecoder().decode(value);
+  return utf8Decoder.decode(value);
 }
 
 function decodeStreamWireHeaderMetadata(

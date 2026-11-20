@@ -847,7 +847,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
       std::uint64_t authority_owner_generation = 0,
       std::uint64_t owner_lease_generation = 0,
       std::optional<protocol::actor_message_header_t::bound_session_source_t> bound_session_source =
-        std::nullopt);
+        std::nullopt,
+      std::uint64_t node_generation = 0);
     task_t<zlink::submit_result_t>
     send_bound_session (const actor_ref_t &actor,
                         const zlink::routing_id_t &session_owner,

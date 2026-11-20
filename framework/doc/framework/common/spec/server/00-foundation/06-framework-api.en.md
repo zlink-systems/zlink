@@ -1007,7 +1007,7 @@ runtime resource or local object. A bound-session accessor returns a new immutab
 snapshot, holding the same ActorId/ObjectGeneration and the target MeshName/NodeRid, after a
 relocation route switch, without changing a previously returned ref value. A regular message
 resolves current authority by global ID and doesn't pin the ref's location as the target.
-Destroy and Close take a ref pinned to a specific incarnation. If that incarnation doesn't exist, it's `false`; if the
+Destroy and Close take a ref pinned to a specific incarnation. If that incarnation doesn't exist, it's `false`; if its destroy is in progress, it joins that terminal; if the
 generation differs, `InvalidOperation`; during a relocation seal, `Unavailable` — and it
 doesn't re-look-up the current ref to end a different incarnation.
 
