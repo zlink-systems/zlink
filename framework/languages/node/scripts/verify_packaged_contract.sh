@@ -10,6 +10,7 @@ BROWSER_DIR="$TEMP_DIR/browser-consumer"
 SERVER_DIR="$TEMP_DIR/server-consumer"
 GENERATED_BROWSER="$TEMP_DIR/framework-json-schema-browser.mjs"
 GENERATED_SERVER="$TEMP_DIR/framework-json-schema-server.cjs"
+ETCD_PROTO_SOURCE="$(realpath "$ROOT_DIR/../../runtime/protocol/etcd/v3.6.16")"
 mkdir -p "$PACK_DIR" "$BROWSER_DIR" "$SERVER_DIR"
 
 packages=(
@@ -19,6 +20,7 @@ packages=(
   framework-codec-protobuf
   framework-codec-msgpack
   framework-locations-redis
+  framework-locations-etcd
   stream-wire
 )
 
@@ -29,6 +31,7 @@ expected=(
   '@zlink-systems/framework-codec-protobuf'
   '@zlink-systems/framework-codec-msgpack'
   '@zlink-systems/framework-locations-redis'
+  '@zlink-systems/framework-locations-etcd'
   '@zlink-systems/stream-wire'
 )
 
@@ -60,11 +63,17 @@ node "$ROOT_DIR/scripts/generate-framework-json-schemas.mjs" \
   --out "$GENERATED_SERVER" \
   --browser-out "$GENERATED_BROWSER" >/dev/null
 
-node - "$PACK_DIR" "${expected[@]}" <<'NODE'
+ETCD_PROTO_SOURCE="$ETCD_PROTO_SOURCE" node - "$PACK_DIR" "${expected[@]}" <<'NODE'
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const [packDir, ...expected] = process.argv.slice(2);
+function sourceFiles(root, relative = '') {
+  return fs.readdirSync(path.join(root, relative), { withFileTypes: true }).flatMap((entry) => {
+    const name = path.posix.join(relative, entry.name);
+    return entry.isDirectory() ? sourceFiles(root, name) : [name];
+  });
+}
 const names = [];
 for (const file of fs.readdirSync(packDir)) {
   const archive = path.join(packDir, file);
@@ -78,6 +87,24 @@ for (const file of fs.readdirSync(packDir)) {
     if (/Node(Socket|Duplex|WebSocket|Zlink)|WebSocketHandshake|WebSocketFrameCodec/.test(listing)) {
       throw new Error('connector tarball contains removed Node runtime');
     }
+  }
+  if (manifest.name === '@zlink-systems/framework-locations-etcd') {
+    const bin = manifest.bin?.['zlink-location-etcd-admin'];
+    if (typeof bin !== 'string' || bin.replace(/^\.\//, '') !== 'dist/admin.js') {
+      throw new Error('etcd tarball does not expose zlink-location-etcd-admin from dist/admin.js');
+    }
+    const listing = new Set(execFileSync('tar', ['-tzf', archive], { encoding: 'utf8' }).split('\n'));
+    const required = [
+      'package/LICENSE',
+      'package/dist/index.js',
+      'package/dist/index.d.ts',
+      'package/dist/options.d.ts',
+      'package/dist/location-store.d.ts',
+      'package/dist/admin.js',
+      ...sourceFiles(process.env.ETCD_PROTO_SOURCE).map((file) => `package/dist/proto/v3.6.16/${file}`)
+    ];
+    const missing = required.filter((file) => !listing.has(file));
+    if (missing.length > 0) throw new Error(`etcd tarball is missing:\n${missing.join('\n')}`);
   }
 }
 if (JSON.stringify(names.sort()) !== JSON.stringify([...expected].sort())) {
@@ -182,15 +209,64 @@ if (packetNames.join(',') !== 'ClassPacket,FixturePacket') {
 }
 NODE
 
+# The etcd provider must load its packed proto files from the consumer install:
+# no NODE_PATH, no workspace sources and no runtime/protocol checkout fallback.
+env -u NODE_PATH node - <<'NODE'
+const fs = require('node:fs');
+const path = require('node:path');
+const consumer = fs.realpathSync(process.cwd());
+const entry = fs.realpathSync(require.resolve('@zlink-systems/framework-locations-etcd'));
+const root = path.join(consumer, 'node_modules/@zlink-systems/framework-locations-etcd');
+if (entry !== path.join(root, 'dist/index.js')) throw new Error(`etcd provider resolved outside the consumer: ${entry}`);
+const framework = fs.realpathSync(require.resolve('@zlink-systems/framework', { paths: [root] }));
+if (!framework.startsWith(path.join(consumer, 'node_modules') + path.sep)) {
+  throw new Error(`etcd provider resolved @zlink-systems/framework outside the consumer: ${framework}`);
+}
+if (!fs.existsSync(path.join(root, 'dist/proto/v3.6.16/etcd/api/etcdserverpb/rpc.proto'))) {
+  throw new Error('installed etcd provider has no packed proto files');
+}
+const checkoutFallback = path.resolve(root, 'dist/internal', '../../../../../../runtime/protocol/etcd/v3.6.16');
+if (fs.existsSync(checkoutFallback)) throw new Error(`proto checkout fallback is reachable: ${checkoutFallback}`);
+const { ZLinkEtcdLocationStore } = require('@zlink-systems/framework-locations-etcd');
+const store = new ZLinkEtcdLocationStore({
+  endpoints: ['http://127.0.0.1:2379'],
+  namespace: 'packed-contract'
+});
+store.dispose().catch((error) => {
+  process.exitCode = 1;
+  console.error(error);
+});
+NODE
+
+ADMIN_BIN="$SERVER_DIR/node_modules/.bin/zlink-location-etcd-admin"
+if [[ "$(realpath "$ADMIN_BIN")" != "$(realpath "$SERVER_DIR/node_modules/@zlink-systems/framework-locations-etcd/dist/admin.js")" ]]; then
+  echo "zlink-location-etcd-admin is not linked to the installed etcd provider" >&2
+  exit 1
+fi
+if admin_stderr="$(env -u NODE_PATH "$ADMIN_BIN" --help 2>&1 >/dev/null)"; then
+  admin_status=0
+else
+  admin_status=$?
+fi
+if [[ "$admin_status" -ne 1 || "$admin_stderr" != 'Invalid command or configuration' ]]; then
+  echo "zlink-location-etcd-admin --help: expected exit 1 with the usage error, got exit $admin_status: $admin_stderr" >&2
+  exit 1
+fi
+
 cat > contract.ts <<'TS'
 import {
   ZLinkFrameworkErrorKind,
   ZLinkPacket,
   type ZLinkLocationRuntimeQuery,
+  type ZLinkLocationStore,
   type ZLinkMessageFlowLogMode,
   type ZLinkSessionSendCall,
   type ZLinkSpotManager
 } from '@zlink-systems/framework';
+import {
+  ZLinkEtcdLocationStore,
+  type ZLinkEtcdLocationOptions
+} from '@zlink-systems/framework-locations-etcd';
 
 const diagnosticsLevels: readonly ZLinkMessageFlowLogMode[] = [
   'off',
@@ -211,7 +287,17 @@ async function createFromSpotTurn(spots: ZLinkSpotManager) {
     .yield();
 }
 
+const etcdOptions: ZLinkEtcdLocationOptions = {
+  endpoints: ['https://etcd.example.test:2379'],
+  namespace: 'packed-contract',
+  tls: { trustedCaPem: 'ca' },
+  credentials: { user: 'zlink', password: 'secret' },
+  operationTimeoutMs: 5000
+};
+const etcdStore: ZLinkLocationStore = new ZLinkEtcdLocationStore(etcdOptions);
+
 void diagnosticsLevels;
+void etcdStore;
 void locations.findActorLocation('actor-a');
 void locations.findSpotLocation('spot-a');
 void send.timeout(1);
@@ -261,4 +347,4 @@ import(pathToFileURL(path.join(root, 'dist/esm/index.mjs')).href).then((esm) => 
 });
 NODE
 
-echo "NODE_PACKAGED_CONTRACT_PASS packages=${#expected[@]} browser=esm+generated-registry server=commonjs+generated-registry"
+echo "NODE_PACKAGED_CONTRACT_PASS packages=${#expected[@]} browser=esm+generated-registry server=commonjs+generated-registry etcd=types+proto+admin-bin"
