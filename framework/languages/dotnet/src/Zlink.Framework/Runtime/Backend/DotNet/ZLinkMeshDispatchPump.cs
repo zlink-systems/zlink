@@ -393,7 +393,8 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
     )
     {
         var domains = TakePendingReadyDomains();
-        if (domains != MeshReadyDomains.None)
+        var startedAt = Stopwatch.GetTimestamp();
+        while (domains != MeshReadyDomains.None)
         {
             readyBatch.Reset();
             bool residue;
@@ -440,6 +441,15 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
                 }
             }
             readyBatch.Reset();
+            // One shared worker drain processes successive records and owners.
+            // Selecting the same owner again does not reset its time budget.
+            if (
+                cancellationToken.IsCancellationRequested
+                || Stopwatch.GetElapsedTime(startedAt)
+                    >= ZLinkExecutionLanePolicy.Default.OwnerTimeBudget
+            )
+                break;
+            domains = TakePendingReadyDomains();
         }
         return (readyBatch, receiveBatch, pending);
     }

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Zlink.Framework.Runtime.Actors;
@@ -77,9 +78,9 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     private readonly SemaphoreSlim _gate = new(1, 1);
     private ZLinkRuntimeExecutionScope? _executionScope;
 
-    // Operation admission, drain counters, worker-pool construction and remote-frame
-    // chain ownership are one C2 state unit.  The lane preserves the former gate's
-    // return-before-complete admission semantics without retaining a lock snapshot.
+    // Drain waiters, worker-pool construction and remote-frame chain ownership are C2
+    // state owned by this lane. Admission counters are C3 atomics; their zero signals
+    // join this lane so waiter registration and completion cannot lose a wakeup.
     private readonly ZLinkStateLane _stateLane = new();
     private readonly ZLinkLocationLifecycle? _locationLifecycle;
     private readonly ZLinkLocationRuntime? _locationRuntime;
@@ -101,6 +102,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     private ZLinkWorkerPool? _logicalMulticastWorkerPool;
     private TaskCompletionSource? _operationsDrained;
     private TaskCompletionSource? _operationsAtZero;
+    private int _inboundReservations;
     private int _activeOperations;
     private long _operationEpoch;
     private int _activeRequests;
@@ -582,7 +584,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     {
         var operationsDrained = AwaitStateLane(
             _stateLane.RunAsync(() =>
-                _activeOperations == 0
+                OperationsAreQuiescent
                     ? Task.CompletedTask
                     : (
                         _operationsAtZero ??= new TaskCompletionSource(
@@ -614,7 +616,10 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     {
         return AwaitStateLane(
             _stateLane.RunAsync(() =>
-                new ZLinkRuntimeOperationAdmissionSnapshot(_operationEpoch, _activeOperations)
+                new ZLinkRuntimeOperationAdmissionSnapshot(
+                    Volatile.Read(ref _operationEpoch),
+                    Volatile.Read(ref _activeOperations)
+                )
             )
         );
     }
@@ -697,8 +702,8 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                 _stateLane.RunAsync(() =>
                 {
                     var currentOperation = new ZLinkRuntimeOperationAdmissionSnapshot(
-                        _operationEpoch,
-                        _activeOperations
+                        Volatile.Read(ref _operationEpoch),
+                        Volatile.Read(ref _activeOperations)
                     );
                     var currentHandoff = AwaitStateLane(
                         _actorHandoffAdmissions.SnapshotDrainAsync()
@@ -928,7 +933,9 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                     )
                 )
             );
-        var requests = AwaitStateLane(_stateLane.RunAsync(() => _activeRequests));
+        var requests = AwaitStateLane(
+            _stateLane.RunAsync(() => Volatile.Read(ref _activeRequests))
+        );
         return new ZLinkDrainRemainderCounts(actors, spots, requests, sessions);
     }
 
@@ -957,7 +964,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
 
         AddAvailableSnapshot(
             unfinished,
-            _stateLane.RunAsync(() => _activeRequests),
+            _stateLane.RunAsync(() => Volatile.Read(ref _activeRequests)),
             "framework-runtime",
             static (count, result) =>
             {
@@ -1087,10 +1094,12 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         return AdmitUnnestedOperationAsync(countAsRequest, boundExecution);
     }
 
-    private async ValueTask<ZLinkRuntimeOperationAdmission> AdmitNestedRequestAsync()
+    private ValueTask<ZLinkRuntimeOperationAdmission> AdmitNestedRequestAsync()
     {
-        await _stateLane.RunAsync(() => _activeRequests++).ConfigureAwait(false);
-        return new ZLinkRuntimeOperationAdmission(this, null, countsRequest: true);
+        Interlocked.Increment(ref _activeRequests);
+        return ValueTask.FromResult(
+            new ZLinkRuntimeOperationAdmission(this, null, countsRequest: true)
+        );
     }
 
     private ZLinkRuntimeOperationAdmission? RefuseClosedApplicationAdmission() =>
@@ -1199,18 +1208,8 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             );
         EnsureAmbientOperationCurrent(current);
 
-        return AwaitStateLane(
-            _stateLane.RunAsync(() =>
-            {
-                _activeOperations++;
-                _operationEpoch++;
-                return new ZLinkRuntimeOperationLease(
-                    this,
-                    countsOperation: true,
-                    countsRequest: false
-                );
-            })
-        );
+        CountOperation(countAsRequest: false);
+        return new ZLinkRuntimeOperationLease(this, countsOperation: true, countsRequest: false);
     }
 
     /// <summary>
@@ -1235,7 +1234,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             .EnterInbound();
 
     /// <summary>
-    /// Decides inbound admission on the runtime state lane. The caller enters the result in its
+    /// Decides inbound admission in the caller's turn. The caller enters the result in its
     /// own frame (<see cref="ZLinkRuntimeOperationAdmission.EnterInbound"/>).
     /// </summary>
     internal ValueTask<ZLinkRuntimeOperationAdmission> TryAdmitInboundOperationAsync(
@@ -1255,57 +1254,51 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                 : ValueTask.FromResult(default(ZLinkRuntimeOperationAdmission));
         }
 
-        return AdmitUnnestedInboundOperationAsync(countAsRequest, ownsObjectWork);
+        return ValueTask.FromResult(AdmitUnnestedInboundOperation(countAsRequest, ownsObjectWork));
     }
 
-    private async ValueTask<ZLinkRuntimeOperationAdmission> AdmitUnnestedInboundOperationAsync(
+    private ZLinkRuntimeOperationAdmission AdmitUnnestedInboundOperation(
         bool countAsRequest,
         bool ownsObjectWork
     )
     {
-        var admission = await _stateLane
-            .RunAsync(
-                static state =>
-                    state.Runtime.AdmitUnnestedInboundOperationOnLane(
-                        state.CountAsRequest,
-                        state.OwnsObjectWork
-                    ),
-                (Runtime: this, CountAsRequest: countAsRequest, OwnsObjectWork: ownsObjectWork)
-            )
-            .ConfigureAwait(false);
-
-        if (!admission.Accepted)
+        var ownerAdmissionOpen =
+            !ownsObjectWork || (_locationRuntime?.IsBoundExecutionOpen ?? true);
+        // A closed owner cannot admit work, so it need not reserve shutdown lifetime.
+        // Only a successful admission changes the relocation baseline's operation epoch.
+        if (!ownerAdmissionOpen)
             return ZLinkRuntimeOperationAdmission.Refused;
-        if (admission.Neutral)
-            return default;
-        return new ZLinkRuntimeOperationAdmission(this, admission.Admitted, countAsRequest);
-    }
 
-    private (
-        ZLinkFrameworkComponentState? Admitted,
-        bool Accepted,
-        bool Neutral
-    ) AdmitUnnestedInboundOperationOnLane(bool countAsRequest, bool ownsObjectWork)
-    {
-        if (
-            _drainAdmission.IsSealedForShutdown
-            || (ownsObjectWork && !(_locationRuntime?.IsBoundExecutionOpen ?? true))
-        )
+        // Dekker ordering: reserve with a full fence before reading the seal; shutdown
+        // publishes its seal with a full fence before reading reservations and active.
+        Interlocked.Increment(ref _inboundReservations);
+        try
         {
-            return (Admitted: (ZLinkFrameworkComponentState?)null, Accepted: false, Neutral: true);
+            ZLinkStateLane.ObserveWork("inbound-reserved");
+            var phase = (ZLinkRuntimeLifecyclePhase)Volatile.Read(ref _lifecyclePhase);
+            if (_drainAdmission.IsSealedForShutdown || phase == ZLinkRuntimeLifecyclePhase.Stopping)
+                return ZLinkRuntimeOperationAdmission.Refused;
+            // Before native startup no transport can deliver a record. A neutral lease
+            // keeps dispatcher construction independent from startup without an operation.
+            if (phase != ZLinkRuntimeLifecyclePhase.Running)
+                return default;
+
+            var state = Volatile.Read(ref _state);
+            Debug.Assert(state is not null, "A running runtime must publish its component state.");
+            CountOperation(countAsRequest);
+            ZLinkStateLane.ObserveWork("inbound-operation-counted");
+            return new ZLinkRuntimeOperationAdmission(this, state, countAsRequest);
         }
-        // Before native startup no transport can deliver a record. A
-        // neutral lease keeps dispatcher construction independent from
-        // runtime startup while the drain seal remains authoritative.
-        if (Volatile.Read(ref _lifecyclePhase) != (int)ZLinkRuntimeLifecyclePhase.Running)
+        finally
         {
-            return (Admitted: (ZLinkFrameworkComponentState?)null, Accepted: true, Neutral: true);
+            // Publish the accepted count before dropping its reservation. Rejected and
+            // neutral arrivals release only the reservation, leaving the epoch unchanged.
+            if (Interlocked.Decrement(ref _inboundReservations) == 0 && OperationsAreQuiescent)
+                _stateLane.TryPost(
+                    static runtime => runtime.SignalOperationQuiescenceOnLane(),
+                    this
+                );
         }
-        return (
-            Admitted: (ZLinkFrameworkComponentState?)AdmitOperationOnLane(countAsRequest),
-            Accepted: true,
-            Neutral: false
-        );
     }
 
     internal async ValueTask ExecuteOperationAsync(
@@ -1820,7 +1813,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         return await _stateLane
             .RunAsync(() =>
             {
-                if (_activeOperations == 0)
+                if (OperationsAreQuiescent)
                     return Task.CompletedTask;
                 return (
                     _operationsDrained ??= new TaskCompletionSource(
@@ -1856,11 +1849,16 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             };
         if (ownerAdmissionOpen == false)
             throw NotAcceptingOperations("owner admission is closed");
-        _activeOperations++;
-        _operationEpoch++;
-        if (countAsRequest)
-            _activeRequests++;
+        CountOperation(countAsRequest);
         return state;
+    }
+
+    private void CountOperation(bool countAsRequest)
+    {
+        Interlocked.Increment(ref _activeOperations);
+        Interlocked.Increment(ref _operationEpoch);
+        if (countAsRequest)
+            Interlocked.Increment(ref _activeRequests);
     }
 
     private static InvalidOperationException NotAcceptingOperations(string refusal) =>
@@ -1868,7 +1866,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
 
     // Runs outside the state lane: the ownership/lease allocation and the AsyncLocal
     // write (an execution-context copy) touch only caller-local state, and the
-    // admission counters incremented under the gate already keep drain from
+    // admission counters already keep drain from
     // completing before the lease is attached.
     private ZLinkRuntimeOperationLease AttachOperation(
         ZLinkFrameworkComponentState state,
@@ -1896,7 +1894,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
 
     // Leaving an operation releases a count; no caller depends on its completion.
     // The release joins the lane FIFO before Dispose returns, so every later
-    // admission, snapshot and drain turn observes it.
+    // snapshot and drain turn observes the release.
     private void ExitOperation(bool countsOperation, bool countsRequest) =>
         _stateLane.TryPost(
             static state =>
@@ -1906,7 +1904,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
 
     private void ExitOperationOnLane(bool countsOperation, bool countsRequest)
     {
-        if (countsRequest && --_activeRequests < 0)
+        if (countsRequest && Interlocked.Decrement(ref _activeRequests) < 0)
         {
             ErrorSink.ReportRuntimeTaskException(
                 "runtime-operation-lease",
@@ -1914,7 +1912,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             );
             return;
         }
-        if (countsOperation && --_activeOperations < 0)
+        if (countsOperation && Interlocked.Decrement(ref _activeOperations) < 0)
         {
             ErrorSink.ReportRuntimeTaskException(
                 "runtime-operation-lease",
@@ -1923,8 +1921,18 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
             return;
         }
         if (countsOperation)
-            _operationEpoch++;
-        if (_activeOperations != 0)
+            Interlocked.Increment(ref _operationEpoch);
+        SignalOperationQuiescenceOnLane();
+    }
+
+    // Read reservations first: an admission transfers to active before releasing its
+    // reservation. Reading active first could miss both sides of that transfer.
+    private bool OperationsAreQuiescent =>
+        Volatile.Read(ref _inboundReservations) == 0 && Volatile.Read(ref _activeOperations) == 0;
+
+    private void SignalOperationQuiescenceOnLane()
+    {
+        if (!OperationsAreQuiescent)
             return;
         // Both signals run their continuations asynchronously (spec 06 §5).
         var drained = _operationsDrained;
