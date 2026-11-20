@@ -203,6 +203,25 @@ test('Framework rejects duplicate Relocation Store registration', () => {
   );
 });
 
+test('Nest rejects duplicate Location Store registration', () => {
+  const store = new integration.ZLinkInMemoryProviderLocationStore();
+  const options = nestjs.zlinkFramework();
+  assert.equal(options.addLocationStore(store), options);
+  assert.throws(() => options.addLocationStore(store), /Location Store is already registered/);
+});
+
+test('Framework rejects duplicate Location Store registration', () => {
+  const store = new integration.ZLinkInMemoryProviderLocationStore();
+  assert.throws(
+    () =>
+      integration.createFrameworkOptions((options) => {
+        options.addLocationStore(store);
+        options.addLocationStore(store);
+      }),
+    /Location Store is already registered/
+  );
+});
+
 test('Nest Actor decorators dispatch selected methods through public Actor client', async (t) => {
   const hostClock = fixedRidHostClock(t);
   const calls = [];
