@@ -153,6 +153,8 @@ shutil.copyfile(pathlib.Path(os.environ['RACE_ASSETS']) / args[args.index('-p')+
                             if first.poll() is None:
                                 first.kill()
                                 first.wait()
+                    assert re.fullmatch(r'[0-9a-f]{16}', prefix.name), 'Core prefix digest must use 16 characters'
+                    assert re.fullmatch(r'[0-9a-f]{16}', fetched.name), 'release prefix digest must use 16 characters'
                     print(f'PASS {iteration}: approved local/release prefixes stable; legacy replacement isolated; concurrent force reuse', flush=True)
                 except (AssertionError, FileNotFoundError) as error:
                     failures += 1

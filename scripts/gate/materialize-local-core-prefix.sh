@@ -104,6 +104,6 @@ NODE
 
 bash "$repo_root/scripts/local-package/core/verify-package.sh" --prefix "$stage" >/dev/null
 
-prefix="$(python3 "$repo_root/scripts/local-package/core/publish-prefix.py" "$stage" "$prefix")"
+prefix="$(node "$repo_root/scripts/local-package/core/publish-prefix.cjs" "$stage" "$prefix")"
 echo "Core prefix materialized: $prefix (from $build_dir, rev ${source_rev:0:10}, dirty=$dirty)" >&2
 printf '%s\n' "$prefix"

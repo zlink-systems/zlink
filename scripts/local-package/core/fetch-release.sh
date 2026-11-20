@@ -83,14 +83,14 @@ esac
 if [[ "$cache_root" != /* ]]; then
   cache_root="$repo_root/$cache_root"
 fi
-# GNU realpath -m is not available on macOS; python3 is on every GitHub runner.
+# GNU realpath -m is not available on macOS; Node is already required.
 normalize_path() {
   if command -v cygpath >/dev/null 2>&1; then
     cygpath -u "$(realpath -m "$1")"
   elif realpath -m / >/dev/null 2>&1; then
     realpath -m "$1"
   else
-    python3 -c 'import os,sys; print(os.path.abspath(sys.argv[1]))' "$1"
+    node -e 'console.log(require("node:path").resolve(process.argv[1]))' "$1"
   fi
 }
 sha256_of() {
@@ -226,7 +226,8 @@ if [[ "$binary_archive_name" == *.zip ]]; then
   elif command -v 7z >/dev/null 2>&1; then
     7z x -y -o"$binary_root" "$binary_archive" >/dev/null
   else
-    python3 -c 'import sys,zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' "$binary_archive" "$binary_root"
+    echo "unzip or 7z is required to extract the Windows Core release" >&2
+    exit 1
   fi
 else
   tar -xzf "$binary_archive" -C "$binary_root"
@@ -411,6 +412,6 @@ if [[ "$platform" == linux-* ]]; then
   PREFIX="$stage" bash "$script_dir/verify-package.sh" "${verify_args[@]}" >/dev/null
 fi
 
-prefix="$(python3 "$script_dir/publish-prefix.py" "$stage" "$prefix")"
+prefix="$(node "$script_dir/publish-prefix.cjs" "$stage" "$prefix")"
 echo "Core release installed: version=$version platform=$platform prefix=$prefix" >&2
 printf '%s\n' "$prefix"
