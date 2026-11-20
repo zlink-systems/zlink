@@ -1854,11 +1854,8 @@ export class ZLinkFrameworkRuntimeHost
   ): Promise<void> {
     if (!this.ownerAdmissionOpen()) return;
     await this.publishOrStayPreparing(runtime, async (signal) => {
-      await spotNodeRuntime.publishMeshNodeState(ZLinkFrameworkRuntimeState.Preparing, signal);
+      await spotNodeRuntime.publishMeshNodeState(this.runtimeState, signal);
       if (runtime.ownerLeaseUsable === false) return;
-      if (this.runtimeState !== ZLinkFrameworkRuntimeState.Preparing) {
-        await spotNodeRuntime.publishMeshNodeState(this.runtimeState, signal);
-      }
       await spotNodeRuntime.startLocationAutoConnect(signal);
       await channelRuntime.startLocationAutoConnect(signal);
       await channelRuntime.reclaimLocationOwnerRows(signal);
