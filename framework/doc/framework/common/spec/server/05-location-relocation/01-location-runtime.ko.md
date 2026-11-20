@@ -1952,7 +1952,7 @@ provider conformance test가 store record golden fixture로 관찰하는 key·va
   적용한다. 해제되는 입력(Disabled Actor, member가 없거나 owner가 끝난 member만 남은 User Spot, steady `Ready` Instance Spot의 새 Instance
   intent)은 새 `ObjectGeneration`, 이전 allocation의 공간 반환과 factory 실행 한 번을 확인한다. 해제 조건을
   하나씩 어긴 입력(유효한 lease, `Disabled`가 아니거나 등록되지 않은 type, owner lease가 유효하거나 이동 중인 member가 남은 User Spot, provider 한 batch 상한을 넘는 member, recovery
-  pointer, `Closing`, aggregate·relocation 진행, 일반 message·`Find`)은 authority·membership·수용 공간과
+  pointer, User Spot의 `Closing`, owner lease가 유효한 Actor `Closing`, aggregate·relocation 진행, 일반 message·`Find`)은 authority·membership·수용 공간과
   factory 실행 수가 바뀌지 않음을 확인한다. 생성을 요청한 node와 factory target(Instance는 source와 수신
   target)의 등록 정책이 다른 입력으로 정책의 출처를 확인한다. Owner가 끝난 member가 남은 User Spot의 해제는 그 member
   Actor authority와 수용 공간도 같은 batch에서 해제되고, 이후 같은 ActorId 생성이 새 incarnation으로 시작함을 확인한다.

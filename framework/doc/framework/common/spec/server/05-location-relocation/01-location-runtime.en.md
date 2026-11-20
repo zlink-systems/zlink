@@ -2199,7 +2199,7 @@ store record golden fixture. Each item maps to one test.
   ended-owner members, a new Instance intent for a steady `Ready` Instance Spot) verify a new `ObjectGeneration`,
   return of the old allocation's capacity, and one factory execution. Inputs that break one release
   condition each (a valid lease, a type that isn't `Disabled` or isn't registered, a User Spot with a
-  member whose owner lease is valid or that is moving, members exceeding the provider's single-batch bound, a recovery pointer, `Closing`, aggregate or relocation progress, an ordinary
+  member whose owner lease is valid or that is moving, members exceeding the provider's single-batch bound, a recovery pointer, a User Spot's `Closing`, an Actor `Closing` with a valid owner lease, aggregate or relocation progress, an ordinary
   message or `Find`) verify that authority, membership, capacity, and factory execution count don't
   change. Inputs whose registered policies differ between the requesting node and the factory
   target (for an Instance, the source and the receiving target) verify the policy source. Releasing a User

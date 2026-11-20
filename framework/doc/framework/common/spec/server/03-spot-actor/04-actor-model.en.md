@@ -562,7 +562,7 @@ The framework proceeds with destroy in the following order.
 | State | Destroy result |
 |---|---|
 | That incarnation no longer exists. | Returns idempotent `false`. |
-| A destroy of that incarnation is in progress. | Joins the in-progress destroy's terminal and receives the same result. |
+| A destroy of that incarnation is in progress. | When called on the owner node, joins the in-progress destroy's terminal and receives the same result. When called on another node, follows the result-observation table below. |
 | A different generation of the same ActorId exists. | Ends with `InvalidOperation`. |
 | The Actor is sealed for a move. | Ends with `Unavailable`. |
 
