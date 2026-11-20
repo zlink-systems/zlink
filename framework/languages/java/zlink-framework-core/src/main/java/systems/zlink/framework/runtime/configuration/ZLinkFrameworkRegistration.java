@@ -226,6 +226,9 @@ public final class ZLinkFrameworkRegistration {
     }
 
     void setLocationStore(ZLinkLocationStore store) {
+        if (locations.storeInstance() != null) {
+            throw new ZLinkConfigurationException("location store is already registered");
+        }
         locations.setStoreInstance(store);
     }
 
