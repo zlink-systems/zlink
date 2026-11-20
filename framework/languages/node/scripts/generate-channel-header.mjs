@@ -1,12 +1,19 @@
 import { execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { copyFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+const require = createRequire(import.meta.url);
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const workspace = resolve(scriptDirectory, '..');
 const repository = resolve(workspace, '../../..');
+const protobufCliPackagePath = require.resolve('protobufjs-cli/package.json');
+const protobufCliPackage = JSON.parse(readFileSync(protobufCliPackagePath, 'utf8'));
+const protobufCliDirectory = dirname(protobufCliPackagePath);
+const pbjs = resolve(protobufCliDirectory, protobufCliPackage.bin.pbjs);
+const pbts = resolve(protobufCliDirectory, protobufCliPackage.bin.pbts);
 const schema = join(repository, 'framework/runtime/protocol/channel-header-v1.proto');
 const generatedDirectory = join(
   workspace,
@@ -36,8 +43,6 @@ const temporaryDirectory = mkdtempSync(join(tmpdir(), 'zlink-channel-header-'));
 try {
   const modulePath = join(temporaryDirectory, 'channel-header-v1.js');
   const typesPath = join(temporaryDirectory, 'channel-header-v1.d.ts');
-  const pbjs = join(workspace, 'node_modules/.bin/pbjs');
-  const pbts = join(workspace, 'node_modules/.bin/pbts');
 
   execFileSync(process.execPath, [pbjs, '-t', 'static-module', '-w', 'commonjs', '-o', modulePath, schema], {
     cwd: workspace,
@@ -52,7 +57,9 @@ try {
       [generatedModule, modulePath],
       [generatedTypes, typesPath]
     ]) {
-      if (!readFileSync(path).equals(readFileSync(generatedPath))) {
+      const committed = readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
+      const generated = readFileSync(generatedPath, 'utf8').replace(/\r\n/g, '\n');
+      if (committed !== generated) {
         throw new Error(`${path.slice(workspace.length + 1)} is stale; run npm run generate:channel-header`);
       }
     }
