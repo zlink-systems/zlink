@@ -31,8 +31,10 @@ public final class CourierSessionApplication {
     }
 
     @Bean
-    ZLinkFrameworkConfigurer courierSessionFramework(SampleTopology topology) {
+    ZLinkFrameworkConfigurer courierSessionFramework(
+            SampleTopology topology, ZLinkRedisLocationStore locations) {
         return options -> {
+            options.addLocationStore(locations);
             options.addHandlersFromPackageOf(CourierSessionApplication.class);
             options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             options.addClientServerChannel(SampleNames.CourierChannel).client();

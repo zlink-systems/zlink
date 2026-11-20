@@ -20,8 +20,9 @@ Framework root를 Spring application context에 한 번 등록한다. 다른 모
 public class GameFrameworkConfig {
 
     @Bean
-    ZLinkFrameworkConfigurer gameConfigurer() {
+    ZLinkFrameworkConfigurer gameConfigurer(ZLinkLocationStore locationStore) {
         return options -> {
+            options.addLocationStore(locationStore);
             ZLinkMeshNodeBuilder play = options.addRouteMesh("play")
                 .listen(5501)
                 .setRoutingIdPrefix("play")
@@ -30,6 +31,10 @@ public class GameFrameworkConfig {
     }
 }
 ```
+
+`ZLinkLocationStore` bean은 configurer에 주입한 뒤 `addLocationStore`로 정확히 한 번 등록한다.
+Spring starter는 Store bean만으로 Location Store를 등록하지 않는다. 여러 configurer가 있어도
+Store 등록 호출은 하나만 둔다.
 
 **옵션.** 이 호출에는 다음 modifier가 붙는다.
 
