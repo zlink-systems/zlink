@@ -356,6 +356,11 @@ export class ZLinkStreamRuntimeManager {
     this.nodes.clear();
   }
 
+  /** Attaches an already-built node without native listeners, for runtime tests. */
+  attachNodeForTesting(nodeName: string, node: ZLinkStartedStreamNode): void {
+    this.nodes.set(nodeName, node);
+  }
+
   shutdownSnapshot() {
     return [...this.nodes.entries()].map(([nodeName, node]) => ({
       nodeName,

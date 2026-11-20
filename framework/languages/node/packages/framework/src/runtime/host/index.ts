@@ -306,6 +306,11 @@ export class ZLinkFrameworkRuntimeHost
   channelRuntime?: ZLinkChannelRuntimeManager;
   spotNodeRuntime?: ZLinkSpotNodeRuntimeManager;
   private streamRuntime?: ZLinkStreamRuntimeManager;
+
+  /** Installs a stream runtime without starting native nodes, for shutdown tests. */
+  useStreamRuntimeForTesting(streamRuntime: ZLinkStreamRuntimeManager): void {
+    this.streamRuntime = streamRuntime;
+  }
   private statefulAuthorityRoutes?: ZLinkStatefulAuthorityRouteRuntime;
   readonly locationOwner: ZLinkLocationRuntimeOwner;
   private readonly meshRouters: MeshRouterResolver;
