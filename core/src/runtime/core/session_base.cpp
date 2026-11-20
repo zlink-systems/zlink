@@ -159,6 +159,8 @@ void zlink::session_base_t::snapshot_peer_routing_id (blob_t *routing_id_) const
     zlink_assert (routing_id_);
     if (_pipe)
         _pipe->snapshot_routing_id (routing_id_);
+    else if (_socket_pipe)
+        _socket_pipe->snapshot_routing_id (routing_id_);
     else
         routing_id_->clear ();
 }
@@ -382,31 +384,54 @@ void zlink::session_base_t::pipe_terminated (pipe_t *pipe_)
 
     const bool current_pipe = pipe_ == _pipe;
     if (current_pipe) {
-        // If this is our current pipe, remove it
-        release_socket_pipe ();
+        // A reconnect may already have replaced the engine while this pipe's
+        // final acknowledgement was queued. Retain only its own engine's peer.
+        const uint64_t connection = pipe_->get_transport_connection_id ();
+        if (!_engine || connection == 0
+            || connection != _engine->get_endpoint ().connection_id)
+            release_socket_pipe ();
         _pipe = NULL;
-        if (_has_linger_timer) {
-            cancel_timer (linger_timer_id);
-            _has_linger_timer = false;
-        }
-        if (!_pending && _engine) {
-            _engine->terminate ();
-            _engine = NULL;
-        }
     } else
         // Remove the pipe from the detached pipes set
         _terminating_pipes.erase (pipe_);
 
-    //  If we are waiting for pending messages to be sent, at this point
-    //  we are sure that there will be no more messages and we can proceed
-    //  with termination safely.
-    if (_pending && !_pipe && _terminating_pipes.empty ()) {
+    finish_termination ();
+}
+
+void zlink::session_base_t::finish_termination (bool force_, bool pipe_drained_)
+{
+    // Before initial pipe attachment, idle handshake output is not a drain
+    // completion. A retained peer identifies an already detached pipe.
+    if (!force_ && _engine && !_pipe && !_socket_pipe && !_pending)
+        return;
+    if (_engine
+        && (force_ || ((!_pipe || pipe_drained_) && !_engine->has_pending_output ()))) {
+        _engine->terminate ();
+        _engine = NULL;
+        if (pipe_drained_ && !_pending && is_active_transport_pair ()
+            && options.transport_pair_state->can_reconnect ())
+            start_transport_pair_reconnect (false);
+    }
+    if (_pipe)
+        return;
+
+    // Pipe completion releases queue ownership, not the encoder or the
+    // transport's write buffer. Keep their session alive through completion.
+    if (_engine) {
+        if (!_pending && !is_terminating ())
+            terminate ();
+        return;
+    }
+    release_socket_pipe ();
+    if (_has_linger_timer) {
+        cancel_timer (linger_timer_id);
+        _has_linger_timer = false;
+    }
+    if (_pending && _terminating_pipes.empty ()) {
         _pending = false;
         own_t::process_term (0);
-    } else if (current_pipe && !_pending && !_pipe
-               && _terminating_pipes.empty () && !is_terminating ()) {
-        if (is_active_transport_pair ()
-            && options.transport_pair_state->can_reconnect ())
+    } else if (!_pending && _terminating_pipes.empty () && !is_terminating ()) {
+        if (is_active_transport_pair () && options.transport_pair_state->can_reconnect ())
             start_transport_pair_reconnect (false);
         else
             terminate ();
@@ -451,14 +476,8 @@ void zlink::session_base_t::hiccuped (pipe_t *)
 
 void zlink::session_base_t::pipe_peer_terminated (pipe_t *pipe_, bool drain_complete_)
 {
-    if (!drain_complete_ || pipe_ != _pipe || _pending || !_engine)
-        return;
-
-    _engine->terminate ();
-    _engine = NULL;
-    if (is_active_transport_pair ()
-        && options.transport_pair_state->can_reconnect ())
-        start_transport_pair_reconnect (false);
+    if (drain_complete_ && pipe_ == _pipe && !_pending)
+        finish_termination (false, true);
 }
 
 zlink::socket_base_t *zlink::session_base_t::get_socket () const
@@ -638,6 +657,12 @@ void zlink::session_base_t::engine_error (bool handshaked_, zlink::i_engine::err
         _pipe->set_transport_connection_id (0);
     //  Engine is dead. Let's forget about it.
     _engine = NULL;
+    if (!_pipe)
+        release_socket_pipe ();
+    if (_pending && !_pipe) {
+        finish_termination ();
+        return;
+    }
 
     //  Remove any half-done messages from the pipes.
     if (_pipe) {
@@ -699,40 +724,32 @@ void zlink::session_base_t::process_term (int linger_)
     zlink_assert (!_pending);
     release_transport_pair_owner_progress_if_held ();
 
-    //  If the termination of the pipe happens before the term command is
-    //  delivered there's nothing much to do. We can proceed with the
-    //  standard termination immediately.
-    if (!_pipe && _terminating_pipes.empty ()) {
-        own_t::process_term (0);
+    // A missing pipe permits immediate termination only after output drains.
+    if (!_pipe && _terminating_pipes.empty () && (!_engine || !_engine->has_pending_output ())) {
+        _pending = true;
+        finish_termination ();
         return;
     }
 
     _pending = true;
 
-    if (_pipe != NULL) {
-        //  If there's finite linger value, delay the termination.
-        //  If linger is infinite (negative) we don't even have to set
-        //  the timer.
-        if (linger_ > 0) {
-            zlink_assert (!_has_linger_timer);
-            add_timer (linger_, linger_timer_id);
-            _has_linger_timer = true;
-        }
-
-        //  Start pipe termination process. Delay the termination till all messages
-        //  are processed in case the linger time is non-zero.
-        //  Once the transport engine is gone there is no consumer that can
-        //  deliver messages already queued on the socket-to-session pipe.
-        //  Waiting for its delimiter would therefore retain the session's
-        //  owner termination ack forever. Force the pipe handshake to drop
-        //  that undeliverable tail and complete instead.
-        _pipe->terminate (linger_ != 0 && _engine != NULL);
-
-        //  In case there's no engine and there's only delimiter in the
-        //  pipe it wouldn't be ever read. Thus we check for it explicitly.
-        if (!_engine)
-            _pipe->check_read ();
+    // The same linger deadline bounds both pipe and transport draining.
+    if (linger_ > 0) {
+        zlink_assert (!_has_linger_timer);
+        add_timer (linger_, linger_timer_id);
+        _has_linger_timer = true;
     }
+    if (!_pipe) {
+        finish_termination (linger_ == 0);
+        return;
+    }
+    if (linger_ == 0)
+        finish_termination (true);
+
+    // Without an engine there is no consumer for the queued tail.
+    _pipe->terminate (linger_ != 0 && _engine != NULL);
+    if (!_engine)
+        _pipe->check_read ();
 }
 
 void zlink::session_base_t::timer_event (int id_)
@@ -742,9 +759,9 @@ void zlink::session_base_t::timer_event (int id_)
     zlink_assert (id_ == linger_timer_id);
     _has_linger_timer = false;
 
-    //  Ask pipe to terminate even though there may be pending messages in it.
-    zlink_assert (_pipe);
-    _pipe->terminate (false);
+    if (_pipe)
+        _pipe->terminate (false);
+    finish_termination (true);
 }
 
 void zlink::session_base_t::process_conn_failed ()

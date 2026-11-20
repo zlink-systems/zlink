@@ -394,6 +394,11 @@ void zlink::asio_engine_t::unplug ()
     _connection_facade.session = NULL;
 }
 
+bool zlink::asio_engine_t::has_pending_output () const
+{
+    return _outsize != 0 || _pipeline.write_pending || _pipeline.async_gather;
+}
+
 void zlink::asio_engine_t::terminate ()
 {
     ENGINE_DBG ("terminate called");
@@ -1228,6 +1233,8 @@ void zlink::asio_engine_t::on_write_complete (const boost::system::error_code &e
         else
             start_async_write ();
     }
+    if (!_connection_facade.terminating && !has_pending_output ())
+        _connection_facade.session->finish_termination ();
 }
 
 bool zlink::asio_engine_t::process_input ()
