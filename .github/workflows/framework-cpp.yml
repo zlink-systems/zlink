@@ -370,14 +370,33 @@ jobs:
           npm install --package-lock-only --ignore-scripts --no-audit --no-fund
           npm ci
 
+      - name: Prepare the isolated host clock guest
+        if: ${{ !inputs.skip_tests && inputs.single_worker }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 busybox-static dropbear-bin linux-image-virtual cpio zstd kmod openssh-client
+          kernel=$(find /boot -maxdepth 1 -name 'vmlinuz-*' | sort -V | tail -1)
+          version=${kernel##*/vmlinuz-}
+          sudo cat "$kernel" > "${RUNNER_TEMP}/clock-kernel"
+          bash scripts/etcd/prepare-clock-vm.sh "${RUNNER_TEMP}/clock-vm" \
+            "${RUNNER_TEMP}/clock-kernel" / "$version" /usr/bin/busybox /
+          node - "${RUNNER_TEMP}/clock-vm/config.json" <<'NODE'
+          const fs = require('node:fs');
+          const file = process.argv[2];
+          const config = JSON.parse(fs.readFileSync(file, 'utf8'));
+          config.accel = 'tcg';
+          fs.writeFileSync(file, JSON.stringify(config, null, 2));
+          NODE
+          echo "ZLINK_CLOCK_VM_CONFIG=${RUNNER_TEMP}/clock-vm/config.json" >> "$GITHUB_ENV"
+
       - name: Run the etcd 4x4 cross-language conformance
         if: ${{ !inputs.skip_tests && inputs.single_worker }}
         run: |
           set -euo pipefail
           mkdir -p "${ZLINK_LOCAL_PACKAGE_ROOT}/nuget" "${ZLINK_LOCAL_PACKAGE_ROOT}/maven"
           CMAKE_BUILD_PARALLEL_LEVEL="${BUILD_PARALLEL}" bash scripts/etcd/build-and-run-4x4.sh \
-            framework/languages/cpp/build/linux-ninja-release "${RUNNER_TEMP}/etcd-4x4" \
-            --allow-unverified
+            framework/languages/cpp/build/linux-ninja-release "${RUNNER_TEMP}/etcd-4x4"
 
       - name: Upload etcd 4x4 logs
         if: ${{ always() && !inputs.skip_tests && inputs.single_worker }}

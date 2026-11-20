@@ -240,9 +240,9 @@ CMAKE_BUILD_PARALLEL_LEVEL=1 \
 .NET adapter 산출물·설정·로그의 출력 경로다. Node와 Java는 각 workspace의 표준 build 경로를
 사용한다. Build 출력은 log directory의 `*-build.log`, 실행 출력은 `conformance.log`에 저장한다.
 `ZLINK_ETCD_TEST_LOG_DIR`로 로그 위치를 지정할 수 있다. 나머지 인자는 공통 실행기에 전달한다.
-Host clock VM이 없을 때의 `--allow-unverified`는 기존 미검증 항목 세 개만 허용한다.
+`--allow-unverified`는 현재 host 시계 case의 VM 준비 실패를 허용하지 않는다.
 매일 밤 `nightly-stress.yml`의 C++ worker 1개 job이 GitHub-hosted runner에서 자기 build directory로
-이 script를 `--allow-unverified`와 함께 실행하고, log directory를 artifact `etcd-4x4-conformance-logs`로 올린다.
+QEMU guest를 준비한 뒤 이 script를 실행하고, log directory를 artifact `etcd-4x4-conformance-logs`로 올린다.
 
 C++ target `zlink_location_store_provider_adapter`는 `WITH_ETCD=ON`에서만 생성하며 ctest에
 등록하지 않는다. 별도 adapter 설정을 사용할 때는 `cpp.command`에 이 실행 파일의 절대 경로,
@@ -275,7 +275,7 @@ companion package인 Framework·stream-wire 산출물과 그 의존성도 함께
 
 Docker 안에서 실행할 때는 runner의 저장소 절대 경로가 host Docker daemon에서도 같은 bind mount
 경로를 가리켜야 한다. Docker socket과 host network를 연결하고, SDK·JDK·Node·Docker CLI를 준비한다.
-시계 VM이 없는 환경에서는 기존 host 시계 case 세 개를 언어마다 `unverified`로 남긴다.
+시계 VM을 준비하지 못하면 host 시계 case는 실패한다.
 
 `grpc-proxy.mjs`는 공용 etcd proto의 KV·Auth unary RPC를 실제 etcd로 전달한다. 실행기는
 `startProxy({target})`로 proxy를 만들고 `arm({boundary, key|prefix})`로 경계를 선택한다.
@@ -291,15 +291,34 @@ Docker 안에서 실행할 때는 runner의 저장소 절대 경로가 host Dock
 | `cleanup-before`    | Delete를 포함한 정리 Txn의 upstream 전달 전                     |
 | `clock-next`        | 선택한 clock Range 응답을 전달한 뒤 같은 key의 다음 RPC 전달 전 |
 
-Host clock VM이 없으면 해당 3개 항목은 이유와 함께 `unverified`다. 기본 실행은 실패하며
-`--allow-unverified`로만 허용한다. 미검증은 통과 수에 포함하지 않는다. Node test 진입점은
-`ZLINK_ETCD_CONFORMANCE=1`일 때 실행되며, 미검증 허용은 `ZLINK_ETCD_ALLOW_UNVERIFIED=1`로 지정한다.
-Snapshot 유효기간 검사는 같은 instance에서 실제 5분을 기다린다.
+세 host 시계 case는 기존 provider adapter와 단일 Node 관리 CLI를 공통 QEMU guest에서 실행한다.
+etcd와 관찰자는 guest 밖에 둔다. VM 설정 누락·시작 실패·시계 변경 미적용은 `--allow-unverified`와
+관계없이 실패한다. Snapshot 유효기간 검사는 같은 instance에서 실제 5분을 기다린다.
+
+Linux에서 같은 버전의 kernel·module tree, static BusyBox와 Dropbear·공유 library prefix를 준비한다.
+호스트 package를 설치하지 않고 다음 명령으로 initramfs를 만든다.
+
+```sh
+bash scripts/etcd/prepare-clock-vm.sh OUTPUT KERNEL MODULES_ROOT KERNEL_VERSION STATIC_BUSYBOX DROPBEAR_PREFIX
+export ZLINK_CLOCK_VM_CONFIG=/absolute/OUTPUT/config.json
+node --test scripts/etcd/clock-vm-self-test.mjs
+ZLINK_ETCD_ADAPTER_CONFIG=/absolute/adapters.json node scripts/etcd/clock-vm-test.mjs
+```
+
+생성한 config에는 `kernel`, `initrd`, `privateKey` 경로가 있다. 선택 항목 `qemu`, `accel`(기본 `kvm`),
+`args`, `env`로 QEMU 설치 위치와 실행 환경을 지정한다. `hostRoot`는 QEMU process에서
+읽기 전용으로 내보낼 호스트 root의 경로이며 기본값은 `/`다. KVM 권한이 없으면 `tcg`로 실행할 수 있다.
+Guest는 호스트 tree를 읽기 전용으로 연결하고 `/tmp`, `/run`, `/root`에는 guest 전용 tmpfs를 쓴다.
+호스트 시각과 시각 동기 도구는 변경하지 않는다. Adapter 명령과 산출물은 guest에서도 같은 절대 경로로
+접근할 수 있어야 한다. User-mode network에서 호스트 loopback endpoint는 `10.0.2.2`로 연결한다.
+반복 시험은 설정한 언어마다 세 항목을 40회 실행하며 adapter 설정을 생략하면 Node만 실행한다.
+시계 근거에는 guest boot ID, realtime·monotonic 관측 쌍, provider 관측 결과와 case 완료 기록을 남긴다.
+일반 conformance 실행기도 같은 executor를 사용한다.
 
 Node 전용 `location-etcd-host-clock.test.js`는 `ZLINK_ETCD_INTEGRATION=1`일 때 provider와
 관리 CLI process에만 `Date.now` preloader를 적용한다. 일 단위 시계 변경의 live·expired read,
-조건 write, snapshot page와 관리 시각 증가 상한을 검사한다. 이 보조 시험은 3단계 VM 검사가
-제공되면 제거하며 공통 실행기의 미검증 판정을 통과로 바꾸지 않는다.
+조건 write, snapshot page와 관리 시각 증가 상한을 검사한다. 이 보조 시험은 process 시각을 대체하므로
+OS 시계 격리의 실행 근거로 쓰지 않는다.
 
 `ZLINK_ETCD_TEST_LOG_DIR`는 결과·명령 출력·manager log·proxy 관찰·member log의 저장 위치다.
 기본값은 `scripts/etcd/.conformance-logs/`다. `unverified.json`은 미검증 목록이며
@@ -345,4 +364,4 @@ F의 cancellation case는 .NET·Java·Node에서 전송 후 abort와 unknown com
 - 항목 3: 네 언어의 `keys_only=true`, .NET·Java·Node의 송수신 크기 양쪽 경계, C++의 직접 RPC 취소 시험을 추가한다. 기존 .NET·Java TLS·auth 단위시험의 실행 결과도 기록한다. 실제 TLS·auth-enabled etcd harness 결과와 fake server 결과를 구분한다.
 - 항목 5·6: 고정한 resolved 그래프와 capability 실행을 연결하고, .NET·Java lockfile 및 C++·.NET·Java의 전이 의존성 license 목록을 기록한다. .NET의 retry·hedging 비활성화는 관찰된 lost-reply 비재전송 결과와 별도로 선택 transport의 설정·계약 근거가 필요하다.
 - C++ pinning: Conan의 etcd-enabled gRPC lock entry와 vcpkg baseline·실제 gRPC/protobuf 해석 버전이 없다. 버전 고정은 별도 결정이며 이 작업에서 build·lockfile을 바꾸지 않는다.
-- 공통 실행기의 host clock 세 ID(`etcd.provider-clock-independent`, `etcd.manager-wall-clock-jumps`, `spi.snapshot-clock`)는 `unverified`다. [실행기](conformance-runner.mjs)가 실행 전에 차단하며 성공한 F step도 이 범위를 검증하지 않는다.
+- 과거 F 실행은 host clock 세 ID를 검증하지 않았다. 현재 실행은 위 QEMU 설정을 요구하며 guest 시계 관측 근거를 보존한다.

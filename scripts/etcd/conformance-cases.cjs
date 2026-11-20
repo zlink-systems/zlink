@@ -73,10 +73,6 @@ async function untilGate(gate, operation) {
     clearTimeout(timer);
   }
 }
-class Unverified extends Error {}
-const hostClock = async () => {
-  throw new Unverified("isolated host clock VM is unavailable");
-};
 async function managers(h, f, count = 1) {
   const before = await h.clock(f);
   const running = Array.from({ length: count }, (_, i) =>
@@ -230,7 +226,70 @@ cases["etcd.corrupt-record"] = async (h, f) => {
   );
   await h.setClock(f, clock.value);
 };
-cases["etcd.provider-clock-independent"] = hostClock;
+cases["etcd.provider-clock-independent"] = async (h, f) => {
+  const vm = await h.clockVM();
+  const store = h.guestStore(vm, f);
+  const now = (await h.clock(f)).value;
+  await h.pair(f, "clock/live", Buffer.from("live"), now + 1000n);
+  await h.pair(f, "clock/expired", Buffer.from("expired"), now);
+  const original = await store.read(key("clock/live"));
+  const observations = [];
+  assert.equal(original.kind, "found");
+  for (const offset of [0, -86400000, 365 * 86400000]) {
+    await vm.move(offset);
+    assert.deepEqual(await store.read(key("clock/live")), original);
+    const expired = await store.read(key("clock/expired"));
+    assert.equal(expired.kind, "missing");
+    assert.equal(expired.storeNow.getTime(), Number(now));
+    const commit = await store.write({
+      conditions: [
+        {
+          kind: "version",
+          key: key("clock/live"),
+          expected: original.value.version,
+        },
+      ],
+      mutations: [],
+    });
+    applied(commit);
+    assert.equal(commit.storeNow.getTime(), Number(now));
+    const scan = await store.scan({ prefix: "clock/", limit: 10 });
+    assert.equal(scan.kind, "page");
+    assert.equal(scan.value.storeNow.getTime(), Number(now));
+    assert.deepEqual(scan.value.items, [
+      { key: key("clock/live"), value: original.value },
+    ]);
+    const writtenKey = key(`clock-write/${offset}`);
+    const put = await store.write({
+      conditions: [{ kind: "missing", key: key("clock/expired") }],
+      mutations: [
+        {
+          kind: "put",
+          key: writtenKey,
+          bytes: Buffer.from("clock-write"),
+          retentionMs: 1000,
+        },
+      ],
+    });
+    applied(put);
+    assert.equal(put.storeNow.getTime(), Number(now));
+    const written = await store.read(writtenKey);
+    assert.equal(written.kind, "found");
+    assert.equal(written.value.storeNow.getTime(), Number(now));
+    assert.equal(written.value.expiresAt.getTime(), Number(now + 1000n));
+    assert.deepEqual(written.value.bytes, Buffer.from("clock-write"));
+    assert.deepEqual(written.value.version, put.putVersions[0].version);
+    observations.push({ offset, expired, commit, scan, put, written });
+    await vm.verifyClock();
+  }
+  vm.record({
+    case: "etcd.provider-clock-independent",
+    language: h.language,
+    status: "passed",
+    read: original,
+    observations,
+  });
+};
 
 cases["etcd.manager-stop-restart-bound"] = async (h, f) => {
   const running = await managers(h, f);
@@ -278,7 +337,50 @@ cases["etcd.manager-delayed-write-bound"] = async (h, f) => {
     await h.stopManager(manager);
   }
 };
-cases["etcd.manager-wall-clock-jumps"] = hostClock;
+cases["etcd.manager-wall-clock-jumps"] = async (h, f) => {
+  const vm = await h.clockVM();
+  const samples = [];
+  const sample = async () => {
+    // Read interval brackets avoid counting RPC latency against the clock bound.
+    const before = performance.now();
+    const clock = await h.clock(f);
+    samples.push({ ...clock, before, after: performance.now() });
+    return clock;
+  };
+  let last = await sample();
+  const manager = await h.guestManager(vm, f);
+  try {
+    for (const offset of [-86400000, 365 * 86400000]) {
+      await vm.move(offset);
+      for (let count = 0; count < 3; count++) {
+        last = await until(async () => {
+          const next = await sample();
+          return next.revision !== last.revision && next;
+        }, "guest manager Store clock update");
+      }
+      await vm.verifyClock();
+    }
+  } finally {
+    await h.stopManager(manager);
+  }
+  for (let j = 1; j < samples.length; j++)
+    for (let i = 0; i < j; i++) {
+      const delta = Number(samples[j].value - samples[i].value);
+      assert.ok(delta >= 0, "Store clock decreased");
+      assert.ok(
+        delta <=
+          CATCH_UP_RATE * HOST_RATE * (samples[j].after - samples[i].before) +
+            Number(MAX_STEP_MS),
+        "guest manager exceeded Store clock bound",
+      );
+    }
+  vm.record({
+    case: "etcd.manager-wall-clock-jumps",
+    language: h.language,
+    status: "passed",
+    samples: samples.map((s) => ({ ...s, value: String(s.value) })),
+  });
+};
 cases["etcd.manager-three-process-frequency"] = async (h, f) => {
   const running = await managers(h, f, 3);
   const started = performance.now();
@@ -1083,7 +1185,51 @@ cases["spi.snapshot-validity"] = async (h, f) => {
     { kind: "expired" },
   );
 };
-cases["spi.snapshot-clock"] = hostClock;
+cases["spi.snapshot-clock"] = async (h, f) => {
+  const vm = await h.clockVM();
+  const store = h.guestStore(vm, f);
+  const now = (await h.clock(f)).value;
+  for (let i = 0; i < 4; i++)
+    applied(
+      await store.write({
+        conditions: [],
+        mutations: [
+          {
+            kind: "put",
+            key: key(`snapshot-clock/${i}`),
+            bytes: Buffer.from([i]),
+            retentionMs: 1000,
+          },
+        ],
+      }),
+    );
+  const expected = await pages(store, "snapshot-clock/", 4);
+  let page = await store.scan({ prefix: "snapshot-clock/", limit: 1 });
+  assert.equal(page.kind, "page");
+  assert.ok(page.value.nextCursor);
+  const items = [...page.value.items];
+  await vm.move(365 * 86400000);
+  await h.setClock(f, now + 2000n);
+  while (page.value.nextCursor) {
+    page = await store.scan({
+      prefix: "snapshot-clock/",
+      limit: 1,
+      cursor: page.value.nextCursor,
+    });
+    assert.equal(page.kind, "page");
+    assert.equal(page.value.storeNow.getTime(), Number(now));
+    items.push(...page.value.items);
+  }
+  assert.deepEqual(items, expected);
+  assert.equal((await store.read(key("snapshot-clock/0"))).kind, "missing");
+  await vm.verifyClock();
+  vm.record({
+    case: "spi.snapshot-clock",
+    language: h.language,
+    status: "passed",
+    items,
+  });
+};
 cases["spi.cursor-page-bounds"] = async (h, f) => {
   for (let i = 0; i < 5; i++)
     await h.put(f, `page/${i}`, Buffer.alloc(1048576, i));
@@ -1155,4 +1301,4 @@ cases["etcd.cross-language-version-condition"] = async (
   assert.equal((await writer.write(request)).kind, "conflict");
   await missing(reader, "stale-marker");
 };
-module.exports = { cases, Unverified, inventory };
+module.exports = { cases, inventory };
