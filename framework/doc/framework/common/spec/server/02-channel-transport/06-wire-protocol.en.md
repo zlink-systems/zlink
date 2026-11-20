@@ -284,11 +284,11 @@ is diagnostic compatibility text, not a command that is decoded or sent.
 | 6 | `livenessAck` | infrastructure | none | — | Responds to the same probe ID |
 | 16 | `nodeSend` | application | required | `metadata` | Node one-way |
 | 17 | `nodeRequest` | application | required | `metadata` | Node request |
-| 18 | `channelSend` | application | required | `metadata` | Channel one-way (RouteMesh connections only) |
-| 19 | `channelRequest` | application | required | `metadata` | Channel request (RouteMesh connections only) |
+| 18 | `channelSend` | application | required | — | Channel one-way (RouteMesh connections only) |
+| 19 | `channelRequest` | application | required | — | Channel request (RouteMesh connections only) |
 | 20 | `reply` | infrastructure | optional | — | Request terminal result (RouteMesh connections only) |
-| 21 | `spotSend` | application | required | `metadata` | Spot one-way |
-| 22 | `spotRequest` | application | required | `metadata` | Spot request |
+| 21 | `spotSend` | application | required | — | Spot one-way |
+| 22 | `spotRequest` | application | required | — | Spot request |
 | 23 | `logicalMulticast` | application | required | `metadata` | Logical multicast |
 | 24 | `actorSend` | application | required | `metadata` · `boundSession` · `sourceSpotId` | Actor one-way |
 | 25 | `actorRequest` | application | required | `metadata` · `boundSession` · `sourceSpotId` | Actor request |
@@ -402,6 +402,7 @@ owns physical pipe selection and replacement.
 - The only service-wire records on a ClientServer connection are the infrastructure commands: the client starts `hello` as a Core request and sends/answers the liveness pair; the server answers `admit`/`reject` only on that hello request's reply leg and pushes `update` and liveness.
 - Application records on a ClientServer connection do not use service-wire commands. They ride the channel envelope — the two-frame record `[protobuf ChannelHeader, payload]` all four runtimes share for channel messaging. A request rides the Core request envelope and its response/error rides the matching reply leg; a one-way command is a plain send. `channelSend`(18)/`channelRequest`(19) and the command 20 reply travel only on RouteMesh connections. The first part of the application payload carried by RouteMesh `channelSend`(18)/`channelRequest`(19) and `spotSend`(21)/`spotRequest`(22) is the same `ChannelHeader`.
 - [ClientServer Channel §5.3](03-client-server-channel.en.md#53-application-record-contract) defines the internal wire representation of ClientServer application metadata.
+- RouteMesh `channelSend` (18), `channelRequest` (19), `spotSend` (21), and `spotRequest` (22) carry application metadata only in the metadata field (field 13) of the `ChannelHeader` that is the first part of the application payload; value validation, ordering, and the 1,024-byte calculation follow [ClientServer Channel §5.3](03-client-server-channel.en.md#53-application-record-contract). The service-wire `metadata` flag (`0x01`) of these four commands is 0; there is no separate metadata frame and no choice between header and frame. A record with the flag set is a protocol error. This rule does not change the metadata representation of other application commands.
 - Reusing a [RouteMesh](../00-foundation/02-glossary.en.md#routemesh) record — where multiple nodes find each other by name — for a ClientServer connection, or the reverse, is a protocol error.
 
 ## 5. Service Liveness
