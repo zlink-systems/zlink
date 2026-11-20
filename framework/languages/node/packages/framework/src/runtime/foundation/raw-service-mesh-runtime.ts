@@ -562,31 +562,39 @@ export class RawServiceMeshRuntime {
   }
 
   announcePeer(nodeRoutingId: string): boolean {
-    if (this.closed) return false;
-    const generation = this.selectedRoutes.get(nodeRoutingId);
-    if (generation === undefined) return false;
-    const key = controlSendKey(nodeRoutingId, M6aServiceWireCommand.hello);
-    if (!this.isPeerAnnouncementCurrent(nodeRoutingId, generation)) {
-      return false;
-    }
-    const current = () =>
-      this.isPeerAnnouncementCurrent(nodeRoutingId, generation) &&
-      this.peerAdmissionSealed?.() !== true;
-    const existing = this.controlSends.get(key);
-    if (!current()) {
-      if (existing === undefined) this.controlSends.set(key, { current });
-      return false;
-    }
-    const hello =
-      existing?.hello ??
-      encodeRouteMeshAdmission(M6aServiceWireCommand.hello, this.topology.localDescriptor());
+    const exchange = this.preparePeerAnnouncement(nodeRoutingId);
+    if (exchange?.current?.() !== true || exchange.hello === undefined) return false;
+    const hello = exchange.hello;
     return this.startControlSend(
       nodeRoutingId,
       M6aServiceWireCommand.hello,
       () => this.submitControl(nodeRoutingId, [hello]),
-      current,
+      exchange.current,
       hello
     );
+  }
+
+  private preparePeerAnnouncement(nodeRoutingId: string): ControlSendState | undefined {
+    if (this.closed) return undefined;
+    const generation = this.selectedRoutes.get(nodeRoutingId);
+    if (generation === undefined || !this.isPeerAnnouncementCurrent(nodeRoutingId, generation))
+      return undefined;
+    const key = controlSendKey(nodeRoutingId, M6aServiceWireCommand.hello);
+    let exchange = this.controlSends.get(key);
+    if (exchange === undefined) {
+      exchange = {
+        current: () =>
+          this.isPeerAnnouncementCurrent(nodeRoutingId, generation) &&
+          this.peerAdmissionSealed?.() !== true
+      };
+      this.controlSends.set(key, exchange);
+    }
+    if (exchange.current?.() === true)
+      exchange.hello ??= encodeRouteMeshAdmission(
+        M6aServiceWireCommand.hello,
+        this.topology.localDescriptor()
+      );
+    return exchange;
   }
 
   private isPeerAnnouncementCurrent(nodeRoutingId: string, generation: bigint): boolean {
@@ -1288,8 +1296,13 @@ export class RawServiceMeshRuntime {
         return this.finishPendingProtocolReceive(this.processAdmission(received, header, nowMs));
       }
       if (header.command === M6aServiceWireCommand.reject) {
+        if (this.selectedRoutes.get(received.sourceRid) !== received.routeGeneration)
+          return 'dropped';
         if (received.parts.length !== 1) return 'protocolError';
         decodeReject(received.parts[0]!);
+        if (peer !== undefined) this.removePeer(peer);
+        this.preparePeerAnnouncement(received.sourceRid);
+        this.progressPeerAdmission(nowMs);
         return 'infrastructure';
       }
       if (!currentSource) return 'dropped';
