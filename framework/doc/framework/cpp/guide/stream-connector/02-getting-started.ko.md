@@ -34,7 +34,7 @@ vcpkg install "zlink-stream-connector[tls,websocket]"
 ```
 
 ```cmake
-find_package(zlink-stream-connector CONFIG REQUIRED)
+find_package(zlink_stream_connector_cpp CONFIG REQUIRED)
 
 target_link_libraries(my_game PRIVATE zlink::stream_connector)
 ```

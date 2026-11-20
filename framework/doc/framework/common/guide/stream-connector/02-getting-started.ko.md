@@ -18,7 +18,7 @@ connector는 서버 framework와 별도로 배포되므로, client project는 co
     ```
 
     ```cmake
-    find_package(zlink-stream-connector CONFIG REQUIRED)
+    find_package(zlink_stream_connector_cpp CONFIG REQUIRED)
 
     target_link_libraries(my_game PRIVATE zlink::stream_connector)
     ```

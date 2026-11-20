@@ -19,7 +19,7 @@ options and their defaults is covered by [Connector Options](03-connector-option
     ```
 
     ```cmake
-    find_package(zlink-stream-connector CONFIG REQUIRED)
+    find_package(zlink_stream_connector_cpp CONFIG REQUIRED)
 
     target_link_libraries(my_game PRIVATE zlink::stream_connector)
     ```

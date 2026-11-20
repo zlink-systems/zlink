@@ -49,7 +49,7 @@ vcpkg install zlink-stream-connector zlink-stream-e2e-client
 ### CMakeLists.txt
 
 ```cmake
-find_package(zlink-stream-connector CONFIG REQUIRED)
+find_package(zlink_stream_connector_cpp CONFIG REQUIRED)
 
 target_link_libraries(my_game PRIVATE zlink::stream_connector)
 ```

@@ -27,6 +27,10 @@ export interface ZLinkActor {
  incoming: ZLinkSessionBindingIdentity,
  signal: AbortSignal,
  ): Promise<string | undefined>;
+ onSessionBound?(
+ incoming: ZLinkSessionBindingIdentity,
+ signal: AbortSignal,
+ ): void | Promise<void>;
  onJoinCompleted?(completion: ZLinkActorJoinCompletion): Promise<void>;
 }
 
