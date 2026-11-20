@@ -17,26 +17,34 @@ final class ZLinkExecutionGuardTest {
                         "room-1", "actor-a", true, true, actorId -> actorId.equals("actor-b"));
 
         try (var ignored = ZLinkSuspendInvocationContext.enterApplicationExecution(execution)) {
-            assertInvalid(() -> ZLinkSuspendInvocationContext.rejectSameSpotWait("room-1"));
-            assertInvalid(() -> ZLinkSuspendInvocationContext.rejectSameActorWait("actor-a"));
-            assertInvalid(() -> ZLinkSuspendInvocationContext.rejectSameActorWait("actor-b"));
+            assertInvalid(() -> ZLinkSuspendInvocationContext.validateSpotRequest("room-1", false));
+            assertInvalid(
+                    () -> ZLinkSuspendInvocationContext.validateActorRequest("actor-a", false));
+            assertInvalid(
+                    () -> ZLinkSuspendInvocationContext.validateActorRequest("actor-b", false));
             assertInvalid(
                     () -> ZLinkSuspendInvocationContext.rejectCurrentActorJoinWait("actor-a"));
-            assertDoesNotThrow(() -> ZLinkSuspendInvocationContext.rejectSameSpotWait("room-2"));
-            assertDoesNotThrow(() -> ZLinkSuspendInvocationContext.rejectSameActorWait("actor-c"));
+            assertDoesNotThrow(
+                    () -> ZLinkSuspendInvocationContext.validateSpotRequest("room-2", false));
+            assertDoesNotThrow(
+                    () -> ZLinkSuspendInvocationContext.validateActorRequest("actor-c", false));
         }
     }
 
     @Test
-    void perActorContextRejectsYieldButDoesNotApplySharedGateGuard() {
+    void perActorContextRejectsSelfRequestWithoutSharedGate() {
         var execution =
                 new ZLinkSuspendInvocationContext.ApplicationExecution(
                         "room-1", "actor-a", false, false, actorId -> true);
 
         try (var ignored = ZLinkSuspendInvocationContext.enterApplicationExecution(execution)) {
             assertInvalid(() -> ZLinkSuspendInvocationContext.requireYieldAllowed("request"));
-            assertDoesNotThrow(() -> ZLinkSuspendInvocationContext.rejectSameSpotWait("room-1"));
-            assertDoesNotThrow(() -> ZLinkSuspendInvocationContext.rejectSameActorWait("actor-a"));
+            assertDoesNotThrow(
+                    () -> ZLinkSuspendInvocationContext.validateSpotRequest("room-1", false));
+            assertInvalid(
+                    () -> ZLinkSuspendInvocationContext.validateActorRequest("actor-a", false));
+            assertDoesNotThrow(
+                    () -> ZLinkSuspendInvocationContext.validateActorRequest("actor-b", false));
         }
     }
 
