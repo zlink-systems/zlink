@@ -1,8 +1,5 @@
 #!/usr/bin/env bash
-# Recreate the Core package prefix cache that scripts/local-package/core/fetch-release.sh
-# short-circuits on, using a locally built Core tree. Needed because no GitHub release
-# exists for the in-development VERSION (latest release tag is core/v0.15.1) and the
-# WSL reinstall wiped the previously materialized cache.
+# Publish a verified local Core build under its immutable provenance digest.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -10,7 +7,7 @@ build_dir="${1:-$repo_root/core/build-dev}"
 version="$(sed -n 's/^LIBZLINK_VERSION=//p' "$repo_root/VERSION")"
 platform="linux-x64"
 cache_root="${ZLINK_CORE_CACHE_DIR:-$HOME/.cache/zlink/core}"
-prefix="$cache_root/$version/$platform"
+prefix="$cache_root/local/$version/$platform"
 
 runtime_src="$build_dir/lib/libzlink.so.$version"
 [[ -f "$runtime_src" ]] || { echo "built runtime missing: $runtime_src" >&2; exit 1; }
@@ -43,7 +40,7 @@ const files = [];
 const cmakeDir = path.join(root, 'lib', 'cmake', 'zlink');
 fs.mkdirSync(cmakeDir, {recursive: true});
 fs.writeFileSync(path.join(cmakeDir, 'zlinkConfig.cmake'), `\
-# Materialized locally (no release asset for this in-development version).
+# Materialized from a local Core build.
 get_filename_component(_zlink_prefix "\${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
 if(NOT TARGET libzlink)
   add_library(libzlink SHARED IMPORTED)
@@ -107,8 +104,6 @@ NODE
 
 bash "$repo_root/scripts/local-package/core/verify-package.sh" --prefix "$stage" >/dev/null
 
-rm -rf "$prefix"
-mkdir -p "$(dirname "$prefix")"
-mv "$stage" "$prefix"
-trap - EXIT
-echo "Core prefix materialized: $prefix (from $build_dir, rev ${source_rev:0:10}, dirty=$dirty)"
+prefix="$(python3 "$repo_root/scripts/local-package/core/publish-prefix.py" "$stage" "$prefix")"
+echo "Core prefix materialized: $prefix (from $build_dir, rev ${source_rev:0:10}, dirty=$dirty)" >&2
+printf '%s\n' "$prefix"

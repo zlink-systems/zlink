@@ -141,7 +141,8 @@ jobs:
         if: ${{ !inputs.skip_tests && (startsWith(matrix.target.name, 'linux-')) }}
         run: bash scripts/ci/verify-framework-relocation-conformance.sh
 
-      - name: Fetch Core and build the checkout Java binding package on Linux
+      - name: Fetch Core release on Linux
+        id: linux-core-release
         if: ${{ !inputs.skip_tests && (startsWith(matrix.target.name, 'linux-')) }}
         shell: bash
         env:
@@ -153,9 +154,15 @@ jobs:
             --version "${core_version}" \
             --platform "${{ matrix.target.core_platform }}" \
             --cache-dir "${RUNNER_TEMP}/zlink-core-release")"
-          ZLINK_LOCAL_PACKAGE_ROOT="${GITHUB_WORKSPACE}/${{ matrix.target.local_package_root }}" \
-            bash scripts/local-package/java/build-wsl.sh \
-              --core-prefix "${core_prefix}"
+          printf 'prefix=%s\n' "${core_prefix}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build the checkout Java binding package on Linux
+        if: ${{ !inputs.skip_tests && (startsWith(matrix.target.name, 'linux-')) }}
+        shell: bash
+        env:
+          ZLINK_CORE_PACKAGE_PREFIX: ${{ steps.linux-core-release.outputs.prefix }}
+          ZLINK_LOCAL_PACKAGE_ROOT: ${{ github.workspace }}/${{ matrix.target.local_package_root }}
+        run: bash scripts/local-package/java/build-wsl.sh --core-prefix "${ZLINK_CORE_PACKAGE_PREFIX}"
 
       - name: Verify the packaged Java public contract and API snapshot
         if: ${{ !inputs.skip_tests && matrix.target.name == 'linux-x64' }}

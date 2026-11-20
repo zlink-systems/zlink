@@ -6,7 +6,7 @@ source "$Z/scripts/gate/check-env.sh"
 check_env || return $?
 mkdir -p /dev/shm/zlink-tmp-{gate,node,java,dotnet}
 # Core runtime the gates run against. Default is the dev build; a release check sets
-# ZLINK_GATE_CORE_LIB to a release prefix lib dir (e.g. ~/.cache/zlink/core/0.17.3/linux-x64/lib).
+# ZLINK_GATE_CORE_LIB to the lib directory of a prefix returned by fetch-release.sh.
 CORE_LIB="${ZLINK_GATE_CORE_LIB:-$Z/core/build-dev/lib}"
 # shellcheck disable=SC2034  # read by the gate scripts that source this file
 CORE_VER="${ZLINK_GATE_CORE_VERSION:-$(sed -n 's/^LIBZLINK_VERSION=//p' "$Z/VERSION")}"
