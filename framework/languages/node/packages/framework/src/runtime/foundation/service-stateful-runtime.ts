@@ -2382,10 +2382,14 @@ export class ServiceStatefulRuntime {
       ) {
         return SubmitResult.NotFound;
       }
-      const delivered = await this.enqueueSessionDelivery(delivery, () =>
-        delivery.deliver(delivery.binding.sessionRid, encodeApplicationPayload(payload))
-      );
-      return delivered ? SubmitResult.Ok : SubmitResult.NotFound;
+      try {
+        const delivered = await this.enqueueSessionDelivery(delivery, () =>
+          delivery.deliver(delivery.binding.sessionRid, encodeApplicationPayload(payload))
+        );
+        return delivered ? SubmitResult.Ok : SubmitResult.NotFound;
+      } catch (error) {
+        return localSubmitFailure(error);
+      }
     }
     const header = encodeBoundSessionSendHeader(actorFence, expectedBindingGeneration);
     return this.submitOneWay(binding.sessionOwnerNodeRid, [
@@ -5005,10 +5009,7 @@ export class ServiceStatefulRuntime {
           ? SubmitResult.Ok
           : SubmitResult.InvalidState;
       } catch (error) {
-        if (isZLinkBackendResultError(error) && error.operation === 'submit') {
-          return error.result;
-        }
-        throw error;
+        return localSubmitFailure(error);
       } finally {
         applicationJobOwner.close();
       }
@@ -6231,6 +6232,13 @@ function activationRefused(): ZLinkFrameworkException {
     ZLinkFrameworkErrorKind.Unavailable,
     'Instance cold activation authority was refused.'
   );
+}
+
+function localSubmitFailure(error: unknown): number {
+  if (isZLinkBackendResultError(error) && error.operation === 'submit') {
+    return error.result;
+  }
+  throw error;
 }
 
 function failure(error: unknown): ServiceStatefulResult {
