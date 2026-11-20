@@ -1,6 +1,7 @@
 package systems.zlink.framework.locations.etcd;
 
 import static org.junit.jupiter.api.Assertions.*;
+
 import static systems.zlink.framework.locations.etcd.ZLinkEtcdProviderTest.KEY;
 import static systems.zlink.framework.locations.etcd.ZLinkEtcdProviderTest.NEVER;
 import static systems.zlink.framework.locations.etcd.ZLinkEtcdProviderTest.assertFailure;
