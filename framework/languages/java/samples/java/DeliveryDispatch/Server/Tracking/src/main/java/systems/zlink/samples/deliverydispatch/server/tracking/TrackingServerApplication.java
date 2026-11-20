@@ -33,8 +33,10 @@ public final class TrackingServerApplication {
     }
 
     @Bean
-    ZLinkFrameworkConfigurer trackingFramework(SampleTopology topology) {
+    ZLinkFrameworkConfigurer trackingFramework(
+            SampleTopology topology, ZLinkRedisLocationStore locations) {
         return options -> {
+            options.addLocationStore(locations);
             options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             options.addHandlersFromPackageOf(TrackingServerApplication.class);
             ZLinkMeshNodeBuilder trackingSpot =

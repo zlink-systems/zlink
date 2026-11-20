@@ -45,45 +45,46 @@ import systems.zlink.samples.kotlin.bingo.server.play.infrastructure.zlink.spots
 )
 class PlayServerApplication {
     @Bean
-    fun playFramework(topology: SampleTopology): ZLinkFrameworkConfigurer =
-        ZLinkFrameworkConfigurer { options ->
-            options.addHandlersFromPackageOf<PlayServerApplication>()
-            options.useCoroutineHandlers(Dispatchers.Default)
-            options.configureDispatch { messageFlow(topology.diagnosticsLevel) }
-            options.codecs().use(ZLinkProtobufCodec.defaultCodec())
-            options.configureLocations()
-            options.addRelocationStore(
-                ZLinkRedisRelocationStore(
-                    ZLinkRedisRelocationOptions()
-                        .setConnectionString(topology.redisEndpoint)
-                        .setKeyPrefix(topology.redisKeyPrefix + "relocation:")
-                )
+    fun playFramework(
+        topology: SampleTopology,
+        locations: ZLinkRedisLocationStore,
+    ): ZLinkFrameworkConfigurer = ZLinkFrameworkConfigurer { options ->
+        options.addLocationStore(locations)
+        options.addHandlersFromPackageOf<PlayServerApplication>()
+        options.useCoroutineHandlers(Dispatchers.Default)
+        options.configureDispatch { messageFlow(topology.diagnosticsLevel) }
+        options.codecs().use(ZLinkProtobufCodec.defaultCodec())
+        options.configureLocations()
+        options.addRelocationStore(
+            ZLinkRedisRelocationStore(
+                ZLinkRedisRelocationOptions()
+                    .setConnectionString(topology.redisEndpoint)
+                    .setKeyPrefix(topology.redisKeyPrefix + "relocation:")
             )
-            val node = options.addRouteMesh(SampleNames.Mesh)
-            node.listen(topology.selectedPlaySpotRouterEndpoint()).setRoutingIdPrefix("play")
-            options.addClientServerChannel(SampleNames.ApiChannel).client()
-            node.channelName(SampleNames.RoomRewardChannel).server()
-            node
-                .objects()
-                .server()
-                .addEntrySpot<BingoEntrySpot>()
-                // --8<-- [start:doc-execution-mode]
-                // SPOT_WIDE is the default. Naming it here keeps the choice visible:
-                // every callback of this room runs through one gate.
-                // --8<-- [start:doc-bingo-play-register]
-                .addSpotFactory<BingoRoomSpot>(SampleNames.RoomSpotType) {
-                    executionMode(ZLinkUserSpotExecutionMode.SPOT_WIDE)
-                    relocationCoordinationMode(
-                        ZLinkSpotRelocationCoordinationMode.APPLICATION_SIGNALED
-                    )
-                    preserveStateWith<BingoRoomSpot, BingoRoomRelocationAdapter>()
-                }
-                // --8<-- [end:doc-bingo-play-register]
-                // --8<-- [end:doc-execution-mode]
-                .addActorFactory<PlayerActor, PlayerActorFactory>(SampleNames.PlayerActorType) {
-                    preserveStateWith<PlayerActor, PlayerActorRelocationAdapter>()
-                }
-        }
+        )
+        val node = options.addRouteMesh(SampleNames.Mesh)
+        node.listen(topology.selectedPlaySpotRouterEndpoint()).setRoutingIdPrefix("play")
+        options.addClientServerChannel(SampleNames.ApiChannel).client()
+        node.channelName(SampleNames.RoomRewardChannel).server()
+        node
+            .objects()
+            .server()
+            .addEntrySpot<BingoEntrySpot>()
+            // --8<-- [start:doc-execution-mode]
+            // SPOT_WIDE is the default. Naming it here keeps the choice visible:
+            // every callback of this room runs through one gate.
+            // --8<-- [start:doc-bingo-play-register]
+            .addSpotFactory<BingoRoomSpot>(SampleNames.RoomSpotType) {
+                executionMode(ZLinkUserSpotExecutionMode.SPOT_WIDE)
+                relocationCoordinationMode(ZLinkSpotRelocationCoordinationMode.APPLICATION_SIGNALED)
+                preserveStateWith<BingoRoomSpot, BingoRoomRelocationAdapter>()
+            }
+            // --8<-- [end:doc-bingo-play-register]
+            // --8<-- [end:doc-execution-mode]
+            .addActorFactory<PlayerActor, PlayerActorFactory>(SampleNames.PlayerActorType) {
+                preserveStateWith<PlayerActor, PlayerActorRelocationAdapter>()
+            }
+    }
 
     @Bean
     fun locationStore(topology: SampleTopology): ZLinkRedisLocationStore =
