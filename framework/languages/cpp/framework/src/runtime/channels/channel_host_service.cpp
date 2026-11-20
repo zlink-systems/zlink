@@ -348,6 +348,8 @@ class channel_host_service_t::server_loop_t
                     auto items = std::move (parts).take_items ();
                     items[0] = messaging::envelope_codec_t{}.encode_header (header.value ());
                     parts = messaging::message_parts_t (std::move (items));
+                    // The view borrowed the replaced header item; read the new one.
+                    header = messaging::envelope_codec_t{}.decode_header_view (parts, true);
                 }
 
                 if (flow.enabled_for (message_flow_outcome_t::received)) {
