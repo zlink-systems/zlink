@@ -20,6 +20,13 @@ enum class stream_session_error_t {
     transport_error = 1
 };
 
+enum class disconnect_reason_t : std::uint32_t {
+    unknown = 0,
+    handshake_failed = 3,
+    transport_error = 4,
+    context_terminated = 5
+};
+
 enum class stream_close_reason_t : std::uint8_t {
     client_close = 1,
     idle_timeout = 2,
@@ -51,6 +58,7 @@ public:
 
     stream_session_error_t error() const noexcept;
     std::string_view message() const noexcept;
+    std::optional<disconnect_reason_t> disconnect_reason() const noexcept;
 };
 
 struct session_message_context_t {
@@ -174,9 +182,12 @@ Core rejects it with `EMSGSIZE` and the server closes that connection. The
 server callback receives no partial message. A raw client observes the
 connection close and doesn't receive a wire error code.
 
-`stream_error_t` only exposes a provider-neutral error kind and
-description. The native transport error code is runtime-internal
-diagnostic information and isn't included in the public contract.
+`stream_error_t` exposes a provider-neutral error kind and description.
+Only in the error of a session that ended with Core's `DISCONNECTED` does `disconnect_reason()` hold
+Core's `zlink_disconnect_reason_t` value; otherwise it's `std::nullopt`
+([STREAM session §7](../../../04-session/01-stream-session.en.md#7-error-boundary)). The native
+transport error code (errno) is runtime-internal diagnostic information and isn't included in the
+public contract.
 
 `on_actor_binding_replaced(...)` is an optional callback run once on the previous session when
 the same Actor is bound to a new session. The application may call `write_packet(...)` to notify
