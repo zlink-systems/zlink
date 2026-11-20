@@ -33,8 +33,10 @@ public final class SessionServerApplication {
     }
 
     @Bean
-    ZLinkFrameworkConfigurer sessionFramework(SampleTopology topology) {
+    ZLinkFrameworkConfigurer sessionFramework(
+            SampleTopology topology, ZLinkRedisLocationStore locations) {
         return options -> {
+            options.addLocationStore(locations);
             options.addHandlersFromPackageOf(SessionServerApplication.class);
             options.configureDispatch().messageFlow(topology.diagnosticsLevel());
             options.codecs().use(ZLinkProtobufCodec.defaultCodec());
