@@ -182,6 +182,7 @@ final class ZLinkDefaultSpotOutboundTerminalTest {
                                             probe.address.targetNodeRid(),
                                             probe.address.spotId(),
                                             probe.address.spotGeneration(),
+                                            probe.address.targetNodeGeneration(),
                                             payload)
                                     .whenComplete(
                                             (ignored, failure) ->

@@ -4101,6 +4101,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             RoutingId targetNodeRid,
             String targetSpotId,
             long targetGeneration,
+            long targetNodeGeneration,
             byte[] metadata,
             List<Message> parts) {
         if (!routingId().equals(targetNodeRid)) {
@@ -4109,6 +4110,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                     targetNodeRid,
                     targetSpotId,
                     targetGeneration,
+                    targetNodeGeneration,
                     metadata,
                     parts);
         }
