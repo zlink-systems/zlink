@@ -60,9 +60,9 @@ reply를 STREAM 송신에 제출해 수락된 시점이고, 그 뒤 callback이 
 
 - Error body는 `{"code":"unavailable","message":"Authentication admission is full."}`이다
   ([Framework error model](../00-foundation/07-framework-error-model.ko.md)의 `Unavailable`).
-- Error packet header의 metadata에 `$zlink.admission.retryAfter`를 넣는다. 값은 다시 시도할 UTC Unix epoch
-  밀리초를 부호와 선행 0 없는 10진수 문자열로 쓴 것이며, 거절한 시각에 `AuthenticationRetryDelay`를 더한 값이다.
-  값의 범위는 1 이상 2^53 − 1 이하다.
+- Error packet header의 metadata에 `$zlink.admission.retryAfterMs`를 넣는다. 값은 다시 시도할 때까지의 상대
+  지연(ms)을 부호와 선행 0 없는 10진수 문자열로 쓴 것이며 `AuthenticationRetryDelay`와 같다. 범위는 0 이상
+  2^31 − 1 이하다. 서버와 client의 시계가 어긋나도 재전송 시각이 몰리지 않도록 절대 시각을 쓰지 않는다.
 - 이 metadata가 있는 `Unavailable`만 입장 거절이다. Handler가 실행되지 않았음을 Framework가 보장한다. 일반
   `Unavailable` 오류에는 이 metadata를 넣지 않는다. 이 제한된 예외는
   [Framework error model §7](../00-foundation/07-framework-error-model.ko.md#7-재시도-판단)이 정하며, 일반 오류의 retry hint 금지는 그대로다.
@@ -122,11 +122,41 @@ Ticket 검증과 비밀 키는 다음을 지킨다.
 - 서명 비교는 상수 시간으로 한다. 만료 시각이 지났거나 epoch가 현재 대기열과 다르면 서명을 맞게 검증했더라도 거절한다.
 - 비밀 키는 설정 값으로만 받는다. Framework는 키를 log, metric, 오류 메시지, trace에 남기지 않는다.
 
+### 3.4 Wire
+
+대기열은 service wire를 바꾸지 않고 STREAM packet과 header metadata만 쓴다. 모든 JSON 정수는 JSON number이고
+`ticket`은 RFC 4648 §5 base64url(padding 없음) 문자열이다.
+
+| 방향 | Packet | 내용 |
+|---|---|---|
+| Server → client, 인증 Request의 Error | `unavailable` + header metadata `$zlink.admission.queueRequired` = `"1"` | 2단계가 켜져 있고 인증 request에 유효한 ticket이 없다. Handler를 실행하지 않고 1단계 처리 중 수에도 넣지 않는다 |
+| Client → server | Request `$zlink.admission.enqueue`, payload `{}` | 대기열에 들어간다. Framework가 대기열 Instance Spot으로 보낸다 |
+| Server → client, 위 Request의 Response | `{"position": n, "estimatedWaitMs": m}` 또는 `{"ticket": "...", "expiresInMs": t}` | 대기 순번과 예상 대기, 또는 바로 입장할 수 있으면 ticket |
+| Server → client | Send `$zlink.admission.position`, `{"position": n, "estimatedWaitMs": m}` | 순번이 바뀔 때 보낸다 |
+| Server → client | Send `$zlink.admission.ticket`, `{"ticket": "...", "expiresInMs": t}` | 차례가 되었을 때 한 번 보낸다 |
+| Client → server, 인증 Request | header metadata `$zlink.admission.ticket` = ticket 문자열 | 받은 ticket을 담아 인증 request를 다시 보낸다 |
+
+Ticket이 없거나, 서명이 맞지 않거나, 만료됐거나, epoch가 현재 대기열과 다르면 모두 첫 행과 같은 결과로 거절한다.
+거절 사유를 client에 구분해 알리지 않는다. 대기열은 session이 끝나거나, 보낸 ticket이 쓰이지 않고 만료되면 그
+대기자를 지운다.
+
+Connector는 다음과 같이 처리한다.
+
+- `$zlink.admission.queueRequired`가 있는 거절을 받으면 갖고 있던 ticket을 버리고 `$zlink.admission.enqueue`를 보낸다.
+  대기열에 들어갈 때 `OnAdmissionQueued`를, 순번을 받을 때마다 `OnAdmissionPosition`을 부른다.
+- Ticket을 받으면 원래 인증 request를 같은 packet 이름·payload·application metadata·correlation과
+  `$zlink.admission.ticket`으로 다시 보낸다. 그 request가 1단계에서 거절되면 [Stream Connector §5.8](../../stream-connector/32-stream-connector.ko.md#58-입장-대기와-자동-재시도)대로
+  기다렸다가 같은 ticket으로 다시 보낸다.
+- 마감은 §5.8과 같다: 원래 request deadline과 `처음 거절을 받은 시각 + MaxAdmissionWait` 중 이른 쪽. 마감이 지나면
+  `RequestTimeout`으로 끝내고 더 보내지 않는다.
+- `$zlink.admission.queueRequired` 값이 `"1"`이 아니거나 Response·Send payload가 위 형식이 아니면 `FrameDecodeFailed`로
+  그 request만 끝내고 연결은 유지한다.
+
 ## 4. 시험
 
 - 공통 fixture `login-admission-v1.json`의 서버 시나리오 12개와 connector 시나리오 7개를 네 언어가 실행한다.
 - 네 언어 서버 × 네 언어 connector 교차언어 contract test: 한도 초과 시 handler 미실행, 거절 결과의 code와
-  `$zlink.admission.retryAfter`, connector 자동 재시도 뒤 성공, 거절된 request의 Actor·Location Store·permit 미사용.
+  `$zlink.admission.retryAfterMs`, connector 자동 재시도 뒤 성공, 거절된 request의 Actor·Location Store·permit 미사용.
 - Fixture validator 통과는 runtime 통과가 아니다. 각 언어 runtime 시험은 fixture에 없는 다음도 확인한다: 거절된
   request의 Actor 조회·Location Store 읽기 부재, Response kind 제외, 0·음수 설정의 시작 오류, 대기 중 연결 끊김과
-  caller 취소, `retryAfter` 경계값(0, 선행 0, 부호, 2^53 − 1, 그보다 큰 값).
+  caller 취소, `retryAfterMs` 경계값(0, 선행 0, 부호, 2^31 − 1, 그보다 큰 값).

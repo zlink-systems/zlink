@@ -69,9 +69,10 @@ A rejection is sent as an existing Error packet. The service wire doesn't change
 
 - The Error body is `{"code":"unavailable","message":"Authentication admission is full."}`
   (`Unavailable` in the [Framework error model](../00-foundation/07-framework-error-model.en.md)).
-- The Error packet header metadata carries `$zlink.admission.retryAfter`. Its value is the UTC Unix epoch millisecond
-  at which to retry, written as a decimal string with no sign and no leading zeros, equal to the rejection time plus
-  `AuthenticationRetryDelay`. The value ranges from 1 to 2^53 − 1.
+- The Error packet header metadata carries `$zlink.admission.retryAfterMs`. Its value is the relative delay (ms) until
+  the retry, written as a decimal string with no sign and no leading zeros, equal to `AuthenticationRetryDelay`. It
+  ranges from 0 to 2^31 − 1. An absolute time isn't used, so skew between the server and client clocks doesn't bunch
+  resends together.
 - Only an `Unavailable` with this metadata is an admission rejection, and the Framework guarantees the handler didn't
   run. Ordinary `Unavailable` errors never carry this metadata. This limited exception is defined by
   [Framework error model §7](../00-foundation/07-framework-error-model.en.md#7-retry-judgment); the ban on retry hints for ordinary
@@ -138,13 +139,44 @@ Ticket validation and the secret key follow these rules.
 - The secret key is accepted only as a setting value. The Framework never writes the key to logs, metrics, error
   messages, or traces.
 
+### 3.4 Wire
+
+The queue doesn't change the service wire; it uses only STREAM packets and header metadata. All JSON integers are JSON
+numbers, and `ticket` is an RFC 4648 §5 base64url string without padding.
+
+| Direction | Packet | Content |
+|---|---|---|
+| Server → client, Error for an authentication Request | `unavailable` + header metadata `$zlink.admission.queueRequired` = `"1"` | Stage 2 is on and the authentication request has no valid ticket. The handler doesn't run and the request isn't counted in stage 1's in-flight count |
+| Client → server | Request `$zlink.admission.enqueue`, payload `{}` | Enters the queue. The Framework sends it to the queue Instance Spot |
+| Server → client, Response to that Request | `{"position": n, "estimatedWaitMs": m}` or `{"ticket": "...", "expiresInMs": t}` | The position and estimated wait, or a ticket when admission is possible right away |
+| Server → client | Send `$zlink.admission.position`, `{"position": n, "estimatedWaitMs": m}` | Sent when the position changes |
+| Server → client | Send `$zlink.admission.ticket`, `{"ticket": "...", "expiresInMs": t}` | Sent once when it's the client's turn |
+| Client → server, authentication Request | Header metadata `$zlink.admission.ticket` = the ticket string | Resends the authentication request carrying the ticket |
+
+A missing ticket, a bad signature, an expired ticket, or an epoch that differs from the current queue are all rejected
+with the result in the first row; the client isn't told which reason applied. The queue removes a waiting client when
+its session ends or when a ticket it was sent expires unused.
+
+The connector handles it as follows.
+
+- On a rejection carrying `$zlink.admission.queueRequired`, it drops any ticket it holds and sends
+  `$zlink.admission.enqueue`. It calls `OnAdmissionQueued` on entering the queue and `OnAdmissionPosition` for each
+  position it receives.
+- On receiving a ticket, it resends the original authentication request with the same packet name, payload, application
+  metadata, and correlation, plus `$zlink.admission.ticket`. If stage 1 rejects that request, it waits per
+  [Stream Connector §5.8](../../stream-connector/32-stream-connector.en.md#58-admission-wait-and-automatic-retry) and resends with the same ticket.
+- The wait ends as in §5.8: at the earlier of the original request deadline and `first rejection time +
+  MaxAdmissionWait`. After that it ends with `RequestTimeout` and sends nothing more.
+- If the `$zlink.admission.queueRequired` value isn't `"1"`, or a Response or Send payload doesn't match the shapes
+  above, only that request ends with `FrameDecodeFailed`; the connection stays open.
+
 ## 4. Tests
 
 - All four languages run the shared fixture `login-admission-v1.json`: 12 server scenarios and 7 connector scenarios.
 - A cross-language contract test of four language servers × four language connectors: no handler run over the limit,
-  the rejection code and `$zlink.admission.retryAfter`, success after the connector's automatic retry, and no Actor,
+  the rejection code and `$zlink.admission.retryAfterMs`, success after the connector's automatic retry, and no Actor,
   Location Store, or permit use by a rejected request.
 - Passing the fixture validator isn't a runtime pass. Each language's runtime tests also check what the fixture doesn't:
   no Actor lookup or Location Store read for a rejected request, exclusion of the Response kind, startup errors for zero
-  or negative settings, disconnect and caller cancellation while waiting, and `retryAfter` boundaries (0, leading zero,
-  sign, 2^53 − 1, and larger).
+  or negative settings, disconnect and caller cancellation while waiting, and `retryAfterMs` boundaries (0, leading zero,
+  sign, 2^31 − 1, and larger).

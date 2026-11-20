@@ -442,12 +442,12 @@ Send와 push 수신에는 적용하지 않는다.
 서버가 인증 request를 입장 거절하면([인증 입장 제한 §1.3](../server/04-session/03-authentication-admission.ko.md#13-거절-결과))
 connector가 같은 연결에서 그 request를 자동으로 다시 보낸다. 앱은 재시도 루프를 만들지 않는다.
 
-- 입장 거절은 `unavailable` code의 Error packet이고 header metadata에 `$zlink.admission.retryAfter`가 있는 경우뿐이다.
+- 입장 거절은 `unavailable` code의 Error packet이고 header metadata에 `$zlink.admission.retryAfterMs`가 있는 경우뿐이다.
   이 metadata가 없는 `unavailable`은 지금처럼 `RemoteError`로 그 request를 끝낸다.
-- `$zlink.admission.retryAfter` 값이 부호·선행 0 없는 10진 UTC epoch 밀리초 문자열이 아니거나 1 이상 2^53 − 1 이하가
+- `$zlink.admission.retryAfterMs` 값이 부호·선행 0 없는 10진 밀리초 문자열이 아니거나 0 이상 2^31 − 1 이하가
   아니면 `FrameDecodeFailed`로 그 request만 끝내고 다시 보내지 않는다. 연결은 유지한다(§9 표의 admission metadata 행).
-- 다시 보낼 시각은 `retryAfter`에 0~50ms의 무작위 지연을 더한 시각이다. `retryAfter`가 이미 지났으면 지금부터
-  그 무작위 지연 뒤에 보낸다.
+- 다시 보낼 시각은 거절을 받은 시각(connector의 단조 시계)에 `retryAfterMs`와 0~50ms의 무작위 지연을 더한 시각이다.
+  서버 시계를 읽지 않는다.
 - 다시 보낼 때 같은 packet 이름, payload, application metadata, correlation을 그대로 쓰고 request sequence만 새로 받는다.
 - 거절을 받을 때마다 앱의 `OnAdmissionWaiting` callback을 한 번 부른다. 재시도는 요청 hook(§5.7)과 request callback의
   실행 횟수를 늘리지 않는다. 횟수와 caller 취소 때의 규칙은 §5.7을 그대로 따른다(caller가 취소한 request에는

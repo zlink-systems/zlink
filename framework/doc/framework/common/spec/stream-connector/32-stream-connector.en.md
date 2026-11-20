@@ -523,12 +523,12 @@ When the server rejects an authentication request at admission
 that request again on the same connection automatically. Applications don't build their own retry loop.
 
 - An admission rejection is only an Error packet with code `unavailable` whose header metadata carries
-  `$zlink.admission.retryAfter`. An `unavailable` without this metadata ends the request with `RemoteError` as today.
-- If the `$zlink.admission.retryAfter` value isn't a decimal UTC epoch millisecond string with no sign and no leading
-  zeros, or isn't between 1 and 2^53 − 1, only that request ends with `FrameDecodeFailed` and isn't sent again. The
+  `$zlink.admission.retryAfterMs`. An `unavailable` without this metadata ends the request with `RemoteError` as today.
+- If the `$zlink.admission.retryAfterMs` value isn't a decimal millisecond string with no sign and no leading zeros, or
+  isn't between 0 and 2^31 − 1, only that request ends with `FrameDecodeFailed` and isn't sent again. The
   connection stays open (the admission metadata row of the §9 table).
-- The resend time is `retryAfter` plus a random delay of 0–50 ms. If `retryAfter` has already passed, the request is
-  sent after that random delay from now.
+- The resend time is the time the rejection was received (on the connector's monotonic clock) plus `retryAfterMs` and a
+  random delay of 0–50 ms. The server's clock is never read.
 - A resend uses the same packet name, payload, application metadata, and correlation, and only takes a new request
   sequence.
 - The application's `OnAdmissionWaiting` callback is called once for each rejection received. Retries don't add runs

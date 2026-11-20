@@ -180,7 +180,7 @@ A public exception, error object, or typed failure does not carry a retry hint s
 that the operation already ran and the impact of a duplicate can differ.
 
 There is exactly one exception. An `Unavailable` that authentication admission returned without running the handler
-carries the Error packet header metadata `$zlink.admission.retryAfter`, and the Stream Connector resends that request as
+carries the Error packet header metadata `$zlink.admission.retryAfterMs`, and the Stream Connector resends that request as
 the same operation ([Authentication admission §1.3](../04-session/03-authentication-admission.en.md#13-rejection-result)). This
 metadata exists only on admission rejections where the handler is guaranteed not to have run, and it never surfaces as a
 retry hint on the public error surface.

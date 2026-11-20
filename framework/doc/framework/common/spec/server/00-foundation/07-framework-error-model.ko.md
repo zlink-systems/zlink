@@ -164,7 +164,7 @@ Public exception, error object와 typed failure에는 `RetryAdvice`, `isRetriabl
 실행되었을 가능성과 중복 영향은 서로 다를 수 있기 때문이다.
 
 예외는 하나뿐이다. 인증 입장 제한이 handler를 실행하지 않고 거절한 `Unavailable`은 Error packet header metadata
-`$zlink.admission.retryAfter`를 담고, Stream Connector가 그 request를 같은 operation으로 다시 보낸다
+`$zlink.admission.retryAfterMs`를 담고, Stream Connector가 그 request를 같은 operation으로 다시 보낸다
 ([인증 입장 제한 §1.3](../04-session/03-authentication-admission.ko.md#13-거절-결과)). 이 metadata는 handler 미실행이 보장된 입장 거절에만
 있고 public error 표면에 retry hint로 드러나지 않는다.
 
