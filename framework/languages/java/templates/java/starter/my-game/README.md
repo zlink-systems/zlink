@@ -16,6 +16,8 @@ Install Docker with Compose v2 and access to a Linux container daemon. Bash or P
 
 The Gradle wrapper and both server modules are included. Copy this directory to build it independently.
 
+`Hosting.configure` registers the Redis Location Store explicitly with `options.addLocationStore` once per node. A Spring Store bean alone does not register it with Framework. Keep this single call when adding application registrations.
+
 ## Build
 
 Build the node and runner images from this directory.

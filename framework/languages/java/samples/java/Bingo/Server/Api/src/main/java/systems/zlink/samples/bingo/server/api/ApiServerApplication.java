@@ -31,8 +31,10 @@ public final class ApiServerApplication {
     }
 
     @Bean
-    ZLinkFrameworkConfigurer apiFramework(SampleTopology topology) {
+    ZLinkFrameworkConfigurer apiFramework(
+            SampleTopology topology, ZLinkRedisLocationStore locations) {
         return options -> {
+            options.addLocationStore(locations);
             options.configureDispatch().messageFlow(topology.diagnosticsLevel());
             // --8<-- [start:doc-codec-register]
             // Every payload this process sends is encoded with Protobuf instead of the default
