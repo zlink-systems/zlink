@@ -44,7 +44,7 @@ final class ZLinkBoundActorReturnTest {
             new CompletableFuture<>();
     private static final CompletableFuture<String> relayed = new CompletableFuture<>();
 
-    @Test
+    @org.junit.jupiter.api.RepeatedTest(40)
     void existingActorJoinsEntrySpotOnAnotherNode() throws Exception {
         joined = new CompletableFuture<>();
         var locations = new ZLinkInMemoryLocationStore();
