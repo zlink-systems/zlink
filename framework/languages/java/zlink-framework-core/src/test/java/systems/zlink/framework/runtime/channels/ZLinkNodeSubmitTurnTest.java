@@ -529,7 +529,12 @@ final class ZLinkNodeSubmitTurnTest {
                                 "sendToSpotViaRouterChannel",
                                 () ->
                                         f.runtime.sendToSpotViaRouterChannel(
-                                                CHANNEL, TARGET, "target-spot", List.of(sendPart)));
+                                                CHANNEL,
+                                                TARGET,
+                                                "target-spot",
+                                                0L,
+                                                0L,
+                                                List.of(sendPart)));
                 spotAdmission.toCompletableFuture().join();
                 assertEquals(2, node.nodeCalls());
                 assertEquals(1, node.spotRequests.get());
@@ -678,11 +683,13 @@ final class ZLinkNodeSubmitTurnTest {
                                                                 CHANNEL,
                                                                 TARGET,
                                                                 "target-spot",
+                                                                0L,
+                                                                0L,
                                                                 List.of(sendPart)))
                                         .toCompletableFuture()
                                         .join()
                                 : f.runtime.sendToSpotViaRouterChannel(
-                                        CHANNEL, TARGET, "target-spot", List.of(sendPart));
+                                        CHANNEL, TARGET, "target-spot", 0L, 0L, List.of(sendPart));
 
                 assertTerminal(reply);
                 admission.toCompletableFuture().join();
@@ -726,6 +733,8 @@ final class ZLinkNodeSubmitTurnTest {
                                                         CHANNEL,
                                                         TARGET,
                                                         "target-spot",
+                                                        0L,
+                                                        0L,
                                                         List.of(part)));
                 try {
                     await(bindingEntered);
@@ -746,7 +755,7 @@ final class ZLinkNodeSubmitTurnTest {
                     try (Message next = Message.from("next")) {
                         f.runtime
                                 .sendToSpotViaRouterChannel(
-                                        CHANNEL, TARGET, "target-spot", List.of(next))
+                                        CHANNEL, TARGET, "target-spot", 0L, 0L, List.of(next))
                                 .toCompletableFuture()
                                 .join();
                     }
