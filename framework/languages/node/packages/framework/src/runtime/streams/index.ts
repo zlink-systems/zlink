@@ -356,6 +356,14 @@ export class ZLinkStreamRuntimeManager {
     this.nodes.clear();
   }
 
+  shutdownSnapshot() {
+    return [...this.nodes.entries()].map(([nodeName, node]) => ({
+      nodeName,
+      meshName: node.meshName,
+      sessions: node.runtime?.shutdownSnapshot() ?? []
+    }));
+  }
+
   async notifyServerDrain(meshName: string): Promise<void> {
     await Promise.all(
       [...this.nodes.values()]

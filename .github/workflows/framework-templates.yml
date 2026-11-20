@@ -1,11 +1,13 @@
 name: Framework templates
 
 # Builds every Framework genre template and runs its Docker e2e (#1683). source=public
-# uses the published packages pinned in each template; source=local (manual runs only)
+# uses the published packages pinned in each template; source=local (manual or nightly runs)
 # builds the Framework packages of this commit at framework_version and links them into
 # a copy of each template (scripts/templates/use-local-packages.py). Pull requests run only
 # the templates they change. Not a required check.
 on:
+  schedule:
+    - cron: '0 18 * * *'
   workflow_dispatch:
     inputs:
       source:
@@ -50,7 +52,6 @@ env:
   CPP_PLATFORM: linux-x64
   # GitHub-hosted runners have 4 cores; the self-hosted build PC is shared (framework-cpp.yml).
   CMAKE_BUILD_PARALLEL_LEVEL: ${{ vars.ZLINK_CPP_BUILD_PARALLEL || '2' }}
-  FRAMEWORK_VERSION: ${{ inputs.framework_version }}
 
 jobs:
   plan:
@@ -66,6 +67,7 @@ jobs:
       cpp_count: ${{ steps.plan.outputs.cpp_count }}
       packages: ${{ steps.plan.outputs.packages }}
       source: ${{ steps.plan.outputs.source }}
+      framework_version: ${{ steps.plan.outputs.framework_version }}
       # A repository variable holding a JSON label list moves the C++ jobs to the
       # self-hosted build PC, but only for manual runs: pull request code (including
       # forks) never runs on the self-hosted build machine.
@@ -93,8 +95,15 @@ jobs:
           SOURCE: ${{ inputs.source || 'public' }}
           LANGUAGES: ${{ inputs.languages }}
           TEMPLATES: ${{ inputs.templates }}
+          FRAMEWORK_VERSION: ${{ inputs.framework_version }}
         run: |
           set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = schedule ]; then
+            SOURCE=local
+            LANGUAGES=node
+            TEMPLATES=''
+            FRAMEWORK_VERSION="$(python3 -c 'import json; print(json.load(open("framework/languages/node/packages/framework/package.json"))["version"])')"
+          fi
           case "${SOURCE}" in
             public) ;;
             local)
@@ -103,6 +112,7 @@ jobs:
             *) echo "::error::Invalid source: ${SOURCE}" >&2; exit 1 ;;
           esac
           echo "source=${SOURCE}" >>"${GITHUB_OUTPUT}"
+          echo "framework_version=${FRAMEWORK_VERSION}" >>"${GITHUB_OUTPUT}"
           args=("${LANGUAGES}" "${TEMPLATES}")
           if [ "${GITHUB_EVENT_NAME}" = pull_request ]; then
             git diff --name-only HEAD^1 HEAD >"${RUNNER_TEMP}/changed-paths.txt"
@@ -128,6 +138,7 @@ jobs:
         package: ${{ fromJSON(needs.plan.outputs.packages) }}
     env:
       PACKAGES_DIR: ${{ github.workspace }}/dist/template-packages
+      FRAMEWORK_VERSION: ${{ needs.plan.outputs.framework_version }}
     steps:
       - uses: actions/checkout@v5
 
@@ -234,6 +245,8 @@ jobs:
     name: Local cpp packages
     runs-on: ${{ fromJSON(needs.plan.outputs.cpp_runner) }}
     needs: plan
+    env:
+      FRAMEWORK_VERSION: ${{ needs.plan.outputs.framework_version }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -349,6 +362,7 @@ jobs:
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
       TEMPLATE_SOURCE: ${{ needs.plan.outputs.source }}
+      FRAMEWORK_VERSION: ${{ needs.plan.outputs.framework_version }}
     steps:
       - uses: actions/checkout@v5
 
@@ -404,7 +418,7 @@ jobs:
           if-no-files-found: ignore
 
       - uses: actions/upload-artifact@v6
-        if: failure()
+        if: ${{ failure() || (always() && github.event_name == 'schedule') }}
         with:
           name: template-logs-${{ matrix.lang }}-${{ matrix.template }}
           path: ${{ env.TEMPLATE_WORK }}/${{ matrix.lang }}-${{ matrix.template }}/my-game/.logs/
@@ -424,6 +438,7 @@ jobs:
       matrix: ${{ fromJSON(needs.plan.outputs.cpp_matrix) }}
     env:
       TEMPLATE_SOURCE: ${{ needs.plan.outputs.source }}
+      FRAMEWORK_VERSION: ${{ needs.plan.outputs.framework_version }}
     steps:
       - uses: actions/checkout@v5
 

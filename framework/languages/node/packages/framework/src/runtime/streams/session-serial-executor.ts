@@ -20,6 +20,14 @@ export class ZLinkSessionSerialExecutor {
   );
   private closed = false;
 
+  shutdownSnapshot(): Record<string, unknown> {
+    return {
+      serialClosed: this.closed,
+      serialActive: this.scheduler.diagnosticActive,
+      serialActiveLifecycle: this.scheduler.activeLifecycle !== undefined
+    };
+  }
+
   executeApplication(
     work: () => Promise<void>,
     options: Omit<ZLinkSerialWorkOptions, 'lane'> = {},
