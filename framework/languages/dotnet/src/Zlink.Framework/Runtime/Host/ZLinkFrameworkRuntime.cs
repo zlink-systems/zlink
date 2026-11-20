@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Zlink.Framework.Runtime.Actors;
@@ -77,9 +78,9 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     private readonly SemaphoreSlim _gate = new(1, 1);
     private ZLinkRuntimeExecutionScope? _executionScope;
 
-    // Operation admission, drain counters, worker-pool construction and remote-frame
-    // chain ownership are one C2 state unit.  The lane preserves the former gate's
-    // return-before-complete admission semantics without retaining a lock snapshot.
+    // Drain waiters, worker-pool construction and remote-frame chain ownership are C2
+    // state owned by this lane. Admission counters are C3 atomics; their zero signals
+    // join this lane so waiter registration and completion cannot lose a wakeup.
     private readonly ZLinkStateLane _stateLane = new();
     private readonly ZLinkLocationLifecycle? _locationLifecycle;
     private readonly ZLinkLocationRuntime? _locationRuntime;
@@ -101,6 +102,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     private ZLinkWorkerPool? _logicalMulticastWorkerPool;
     private TaskCompletionSource? _operationsDrained;
     private TaskCompletionSource? _operationsAtZero;
+    private int _inboundReservations;
     private int _activeOperations;
     private long _operationEpoch;
     private int _activeRequests;
@@ -582,7 +584,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     {
         var operationsDrained = AwaitStateLane(
             _stateLane.RunAsync(() =>
-                Volatile.Read(ref _activeOperations) == 0
+                OperationsAreQuiescent
                     ? Task.CompletedTask
                     : (
                         _operationsAtZero ??= new TaskCompletionSource(
@@ -1262,29 +1264,41 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     {
         var ownerAdmissionOpen =
             !ownsObjectWork || (_locationRuntime?.IsBoundExecutionOpen ?? true);
-        // Reserve before sampling the shutdown seal. ClaimShutdown publishes the seal with
-        // a full fence before quiescence reads this count, so an accepted operation cannot
-        // be missed. A refused reservation returns through the existing release path.
-        CountOperation(countAsRequest);
-        var phase = (ZLinkRuntimeLifecyclePhase)Volatile.Read(ref _lifecyclePhase);
-        var state = Volatile.Read(ref _state);
-        if (
-            _drainAdmission.IsSealedForShutdown
-            || phase == ZLinkRuntimeLifecyclePhase.Stopping
-            || !ownerAdmissionOpen
-        )
-        {
-            ExitOperation(countsOperation: true, countsRequest: countAsRequest);
+        // A closed owner cannot admit work, so it need not reserve shutdown lifetime.
+        // Only a successful admission changes the relocation baseline's operation epoch.
+        if (!ownerAdmissionOpen)
             return ZLinkRuntimeOperationAdmission.Refused;
-        }
-        // Before native startup no transport can deliver a record. A neutral lease keeps
-        // dispatcher construction independent from startup; shutdown still refuses it.
-        if (phase != ZLinkRuntimeLifecyclePhase.Running)
+
+        // Dekker ordering: reserve with a full fence before reading the seal; shutdown
+        // publishes its seal with a full fence before reading reservations and active.
+        Interlocked.Increment(ref _inboundReservations);
+        try
         {
-            ExitOperation(countsOperation: true, countsRequest: countAsRequest);
-            return default;
+            ZLinkStateLane.ObserveWork("inbound-reserved");
+            var phase = (ZLinkRuntimeLifecyclePhase)Volatile.Read(ref _lifecyclePhase);
+            if (_drainAdmission.IsSealedForShutdown || phase == ZLinkRuntimeLifecyclePhase.Stopping)
+                return ZLinkRuntimeOperationAdmission.Refused;
+            // Before native startup no transport can deliver a record. A neutral lease
+            // keeps dispatcher construction independent from startup without an operation.
+            if (phase != ZLinkRuntimeLifecyclePhase.Running)
+                return default;
+
+            var state = Volatile.Read(ref _state);
+            Debug.Assert(state is not null, "A running runtime must publish its component state.");
+            CountOperation(countAsRequest);
+            ZLinkStateLane.ObserveWork("inbound-operation-counted");
+            return new ZLinkRuntimeOperationAdmission(this, state, countAsRequest);
         }
-        return new ZLinkRuntimeOperationAdmission(this, state, countAsRequest);
+        finally
+        {
+            // Publish the accepted count before dropping its reservation. Rejected and
+            // neutral arrivals release only the reservation, leaving the epoch unchanged.
+            if (Interlocked.Decrement(ref _inboundReservations) == 0 && OperationsAreQuiescent)
+                _stateLane.TryPost(
+                    static runtime => runtime.SignalOperationQuiescenceOnLane(),
+                    this
+                );
+        }
     }
 
     internal async ValueTask ExecuteOperationAsync(
@@ -1799,7 +1813,7 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         return await _stateLane
             .RunAsync(() =>
             {
-                if (Volatile.Read(ref _activeOperations) == 0)
+                if (OperationsAreQuiescent)
                     return Task.CompletedTask;
                 return (
                     _operationsDrained ??= new TaskCompletionSource(
@@ -1908,7 +1922,17 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         }
         if (countsOperation)
             Interlocked.Increment(ref _operationEpoch);
-        if (Volatile.Read(ref _activeOperations) != 0)
+        SignalOperationQuiescenceOnLane();
+    }
+
+    // Read reservations first: an admission transfers to active before releasing its
+    // reservation. Reading active first could miss both sides of that transfer.
+    private bool OperationsAreQuiescent =>
+        Volatile.Read(ref _inboundReservations) == 0 && Volatile.Read(ref _activeOperations) == 0;
+
+    private void SignalOperationQuiescenceOnLane()
+    {
+        if (!OperationsAreQuiescent)
             return;
         // Both signals run their continuations asynchronously (spec 06 §5).
         var drained = _operationsDrained;

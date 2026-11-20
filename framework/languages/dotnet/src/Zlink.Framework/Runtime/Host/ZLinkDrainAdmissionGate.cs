@@ -63,6 +63,9 @@ internal sealed class ZLinkDrainAdmissionGate
     // Owner and seal share one atomic publication; readers never combine different turns.
     private int _admissionState;
 
+    // Every admission-state writer runs in a turn of _lane (including Seal, reset
+    // and ClaimShutdown). No writer can intervene between this read and exchange;
+    // concurrent readers use the single atomic publication without entering the lane.
     private ZLinkDrainOwner Owner
     {
         get => (ZLinkDrainOwner)(Volatile.Read(ref _admissionState) & ~SealedBit);
