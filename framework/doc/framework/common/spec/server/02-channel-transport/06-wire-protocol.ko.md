@@ -337,6 +337,7 @@ callback·연결 종료는 새 bind terminal을 지연시키거나 되돌리지 
 ### Admission 절차
 
 - RouteMesh와 ClientServer는 `hello → admit|reject`로 current physical connection을 service route로 승인한다.
+  REJECT 뒤의 route·peer 상태는 [MeshNode §7.1](../03-spot-actor/03-mesh-node.ko.md)이 정한다.
 - Manual 구성의 lifecycle token은 예측하기 어려운 난수를 만드는 [CSPRNG](../00-foundation/02-glossary.ko.md#csprng)로 만든 non-zero opaque equality token이다.
 - 숫자 크기로 새 값을 판단하지 않으며 current physical connection의 handover와 liveness로 이전 token을 차단한다.
 

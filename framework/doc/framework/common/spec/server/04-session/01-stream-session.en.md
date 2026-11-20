@@ -225,6 +225,9 @@ pending request.
 The full rule is defined by the reply correlation contract in the
 [Message Model](../00-foundation/05-message-model.en.md).
 
+A STREAM request handler does not receive the client's request deadline. A handler that waits for another
+object's reply sets the deadline of that wait itself.
+
 ## 6. Payload Conversion and the Codec Boundary
 
 The framework's basic surface only provides session, session context,
