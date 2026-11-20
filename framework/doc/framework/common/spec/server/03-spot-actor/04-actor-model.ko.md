@@ -491,7 +491,7 @@ Framework는 다음 순서로 destroy를 진행한다.
 
 1. 새로운 payload admission을 닫고, Location Store의 Actor authority record를 `Closing`으로
    바꾼다. 이 변경은 현재 `objectGeneration`과 owner를 보존하는 CAS 한 번이다. 다른 node는 이
-   상태로 destroy가 진행 중임을 관찰한다(`GetOrCreate`의 대기는 위 단락, `Create`의 결과는
+   상태로 destroy가 진행 중임을 관찰한다(`GetOrCreate`의 대기는 [§6.5](#65-create와-getorcreate의-차이), `Create`의 결과는
    [Location runtime §7](../05-location-relocation/01-location-runtime.ko.md#7-actor와-user-spot을-만든다) 결과 표의 `Closing` 행).
 2. 진행 중인 lifecycle 작업을 정리한다.
 3. Session binding을 제거한다.
