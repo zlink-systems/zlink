@@ -39,10 +39,19 @@ internal sealed class AtomicCounter : NativeOwner, IAtomicCounter
 
     public void Dispose()
     {
-        if (IsClosed)
-            return;
-        NativeMethods.zlink_atomic_counter_destroy(ref _handle);
-        MarkClosed();
+        if (TryBeginClose())
+        {
+            try
+            {
+                var handle = _handle;
+                NativeMethods.zlink_atomic_counter_destroy(ref handle);
+                MarkClosed();
+            }
+            finally
+            {
+                EndClose();
+            }
+        }
         GC.SuppressFinalize(this);
     }
 
