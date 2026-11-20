@@ -155,11 +155,11 @@ leading index stored.** If storing or confirming any chunk fails, the leading in
 In this case, no Location Store record points to the remaining chunks, so they're cleaned up when
 their retention expires.
 
-When reading, the provider reads the data chunks and verifies each checksum. Regardless of I/O
+When reading, the Framework reads the data chunks and verifies each checksum. Regardless of I/O
 completion order, it combines them in the chunk order recorded in the leading index. The combined
 bytes' overall checksum must also match before that payload is used. If even one chunk is missing
 or its checksum differs, the whole payload is treated as `DataLost` — it's never used from only
-some chunks. When extending the retention period, the provider also verifies the existence and
+some chunks. When extending the retention period, the Framework also verifies the existence and
 checksum of each data chunk, and extends the leading index's retention only after all checks succeed.
 
 The default retention for each data chunk and the leading index is 24 hours, and the Framework
