@@ -29,7 +29,7 @@ class offload_executor_t
         // One complete receive rotation; false means the role has stopped.
         virtual bool run () = 0;
         // Publication returns before worker assignment or application entry.
-        virtual bool publish () { return false; }
+        virtual void publish () {}
     };
 
     template <typename Work> static void run_application_turn (Work &&work) noexcept
@@ -53,6 +53,11 @@ class offload_executor_t
     offload_executor_t (const offload_executor_t &) = delete;
     offload_executor_t &operator= (const offload_executor_t &) = delete;
 
+    // Uses the existing receive publication queue without starting a worker.
+    // A false placement is delivered back to the completion dispatcher.
+    static bool defer_receive_completion (std::function<void (bool)> &placement);
+    // Accepted turn publication must finish before the receive role waits again.
+    static bool receive_publication_pending () noexcept;
     bool try_submit (std::function<void ()> work);
     bool try_submit_cancellable (std::function<void (std::stop_token)> work);
     // Internal scheduling retains its separate entry point because shutdown
@@ -103,6 +108,7 @@ class offload_executor_t
     static thread_local const offload_executor_t *_current_worker_executor;
 #endif
     using work_t = std::variant<std::function<void ()>,
+                                std::function<void (bool)>,
                                 std::function<void (std::stop_token)>,
                                 std::shared_ptr<role_t>>;
     struct work_item_t
@@ -119,10 +125,11 @@ class offload_executor_t
         worker_t *previous_idle = nullptr;
         worker_t *next_idle = nullptr;
     };
-    static thread_local offload_executor_t *_publishing_executor;
+    struct publication_scope_t;
+    static thread_local publication_scope_t *_publishing_executor;
     bool try_submit_application (work_t work);
     bool publishing_role () const noexcept;
-    bool idle_workers_exceed_locked (std::size_t count) const noexcept;
+    void start_worker_if_needed_locked ();
     void add_idle_locked (worker_t &worker) noexcept;
     void remove_idle_locked (worker_t &worker) noexcept;
     std::shared_ptr<worker_t> assign_worker_locked (worker_t *current);

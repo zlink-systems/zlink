@@ -2161,13 +2161,11 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
         return true;
     }
 
-    bool publish () override
+    void publish () override
     {
         auto ready = std::move (ready_batch);
         ready_batch.reset ();
-        const bool published = ready && !ready->first.empty ();
         mesh::service_mailbox_t::notify_application_ready (ready);
-        return published;
     }
 
     void rotate ()
@@ -2396,8 +2394,8 @@ struct mesh_node_host_service_t::node_receive_role_t final : offload_executor_t:
         readiness.reset ();
         // A pump may consume the wake for supply delivered after this turn's
         // take. Recheck its owner state before waiting for the next rotation.
-        if (!local_pending && !ready_batch && !host._stop.load (std::memory_order_acquire)
-            && !supply.has_supply ()) {
+        if (!local_pending && !ready_batch && !offload_executor_t::receive_publication_pending ()
+            && !host._stop.load (std::memory_order_acquire) && !supply.has_supply ()) {
             readiness = node->native_node ().wait_for_hosted_dispatch_activity (
               std::chrono::milliseconds (-1), accept_application_receive, next_activity);
         }

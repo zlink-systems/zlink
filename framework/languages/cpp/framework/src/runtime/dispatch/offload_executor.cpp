@@ -20,7 +20,24 @@
 namespace zlink::framework::runtime
 {
 
-thread_local offload_executor_t *offload_executor_t::_publishing_executor = nullptr;
+struct offload_executor_t::publication_scope_t
+{
+    offload_executor_t &executor;
+    bool &published;
+    const bool &more;
+    publication_scope_t *previous;
+    publication_scope_t (offload_executor_t &owner, bool &accepted, const bool &rotation_returned) :
+        executor (owner),
+        published (accepted),
+        more (rotation_returned),
+        previous (_publishing_executor)
+    {
+        _publishing_executor = this;
+    }
+    ~publication_scope_t () { _publishing_executor = previous; }
+};
+thread_local offload_executor_t::publication_scope_t *offload_executor_t::_publishing_executor =
+  nullptr;
 
 std::shared_ptr<offload_executor_t> infrastructure_executor ()
 {
@@ -91,6 +108,23 @@ void offload_executor_t::submit (std::function<void ()> work)
     }
 }
 
+bool offload_executor_t::defer_receive_completion (std::function<void (bool)> &placement)
+{
+    auto *publication = _publishing_executor;
+    if (!publication)
+        return false;
+    auto &executor = publication->executor;
+    std::lock_guard lock (executor._mutex);
+    executor._queue.push_back (work_item_t{std::move (placement), std::nullopt});
+    publication->published = true;
+    return true;
+}
+
+bool offload_executor_t::receive_publication_pending () noexcept
+{
+    return _publishing_executor && _publishing_executor->published;
+}
+
 bool offload_executor_t::try_submit (std::function<void ()> work)
 {
     return try_submit_application (std::move (work));
@@ -106,12 +140,12 @@ bool offload_executor_t::try_submit_internal (std::function<void ()> work)
         if (_stopping && _active == _role_active && application_queue_empty_locked ()) {
             return false;
         }
-        if (!idle_workers_exceed_locked (_queue.size ()) && _live_workers < _max_worker_count) {
-            start_worker_locked ();
-        }
+        start_worker_if_needed_locked ();
         _queue.push_back (work_item_t{std::move (work), std::nullopt});
     }
-    if (!publishing_role ())
+    if (publishing_role ())
+        _publishing_executor->published = true;
+    else
         dispatch_pending ();
     return true;
 }
@@ -168,9 +202,7 @@ bool offload_executor_t::try_submit_application (work_t work)
         if (_stopping) {
             return false;
         }
-        if (!idle_workers_exceed_locked (_queue.size ()) && _live_workers < _max_worker_count) {
-            start_worker_locked ();
-        }
+        start_worker_if_needed_locked ();
         _queue.push_back (work_item_t{std::move (work), std::stop_source{}});
     }
     dispatch_pending ();
@@ -330,16 +362,23 @@ void offload_executor_t::complete_work_locked ()
 bool offload_executor_t::publishing_role () const noexcept
 {
     // The publication scope identifies the executor deferring its normal wakes.
-    return _publishing_executor == this;
+    return _publishing_executor && &_publishing_executor->executor == this
+           && _publishing_executor->more;
 }
 
-bool offload_executor_t::idle_workers_exceed_locked (std::size_t count) const noexcept
+void offload_executor_t::start_worker_if_needed_locked ()
 {
-    // Stops at the (count + 1)th idle worker; an empty queue needs only the head.
-    for (auto *worker = _idle_head; worker; worker = worker->next_idle)
-        if (count-- == 0)
-            return true;
-    return false;
+    // Completion placements can only use an existing handoff resource; they
+    // do not contribute to the ordinary queue's demand for another worker.
+    auto *available = _idle_head;
+    for (const auto &item : _queue) {
+        if (!available)
+            break;
+        if (!std::holds_alternative<std::function<void (bool)>> (item.work))
+            available = available->next_idle;
+    }
+    if (!available && _live_workers < _max_worker_count)
+        start_worker_locked ();
 }
 
 void offload_executor_t::add_idle_locked (worker_t &worker) noexcept
@@ -373,6 +412,10 @@ offload_executor_t::assign_worker_locked (worker_t *current)
     if (receiver
         && (_stopping || std::holds_alternative<std::shared_ptr<role_t>> (_queue.front ().work)))
         return nullptr;
+    // Completion work can use this pool only on the receiver selected by the
+    // same exclusive handoff as handler work. Other placements use its dispatcher.
+    if (!receiver && std::holds_alternative<std::function<void (bool)>> (_queue.front ().work))
+        return nullptr;
     auto *available = current && !receiver ? current : _idle_head;
     if (!available)
         return nullptr;
@@ -398,6 +441,21 @@ offload_executor_t::assign_worker_locked (worker_t *current)
 void offload_executor_t::dispatch_pending ()
 {
     std::unique_lock lock (_mutex);
+    // Unselected completions remain independent even when every pool worker is
+    // busy. Never leave them behind a handler or a blocked completion callback.
+    for (;;) {
+        const auto item = std::find_if (_queue.begin (), _queue.end (), [] (const auto &queued) {
+            return std::holds_alternative<std::function<void (bool)>> (queued.work);
+        });
+        if (item == _queue.end ())
+            break;
+        auto placement = std::move (std::get<std::function<void (bool)>> (item->work));
+        _queue.erase (item);
+        _empty.notify_all ();
+        lock.unlock ();
+        placement (false);
+        lock.lock ();
+    }
     while (auto worker = assign_worker_locked (nullptr)) {
         lock.unlock ();
         worker->ready.notify_one ();
@@ -452,7 +510,9 @@ void offload_executor_t::worker_loop (worker_t &worker)
         if (!worker.assignment) {
             std::unique_lock lock (_mutex);
             add_idle_locked (worker);
-            const auto ready = [&] { return worker.assignment || !_queue.empty () || _stopping; };
+            const auto ready = [&] {
+                return worker.assignment || assign_worker_locked (&worker) || _stopping;
+            };
             const bool woke = _idle_timeout.count () == 0
                                 ? (worker.ready.wait (lock, ready), true)
                                 : worker.ready.wait_for (lock, _idle_timeout, ready);
@@ -473,16 +533,15 @@ void offload_executor_t::worker_loop (worker_t &worker)
         if (auto *role = std::get_if<std::shared_ptr<role_t>> (&item.work)) {
             // Neither receive nor publication exceptions enter the application
             // exception boundary. Both stacks return before a handoff.
-            if ((*role)->run ()) {
-                bool published;
-                {
-                    struct publication_scope_t
-                    {
-                        offload_executor_t *previous;
-                        ~publication_scope_t () { _publishing_executor = previous; }
-                    } publication{std::exchange (_publishing_executor, this)};
-                    published = (*role)->publish ();
-                }
+            bool more = false;
+            bool published = false;
+            {
+                publication_scope_t publication{*this, published, more};
+                more = (*role)->run ();
+                if (more)
+                    (*role)->publish ();
+            }
+            if (more) {
                 auto successor = try_handoff (worker);
                 if (successor)
                     successor->ready.notify_one ();
@@ -490,6 +549,8 @@ void offload_executor_t::worker_loop (worker_t &worker)
                     dispatch_pending ();
                 continue;
             }
+            if (published)
+                dispatch_pending ();
         } else {
             run_application_turn ([&] {
                 std::visit (
@@ -498,7 +559,11 @@ void offload_executor_t::worker_loop (worker_t &worker)
                                                    std::shared_ptr<role_t>>) {
                           // Receive roles never enter this boundary.
                       } else if (callback) {
-                          if constexpr (std::is_invocable_v<decltype (callback), std::stop_token>)
+                          if constexpr (std::is_same_v<std::decay_t<decltype (callback)>,
+                                                       std::function<void (bool)>>)
+                              callback (true);
+                          else if constexpr (std::is_invocable_v<decltype (callback),
+                                                                 std::stop_token>)
                               callback (item.cancellation ? item.cancellation->get_token ()
                                                           : std::stop_token{});
                           else

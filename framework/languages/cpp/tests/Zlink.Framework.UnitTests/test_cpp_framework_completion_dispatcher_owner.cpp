@@ -8,8 +8,20 @@
 #include <latch>
 #include <iostream>
 #include <thread>
+#include <future>
+#include <chrono>
 
 namespace detail = zlink::framework::detail;
+
+namespace
+{
+std::function<void (bool)> deferred_completion;
+bool defer_completion (std::function<void (bool)> &work)
+{
+    deferred_completion = std::move (work);
+    return true;
+}
+}
 
 int main ()
 {
@@ -115,6 +127,48 @@ int main ()
         owner.close ();
         assert (delivered.load (std::memory_order_relaxed) == callbacks_per_round);
     }
+    // This process has no test-harness owner: close below really releases the
+    // last owner. The runtime hook controls deferred placement independently of
+    // the executor tests, while exercising the provider's actual work credit.
+    for (const bool handed_off : {true, false}) {
+        using namespace std::chrono_literals;
+        zlink::framework::completion_owner_t owner;
+        auto dispatcher = detail::borrow_completion_dispatcher ();
+        const auto observed = detail::observe_completion_dispatcher ();
+        const detail::runtime_execution_hooks_t hooks{
+          [] () -> detail::completion_dispatcher_borrow_t { return {}; },
+          [] (detail::completion_dispatcher_borrow_t *) { return detail::task_scheduler_t{}; },
+          [] { return detail::task_scheduler_t{}; }, [] {}, &defer_completion};
+        detail::set_runtime_execution_hooks (&hooks);
+        std::promise<void> callback, release;
+        auto entered = callback.get_future ();
+        auto released = release.get_future ().share ();
+        detail::dispatch_request_completion (
+          [&] {
+              callback.set_value ();
+              released.wait ();
+          },
+          &callback, dispatcher);
+        assert (deferred_completion);
+        assert (observed.use_count () == 1);
+        auto closed = std::async (std::launch::async, [&] { owner.close (); });
+        while (!observed.expired ())
+            std::this_thread::yield ();
+        assert (closed.wait_for (100ms) != std::future_status::ready);
+        std::jthread delivery ([&] {
+            auto placement = std::move (deferred_completion);
+            placement (handed_off);
+        });
+        assert (entered.wait_for (5s) == std::future_status::ready);
+        assert (closed.wait_for (100ms) != std::future_status::ready);
+        release.set_value ();
+        assert (closed.wait_for (5s) == std::future_status::ready);
+        closed.get ();
+        delivery.join ();
+        detail::set_runtime_execution_hooks (nullptr);
+        assert (!deferred_completion);
+    }
+    std::cout << "deferred_and_local_owner_release_drains=pass\n";
     std::cout << "owner_release_drains=pass rounds=" << rounds
               << " callbacks_per_round=" << callbacks_per_round << '\n';
 }

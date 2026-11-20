@@ -76,6 +76,7 @@ class completion_dispatcher_t : public std::enable_shared_from_this<completion_d
                                          registered_execution_context_shutting_down_message);
         boost::asio::post (_context, std::forward<Work> (work));
     }
+    auto retain_turn () { return boost::asio::make_work_guard (_context); }
     std::size_t worker_count () const noexcept { return _workers.size (); }
 
   private:
@@ -169,10 +170,14 @@ bool can_reuse_completion_turn (bool known_runtime_worker,
            && !current_wait_owner_token.stop_possible ();
 }
 
-void dispatch_completion (std::function<void ()> work,
-                          bool inline_allowed,
-                          const void *owner,
-                          completion_dispatcher_borrow_t dispatcher)
+namespace
+{
+template <typename Place>
+void dispatch_completion_turn (std::function<void ()> work,
+                               bool inline_allowed,
+                               const void *owner,
+                               completion_dispatcher_borrow_t dispatcher,
+                               Place place)
 {
     if (!work)
         return;
@@ -182,11 +187,48 @@ void dispatch_completion (std::function<void ()> work,
     }
     if (!dispatcher)
         dispatcher = borrow_completion_dispatcher ();
-    dispatcher->post ([work = std::move (work), owner, dispatcher] {
+    auto turn = [work = std::move (work), owner, dispatcher] {
         const completion_turn_scope_t scope{owner != nullptr ? owner : &process_completion_owner,
                                             dispatcher};
         work ();
-    });
+    };
+    place (std::move (turn), std::move (dispatcher));
+}
+}
+
+void dispatch_completion (std::function<void ()> work,
+                          bool inline_allowed,
+                          const void *owner,
+                          completion_dispatcher_borrow_t dispatcher)
+{
+    dispatch_completion_turn (std::move (work), inline_allowed, owner, std::move (dispatcher),
+                              [] (auto turn, auto target) { target->post (std::move (turn)); });
+}
+
+void dispatch_request_completion (std::function<void ()> work,
+                                  const void *owner,
+                                  completion_dispatcher_borrow_t dispatcher)
+{
+    dispatch_completion_turn (
+      std::move (work), false, owner, std::move (dispatcher), [] (auto turn, auto target) {
+          const auto *hooks = runtime_execution_hooks.load (std::memory_order_acquire);
+          if (!current_infrastructure_wait_flag && hooks && hooks->defer_receive_completion) {
+              // Reuse Asio's work credit while placement is deferred or local, so
+              // closing the owner still waits for every accepted completion turn.
+              std::function<void (bool)> placement =
+                [turn = std::move (turn), target,
+                 lifetime = target->retain_turn ()] (bool handed_off) mutable {
+                    if (handed_off)
+                        turn ();
+                    else
+                        target->post (std::move (turn));
+                };
+              if (!hooks->defer_receive_completion (placement))
+                  placement (false);
+              return;
+          }
+          target->post (std::move (turn));
+      });
 }
 
 std::size_t completion_dispatcher_worker_count () noexcept

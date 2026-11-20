@@ -3,6 +3,7 @@
 #include "runtime/foundation/operation_registry.hpp"
 #include "runtime/diagnostics/mesh_request_metrics.hpp"
 #include "runtime/dispatch/dispatch_limits.hpp"
+#include "runtime/dispatch/completion_turn.hpp"
 #include "runtime/execution/task_result.hpp"
 
 #include <zlink/framework/contracts/dispatch/task.hpp>
@@ -282,7 +283,7 @@ void post_completions (operation_completion_chain_t completions) noexcept
         const auto *owner = completion->drain_state.get ();
         // The existing reservation owns the callback and drain lifetime.
         // Capture one raw pointer; the independent turn immediately reclaims it.
-        detail::dispatch_completion (
+        detail::dispatch_request_completion (
           [item = completion.get ()] {
               // Keep the TLS drain identity valid through callback-capture destruction.
               const auto drain_lifetime = item->drain_state;
@@ -294,7 +295,7 @@ void post_completions (operation_completion_chain_t completions) noexcept
                   // A consumer failure must still release its drain reservation.
               }
           },
-          false, owner, std::move (completion->dispatcher));
+          owner, std::move (completion->dispatcher));
         (void) completion.release ();
     }
 }

@@ -2,6 +2,7 @@
 #include <gtest/gtest.h>
 #include "same_owner_claim_controls.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
+#include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/mesh/service_mailbox.hpp"
 #include "runtime/mesh/application_dispatch_terminal_owner.hpp"
 #include "runtime/execution/serial_execution_queue.hpp"
@@ -142,12 +143,7 @@ struct role_t final : rt::offload_executor_t::role_t
     std::function<bool ()> receive = [] { return false; };
     std::function<void ()> publication = [] {};
     bool run () override { return receive (); }
-    bool has_publication = true;
-    bool publish () override
-    {
-        publication ();
-        return has_publication;
-    }
+    void publish () override { publication (); }
 };
 
 template <typename Predicate> bool until (Predicate predicate)
@@ -267,7 +263,6 @@ TEST (ReceiveRoleHandoff, T02EmptyRotationReturnsBeforeMutexRelease)
     auto next = next_rotation.get_future ();
     bool first = true;
     auto role = std::make_shared<role_t> ();
-    role->has_publication = false;
     role->receive = [&] {
         if (std::exchange (first, false))
             return true;
@@ -1041,6 +1036,189 @@ TEST (ReceiveRoleHandoff, T08IndependentCompletionWhileLocalCallbackBlocks)
     EXPECT_EQ (2u, delivered.load ());
     EXPECT_FALSE (operations.complete (a, {}));
     EXPECT_FALSE (operations.complete (b, {}));
+}
+
+// Exercise the operation registry's E5 delivery, including the completion owner
+// scope, rather than scheduling an ordinary application item in publication.
+void receive_completion_placement (unsigned workers)
+{
+    namespace fw = zlink::framework;
+    rt::install_host_context_hooks ();
+    fw::completion_owner_t owner;
+    rt::foundation::operation_registry_t operations;
+    rt::offload_executor_t executor (workers);
+    ASSERT_TRUE (until ([&] { return access_t::idle (executor) == workers; }));
+    std::promise<void> entered, release, receiving, independent, handler;
+    auto entry = entered.get_future ();
+    auto released = release.get_future ().share ();
+    auto next_receive = receiving.get_future ();
+    auto second = independent.get_future ();
+    auto handled = handler.get_future ();
+    std::thread::id receiver, completion;
+    std::atomic_bool stop{false};
+    const rt::foundation::call_id_t a{12, 1}, b{12, 2};
+    const auto deadline = rt::foundation::operation_registry_t::clock_t::time_point::max ();
+    ASSERT_TRUE (operations.register_operation (a, deadline, [&] (auto, auto) {
+        completion = std::this_thread::get_id ();
+        EXPECT_FALSE (access_t::receiving (executor));
+        EXPECT_NE (nullptr, fw::detail::current_completion_owner ());
+        entered.set_value ();
+        released.wait ();
+    }));
+    ASSERT_TRUE (
+      operations.register_operation (b, deadline, [&] (auto, auto) { independent.set_value (); }));
+    unsigned rotations = 0;
+    auto role = std::make_shared<role_t> ();
+    role->receive = [&] {
+        if (rotations++ == 0) {
+            receiver = std::this_thread::get_id ();
+            EXPECT_TRUE (operations.complete (a, {}));
+            EXPECT_TRUE (rt::offload_executor_t::receive_publication_pending ());
+            return true;
+        }
+        // A blocked completion must leave receive/completion progressing.
+        if (rotations == 2) {
+            receiving.set_value ();
+            EXPECT_TRUE (operations.complete (b, {}));
+            EXPECT_TRUE (executor.try_submit_internal ([&] { handler.set_value (); }));
+            return true;
+        }
+        while (!stop.load ())
+            std::this_thread::yield ();
+        return false;
+    };
+    ASSERT_TRUE (executor.start_role (role));
+    const auto started = entry.wait_for (5s);
+    EXPECT_EQ (std::future_status::ready, started);
+    if (started == std::future_status::ready) {
+        std::cout << "E5 receiver=" << receiver << " completion=" << completion
+                  << " application_transitions=" << (receiver != completion)
+                  << " workers=" << workers << '\n';
+        if (workers > 1)
+            EXPECT_EQ (receiver, completion); // zero application thread transitions
+        else
+            EXPECT_NE (receiver, completion); // dispatcher fallback
+    }
+    EXPECT_EQ (std::future_status::ready, next_receive.wait_for (5s));
+    EXPECT_EQ (std::future_status::ready, second.wait_for (5s));
+    if (workers > 1)
+        EXPECT_EQ (std::future_status::ready, handled.wait_for (5s));
+    release.set_value ();
+    stop = true;
+    EXPECT_EQ (workers, executor.owned_thread_count ());
+    executor.drain ();
+    (void) operations.shutdown ();
+}
+
+TEST (ReceiveRoleHandoff, E5CompletionUsesReceiverAfterExclusiveHandoff)
+{
+    receive_completion_placement (3);
+}
+
+TEST (ReceiveRoleHandoff, E5CompletionUsesDispatcherWithoutIdleSuccessor)
+{
+    receive_completion_placement (1);
+}
+
+TEST (ReceiveRoleHandoff, InternalCompletionDoesNotWaitForReceiveReturn)
+{
+    namespace fw = zlink::framework;
+    rt::install_host_context_hooks ();
+    rt::offload_executor_t executor (1);
+    std::promise<void> completed;
+    auto completion = completed.get_future ();
+    std::atomic_bool returned{false};
+    auto role = std::make_shared<role_t> ();
+    role->receive = [&] {
+        fw::detail::dispatch_completion ([&] { completed.set_value (); }, false, &completed);
+        const auto progressed = completion.wait_for (1s);
+        EXPECT_EQ (std::future_status::ready, progressed);
+        returned = true;
+        return false;
+    };
+    ASSERT_TRUE (executor.start_role (role));
+    ASSERT_TRUE (until ([&] { return returned.load (); }));
+    executor.drain ();
+    EXPECT_EQ (std::future_status::ready, completion.wait_for (5s));
+}
+
+TEST (ReceiveRoleHandoff, E5PlacementDoesNotIncreaseWorkerDemand)
+{
+    namespace fw = zlink::framework;
+    rt::install_host_context_hooks ();
+    rt::offload_executor_t executor (2, 4, 0ms);
+    rt::foundation::operation_registry_t operations;
+    ASSERT_TRUE (until ([&] { return access_t::idle (executor) == 2; }));
+    std::promise<std::size_t> workers;
+    auto observed = workers.get_future ();
+    std::promise<void> completion, ordinary;
+    auto completed = completion.get_future ();
+    auto executed = ordinary.get_future ();
+    const rt::foundation::call_id_t call{15, 1};
+    ASSERT_TRUE (operations.register_operation (
+      call, rt::foundation::operation_registry_t::clock_t::time_point::max (),
+      [&] (auto, auto) { completion.set_value (); }));
+    auto role = std::make_shared<role_t> ();
+    role->receive = [&] {
+        EXPECT_TRUE (operations.complete (call, {}));
+        EXPECT_TRUE (executor.try_submit_internal ([&] { ordinary.set_value (); }));
+        workers.set_value (executor.live_worker_count ());
+        return false;
+    };
+    ASSERT_TRUE (executor.start_role (role));
+    EXPECT_EQ (std::future_status::ready, observed.wait_for (5s));
+    const auto source_workers = observed.get ();
+    std::cout << "E5 placement_worker_count=" << source_workers << '\n';
+    EXPECT_EQ (2u, source_workers);
+    EXPECT_EQ (std::future_status::ready, completed.wait_for (5s));
+    EXPECT_EQ (std::future_status::ready, executed.wait_for (5s));
+    executor.drain ();
+    (void) operations.shutdown ();
+}
+
+TEST (ReceiveRoleHandoff, E5DispatcherFallbackReleasesApplicationDrain)
+{
+    namespace fw = zlink::framework;
+    rt::install_host_context_hooks ();
+    fw::completion_owner_t owner;
+    rt::offload_executor_t executor (1);
+    rt::foundation::operation_registry_t operations;
+    std::promise<void> publishing, release, completion;
+    auto published = publishing.get_future ();
+    auto released = release.get_future ().share ();
+    auto completed = completion.get_future ();
+    std::atomic_bool stop{false};
+    const rt::foundation::call_id_t call{13, 1};
+    ASSERT_TRUE (operations.register_operation (
+      call, rt::foundation::operation_registry_t::clock_t::time_point::max (),
+      [&] (auto, auto) { completion.set_value (); }));
+    bool first = true;
+    auto role = std::make_shared<role_t> ();
+    role->receive = [&] {
+        if (std::exchange (first, false)) {
+            EXPECT_TRUE (operations.complete (call, {}));
+            return true;
+        }
+        while (!stop.load ())
+            std::this_thread::yield ();
+        return false;
+    };
+    role->publication = [&] {
+        publishing.set_value ();
+        released.wait ();
+    };
+    ASSERT_TRUE (executor.start_role (role));
+    EXPECT_EQ (std::future_status::ready, published.wait_for (5s));
+    auto draining = std::async (std::launch::async, [&] { executor.drain_application (); });
+    EXPECT_TRUE (until ([&] { return access_t::stopping (executor); }));
+    release.set_value ();
+    EXPECT_EQ (std::future_status::ready, completed.wait_for (5s));
+    const auto application_drained = draining.wait_for (5s);
+    stop = true;
+    executor.drain ();
+    draining.get ();
+    (void) operations.shutdown ();
+    EXPECT_EQ (std::future_status::ready, application_drained);
 }
 
 TEST (ReceiveRoleHandoff, T09ReservedRoleKeepsCreditUntilActualStop)

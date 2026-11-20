@@ -107,6 +107,9 @@ struct runtime_execution_hooks_t
     task_scheduler_t (*capture_scheduler) (completion_dispatcher_borrow_t *);
     task_scheduler_t (*capture_scope_exit_scheduler) ();
     void (*ensure_blocking_allowed) ();
+    // The runtime resolves placement only after the receive rotation returns.
+    // The callback receives whether the existing role handoff selected it.
+    bool (*defer_receive_completion) (std::function<void (bool)> &) = nullptr;
 };
 
 void set_runtime_execution_hooks (const runtime_execution_hooks_t *hooks) noexcept;

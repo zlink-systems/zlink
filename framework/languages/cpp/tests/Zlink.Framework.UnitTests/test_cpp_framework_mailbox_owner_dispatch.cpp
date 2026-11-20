@@ -59,11 +59,10 @@ struct observed_role_t final : rt::offload_executor_t::role_t
             ++receive_rotations;
         return more;
     }
-    bool publish () override
+    void publish () override
     {
-        const bool published = inner->publish ();
+        inner->publish ();
         ++publications;
-        return published;
     }
     std::shared_ptr<rt::offload_executor_t::role_t> inner;
 };

@@ -247,7 +247,7 @@ completion_dispatcher_borrow_t borrow_host_dispatcher ()
 
 constexpr runtime_execution_hooks_t host_execution_hooks{
   &borrow_host_dispatcher, &capture_native_scheduler, &capture_scope_exit_scheduler,
-  &check_blocking_submit_context};
+  &check_blocking_submit_context, &runtime::offload_executor_t::defer_receive_completion};
 } // namespace
 
 } // namespace zlink::framework::detail
