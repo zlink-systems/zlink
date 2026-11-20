@@ -1,0 +1,199 @@
+/* SPDX-License-Identifier: MPL-2.0 */
+
+#include <cerrno>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <string>
+
+// The generated production bodies use the Windows path without requiring a
+// Windows ABI. These stubs test control flow, not native syscall integration.
+#undef ZLINK_HAVE_EVENTFD
+#ifndef ZLINK_HAVE_WINDOWS
+#define ZLINK_HAVE_WINDOWS 1
+#endif
+#ifndef ZLINK_HAVE_WINDOWS_AF_UNIX
+#define ZLINK_HAVE_WINDOWS_AF_UNIX 1
+#endif
+#define MAX_PATH 260
+#define AF_UNIX 1
+#define SOCK_STREAM 1
+#define errno_assert(condition)                                                                    \
+    do {                                                                                           \
+        if (!(condition))                                                                          \
+            std::abort ();                                                                         \
+    } while (0)
+#define wsa_assert(condition) errno_assert (condition)
+#define _wtmpnam_s fake_wtmpnam_s
+#define _wmkdir fake_wmkdir
+#define unlink fake_unlink
+#define rmdir fake_rmdir
+
+typedef int SOCKET;
+typedef unsigned int socklen_t;
+typedef int errno_t;
+struct sockaddr
+{
+};
+struct sockaddr_un
+{
+};
+static int mode, mkdir_calls, bind_calls, tcp_calls, close_calls;
+
+namespace zlink
+{
+typedef int fd_t;
+const fd_t retired_fd = -1;
+int make_fdpair (fd_t *, fd_t *);
+int create_ipc_wildcard_address (std::string &, std::string &);
+class ipc_address_t
+{
+  public:
+    int resolve (const char *) { return 0; }
+    const sockaddr *addr () const { return NULL; }
+    socklen_t addrlen () const { return sizeof (sockaddr); }
+};
+static SOCKET open_socket (int, int, int)
+{
+    if (mode == 2) {
+        errno = EAFNOSUPPORT;
+        return retired_fd;
+    }
+    return 10;
+}
+static int wsa_error_to_errno (int error_)
+{
+    return error_;
+}
+static char *widechar_to_utf8 (const wchar_t *)
+{
+    char *path = static_cast<char *> (std::malloc (5));
+    std::memcpy (path, "temp", 5);
+    return path;
+}
+}
+
+static errno_t _wtmpnam_s (wchar_t (&buffer_)[MAX_PATH])
+{
+    buffer_[0] = L't';
+    buffer_[1] = 0;
+    return 0;
+}
+static int _wmkdir (const wchar_t *)
+{
+    ++mkdir_calls;
+    if (mode == 1) {
+        errno = EACCES;
+        return -1;
+    }
+    return 0;
+}
+static int bind (SOCKET, sockaddr *, socklen_t)
+{
+    ++bind_calls;
+    if (mode == 1 || mode == 4) {
+        errno = ENOENT;
+        return -1;
+    }
+    return 0;
+}
+static int listen (SOCKET, int)
+{
+    if (mode == 3) {
+        errno = EIO;
+        return -1;
+    }
+    return 0;
+}
+static int WSAGetLastError ()
+{
+    return errno;
+}
+static int getsockname (SOCKET, sockaddr *, socklen_t *)
+{
+    return 0;
+}
+static int connect (SOCKET, const sockaddr *, socklen_t)
+{
+    return 0;
+}
+static SOCKET accept (SOCKET, sockaddr *, socklen_t *)
+{
+    return 11;
+}
+static int closesocket (SOCKET)
+{
+    ++close_calls;
+    errno = EBADF;
+    return 0;
+}
+static int fake_unlink (const char *)
+{
+    errno = ERANGE;
+    return 0;
+}
+static int fake_rmdir (const char *)
+{
+    errno = ERANGE;
+    return 0;
+}
+static int make_fdpair_tcpip (zlink::fd_t *r_, zlink::fd_t *w_)
+{
+    ++tcp_calls;
+    *r_ = 20;
+    *w_ = 21;
+    return 0;
+}
+
+@WILDCARD_BODY@
+@FDPAIR_BODY@
+
+int main ()
+{
+    int total_violations = 0;
+    for (mode = 0; mode != 5; ++mode) {
+        int violations = 0;
+        for (int iteration = 1; iteration <= 40; ++iteration) {
+            mkdir_calls = bind_calls = tcp_calls = close_calls = 0;
+            zlink::fd_t r = zlink::retired_fd, w = zlink::retired_fd;
+            errno = 0;
+            const int rc = zlink::make_fdpair (&r, &w);
+            const int error = errno;
+            bool ok = false;
+            switch (mode) {
+                case 0:
+                    ok = rc == 0 && r == 11 && w == 10 && mkdir_calls == 1 && bind_calls == 1
+                         && tcp_calls == 0 && close_calls == 1;
+                    break;
+                case 1:
+                    ok = rc == -1 && error == EACCES && r == zlink::retired_fd
+                         && w == zlink::retired_fd && mkdir_calls == 1 && bind_calls == 0
+                         && tcp_calls == 0 && close_calls == 1;
+                    break;
+                case 2:
+                    ok = rc == 0 && r == 20 && w == 21 && mkdir_calls == 0 && bind_calls == 0
+                         && tcp_calls == 1 && close_calls == 0;
+                    break;
+                case 3:
+                    ok = rc == -1 && error == EIO && r == zlink::retired_fd
+                         && w == zlink::retired_fd && mkdir_calls == 1 && bind_calls == 1
+                         && tcp_calls == 0 && close_calls == 1;
+                    break;
+                case 4:
+                    ok = rc == 0 && r == 20 && w == 21 && mkdir_calls == 1 && bind_calls == 1
+                         && tcp_calls == 1 && close_calls == 1;
+                    break;
+            }
+            if (!ok) {
+                ++violations;
+                std::printf ("mode=%d iteration=%02d rc=%d errno=%d mkdir=%d bind=%d tcp=%d "
+                             "closes=%d contract=FAIL\n",
+                             mode, iteration, rc, error, mkdir_calls, bind_calls, tcp_calls,
+                             close_calls);
+            }
+        }
+        std::printf ("SUMMARY mode=%d iterations=40 violations=%d\n", mode, violations);
+        total_violations += violations;
+    }
+    return total_violations ? 1 : 0;
+}
