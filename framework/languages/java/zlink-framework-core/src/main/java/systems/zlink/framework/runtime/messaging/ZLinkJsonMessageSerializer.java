@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.JsonToken;
+import com.fasterxml.jackson.core.util.JsonRecyclerPools;
 import com.fasterxml.jackson.databind.DeserializationContext;
 import com.fasterxml.jackson.databind.JsonDeserializer;
 import com.fasterxml.jackson.databind.JsonMappingException;
@@ -44,6 +45,8 @@ public final class ZLinkJsonMessageSerializer
 
     ZLinkJsonMessageSerializer(ObjectMapper mapper) {
         this.mapper = mapper;
+        // Scratch storage must outlive the short-lived virtual threads used by handler workers.
+        mapper.getFactory().setRecyclerPool(JsonRecyclerPools.sharedConcurrentDequePool());
     }
 
     @Override
