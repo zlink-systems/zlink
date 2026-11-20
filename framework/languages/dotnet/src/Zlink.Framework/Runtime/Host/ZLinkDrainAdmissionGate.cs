@@ -53,18 +53,33 @@ internal sealed class ZLinkRelocationRollbackLease : IDisposable
 
 internal sealed class ZLinkDrainAdmissionGate
 {
+    private const int SealedBit = 4;
     private readonly ZLinkStateLane _lane = new();
     private int _acceptedActorAdmissions;
     private long _actorAdmissionEpoch;
     private TaskCompletionSource? _actorAdmissionsDrained;
     private int _draining;
-    private int _sealed;
-    private ZLinkDrainOwner _owner;
+
+    // Owner and seal share one atomic publication; readers never combine different turns.
+    private int _admissionState;
+
+    // Every admission-state writer runs in a turn of _lane (including Seal, reset
+    // and ClaimShutdown). No writer can intervene between this read and exchange;
+    // concurrent readers use the single atomic publication without entering the lane.
+    private ZLinkDrainOwner Owner
+    {
+        get => (ZLinkDrainOwner)(Volatile.Read(ref _admissionState) & ~SealedBit);
+        set =>
+            Interlocked.Exchange(
+                ref _admissionState,
+                (Volatile.Read(ref _admissionState) & SealedBit) | (int)value
+            );
+    }
     private ZLinkRelocationRollbackLease? _rollbackLease;
 
     public bool IsDraining => RunState(() => _draining != 0);
 
-    internal ZLinkDrainOwner DrainOwner => RunState(() => _owner);
+    internal ZLinkDrainOwner DrainOwner => RunState(() => Owner);
 
     public bool BeginDrain() => BeginDrain(ZLinkDrainOwner.Relocation);
 
@@ -78,12 +93,12 @@ internal sealed class ZLinkDrainAdmissionGate
             {
                 if (
                     owner == ZLinkDrainOwner.Shutdown
-                    && (_owner is ZLinkDrainOwner.Relocation or ZLinkDrainOwner.RelocationRollback)
+                    && (Owner is ZLinkDrainOwner.Relocation or ZLinkDrainOwner.RelocationRollback)
                 )
                 {
                     var rollbackLease = _rollbackLease;
                     _rollbackLease = null;
-                    _owner = ZLinkDrainOwner.Shutdown;
+                    Owner = ZLinkDrainOwner.Shutdown;
                     return (Started: true, RollbackLease: rollbackLease);
                 }
                 else
@@ -92,7 +107,7 @@ internal sealed class ZLinkDrainAdmissionGate
             else
             {
                 _draining = 1;
-                _owner = owner;
+                Owner = owner;
                 return (Started: true, RollbackLease: (ZLinkRelocationRollbackLease?)null);
             }
         });
@@ -107,27 +122,21 @@ internal sealed class ZLinkDrainAdmissionGate
             _draining = 1;
             var current = _rollbackLease;
             _rollbackLease = null;
-            _owner = ZLinkDrainOwner.Shutdown;
-            _sealed = 1;
+            Interlocked.Exchange(ref _admissionState, (int)ZLinkDrainOwner.Shutdown | SealedBit);
             return current;
         });
         rollbackLease?.Invalidate();
     }
 
-    public bool IsSealed => RunState(() => _sealed != 0);
+    public bool IsSealed => (Volatile.Read(ref _admissionState) & SealedBit) != 0;
 
     //  Spec 30 §14 step 1: the mesh node follows the host's *shutdown* seal
     //  (no new peer admission). A relocation fence also seals application
     //  admission but is not a shutdown, so the owner decides.
     internal bool IsSealedForShutdown =>
-        AwaitStateLane(
-            _lane.RunAsync(
-                static gate => gate._sealed != 0 && gate._owner == ZLinkDrainOwner.Shutdown,
-                this
-            )
-        );
+        Volatile.Read(ref _admissionState) == ((int)ZLinkDrainOwner.Shutdown | SealedBit);
 
-    public void Seal() => RunState(() => _sealed = 1);
+    public void Seal() => RunState(() => Interlocked.Or(ref _admissionState, SealedBit));
 
     public void Reset()
     {
@@ -138,10 +147,9 @@ internal sealed class ZLinkDrainAdmissionGate
                     "The drain admission gate cannot reset while actor admissions are active."
                 );
             _actorAdmissionsDrained = null;
-            _sealed = 0;
+            Interlocked.Exchange(ref _admissionState, 0);
             _draining = 0;
             _rollbackLease = null;
-            _owner = ZLinkDrainOwner.None;
         });
     }
 
@@ -153,7 +161,7 @@ internal sealed class ZLinkDrainAdmissionGate
             if (_draining != 0)
                 return (Started: false, Snapshot: default(ZLinkActorAdmissionSnapshot));
             _draining = 1;
-            _owner = ZLinkDrainOwner.Relocation;
+            Owner = ZLinkDrainOwner.Relocation;
             return (
                 Started: true,
                 Snapshot: new ZLinkActorAdmissionSnapshot(
@@ -179,7 +187,7 @@ internal sealed class ZLinkDrainAdmissionGate
                 RunState(() =>
                 {
                     _draining = 0;
-                    _owner = ZLinkDrainOwner.None;
+                    Owner = ZLinkDrainOwner.None;
                 });
         }
     }
@@ -187,19 +195,18 @@ internal sealed class ZLinkDrainAdmissionGate
     internal bool TryReopenRelocationFence(Func<bool> reopen)
     {
         ArgumentNullException.ThrowIfNull(reopen);
-        if (!RunState(() => _owner == ZLinkDrainOwner.Relocation && _acceptedActorAdmissions == 0))
+        if (!RunState(() => Owner == ZLinkDrainOwner.Relocation && _acceptedActorAdmissions == 0))
             return false;
         if (!reopen())
             return false;
         return RunState(() =>
         {
-            if (_owner != ZLinkDrainOwner.Relocation || _acceptedActorAdmissions != 0)
+            if (Owner != ZLinkDrainOwner.Relocation || _acceptedActorAdmissions != 0)
                 return false;
 
             _actorAdmissionsDrained = null;
-            _sealed = 0;
+            Interlocked.Exchange(ref _admissionState, 0);
             _draining = 0;
-            _owner = ZLinkDrainOwner.None;
             return true;
         });
     }
@@ -209,18 +216,18 @@ internal sealed class ZLinkDrainAdmissionGate
     )
     {
         ArgumentNullException.ThrowIfNull(acquire);
-        if (!RunState(() => _owner == ZLinkDrainOwner.Relocation && _acceptedActorAdmissions == 0))
+        if (!RunState(() => Owner == ZLinkDrainOwner.Relocation && _acceptedActorAdmissions == 0))
             return new ZLinkRelocationRollbackLeaseAcquisition(false, null);
         if (!acquire())
             return new ZLinkRelocationRollbackLeaseAcquisition(false, null);
         return RunState(() =>
         {
-            if (_owner != ZLinkDrainOwner.Relocation || _acceptedActorAdmissions != 0)
+            if (Owner != ZLinkDrainOwner.Relocation || _acceptedActorAdmissions != 0)
                 return new ZLinkRelocationRollbackLeaseAcquisition(false, null);
 
             var lease = new ZLinkRelocationRollbackLease();
             _rollbackLease = lease;
-            _owner = ZLinkDrainOwner.RelocationRollback;
+            Owner = ZLinkDrainOwner.RelocationRollback;
             return new ZLinkRelocationRollbackLeaseAcquisition(true, lease);
         });
     }
@@ -244,7 +251,7 @@ internal sealed class ZLinkDrainAdmissionGate
         ArgumentNullException.ThrowIfNull(complete);
         if (
             !RunState(() =>
-                _owner == ZLinkDrainOwner.RelocationRollback
+                Owner == ZLinkDrainOwner.RelocationRollback
                 && ReferenceEquals(_rollbackLease, lease)
                 && lease.IsCurrent
                 && _acceptedActorAdmissions == 0
@@ -256,7 +263,7 @@ internal sealed class ZLinkDrainAdmissionGate
         var completed = RunState(() =>
         {
             if (
-                _owner != ZLinkDrainOwner.RelocationRollback
+                Owner != ZLinkDrainOwner.RelocationRollback
                 || !ReferenceEquals(_rollbackLease, lease)
                 || !lease.IsCurrent
                 || _acceptedActorAdmissions != 0
@@ -265,9 +272,8 @@ internal sealed class ZLinkDrainAdmissionGate
 
             _rollbackLease = null;
             _actorAdmissionsDrained = null;
-            _sealed = 0;
+            Interlocked.Exchange(ref _admissionState, 0);
             _draining = 0;
-            _owner = ZLinkDrainOwner.None;
             return true;
         });
         if (completed)
