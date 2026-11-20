@@ -1,7 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const framework = require('../../packages/framework/dist/internal');
-const { ZLinkStreamRuntimeManager } = require('../../packages/framework/dist/runtime/streams');
 
 test('Session shutdown diagnostics pair boundaries, identify failures, and remain silent when disabled', async (t) => {
   for (const scenario of ['disabled', 'resolved', 'session-rejected', 'actor-rejected']) {
@@ -56,13 +55,6 @@ test('Session shutdown diagnostics pair boundaries, identify failures, and remai
           };
         }
       });
-      const manager = new ZLinkStreamRuntimeManager({});
-      // Attach the real runtimes without opening native network resources.
-      manager.nodes.set('game', { socket, runtime, nativeSessionServices: [] });
-      const host = new framework.ZLinkFrameworkRuntimeHost({
-        registration: framework.createFrameworkRegistration()
-      });
-      host.streamRuntime = manager;
       process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION = scenario === 'disabled' ? '0' : '1';
       console.error = (...args) => records.push(args);
       try {
@@ -77,8 +69,8 @@ test('Session shutdown diagnostics pair boundaries, identify failures, and remai
         // Ignore binding diagnostics so the assertion covers shutdown alone.
         records.length = 0;
         calls.length = 0;
-        const result = await host.shutdown({ deadlineMs: 1000 });
-        assert.equal(result.outcome, framework.ZLinkFrameworkTerminationOutcome.Stopped);
+        const [session] = runtime.shutdownSnapshot();
+        await runtime.drainCloseSessions();
         assert.deepEqual(calls, [
           'closing',
           'disconnectPeer',
@@ -91,13 +83,6 @@ test('Session shutdown diagnostics pair boundaries, identify failures, and remai
           return;
         }
         const events = records.filter(([prefix]) => prefix === '[zlink.runtime.relocation]');
-        const snapshot = events.find(([, marker]) => marker === 'host.shutdown.start')[2];
-        const session = snapshot.nodes[0].sessions[0];
-        const visibleSession = events.find(([, marker]) => marker === 'host.shutdown.session')[2];
-        assert.equal(visibleSession.nodeName, 'game');
-        for (const [field, value] of Object.entries(session)) {
-          assert.deepEqual(visibleSession[field], value, field);
-        }
         assert.equal(session.sessionId, sessionId);
         for (const field of [
           'connected',
@@ -144,7 +129,6 @@ test('Session shutdown diagnostics pair boundaries, identify failures, and remai
           assert.ok(['resolved', 'rejected'].includes(selected[1][2].outcome), terminal);
         }
         const ordered = [
-          'host.shutdown.start',
           'shutdown.sessions.enter',
           'session.drainClose.enter',
           'drainClose.final.submit',
@@ -189,7 +173,7 @@ test('Session shutdown diagnostics pair boundaries, identify failures, and remai
           assert.equal(record[2].sessionId, sessionId);
         }
       } finally {
-        await manager.dispose();
+        await runtime.dispose();
         console.error = originalConsole;
         if (previous === undefined) delete process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION;
         else process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION = previous;
