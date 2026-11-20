@@ -17,7 +17,10 @@ cd "$root"
 # CPP_BUILD_DIR is configured by the caller with WITH_ETCD=ON and its dependency prefixes.
 cmake --build "$cpp_build" --parallel "${CMAKE_BUILD_PARALLEL_LEVEL:-1}" \
   --target zlink_location_store_provider_adapter >"$ZLINK_ETCD_TEST_LOG_DIR/cpp-build.log" 2>&1
-(cd framework/languages/node/packages/framework-locations-etcd && npm run build) \
+# tsc -b builds the referenced framework package but not its generated protobuf module;
+# the Node workspace build emits it with the same script.
+(cd framework/languages/node/packages/framework-locations-etcd && npm run build \
+  && cd ../.. && node scripts/generate-channel-header.mjs --dist) \
   >"$ZLINK_ETCD_TEST_LOG_DIR/node-build.log" 2>&1
 dotnet build framework/languages/dotnet/tests/Zlink.Framework.LocationStore.ProviderAdapter/Zlink.Framework.LocationStore.ProviderAdapter.csproj \
   -c Release -m:1 --disable-build-servers -p:UseSharedCompilation=false -o "$output/dotnet" \
