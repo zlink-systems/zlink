@@ -73,10 +73,12 @@ public final class Program {
     }
 
     @Bean
-    ZLinkFrameworkConfigurer supportFramework(SampleTopology topology) {
+    ZLinkFrameworkConfigurer supportFramework(
+            SampleTopology topology, ZLinkRedisLocationStore locations) {
         SampleTopology.Support support = topology.support();
         URI channelEndpoint = URI.create(support.channelEndpoint());
         return options -> {
+            options.addLocationStore(locations);
             options.configureLocations();
             options.addRelocationStore(
                     new ZLinkRedisRelocationStore(

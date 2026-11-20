@@ -59,8 +59,12 @@ public final class ApiServerApplication {
     }
 
     @Bean
-    ZLinkFrameworkConfigurer apiFramework(ApiSettings settings) {
-        return ApiServer.configure(settings);
+    ZLinkFrameworkConfigurer apiFramework(ApiSettings settings, ZLinkRedisLocationStore locations) {
+        ZLinkFrameworkConfigurer server = ApiServer.configure(settings);
+        return options -> {
+            options.addLocationStore(locations);
+            server.configure(options);
+        };
     }
 
     @Bean(destroyMethod = "close")
