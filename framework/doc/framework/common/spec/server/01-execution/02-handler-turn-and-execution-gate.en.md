@@ -296,8 +296,12 @@ constraints.
 
 **Acquiring it also acquires exclusivity.** Only one processing
 authority per owner with a gate exists at a time. Each processing authority is given a
-non-reusable number used to decide whether a late completion belongs to
-it — this fencing number is an internal confirmation condition.
+non-reusable identity used to decide whether a late completion belongs to
+it. It may be a monotonically increasing number or the identity of an object kept alive
+until the processing authority ends. Either way it can never equal the identity of a
+processing authority that already ended on the same owner (with object identity, the
+object is kept until every late completion has finished checking it, so its address is
+not reused). This fencing identity is an internal confirmation condition.
 
 **Handing work off between threads rules out thread-bound storage.**
 Execution authority can guarantee "only one at a time" while not fixing
@@ -650,7 +654,7 @@ and `Defer()` operations and their error (`InvalidOperation`), the Actor
 Join completion callback, handler execution order — and observable
 application/infrastructure progress events — timeout, shutdown, peer
 acceptance. Conditions confirmable only through internal structure
-(fencing numbers, the yield-debt mark, the FIFO wakeup mechanism,
+(fencing identities, the yield-debt mark, the FIFO wakeup mechanism,
 non-use of thread-local, lock count, independence of execution resources
 from Spot count) are owned by each rule paragraph as an "internal
 confirmation condition" and are not listed here.
