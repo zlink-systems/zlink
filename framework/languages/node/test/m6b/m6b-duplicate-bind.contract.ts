@@ -11,6 +11,9 @@ import {
 
 import { RequestResult, SubmitResult } from '@zlink-systems/zlink';
 import { ZLinkFrameworkRuntimeHost } from '../../packages/framework/src/runtime/host';
+import { ZLinkSpotSerialTurnExecutor } from '../../packages/framework/src/runtime/spots/spot-serial-turn-executor';
+import { ZLinkSpotSerialExecutor } from '../../packages/framework/src/runtime/spots/spot-serial-executor';
+import { ZLinkUserSpotExecutionMode } from '../../packages/framework/src/contracts';
 import {
   ReadyDomain,
   ReceiveKind,
@@ -412,6 +415,24 @@ for (const cancel of [false, true]) {
     t.mock.timers.enable({ apis: ['setTimeout'] });
     const fixture = makeFixture(undefined, 100);
     const lifecycle = new AbortController();
+    const executor = new ZLinkSpotSerialExecutor(
+      new ZLinkSpotSerialTurnExecutor(false),
+      ZLinkUserSpotExecutionMode.PerActor,
+      'user-spot-a'
+    );
+    Object.assign(fixture.host, {
+      spotManager: {
+        executeActorTurn: (
+          _mesh: string,
+          _spot: string,
+          actorId: string,
+          operation: () => Promise<void>
+        ) => {
+          fixture.gateCalls.push([actorId]);
+          return executor.executeActorLifecycle(actorId, operation);
+        }
+      }
+    });
     let callbackSignal: AbortSignal | undefined;
     let entered!: () => void;
     const started = new Promise<void>((resolve) => {
@@ -445,8 +466,27 @@ for (const cancel of [false, true]) {
     assert.equal(fixture.errors.length, cancel ? 0 : 1);
     assert.equal(fixture.replies.length, 1);
     assert.equal(fixture.replies[0]?.terminal, RequestResult.Ok);
-    release();
+    let nextTurnStarted = false;
+    const nextTurn = executor.executeActorLifecycle('actor-a', async () => {
+      nextTurnStarted = true;
+    });
     await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(fixture.errors.length, cancel ? 0 : 1);
+    assert.equal(nextTurnStarted, false);
+    const unhandled: unknown[] = [];
+    const onUnhandled = (error: unknown): void => {
+      unhandled.push(error);
+    };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      release();
+      await new Promise((resolve) => setImmediate(resolve));
+      await nextTurn;
+      assert.equal(nextTurnStarted, true);
+      assert.deepEqual(unhandled, []);
+      assert.equal(fixture.errors.length, cancel ? 0 : 1);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+      await executor.closeChildren();
+    }
   });
 }
