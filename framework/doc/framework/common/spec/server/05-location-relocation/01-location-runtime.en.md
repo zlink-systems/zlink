@@ -542,7 +542,8 @@ number precision).
 | `pendingCreation` | Creation-in-progress state (§7). `null` when absent; when present, includes `reservationId`, `requestContentReference`, `requestSha256` (hex, 64 characters), and `requestEncodedSize` (integer). `requestContentReference` has the form `inline-v1:{base64url}`, where `{base64url}` encodes the creation request bytes over the alphabet `A-Z a-z 0-9 - _` with no `=` padding. No other form is recognized. |
 | `aggregate` | Progress of the aggregate change this record takes part in (§8.1). The field is omitted when absent. When present, it includes `aggregateId` (lowercase canonical UUID), `aggregateGeneration` (integer as a string), `index` (JSON number, position in the participant list), `expectedStoreVersion`, `ownerTransition` (`preserve \| newOwner`), `targetAuthorityOwnerGeneration` (integer as a string), and `authorityPayloadSha256`·`membershipMutationSha256` (64 hex characters). |
 | `visibleStoreVersion` | While `aggregate` is present, the value the framework exposes as the public `StoreVersion`. Even when aggregate preparation rewrites this record, the public `StoreVersion` stays at its pre-preparation value. The field is omitted when `aggregate` is absent. |
-| `aggregate.relocation` | Relocation progress of this authority record (§9.1). Includes `relocationId` (lowercase canonical UUID), `phase` (`preparing \| captured \| prepared \| committed \| activating \| activated \| cleaning \| completed \| aborted`), `source`, `target`, `coordinator`, `sourceInventorySha256` (64 hex characters), and `applicationVersion` (integer as a string). `source` and `target` hold `nodeRid`, `nodeGeneration`, `ownerId`, and `ownerLeaseGeneration`; `target` also holds `attemptGeneration`. `target` is `null` in `preparing` and `captured` and complete from `prepared` on. 64-bit integers are strings. |
+| `aggregate.relocation` | Relocation progress of this authority record (§9.1). Includes `relocationId` (lowercase canonical UUID), `phase` (`preparing \| captured \| prepared \| committed \| activating \| activated \| cleaning \| completed \| aborted`), `source`, `target`, `coordinator`, `sourceInventorySha256` (64 hex characters), and `applicationVersion` (integer as a string). `source` and `target` hold `nodeRid`, `nodeGeneration`, `ownerId`, and `ownerLeaseGeneration`; `target` also holds `attemptGeneration`. `target` is `null` in `preparing` and `captured` and complete from `prepared` on. `aborted` keeps the `target` of the phase it aborted from, so it is `null` after an abort from `preparing` or `captured` and complete after an abort from `prepared` or later. 64-bit integers are strings. |
+| `aggregate.relocation.completion` | Progress of the §9.3 completion record. First written in the target commit CAS, and removed together with the relocation progress information. `acceptedRequests` is the number of requests the source accepted and the target finishes: the requests in the queue fixed by capture plus the requests relayed before the cutover boundary ([Relocation flow §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover)). It's fixed at target commit and never changed afterwards. A request that arrives after the boundary is an ordinary request the target received and isn't counted. The other fields are `completedResults`, `pendingDeliveries` (all string integers), `reference` (the root-list reference of the completion record payload, `null` while there is no completion result), and `sha256` (SHA-256 of that payload's full bytes, 64 hex characters, `null` when `reference` is `null`). With no accepted request, `acceptedRequests` is `"0"`. Sends, events, and timers aren't counted in `acceptedRequests`. |
 | `aggregate.relocation.coordinator.expectedStoreVersion` | The original authority StoreVersion the coordinator that started the move read. An opaque string compared only for equality. Distinct from the current expected StoreVersion of a phase CAS. |
 
 The node that runs the creation decodes `requestContentReference` and verifies that the
@@ -1910,6 +1911,31 @@ completion result and payload in the Relocation Store first, then changes the Lo
 Store's payload location, checksum, completion count, and delivery-pending count in a
 single CAS.**
 
+The completion record payload is a JSON object stored in the [Relocation Store common blob format](03-relocation-store-redis.en.md),
+serialized in [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785) canonical form. Integers are decimal strings with no sign and no leading zeros. `OperationId` is written like the §3.4 creation terminal key: its big-endian 16 bytes as 32 lowercase hex characters. `ReplyRouteId` (`u64`) is a decimal string. `nodeRid` is the RoutingId raw bytes in lowercase hex. `reply` is [RFC 4648 §4](https://www.rfc-editor.org/rfc/rfc4648#section-4) standard base64 (with padding, no line breaks). Object order is the UTF-8 authority-key byte order of [Relocation flow §4.2](04-relocation-flow.en.md#42-stop-source-execution-not-message-reception).
+
+| Field | Meaning |
+|---|---|
+| `formatVersion` | Currently `1`. Any other value isn't read and is handled as `DataLost`. |
+| `relocationId` | The relocation this record belongs to. Must equal the Location Store's `aggregate.relocation.relocationId`. |
+| `entries` | Array of completion results, in object order and, within one object, in the order the source accepted the requests. |
+| `entries[].objectKey` | Authority logical key of the object that produced the result. |
+| `entries[].source` | The source request information from the table above (`ownerId`, `leaseGeneration`, `nodeRid`, `nodeGeneration`). |
+| `entries[].operationId`, `entries[].replyRouteId` | The values from the table above. |
+| `entries[].reply` | The final reply bytes produced by the existing reply serialization, base64-encoded. Holds both success and failure results. |
+| `entries[].delivery` | One of `pending`, `terminalReceived`, `alreadyTerminal`, `sourceLeaseExpired`. Changes from `pending` to the matching value once, when the basis in the table below is obtained. |
+
+Adding a completion result or changing `delivery` never edits the existing payload. The Framework stores the whole
+payload under a new reference, verifies it, then changes `reference`, `sha256`, `completedResults`, and
+`pendingDeliveries` in a single CAS. Several results or confirmations can be combined into one replacement.
+`completedResults` must equal the number of `entries` and `pendingDeliveries` the number of entries whose `delivery`
+is `pending`; otherwise it's `DataLost`. A reply is sent to the original requester only after the CAS that holds its
+result. A previous payload that's no longer referenced after a replacement is deleted after its retention.
+
+After a Store error or a dropped connection during delivery, the target sends the `pending` entries of the payload `reference` points to again on the current route, within the same execution. What happens after the target's execution ends follows the failure contract of [Host relocation and shutdown](05-host-relocation-flow.en.md). After the target's execution ends, no other runtime takes over this relocation, per [failure policy §5](06-failure-failover-policy.en.md#5-host-relocation-failure); the stored completion record is used only when that policy activates the object again. In that case the runtime sends only the reply bytes of the `pending` entries again before activation, and doesn't run the handler, Restore, unfinished queue work, or target selection again.
+
+If adding a result would make the encoded payload exceed the common blob limit of the [Relocation Store](03-relocation-store-redis.en.md), the Framework stores an `InternalFailure` failure reply (failure code `requestFailed`, [Framework error model §2](../00-foundation/07-framework-error-model.en.md)) as that entry's `reply` instead of the request's reply bytes. The request already ran and only its result bytes couldn't be kept, so no new error kind is added. Entries already stored don't change, and the relocation doesn't become a failure.
+
 `Completed` is only recorded when the accepted request count equals the completion
 result count and the delivery-pending count is 0. Otherwise it's a recovery error.
 
@@ -1920,9 +1946,15 @@ result count and the delivery-pending count is 0. Otherwise it's a recovery erro
 | `SourceLeaseExpired` | The Location Store confirmed the source owner lease has ended. |
 
 Connection closure or reconnection alone isn't judged as having received the completion
-result. The target keeps delivering on the current route. If the `Relocate` deadline
-passes while the source owner lease is still valid, it's `ForceStopped`. In this case
-the relocation root, payload, and reply bytes are retained for 24 hours.
+result. The target keeps delivering on the current route. The `Relocate` deadline only ends the `Relocate`
+call; it doesn't stop delivery. Until `pendingDeliveries` reaches 0 — until every entry has obtained a basis from
+the table above — the Framework keeps `aggregate.relocation.completion` and the payload `reference` points to, and
+extends the retention of the payload's data chunks and root list by the renew rule of the
+[Relocation Store](03-relocation-store-redis.en.md). While `pendingDeliveries` is greater than 0, the next
+`Relocate` of that object ends as `Blocked/OperationInProgress`, and the Framework writes to the runtime log that the
+reason is a pending delivery, together with the `RelocationId` and `pendingDeliveries`. Languages whose result
+carries a description string put the same reason in that string as well. When `pendingDeliveries` reaches 0,
+the existing terminal cleanup removes the relocation progress information and the payload.
 
 ### 9.4 Cancellation Before Relay-Ready Is Accepted
 
