@@ -66,6 +66,7 @@ function makeFixture(
     }
   };
   const gateCalls: unknown[][] = [];
+  const errors: unknown[] = [];
   const host = Object.assign(Object.create(ZLinkFrameworkRuntimeHost.prototype), {
     options: { registration: { sessionReplacementCallbackTimeoutMs: timeoutMs } },
     actorManager: { getState: () => state },
@@ -89,9 +90,17 @@ function makeFixture(
         return (args.at(-1) as () => Promise<void>)();
       }
     },
-    runtimeOrPreStartErrorSink: { reportRuntimeTaskException() {} }
+    runtimeOrPreStartErrorSink: {
+      reportRuntimeTaskException(_name: string, error: unknown) {
+        errors.push(error);
+      }
+    }
   }) as unknown as {
-    dispatchMeshActorBinding(meshName: string, record: ReceiveRecord): Promise<void>;
+    dispatchMeshActorBinding(
+      meshName: string,
+      record: ReceiveRecord,
+      signal?: AbortSignal
+    ): Promise<void>;
   };
   const record = {
     kind: ReceiveKind.ActorBinding,
@@ -135,7 +144,7 @@ function makeFixture(
       return SubmitResult.Ok;
     }
   } as unknown as ReceiveRecord;
-  return { host, state, current, installed, replies, gateCalls, record };
+  return { host, state, current, installed, replies, gateCalls, record, errors };
 }
 
 test('duplicate bind acceptance commits through the Actor gate', async () => {
@@ -328,5 +337,116 @@ for (const scenario of sameNodeCases) {
     } finally {
       runtime.close();
     }
+  });
+}
+
+for (const kind of ['first', 'duplicate', 'idempotent'] as const) {
+  test(`session bound notification commits before callback and reply: ${kind}`, async () => {
+    const fixture = makeFixture(async () => undefined);
+    if (kind === 'first') Object.assign(fixture.state, { boundSession: undefined });
+    if (kind === 'idempotent')
+      Object.assign(fixture.state, {
+        boundSession: {
+          ...fixture.current,
+          sessionNodeRid: 'session-node-incoming',
+          sessionRid: 'session-incoming',
+          sessionOwnerNodeGeneration: 6n
+        }
+      });
+    const calls: unknown[] = [];
+    Object.assign(fixture.state.actor, {
+      onSessionBound(incoming: unknown, signal: AbortSignal) {
+        assert.equal(fixture.installed.length, 1);
+        assert.equal(fixture.replies.length, 1);
+        assert.equal(signal.aborted, false);
+        calls.push(incoming);
+      }
+    });
+    await fixture.host.dispatchMeshActorBinding('actor-mesh', fixture.record);
+    assert.deepEqual(calls, [
+      {
+        sessionOwnerNodeRid: 'session-node-incoming',
+        sessionOwnerNodeGeneration: 6n,
+        bindingGeneration: 2n
+      }
+    ]);
+    assert.equal(fixture.gateCalls.length, 1);
+    assert.equal(fixture.replies.length, 1);
+    assert.deepEqual(fixture.errors, []);
+  });
+}
+
+test('rejected bind does not notify', async () => {
+  const fixture = makeFixture(async () => 'rejected');
+  let calls = 0;
+  Object.assign(fixture.state.actor, {
+    onSessionBound() {
+      calls++;
+    }
+  });
+  await fixture.host.dispatchMeshActorBinding('actor-mesh', fixture.record);
+  assert.equal(calls, 0);
+  assert.equal(fixture.replies[0]?.terminal, RequestResult.Rejected);
+});
+
+for (const asynchronous of [false, true]) {
+  test(`bound notification failure is reported once without changing bind: async=${asynchronous}`, async () => {
+    const fixture = makeFixture();
+    const failure = new Error('notification failed');
+    Object.assign(fixture.state.actor, {
+      onSessionBound() {
+        if (asynchronous) return Promise.reject(failure);
+        throw failure;
+      }
+    });
+    await fixture.host.dispatchMeshActorBinding('actor-mesh', fixture.record);
+    assert.deepEqual(fixture.errors, [failure]);
+    assert.equal(fixture.replies.length, 1);
+    assert.equal(fixture.replies[0]?.terminal, RequestResult.Ok);
+    assert.equal(fixture.installed.length, 1);
+  });
+}
+
+for (const cancel of [false, true]) {
+  test(`bound notification cancellation preserves bind and reports only timeout: shutdown=${cancel}`, async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const fixture = makeFixture(undefined, 100);
+    const lifecycle = new AbortController();
+    let callbackSignal: AbortSignal | undefined;
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let release!: () => void;
+    Object.assign(fixture.state.actor, {
+      async onSessionBound(_incoming: unknown, signal: AbortSignal) {
+        callbackSignal = signal;
+        entered();
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        throw new Error('late callback failure');
+      }
+    });
+    const dispatch = fixture.host.dispatchMeshActorBinding(
+      'actor-mesh',
+      fixture.record,
+      lifecycle.signal
+    );
+    // A missing callback must fail deterministically instead of awaiting an unfulfilled promise.
+    assert.equal(fixture.gateCalls.length, 1);
+    await started;
+    if (cancel) lifecycle.abort();
+    // Allow the callback-start continuation to arm its existing timeout.
+    await Promise.resolve();
+    t.mock.timers.tick(100);
+    await dispatch;
+    assert.equal(callbackSignal?.aborted, true);
+    assert.equal(fixture.errors.length, cancel ? 0 : 1);
+    assert.equal(fixture.replies.length, 1);
+    assert.equal(fixture.replies[0]?.terminal, RequestResult.Ok);
+    release();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(fixture.errors.length, cancel ? 0 : 1);
   });
 }

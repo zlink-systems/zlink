@@ -2208,6 +2208,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     LABELS "framework-unit;framework-contract;framework-actor;stream"
     TIER contract
     TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_session_bound_policy
+    COMMAND test_cpp_framework_actor_gateway --session-bound-policy
+    LABELS "framework-unit;framework-contract;framework-actor;stream"
+    TIER contract
+    TIMEOUT 30)
   target_include_directories(test_cpp_framework_actor_gateway PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   foreach(termination_case physical logical disconnect-then-shutdown)
@@ -2994,6 +3000,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     LABELS "framework-integration;framework-contract;stream;stream-session"
     TIER contract
     TIMEOUT 30)
+  foreach(bound_failure_case IN ITEMS standard nonstandard)
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_framework_same_node_duplicate_bind_bound_${bound_failure_case}_error
+      COMMAND test_cpp_framework_same_node_duplicate_bind bound-${bound_failure_case}-error
+      LABELS "framework-integration;framework-contract;stream;stream-session"
+      TIER contract
+      TIMEOUT 30)
+  endforeach()
   add_zlink_framework_test(
     test_cpp_framework_stream_framework
     tests/Zlink.Framework.UnitTests/test_cpp_framework_stream_framework.cpp

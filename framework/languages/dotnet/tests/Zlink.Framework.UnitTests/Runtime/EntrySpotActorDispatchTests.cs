@@ -3177,10 +3177,12 @@ public sealed partial class EntrySpotActorDispatchTests
         RoutingId SessionNode
     )> CreateDuplicateBindFixtureAsync(
         TimeSpan? callbackTimeout = null,
-        ZLinkUserSpotExecutionMode? userSpotMode = null
+        ZLinkUserSpotExecutionMode? userSpotMode = null,
+        TimeProvider? callbackTime = null,
+        CapturingSpotNode? nodeOverride = null
     )
     {
-        var node = new CapturingSpotNode();
+        var node = nodeOverride ?? new CapturingSpotNode();
         var (runtime, actorRef) = await CreateStartedRuntimeAsync(
             node,
             meshResolverWrapper: resolver => new AdmittedPeerDescriptors(
@@ -3190,6 +3192,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 71
             ),
             sessionReplacementCallbackTimeout: callbackTimeout,
+            joinTimeProvider: callbackTime,
             userSpotType: userSpotMode is null ? null : typeof(JoinTargetSpot),
             userSpotExecutionMode: userSpotMode ?? ZLinkUserSpotExecutionMode.SpotWide
         );
@@ -14343,8 +14346,7 @@ public sealed partial class EntrySpotActorDispatchTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
-    internal sealed class ProbeActor(string actorId, IZLinkActorContext? context = null)
-        : IZLinkActor
+    internal class ProbeActor(string actorId, IZLinkActorContext? context = null) : IZLinkActor
     {
         internal int OwnedDisconnectCalls { get; set; }
 
