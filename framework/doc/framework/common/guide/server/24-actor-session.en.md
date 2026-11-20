@@ -88,11 +88,44 @@ When the client names its id, the Actor for that id is found or created and boun
     --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/sessions/AuthenticateHandler.java:session-actor-bind"
     ```
 
+    Override `onSessionBound` on the Actor to receive notification after a bind is committed.
+
+    ```java
+    @Override
+    public CompletionStage<Void> onSessionBound(
+            ZLinkSessionBindingIdentity incoming,
+            ZLinkActorCallbackCancellation cancellation) {
+        return CompletableFuture.completedFuture(null);
+    }
+    ```
+
+    The callback runs in the Actor's handler order. An exception or timeout leaves the successful
+    bind unchanged. The default implementation does nothing; without an override, binding does
+    not wait for the Actor gate. See the
+    [API reference](../../../java/reference/05-actor-relocation.en.md#zlinkactoronsessionbound) for cancellation
+    and failure handling.
+
 === "Kotlin"
 
     ```kotlin
     --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/sessions/SessionHandlers.kt:session-actor-bind"
     ```
+
+    Override `onSessionBoundSuspending` on the Actor to receive notification after a bind is committed.
+
+    ```kotlin
+    override suspend fun onSessionBoundSuspending(
+        incoming: ZLinkSessionBindingIdentity,
+        cancellation: ZLinkActorCallbackCancellation,
+    ) {
+        // Update application state using the committed binding.
+    }
+    ```
+
+    The default implementation does nothing. An overridden callback runs once in Actor handler order
+    after the bind commits. Exceptions and timeouts preserve the successful bind. The callback checks
+    `cancellation.isCancellationRequested` for cancellation requests. The Framework reports failures
+    and timeouts as runtime task exceptions.
 
 === "Node/TypeScript"
 

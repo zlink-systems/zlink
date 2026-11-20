@@ -86,11 +86,43 @@ client가 자기 id를 보내면, 그 id의 Actor를 찾거나 만들어 이 연
     --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/sessions/AuthenticateHandler.java:session-actor-bind"
     ```
 
+    Actor는 `onSessionBound`를 재정의해 bind 확정 통지를 받을 수 있다.
+
+    ```java
+    @Override
+    public CompletionStage<Void> onSessionBound(
+            ZLinkSessionBindingIdentity incoming,
+            ZLinkActorCallbackCancellation cancellation) {
+        return CompletableFuture.completedFuture(null);
+    }
+    ```
+
+    Callback은 Actor의 handler 순서에서 실행된다. 예외나 시간 초과는 이미 성공한 bind를
+    바꾸지 않는다. 기본 구현은 아무것도 하지 않으며, 재정의하지 않으면 bind는 Actor gate를
+    기다리지 않는다. [API reference](../../../java/reference/05-actor-relocation.ko.md#zlinkactoronsessionbound)에서
+    취소와 오류 처리를 확인할 수 있다.
+
 === "Kotlin"
 
     ```kotlin
     --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/sessions/SessionHandlers.kt:session-actor-bind"
     ```
+
+    Actor는 `onSessionBoundSuspending`를 재정의해 bind 확정 통지를 받을 수 있다.
+
+    ```kotlin
+    override suspend fun onSessionBoundSuspending(
+        incoming: ZLinkSessionBindingIdentity,
+        cancellation: ZLinkActorCallbackCancellation,
+    ) {
+        // 확정된 binding으로 application 상태를 갱신한다.
+    }
+    ```
+
+    기본 구현은 아무것도 하지 않는다. 재정의한 callback은 bind 확정 뒤 Actor handler 순서에서
+    한 번 실행되며, 예외나 시간 초과는 성공한 bind를 바꾸지 않는다. Callback은 전달받은
+    `cancellation.isCancellationRequested`로 취소 요청을 확인한다. Framework는 실패와 시간 초과를
+    runtime task 예외로 보고한다.
 
 === "Node/TypeScript"
 
