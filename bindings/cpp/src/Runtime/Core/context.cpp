@@ -7,7 +7,9 @@
 
 #include <zlink.h>
 
+#include <atomic>
 #include <cerrno>
+#include <mutex>
 #include <stdexcept>
 
 namespace zlink
@@ -20,8 +22,8 @@ void *create_context ()
 {
     size_t count = 0;
     size_t required = 0;
-    const auto result = zlink_socket_connection_attempts_snapshot (
-      nullptr, nullptr, 0, &count, nullptr, 0, &required);
+    const auto result = zlink_socket_connection_attempts_snapshot (nullptr, nullptr, 0, &count,
+                                                                   nullptr, 0, &required);
     if (result != ZLINK_CONFIG_INVALID_HANDLE)
         throw std::runtime_error ("connection snapshot protocol violation: Core capability check");
     return zlink_ctx_new ();
@@ -36,19 +38,24 @@ int context_option_id_value (detail::context_option_id option_) noexcept
 
 struct context_t::impl
 {
-    void *ctx = nullptr;
+    std::atomic<void *> ctx{nullptr};
     std::string thread_name_prefix;
+    // Core allows one zlink_ctx_term per context: one caller runs the close and
+    // later callers wait for its outcome.
+    std::mutex close_mutex;
 
     close_result_t terminate () noexcept
     {
-        if (!ctx)
+        std::lock_guard<std::mutex> lock (close_mutex);
+        void *handle = ctx.load (std::memory_order_acquire);
+        if (!handle)
             return close_result_t::ok;
-        const auto shutdown_result = static_cast<close_result_t> (zlink_ctx_shutdown (ctx));
+        const auto shutdown_result = static_cast<close_result_t> (zlink_ctx_shutdown (handle));
         if (shutdown_result != close_result_t::ok)
             return shutdown_result;
-        const auto term_result = static_cast<close_result_t> (zlink_ctx_term (ctx));
+        const auto term_result = static_cast<close_result_t> (zlink_ctx_term (handle));
         if (term_result == close_result_t::ok)
-            ctx = nullptr;
+            ctx.store (nullptr, std::memory_order_release);
         return term_result;
     }
 };
@@ -62,10 +69,10 @@ context_t::context_t (io_thread_count_t io_threads_) : _impl (std::make_unique<i
 {
     _impl->ctx = create_context ();
     if (_impl->ctx)
-        (void) zlink_ctx_set (
-          _impl->ctx,
-          static_cast<zlink_ctx_option_t> (context_option_id_value (detail::context_option_id::io_threads)),
-          io_threads_.value ());
+        (void) zlink_ctx_set (_impl->ctx,
+                              static_cast<zlink_ctx_option_t> (
+                                context_option_id_value (detail::context_option_id::io_threads)),
+                              io_threads_.value ());
 }
 
 context_t::~context_t ()
@@ -126,8 +133,8 @@ core_hwm_budget_snapshot_t context_t::core_hwm_budget_snapshot () const
     zlink_auto_hwm_budget_snapshot_t native{};
     native.abi_version = ZLINK_AUTO_HWM_BUDGET_SNAPSHOT_ABI_V1;
     native.struct_size = sizeof (native);
-    detail::throw_if_failed<config_error_t> (static_cast<config_result_t> (
-      zlink_ctx_get_auto_hwm_budget_snapshot (_impl->ctx, &native)));
+    detail::throw_if_failed<config_error_t> (
+      static_cast<config_result_t> (zlink_ctx_get_auto_hwm_budget_snapshot (_impl->ctx, &native)));
 
     core_hwm_budget_snapshot_t snapshot;
     snapshot._abi_version = native.abi_version;
@@ -146,8 +153,7 @@ core_hwm_budget_snapshot_t context_t::core_hwm_budget_snapshot () const
     snapshot._current_accounted_bytes = native.current_accounted_bytes;
     snapshot._provisional_accounted_bytes = native.provisional_accounted_bytes;
     snapshot._peak_accounted_bytes = native.peak_accounted_bytes;
-    snapshot._completion_current_accounted_bytes =
-      native.completion_current_accounted_bytes;
+    snapshot._completion_current_accounted_bytes = native.completion_current_accounted_bytes;
     snapshot._completion_peak_accounted_bytes = native.completion_peak_accounted_bytes;
     snapshot._completion_pending_message_count = native.completion_pending_message_count;
     snapshot._total_messaging_accounted_bytes = native.total_messaging_accounted_bytes;
@@ -162,8 +168,7 @@ core_hwm_budget_snapshot_t context_t::core_hwm_budget_snapshot () const
       native.active_completion_directional_queue_count;
     snapshot._active_send_queue_count = native.active_send_queue_count;
     snapshot._active_receive_queue_count = native.active_receive_queue_count;
-    snapshot._outstanding_application_lease_count =
-      native.outstanding_application_lease_count;
+    snapshot._outstanding_application_lease_count = native.outstanding_application_lease_count;
     snapshot._retired_queue_count = native.retired_queue_count;
     snapshot._deferred_origin_credit_bytes = native.deferred_origin_credit_bytes;
     snapshot._unlimited_manual_queue_count = native.unlimited_manual_queue_count;
@@ -178,8 +183,8 @@ void context_t::reset_core_hwm_budget_metrics ()
 {
     if (!_impl || !_impl->ctx)
         throw config_error_t (config_result_t::invalid_handle);
-    detail::throw_if_failed<config_error_t> (static_cast<config_result_t> (
-      zlink_ctx_reset_auto_hwm_budget_metrics (_impl->ctx)));
+    detail::throw_if_failed<config_error_t> (
+      static_cast<config_result_t> (zlink_ctx_reset_auto_hwm_budget_metrics (_impl->ctx)));
 }
 
 void context_t::term_noexcept () noexcept
@@ -226,8 +231,8 @@ uint64_t context_t::get_option_uint64_raw (int option_) const
         throw config_error_t (config_result_t::invalid_handle);
     uint64_t value = 0;
     size_t size = sizeof (value);
-    const config_result_t result = static_cast<config_result_t> (zlink_ctx_get_data (
-      _impl->ctx, static_cast<zlink_ctx_option_t> (option_), &value, &size));
+    const config_result_t result = static_cast<config_result_t> (
+      zlink_ctx_get_data (_impl->ctx, static_cast<zlink_ctx_option_t> (option_), &value, &size));
     detail::throw_if_failed<config_error_t> (result);
     if (size != sizeof (value))
         throw config_error_t (config_result_t::invalid_argument, EINVAL);
@@ -247,12 +252,12 @@ namespace detail
 
 void *context_access_t::native_handle (context_t &ctx_) noexcept
 {
-    return ctx_._impl ? ctx_._impl->ctx : nullptr;
+    return ctx_._impl ? ctx_._impl->ctx.load () : nullptr;
 }
 
 const void *context_access_t::native_handle (const context_t &ctx_) noexcept
 {
-    return ctx_._impl ? ctx_._impl->ctx : nullptr;
+    return ctx_._impl ? ctx_._impl->ctx.load () : nullptr;
 }
 
 } // namespace detail
@@ -276,8 +281,8 @@ void context_options_t::io_threads (io_thread_count_t value_)
 socket_count_t context_options_t::max_sockets () const
 {
     int error = 0;
-    const int value =
-      _ctx.get_option_raw (context_option_id_value (detail::context_option_id::max_sockets), &error);
+    const int value = _ctx.get_option_raw (
+      context_option_id_value (detail::context_option_id::max_sockets), &error);
     if (error != 0)
         throw config_error_t (static_cast<config_result_t> (error));
     return socket_count_t::value (value);
@@ -292,8 +297,8 @@ void context_options_t::max_sockets (socket_count_t value_)
 std::optional<thread_priority_t> context_options_t::thread_priority () const
 {
     int error = 0;
-    const int value =
-      _ctx.get_option_raw (context_option_id_value (detail::context_option_id::thread_priority), &error);
+    const int value = _ctx.get_option_raw (
+      context_option_id_value (detail::context_option_id::thread_priority), &error);
     if (error != 0)
         throw config_error_t (static_cast<config_result_t> (error));
     if (value == -1)
@@ -310,8 +315,8 @@ void context_options_t::thread_priority (thread_priority_t value_)
 thread_scheduling_policy_t context_options_t::thread_scheduling_policy () const
 {
     int error = 0;
-    const int value =
-      _ctx.get_option_raw (context_option_id_value (detail::context_option_id::thread_sched_policy), &error);
+    const int value = _ctx.get_option_raw (
+      context_option_id_value (detail::context_option_id::thread_sched_policy), &error);
     if (error != 0)
         throw config_error_t (static_cast<config_result_t> (error));
     return static_cast<thread_scheduling_policy_t> (value);
@@ -319,8 +324,9 @@ thread_scheduling_policy_t context_options_t::thread_scheduling_policy () const
 
 void context_options_t::thread_scheduling_policy (thread_scheduling_policy_t value_)
 {
-    detail::throw_if_failed<config_error_t> (_ctx.set_option_raw (
-      context_option_id_value (detail::context_option_id::thread_sched_policy), static_cast<int> (value_)));
+    detail::throw_if_failed<config_error_t> (
+      _ctx.set_option_raw (context_option_id_value (detail::context_option_id::thread_sched_policy),
+                           static_cast<int> (value_)));
 }
 
 std::string context_options_t::thread_name_prefix () const
@@ -355,8 +361,8 @@ void context_options_t::blocky (bool enabled_)
 bool context_options_t::auto_hwm_enabled () const
 {
     int error = 0;
-    const int value =
-      _ctx.get_option_raw (context_option_id_value (detail::context_option_id::auto_hwm_enable), &error);
+    const int value = _ctx.get_option_raw (
+      context_option_id_value (detail::context_option_id::auto_hwm_enable), &error);
     if (error != 0)
         throw config_error_t (static_cast<config_result_t> (error));
     return value != 0;
@@ -380,9 +386,9 @@ std::chrono::milliseconds context_options_t::auto_hwm_recalc_debounce () const
 
 void context_options_t::auto_hwm_recalc_debounce (std::chrono::milliseconds value_)
 {
-    detail::throw_if_failed<config_error_t> (
-      _ctx.set_option_raw (context_option_id_value (detail::context_option_id::auto_hwm_recalc_debounce_ms),
-                           detail::native_option_ms (value_)));
+    detail::throw_if_failed<config_error_t> (_ctx.set_option_raw (
+      context_option_id_value (detail::context_option_id::auto_hwm_recalc_debounce_ms),
+      detail::native_option_ms (value_)));
 }
 
 byte_count_t context_options_t::core_hwm_memory_limit_bytes () const
@@ -407,15 +413,14 @@ byte_count_t context_options_t::core_hwm_budget_bytes () const
 void context_options_t::core_hwm_budget_bytes (byte_count_t value_)
 {
     detail::throw_if_failed<config_error_t> (_ctx.set_option_uint64_raw (
-      context_option_id_value (detail::context_option_id::core_hwm_budget_bytes),
-      value_.bytes ()));
+      context_option_id_value (detail::context_option_id::core_hwm_budget_bytes), value_.bytes ()));
 }
 
 zlink::auto_hwm_profile context_options_t::core_hwm_profile () const
 {
     int error = 0;
-    const int value =
-      _ctx.get_option_raw (context_option_id_value (detail::context_option_id::auto_hwm_profile), &error);
+    const int value = _ctx.get_option_raw (
+      context_option_id_value (detail::context_option_id::auto_hwm_profile), &error);
     if (error != 0)
         throw config_error_t (static_cast<config_result_t> (error));
     return static_cast<zlink::auto_hwm_profile> (value);
@@ -423,15 +428,16 @@ zlink::auto_hwm_profile context_options_t::core_hwm_profile () const
 
 void context_options_t::core_hwm_profile (zlink::auto_hwm_profile profile_)
 {
-    detail::throw_if_failed<config_error_t> (_ctx.set_option_raw (
-      context_option_id_value (detail::context_option_id::auto_hwm_profile), static_cast<int> (profile_)));
+    detail::throw_if_failed<config_error_t> (
+      _ctx.set_option_raw (context_option_id_value (detail::context_option_id::auto_hwm_profile),
+                           static_cast<int> (profile_)));
 }
 
 socket_count_t context_options_t::socket_limit () const
 {
     int error = 0;
-    const int value =
-      _ctx.get_option_raw (context_option_id_value (detail::context_option_id::socket_limit), &error);
+    const int value = _ctx.get_option_raw (
+      context_option_id_value (detail::context_option_id::socket_limit), &error);
     if (error != 0)
         throw config_error_t (static_cast<config_result_t> (error));
     return socket_count_t::value (value);
@@ -456,7 +462,8 @@ void context_options_t::add_thread_affinity (cpu_index_t cpu_)
 void context_options_t::remove_thread_affinity (cpu_index_t cpu_)
 {
     detail::throw_if_failed<config_error_t> (_ctx.set_option_raw (
-      context_option_id_value (detail::context_option_id::thread_affinity_cpu_remove), cpu_.value ()));
+      context_option_id_value (detail::context_option_id::thread_affinity_cpu_remove),
+      cpu_.value ()));
 }
 
 } // namespace zlink
