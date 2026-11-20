@@ -113,6 +113,12 @@ struct actor_bound_session_route_t
     std::string session_owner_id;
     std::uint64_t session_owner_lease_generation = 0;
 
+    bool is_same_physical_session (const actor_bound_session_route_t &other) const
+    {
+        return node_rid == other.node_rid && node_generation == other.node_generation
+               && session_rid == other.session_rid;
+    }
+
     friend bool operator== (const actor_bound_session_route_t &,
                             const actor_bound_session_route_t &) = default;
 };

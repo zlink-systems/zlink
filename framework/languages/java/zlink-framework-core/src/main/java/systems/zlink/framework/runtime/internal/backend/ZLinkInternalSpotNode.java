@@ -551,8 +551,8 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
                 };
 
         /** Applies the decided binding in the state owner turn, outside the user callback. */
-        default CompletionStage<Boolean> commit(
-                java.util.function.Supplier<CompletionStage<Boolean>> transition) {
+        default <T> CompletionStage<T> commit(
+                java.util.function.Supplier<CompletionStage<T>> transition) {
             return transition.get();
         }
 
@@ -568,6 +568,13 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
                                 RemoteSessionBindingTransition, CompletionStage<Boolean>>
                         transition) {
             return transition.apply(this);
+        }
+
+        /** Notifies the Actor after commit, without changing the bind reply. */
+        default CompletionStage<Void> sessionBound(
+                systems.zlink.framework.actors.ZLinkSessionBindingIdentity incoming,
+                Duration callbackTimeout) {
+            return CompletableFuture.completedFuture(null);
         }
 
         default CompletionStage<java.util.Optional<String>> decideDuplicateBind(

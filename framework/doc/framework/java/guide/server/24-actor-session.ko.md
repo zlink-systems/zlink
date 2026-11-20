@@ -64,6 +64,22 @@ client가 자기 id를 보내면, 그 id의 Actor를 찾거나 만들어 이 연
 --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/sessions/AuthenticateHandler.java:session-actor-bind"
 ```
 
+Actor는 `onSessionBound`를 재정의해 bind 확정 통지를 받을 수 있다.
+
+```java
+@Override
+public CompletionStage<Void> onSessionBound(
+        ZLinkSessionBindingIdentity incoming,
+        ZLinkActorCallbackCancellation cancellation) {
+    return CompletableFuture.completedFuture(null);
+}
+```
+
+Callback은 Actor의 handler 순서에서 실행된다. 예외나 시간 초과는 이미 성공한 bind를
+바꾸지 않는다. 기본 구현은 아무것도 하지 않으며, 재정의하지 않으면 bind는 Actor gate를
+기다리지 않는다. [API reference](../../../java/reference/05-actor-relocation.ko.md#zlinkactoronsessionbound)에서
+취소와 오류 처리를 확인할 수 있다.
+
 **같은 id로 다시 접속하면 있던 Actor에 묶인다.** 그래서 만들기와 찾기를 한 호출로 처리한다.
 
 ### 3.2 남은 packet을 넘기기
