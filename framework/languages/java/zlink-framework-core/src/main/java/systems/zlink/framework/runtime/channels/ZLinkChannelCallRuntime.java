@@ -41,6 +41,7 @@ final class ZLinkChannelCallRuntime {
                 RoutingId targetNode,
                 String targetSpot,
                 long targetSpotGeneration,
+                long targetNodeGeneration,
                 long authorityOwnerGeneration,
                 long ownerLeaseGeneration,
                 List<Message> parts);
@@ -281,6 +282,7 @@ final class ZLinkChannelCallRuntime {
             RoutingId targetNode,
             String targetSpot,
             long targetSpotGeneration,
+            long targetNodeGeneration,
             long authorityOwnerGeneration,
             long ownerLeaseGeneration,
             List<Message> parts) {
@@ -289,6 +291,7 @@ final class ZLinkChannelCallRuntime {
                 targetNode,
                 targetSpot,
                 targetSpotGeneration,
+                targetNodeGeneration,
                 authorityOwnerGeneration,
                 ownerLeaseGeneration,
                 parts);

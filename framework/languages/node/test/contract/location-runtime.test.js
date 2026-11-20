@@ -1454,6 +1454,32 @@ test('location runtime does not install a reclaimed lease after stop races with 
   assert.deepEqual(released, [{ ownerId: 'owner-a', leaseGeneration: 2n }]);
 });
 
+test('owner cleanup ends the heartbeat so stop leaves no owner lease (#4902)', async () => {
+  // Host shutdown runs owner cleanup, then disposes transports, then stops the runtime.
+  // A 10 ms heartbeat fires several times in that window.
+  const store = testInMemoryLocationStore();
+  const runtime = new internal.ZLinkLocationRuntime({
+    stores: {
+      locationStore: store,
+      authorityStore: store,
+      peerStore: store,
+      spotStore: store,
+      actorStore: store,
+      routeStore: store,
+      ownerLeaseStore: store
+    },
+    ownerId: 'owner-4902',
+    options: { ownerLeaseRenewIntervalMs: 10 }
+  });
+
+  await runtime.start(rid('node-4902'));
+  await runtime.cleanupOwner();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  await runtime.stop();
+
+  assert.deepEqual(await store.readOwnerLease('owner-4902'), { kind: 'missing' });
+});
+
 test('location runtime stamps owner id, reports stale ownership, and removes rows on stop', async () => {
   const store = testInMemoryLocationStore(() => new Date(Date.UTC(2026, 6, 3, 0, 0, 0)));
   const oldOwner = runtimeFor(store, { ownerId: 'owner-a' });
@@ -3614,6 +3640,36 @@ test('production repository restarts an expired owner cleanup scan from its firs
   assert.equal(await repository.removeAllByOwner(claimed.token), 1n);
   assert.equal(scanCalls >= 2, true);
   assert.equal((await repository.listMeshNodes('play')).items.length, 1);
+});
+
+test('production repository release retries after a renewal of the same token lands first (#4902)', async () => {
+  const now = new Date(Date.UTC(2026, 6, 3, 0, 0, 0));
+  const inner = new internal.ZLinkInMemoryProviderLocationStore(() => now);
+  const leaseRepository = testLocationStoreRepository(inner, () => now);
+  const claimed = await leaseRepository.claimOwnerLease('owner-renewed', 30_000);
+  assert.equal(claimed.kind, 'claimed');
+  let renewed = false;
+  const provider = {
+    read: inner.read.bind(inner),
+    scan: inner.scan.bind(inner),
+    async write(request, signal) {
+      if (!renewed && request.mutations.some((mutation) => mutation.kind === 'delete')) {
+        renewed = true;
+        assert.equal(
+          (await leaseRepository.renewOwnerLease(claimed.token, 30_000)).kind,
+          'renewed'
+        );
+      }
+      return await inner.write(request, signal);
+    }
+  };
+  const repository = testLocationStoreRepository(provider, () => now);
+
+  assert.equal(await repository.releaseOwnerLease(claimed.token), 'released');
+  assert.equal(renewed, true);
+  assert.deepEqual(await repository.readOwnerLease('owner-renewed'), { kind: 'missing' });
+  // A token that no longer holds the lease is still reported as stale.
+  assert.equal(await repository.releaseOwnerLease(claimed.token), 'stale');
 });
 
 test('production repository does not delete a row after its owner lease is replaced', async () => {

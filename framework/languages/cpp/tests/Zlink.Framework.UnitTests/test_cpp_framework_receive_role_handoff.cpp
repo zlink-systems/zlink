@@ -7,6 +7,7 @@
 #include "runtime/execution/serial_execution_queue.hpp"
 #include "runtime/foundation/operation_registry.hpp"
 #include <zlink/framework/contracts/channels/call.hpp>
+#include "../support/allocation_counter.hpp"
 #include "scope_exit.hpp"
 
 #include <atomic>
@@ -16,11 +17,10 @@
 #include <algorithm>
 #include <iostream>
 
-#ifdef ZLINK_TEST_HANDOFF_ALLOC_FAIL
+#ifdef ZLINK_TEST_HANDOFF_TRYLOCK_WRAP
 #include <pthread.h>
 namespace
 {
-thread_local int allocation_failure_after = -1;
 std::atomic<pthread_mutex_t *> observed_mutex{nullptr};
 std::atomic_uint observed_attempts{0};
 }
@@ -30,16 +30,6 @@ extern "C" int __wrap_pthread_mutex_trylock (pthread_mutex_t *mutex)
     if (mutex == observed_mutex.load ())
         ++observed_attempts;
     return __real_pthread_mutex_trylock (mutex);
-}
-extern "C" void *real_allocate (std::size_t) __asm__ ("__real__Znwm");
-extern "C" void *wrapped_allocate (std::size_t) __asm__ ("__wrap__Znwm");
-extern "C" void *wrapped_allocate (std::size_t size)
-{
-    if (allocation_failure_after >= 0 && allocation_failure_after-- == 0) {
-        allocation_failure_after = -1;
-        throw std::bad_alloc ();
-    }
-    return real_allocate (size);
 }
 #endif
 
@@ -79,7 +69,7 @@ struct offload_executor_test_access_t
         std::lock_guard lock (executor._mutex);
         return executor._role_active;
     }
-#ifdef ZLINK_TEST_HANDOFF_ALLOC_FAIL
+#ifdef ZLINK_TEST_HANDOFF_TRYLOCK_WRAP
     static void observe_attempts (offload_executor_t &executor)
     {
         observed_attempts = 0;
@@ -294,7 +284,7 @@ TEST (ReceiveRoleHandoff, T03RotationHasOneReceiverAndOneAttempt)
 {
     rt::offload_executor_t executor (3);
     ASSERT_TRUE (until ([&] { return access_t::idle (executor) == 3; }));
-#ifdef ZLINK_TEST_HANDOFF_ALLOC_FAIL
+#ifdef ZLINK_TEST_HANDOFF_TRYLOCK_WRAP
     access_t::observe_attempts (executor);
     const zlink::framework::test::scope_exit_t reset_observer ([] { observed_mutex = nullptr; });
 #endif
@@ -365,7 +355,7 @@ TEST (ReceiveRoleHandoff, T03RotationHasOneReceiverAndOneAttempt)
     EXPECT_EQ (1u, maximum.load ());
     EXPECT_EQ (rotations, publications);
     EXPECT_EQ (rotations, handoffs + failures);
-#ifdef ZLINK_TEST_HANDOFF_ALLOC_FAIL
+#ifdef ZLINK_TEST_HANDOFF_TRYLOCK_WRAP
     EXPECT_EQ (rotations, observed_attempts.load ());
     EXPECT_EQ (observed_attempts.load (), handoffs + failures);
 #endif
@@ -626,7 +616,7 @@ TEST (SameOwner, ShutdownAgainstEnqueueAndSettlement)
 
 TEST (SameOwner, ClaimAllocationFailureRepublishesUntakenOriginal)
 {
-#ifdef ZLINK_TEST_HANDOFF_ALLOC_FAIL
+    auto &allocations_before_failure = zlink::framework::tests::allocations_before_failure;
     for (int allocation = 0; allocation != 3; ++allocation) {
         SCOPED_TRACE (allocation);
         mesh::service_mailbox_t mailbox;
@@ -639,15 +629,17 @@ TEST (SameOwner, ClaimAllocationFailureRepublishesUntakenOriginal)
         ASSERT_TRUE (mailbox.begin_application_drain ("node"));
         bool failed = false;
         original_t original;
-        allocation_failure_after = allocation;
+        allocations_before_failure = allocation;
         try {
             (void) take_independent (mailbox, "node", original);
         }
         catch (const std::bad_alloc &) {
             failed = true;
         }
-        allocation_failure_after = -1;
+        const bool failure_injected = !allocations_before_failure.has_value ();
+        allocations_before_failure.reset ();
         EXPECT_TRUE (failed);
+        EXPECT_TRUE (failure_injected);
         EXPECT_FALSE (original);
         EXPECT_EQ (2u, mailbox.pending_messages (mesh::service_mailbox_domain_t::application));
         EXPECT_EQ (2u, publications);
@@ -663,9 +655,6 @@ TEST (SameOwner, ClaimAllocationFailureRepublishesUntakenOriginal)
         mailbox.end_application_drain ("node");
     }
     same_owner_negative_controls ();
-#else
-    GTEST_SKIP () << "allocation injection requires Linux/GNU linker wrapping";
-#endif
 }
 
 TEST (SameOwner, RejectedReadyPublicationKeepsNextOriginal)
@@ -1220,7 +1209,6 @@ TEST (ReceiveRoleHandoff, T10BatchPublicationIsPerOwnerAndKeepsQueueFifo)
 
 TEST (ReceiveRoleHandoff, T11QueueAllocationFailurePreservesRecordAndNotification)
 {
-#ifdef ZLINK_TEST_HANDOFF_ALLOC_FAIL
     rt::offload_executor_t executor (1);
     std::promise<void> busy, release;
     auto entered = busy.get_future ();
@@ -1253,9 +1241,11 @@ TEST (ReceiveRoleHandoff, T11QueueAllocationFailurePreservesRecordAndNotificatio
         return mailbox.take_application_receive_turn ();
     };
     auto ready = prepare (0);
-    allocation_failure_after = 0;
+    auto &allocations_before_failure = zlink::framework::tests::allocations_before_failure;
+    allocations_before_failure = 0;
     EXPECT_THROW (mesh::service_mailbox_t::notify_application_ready (ready), std::bad_alloc);
-    allocation_failure_after = -1;
+    EXPECT_FALSE (allocations_before_failure.has_value ());
+    allocations_before_failure.reset ();
     ASSERT_TRUE (ready);
     EXPECT_EQ ((std::list<std::string>{"node-0"}), ready->first);
     EXPECT_EQ (0u, calls.load ());
@@ -1266,15 +1256,17 @@ TEST (ReceiveRoleHandoff, T11QueueAllocationFailurePreservesRecordAndNotificatio
     unsigned records = 1;
     for (; records != 256; ++records) {
         ready = prepare (records);
-        allocation_failure_after = 1;
+        allocations_before_failure = 1;
         try {
             mesh::service_mailbox_t::notify_application_ready (ready);
         }
         catch (const std::bad_alloc &) {
             publication_failed = true;
         }
-        allocation_failure_after = -1;
+        const bool failure_injected = !allocations_before_failure.has_value ();
+        allocations_before_failure.reset ();
         if (publication_failed) {
+            EXPECT_TRUE (failure_injected);
             ASSERT_TRUE (ready);
             EXPECT_EQ ((std::list<std::string>{"node-" + std::to_string (records)}), ready->first);
             ++records;
@@ -1291,9 +1283,6 @@ TEST (ReceiveRoleHandoff, T11QueueAllocationFailurePreservesRecordAndNotificatio
     executor.drain ();
     EXPECT_EQ (records, calls.load ());
     EXPECT_EQ (0u, mailbox.pending_messages (mesh::service_mailbox_domain_t::application));
-#else
-    GTEST_SKIP () << "allocation injection requires Linux/GNU linker wrapping";
-#endif
 }
 
 TEST (ReceiveRoleHandoff, T11PublicationExceptionRetainsUnacceptedOwner)

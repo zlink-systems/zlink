@@ -2171,14 +2171,15 @@ task_t<zlink::submit_result_t> mesh_node_runtime_t::send_to_actor (
   std::uint64_t authority_owner_generation,
   std::uint64_t owner_lease_generation,
   std::optional<runtime::protocol::actor_message_header_t::bound_session_source_t>
-    bound_session_source)
+    bound_session_source,
+  std::uint64_t node_generation)
 {
     if (!_node) {
         throw configuration_error ("MeshNode has not started");
     }
     co_return co_await _node->send_to_actor (target, parts, metadata, authority_owner_generation,
                                              owner_lease_generation,
-                                             std::move (bound_session_source));
+                                             std::move (bound_session_source), node_generation);
 }
 
 task_t<zlink::submit_result_t> mesh_node_runtime_t::request_to_actor (
@@ -3854,7 +3855,7 @@ request_task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_appli
         if (kind == runtime::messaging::message_kind_t::command) {
             const auto submitted = co_await send_to_actor (
               native_actor, encoded.items (), {}, authority_owner_generation,
-              owner_lease_generation, wire_bound_session_source);
+              owner_lease_generation, wire_bound_session_source, node_generation);
             if (submitted != zlink::submit_result_t::ok) {
                 co_return result_t<std::optional<zlink::message_t>>::failure (
                   runtime::messaging::map_submit_result_error_kind (submitted),

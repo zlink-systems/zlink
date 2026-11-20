@@ -1,5 +1,9 @@
 # MyGame FPS development guide
 
+## Client connection
+
+Use [Client connection in README](README.md#client-connection) for this template's endpoint, first application flow, connector choices and Java example. Keep the endpoint and packet order consistent with `server/config/`, Session startup, shared DTOs and the e2e client. Register push handlers before sending; preserve the documented join and HTTP preconditions. TCP listeners cannot serve browser, WebGL or Cocos Creator web targets. Use the release pinned by `build.gradle.kts` extra `frameworkVersion` for connectors and `bindingVersion` for the binding; `<version>` and `<binding-version>` in this file refer to those keys. Do not add literal release versions or copy engine sample packets into this template.
+
 ## Rules for AI
 
 `server/lobby` is an HTTP lobby that holds no game state; every other server process is a stateful ZLink node. Before writing code, decide which kind you are editing.

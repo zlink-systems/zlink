@@ -882,7 +882,7 @@ string으로 encode한다. Ref는 runtime resource나 local object를 소유하�
 relocation route switch 뒤 같은 ActorId·ObjectGeneration과 target MeshName·NodeRid를 담은 새 immutable
 ActorRef snapshot을 반환하며, 이전에 반환된 ref 값은 변경하지 않는다. 일반 message는 global ID로
 current authority를 찾으며 ref의 location을 target으로 고정하지 않는다. Destroy와 Close는 특정 incarnation을 가리키는 ref를
-받는다. 같은 incarnation이 없으면 `false`, generation이 다르면 `InvalidOperation`, relocation seal 중이면
+받는다. 같은 incarnation이 없으면 `false`, destroy가 진행 중이면 그 terminal에 합류, generation이 다르면 `InvalidOperation`, relocation seal 중이면
 `Unavailable`로 끝나며 current ref를 다시 찾아 다른 incarnation을 종료하지 않는다.
 
 Manager `Find`는 global ID의 current Ready ref를 반환한다. Actor가 현재 속한 User Spot을 조회하는 operation도

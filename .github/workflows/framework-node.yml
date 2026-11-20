@@ -299,6 +299,13 @@ jobs:
         working-directory: framework/languages/node
         run: npm run verify:m6c-runtime
 
+      # Packs every published workspace package and installs the tarballs into
+      # empty consumer projects (no workspace, no NODE_PATH, no checkout proto).
+      - name: Verify packed Node packages in clean consumers
+        if: matrix.node-version == 22 && matrix.target.name == 'linux-x64'
+        working-directory: framework/languages/node
+        run: bash scripts/verify_packaged_contract.sh
+
       # The browser build rewrites the committed WebGL bundle, so the bundle
       # check inside the gate always sees a fresh file. A diff here means the
       # source changed without the regenerated bundle being committed.

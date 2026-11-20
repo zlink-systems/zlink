@@ -253,11 +253,11 @@ Wire v1은 다음 ID를 사용한다. `7..15`, `32`, `35`, `41`, `45`와 `55..25
 | 6 | `livenessAck` | infrastructure | 없음 | — | 같은 probe ID 응답 |
 | 16 | `nodeSend` | application | 필수 | `metadata` | node one-way |
 | 17 | `nodeRequest` | application | 필수 | `metadata` | node request |
-| 18 | `channelSend` | application | 필수 | `metadata` | channel one-way (RouteMesh connection 전용) |
-| 19 | `channelRequest` | application | 필수 | `metadata` | channel request (RouteMesh connection 전용) |
+| 18 | `channelSend` | application | 필수 | — | channel one-way (RouteMesh connection 전용) |
+| 19 | `channelRequest` | application | 필수 | — | channel request (RouteMesh connection 전용) |
 | 20 | `reply` | infrastructure | 선택 | — | request terminal result (RouteMesh connection 전용) |
-| 21 | `spotSend` | application | 필수 | `metadata` | Spot one-way |
-| 22 | `spotRequest` | application | 필수 | `metadata` | Spot request |
+| 21 | `spotSend` | application | 필수 | — | Spot one-way |
+| 22 | `spotRequest` | application | 필수 | — | Spot request |
 | 23 | `logicalMulticast` | application | 필수 | `metadata` | logical multicast |
 | 24 | `actorSend` | application | 필수 | `metadata`·`boundSession`·`sourceSpotId` | Actor one-way |
 | 25 | `actorRequest` | application | 필수 | `metadata`·`boundSession`·`sourceSpotId` | Actor request |
@@ -337,6 +337,7 @@ callback·연결 종료는 새 bind terminal을 지연시키거나 되돌리지 
 ### Admission 절차
 
 - RouteMesh와 ClientServer는 `hello → admit|reject`로 current physical connection을 service route로 승인한다.
+  REJECT 뒤의 route·peer 상태는 [MeshNode §7.1](../03-spot-actor/03-mesh-node.ko.md)이 정한다.
 - Manual 구성의 lifecycle token은 예측하기 어려운 난수를 만드는 [CSPRNG](../00-foundation/02-glossary.ko.md#csprng)로 만든 non-zero opaque equality token이다.
 - 숫자 크기로 새 값을 판단하지 않으며 current physical connection의 handover와 liveness로 이전 token을 차단한다.
 
@@ -361,6 +362,7 @@ physical pipe 선택·교체는 [Core ROUTER §10.1](../../../../../../../core/d
 - ClientServer connection에서 service wire record는 infrastructure command에만 사용한다. client는 `hello`를 Core request로 시작하고 liveness 쌍을 주고받으며, server는 그 hello request의 reply leg로만 `admit`/`reject`를 돌려주고 `update`와 liveness를 push한다.
 - ClientServer connection의 application record는 service wire command를 사용하지 않는다. 네 runtime이 channel messaging에 공유하는 channel envelope — `[protobuf ChannelHeader, payload]` 두 frame record — 를 탄다. request는 Core request envelope을 타고 response/error는 그 reply leg로 돌아오며, one-way command는 plain send다. `channelSend`(18)/`channelRequest`(19)와 command 20 reply는 RouteMesh connection에서만 오간다. RouteMesh의 `channelSend`(18)/`channelRequest`(19)와 `spotSend`(21)/`spotRequest`(22)가 싣는 application payload의 첫 part도 같은 `ChannelHeader`다.
 - ClientServer application metadata의 내부 wire 표현은 [ClientServer Channel §5.3](03-client-server-channel.ko.md#53-application-record-계약)이 정한다.
+- RouteMesh의 `channelSend`(18)·`channelRequest`(19)·`spotSend`(21)·`spotRequest`(22)는 application metadata를 application payload 첫 part인 `ChannelHeader`의 metadata(field 13)에만 싣고, 값 검증·정렬·1,024 byte 계산은 [ClientServer Channel §5.3](03-client-server-channel.ko.md#53-application-record-계약)을 따른다. 이 네 command의 service-wire `metadata` flag(`0x01`)는 0이며, 별도 metadata frame이나 header와 frame 중 하나를 고르는 처리는 없다. flag가 1인 record는 protocol error다. 다른 application command의 metadata 표현은 이 규칙으로 바뀌지 않는다.
 - node 여럿이 이름으로 서로를 찾는 [RouteMesh](../00-foundation/02-glossary.ko.md#routemesh)의 record를 ClientServer connection에 재사용하거나 반대로 재사용하면 protocol error다.
 
 ## 5. Service liveness
@@ -668,8 +670,7 @@ seal/route-update leg만 추가하므로, 수신자는 canonical `actorJoin`(28)
   JSON에서 protobuf `ChannelHeader`로 바꾸며 v13에서 올렸다(v13은 command 52·53과 Prepare·Cutover
   manifest field 때문에 v12에서 올렸다). 네 runtime을 동시에 승급한다.
 - Target의 유효 수신 chunk-byte 상한은 admission-accept reply의 `receiveChunkLimitBytes`
-  field로 협상하거나, 그 reply가 없으면 host preflight로 협상한다. 협상 경로가 없는
-  `JoinEntrySpot`은 32 KiB — Compact 일반 data 하한 — 를 유효 상한으로 사용한다. 이 형태와 상한은
+  field로 협상하거나, 그 reply가 없으면 host preflight로 협상한다. 이 형태와 상한은
   `actor-join-reply-tail` golden fixture
   (`framework/runtime/protocol/golden/actor-join-reply-v1.json`)가 고정하며 네 runtime(cpp,
   dotnet, java, node) 모두 동일하게 decode한다. **네 runtime 모두** 다른 node에 있는 target의 canonical

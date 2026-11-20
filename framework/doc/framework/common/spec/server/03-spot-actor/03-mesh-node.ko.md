@@ -297,6 +297,10 @@ handshake만 admission한다.
 않을 수 있다. HELLO는 같은 identity에 대해 멱등이다. 이를 위해 별도 timer를 두지 않으며, ADMIT을 받으면
 다시 보내지 않는다.
 
+**선택 route에서 REJECT를 받은 node는 그 route의 admission을 하지 않은 상태로 둔다.** 그 peer가 admitted였다면
+admitted 기록과 liveness admission을 지운다. REJECT는 connection intent를 제거하지 않으며, 그 뒤는 위의 ADMIT 대기
+규칙(HELLO를 liveness 관리 주기마다 다시 보냄)을 그대로 따른다. REJECT를 위한 별도 peer 상태나 timer는 두지 않는다.
+
 **선택 route에서 handshake로 admission을 확인하기 전에 그 route로 받은 handshake 밖의 record는 처리하지
 않고 버리며, 응답을 보내지 않는다.** 선택 route가 바뀐 뒤 상대가 새 route의 handshake보다 먼저 보낸
 record도 같다. 이렇게 잃은 request는 다시 보내지 않는다. 송신 측은 상대의 ADMIT를 받은 선택 route에서만

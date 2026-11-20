@@ -40,6 +40,7 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 import systems.zlink.framework.runtime.internal.streams.ZLinkStreamErrorPayload;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
+import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 import systems.zlink.framework.runtime.streams.ZLinkStreamFrameCodec;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
@@ -813,9 +814,6 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             remote.accept(parts);
             return;
         }
-        if (!isCurrentActor(actor)) {
-            throw new IllegalStateException("actor is not local");
-        }
     }
 
     @Override
@@ -901,7 +899,9 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             return owner.requestExactActor(actor, parts, timeout, requestAdmission);
         }
         if (actor == null || !actors.containsKey(actor.actorId())) {
-            return CompletableFuture.failedFuture(new IllegalStateException("actor is not local"));
+            return CompletableFuture.failedFuture(
+                    ZLinkFrameworkErrorOrigin.framework(
+                            ZLinkFrameworkErrorKind.NOT_FOUND, "Actor is not local"));
         }
         var retained = ZLinkJavaRawSpot.copy(parts);
         return requestLocalActor(
@@ -979,15 +979,10 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         actorRequests.put(requestId, completion);
         CompletionStage<Void> dispatched;
         try {
-            dispatched = dispatch.apply(requestId, requestAdmission);
+            dispatched = actorDispatchResult(dispatch.apply(requestId, requestAdmission));
         } catch (RuntimeException | Error failure) {
             actorRequests.remove(requestId, completion);
             throw failure;
-        }
-        if (dispatched == null) {
-            actorRequests.remove(requestId);
-            return CompletableFuture.failedFuture(
-                    new IllegalStateException("actor Spot is not local"));
         }
         systems.zlink.framework.runtime.internal.ZLinkCompletionBridge.forwardCancellation(
                 logical, dispatched);
@@ -1213,10 +1208,15 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         return actorAdmission(dispatched, admission);
     }
 
+    private static CompletionStage<Void> actorDispatchResult(CompletionStage<Void> dispatched) {
+        return dispatched == null
+                ? CompletableFuture.failedFuture(new ZlinkSubmitException(SubmitResult.NOT_FOUND))
+                : dispatched;
+    }
+
     private static CompletionStage<Void> actorAdmission(
             CompletionStage<Void> dispatched, CompletableFuture<Void> admission) {
-        if (dispatched == null)
-            return CompletableFuture.failedFuture(new ZlinkSubmitException(SubmitResult.NOT_FOUND));
+        dispatched = actorDispatchResult(dispatched);
         // The owning Actor queue completes the admission when it accepts the message. A
         // dispatch that ends before any acceptance (no Actor, no matching handler) was not
         // admitted: it fails with its own failure, or NotFound when it ended without one
@@ -1227,11 +1227,9 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                         admission.completeExceptionally(failure);
                     } else if (!admission.isDone()) {
                         admission.completeExceptionally(
-                                systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin
-                                        .framework(
-                                                systems.zlink.framework.errors
-                                                        .ZLinkFrameworkErrorKind.NOT_FOUND,
-                                                "No local Actor handler accepted the message"));
+                                ZLinkFrameworkErrorOrigin.framework(
+                                        ZLinkFrameworkErrorKind.NOT_FOUND,
+                                        "No local Actor handler accepted the message"));
                     }
                 });
         systems.zlink.framework.runtime.internal.ZLinkCompletionBridge.forwardCancellation(
@@ -4101,6 +4099,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             RoutingId targetNodeRid,
             String targetSpotId,
             long targetGeneration,
+            long targetNodeGeneration,
             byte[] metadata,
             List<Message> parts) {
         if (!routingId().equals(targetNodeRid)) {
@@ -4109,6 +4108,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                     targetNodeRid,
                     targetSpotId,
                     targetGeneration,
+                    targetNodeGeneration,
                     metadata,
                     parts);
         }

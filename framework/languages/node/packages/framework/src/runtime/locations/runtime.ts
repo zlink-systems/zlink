@@ -647,18 +647,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
   }
 
   async stop(signal?: AbortSignal): Promise<void> {
-    this.started = false;
-    this.wakeExecution();
-    if (this.heartbeatTimer !== undefined) {
-      this.clearTimer(this.heartbeatTimer);
-      this.heartbeatTimer = undefined;
-    }
-    if (this.ownerDeadlineTimer !== undefined) {
-      this.clearTimer(this.ownerDeadlineTimer);
-      this.ownerDeadlineTimer = undefined;
-    }
-    this.leaseOperationStartedAtMs = 0;
-    this.ownerLeaseDeadlineMs = undefined;
+    this.endLeaseLifecycle();
     try {
       const pending = await Promise.allSettled(
         [...this.discardedAuthorities.values()].map((record) => record.pending)
@@ -676,7 +665,27 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     }
   }
 
+  /**
+   * Ends this lifecycle's owner lease use: no renewal or fresh claim starts after this point, so
+   * owner cleanup releases the last token this lifecycle holds (Location runtime §11).
+   */
+  private endLeaseLifecycle(): void {
+    this.started = false;
+    this.wakeExecution();
+    if (this.heartbeatTimer !== undefined) {
+      this.clearTimer(this.heartbeatTimer);
+      this.heartbeatTimer = undefined;
+    }
+    if (this.ownerDeadlineTimer !== undefined) {
+      this.clearTimer(this.ownerDeadlineTimer);
+      this.ownerDeadlineTimer = undefined;
+    }
+    this.leaseOperationStartedAtMs = 0;
+    this.ownerLeaseDeadlineMs = undefined;
+  }
+
   async cleanupOwner(signal?: AbortSignal): Promise<void> {
+    this.endLeaseLifecycle();
     const pending = this.heartbeatRenewal;
     try {
       await (pending ?? Promise.resolve());
@@ -821,6 +830,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     signal?: AbortSignal,
     shutdownSignal?: () => AbortSignal
   ): Promise<boolean> {
+    if (!this.isStarted) return false;
     const claimStartedAtMs = this.monotonicNowMs();
     this.leaseOperationStartedAtMs = claimStartedAtMs;
     const timeoutStartedAtMs = performance.now();

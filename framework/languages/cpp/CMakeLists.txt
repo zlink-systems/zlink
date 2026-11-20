@@ -70,9 +70,9 @@ option(ZLINK_FRAMEWORK_CPP_USE_SYSTEM_BOOST
   "Use packaged Boost instead of the repository's vendored Boost" ${_zlink_use_system_boost})
 set(ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT "$ENV{ZLINK_LOCAL_PACKAGE_ROOT}" CACHE PATH
   "Root directory containing local package outputs")
-set(ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION "1.25.1" CACHE STRING
+set(ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION "1.26.0" CACHE STRING
   "Exact local zlink_cpp package version consumed by the C++ framework")
-set(ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION "1.25.0" CACHE STRING
+set(ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION "1.26.0" CACHE STRING
   "Exact local zlink Core package version embedded by zlink_cpp")
 # The binding and Core package prefixes have three sources, in this order: the
 # two ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_*_PREFIX options, the repository's local
@@ -2420,11 +2420,13 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_use_zlink_gtest_main(test_cpp_framework_receive_role_handoff)
   target_include_directories(test_cpp_framework_receive_role_handoff PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  target_sources(test_cpp_framework_receive_role_handoff PRIVATE
+    tests/support/allocation_counter.cpp)
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     target_compile_definitions(test_cpp_framework_receive_role_handoff PRIVATE
-      ZLINK_TEST_HANDOFF_ALLOC_FAIL)
+      ZLINK_TEST_HANDOFF_TRYLOCK_WRAP)
     target_link_options(test_cpp_framework_receive_role_handoff PRIVATE
-      "LINKER:--wrap=_Znwm" "LINKER:--wrap=pthread_mutex_trylock")
+      "LINKER:--wrap=pthread_mutex_trylock")
   endif()
 
   add_zlink_framework_test(

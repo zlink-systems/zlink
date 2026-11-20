@@ -147,8 +147,19 @@ final class ZLinkJavaRawSpot implements ZLinkBackendSpot {
 
     @Override
     public CompletionStage<Void> sendToSpot(
-            RoutingId targetNodeRid, String spotId, long spotGeneration, List<Message> parts) {
-        return owner.sendToSpot(this, targetNodeRid, spotId, spotGeneration, new byte[0], parts);
+            RoutingId targetNodeRid,
+            String spotId,
+            long spotGeneration,
+            long targetNodeGeneration,
+            List<Message> parts) {
+        return owner.sendToSpot(
+                this,
+                targetNodeRid,
+                spotId,
+                spotGeneration,
+                targetNodeGeneration,
+                new byte[0],
+                parts);
     }
 
     @Override
@@ -156,9 +167,11 @@ final class ZLinkJavaRawSpot implements ZLinkBackendSpot {
             RoutingId targetNodeRid,
             String spotId,
             long spotGeneration,
+            long targetNodeGeneration,
             byte[] metadata,
             List<Message> parts) {
-        return owner.sendToSpot(this, targetNodeRid, spotId, spotGeneration, metadata, parts);
+        return owner.sendToSpot(
+                this, targetNodeRid, spotId, spotGeneration, targetNodeGeneration, metadata, parts);
     }
 
     @Override
