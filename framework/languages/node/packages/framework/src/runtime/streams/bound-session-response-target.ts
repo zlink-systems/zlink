@@ -23,16 +23,32 @@ export interface ZLinkBoundSessionResponseTarget {
 
 export interface ZLinkBoundSessionResponseContext {
   readonly stream: {
+    captureBoundSessionSubmission?(
+      actorId: string
+    ): (payload: Message) => Promise<ZLinkSubmitResult>;
     submitRaw(payload: Message): Promise<ZLinkSubmitResult>;
   };
 }
 
+export function captureBoundSessionSubmission(
+  context: ZLinkBoundSessionResponseContext,
+  actorId: string
+): (payload: Message) => Promise<ZLinkSubmitResult> {
+  return (
+    context.stream.captureBoundSessionSubmission?.(actorId) ??
+    ((payload) => context.stream.submitRaw(payload))
+  );
+}
+
 export class DefaultZLinkBoundSessionResponseTarget implements ZLinkBoundSessionResponseTarget {
+  private readonly submit: (payload: Message) => Promise<ZLinkSubmitResult>;
   constructor(
     private readonly frameMessages: ZLinkStreamFrameMessageFactory,
-    private readonly context: ZLinkBoundSessionResponseContext,
+    context: ZLinkBoundSessionResponseContext,
     private readonly actorId: string
-  ) {}
+  ) {
+    this.submit = captureBoundSessionSubmission(context, actorId);
+  }
 
   sendResponse(
     packetName: string,
@@ -83,7 +99,7 @@ export class DefaultZLinkBoundSessionResponseTarget implements ZLinkBoundSession
       payload
     );
     try {
-      const result = await this.context.stream.submitRaw(frame);
+      const result = await this.submit(frame);
       if (result.status !== ZLinkSubmitStatus.Submitted) {
         throw new Error(`Actor '${this.actorId}' local bound session ${operationName} failed.`);
       }

@@ -8122,8 +8122,10 @@ test('runtime host completes local bound actor request without native SessionRel
     }
   });
 
-  host.spotNodeRuntime.dispatchEntryActorPacket = async (origin, actorId, parts, response, bound, ref) => {
-    return dispatchEntryIngress(host, origin, actorId, parts, response, bound, ref);
+  host.spotNodeRuntime.dispatchEntryActorPacket = async (origin, actorId, parts, response, bound, ref, terminal) => {
+    const result = await dispatchEntryIngress(host, origin, actorId, parts, response, bound, ref);
+    await terminal?.(result);
+    return result;
   };
 
   const context = host.streamBindingRuntime.createSessionContext(stream);
