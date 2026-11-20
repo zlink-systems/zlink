@@ -381,7 +381,7 @@ jobs:
       - name: Start Redis for the tutorial (README — docker run -p 6379:6379 redis)
         run: |
           set -euo pipefail
-          redis_name="zlink-redis-$$"
+          redis_name="zlink-redis-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB}-$$"
           docker run -d --rm --name "${redis_name}" -p 6379:6379 redis:7
           printf '%s\n' "${redis_name}" > examples/zlink-dotnet-examples/tutorial/redis.container
 
@@ -409,7 +409,7 @@ jobs:
           if [ -f redis.container ]; then
             redis_name="$(cat redis.container)"
             case "${redis_name}" in
-              zlink-redis-[0-9]*) docker rm -f "${redis_name}" 2>/dev/null || true ;;
+              zlink-redis-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB}-[0-9]*) docker rm -f "${redis_name}" 2>/dev/null || true ;;
             esac
           fi
       - name: Samples root solution build (Samples.sln)
@@ -824,7 +824,7 @@ jobs:
       - name: Start Redis for the tutorial (README — docker run -p 6379:6379 redis)
         run: |
           set -euo pipefail
-          redis_name="zlink-redis-$$"
+          redis_name="zlink-redis-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB}-$$"
           docker run -d --rm --name "${redis_name}" -p 6379:6379 redis:7
           printf '%s\n' "${redis_name}" > examples/zlink-${{ matrix.lang }}-examples/tutorial/redis.container
 
@@ -852,7 +852,7 @@ jobs:
           if [ -f redis.container ]; then
             redis_name="$(cat redis.container)"
             case "${redis_name}" in
-              zlink-redis-[0-9]*) docker rm -f "${redis_name}" 2>/dev/null || true ;;
+              zlink-redis-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB}-[0-9]*) docker rm -f "${redis_name}" 2>/dev/null || true ;;
             esac
           fi
       - name: Sample install (README's own 내려받기와 설치/linux block)
