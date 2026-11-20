@@ -1,3 +1,5 @@
+include("${CMAKE_CURRENT_LIST_DIR}/consumer_helpers.cmake")
+
 if(NOT DEFINED ZLINK_FRAMEWORK_CPP_BUILD_DIR)
   message(FATAL_ERROR "ZLINK_FRAMEWORK_CPP_BUILD_DIR is required")
 endif()
@@ -342,11 +344,7 @@ main ()
 }
 ]=])
 
-# execute_process expands its COMMAND list unquoted, so a list element that
-# itself contains ";" is flattened into separate arguments and all but the
-# first prefix path entry is lost. Escape the separators so CMAKE_PREFIX_PATH
-# arrives as one argument holding the whole list.
-string(REPLACE ";" "\;" consumer_prefix_path
+zlink_framework_cpp_escape_list_argument(consumer_prefix_path
   "${consumer_install_prefix};${ZLINK_FRAMEWORK_CPP_DEPENDENCY_PREFIX_PATH}")
 set(consumer_configure_command
   "${CMAKE_COMMAND}" -S "${consumer_source_dir}" -B "${consumer_build_dir}"

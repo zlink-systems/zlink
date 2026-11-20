@@ -1,3 +1,5 @@
+include("${CMAKE_CURRENT_LIST_DIR}/consumer_helpers.cmake")
+
 if(NOT DEFINED ZLINK_FRAMEWORK_CPP_BUILD_DIR)
   message(FATAL_ERROR "ZLINK_FRAMEWORK_CPP_BUILD_DIR is required")
 endif()
@@ -137,6 +139,7 @@ int main ()
 }
 ]=])
 
+zlink_framework_cpp_escape_list_argument(consumer_prefix_path "${consumer_prefix_path}")
 set(consumer_configure_command
   "${CMAKE_COMMAND}" -S "${consumer_source_dir}" -B "${consumer_build_dir}"
   "-DCMAKE_PREFIX_PATH=${consumer_prefix_path}")
