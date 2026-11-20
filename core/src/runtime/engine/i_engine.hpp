@@ -34,6 +34,9 @@ struct i_engine
     //  events are not fired on termination.
     virtual void terminate () = 0;
 
+    // A drained pipe can still have encoded or in-flight transport output.
+    virtual bool has_pending_output () const = 0;
+
     //  This method is called by the session to signalise that more
     //  messages can be written to the pipe.
     //  Returns false if the engine reached its terminal heap-owner release path
