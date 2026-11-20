@@ -32,8 +32,10 @@ public final class CustomerGatewayApplication {
     }
 
     @Bean
-    ZLinkFrameworkConfigurer customerGatewayFramework(SampleTopology topology) {
+    ZLinkFrameworkConfigurer customerGatewayFramework(
+            SampleTopology topology, ZLinkRedisLocationStore locations) {
         return options -> {
+            options.addLocationStore(locations);
             options.addHandlersFromPackageOf(CustomerGatewayApplication.class);
             options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             ZLinkMeshNodeBuilder node = options.addRouteMesh(SampleNames.CustomerSpotDiscovery);

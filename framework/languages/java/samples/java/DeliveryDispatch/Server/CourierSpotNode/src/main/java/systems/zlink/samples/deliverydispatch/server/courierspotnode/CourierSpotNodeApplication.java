@@ -31,8 +31,10 @@ public final class CourierSpotNodeApplication {
     }
 
     @Bean
-    ZLinkFrameworkConfigurer courierSpotNodeFramework(SampleTopology topology) {
+    ZLinkFrameworkConfigurer courierSpotNodeFramework(
+            SampleTopology topology, ZLinkRedisLocationStore locations) {
         return options -> {
+            options.addLocationStore(locations);
             String node = topology.courierNode();
             NodeOptions selected = NodeOptions.resolve(node, topology);
             options.addHandlersFromPackageOf(CourierSpotNodeApplication.class);
