@@ -497,6 +497,7 @@ field는 다른 record의 generation field와 마찬가지로 JSON number가 아
 | `aggregate` | 이 record가 참여 중인 aggregate 변경의 진행 정보다(§8.1). 없으면 field를 쓰지 않는다. 있으면 `aggregateId`(lowercase canonical UUID), `aggregateGeneration`(문자열 정수), `index`(JSON number, 참여 목록 안의 위치), `expectedStoreVersion`, `ownerTransition`(`preserve \| newOwner`), `targetAuthorityOwnerGeneration`(문자열 정수), `authorityPayloadSha256`·`membershipMutationSha256`(hex 64자)를 포함한다. |
 | `visibleStoreVersion` | `aggregate`가 있는 동안 Framework가 공개 `StoreVersion`으로 내놓는 값이다. Aggregate 준비가 이 record를 다시 써도 공개 `StoreVersion`은 준비 전 값으로 유지한다. `aggregate`가 없으면 field를 쓰지 않는다. |
 | `aggregate.relocation` | 이 authority record의 relocation 진행 정보다(§9.1). `relocationId`(lowercase canonical UUID), `phase`(`preparing \| captured \| prepared \| committed \| activating \| activated \| cleaning \| completed \| aborted`), `source`, `target`, `coordinator`, `sourceInventorySha256`(hex 64자), `applicationVersion`(문자열 정수)을 포함한다. `source`·`target`은 `nodeRid`, `nodeGeneration`, `ownerId`, `ownerLeaseGeneration`을 담고 `target`은 `attemptGeneration`도 담는다. `target`은 `preparing`·`captured`에서 `null`이고 `prepared`부터 전체 값을 갖는다. `aborted`는 abort 직전 phase의 `target`을 그대로 둔다. 그래서 `preparing`·`captured`에서 abort하면 `null`이고 `prepared` 이후에서 abort하면 전체 값이다. 64-bit 정수는 문자열로 쓴다. |
+| `aggregate.relocation.completion` | §9.3 완료 기록의 진행이다. Source가 새 request 수락을 멈추고 `captured`를 기록할 때 함께 쓰며 relocation 진행 정보와 함께 제거한다. `acceptedRequests`(`captured`에서 정한 뒤 바꾸지 않는다), `completedResults`, `pendingDeliveries`(모두 문자열 정수), `reference`(완료 기록 payload의 맨 앞 목록 reference, 완료 결과가 없으면 `null`), `sha256`(그 payload 전체 bytes의 SHA-256, hex 64자, `reference`가 `null`이면 `null`)을 포함한다. 수락한 request가 없으면 `acceptedRequests`는 `"0"`이다. Send·event·timer는 `acceptedRequests`에 넣지 않는다. |
 | `aggregate.relocation.coordinator.expectedStoreVersion` | 이동을 시작한 coordinator가 읽은 원래 authority StoreVersion이다. Opaque 문자열이며 같은 값인지만 비교한다. Phase CAS의 현재 expected StoreVersion과 구분한다. |
 
 생성을 실행하는 node는 `requestContentReference`를 decode한 뒤 그 bytes의 길이가
@@ -1599,6 +1600,29 @@ Framework는 각 object의 완료 결과를 object 순서로 저장한다. 같�
 저장한 뒤 Location Store의 payload 위치, checksum, 완료 수와 전달 대기 수를 CAS 한 번으로
 바꾼다.**
 
+완료 기록 payload는 [Relocation Store 공통 blob 형식](03-relocation-store-redis.ko.md)으로 저장하는 JSON object이며
+[RFC 8785](https://www.rfc-editor.org/rfc/rfc8785) canonical 형식으로 직렬화한다. 64-bit 정수는 문자열로 쓴다.
+
+| Field | 의미 |
+|---|---|
+| `formatVersion` | 현재 값은 `1`이다. 다른 값은 읽지 않고 `DataLost`로 처리한다. |
+| `relocationId` | 이 기록이 속한 relocation이다. Location Store의 `aggregate.relocation.relocationId`와 같아야 한다. |
+| `entries` | 완료 결과 배열이다. Object 순서, 같은 object 안에서는 source가 request를 수락한 순서로 둔다. |
+| `entries[].objectKey` | 결과를 낸 object의 authority logical key다. |
+| `entries[].source` | 위 표의 source request 정보(`ownerId`, `leaseGeneration`, `nodeRid`, `nodeGeneration`)다. |
+| `entries[].operationId`, `entries[].replyRouteId` | 위 표의 값이다. |
+| `entries[].reply` | 기존 reply 직렬화가 만든 최종 reply bytes를 base64로 쓴 값이다. 성공·실패 결과 모두 여기에 담는다. |
+| `entries[].delivery` | `pending`, `terminalReceived`, `alreadyTerminal`, `sourceLeaseExpired` 중 하나다. 아래 표의 확인 근거를 얻으면 `pending`에서 해당 값으로 한 번만 바뀐다. |
+
+완료 결과를 추가하거나 `delivery`를 바꿀 때는 기존 payload를 고치지 않는다. 새 reference로 전체 payload를 저장하고
+다시 확인한 뒤 `reference`, `sha256`, `completedResults`, `pendingDeliveries`를 CAS 한 번으로 바꾼다. 여러 결과나 확인
+근거를 한 번의 교체로 묶을 수 있다. `completedResults`는 `entries` 수, `pendingDeliveries`는 `delivery`가 `pending`인
+항목 수와 같아야 한다. 다르면 `DataLost`다. 원래 requester에게 reply를 보내는 일은 그 결과를 담은 CAS가 끝난 뒤에만
+한다. 교체로 더 이상 가리키지 않는 이전 payload는 보관 기한 뒤 삭제한다.
+
+Target이 다시 시작하거나 owner가 바뀌어도 `reference`가 가리키는 payload를 읽어 `delivery`가 `pending`인 항목의
+reply bytes를 현재 route로 다시 보낸다. Handler를 다시 실행하지 않는다.
+
 수락한 request 수와 완료 결과 수가 같고 전달 대기 수가 0일 때만 `Completed`를 기록한다.
 다르면 복구 오류다.
 
@@ -1610,7 +1634,7 @@ Framework는 각 object의 완료 결과를 object 순서로 저장한다. 같�
 
 Connection 종료나 재연결만으로 완료 결과를 받았다고 판단하지 않는다. Target은 현재 route로
 전달을 계속한다. Source owner lease가 유효한 상태에서 `Relocate` deadline을 넘으면
-`ForceStopped`다. 이 경우 relocation root와 payload, reply bytes를 24시간 보관한다.
+`ForceStopped`다. 이 경우 relocation root와 payload, reply bytes를 24시간 보관한다. 보관 기간은 relocation이 `ForceStopped`로 끝나는 시점부터 센다. 그 시점에 Framework는 `reference`가 가리키는 payload의 모든 data chunk와 맨 앞 목록을 renew해 provider clock 기준 남은 retention이 24시간 이상이 되게 하고, 그동안 `aggregate.relocation`을 authority record에서 제거하지 않는다.
 
 ### 9.4 Relay-ready accepted 전 취소
 

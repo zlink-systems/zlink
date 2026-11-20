@@ -543,6 +543,7 @@ number precision).
 | `aggregate` | Progress of the aggregate change this record takes part in (§8.1). The field is omitted when absent. When present, it includes `aggregateId` (lowercase canonical UUID), `aggregateGeneration` (integer as a string), `index` (JSON number, position in the participant list), `expectedStoreVersion`, `ownerTransition` (`preserve \| newOwner`), `targetAuthorityOwnerGeneration` (integer as a string), and `authorityPayloadSha256`·`membershipMutationSha256` (64 hex characters). |
 | `visibleStoreVersion` | While `aggregate` is present, the value the framework exposes as the public `StoreVersion`. Even when aggregate preparation rewrites this record, the public `StoreVersion` stays at its pre-preparation value. The field is omitted when `aggregate` is absent. |
 | `aggregate.relocation` | Relocation progress of this authority record (§9.1). Includes `relocationId` (lowercase canonical UUID), `phase` (`preparing \| captured \| prepared \| committed \| activating \| activated \| cleaning \| completed \| aborted`), `source`, `target`, `coordinator`, `sourceInventorySha256` (64 hex characters), and `applicationVersion` (integer as a string). `source` and `target` hold `nodeRid`, `nodeGeneration`, `ownerId`, and `ownerLeaseGeneration`; `target` also holds `attemptGeneration`. `target` is `null` in `preparing` and `captured` and complete from `prepared` on. `aborted` keeps the `target` of the phase it aborted from, so it is `null` after an abort from `preparing` or `captured` and complete after an abort from `prepared` or later. 64-bit integers are strings. |
+| `aggregate.relocation.completion` | Progress of the §9.3 completion record. Written together with `captured` when the source stops accepting new requests, and removed together with the relocation progress information. Includes `acceptedRequests` (fixed at `captured` and never changed afterwards), `completedResults`, `pendingDeliveries` (all string integers), `reference` (the root-list reference of the completion record payload, `null` while there is no completion result), and `sha256` (SHA-256 of that payload's full bytes, 64 hex characters, `null` when `reference` is `null`). With no accepted request, `acceptedRequests` is `"0"`. Sends, events, and timers aren't counted in `acceptedRequests`. |
 | `aggregate.relocation.coordinator.expectedStoreVersion` | The original authority StoreVersion the coordinator that started the move read. An opaque string compared only for equality. Distinct from the current expected StoreVersion of a phase CAS. |
 
 The node that runs the creation decodes `requestContentReference` and verifies that the
@@ -1793,6 +1794,30 @@ completion result and payload in the Relocation Store first, then changes the Lo
 Store's payload location, checksum, completion count, and delivery-pending count in a
 single CAS.**
 
+The completion record payload is a JSON object stored in the [Relocation Store common blob format](03-relocation-store-redis.en.md),
+serialized in [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785) canonical form. 64-bit integers are strings.
+
+| Field | Meaning |
+|---|---|
+| `formatVersion` | Currently `1`. Any other value isn't read and is handled as `DataLost`. |
+| `relocationId` | The relocation this record belongs to. Must equal the Location Store's `aggregate.relocation.relocationId`. |
+| `entries` | Array of completion results, in object order and, within one object, in the order the source accepted the requests. |
+| `entries[].objectKey` | Authority logical key of the object that produced the result. |
+| `entries[].source` | The source request information from the table above (`ownerId`, `leaseGeneration`, `nodeRid`, `nodeGeneration`). |
+| `entries[].operationId`, `entries[].replyRouteId` | The values from the table above. |
+| `entries[].reply` | The final reply bytes produced by the existing reply serialization, base64-encoded. Holds both success and failure results. |
+| `entries[].delivery` | One of `pending`, `terminalReceived`, `alreadyTerminal`, `sourceLeaseExpired`. Changes from `pending` to the matching value once, when the basis in the table below is obtained. |
+
+Adding a completion result or changing `delivery` never edits the existing payload. The Framework stores the whole
+payload under a new reference, verifies it, then changes `reference`, `sha256`, `completedResults`, and
+`pendingDeliveries` in a single CAS. Several results or confirmations can be combined into one replacement.
+`completedResults` must equal the number of `entries` and `pendingDeliveries` the number of entries whose `delivery`
+is `pending`; otherwise it's `DataLost`. A reply is sent to the original requester only after the CAS that holds its
+result. A previous payload that's no longer referenced after a replacement is deleted after its retention.
+
+When the target restarts or the owner changes, it reads the payload `reference` points to and sends the reply
+bytes of every entry whose `delivery` is `pending` again on the current route. It doesn't run the handler again.
+
 `Completed` is only recorded when the accepted request count equals the completion
 result count and the delivery-pending count is 0. Otherwise it's a recovery error.
 
@@ -1805,7 +1830,7 @@ result count and the delivery-pending count is 0. Otherwise it's a recovery erro
 Connection closure or reconnection alone isn't judged as having received the completion
 result. The target keeps delivering on the current route. If the `Relocate` deadline
 passes while the source owner lease is still valid, it's `ForceStopped`. In this case
-the relocation root, payload, and reply bytes are retained for 24 hours.
+the relocation root, payload, and reply bytes are retained for 24 hours, counted from when the relocation ends as `ForceStopped`. At that point the Framework renews every data chunk and the root list of the payload `reference` points to so that the remaining retention on the provider clock is at least 24 hours, and it doesn't remove `aggregate.relocation` from the authority record during that time.
 
 ### 9.4 Cancellation Before Relay-Ready Is Accepted
 
