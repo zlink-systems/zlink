@@ -2658,11 +2658,13 @@ void verify_public_host_route_fence_reads_store_without_second_cache (bool relea
 void verify_public_host_send_uses_authority_generation ()
 {
     std::atomic<std::uint64_t> spot_node_generation{0};
-    auto source = std::make_shared<host::public_host_runtime_t> (
-      host::host_options_t{mesh::raw_mesh_node_options_t{
+    auto source = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
+      mesh::raw_mesh_node_options_t{
         .descriptor = descriptor ("authority-send-host-source"),
         .runtime_failures =
-          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()},
+      "entry",
+      {"framework.spot"}});
     auto target = std::make_shared<host::public_host_runtime_t> (
       host::host_options_t{mesh::raw_mesh_node_options_t{
         .descriptor = descriptor ("authority-send-host-target"),
