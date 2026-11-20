@@ -17,6 +17,7 @@ import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationC
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
 final class ZLinkApplicationExecutionSchedulerTest {
@@ -203,8 +204,11 @@ final class ZLinkApplicationExecutionSchedulerTest {
                         assertEquals(0, jobs.snapshot().permitsInUse());
                         prefix.complete(null);
                     });
+            executor.drain();
             assertFalse(stopping.isDone());
             handlerTerminal.complete(null);
+            assertFalse(stopping.isDone(), "the handler terminal resumes on the executor");
+            executor.drain();
             stopping.get(2, TimeUnit.SECONDS);
             assertTrue(recordTerminal.isDone());
             assertEquals(0, jobs.snapshot().permitsInUse());
@@ -290,6 +294,8 @@ final class ZLinkApplicationExecutionSchedulerTest {
         assertNull(ZLinkFlowContext.current());
         assertFalse(ZLinkBlockingCalls.isRuntimeExecutionContext());
         first.complete(null);
+        assertFalse(observed.isDone(), "the completion resumes on the executor");
+        executor.drain();
         observed.get(2, TimeUnit.SECONDS);
         assertNull(ZLinkFlowContext.current());
         assertFalse(ZLinkBlockingCalls.isRuntimeExecutionContext());
@@ -384,6 +390,101 @@ final class ZLinkApplicationExecutionSchedulerTest {
         assertTrue(events.contains("other"));
         assertEquals(3, events.size());
         assertEquals(1, executor.identities.size());
+    }
+
+    @Test
+    void completionContinuationsResumeOnHandlerExecutorNotOnCompletingThread() throws Exception {
+        var executor = new ManualExecutor();
+        var scheduler = new ZLinkApplicationExecutionScheduler(executor, 1);
+        var owner = scheduler.register();
+        var upstream = new CompletableFuture<String>();
+        var resumed = new CompletableFuture<String>();
+        var resumedTurn = new AtomicReference<Object>();
+        var callbackTurn = new AtomicReference<Object>();
+        var handlerTurn = new AtomicReference<Object>();
+        var callbackInline = new AtomicReference<Object>();
+        var terminal =
+                owner.enqueue(
+                                () -> {
+                                    handlerTurn.set(
+                                            ZLinkSuspendInvocationContext
+                                                    .currentSerialExecutionTurn());
+                                    ZLinkSerialExecutionQueue.manageCurrent(upstream)
+                                            .thenAccept(
+                                                    value -> {
+                                                        resumedTurn.set(
+                                                                ZLinkSuspendInvocationContext
+                                                                        .currentSerialExecutionTurn());
+                                                        resumed.complete(value);
+                                                    });
+                                    ZLinkSerialExecutionQueue.captureCurrentCallbackExecutor()
+                                            .execute(
+                                                    () ->
+                                                            callbackTurn.set(
+                                                                    ZLinkSuspendInvocationContext
+                                                                            .currentSerialExecutionTurn()));
+                                    callbackInline.set(callbackTurn.get());
+                                    return DONE;
+                                },
+                                null)
+                        .toCompletableFuture();
+        executor.drain();
+        assertTrue(terminal.isDone());
+        // The test thread stands in for the Core or service thread that completes a reply.
+        upstream.complete("reply");
+        assertFalse(resumed.isDone(), "continuation must not run on the completing thread");
+        assertNull(callbackInline.get(), "callback must not run inline on the capturing thread");
+        executor.drain();
+        assertEquals("reply", resumed.join());
+        assertSame(handlerTurn.get(), resumedTurn.get());
+        assertSame(handlerTurn.get(), callbackTurn.get());
+    }
+
+    @Test
+    void transientRejectionFailsOnlyTheRecordItsSubmissionCarried() {
+        var executor = new ManualExecutor();
+        var scheduler = new ZLinkApplicationExecutionScheduler(executor, 1);
+        var owner = scheduler.register();
+        var events = new ArrayList<String>();
+        var first =
+                owner.enqueue(
+                                () -> {
+                                    long until =
+                                            System.nanoTime()
+                                                    + ZLinkSerialExecutionQueue
+                                                                    .DEFAULT_OWNER_TIME_BUDGET
+                                                                    .toNanos()
+                                                            * 2;
+                                    while (System.nanoTime() < until) Thread.onSpinWait();
+                                    // The budget resubmission of the next record is refused once.
+                                    executor.rejectNext = 1;
+                                    events.add("first");
+                                    return DONE;
+                                },
+                                null)
+                        .toCompletableFuture();
+        var refused =
+                owner.enqueue(
+                                () -> {
+                                    events.add("refused");
+                                    return DONE;
+                                },
+                                null)
+                        .toCompletableFuture();
+        var later =
+                owner.enqueue(
+                                () -> {
+                                    events.add("later");
+                                    return DONE;
+                                },
+                                null)
+                        .toCompletableFuture();
+        executor.drain();
+        assertFalse(first.isCompletedExceptionally());
+        assertTrue(refused.isCompletedExceptionally());
+        assertFalse(later.isCompletedExceptionally(), "next record gets its own submission");
+        assertEquals(List.of("first", "later"), events);
+        assertEquals(1, scheduler.idle.size());
     }
 
     @Test
@@ -498,10 +599,15 @@ final class ZLinkApplicationExecutionSchedulerTest {
         final Set<Runnable> identities = Collections.newSetFromMap(new IdentityHashMap<>());
         int submissions;
         boolean reject;
+        int rejectNext;
         boolean shutdown;
 
         public void execute(Runnable command) {
             if (reject) throw new RejectedExecutionException("executor stopped");
+            if (rejectNext > 0) {
+                rejectNext--;
+                throw new RejectedExecutionException("executor saturated");
+            }
             submissions++;
             identities.add(command);
             pending.addLast(command);

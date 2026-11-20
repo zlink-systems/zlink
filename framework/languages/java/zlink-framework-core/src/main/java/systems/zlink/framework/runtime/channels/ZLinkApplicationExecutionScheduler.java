@@ -16,6 +16,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
 /** Process-shared application drains for gate-free owners using the same execution resource. */
@@ -75,7 +76,7 @@ final class ZLinkApplicationExecutionScheduler {
             List<Slot> wake;
             synchronized (ZLinkApplicationExecutionScheduler.this) {
                 if (closingAdmissionSealed) return null;
-                record = new Record(operation);
+                record = new Record(operation, executor);
                 if (pending.isEmpty()) ready.addLast(this);
                 pending.addLast(record);
                 wake = reserveLocked();
@@ -142,8 +143,12 @@ final class ZLinkApplicationExecutionScheduler {
             submit();
         }
 
+        // A rejected submission fails only the record it carried; the next record gets its own
+        // submission attempt, as the serial queue's rejectDrain does, so a transient rejection
+        // does not fail every waiting record. A synchronous rejection continues this loop
+        // instead of recursing.
         private void reject(RuntimeException failure) {
-            do {
+            while (true) {
                 record.finish(failure);
                 synchronized (ZLinkApplicationExecutionScheduler.this) {
                     record = takeLocked();
@@ -152,9 +157,21 @@ final class ZLinkApplicationExecutionScheduler {
                         return;
                     }
                 }
-            } while (true);
+                var attempt = new AtomicReference<Object>();
+                ZLinkExecutionSubmission.submit(
+                        executor,
+                        this,
+                        rejected -> {
+                            if (!attempt.compareAndSet(null, rejected)) reject(rejected);
+                        });
+                if (attempt.compareAndSet(null, this)) return;
+                failure = (RuntimeException) attempt.get();
+            }
         }
     }
+
+    private static final java.util.logging.Logger CALLBACK_LOG =
+            java.util.logging.Logger.getLogger(ZLinkSerialExecutionQueue.class.getName());
 
     static final class Record implements ZLinkSuspendInvocationContext.ApplicationTurn {
         final Supplier<CompletionStage<Void>> operation;
@@ -163,8 +180,11 @@ final class ZLinkApplicationExecutionScheduler {
                 ZLinkApplicationJobContext.transferQueuedOwnership();
         private final ZLinkFlowContext.State flow = ZLinkFlowContext.current();
 
-        Record(Supplier<CompletionStage<Void>> operation) {
+        private final Executor executor;
+
+        Record(Supplier<CompletionStage<Void>> operation, Executor executor) {
             this.operation = java.util.Objects.requireNonNull(operation);
+            this.executor = executor;
         }
 
         void run() {
@@ -200,6 +220,35 @@ final class ZLinkApplicationExecutionScheduler {
             }
         }
 
+        // Continuations leave the completing thread (Core, service or another owner's worker)
+        // and resume on the handler executor in this record's context, as the serial lane's
+        // submitWorker resume did.
+        @Override
+        public void execute(Runnable command) {
+            java.util.Objects.requireNonNull(command, "command");
+            ZLinkExecutionSubmission.submit(
+                    executor,
+                    () -> {
+                        try {
+                            call(
+                                    () -> {
+                                        command.run();
+                                        return null;
+                                    });
+                        } catch (RuntimeException | Error failure) {
+                            CALLBACK_LOG.log(
+                                    java.util.logging.Level.SEVERE,
+                                    "Framework callback completion failed",
+                                    failure);
+                        }
+                    },
+                    rejected ->
+                            CALLBACK_LOG.log(
+                                    java.util.logging.Level.SEVERE,
+                                    "Framework callback completion failed",
+                                    rejected));
+        }
+
         @Override
         public <T> CompletionStage<T> manage(CompletionStage<T> stage) {
             if (stage.toCompletableFuture().isDone()) return stage;
@@ -208,11 +257,22 @@ final class ZLinkApplicationExecutionScheduler {
                     managed, stage);
             stage.whenComplete(
                     (value, failure) ->
-                            execute(
+                            ZLinkExecutionSubmission.submit(
+                                    executor,
                                     () -> {
-                                        if (failure == null) managed.complete(value);
-                                        else managed.completeExceptionally(failure);
-                                    }));
+                                        try {
+                                            call(
+                                                    () -> {
+                                                        if (failure == null)
+                                                            managed.complete(value);
+                                                        else managed.completeExceptionally(failure);
+                                                        return null;
+                                                    });
+                                        } catch (RuntimeException | Error resumeFailure) {
+                                            managed.completeExceptionally(resumeFailure);
+                                        }
+                                    },
+                                    managed::completeExceptionally));
             return managed;
         }
     }
