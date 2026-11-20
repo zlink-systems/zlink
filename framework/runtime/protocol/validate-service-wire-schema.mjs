@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import fs from "node:fs";
+import { validateJsonStorageFormats } from "./aggregate-storage.mjs";
 import crypto from "node:crypto";
 import path from "node:path";
 import process from "node:process";
@@ -142,6 +143,7 @@ function validateSchema(schema) {
     if (!isObject(value)) {
       return;
     }
+    if (location.startsWith("$.jsonStorageFormats.")) return;
     if (hasOwn(value, "$ref")) {
       if (resolveReference(value, types) === null) {
         fail(`${location}.$ref`, `undefined type ${JSON.stringify(value.$ref)}`);
@@ -168,7 +170,10 @@ function validateSchema(schema) {
   validateAuthorityStoreGenerationProfile(schema.authorityStoreGenerationProfile, fail);
   validateAuthorityStoreDurabilityProfile(schema.authorityStoreDurabilityProfile, fail);
   validateOwnerLeaseAuthorityProfile(schema.ownerLeaseAuthorityProfile, fail);
-  validateRelocationRetentionPolicy(schema.relocationRetentionPolicy, fail);
+  if (hasOwn(schema, "relocationRetentionPolicy")) {
+    fail("$.relocationRetentionPolicy", "durable relocation reference retention is obsolete (location §9.1)");
+  }
+  validateJsonStorageFormats(schema.jsonStorageFormats, fail);
   validateRelocationStorageProfile(schema.relocationStorageProfile, fail);
   validateRelocationTransferChecksumProfile(schema.relocationTransferChecksumProfile, fail);
   validateRelocationLogicalStreamReplay(schema.relocationLogicalStreamFormat, fail);
@@ -1079,15 +1084,8 @@ function validateSemanticConstraints(constraints, contexts, fail) {
         "descriptor-and-owner-lease",
         "object-authority-and-normal-host-capacity-accounting",
         "aggregate-generation-and-canonical-participant-mutations",
-        "inventory-digest-and-relocation-reference",
-        "relocation-phase-and-exact-target-attempt",
-      ],
-      relocationRootRole: "immutable-payload-lookup-projection-never-authority",
-      publicationOrder: [
-        "write-all-immutable-relocation-chunks",
-        "write-immutable-relocation-root-manifest",
-        "read-and-verify-complete-root-from-relocation-provider",
-        "one-location-expected-store-version-cas-publishes-reference-checksum-and-captured-phase",
+        "inventory-digest",
+        "relocation-phase-and-exact-target-attempt"
       ],
       aggregateAuthority: {
         format: "maintenance-aggregate-v1",
@@ -1096,51 +1094,25 @@ function validateSemanticConstraints(constraints, contexts, fail) {
           "aggregateId",
           "aggregateGeneration",
           "participants-and-mutations",
-          "inventoryDigestSha256",
-          "relocationReference-and-checksum",
-        ],
-        relocationManifestDigest: "must-equal-location-authority-inventory-digest",
-        manifestAuthority: "forbidden",
+          "inventoryDigestSha256"
+        ]
       },
       authoritySlotProjection: {
         format: "authority-relocation-state",
         aggregateIdField: "relocation",
         aggregateGenerationField: "aggregateGeneration",
-        preRootPhase: "preparing",
-        preRootValue: "zero-only",
-        rootExistsPhases: [
-          "captured", "prepared", "committed", "activating",
-          "activated", "cleaning", "completed", "aborted",
-        ],
         issuedRange: {
           minimum: "1",
           maximum: "9223372036854775806",
           exhaustedSentinel: "9223372036854775807",
-          sentinelIssued: "forbidden",
+          sentinelIssued: "forbidden"
         },
-        rootAgreement: "must-equal-maintenance-aggregate-v1.aggregateGeneration-when-root-exists",
         participantAgreement: "all-authority-slots-in-one-aggregate-must-agree",
         coordinatorExpectedStoreVersion: {
           presence: "nonempty-iff-writing-coordinator-retains-session-relocation-coordinator-fence-otherwise-empty-and-empty-is-legal-in-every-phase",
-          comparison: "opaque-token-exact-equality-only-never-ordered-or-derived",
-        },
-      },
-      replacement: "write-and-verify-new-root-before-one-location-authority-cas-replaces-reference",
-      orphanCleanup: "unpublished-or-replaced-root-is-not-authority-and-is-deleted-or-expires",
-      deleteOrder: "release-or-replace-location-authority-reference-before-idempotent-relocation-root-delete",
-      backend: "location-and-relocation-providers-may-use-different-backends-connections-and-failure-domains",
-      clock: "retention-and-renewal-use-relocation-provider-storeNow-and-expiresAt-only",
-      publishedRelocationDataLoss: {
-        closedTerminalTriggers: [
-          "permanent-published-payload-missing",
-          "published-payload-checksum-mismatch",
-          "published-payload-inventory-digest-mismatch",
-        ],
-        failureCode: "relocationDataLost",
-        retriable: false,
-        rollback: "forbidden",
-        publication: "Ready-and-Completed-forbidden",
-      },
+          comparison: "opaque-token-exact-equality-only-never-ordered-or-derived"
+        }
+      }
     }],
     ["reply-relay-context-integrity", {
       command: "replyRelay",
@@ -1162,11 +1134,9 @@ function validateSemanticConstraints(constraints, contexts, fail) {
         identity: ["stable-relocation-id", "exact-request-source-fence", "operation-id", "reply-route-id"],
         requestSource: "authenticated-exact-source-owner-lease-node-rid-and-generation",
         statuses: ["terminalReceived", "alreadyTerminal"],
-        targetPersistence: "relocation-root-cas-before-ack-effect",
         targetRetry: "retransmit-same-terminal-across-connection-replacement-until-ack-or-exact-request-source-owner-lease-expiry",
         sourceDuplicate: "reply-already-terminal-still-emits-alreadyTerminal-ack",
         physicalConnectionClose: "never-terminal-proof",
-        retireWhileSourceLeaseValid: "forceStopped-and-retain-relocation-root-and-reply-bytes-for-retention-window",
       },
       terminalOwnership: "stable-relocation-id-exact-request-source-fence-operation-id-and-reply-route-id-once-independent-of-target-attempt",
       replyRoute: "request-and-ack-echo-only",
@@ -1485,7 +1455,6 @@ function validateSemanticConstraints(constraints, contexts, fail) {
     ["relocation-target-attempt-integrity", {
       authorityType: "authority-payload-v1",
       fenceType: "relocation-coordinator-fence",
-      prepare: "source-only-captured-phase-exact-relocation-root-target-fence-object-and-application-version",
       ready: "target-only-reply-after-factory-restore-temporary-queue-and-relay-reception-are-ready-with-dispatch-closed",
       oldTargetFence: "old-target-attempt-generation-or-authority-store-version-rejected",
       sameTargetRetry: "factory-and-restore-may-repeat-only-on-the-same-target-process-before-commit",
@@ -1637,7 +1606,6 @@ function validateSemanticConstraints(constraints, contexts, fail) {
     }],
     ["durable-operation-identity-integrity", {
       relocationId: "runtime-generated-nonzero-128-bit-csprng",
-      relocationIdScope: "unique-across-active-and-retained-relocation-roots-collision-rejected-and-regenerated",
       operationId: "nonzero-unique-within-source-owner-lifecycle-for-terminal-dedupe",
       replyRouteId: "nonzero-unique-within-source-owner-lifecycle-for-correlation-only",
       counterWrapOrReuse: "forbidden-terminal-runtime-error",
@@ -1710,7 +1678,6 @@ function validateSemanticConstraints(constraints, contexts, fail) {
       participantMapping: "exactly-one-sorted-application-state-entry-per-objectMailbox-participant-id-and-no-boundSession-entry",
       participantPayloadMaximumBytes: { $bound: "relocationChunkBytes" },
       relocationPresence: "every-relocation-including-empty-recreate-writes-one-deterministic-envelope",
-      storage: "canonical-logical-stream-split-into-immutable-chunks-and-one-root-manifest",
       chunking: "ordered-byte-stream-may-split-within-a-frozen-record",
       applicationInterpretation: "forbidden-framework-validates-byte-count-and-relocation-checksum-only",
     }],
@@ -1766,7 +1733,7 @@ function validateSemanticConstraints(constraints, contexts, fail) {
       fail(location, `${constraint.kind} does not match the v1 contract`);
     }
   });
-  for (const kind of ["implies", ...expectedExact.keys()]) {
+  for (const kind of expectedExact.keys()) {
     if (!seenKinds.has(kind)) {
       fail("$.semanticConstraints", `missing required semantic constraint ${kind}`);
     }
@@ -4040,9 +4007,6 @@ function validateRelocationLogicalFixture(schema, schemaPath) {
   if (fixture.format !== profile.name
       || JSON.stringify(fixture.consumers) !== JSON.stringify(["cpp", "dotnet", "jvm", "node"])) {
     fail(location, "must identify the logical relocation and all four runtime consumers");
-  }
-  if (fixture.durabilityBoundary !== schema.maintenanceAdmissionProfile.durableReplayBoundary) {
-    fail(`${location}.durabilityBoundary`, "must begin only after the complete root is linked by Captured CAS");
   }
   if (typeof fixture.logicalHex !== "string" || !/^(?:[0-9a-f]{2})+$/.test(fixture.logicalHex)) {
     fail(`${location}.logicalHex`, "must be non-empty lowercase whole-byte hex without a provider envelope");
@@ -6596,35 +6560,6 @@ function validateOwnerLeaseAuthorityProfile(profile, fail) {
   }
 }
 
-function validateRelocationRetentionPolicy(policy, fail) {
-  const expected = {
-    retentionMs: 86400000,
-    renewThresholdMs: 43200000,
-    leaseOwner: "current-authority-owner-or-recovery-coordinator",
-    referenced: "renew-current-reference-before-expiry-using-provider-store-time",
-    renewOperation: "RenewManifestTree(root-reference-fixed-retention)",
-    renewResult: "all-manifest-and-chunks-renewed-expiresAt-storeNow-or-missing-partial-failure",
-    partialRenewFailure: "retry-before-threshold-and-fail-closed-before-any-expiry",
-    renewFence: "authority-key-revision-and-current-reference-exact-check-immediately-before-renew",
-    stagedWriteTracking: "track-provider-expiresAt-and-storeNow-for-every-unlinked-chunk-and-manifest",
-    preLinkGate: "immediately-before-captured-and-prepared-cas-verify-or-renew-complete-tree-to-more-than-renew-threshold-remaining",
-    preLinkFailure: "missing-or-partial-renew-aborts-precommit-and-never-links-root",
-    concurrentReplacement: "one-stale-renew-may-extend-orphan-only-never-authorizes-read",
-    orphan: "not-renewed-and-provider-deletes-at-expiry",
-    cleanupOrder: [
-      "cas-authority-reference-removal-or-replacement",
-      "idempotent-delete-no-longer-referenced-manifest-and-all-chunks",
-    ],
-    reader: "current-authority-reference-only",
-    providerClock: "relocation-storeNow-and-expiresAt-independent-of-location-provider-clock",
-    recoveryHorizon: "permanent-published-root-missing-is-non-retriable-RelocationDataLost-no-rollback",
-    publicOption: "forbidden",
-  };
-  if (!isObject(policy) || JSON.stringify(policy) !== JSON.stringify(expected)) {
-    fail("$.relocationRetentionPolicy", "must use the fixed renewable 24-hour relocation lease and bounded recovery horizon");
-  }
-}
-
 function validateRelocationStorageProfile(profile, fail) {
   const expected = {
     logicalStreamType: "relocation-envelope-v1",
@@ -6634,25 +6569,19 @@ function validateRelocationStorageProfile(profile, fail) {
     chunkCountMaximum: 4096,
     logicalMaximumBytes: 274877906944,
     manifestFields: [
-      "logicalFormatVersion", "totalLength", "totalChecksumCrc32c",
+      "logicalFormatVersion",
+      "totalLength",
+      "totalChecksumCrc32c",
       "inventoryDigestSha256",
-      "ordered-chunk-reference-length-checksum",
+      "ordered-chunk-reference-length-checksum"
     ],
-    writeOrder: [
-      "all-immutable-chunks", "immutable-root-manifest", "read-and-verify-complete-root",
-      "location-authority-reference-cas",
-    ],
-    authority: "forbidden-payload-lookup-projection-only",
-    backend: "may-differ-from-location-store",
-    clock: "relocation-provider-storeNow-and-expiresAt-only",
-    writeFailure: "unreferenced-chunks-or-manifest-are-orphans-never-authority",
     emptyRelocation: "deterministic-zero-data-manifest-with-no-chunks",
     streaming: "chunk-validated-and-incrementally-decoded-with-bounded-memory",
     recordSplit: "allowed-across-chunk-boundaries",
-    oversize: "reversible-seal-rollback-and-blocked-state-incompatible-before-draining",
+    oversize: "reversible-seal-rollback-and-blocked-state-incompatible-before-draining"
   };
   if (!isObject(profile) || JSON.stringify(profile) !== JSON.stringify(expected)) {
-    fail("$.relocationStorageProfile", "must define the bounded manifest and immutable relocation chunk contract");
+    fail("$.relocationStorageProfile", "must define the bounded relocation stream formats without Location Store publication");
   }
 }
 
@@ -6805,16 +6734,13 @@ function validateMaintenanceAdmissionProfile(profile, fail) {
     requestDrainFailure: "abort-before-captured-retire-blocked-deadlineExceeded-and-restore-admission",
     phaseOrder: [
       "preparing-cas",
-      "relocation-put",
       "captured-cas",
       "target-reserve",
       "target-factory-and-restore",
       "journal-and-timer-staging",
       "prepared-cas",
     ],
-    durableReplayBoundary: "complete-root-linked-by-captured-cas",
     sourceCrashBeforeCaptured: "fenced-abort-no-maintenance-continuity-original-request-uses-normal-connection-failure-timeout-or-cancellation-terminal",
-    unlinkedPutAfterCrash: "orphan-cleanup-never-replay-authority",
     rollbackBeforeDraining: "abort-transactions-release-reservations-delete-orphans-and-reopen-serving",
     drainingPublish: "after-all-transactions-prepared",
     queueGrowthAfterSeal: "forbidden",
@@ -7386,23 +7312,11 @@ function runSelfTests(schema) {
       const phaseIndex = fields.findIndex((entry) => entry.name === "phase");
       fields.splice(phaseIndex + 1, 0, field);
     }],
-    ["authority relocation zero allowed after root", (candidate) => {
-      const integrity = candidate.semanticConstraints.find(
-        (entry) => entry.kind === "location-relocation-storage-integrity",
-      );
-      integrity.authoritySlotProjection.preRootPhase = "captured";
-    }],
     ["authority relocation exhausted sentinel issued", (candidate) => {
       const relocation = candidate.types.find((type) => type.name === "authority-relocation-state");
       const fields = relocation.cases.find((entry) => entry.when.hasRelocation === "true").fields;
       fields.find((field) => field.name === "aggregateGeneration").maximum =
         "9223372036854775807";
-    }],
-    ["authority relocation root disagreement allowed", (candidate) => {
-      const integrity = candidate.semanticConstraints.find(
-        (entry) => entry.kind === "location-relocation-storage-integrity",
-      );
-      integrity.authoritySlotProjection.rootAgreement = "may-differ-from-root";
     }],
     ["authority relocation legacy trailing tag and u64 present", (candidate) => {
       const relocation = candidate.types.find((type) => type.name === "authority-relocation-state");
@@ -7522,51 +7436,6 @@ function runSelfTests(schema) {
     ["relocation manifest loses inventory digest", (candidate) => {
       const manifest = candidate.types.find((type) => type.name === "relocation-manifest-v1");
       manifest.fields = manifest.fields.filter((field) => field.name !== "inventoryDigestSha256");
-    }],
-    ["Location aggregate permits Relocation manifest authority", (candidate) => {
-      const constraint = candidate.semanticConstraints.find(
-        (entry) => entry.kind === "location-relocation-storage-integrity",
-      );
-      constraint.aggregateAuthority.manifestAuthority = "allowed";
-    }],
-    ["Location aggregate weakens inventory digest match", (candidate) => {
-      const constraint = candidate.semanticConstraints.find(
-        (entry) => entry.kind === "location-relocation-storage-integrity",
-      );
-      constraint.aggregateAuthority.inventoryDigestMatch = "optional";
-    }],
-    ["published payload missing terminal trigger omitted", (candidate) => {
-      const constraint = candidate.semanticConstraints.find(
-        (entry) => entry.kind === "location-relocation-storage-integrity",
-      );
-      constraint.publishedRelocationDataLoss.closedTerminalTriggers =
-        constraint.publishedRelocationDataLoss.closedTerminalTriggers.filter(
-          (trigger) => trigger !== "permanent-published-payload-missing",
-        );
-    }],
-    ["published payload checksum mismatch terminal trigger omitted", (candidate) => {
-      const constraint = candidate.semanticConstraints.find(
-        (entry) => entry.kind === "location-relocation-storage-integrity",
-      );
-      constraint.publishedRelocationDataLoss.closedTerminalTriggers =
-        constraint.publishedRelocationDataLoss.closedTerminalTriggers.filter(
-          (trigger) => trigger !== "published-payload-checksum-mismatch",
-        );
-    }],
-    ["published payload inventory digest mismatch terminal trigger omitted", (candidate) => {
-      const constraint = candidate.semanticConstraints.find(
-        (entry) => entry.kind === "location-relocation-storage-integrity",
-      );
-      constraint.publishedRelocationDataLoss.closedTerminalTriggers =
-        constraint.publishedRelocationDataLoss.closedTerminalTriggers.filter(
-          (trigger) => trigger !== "published-payload-inventory-digest-mismatch",
-        );
-    }],
-    ["published Relocation loss becomes retriable", (candidate) => {
-      const constraint = candidate.semanticConstraints.find(
-        (entry) => entry.kind === "location-relocation-storage-integrity",
-      );
-      constraint.publishedRelocationDataLoss.retriable = true;
     }],
     ["RelocationDataLost failure omitted", (candidate) => {
       const errorCodes = candidate.types.find((type) => type.name === "framework-error-code");
@@ -7746,9 +7615,6 @@ function runSelfTests(schema) {
     ["relocation transfer checksum coverage dropped", (candidate) => {
       candidate.relocationTransferChecksumProfile.coverage.pop();
     }],
-    ["relocation renew result loses store clock", (candidate) => {
-      candidate.relocationRetentionPolicy.renewResult = "renewed-or-missing";
-    }],
     ["maintenance reserves before seal", (candidate) => {
       candidate.maintenanceAdmissionProfile.phaseOrder = [
         "target-reserve", "preparing-cas", "relocation-put", "captured-cas", "prepared-cas",
@@ -7922,9 +7788,6 @@ function runSelfTests(schema) {
         (entry) => entry.kind === "service-admission-update-integrity",
       );
       constraint.mutableOnly.push("normalizedEffectiveMaxMessageBytes");
-    }],
-    ["staged relocation can link without renew", (candidate) => {
-      candidate.relocationRetentionPolicy.preLinkGate = "skip";
     }],
     ["target retry claims exactly once callbacks", (candidate) => {
       const constraint = candidate.semanticConstraints.find(
