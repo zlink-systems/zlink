@@ -12,6 +12,8 @@ GENERATED_BROWSER="$TEMP_DIR/framework-json-schema-browser.mjs"
 GENERATED_SERVER="$TEMP_DIR/framework-json-schema-server.cjs"
 ETCD_PROTO_SOURCE="$(realpath "$ROOT_DIR/../../runtime/protocol/etcd/v3.6.16")"
 mkdir -p "$PACK_DIR" "$BROWSER_DIR" "$SERVER_DIR"
+# Packet contracts of test/contract/fixtures/framework-json-schema-fixture.ts, sorted.
+EXPECTED_PACKETS='ClassPacket,FixturePacket,RequiredPresence'
 
 packages=(
   framework
@@ -155,7 +157,7 @@ JSON
 "$ROOT_DIR/node_modules/.bin/esbuild" index.ts --bundle --platform=browser --format=esm \
   --outfile=browser.mjs --metafile=browser-meta.json >/dev/null
 cp "$GENERATED_BROWSER" generated-framework-json-schemas.mjs
-node - <<'NODE'
+EXPECTED_PACKETS="$EXPECTED_PACKETS" node - <<'NODE'
 const fs = require('node:fs');
 const graph = JSON.parse(fs.readFileSync('browser-meta.json', 'utf8'));
 const inputs = Object.keys(graph.inputs).join('\n');
@@ -175,7 +177,7 @@ import('@zlink-systems/stream-connector/browser').then(
 );
 import('./generated-framework-json-schemas.mjs').then((registry) => {
   const packetNames = Object.keys(registry.packetContracts).sort();
-  if (packetNames.join(',') !== 'ClassPacket,FixturePacket') {
+  if (packetNames.join(',') !== process.env.EXPECTED_PACKETS) {
     throw new Error('browser generated schema registry was not consumable');
   }
 });
@@ -201,10 +203,10 @@ if (options === undefined || wire.ZlinkStreamCodec.Protobuf !== 3) {
 }
 JS
 node index.cjs
-node - <<'NODE'
+EXPECTED_PACKETS="$EXPECTED_PACKETS" node - <<'NODE'
 const registry = require('./generated-framework-json-schemas.cjs');
 const packetNames = Object.keys(registry.packetContracts).sort();
-if (packetNames.join(',') !== 'ClassPacket,FixturePacket') {
+if (packetNames.join(',') !== process.env.EXPECTED_PACKETS) {
   throw new Error('server generated schema registry was not consumable from packed packages');
 }
 NODE
