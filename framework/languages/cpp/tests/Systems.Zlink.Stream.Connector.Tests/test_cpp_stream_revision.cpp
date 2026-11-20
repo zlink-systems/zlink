@@ -288,15 +288,51 @@ int main ()
     for (auto dispatch_mode : {dispatch_mode_t::manual, dispatch_mode_t::immediate}) {
         connector_options_t options;
         options.dispatch_mode = dispatch_mode;
+        boost::asio::io_context io;
+        auto connection_released = std::make_shared<std::promise<void>> ();
+        auto connection_released_completion = connection_released->get_future ();
+        struct connection_release_guard_t
+        {
+            std::future<void> &completion;
+            bool armed = false;
+            bool checked = false;
+            bool released = false;
+
+            bool wait ()
+            {
+                if (!armed)
+                    return true;
+                if (!checked) {
+                    checked = true;
+                    released =
+                      completion.wait_for (std::chrono::seconds (5)) == std::future_status::ready;
+                    if (released)
+                        completion.get ();
+                }
+                return released;
+            }
+
+            ~connection_release_guard_t ()
+            {
+                if (armed && !checked && !wait ())
+                    std::cerr << "FAIL R12 connection released before io_context\n";
+            }
+        } connection_release_guard{connection_released_completion};
         auto connector = connector_factory_t::create (options);
         auto close_state = std::static_pointer_cast<detail::connector_state_t> (
           connector_internal_handle (connector));
-        boost::asio::io_context io;
         boost::asio::ip::tcp::socket socket (io);
         socket.open (boost::asio::ip::tcp::v4 ());
         const auto descriptor = socket.native_handle ();
         io.stop ();
-        close_state->connection = detail::make_tcp_connection (io, std::move (socket));
+        auto connection = detail::make_tcp_connection (io, std::move (socket));
+        connection_release_guard.armed = true;
+        close_state->connection = std::shared_ptr<detail::stream_connection_t> (
+          connection.release (),
+          [connection_released] (detail::stream_connection_t *released_connection) {
+              delete released_connection;
+              connection_released->set_value ();
+          });
         close_state->state = connection_state_t::connected;
         int close_errors = 0;
         bool observed_closed = false;
@@ -326,6 +362,7 @@ int main ()
                "R12 close reason preserved");
         check (connector.state () == connection_state_t::closed,
                "R12 failed native close remains closed");
+        check (connection_release_guard.wait (), "R12 connection released before io_context");
     }
 #endif
     return failures != 0;

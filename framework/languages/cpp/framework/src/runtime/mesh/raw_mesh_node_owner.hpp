@@ -622,7 +622,8 @@ class raw_mesh_node_owner_t
                              protocol::application_payload_t application_payload,
                              detail::backend::raw_send_stage_trace_t trace = {},
                              bool target_claimed = false,
-                             std::optional<std::vector<std::uint8_t>> metadata = {});
+                             std::optional<std::vector<std::uint8_t>> metadata = {},
+                             std::uint64_t target_lifecycle_generation = 0);
     task_t<bool> send_header_only (const std::vector<std::uint8_t> &target_routing_id,
                                    std::vector<std::uint8_t> header);
     task_t<bool> send_control (std::vector<std::uint8_t> target_routing_id,
@@ -677,7 +678,8 @@ class raw_mesh_node_owner_t
       const std::function<std::vector<std::uint8_t> (const detail::backend::raw_message_t &)>
         &decode_reply,
       foundation::operation_registry_t::clock_t::time_point deadline,
-      foundation::operation_registry_t::callback_t callback);
+      foundation::operation_registry_t::callback_t callback,
+      std::uint64_t target_lifecycle_generation = 0);
     static void observe_request (std::shared_ptr<foundation::operation_registry_t> operations,
                                  foundation::call_id_t operation,
                                  std::uint64_t correlation,

@@ -403,12 +403,6 @@ static void prime_raw_case (raw_case_t *raw_, raw_pattern_t pattern_)
     msleep (50);
 }
 
-static void publish_part_blocking (void *subject_)
-{
-    zlink_msg_t part = make_payload_part ('b');
-    TEST_ASSERT_SUCCESS_ERRNO (zlink_publish (subject_, kTopic, &part, 1, 0));
-}
-
 static size_t measure_send_window_raw (void *sender_,
                                        const zlink_routing_id_t *target_rid_,
                                        size_t attempt_limit_,
@@ -825,8 +819,11 @@ static void verify_raw_pressure_entry_and_resume ()
                                       &drain);
             start_drain (&drain);
 
-            TEST_ASSERT_TRUE (wait_drain_done (&drain, kTimeoutMs));
+            const bool drained = wait_drain_done (&drain, kTimeoutMs);
             drain_thread.join ();
+            if (!drained || drain.received != queued || drain.error_code != 0)
+                close_raw_case (&raw);
+            TEST_ASSERT_TRUE (drained);
             TEST_ASSERT_EQUAL_UINT (queued, drain.received);
             TEST_ASSERT_EQUAL_INT (0, drain.error_code);
 
@@ -922,20 +919,26 @@ static void verify_pubsub_pressure_entry_and_resume ()
         TEST_ASSERT_TRUE_MESSAGE (backpressured, transport);
         TEST_ASSERT_TRUE (queued > 0);
 
+        set_send_timeout (entry_case.pub, kTimeoutMs);
+        zlink_msg_t part = make_payload_part ('b');
         drain_gate_t drain;
         std::thread drain_thread (drain_subscription_receiver, entry_case.sub, queued + 1, &drain);
         start_drain (&drain);
-        set_send_timeout (entry_case.pub, kTimeoutMs);
-        publish_part_blocking (entry_case.pub);
-        set_send_timeout (entry_case.pub, 0);
+        const int publish_rc = zlink_publish (entry_case.pub, kTopic, &part, 1, 0);
+        const int publish_errno = errno;
+        if (publish_rc != 0)
+            zlink_msg_close (&part);
 
         drain_thread.join ();
+        set_send_timeout (entry_case.pub, 0);
         char drain_label[160];
         snprintf (drain_label, sizeof (drain_label),
                   "PUBSUB %s drain queued=%zu received=%zu q=%zu b=%zu errno=%d",
                   transport, queued, drain.received, drain.queued_received,
                   drain.resumed_received, drain.error_code);
         close_pubsub_case (&entry_case);
+        errno = publish_errno;
+        TEST_ASSERT_SUCCESS_ERRNO (publish_rc);
         TEST_ASSERT_EQUAL_UINT_MESSAGE (queued + 1, drain.received, drain_label);
         TEST_ASSERT_EQUAL_UINT_MESSAGE (queued, drain.queued_received, drain_label);
         TEST_ASSERT_EQUAL_UINT_MESSAGE (1, drain.resumed_received, drain_label);

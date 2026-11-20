@@ -10,7 +10,7 @@ coroutine flow. It's not the default API for a general game engine client.
 ## Installation
 
 ```cmake
-find_package(zlink-stream-e2e-client CONFIG REQUIRED)
+find_package(zlink_stream_connector_cpp CONFIG REQUIRED)
 
 target_link_libraries(my_scenario_test PRIVATE
     zlink::stream_connector

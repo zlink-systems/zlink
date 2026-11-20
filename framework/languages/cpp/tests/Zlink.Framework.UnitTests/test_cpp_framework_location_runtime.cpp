@@ -3521,6 +3521,81 @@ TEST (ZLinkFrameworkLocationRuntime, DrainingPublicationDoesNotHoldRecoveryMutex
     runtime.stop ();
 }
 
+namespace
+{
+// Holds the next MeshNode descriptor write until the test releases it.
+class held_state_publication_store_t final
+    : public zlink::framework::runtime::in_memory_location_repository_t
+{
+  public:
+    std::atomic_bool hold{false};
+    std::promise<void> entered;
+    zlink::framework::task_completion_source_t<void> release;
+
+    zlink::framework::task_t<zlink::framework::location_write_result_t>
+    update_mesh_node (zlink::framework::mesh_node_descriptor_t descriptor,
+                      zlink::framework::location_write_intent_t intent) override
+    {
+        if (!hold.exchange (false))
+            return in_memory_location_repository_t::update_mesh_node (std::move (descriptor),
+                                                                      intent);
+        entered.set_value ();
+        return zlink::framework::runtime::continue_task<zlink::framework::location_write_result_t> (
+          release.task (), [this, descriptor = std::move (descriptor), intent] () mutable {
+              return this->in_memory_location_repository_t::update_mesh_node (
+                std::move (descriptor), intent);
+          });
+    }
+};
+} // namespace
+
+// #4308: the renew completion takes the descriptor publication mutex. When the
+// worker that completes a state publication's Store write runs that renew
+// continuation first, the write completes only after the continuation does.
+TEST (ZLinkFrameworkLocationRuntime, StatePublicationDoesNotHoldDescriptorMutexAcrossStoreWrite)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::runtime;
+    auto store = std::make_shared<held_state_publication_store_t> ();
+    location_runtime_t runtime (*store);
+    runtime.renew_owner_lease_once ();
+    serializer_registry_t serializers;
+    mesh_node_host_service_t service (std::make_shared<runtime_failure_collector_t> (), {},
+                                      serializers);
+    mesh_node_host_service_test_access_t::configure (service, store, runtime, true);
+    store->hold = true;
+    auto entered = store->entered.get_future ();
+    auto relocating = std::async (std::launch::async, [&] {
+        return service.publish_descriptor_state (framework_runtime_state_t::relocating);
+    });
+    const auto pending = entered.wait_for (std::chrono::seconds (5));
+    const bool available =
+      mesh_node_host_service_test_access_t::publication_mutex_available (service);
+    auto renewal = std::async (std::launch::async, [&] {
+        return service
+          .republish_after_store_recovery (location_write_intent_t::renew, {},
+                                           std::chrono::steady_clock::time_point::max ())
+          .result ()
+          .value ();
+    });
+    const bool renewed_while_pending =
+      renewal.wait_for (std::chrono::seconds (2)) == std::future_status::ready;
+    // Released after RED is recorded too, so the old implementation also unwinds.
+    store->release.complete (result_t<void>::success ());
+    const bool renewed = renewal.get ();
+    const bool published = relocating.get ();
+    const auto descriptors = store->list_mesh_nodes ("publication-mesh").result ().value ();
+    EXPECT_EQ (std::future_status::ready, pending);
+    EXPECT_TRUE (available);
+    EXPECT_TRUE (renewed_while_pending);
+    EXPECT_TRUE (renewed);
+    EXPECT_TRUE (published);
+    ASSERT_EQ (1u, descriptors.items.size ());
+    EXPECT_EQ (framework_runtime_state_t::relocating, descriptors.items.front ().state);
+    service.stop ();
+    runtime.stop ();
+}
+
 namespace zlink::framework::runtime
 {
 namespace
