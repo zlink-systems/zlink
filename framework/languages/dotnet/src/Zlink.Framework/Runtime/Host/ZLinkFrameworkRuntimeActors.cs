@@ -2382,25 +2382,18 @@ internal sealed partial class ZLinkFrameworkRuntime
                         ZLinkFrameworkDebugLog.SpotDiscovery(
                             $"admit_reply_built actor={request.ActorId} accepted=true"
                         );
-                        if (target.UserSpot is not null)
-                            //  Spec 15 §4.2: register the relocation
-                            //  temporary queue before Accepted returns to
-                            //  the source, so a production ingress
-                            //  arrival for this ActorId between now and
-                            //  Restore/PREPARE parks instead of being
-                            //  dropped as NotFound. JoinEntrySpot has no
-                            //  admission round trip and is excluded (spec
-                            //  15 §4.2 "이 준비 동승이 없다").
-                            await RegisterActorJoinPrewarmAsync(
-                                    request.HandoffId,
-                                    request.ActorId,
-                                    request.ActorGeneration,
-                                    DateTimeOffset.FromUnixTimeMilliseconds(
-                                        request.DeadlineUnixTimeMilliseconds
-                                    ),
-                                    ct
-                                )
-                                .ConfigureAwait(false);
+                        // Spec 15 §4.2: Entry and User Spot admissions register the temporary
+                        // queue before Accepted so ingress can wait for Restore/PREPARE.
+                        await RegisterActorJoinPrewarmAsync(
+                                request.HandoffId,
+                                request.ActorId,
+                                request.ActorGeneration,
+                                DateTimeOffset.FromUnixTimeMilliseconds(
+                                    request.DeadlineUnixTimeMilliseconds
+                                ),
+                                ct
+                            )
+                            .ConfigureAwait(false);
                         return ZLinkRemoteActorJoinPackets.CreateAdmissionReply(
                             true,
                             result.Reply,
@@ -2548,53 +2541,6 @@ internal sealed partial class ZLinkFrameworkRuntime
                 $"Actor '{request.ActorId}' Authority stable type '{stableType}' is not registered on the target node."
             );
         return stableType;
-    }
-
-    // Canonical command 28 deliberately has no private ActorType or relocation
-    // transfer id.  Reuse the S3 Authority-row decision before the normal Spot
-    // dispatcher materializes the target Actor.
-    internal async ValueTask PrepareCanonicalActorJoinAsync(
-        ActorJoinRequest request,
-        CancellationToken cancellationToken
-    )
-    {
-        var target = ResolveActorHandoffTarget(request.TargetSpotId);
-        if (target.NodeRid != request.TargetNodeRid)
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.ProtocolError,
-                $"Actor '{request.Actor.ActorId}' Join target node fence does not match."
-            );
-
-        var stableType = await ResolveCanonicalActorJoinStableTypeAsync(
-                request,
-                Registration.Locations.ResolveStore(),
-                type =>
-                    ZLinkActorRelocationRegistry.TryResolve(
-                        Registration,
-                        type,
-                        target.NodeRid,
-                        out _
-                    ),
-                cancellationToken
-            )
-            .ConfigureAwait(false);
-
-        var state = GetOrCreateActorState(request.Actor.ActorId);
-        if (state.Actor is not null)
-            return;
-
-        // This is target-local provisional existence only. Command 40 owns
-        // the relocation reservation, staging queue, and byte budget under
-        // its relocation identity; do not create any of those at command 28.
-        await _actorSessionManager
-            .EnsureProvisionalActorAsync(
-                request.Actor.ActorId,
-                stableType,
-                request.Actor.ObjectGeneration,
-                request.ActorAuthorityOwnerGeneration,
-                cancellationToken
-            )
-            .ConfigureAwait(false);
     }
 
     internal static async ValueTask<string> ResolveCanonicalActorJoinStableTypeAsync(
