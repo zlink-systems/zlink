@@ -5,11 +5,11 @@
 # PRs to main are squash-merged so a merged fix is one commit that Mergify can
 # backport. A PR labelled `backport-0.30.3` then gets a backport PR to the release
 # branch, which enters the release queue by itself and merges after the same checks.
-# One batch already needs about 20 GitHub-hosted jobs (the hosted concurrency
-# limit), so more parallel batches only wait for runners and get reset by
-# requeues. Fewer, larger batches merge more PRs per hour.
+# Since 2026-11-21 C++ batch jobs run on 8 self-hosted runners (home PC 6, ws1/ws2 1
+# each) and the other Linux suites on GitHub-hosted runners, so four batches fit at
+# once. Two left the self-hosted runners idle while 60+ PRs waited.
 merge_queue:
-  max_parallel_checks: 2
+  max_parallel_checks: 4
 
 queue_rules:
   - name: default
