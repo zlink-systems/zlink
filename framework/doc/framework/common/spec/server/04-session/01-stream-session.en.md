@@ -258,7 +258,14 @@ connector owns a per-connector-instance typed codec option
 | An application handler exception | Not a transport error, so the session error callback isn't run — the handler exception-handling path is used instead. |
 
 The session error callback is limited to surfacing a monitor-observable
-transport error at the session level.
+transport error at the session level. When a connection ends with Core monitor's `DISCONNECTED`
+event, the framework in all four languages runs the session error callback once with the
+`TransportError` kind and then performs the existing connection-close handling. That error carries the
+`zlink_disconnect_reason_t` value Core reported in the event's `value` in an optional field (named
+`disconnectReason`, `DisconnectReason`, or `disconnect_reason()` in each exact interface). The field
+exists only on errors produced by `DISCONNECTED`, and `UNKNOWN` (0) counts as present
+([Core monitoring §3.2](../../../../../../../core/doc/spec/core/06-monitoring.en.md#32-value-and-flags)). The framework doesn't interpret this value or
+turn it into another close reason.
 
 A server STREAM session follows the heartbeat rule of [Stream Connector §6](../../stream-connector/32-stream-connector.en.md#6-connection-lifecycle). The heartbeat interval and timeout default to that section's defaults and can be changed in the Stream node configuration. On the server, the result of the no-inbound timeout is closing the session with `heartbeat_timeout`, not reconnecting.
 
@@ -269,7 +276,7 @@ The heartbeat interval and timeout must be positive, and the timeout must be gre
 The termination reason when a session closes matches the closed set in
 [Stream Connector §6.2](../../stream-connector/32-stream-connector.en.md#62-close-reason),
 and the corresponding instrument is owned by
-[runtime-metrics §4](../06-observability/02-runtime-metrics.en.md).
+[runtime-metrics §6](../06-observability/02-runtime-metrics.en.md).
 
 ## 8. From Session to Actor
 
@@ -392,6 +399,8 @@ and the inter-node wire records. Each item leads to one contract test.
   client matches by request sequence alone to complete normally.
 - Handshake failure and socket-level errors don't run the session error
   callback and are only recorded in runtime monitoring.
+- In the error callback of a session that ended with Core's `DISCONNECTED` event, the event's
+  `zlink_disconnect_reason_t` value can be read, and it equals the value Core reported.
 
 **The path to the Actor**
 
