@@ -74,6 +74,7 @@ import {
   isValidPositiveCapacity,
   registerActorFactory,
   registerEntrySpot,
+  registerLocationStore,
   registerRelocationStore,
   registerSpotFactory,
   requirePublicWeight,
@@ -149,7 +150,7 @@ class ZLinkFrameworkOptionsBuilder implements ZLinkFrameworkOptions {
 
   addLocationStore(store: ZLinkLocationStore): this {
     this.options.locations ??= { options: {} };
-    this.options.locations.storeInstance = store;
+    registerLocationStore(this.options.locations, store);
     return this;
   }
 

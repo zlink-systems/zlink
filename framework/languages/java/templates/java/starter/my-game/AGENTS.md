@@ -77,6 +77,8 @@ The channels in `mmo-world-channels` are player-selected game spaces within a wo
 
 After each addition, extend settings and registrations, `zlink.structure.json`, its checker, and e2e together. Keep game rules in application modules apart from the Framework callbacks and transport adapters that call them. Do not create empty layers in this starter.
 
+`Hosting.configure` registers the Location Store explicitly with `options.addLocationStore` once per node. A Spring Store bean alone does not register it with Framework. Keep Store registration in this shared hosting setup; role configurers must not register it again.
+
 ## Public API boundaries
 
 Use the [documentation](https://docs.zlink.systems/), [Java server guide](https://docs.zlink.systems/java/guide/server/), [API reference](https://docs.zlink.systems/java/reference/), and [agent index](https://docs.zlink.systems/llms.txt). Check API availability against `build.gradle.kts` because online guides may describe a newer release.

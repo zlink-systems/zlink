@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.configuration;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.junit.jupiter.api.Test;
@@ -50,5 +51,16 @@ final class ZLinkLocationStartupValidationTest {
         assertThrows(ZLinkConfigurationException.class, registration::validate);
         options.setOwnerLeaseRenewInterval(Duration.ofSeconds(Long.MAX_VALUE - 9));
         assertDoesNotThrow(registration::validate);
+    }
+
+    @Test
+    void locationStoreIsRegisteredExactlyOnce() {
+        ZLinkFrameworkRegistration registration = new ZLinkFrameworkRegistration();
+        ZLinkInMemoryLocationStore first = new ZLinkInMemoryLocationStore();
+        registration.setLocationStore(first);
+        assertThrows(
+                ZLinkConfigurationException.class,
+                () -> registration.setLocationStore(new ZLinkInMemoryLocationStore()));
+        assertSame(first, registration.locations().storeInstance());
     }
 }
