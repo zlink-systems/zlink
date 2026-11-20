@@ -3463,7 +3463,10 @@ export class ZLinkFrameworkRuntimeHost
     }
 
     let callbackTimedOut = false;
-    const callbackState = { notifying: false };
+    const callbackState: { notifying: boolean; failed: boolean; error?: unknown } = {
+      notifying: false,
+      failed: false
+    };
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     const cancellation = new AbortController();
     const lifecycleSignal = signal ?? this.executionState?.abortController.signal;
@@ -3523,11 +3526,23 @@ export class ZLinkFrameworkRuntimeHost
         lifecycleSignal?.addEventListener('abort', stopNotification, { once: true });
         startCallbackTimeout();
         if (lifecycleSignal?.aborted === true) stopNotification();
-        await boundCallback.call(actor, sessionBindingIdentity(incomingTarget), callbackSignal);
+        try {
+          await boundCallback.call(actor, sessionBindingIdentity(incomingTarget), callbackSignal);
+        } catch (error) {
+          // The bind is already confirmed; a callback failure must not fail the Actor turn.
+          callbackState.failed = true;
+          callbackState.error = error;
+        }
       }
     );
     try {
       const outcome = await Promise.race([turn.then(() => 'completed' as const), timeout]);
+      if (outcome === 'completed' && callbackState.failed && lifecycleSignal?.aborted !== true) {
+        this.runtimeOrPreStartErrorSink.reportRuntimeTaskException(
+          `session bound callback '${binding.actor.actorId}'`,
+          callbackState.error
+        );
+      }
       if (outcome === 'timedOut') {
         const error = createDeadlineExceededError(
           callbackState.notifying
