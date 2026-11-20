@@ -373,7 +373,15 @@ public sealed partial class LocationRuntimeTests
             await pending.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.Equal(1, calls);
             Assert.Equal(messages, instance.Messages);
-            // Post-recovery public request routing is tracked in https://github.com/zlink-systems/zlink/issues/4737.
+            Assert.Equal(
+                2,
+                (
+                    await client
+                        .RequestToActor(actor.ActorId, "after")
+                        .Timeout(TimeSpan.FromSeconds(1))
+                        .Async<OutageExecutionReply>()
+                ).Count
+            );
             Assert.Same(instance, actor.Actor);
             Assert.Equal(factoryCalls, probe.FactoryCalls);
         }
@@ -2021,7 +2029,15 @@ public sealed partial class LocationRuntimeTests
             );
             Assert.Equal(1, messages);
             Assert.Equal(2, (await PingActor()).Count);
-            Assert.Equal(2, (await PingSpot()).Count);
+            // Routing §2: a positive route cache entry is usable only until the owner's
+            // admission deadline, and Location runtime §5.1 excludes new route lookups
+            // after it. With retention the deadline has passed here, so a public Spot
+            // request that resolves its route by ID is refused; without retention the
+            // clock is still inside the admission window.
+            if (retention)
+                await Assert.ThrowsAsync<InvalidOperationException>(async () => await PingSpot());
+            else
+                Assert.Equal(2, (await PingSpot()).Count);
             var timer = Assert.IsType<ZLinkTimer>(spot.Timer);
             await spot.FirstTick.Task;
             Assert.Equal(1, spot.Ticks);
@@ -2049,7 +2065,10 @@ public sealed partial class LocationRuntimeTests
                         .AsTask()
                 );
                 Assert.Equal(calls, probe.FactoryCalls);
-                Assert.NotNull(await rows.ResolveSpotRowAsync(new ZLinkSpotLocationKey("steady")));
+                // Routing §2: the cached route ended at the admission deadline.
+                await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                    rows.ResolveSpotRowAsync(new ZLinkSpotLocationKey("steady")).AsTask()
+                );
                 await Assert.ThrowsAsync<InvalidOperationException>(() =>
                     rows.ResolveSpotRowAsync(new ZLinkSpotLocationKey("uncached")).AsTask()
                 );

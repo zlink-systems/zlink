@@ -457,11 +457,12 @@ internal static class ZLinkFrameworkServiceRegistrar
             return services;
         }
 
-        services.AddSingleton<ZLinkLocationStoreHealth>();
-        services.AddSingleton(static provider => new ZLinkOwnerLeaseTracker(
+        services.AddSingleton(new ZLinkLocationStoreHealth(registration.TimeProvider));
+        services.AddSingleton(provider => new ZLinkOwnerLeaseTracker(
             provider.GetRequiredService<IZLinkLocationRepository>(),
             provider.GetRequiredService<ZLinkLocationOptions>(),
-            health: provider.GetRequiredService<ZLinkLocationStoreHealth>()
+            registration.TimeProvider,
+            provider.GetRequiredService<ZLinkLocationStoreHealth>()
         ));
         services.AddSingleton(static provider =>
         {
