@@ -1112,7 +1112,10 @@ function validateSemanticConstraints(constraints, contexts, fail) {
           presence: "nonempty-iff-writing-coordinator-retains-session-relocation-coordinator-fence-otherwise-empty-and-empty-is-legal-in-every-phase",
           comparison: "opaque-token-exact-equality-only-never-ordered-or-derived"
         }
-      }
+      },
+      replacement: "write-and-verify-new-root-before-one-location-authority-cas-replaces-reference",
+      orphanCleanup: "unpublished-or-replaced-root-is-not-authority-and-is-deleted-or-expires",
+      deleteOrder: "release-or-replace-location-authority-reference-before-idempotent-relocation-root-delete",
     }],
     ["reply-relay-context-integrity", {
       command: "replyRelay",
@@ -1134,9 +1137,11 @@ function validateSemanticConstraints(constraints, contexts, fail) {
         identity: ["stable-relocation-id", "exact-request-source-fence", "operation-id", "reply-route-id"],
         requestSource: "authenticated-exact-source-owner-lease-node-rid-and-generation",
         statuses: ["terminalReceived", "alreadyTerminal"],
+        targetPersistence: "relocation-root-cas-before-ack-effect",
         targetRetry: "retransmit-same-terminal-across-connection-replacement-until-ack-or-exact-request-source-owner-lease-expiry",
         sourceDuplicate: "reply-already-terminal-still-emits-alreadyTerminal-ack",
         physicalConnectionClose: "never-terminal-proof",
+        retireWhileSourceLeaseValid: "forceStopped-and-retain-relocation-root-and-reply-bytes-for-retention-window",
       },
       terminalOwnership: "stable-relocation-id-exact-request-source-fence-operation-id-and-reply-route-id-once-independent-of-target-attempt",
       replyRoute: "request-and-ack-echo-only",
@@ -6924,6 +6929,19 @@ function expectInvalid(schema, label, mutate, pattern) {
 
 function runSelfTests(schema) {
   const tests = [
+    ["source inventory digest semantics omitted", (candidate) => {
+      delete candidate.jsonStorageFormats.sourceInventorySha256;
+    }, "jsonStorageFormats.sourceInventorySha256"],
+    ["source inventory digest semantics changed", (candidate) => {
+      candidate.jsonStorageFormats.sourceInventorySha256.immutableAfter = "committed";
+    }, "jsonStorageFormats.sourceInventorySha256"],
+    ["unbounded storage generation", (candidate) => {
+      candidate.jsonStorageFormats.records.$defs.generation.pattern = "^(0|[1-9][0-9]*)$";
+    }, "jsonStorageFormats.records.generation"],
+    ["count-only page partition", (candidate) => {
+      candidate.jsonStorageFormats.pagePartition.leaf = "consecutive-entry-index-groups";
+    }, "jsonStorageFormats.pagePartition"],
+
     ["undefined type", (candidate) => {
       candidate.commands[0].body[0].$ref = "undefined-type";
     }],

@@ -356,7 +356,10 @@
           "presence": "nonempty-iff-writing-coordinator-retains-session-relocation-coordinator-fence-otherwise-empty-and-empty-is-legal-in-every-phase",
           "comparison": "opaque-token-exact-equality-only-never-ordered-or-derived"
         }
-      }
+      },
+      "replacement": "write-and-verify-new-root-before-one-location-authority-cas-replaces-reference",
+      "orphanCleanup": "unpublished-or-replaced-root-is-not-authority-and-is-deleted-or-expires",
+      "deleteOrder": "release-or-replace-location-authority-reference-before-idempotent-relocation-root-delete"
     },
     {
       "kind": "reply-relay-context-integrity",
@@ -387,9 +390,11 @@
           "terminalReceived",
           "alreadyTerminal"
         ],
+        "targetPersistence": "relocation-root-cas-before-ack-effect",
         "targetRetry": "retransmit-same-terminal-across-connection-replacement-until-ack-or-exact-request-source-owner-lease-expiry",
         "sourceDuplicate": "reply-already-terminal-still-emits-alreadyTerminal-ack",
-        "physicalConnectionClose": "never-terminal-proof"
+        "physicalConnectionClose": "never-terminal-proof",
+        "retireWhileSourceLeaseValid": "forceStopped-and-retain-relocation-root-and-reply-bytes-for-retention-window"
       },
       "terminalOwnership": "stable-relocation-id-exact-request-source-fence-operation-id-and-reply-route-id-once-independent-of-target-attempt",
       "replyRoute": "request-and-ack-echo-only"
@@ -8563,7 +8568,7 @@
   "jsonStorageFormats": {
     "encoding": "utf-8-without-bom",
     "canonicalization": "RFC8785",
-    "spec": "01-location-runtime.ko.md#8.3",
+    "spec": "01-location-runtime.ko.md#83-aggregate-기록과-이동-대상-목록의-저장-형식",
     "keys": {
       "aggregate": "{prefix}aggregate:{aggregateId}:{aggregateGeneration}",
       "root": "{prefix}aggregate-inventory:{aggregateId}:{aggregateGeneration}:root",
@@ -8587,7 +8592,7 @@
         },
         "generation": {
           "type": "string",
-          "pattern": "^(0|[1-9][0-9]*)$"
+          "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$"
         },
         "count": {
           "type": "integer",
@@ -8943,8 +8948,8 @@
     },
     "pagePartition": {
       "maximumItems": 1024,
-      "leaf": "consecutive-entry-index-groups",
-      "parent": "consecutive-child-page-index-groups",
+      "leaf": "greedy-entry-index-order-until-next-item-exceeds-byte-or-item-limit",
+      "parent": "greedy-child-page-index-order-until-next-item-exceeds-byte-or-item-limit",
       "promotion": "only-when-current-level-has-multiple-pages",
       "root": "single-highest-page-reference",
       "empty": {
@@ -8952,6 +8957,12 @@
         "topLevel": 0,
         "topPages": []
       }
+    },
+    "sourceInventorySha256": {
+      "authorityField": "aggregate.relocation.sourceInventorySha256",
+      "value": "sealed-inventory-root.digestSha256",
+      "immutableAfter": "preparing",
+      "singleActorWithoutAggregate": "single-actor-entry-inventory-root.digestSha256"
     }
   }
 }

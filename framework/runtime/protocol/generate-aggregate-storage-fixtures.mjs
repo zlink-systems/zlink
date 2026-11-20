@@ -23,15 +23,17 @@ export function generateAggregateStorageFixtures(schema) {
       ({ prefix, aggregateId, aggregateGeneration, ...decoded })[name]);
     return { key, decoded, jcsUtf8: bytes.toString("utf8"), jcsHex: bytes.toString("hex"), sha256: sha256(bytes) };
   }
-  function inventory(name, count) {
+  function inventory(name, count, longEntries = false) {
     // §8.3 stores participant records verbatim, outside JSON canonicalization.
     const authorityPayloadHex = "00ff807061796c6f6164";
     const membershipMutationHex = "0100fe806d75746174696f6e";
     const authorityPayloadSha256 = sha256(Buffer.from(authorityPayloadHex, "hex"));
     const membershipMutationSha256 = sha256(Buffer.from(membershipMutationHex, "hex"));
     const entries = Array.from({ length: count }, (_, index) => ({
-      index, authorityKey: `zla1:a:11:golden-${String(index).padStart(4, "0")}`,
-      expectedStoreVersion: `opaque:${index}:한글`,
+      index, authorityKey: longEntries
+        ? `zla1:a:255:${"%EA%B0%80".repeat(84)}${[...Buffer.from(String.fromCharCode(0xAC00 + index))].map((b) => `%${b.toString(16).toUpperCase()}`).join("")}`
+        : `zla1:a:11:golden-${String(index).padStart(4, "0")}`,
+      expectedStoreVersion: longEntries ? "v".repeat(4096) : `opaque:${index}:한글`,
       ownerTransition: index % 2 === 0 ? "preserve" : "newOwner",
       authorityPayloadSha256, membershipMutationSha256,
     }));
@@ -40,30 +42,36 @@ export function generateAggregateStorageFixtures(schema) {
       level: page.decoded.level, index: page.decoded.index, startIndex: page.decoded.startIndex,
       entryCount: page.decoded.entryCount, sha256: page.sha256,
     });
-    let current = [];
-    for (let start = 0; start < count; start += pageSize) {
-      const leaf = record("page", {
-        level: 0, index: current.length, startIndex: start,
-        entryCount: Math.min(pageSize, count - start), entries: entries.slice(start, start + pageSize), children: [],
+    // One partition rule for entries and references, using the whole stored page.
+    function partition(items, level) {
+      const result = [];
+      const makePage = (group) => ({
+        level, index: result.length,
+        startIndex: level === 0 ? group[0].index : group[0].startIndex,
+        entryCount: level === 0 ? group.length : group.reduce((sum, child) => sum + child.entryCount, 0),
+        entries: level === 0 ? group : [], children: level === 0 ? [] : group,
       });
-      pages.push(leaf);
-      current.push(reference(leaf));
-    }
-    let topLevel = 0;
-    while (current.length > 1) {
-      topLevel += 1;
-      const next = [];
-      for (let start = 0; start < current.length; start += pageSize) {
-        const children = current.slice(start, start + pageSize);
-        const page = record("page", {
-          level: topLevel, index: next.length, startIndex: children[0].startIndex,
-          entryCount: children.reduce((sum, child) => sum + child.entryCount, 0), entries: [], children,
-        });
+      const flush = (group) => {
+        const page = record("page", makePage(group));
         pages.push(page);
-        next.push(reference(page));
+        result.push(reference(page));
+      };
+      let group = [];
+      for (const item of items) {
+        const candidate = [...group, item];
+        if (group.length && (candidate.length > pageSize
+          || jcsBytes(makePage(candidate)).length > storage.pageMaximumEncodedBytes)) {
+          flush(group);
+          group = [];
+        }
+        group.push(item);
       }
-      current = next;
+      if (group.length) flush(group);
+      return result;
     }
+    let current = partition(entries, 0);
+    let topLevel = 0;
+    while (current.length > 1) current = partition(current, ++topLevel);
     const digestInput = { totalCount: count, topLevel, topPages: current };
     const digestInputBytes = jcsBytes(digestInput);
     const root = record("root", { ...digestInput, digestSha256: sha256(digestInputBytes) });
@@ -82,9 +90,9 @@ export function generateAggregateStorageFixtures(schema) {
     };
   }
   return {
-    spec: "01-location-runtime.ko.md#8.3", canonicalization: "RFC8785 (canonicalize@2.1.0)",
+    spec: storage.spec, canonicalization: "RFC8785 (canonicalize@2.1.0)",
     byteEncoding: "jcsHex is exact UTF-8 storage bytes; no BOM or trailing newline",
-    cases: [inventory("small-3", 3), inventory("two-level-1025", 1025), inventory("empty-0", 0)],
+    cases: [inventory("small-3", 3), inventory("two-level-1025", 1025), inventory("empty-0", 0), inventory("byte-limited-256", 256, true)],
   };
 }
 

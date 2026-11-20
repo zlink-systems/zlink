@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { jcsBytes, sha256, storageValidators } from "./aggregate-storage.mjs";
+import { generateAggregateStorageFixtures } from "./generate-aggregate-storage-fixtures.mjs";
 import { validateSchema, SchemaValidationError } from "./validate-service-wire-schema.mjs";
 
 const schema = JSON.parse(readFileSync(new URL("./service-wire-v1.schema.json", import.meta.url)));
@@ -105,8 +106,8 @@ test("participant records retain raw bytes and inventory partition is determinis
   });
   assert.deepEqual(schema.jsonStorageFormats.pagePartition, {
     maximumItems: 1024,
-    leaf: "consecutive-entry-index-groups",
-    parent: "consecutive-child-page-index-groups",
+    leaf: "greedy-entry-index-order-until-next-item-exceeds-byte-or-item-limit",
+    parent: "greedy-child-page-index-order-until-next-item-exceeds-byte-or-item-limit",
     promotion: "only-when-current-level-has-multiple-pages",
     root: "single-highest-page-reference",
     empty: { totalCount: 0, topLevel: 0, topPages: [] },
@@ -123,7 +124,7 @@ test("participant records retain raw bytes and inventory partition is determinis
   }
 });
 
-test("Location Store does not publish durable relocation payload roots", () => {
+test("application snapshots do not require durable relocation roots", () => {
   const integrity = schema.semanticConstraints.find(
     (entry) => entry.kind === "location-relocation-storage-integrity",
   );
@@ -179,28 +180,39 @@ for (const fixture of storageGolden.cases) {
     }
     const entries = fixture.pages.flatMap((page) => page.decoded.entries);
     assert.equal(entries.length, fixture.root.decoded.totalCount);
-    assert(entries.every((entry) => /^zla1:a:11:golden-[0-9]{4}$/.test(entry.authorityKey)));
+    assert(entries.every((entry) => entry.authorityKey.startsWith("zla1:a:")));
     assert.deepEqual(entries.map((entry) => entry.index), Array.from({ length: entries.length }, (_, i) => i));
     assert.deepEqual(entries.map((entry) => entry.authorityKey), entries.map((entry) => entry.authorityKey)
       .sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b))));
-    let levelCount = entries.length;
     let level = 0;
     let pageCount = 0;
-    while (levelCount > 0) {
-      const expectedCount = Math.ceil(levelCount / 1024);
+    while (entries.length > 0) {
       const levelPages = fixture.pages.filter((page) => page.decoded.level === level);
-      assert.equal(levelPages.length, expectedCount);
+      let itemIndex = 0;
       for (const [index, page] of levelPages.entries()) {
-        assert.equal(page.decoded.index, index);
-        const items = level === 0 ? page.decoded.entries : page.decoded.children;
-        assert.equal(items.length, Math.min(1024, levelCount - index * 1024));
+        const value = page.decoded;
+        assert.equal(value.index, index);
+        const items = level === 0 ? value.entries : value.children;
+        assert(items.length > 0 && items.length <= 1024);
         assert.deepEqual(items.map((item) => item.index),
-          Array.from({ length: items.length }, (_, i) => index * 1024 + i));
-        assert.equal(page.decoded.startIndex, level === 0 ? items[0].index : items[0].startIndex);
+          Array.from({ length: items.length }, (_, i) => itemIndex + i));
+        itemIndex += items.length;
+        assert.equal(value.startIndex, level === 0 ? items[0].index : items[0].startIndex);
+        const next = levelPages[index + 1]?.decoded;
+        if (next && items.length < 1024) {
+          const candidate = structuredClone(value);
+          if (level === 0) {
+            candidate.entries.push(next.entries[0]);
+            candidate.entryCount += 1;
+          } else {
+            candidate.children.push(next.children[0]);
+            candidate.entryCount += next.children[0].entryCount;
+          }
+          assert(jcsBytes(candidate).length > 1048576, "page must include every item that fits");
+        }
       }
-      pageCount += expectedCount;
-      if (expectedCount === 1) break;
-      levelCount = expectedCount;
+      pageCount += levelPages.length;
+      if (levelPages.length === 1) break;
       level += 1;
     }
     assert.equal(fixture.pages.length, pageCount);
@@ -257,4 +269,73 @@ test("JSON record schemas reject corrupt storage records", () => {
     ["page", { ...valid.pages[0].decoded, entries: Array(1025).fill(valid.pages[0].decoded.entries[0]) }],
     ["page", { ...valid.pages[0].decoded, index: 2147483648 }],
   ]) assert.equal(validators[kind](value), false);
+});
+
+
+test("generation decimal strings stay within unsigned 64-bit range", () => {
+  const value = structuredClone(storageGolden.cases[0].aggregate.decoded);
+  value.aggregateGeneration = "18446744073709551615";
+  assert.equal(validators.aggregate(value), true);
+  value.aggregateGeneration = "18446744073709551616";
+  assert.equal(validators.aggregate(value), false);
+});
+
+test("source inventory digest semantics cannot be omitted or changed", () => {
+  assert.deepEqual(schema.jsonStorageFormats.sourceInventorySha256, {
+    authorityField: "aggregate.relocation.sourceInventorySha256",
+    value: "sealed-inventory-root.digestSha256",
+    immutableAfter: "preparing",
+    singleActorWithoutAggregate: "single-actor-entry-inventory-root.digestSha256",
+  });
+  for (const field of Object.keys(schema.jsonStorageFormats.sourceInventorySha256)) {
+    for (const replacement of [undefined, "wrong"]) {
+      const candidate = structuredClone(schema);
+      if (replacement === undefined) delete candidate.jsonStorageFormats.sourceInventorySha256[field];
+      else candidate.jsonStorageFormats.sourceInventorySha256[field] = replacement;
+      assert.throws(() => validateSchema(candidate), SchemaValidationError);
+    }
+  }
+});
+
+test("terminal completion persistence survives application snapshot rule removal", () => {
+  const ack = schema.semanticConstraints.find((e) => e.kind === "reply-relay-context-integrity").acknowledgement;
+  assert.equal(ack.targetPersistence, "relocation-root-cas-before-ack-effect");
+  assert.equal(ack.retireWhileSourceLeaseValid,
+    "forceStopped-and-retain-relocation-root-and-reply-bytes-for-retention-window");
+  for (const field of ["targetPersistence", "retireWhileSourceLeaseValid"]) {
+    const candidate = structuredClone(schema);
+    delete candidate.semanticConstraints.find((e) => e.kind === "reply-relay-context-integrity").acknowledgement[field];
+    assert.throws(() => validateSchema(candidate), SchemaValidationError);
+  }
+});
+
+test("byte-limited inventory splits before 1024 entries", () => {
+  const fixture = generateAggregateStorageFixtures(schema).cases.find((c) => c.name === "byte-limited-256");
+  assert(fixture, "long authority key and StoreVersion fixture is required");
+  const leaves = fixture.pages.filter((p) => p.decoded.level === 0);
+  assert(leaves.length > 1);
+  assert(leaves[0].decoded.entries.length < 256);
+  assert.equal(Buffer.byteLength(leaves[0].decoded.entries[0].authorityKey), 776);
+  assert.equal(Buffer.byteLength(leaves[0].decoded.entries[0].expectedStoreVersion), 4096);
+});
+
+test("storage spec link uses the actual section anchor", () => {
+  const anchor = "01-location-runtime.ko.md#83-aggregate-기록과-이동-대상-목록의-저장-형식";
+  assert.equal(schema.jsonStorageFormats.spec, anchor);
+  assert.equal(generateAggregateStorageFixtures(schema).spec, anchor);
+});
+
+test("completion roots retain verified replacement and authority-before-delete order", () => {
+  const rules = {
+    replacement: "write-and-verify-new-root-before-one-location-authority-cas-replaces-reference",
+    orphanCleanup: "unpublished-or-replaced-root-is-not-authority-and-is-deleted-or-expires",
+    deleteOrder: "release-or-replace-location-authority-reference-before-idempotent-relocation-root-delete",
+  };
+  const integrity = schema.semanticConstraints.find((e) => e.kind === "location-relocation-storage-integrity");
+  for (const [field, value] of Object.entries(rules)) {
+    assert.equal(integrity[field], value);
+    const candidate = structuredClone(schema);
+    delete candidate.semanticConstraints.find((e) => e.kind === "location-relocation-storage-integrity")[field];
+    assert.throws(() => validateSchema(candidate), SchemaValidationError);
+  }
 });

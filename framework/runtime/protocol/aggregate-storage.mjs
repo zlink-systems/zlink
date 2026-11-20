@@ -24,6 +24,13 @@ export function validateJsonStorageFormats(storage, fail) {
       fail(`${location}.${name}`, "must match location §8.3");
     }
   };
+  requireEqual("spec", storage.spec, "01-location-runtime.ko.md#83-aggregate-기록과-이동-대상-목록의-저장-형식");
+  requireEqual("sourceInventorySha256", storage.sourceInventorySha256, {
+    authorityField: "aggregate.relocation.sourceInventorySha256",
+    value: "sealed-inventory-root.digestSha256",
+    immutableAfter: "preparing",
+    singleActorWithoutAggregate: "single-actor-entry-inventory-root.digestSha256",
+  });
   requireEqual("canonicalization", storage.canonicalization, "RFC8785");
   requireEqual("encoding", storage.encoding, "utf-8-without-bom");
   const base = "{prefix}aggregate-inventory:{aggregateId}:{aggregateGeneration}";
@@ -93,7 +100,7 @@ export function validateJsonStorageFormats(storage, fail) {
   requireEqual("countAgreement", storage.countAgreement, "aggregate.participantCount-equals-root.totalCount");
   requireEqual("referenceAgreement", storage.referenceAgreement, ["level", "index", "startIndex", "entryCount"]);
   requireEqual("replacement", storage.replacement, "new-aggregateGeneration-for-different-content");
-  requireEqual("records.generation", defs.generation, { type: "string", pattern: "^(0|[1-9][0-9]*)$" });
+  requireEqual("records.generation", defs.generation, { type: "string", pattern: "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-4]|18446744073709551615)$" });
   requireEqual("records.count", defs.count, { type: "integer", minimum: 0, maximum: 2147483647 });
   requireEqual("records.sha256", defs.sha256, { type: "string", pattern: "^[0-9a-f]{64}$" });
   requireEqual("records.aggregate.state", defs.aggregate?.properties?.state, { enum: ["preparing", "prepared", "committed", "aborted"] });
@@ -107,8 +114,8 @@ export function validateJsonStorageFormats(storage, fail) {
   });
   requireEqual("pagePartition", storage.pagePartition, {
     maximumItems: 1024,
-    leaf: "consecutive-entry-index-groups",
-    parent: "consecutive-child-page-index-groups",
+    leaf: "greedy-entry-index-order-until-next-item-exceeds-byte-or-item-limit",
+    parent: "greedy-child-page-index-order-until-next-item-exceeds-byte-or-item-limit",
     promotion: "only-when-current-level-has-multiple-pages",
     root: "single-highest-page-reference",
     empty: { totalCount: 0, topLevel: 0, topPages: [] },
