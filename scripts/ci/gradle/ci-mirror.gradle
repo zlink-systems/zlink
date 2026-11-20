@@ -1,0 +1,29 @@
+// CI-only repository policy. Keep Central and the portal as fallbacks.
+// ZLink artifacts stay with the build's own repositories so a local package
+// (source=local) is never replaced by a published one with the same version.
+def centralFirst = { repositories ->
+    repositories.maven {
+        name = 'ciCentralMirror'
+        url = uri('https://maven-central.storage-download.googleapis.com/maven2/')
+        content { excludeGroupByRegex(/systems\.zlink(\..*)?/) }
+    }
+    repositories.mavenCentral {
+        content { excludeGroupByRegex(/systems\.zlink(\..*)?/) }
+    }
+}
+
+gradle.beforeSettings { settings ->
+    centralFirst(settings.pluginManagement.repositories)
+    settings.pluginManagement.repositories.gradlePluginPortal()
+    centralFirst(settings.dependencyResolutionManagement.repositories)
+    centralFirst(settings.buildscript.repositories)
+}
+
+gradle.beforeProject { project ->
+    centralFirst(project.buildscript.repositories)
+    // Respect builds that resolve dependencies exclusively through settings.
+    if (project.gradle.settings.dependencyResolutionManagement.repositoriesMode.get() ==
+            org.gradle.api.initialization.resolve.RepositoriesMode.PREFER_PROJECT) {
+        centralFirst(project.repositories)
+    }
+}
