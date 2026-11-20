@@ -271,8 +271,10 @@ Actor Join은 [01. Submit과 완료](01-submit-and-completion.ko.md)의 terminat
 있다. 언어에 맞는 쪽을 사용한다. 다만 구현 방식에 따라오는 제약이 있다.
 
 **가져오기는 배타권 획득을 겸한다.** Gate가 있는 owner당 처리 권한은 동시에 하나만 존재한다.
-처리 권한마다 재사용 없는 번호를 붙여 늦은 완료가 자기 것인지 판단한다 — 이 fencing
-번호는 내부 확인 조건이다.
+처리 권한마다 재사용되지 않는 identity를 붙여 늦은 완료가 자기 것인지 판단한다. 단조 증가 번호일
+수도, 처리 권한이 끝날 때까지 보존되는 객체 자체의 identity일 수도 있다. 어느 쪽이든 같은 owner에서 이미 끝난
+처리 권한의 identity와 같아질 수 없어야 한다(객체 identity면 그 객체를 늦은 완료가 확인을 마칠 때까지 보존해 주소가
+재사용되지 않게 한다). 이 fencing identity는 내부 확인 조건이다.
 
 **작업을 thread에 넘겨가며 실행하면 thread에 매인 저장소를 사용할 수 없다.** 실행 권한을
 "한 번에 하나"로만 보장하고 어느 thread에서 실행할지는 고정하지 않을 수 있다. 이때
@@ -555,7 +557,7 @@ Provider failure는 원래 dispatch 결과를 바꾸지 않으며 별도 public 
 다음은 `Yield`·`Defer()` operation과 그 오류(`InvalidOperation`), Actor Join completion
 callback, handler 실행 순서를 관찰할 수 있는 side effect, application/infrastructure
 진행을 관찰할 수 있는 timeout·종료·peer 수락 이벤트만으로 확인한다. 내부 구조로만
-확인할 수 있는 조건(fencing 번호, 양보 부채 표시, FIFO wakeup 방식, thread-local 미사용,
+확인할 수 있는 조건(fencing identity, 양보 부채 표시, FIFO wakeup 방식, thread-local 미사용,
 잠금 횟수, 실행 자원과 Spot 수의 독립)은 각 규칙 문단이 "내부 확인 조건"으로 소유하며
 여기 적지 않는다.
 

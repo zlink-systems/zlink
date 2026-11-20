@@ -446,8 +446,9 @@ Exclusive `Create`를 실행할 때 같은 type의 Ready Actor가 이미 있으�
 Owner가 끝난(강제 종료 등) Actor record는 [Location runtime §6.1](../05-location-relocation/01-location-runtime.ko.md#61-read와-cas)의 해제 규칙을 따른다.
 
 `GetOrCreate`는 같은 type의 Ready Actor가 있으면 새 reservation과 callback 실행 없이
-현재 incarnation을 `Existing`으로 반환한다. 같은 type의 Actor가 Creating이면 그
-상태가 끝날 때까지 bounded backoff로 authority를 다시 확인한다. 동일한 ActorId에
+현재 incarnation을 `Existing`으로 반환한다. 같은 type의 Actor가 Creating이거나 destroy가
+진행 중이면 그 상태가 끝날 때까지 bounded backoff로 authority를 다시 확인한다. Destroy가 끝나
+authority가 없어지면 남은 deadline 안에서 새 incarnation의 생성을 경쟁한다. 동일한 ActorId에
 여러 process가 동시에 `GetOrCreate`를 호출해도 Location Store의
 [reservation](../00-foundation/02-glossary.ko.md#reservation-id) CAS에 성공한 caller만 생성 실행을
 소유한다.
@@ -496,6 +497,7 @@ Framework는 다음 순서로 destroy를 진행한다.
 | 상태 | Destroy 결과 |
 |---|---|
 | 같은 incarnation이 이미 없다. | Idempotent `false`를 반환한다. |
+| 같은 incarnation의 destroy가 진행 중이다. | 진행 중인 destroy의 terminal에 합류해 같은 결과를 받는다. |
 | 같은 ActorId의 다른 generation이 있다. | `InvalidOperation`으로 끝난다. |
 | Actor가 이동을 위한 seal 상태다. | `Unavailable`로 끝난다. |
 
