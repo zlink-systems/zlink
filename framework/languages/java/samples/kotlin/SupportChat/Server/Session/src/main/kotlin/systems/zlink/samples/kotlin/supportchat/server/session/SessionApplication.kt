@@ -32,26 +32,29 @@ import systems.zlink.samples.kotlin.supportchat.server.session.sessions.SupportC
 )
 class SessionApplication {
     @Bean
-    fun sessionFramework(topology: SampleTopology): ZLinkFrameworkConfigurer =
-        ZLinkFrameworkConfigurer { options ->
-            val session = topology.session()
-            options.addHandlersFromPackageOf<SessionApplication>()
-            options.useCoroutineHandlers(Dispatchers.Default)
-            options.configureDispatch { messageFlow(ZLinkMessageFlowLogMode.NORMAL) }
-            options.configureLocations()
-            // --8<-- [start:doc-sc-session-register]
-            options.addClientServerChannel(SampleNames.ApiChannel).client()
-            options.addClientServerChannel(SampleNames.SupportChannel).client()
-            val node = options.addRouteMesh(SampleNames.SupportSpotDiscovery)
-            node.listen(session.routerEndpoint).setRoutingIdPrefix("support-session")
-            node.objects().client()
-            options
-                .addStreamNode(SampleNames.StreamNode)
-                .bind(session.streamEndpoint)
-                .enableActorDispatch()
-                .registerSession<SupportChatSession>()
-            // --8<-- [end:doc-sc-session-register]
-        }
+    fun sessionFramework(
+        topology: SampleTopology,
+        locations: ZLinkRedisLocationStore,
+    ): ZLinkFrameworkConfigurer = ZLinkFrameworkConfigurer { options ->
+        options.addLocationStore(locations)
+        val session = topology.session()
+        options.addHandlersFromPackageOf<SessionApplication>()
+        options.useCoroutineHandlers(Dispatchers.Default)
+        options.configureDispatch { messageFlow(ZLinkMessageFlowLogMode.NORMAL) }
+        options.configureLocations()
+        // --8<-- [start:doc-sc-session-register]
+        options.addClientServerChannel(SampleNames.ApiChannel).client()
+        options.addClientServerChannel(SampleNames.SupportChannel).client()
+        val node = options.addRouteMesh(SampleNames.SupportSpotDiscovery)
+        node.listen(session.routerEndpoint).setRoutingIdPrefix("support-session")
+        node.objects().client()
+        options
+            .addStreamNode(SampleNames.StreamNode)
+            .bind(session.streamEndpoint)
+            .enableActorDispatch()
+            .registerSession<SupportChatSession>()
+        // --8<-- [end:doc-sc-session-register]
+    }
 
     @Bean
     fun sessionStreamReadiness(): ApplicationRunner = ApplicationRunner {
