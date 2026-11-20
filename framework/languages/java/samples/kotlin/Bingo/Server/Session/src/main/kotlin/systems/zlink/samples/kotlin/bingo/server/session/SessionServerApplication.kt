@@ -32,27 +32,30 @@ import systems.zlink.samples.kotlin.bingo.server.session.sessions.BingoSession
 )
 class SessionServerApplication {
     @Bean
-    fun sessionFramework(topology: SampleTopology): ZLinkFrameworkConfigurer =
-        ZLinkFrameworkConfigurer { options ->
-            options.addHandlersFromPackageOf<SessionServerApplication>()
-            options.useCoroutineHandlers(Dispatchers.Default)
-            options.configureDispatch { messageFlow(topology.diagnosticsLevel) }
-            options.codecs().use(ZLinkProtobufCodec.defaultCodec())
-            options.configureLocations()
-            // --8<-- [start:doc-bingo-session-register]
-            val node = options.addRouteMesh(SampleNames.Mesh)
+    fun sessionFramework(
+        topology: SampleTopology,
+        locations: ZLinkRedisLocationStore,
+    ): ZLinkFrameworkConfigurer = ZLinkFrameworkConfigurer { options ->
+        options.addLocationStore(locations)
+        options.addHandlersFromPackageOf<SessionServerApplication>()
+        options.useCoroutineHandlers(Dispatchers.Default)
+        options.configureDispatch { messageFlow(topology.diagnosticsLevel) }
+        options.codecs().use(ZLinkProtobufCodec.defaultCodec())
+        options.configureLocations()
+        // --8<-- [start:doc-bingo-session-register]
+        val node = options.addRouteMesh(SampleNames.Mesh)
 
-            node.listen(topology.selectedSessionRouterEndpoint()).setRoutingIdPrefix("session")
-            node.objects().client()
-            options.addClientServerChannel(SampleNames.ApiChannel).client()
-            node.channelName(SampleNames.RoomSpotDiscovery).client()
-            options
-                .addStreamNode(SampleNames.StreamNode)
-                .bind(topology.selectedStreamEndpoint())
-                .enableActorDispatch()
-                .registerSession<BingoSession>()
-            // --8<-- [end:doc-bingo-session-register]
-        }
+        node.listen(topology.selectedSessionRouterEndpoint()).setRoutingIdPrefix("session")
+        node.objects().client()
+        options.addClientServerChannel(SampleNames.ApiChannel).client()
+        node.channelName(SampleNames.RoomSpotDiscovery).client()
+        options
+            .addStreamNode(SampleNames.StreamNode)
+            .bind(topology.selectedStreamEndpoint())
+            .enableActorDispatch()
+            .registerSession<BingoSession>()
+        // --8<-- [end:doc-bingo-session-register]
+    }
 
     @Bean
     fun locationStore(topology: SampleTopology): ZLinkRedisLocationStore =

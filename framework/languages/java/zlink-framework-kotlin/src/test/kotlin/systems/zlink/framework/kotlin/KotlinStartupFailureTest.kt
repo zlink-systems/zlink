@@ -59,6 +59,7 @@ class KotlinStartupFailureTest {
             ZLinkFrameworkConfigurer::class.java,
             Supplier {
                 ZLinkFrameworkConfigurer { options ->
+                    options.addLocationStore(store)
                     val mesh = options.addRouteMesh("startup").listen(endpoint)
                     if (fixedRid != null) {
                         mesh.setRoutingId(fixedRid)
