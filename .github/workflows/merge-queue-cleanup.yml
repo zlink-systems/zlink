@@ -24,7 +24,8 @@ jobs:
       || (github.event_name == 'delete'
           && github.event.ref_type == 'branch'
           && startsWith(github.event.ref, 'mergify/'))
-    runs-on: ${{ vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04' }}
+    # Light control job: keep it on hosted runners so it never waits behind the test jobs it manages.
+    runs-on: ubuntu-24.04
     steps:
       - name: Cancel unfinished runs of the branch
         env:

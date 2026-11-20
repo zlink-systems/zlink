@@ -126,11 +126,22 @@ public interface systems.zlink.framework.streams.ZLinkStreamCompressionCodec {
 }
 public final class systems.zlink.framework.streams.ZLinkStreamError extends java.lang.Record {
  public systems.zlink.framework.streams.ZLinkStreamError(systems.zlink.framework.streams.ZLinkStreamSessionError, java.lang.String);
+ public systems.zlink.framework.streams.ZLinkStreamError(systems.zlink.framework.streams.ZLinkStreamSessionError, java.lang.String, java.util.Optional<systems.zlink.framework.streams.ZLinkDisconnectReason>);
  public final java.lang.String toString();
  public final int hashCode();
  public final boolean equals(java.lang.Object);
  public systems.zlink.framework.streams.ZLinkStreamSessionError error();
  public java.lang.String message();
+ public java.util.Optional<systems.zlink.framework.streams.ZLinkDisconnectReason> disconnectReason();
+}
+public final class systems.zlink.framework.streams.ZLinkDisconnectReason extends java.lang.Enum<systems.zlink.framework.streams.ZLinkDisconnectReason> {
+ public static final systems.zlink.framework.streams.ZLinkDisconnectReason UNKNOWN;
+ public static final systems.zlink.framework.streams.ZLinkDisconnectReason HANDSHAKE_FAILED;
+ public static final systems.zlink.framework.streams.ZLinkDisconnectReason TRANSPORT_ERROR;
+ public static final systems.zlink.framework.streams.ZLinkDisconnectReason CONTEXT_TERMINATED;
+ public static systems.zlink.framework.streams.ZLinkDisconnectReason[] values();
+ public static systems.zlink.framework.streams.ZLinkDisconnectReason valueOf(java.lang.String);
+ public int value();
 }
 public final class systems.zlink.framework.streams.ZLinkStreamSessionError extends java.lang.Enum<systems.zlink.framework.streams.ZLinkStreamSessionError> {
  public static final systems.zlink.framework.streams.ZLinkStreamSessionError INTERNAL;
@@ -155,6 +166,8 @@ perform a separate reply/retry. The one-way dispatch context has no
 reply capability, so it only returns admission. A handshake failure is
 only recorded in runtime monitoring before session creation, and isn't
 delivered to `onError(...)`.
+
+The canonical constructor of `ZLinkStreamError` takes `disconnectReason` as its third component and rejects `null`. The two-argument constructor is a compatibility overload that delegates with `Optional.empty()`. `ZLinkDisconnectReason.value()` returns the Core raw value, not the ordinal: `UNKNOWN`=0, `HANDSHAKE_FAILED`=3, `TRANSPORT_ERROR`=4, `CONTEXT_TERMINATED`=5 ([Core monitoring §3.2](../../../../../../../../../core/doc/spec/core/06-monitoring.en.md#32-value-and-flags)).
 
 The wait termination of a send or reply call follows [Submit and completion §7](../../../01-execution/01-submit-and-completion.en.md#7-one-way-send-wait-termination-and-classic-fanout-send-timeout), and
 `cancel(false)` on the returned stage follows [Cancellation and shutdown §1](../../../01-execution/03-cancellation-and-shutdown.en.md#1-cooperative-cancellation).
