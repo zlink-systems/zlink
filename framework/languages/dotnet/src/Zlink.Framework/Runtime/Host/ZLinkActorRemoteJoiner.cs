@@ -553,90 +553,90 @@ internal sealed class ZLinkActorRemoteJoiner(
             );
         }
 
-        var canonicalAdmission =
-            canonicalTransport is not null
-            && canonicalTransport.CanRequestCanonicalActorJoin(canonicalRequest)
-                ? await TryRequestCanonicalAdmissionAsync(
-                        canonicalTransport,
-                        canonicalRequest,
+        var admission = await ZLinkSpotHandleRequestExecution
+            .ExecuteAsync(
+                target,
+                async snapshot =>
+                {
+                    var canonicalAdmission =
+                        canonicalTransport is not null
+                        && canonicalTransport.CanRequestCanonicalActorJoin(canonicalRequest)
+                            ? await TryRequestCanonicalAdmissionAsync(
+                                    canonicalTransport,
+                                    canonicalRequest,
+                                    predictedPayloadBytes,
+                                    RemainingTimeout(deadline.Monotonic),
+                                    cancellationToken
+                                )
+                                .ConfigureAwait(false)
+                            : null;
+                    handoffId = canonicalAdmission?.HandoffId ?? handoffId;
+                    if (canonicalAdmission is { } selectedCanonical)
+                        return (Snapshot: snapshot, Reply: selectedCanonical.Reply);
+                    var requestTimeout = RemainingTimeout(deadline.Monotonic);
+                    var admissionHeader = ZLinkClientCallCodec.CreateEnvelope(
+                        registration.TimeProvider,
+                        ZLinkMessageKind.Request,
+                        snapshot.RouterChannelId,
+                        ZLinkRemoteActorJoinPackets.AdmissionPacketName,
+                        requestTimeout
+                    );
+                    var admissionParts = ZLinkRemoteActorJoinPackets.EncodeAdmissionRequest(
+                        admissionHeader,
+                        actor.Context.ActorId,
+                        actorType,
+                        handoffId,
+                        admissionDeadline,
+                        sourceSpotId,
+                        actorRef.NodeRid,
+                        request,
+                        registration.Codecs,
+                        actorRef.Generation,
+                        actorAuthorityOwnerGeneration,
                         predictedPayloadBytes,
-                        RemainingTimeout(deadline.Monotonic),
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false)
-                : null;
-        handoffId = canonicalAdmission?.HandoffId ?? handoffId;
-        var admission = canonicalAdmission is { } selectedCanonical
-            ? (Snapshot: target.Snapshot, Reply: selectedCanonical.Reply)
-            : await ZLinkSpotHandleRequestExecution
-                .ExecuteAsync(
-                    target,
-                    async snapshot =>
+                        (ulong)snapshot.Generation,
+                        snapshot.AuthorityOwnerGeneration
+                    );
+                    IReadOnlyList<ReadOnlyMemory<byte>> wire;
+                    try
                     {
-                        var requestTimeout = RemainingTimeout(deadline.Monotonic);
-                        var admissionHeader = ZLinkClientCallCodec.CreateEnvelope(
-                            registration.TimeProvider,
-                            ZLinkMessageKind.Request,
+                        wire = admissionParts
+                            .Select(static part => (ReadOnlyMemory<byte>)part.ToArray())
+                            .ToArray();
+                    }
+                    finally
+                    {
+                        ZLinkMessageParts.DisposeAll(admissionParts);
+                    }
+                    var requestAdmission = new ZLinkRequestAdmission();
+                    var replyParts = await runtime
+                        .RequestToSpotViaRouterChannelAsync(
                             snapshot.RouterChannelId,
-                            ZLinkRemoteActorJoinPackets.AdmissionPacketName,
-                            requestTimeout
-                        );
-                        var admissionParts = ZLinkRemoteActorJoinPackets.EncodeAdmissionRequest(
-                            admissionHeader,
-                            actor.Context.ActorId,
-                            actorType,
-                            handoffId,
-                            admissionDeadline,
-                            sourceSpotId,
-                            actorRef.NodeRid,
-                            request,
-                            registration.Codecs,
-                            actorRef.Generation,
-                            actorAuthorityOwnerGeneration,
-                            predictedPayloadBytes,
+                            snapshot.NodeRid,
+                            snapshot.SpotId,
                             (ulong)snapshot.Generation,
-                            snapshot.AuthorityOwnerGeneration
-                        );
-                        IReadOnlyList<ReadOnlyMemory<byte>> wire;
-                        try
-                        {
-                            wire = admissionParts
-                                .Select(static part => (ReadOnlyMemory<byte>)part.ToArray())
-                                .ToArray();
-                        }
-                        finally
-                        {
-                            ZLinkMessageParts.DisposeAll(admissionParts);
-                        }
-                        var requestAdmission = new ZLinkRequestAdmission();
-                        var replyParts = await runtime
-                            .RequestToSpotViaRouterChannelAsync(
-                                snapshot.RouterChannelId,
-                                snapshot.NodeRid,
-                                snapshot.SpotId,
-                                (ulong)snapshot.Generation,
-                                snapshot.NodeGeneration,
-                                snapshot.AuthorityOwnerGeneration,
-                                snapshot.OwnerLeaseGeneration,
-                                ZLinkRawRouterServicePort.CreateMessages(wire),
-                                RemainingTimeout(deadline.Monotonic),
-                                cancellationToken,
-                                requestAdmission: requestAdmission
-                            )
-                            .ConfigureAwait(false);
-                        ZLinkFrameworkDebugLog.SpotDiscovery(
-                            $"admit_reply_received actor={actor.Context.ActorId}"
-                        );
-                        var reply = ZLinkRemoteActorJoinPackets.DecodeAdmissionReplyAndDispose(
-                            replyParts,
-                            actor.Context.ActorId,
-                            snapshot.SpotId
-                        );
-                        return (Snapshot: snapshot, Reply: reply);
-                    },
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
+                            snapshot.NodeGeneration,
+                            snapshot.AuthorityOwnerGeneration,
+                            snapshot.OwnerLeaseGeneration,
+                            ZLinkRawRouterServicePort.CreateMessages(wire),
+                            RemainingTimeout(deadline.Monotonic),
+                            cancellationToken,
+                            requestAdmission: requestAdmission
+                        )
+                        .ConfigureAwait(false);
+                    ZLinkFrameworkDebugLog.SpotDiscovery(
+                        $"admit_reply_received actor={actor.Context.ActorId}"
+                    );
+                    var reply = ZLinkRemoteActorJoinPackets.DecodeAdmissionReplyAndDispose(
+                        replyParts,
+                        actor.Context.ActorId,
+                        snapshot.SpotId
+                    );
+                    return (Snapshot: snapshot, Reply: reply);
+                },
+                cancellationToken
+            )
+            .ConfigureAwait(false);
         var targetNodeRid = admission.Snapshot.NodeRid;
         var targetSpotId = admission.Snapshot.SpotId;
         var routerChannelId = admission.Snapshot.RouterChannelId;
