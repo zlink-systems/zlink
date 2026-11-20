@@ -1473,7 +1473,7 @@ final class ZLinkProviderAuthorityRepository {
             systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation,
             boolean requireSteadyReady) {
         return provider.scan(
-                        new ZLinkStoreScanRequest(AUTHORITY_PREIMAGE_PREFIX, cursor, 1000),
+                        new ZLinkStoreScanRequest(ACTOR_AUTHORITY_PREIMAGE_PREFIX, cursor, 1000),
                         cancellation)
                 .thenCompose(
                         result -> {
@@ -4943,11 +4943,13 @@ final class ZLinkProviderAuthorityRepository {
     // {Id} is the raw ActorId/SpotId, not the "zla1:..." wire form the rest
     // of this class carries as its authority-key contract value.
     private static final String AUTHORITY_PREIMAGE_PREFIX = "authority\0";
+    private static final String ACTOR_AUTHORITY_PREIMAGE_PREFIX =
+            AUTHORITY_PREIMAGE_PREFIX + "actor\0";
 
     private static String authorityScanPrefix(String prefix) {
         return switch (prefix) {
             case "" -> AUTHORITY_PREIMAGE_PREFIX;
-            case "zla1:a:" -> AUTHORITY_PREIMAGE_PREFIX + "actor\0";
+            case "zla1:a:" -> ACTOR_AUTHORITY_PREIMAGE_PREFIX;
             case "zla1:s:" -> AUTHORITY_PREIMAGE_PREFIX + "spot\0";
             default ->
                     throw new IllegalArgumentException(
