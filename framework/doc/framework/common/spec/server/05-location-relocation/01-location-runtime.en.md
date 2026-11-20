@@ -540,6 +540,8 @@ number precision).
 | `ownerId`, `ownerLeaseGeneration` | The current owner's `(OwnerId, LeaseGeneration)` (§3.1). |
 | `allocation` | Placement information (§3.3), derived from dotnet's internal `ZLinkPlacementAllocation`. Includes `state` (`reserved \| active`), `objectKind` (`actor \| userSpot \| instanceSpot` — no Entry Spot; an Entry Spot's Actor is counted as `actor`, §4), `stableType`, `descriptor` (`{meshName, routingIdHex}`, the same shape as a MeshNode descriptor key), `descriptorLifecycleGeneration` (the target MeshNode's `lifecycleGeneration`, CAS-checked against it), and `capacity`. `capacity` is `{actors, spots, spotType}`: `actors`/`spots` are the integer slot counts this allocation secured, and `spotType` is `null` unless the object is a Spot, in which case it's `{objectKind, stableType, count}` (§3.3's "1 Spot slot plus 1 slot of that Spot kind/stable type" — a single flat counter can't express which `(spotKind, stableType)` pair was secured). |
 | `pendingCreation` | Creation-in-progress state (§7). `null` when absent; when present, includes `reservationId`, `requestContentReference`, `requestSha256` (hex, 64 characters), and `requestEncodedSize` (integer). `requestContentReference` has the form `inline-v1:{base64url}`, where `{base64url}` encodes the creation request bytes over the alphabet `A-Z a-z 0-9 - _` with no `=` padding. No other form is recognized. |
+| `aggregate` | Progress of the aggregate change this record takes part in (§8.1). The field is omitted when absent. When present, it includes `aggregateId` (lowercase canonical UUID), `aggregateGeneration` (integer as a string), `index` (JSON number, position in the participant list), `expectedStoreVersion`, `ownerTransition` (`preserve \| newOwner`), `targetAuthorityOwnerGeneration` (integer as a string), and `authorityPayloadSha256`·`membershipMutationSha256` (64 hex characters). |
+| `visibleStoreVersion` | While `aggregate` is present, the value the framework exposes as the public `StoreVersion`. Even when aggregate preparation rewrites this record, the public `StoreVersion` stays at its pre-preparation value. The field is omitted when `aggregate` is absent. |
 
 The node that runs the creation decodes `requestContentReference` and verifies that the
 decoded bytes have the length `requestEncodedSize` and the SHA-256 `requestSha256`. If
@@ -553,7 +555,9 @@ and `pendingCreation.reservationId` identifies it. No logical key is reserved fo
 completing or aborting a reservation another node created is decided from this record and
 §7's final-result record alone. Reservation state isn't held outside the fields in the
 table above — reservation information placed in a field only one language reads doesn't
-survive another language's update of that record.
+survive another language's update of that record. Aggregate and relocation progress is also state of this record, not a
+separate lock record; whether one is in progress and the pre-commit values are decided from the `aggregate` and
+`visibleStoreVersion` fields alone. The aggregate record key is `{prefix}aggregate:{aggregateId}:{aggregateGeneration}`.
 
 Payloads the Relocation Store holds (the cold-activation envelope, completion records)
 don't use this opaque record. A separately versioned key space and raw-bytes storage
@@ -1294,7 +1298,7 @@ in the table below apply only to a record whose owner lease is valid.
 |---|---|---|
 | `Ready` of the same type | `AlreadyExists` | existing ref |
 | `Creating` of the same type | `AlreadyExists` | waits for the in-progress creation result. |
-| `Closing` of the same type | `AlreadyExists` | For User Spots, follows the authority-change wait and subsequent steps in [Spot address messaging §3.2](../03-spot-actor/06-spot-address-messaging.en.md#32-convergence-of-concurrent-requests). |
+| `Closing` of the same type | `AlreadyExists` | For Actors and User Spots, follows the authority-change wait and subsequent steps in [Spot address messaging §3.2](../03-spot-actor/06-spot-address-messaging.en.md#32-convergence-of-concurrent-requests). |
 | A different Actor type | `TypeMismatch` | `TypeMismatch` |
 | A different Spot kind or type | `TypeMismatch` | `TypeMismatch` |
 
