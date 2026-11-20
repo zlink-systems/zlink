@@ -213,6 +213,10 @@ export class ZLinkSerialExecutionQueue {
     return this.admit(operation, { lane: 'lifecycle' }, context, undefined, true);
   }
 
+  get diagnosticActive(): boolean {
+    return this.activeRecord !== undefined;
+  }
+
   get retainsApplicationForLifecycle(): boolean {
     return this.activeLifecycle?.context !== undefined;
   }
