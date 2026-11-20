@@ -395,6 +395,39 @@ class callback_scope_t
   private:
     const connector_state_t *_previous;
 };
+/* While the scope is current on this thread, schedule_delivery keeps the
+ * Immediate callbacks of `state` instead of running them, and deliver() runs
+ * them in the order they were scheduled. The close work and connection_ended
+ * record their transition first and deliver after it, with no connector lock
+ * held. Neither waits for the callbacks to complete (stream-connector §7). */
+class deferred_delivery_scope_t
+{
+  public:
+    explicit deferred_delivery_scope_t (connector_state_t &state) :
+        state (state), previous (current)
+    {
+        current = this;
+    }
+    ~deferred_delivery_scope_t () { current = previous; }
+    deferred_delivery_scope_t (const deferred_delivery_scope_t &) = delete;
+    deferred_delivery_scope_t &operator= (const deferred_delivery_scope_t &) = delete;
+
+    void deliver ()
+    {
+        current = previous;
+        callback_scope_t scope (state);
+        for (auto &callback : callbacks) {
+            invoke_user_callback (state, "connector callback failed", callback);
+        }
+    }
+
+    connector_state_t &state;
+    std::vector<std::function<void ()>> callbacks;
+    inline static thread_local deferred_delivery_scope_t *current = nullptr;
+
+  private:
+    deferred_delivery_scope_t *previous;
+};
 void close_bound_actors (const std::shared_ptr<connector_state_t> &state);
 /* Queues the bound or unbound callbacks (`registry`) of one Actor event for the
  * handlers `handler_ids` registered when it happened (stream-connector §5.6). */

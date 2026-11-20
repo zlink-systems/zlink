@@ -250,7 +250,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_compile_features(test_connector_lifecycle PRIVATE cxx_std_20)
   target_link_libraries(test_connector_lifecycle PRIVATE zlink::stream_connector Threads::Threads)
   zlink_framework_cpp_add_boost_headers(test_connector_lifecycle)
-  set(_lifecycle_test_modes closed close_connect immediate_close_connect refused timeout)
+  set(_lifecycle_test_modes closed close_connect immediate_close_connect immediate_error_send refused timeout)
   if(ZLINK_HTTP_CLIENT_TEST_WITH_OPENSSL)
     target_compile_definitions(test_connector_lifecycle PRIVATE
       ZLINK_CONNECTOR_LIFECYCLE_TLS

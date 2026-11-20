@@ -2,6 +2,7 @@ package systems.zlink.stream.connector;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -74,6 +75,77 @@ final class ZLinkStreamConnectionEndingTest {
                 assertEquals(ZLinkStreamErrorCode.DISCONNECTED, codeOf(request));
                 assertEquals(expected, disconnected.get(WAIT_SECONDS, TimeUnit.SECONDS));
                 assertEquals(Optional.of(expected), connector.closeReason());
+            } finally {
+                ConnectorTestAwait.await(connector.close());
+            }
+        }
+    }
+
+    /**
+     * Spec 32 9: a protocol violation ends the connection before its error is published. While the
+     * Immediate error handler runs, the connector is not connected and a request it makes fails
+     * with Disconnected.
+     */
+    @ParameterizedTest
+    @CsvSource({"decode, FRAME_DECODE_FAILED", "tooLarge, FRAME_TOO_LARGE"})
+    void aProtocolViolationEndsTheConnectionBeforeItsErrorHandlerRuns(
+            String failure, ZLinkStreamErrorCode expected) throws Exception {
+        try (TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer()) {
+            ZLinkStreamConnector connector =
+                    ZLinkStreamConnectorFactory.create(options(server.endpoint()));
+            CompletableFuture<ZLinkStreamError> streamError = new CompletableFuture<>();
+            CompletableFuture<Boolean> connectedInHandler = new CompletableFuture<>();
+            CompletableFuture<ZLinkStreamEncodedPayload> requestInHandler =
+                    new CompletableFuture<>();
+            connector.onErrorReceived(
+                    error -> {
+                        if (streamError.complete(error)) {
+                            connectedInHandler.complete(connector.isConnected());
+                            try {
+                                connector
+                                        .request(payload("Next"))
+                                        .submit()
+                                        .whenComplete(
+                                                (reply, requestFailure) -> {
+                                                    if (requestFailure == null) {
+                                                        requestInHandler.complete(reply);
+                                                    } else {
+                                                        requestInHandler.completeExceptionally(
+                                                                requestFailure);
+                                                    }
+                                                });
+                            } catch (RuntimeException rejected) {
+                                requestInHandler.completeExceptionally(rejected);
+                            }
+                        }
+                        return CompletableFuture.completedFuture(null);
+                    });
+            try {
+                ConnectorTestAwait.await(connector.connect());
+
+                switch (failure) {
+                    case "decode" ->
+                            server.sendRawAsync(
+                                            new byte[] {(byte) 0xFF, (byte) 0xFF, (byte) 0xFF},
+                                            new byte[0])
+                                    .join();
+                    default ->
+                            server.sendBytesAsync(
+                                            ByteBuffer.allocate(6)
+                                                    .putShort((short) 0)
+                                                    .putInt(64 * 1024 + 1)
+                                                    .array())
+                                    .join();
+                }
+
+                assertEquals(expected, streamError.get(WAIT_SECONDS, TimeUnit.SECONDS).code());
+                assertFalse(connectedInHandler.get(WAIT_SECONDS, TimeUnit.SECONDS));
+                assertEquals(ZLinkStreamErrorCode.DISCONNECTED, codeOf(requestInHandler));
+                TcpStreamConnectorTestServer.awaitCondition(
+                        () -> connector.closeReason().isPresent());
+                assertEquals(
+                        Optional.of(ZLinkStreamCloseReason.PROTOCOL_ERROR),
+                        connector.closeReason());
             } finally {
                 ConnectorTestAwait.await(connector.close());
             }

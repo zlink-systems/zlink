@@ -462,34 +462,6 @@ bool callback_scope_t::running_callback_of (const connector_state_t &state) noex
     return running_callbacks_of == &state;
 }
 
-/* After terminal close operations finish, callbacks run in the same operation
- * context. Close completion does not wait for callback completion (SC §7). */
-class close_delivery_scope_t
-{
-  public:
-    explicit close_delivery_scope_t (connector_state_t &state) : state (state), previous (current)
-    {
-        current = this;
-    }
-    ~close_delivery_scope_t () { current = previous; }
-
-    void deliver ()
-    {
-        current = previous;
-        callback_scope_t scope (state);
-        for (auto &callback : callbacks) {
-            invoke_user_callback (state, "connector callback failed", callback);
-        }
-    }
-
-    connector_state_t &state;
-    std::vector<std::function<void ()>> callbacks;
-    inline static thread_local close_delivery_scope_t *current = nullptr;
-
-  private:
-    close_delivery_scope_t *previous;
-};
-
 void schedule_delivery (std::shared_ptr<connector_state_t> state,
                         std::function<void ()> callback,
                         std::function<std::size_t ()> callbacks)
@@ -498,9 +470,9 @@ void schedule_delivery (std::shared_ptr<connector_state_t> state,
         return;
     }
     if (state->options.dispatch_mode == dispatch_mode_t::immediate) {
-        auto *closing = close_delivery_scope_t::current;
-        if (closing && &closing->state == state.get ()) {
-            closing->callbacks.push_back (std::move (callback));
+        auto *deferred = deferred_delivery_scope_t::current;
+        if (deferred && &deferred->state == state.get ()) {
+            deferred->callbacks.push_back (std::move (callback));
             return;
         }
         callback_scope_t scope (*state);
@@ -1559,7 +1531,7 @@ namespace
 void run_close_work (const std::shared_ptr<detail::connector_state_t> &state,
                      std::shared_ptr<detail::stream_connection_t> connection)
 {
-    detail::close_delivery_scope_t deliveries (*state);
+    detail::deferred_delivery_scope_t deliveries (*state);
     std::shared_ptr<boost::asio::steady_timer> reconnect_timer;
     std::shared_ptr<detail::transport_connect_control_t> connect_control;
     {
