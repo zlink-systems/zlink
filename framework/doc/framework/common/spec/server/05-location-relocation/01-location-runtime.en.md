@@ -563,7 +563,7 @@ separate lock record; whether one is in progress and the pre-commit values are d
 
 The `aggregate` field holds the aggregate marker fields and an optional `relocation` field. In a relocation whose aggregate marker has not been materialized yet, `aggregate` may hold only `relocation`; that shape does not mean an aggregate transaction marker is prepared. When `aggregate` is present, the marker fields are either all present or all absent, and an empty object is invalid. An authority change that materializes or updates the aggregate marker preserves the existing `aggregate.relocation`, and meanwhile `visibleStoreVersion` keeps the public StoreVersion from before aggregate preparation. Relocation progress is removed by the existing terminal cleanup's conditional authority change; if no marker remains after removal, the `aggregate` field is omitted.
 
-`aggregate.relocation` owns this record's durable relocation phase and the source, target, and coordinator fences. The same facts are not also recorded in `payload` or `visibleStoreVersion`; `payload` stays application-defined opaque bytes. Earlier language-specific relocation encodings are read only as compatibility input, and new writers write this one representation. The field is an optional extension of `recordVersion` 1. Existing records without it are read as is, but its absence is not taken to mean there is no relocation. Finish in-flight relocations before upgrading to a runtime that writes this field, and do not roll back to an earlier version while records still carry it.
+`aggregate.relocation` owns this record's durable relocation phase and the source, target, and coordinator fences. The same facts are not also recorded in `payload` or `visibleStoreVersion`; `payload` stays application-defined opaque bytes. The aggregate generation is owned only by the same record's aggregate marker (`aggregate.aggregateGeneration`), with no copy in `aggregate.relocation`. A Direct Join whose marker doesn't exist yet receives the aggregate generation from the fence of the move request its caller holds. Source cleanup progress is represented by the single phase `cleaning`, with no separate cleanup-state field. Earlier language-specific relocation encodings are read only as compatibility input, and new writers write this one representation. The field is an optional extension of `recordVersion` 1. Existing records without it are read as is, but its absence is not taken to mean there is no relocation. Finish in-flight relocations before upgrading to a runtime that writes this field, and do not roll back to an earlier version while records still carry it.
 
 Payloads the Relocation Store holds (the cold-activation envelope, completion records)
 don't use this opaque record. A separately versioned key space and raw-bytes storage
@@ -1148,9 +1148,13 @@ operation that creates a new incarnation of the same ID is an Actor `Create` or 
 Spot `GetOrCreate`, or a new message with [Instance intent](../00-foundation/02-glossary.en.md#instance-intent). When such an operation reads a
 steady `Ready` record whose owner lease is missing, has a different `LeaseGeneration`, or has
 expired, and the relocation policy registered for that type on the node that `Reserve`s the new
-incarnation is `Disabled`, the Location repository releases that record. `Closing` and an incomplete
-initial activation aren't eligible merely because their allocation is `Active`; they follow their
-own lifecycle or recovery procedures. The node that `Reserve`s is the node that requested
+incarnation is `Disabled`, the Location repository releases that record. A User Spot's `Closing` and
+an incomplete initial activation aren't eligible merely because their allocation is `Active`; they
+follow their own lifecycle or recovery procedures. An Actor's `Closing` is a state in which the destroy
+has already closed admission, so if its owner lease is missing, has a different `LeaseGeneration`, or
+has expired, it's released by the same conditional batch. In that case the relocation policy condition
+doesn't apply, and both a creating operation and a call that destroys the same generation start this
+release. The node that `Reserve`s is the node that requested
 creation for an Actor or User Spot, and the target that received the activation envelope for an
 Instance Spot. If the type isn't registered on that node, the policy isn't treated as `Disabled`. A
 User Spot is released only when every Actor membership remaining for that SpotId and
@@ -1182,7 +1186,7 @@ the release decision (a different type keeps the existing `TypeMismatch`). If th
 valid, the existing result for the type and operation is returned. If the owner lease is invalid
 and the release conditions aren't met, `Unavailable` is returned. Ordinary messages and `Find`
 don't start this release. This release is a conditional repository batch, distinct from `Delete`,
-which requires a valid owner lease. Besides create operations, only the post-discard cleanup of
+which requires a valid owner lease. Besides create operations and a call that destroys an Actor in `Closing`, only the post-discard cleanup of
 §5.1 starts this release, when the owner's own same-incarnation record points at its own old
 invalid token. The conditions are the same, but no new incarnation is created, so the type's
 relocation policy condition does not apply.
