@@ -1634,8 +1634,13 @@ Framework는 각 object의 완료 결과를 object 순서로 저장한다. 같�
 | `SourceLeaseExpired` | Location Store에서 source owner lease가 끝났음을 확인했다. |
 
 Connection 종료나 재연결만으로 완료 결과를 받았다고 판단하지 않는다. Target은 현재 route로
-전달을 계속한다. Source owner lease가 유효한 상태에서 `Relocate` deadline을 넘으면
-`ForceStopped`다. 이 경우 relocation root와 payload, reply bytes를 24시간 보관한다. 보관 기간은 relocation이 `ForceStopped`로 끝나는 시점부터 센다. 그 시점에 Framework는 `reference`가 가리키는 payload의 모든 data chunk와 맨 앞 목록을 renew해 provider clock 기준 남은 retention이 24시간 이상이 되게 하고, 그동안 `aggregate.relocation`을 authority record에서 제거하지 않는다.
+전달을 계속한다. `Relocate` deadline은 `Relocate` 호출만 끝내며 전달을 멈추지 않는다. Framework는
+`pendingDeliveries`가 0이 될 때까지 — 위 표의 확인 근거를 모든 항목이 얻을 때까지 — `aggregate.relocation.completion`과
+`reference`가 가리키는 payload를 유지하고, payload의 data chunk와 맨 앞 목록은 [Relocation Store](03-relocation-store-redis.ko.md)의
+renew 규칙으로 보관 기간을 연장한다. `pendingDeliveries`가 0보다 큰 동안 그 object의 다음 `Relocate`는
+`Blocked/OperationInProgress`로 끝나며, Framework는 그 사유가 전달 대기(pending delivery)임을 `RelocationId`,
+`pendingDeliveries`와 함께 runtime log에 남긴다. 결과에 설명 문자열을 담는 언어는 같은 사유를 그 문자열에도 넣는다.
+`pendingDeliveries`가 0이 되면 기존 terminal cleanup으로 relocation 진행 정보와 payload를 정리한다.
 
 ### 9.4 Relay-ready accepted 전 취소
 

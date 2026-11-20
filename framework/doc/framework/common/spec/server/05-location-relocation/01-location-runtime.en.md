@@ -1829,9 +1829,15 @@ result count and the delivery-pending count is 0. Otherwise it's a recovery erro
 | `SourceLeaseExpired` | The Location Store confirmed the source owner lease has ended. |
 
 Connection closure or reconnection alone isn't judged as having received the completion
-result. The target keeps delivering on the current route. If the `Relocate` deadline
-passes while the source owner lease is still valid, it's `ForceStopped`. In this case
-the relocation root, payload, and reply bytes are retained for 24 hours, counted from when the relocation ends as `ForceStopped`. At that point the Framework renews every data chunk and the root list of the payload `reference` points to so that the remaining retention on the provider clock is at least 24 hours, and it doesn't remove `aggregate.relocation` from the authority record during that time.
+result. The target keeps delivering on the current route. The `Relocate` deadline only ends the `Relocate`
+call; it doesn't stop delivery. Until `pendingDeliveries` reaches 0 — until every entry has obtained a basis from
+the table above — the Framework keeps `aggregate.relocation.completion` and the payload `reference` points to, and
+extends the retention of the payload's data chunks and root list by the renew rule of the
+[Relocation Store](03-relocation-store-redis.en.md). While `pendingDeliveries` is greater than 0, the next
+`Relocate` of that object ends as `Blocked/OperationInProgress`, and the Framework writes to the runtime log that the
+reason is a pending delivery, together with the `RelocationId` and `pendingDeliveries`. Languages whose result
+carries a description string put the same reason in that string as well. When `pendingDeliveries` reaches 0,
+the existing terminal cleanup removes the relocation progress information and the payload.
 
 ### 9.4 Cancellation Before Relay-Ready Is Accepted
 
