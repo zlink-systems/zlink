@@ -47,6 +47,11 @@ for (let iteration = 1; iteration <= 40; iteration++) {
       else await resolver.observeLiveDescriptors('play', []);
       release([row]);
       await pointRead;
+      if (update === 'cleared') {
+        // Selection starts before the first post-clear publication, so a stale read
+        // that restored the descriptor still fails the assertion below.
+        queueMicrotask(() => void resolver.observeLiveDescriptors('play', []));
+      }
       assert.equal(await resolver.selectPlacement('play', 'actor', 'room'), undefined);
     });
   }

@@ -75,7 +75,9 @@ export class ZLinkRequestSourceResolver {
     signal?: AbortSignal,
     excludedNodeRids?: ReadonlySet<string>
   ): Promise<ZLinkMeshNodeDescriptor | undefined> {
-    let waitedForEmpty = false;
+    // An absent mesh has no discovery observation yet (startup or after clear()).
+    // An observed empty snapshot already establishes that no target is available.
+    if (!this.polled.has(meshName)) await this.waitForPlacementChange(meshName, signal);
     for (;;) {
       signal?.throwIfAborted();
       const candidates = [...(this.polled.get(meshName)?.values() ?? [])]
@@ -108,14 +110,7 @@ export class ZLinkRequestSourceResolver {
               typeCapacity.active + typeCapacity.reserved < typeCapacity.limit)
           );
         });
-      if (candidates.length === 0) {
-        // The cache may predate the first poll of a peer (startup or after clear()); give
-        // discovery one publication before reporting that no node can take the object.
-        if (waitedForEmpty) return undefined;
-        waitedForEmpty = true;
-        await this.waitForPlacementChange(meshName, signal);
-        continue;
-      }
+      if (candidates.length === 0) return undefined;
       const status = node?.status();
       const selected = selectLocationPlacementDescriptor(
         candidates.filter(
