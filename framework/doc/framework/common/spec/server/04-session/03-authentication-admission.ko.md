@@ -88,9 +88,9 @@ Stream Connector의 동작은 [Stream Connector §5.8](../../stream-connector/32
    않고 거절한다. 맞으면 1단계 판정으로 넘어간다.
 5. Connector는 대기 상태·순번 이벤트와 ticket 재사용을 처리해 client 앱에는 callback만 알린다.
 
-### 3.3 정할 값
+### 3.3 정한 값
 
-다음 값은 2단계 구현 전에 정한다. 정해지면 이 절과 공통 fixture를 함께 고친다.
+다음 값은 PM 판정(11-20)으로 정했다. 바꿀 때는 이 절과 공통 fixture를 함께 고친다.
 
 | 항목 | 기본안 |
 |---|---|
@@ -99,6 +99,14 @@ Stream Connector의 동작은 [Stream Connector §5.8](../../stream-connector/32
 | 순번 push | 대기열 Spot이 client session에 보내는 Send packet(이름 `$zlink.admission.position`), 값은 순번·예상 대기 ms |
 | 입장 허가 속도 | 대기열이 1단계 한도에서 남은 자리만큼 ticket을 낸다. 남은 자리는 각 node가 대기열 Spot에 알리는 처리 중 수로 계산한다 |
 | Connector callback | 대기 상태 변화(`OnAdmissionQueued`)와 순번 변화(`OnAdmissionPosition`) |
+| ticket 만료 | 발급부터 30초. 대기열 epoch 수명보다 길지 않다 |
+
+Ticket 검증과 비밀 키는 다음을 지킨다.
+
+- 서버는 현재 키와 이전 키 하나로 ticket을 검증한다. 키를 바꾸는 동안 이전 키로 서명한 ticket을 가진 대기자는
+  끊기지 않는다. 이전 키로는 서명하지 않는다.
+- 서명 비교는 상수 시간으로 한다. 만료 시각이 지났거나 epoch가 현재 대기열과 다르면 서명을 맞게 검증했더라도 거절한다.
+- 비밀 키는 설정 값으로만 받는다. Framework는 키를 log, metric, 오류 메시지, trace에 남기지 않는다.
 
 ## 4. 시험
 

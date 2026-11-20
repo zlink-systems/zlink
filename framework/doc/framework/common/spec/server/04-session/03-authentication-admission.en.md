@@ -100,10 +100,9 @@ rejecting an authentication request is decided in one place, stage 1.
 5. The connector handles the waiting state, position events, and ticket reuse, so the client application only
    receives callbacks.
 
-### 3.3 Values to Fix
+### 3.3 Fixed Values
 
-These values are fixed before stage 2 is implemented. When they are, this section and the shared fixture change
-together.
+These values were fixed by the PM decision (11-20). Changing one changes this section and the shared fixture together.
 
 | Item | Default proposal |
 |---|---|
@@ -112,6 +111,16 @@ together.
 | Position push | A Send packet from the queue Spot to the client session (name `$zlink.admission.position`) carrying the position and estimated wait in ms |
 | Admission rate | The queue issues tickets for the free room under the stage 1 limits, computed from the in-flight counts each node reports to the queue Spot |
 | Connector callbacks | Waiting state changes (`OnAdmissionQueued`) and position changes (`OnAdmissionPosition`) |
+| Ticket expiry | 30 seconds from issue, never longer than the queue epoch's lifetime |
+
+Ticket validation and the secret key follow these rules.
+
+- The server validates tickets with the current key and one previous key, so waiting clients holding a ticket
+  signed with the previous key aren't dropped during key rotation. The previous key is never used to sign.
+- Signatures are compared in constant time. A ticket whose expiry has passed, or whose epoch differs from the current
+  queue, is rejected even if its signature verifies.
+- The secret key is accepted only as a setting value. The Framework never writes the key to logs, metrics, error
+  messages, or traces.
 
 ## 4. Tests
 
