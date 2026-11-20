@@ -670,8 +670,7 @@ seal/route-update leg만 추가하므로, 수신자는 canonical `actorJoin`(28)
   JSON에서 protobuf `ChannelHeader`로 바꾸며 v13에서 올렸다(v13은 command 52·53과 Prepare·Cutover
   manifest field 때문에 v12에서 올렸다). 네 runtime을 동시에 승급한다.
 - Target의 유효 수신 chunk-byte 상한은 admission-accept reply의 `receiveChunkLimitBytes`
-  field로 협상하거나, 그 reply가 없으면 host preflight로 협상한다. 협상 경로가 없는
-  `JoinEntrySpot`은 32 KiB — Compact 일반 data 하한 — 를 유효 상한으로 사용한다. 이 형태와 상한은
+  field로 협상하거나, 그 reply가 없으면 host preflight로 협상한다. 이 형태와 상한은
   `actor-join-reply-tail` golden fixture
   (`framework/runtime/protocol/golden/actor-join-reply-v1.json`)가 고정하며 네 runtime(cpp,
   dotnet, java, node) 모두 동일하게 decode한다. **네 runtime 모두** 다른 node에 있는 target의 canonical
