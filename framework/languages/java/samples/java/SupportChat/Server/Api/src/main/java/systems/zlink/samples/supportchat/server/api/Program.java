@@ -61,10 +61,12 @@ public final class Program {
     }
 
     @Bean
-    ZLinkFrameworkConfigurer apiFramework(SampleTopology topology) {
+    ZLinkFrameworkConfigurer apiFramework(
+            SampleTopology topology, ZLinkRedisLocationStore locations) {
         SampleTopology.Api api = topology.api();
         URI channelEndpoint = URI.create(api.channelEndpoint());
         return options -> {
+            options.addLocationStore(locations);
             options.configureLocations();
             options.addHandlersFromPackageOf(Program.class);
             options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
