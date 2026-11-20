@@ -6,7 +6,7 @@ vcpkg_check_linkage(ONLY_STATIC_LIBRARY)
 vcpkg_download_distfile(ARCHIVE
     URLS "https://github.com/zlink-systems/zlink/releases/download/framework-cpp/v${VERSION}/zlink-framework-cpp-${VERSION}.tar.gz"
     FILENAME "zlink-framework-cpp-${VERSION}.tar.gz"
-    SHA512 cf56f7c6adca1f1a2d7449f7594222a4aacb6553fd94a8442302eeaa1deb82880d046079c562f220b4c8b74ea8e55ab625b0538ae9260fc626233d2211e24e70
+    SHA512 224a7228378142d26f874a3bead407a522447ee568ecd985f4c95109703cb0129b88a6e548808a4cd8835572e99700605d9fa5b9855d30ede0519690fbe4142f
 )
 vcpkg_extract_source_archive(SOURCE_PATH ARCHIVE "${ARCHIVE}")
 if(NOT EXISTS "${SOURCE_PATH}/runtime/protocol/generated/cpp/service_wire_constants.hpp")
@@ -19,8 +19,8 @@ vcpkg_cmake_configure(
         -DZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK=ON
         -DZLINK_FRAMEWORK_CPP_STAGE_STANDALONE_DEPENDENCIES=OFF
         -DZLINK_FRAMEWORK_CPP_USE_SYSTEM_BOOST=ON
-        -DZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION=1.25.1
-        -DZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION=1.25.0
+        -DZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION=1.26.0
+        -DZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION=1.26.0
         # Resolve the server framework's binding and Core packages from the
         # vcpkg prefix instead of the repository's local-package layout.
         -DZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CPP_PREFIX=${CURRENT_INSTALLED_DIR}

@@ -1,6 +1,6 @@
 # scripts/dev/release-check.sh --write framework cpp writes the one entry below from the archive
 # that framework/languages/cpp/scripts/package-source.py builds before the tag.
 sources:
-  "0.32.0":
-    url: "https://github.com/zlink-systems/zlink/releases/download/framework-cpp/v0.32.0/zlink-framework-cpp-0.32.0.tar.gz"
-    sha256: "5eab1347c1be73ad0486e7a154c160fba37e20a0238f79713ef992323f9c688d"
+  "0.33.0":
+    url: "https://github.com/zlink-systems/zlink/releases/download/framework-cpp/v0.33.0/zlink-framework-cpp-0.33.0.tar.gz"
+    sha256: "bbc9f83c39196f62959d42244e8b7e5b1e60ab79c3f18ce2cefd3af965f41c96"
