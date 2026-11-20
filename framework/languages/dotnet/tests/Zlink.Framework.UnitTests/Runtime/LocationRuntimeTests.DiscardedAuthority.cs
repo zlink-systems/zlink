@@ -271,6 +271,33 @@ public sealed partial class LocationRuntimeTests
     }
 
     [Fact]
+    public async Task DiscardedAuthority_Spot_Membership_Snapshot_Reads_Only_Actor_Authorities()
+    {
+        var time = new ControllableTimeProvider();
+        var raw = new DiscardedAuthorityProvider(new ZLinkInMemoryProviderLocationStore(time));
+        var store = new ZLinkProviderLocationRepository(raw, time);
+        await using var host = await DiscardedAuthorityHost.Start(store, time);
+        var spots = host.Provider.GetRequiredService<IZLinkSpotManager>();
+        foreach (var id in new[] { "prefix-spot", "unrelated-spot" })
+            await spots.GetOrCreate(id, "outage-execution").InMesh("discarded-authority").Async();
+        var key = ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey("prefix-spot");
+        var spot = Assert
+            .IsType<ZLinkAuthorityReadResult.Found>(await store.ReadAuthorityAsync(key))
+            .Snapshot;
+        raw.ScanPrefixes.Clear();
+        Assert.True(
+            await store.CleanupDiscardedAuthorityAsync(key, spot, host.Locations.OwnerToken)
+        );
+        var authorityScans = raw
+            .ScanPrefixes.Where(prefix =>
+                prefix.StartsWith("authority\0", StringComparison.Ordinal)
+            )
+            .ToArray();
+        Assert.NotEmpty(authorityScans);
+        Assert.All(authorityScans, prefix => Assert.Equal("authority\0actor\0", prefix));
+    }
+
+    [Fact]
     public async Task DiscardedAuthority_Spot_ScanFailure_And_Expired_Snapshot_Do_Not_Mean_Empty()
     {
         var time = new ControllableTimeProvider();
@@ -668,6 +695,8 @@ public sealed partial class LocationRuntimeTests
     private sealed class DiscardedAuthorityProvider(IZLinkLocationStore inner) : IZLinkLocationStore
     {
         internal int Scans;
+        internal readonly System.Collections.Concurrent.ConcurrentQueue<string> ScanPrefixes =
+            new();
         internal bool FailScan;
         internal bool ExpireScanOnce;
 
@@ -693,6 +722,7 @@ public sealed partial class LocationRuntimeTests
         )
         {
             Interlocked.Increment(ref Scans);
+            ScanPrefixes.Enqueue(request.Prefix);
             if (FailScan)
                 throw new InvalidOperationException("Injected membership snapshot failure.");
             if (ExpireScanOnce)
