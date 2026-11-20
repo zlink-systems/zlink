@@ -1726,20 +1726,22 @@ holds entries, and a page at level 1 or above holds references to pages one leve
 holds at most 1,024 entries or references and at most 1 MiB encoded
 ([02 §4](02-location-store-redis.en.md#4-conditional-atomic-batch)).
 
-Pages are split by count only, regardless of content, so the same inventory gives the same pages
-and check values whichever language wrote it.
+Pages are split from the stored bytes alone, so the same inventory gives the same pages and check
+values whichever language wrote it. The size of one entry varies with its authority key (at most 776
+bytes) and `expectedStoreVersion` (at most 4,096 bytes), so a count alone can't keep the 1 MiB bound.
 
-1. Level-0 page `i` holds the entries with `index` from `1024 × i` to `1024 × i + 1023`, in `index`
-   order. Only the last page may hold fewer than 1,024.
-2. When a level has two or more pages, the level above is built. Page `j` of level `L + 1` holds the
-   references to pages `1024 × j` to `1024 × j + 1023` of level `L`, in page `index` order.
+1. A level-0 page is filled with entries in `index` order. If adding the next entry would make the
+   page's stored bytes exceed 1 MiB or make it hold 1,025 entries, the next page starts from that
+   entry. Page `index` starts at 0 and increases by 1.
+2. When a level has two or more pages, the level above is built. Pages of level `L + 1` are filled
+   with the references to level-`L` pages in page `index` order, the same way (1 MiB and 1,024).
 3. The level with exactly one page is the top level. The root's `topLevel` is that level, and
    `topPages` is the reference to that one page.
 4. With zero entries no page is created. The root has `totalCount` 0, `topLevel` 0, and an empty
    `topPages`.
 
-Because of the maximum length of a canonical authority key, a page of 1,024 entries doesn't exceed
-1 MiB.
+The stored bytes of one entry are far below 1 MiB, so every page holds at least one entry or
+reference.
 
 | Record and field | Format | Meaning |
 |---|---|---|
