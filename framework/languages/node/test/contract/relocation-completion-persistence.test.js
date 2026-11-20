@@ -308,6 +308,37 @@ test('pending delivery blocks another Relocate and logs the durable reason', asy
   assert.equal(await runtime.hasPendingDeliveries(), false);
 });
 
+test('pending delivery scan restarts from the first page when the scan cursor expires', async () => {
+  const { ZLinkHostServiceRelocationRuntime } = require('../../packages/framework/dist/internal');
+  const f = fixture();
+  const current = await f.owner.append(f.key, f.current(), entry);
+  let starts = 0,
+    expired = false;
+  const runtime = new ZLinkHostServiceRelocationRuntime({
+    currentOwner: () => ({ ownerId: 'target', leaseGeneration: 1n }),
+    locationStore: () => ({
+      async listAuthorities(_prefix, cursor) {
+        if (cursor === undefined) {
+          starts++;
+          return { kind: 'page', items: [], nextCursor: 'second' };
+        }
+        if (!expired) {
+          expired = true;
+          return { kind: 'scanExpired' };
+        }
+        return { kind: 'page', items: [{ key: f.key, snapshot: current }] };
+      }
+    })
+  });
+  assert.equal(await runtime.hasPendingDeliveries(), true);
+  assert.equal(expired, true);
+  assert.equal(starts, 2);
+  const aborted = new AbortController();
+  aborted.abort();
+  expired = false;
+  await assert.rejects(runtime.hasPendingDeliveries(aborted.signal), { name: 'AbortError' });
+});
+
 test('blob bound replaces only the new result with requestFailed and preserves earlier entries', () => {
   const {
     completionEntryWithinBlobBound

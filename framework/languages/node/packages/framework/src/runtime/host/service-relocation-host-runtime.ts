@@ -791,7 +791,12 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     let cursor: ZLinkAuthorityScanCursor | undefined;
     for (;;) {
       const page = await store.listAuthorities('', cursor, ZLINK_PROVIDER_MAX_PAGE_SIZE, signal);
-      if (page.kind === 'scanExpired') throw new Error('Completion authority scan expired.');
+      if (page.kind === 'scanExpired') {
+        // Same as the other authority scans: restart from the first page; the caller's signal bounds retries.
+        signal?.throwIfAborted();
+        cursor = undefined;
+        continue;
+      }
       for (const { snapshot } of page.items) {
         if (
           snapshot.ownerId === owner.ownerId &&
