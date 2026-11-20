@@ -29,6 +29,7 @@ on:
       - 'framework/languages/cpp/packaging/**'
       - 'framework/languages/cpp/scripts/package-prebuilt.sh'
       - 'framework/languages/cpp/scripts/verify-apple-exports.py'
+      - 'framework/languages/cpp/tests/Zlink.Framework.PackageTests/**'
       - 'scripts/local-package/core/**'
       - 'VERSION'
       - '.github/actions/msvc-env/**'
