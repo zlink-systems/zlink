@@ -49,6 +49,8 @@ Framework 0.33.0은 .NET binding 1.26.0과 Core 1.26.0을 사용합니다. (#484
 
 ## 의존성
 
+- Zlink.Framework가 Google.Protobuf 3.30.0 이상을 요구합니다(protobuf channel header). 중앙 패키지 관리(`Directory.Packages.props`)로 더 낮은 버전을 고정한 프로젝트는 3.30.0 이상으로 올려야 합니다. 낮으면 restore가 NU1109로 실패합니다. (#4713, #4927)
+
 - `Zlink.Framework`가 Google.Protobuf 3.30.0에 의존합니다. `Zlink.Framework.AspNetCore`에도 Google.Protobuf 3.30.0 의존이 추가되고, `Zlink.Framework.Codecs.Protobuf`와 `Zlink.Framework.Locations.Etcd`의 Google.Protobuf은 3.29.1에서 3.30.0으로 올라갑니다. (#4713)
 
 ## 설치

@@ -49,6 +49,8 @@ Framework 0.33.0 uses .NET binding 1.26.0 and Core 1.26.0. (#4846)
 
 ## Dependencies
 
+- Zlink.Framework requires Google.Protobuf 3.30.0 or later (protobuf channel header). Projects that pin a lower version through central package management (`Directory.Packages.props`) must raise it to 3.30.0 or later; otherwise restore fails with NU1109. (#4713, #4927)
+
 - `Zlink.Framework` now depends on Google.Protobuf 3.30.0. `Zlink.Framework.AspNetCore` also gains a Google.Protobuf 3.30.0 dependency, and Google.Protobuf in `Zlink.Framework.Codecs.Protobuf` and `Zlink.Framework.Locations.Etcd` moves from 3.29.1 to 3.30.0. (#4713)
 
 ## Install
