@@ -45,12 +45,6 @@ public interface IZLinkActor
  {
  return ValueTask.FromResult<string?>(null);
  }
- ValueTask OnSessionBoundAsync(
- ZLinkSessionBindingIdentity incoming,
- CancellationToken cancellationToken)
- {
- return ValueTask.CompletedTask;
- }
  ValueTask OnJoinCompletedAsync(
  ZLinkActorJoinCompletion completion,
  CancellationToken cancellationToken)
