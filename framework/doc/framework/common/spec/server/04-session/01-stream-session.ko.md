@@ -195,6 +195,9 @@ Client는 이 sequence만으로 pending request를 찾는다.
 
 전체 규칙은 [메시지 모델](../00-foundation/05-message-model.ko.md)의 reply correlation 계약이 정의한다.
 
+STREAM request의 handler는 client의 request 기한을 전달받지 않는다. 다른 객체의 회신을 기다리는 handler는 그 대기의
+기한을 스스로 정한다.
+
 ## 6. Payload 변환과 codec 경계
 
 Framework 기본 표면은 session, session context, stream과 message까지만 제공한다. 객체

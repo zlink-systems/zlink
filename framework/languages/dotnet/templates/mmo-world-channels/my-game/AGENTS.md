@@ -226,3 +226,11 @@ gh issue create --repo zlink-systems/zlink --title "<area>: <observed failure>" 
 ```
 
 Put the language and the failing behavior in the title (for example, `framework(dotnet): Spot startup fails with empty SpotId`). Record the filed issue number in the README Known issues so the project keeps the place to re-verify when a fixed package is released.
+
+## Client connection
+
+The [README client connection section](README.md#client-connection) owns the shared client installation table and minimal C# example. The Session `players` listener defaults to `ws://127.0.0.1:0` in `server/config/sessionA.json` and `server/config/sessionB.json` (WebSocket root path `/`, OS-assigned port). Use its actual STREAM address from `READY`; mesh and Redis are internal endpoints. External clients need a running deployment with a reachable interface and exposed port; HTTPS web clients require `wss://`.
+
+Start with Accounts `GET /worlds`, choose a world and use its advertised Session endpoint. Send `EnterWorldRequest(playerId)` first and receive `PlayerView` as a push. Keep Accounts world endpoints consistent with Session READY. Register push handlers before sending with `Send(...).Async(ct)`; do not turn admission into request/reply. Request `SessionInfoRequest` only after Actor binding. Retain the default typed JSON path and validate identity before binding when adding authentication.
+
+Match connector versions to `Directory.Packages.props` `PackageVersion` entries `Zlink.Framework` and `Zlink.Stream.Connector` (`Version` attributes); check examples against the public connector source and pinned package. Preserve the endpoint, HTTP preconditions, packet names, and push/reply distinction when updating the README.

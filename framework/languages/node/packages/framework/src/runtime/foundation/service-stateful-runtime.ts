@@ -1545,10 +1545,10 @@ export class ServiceStatefulRuntime {
 
   async sendToSpot(
     sourceSpotId: string,
-    requested: ServiceDirectSpotRouteFence,
+    requested: ServiceDirectSpotRouteFence | undefined,
     payload: ServiceApplicationPayload
   ): Promise<number> {
-    const target = this.acceptSpotAuthority(requested);
+    const target = requested === undefined ? undefined : this.acceptSpotAuthority(requested);
     if (target === undefined) {
       return SubmitResult.NotFound;
     }
@@ -1565,7 +1565,7 @@ export class ServiceStatefulRuntime {
 
   requestToSpot(
     sourceSpotId: string,
-    requested: ServiceDirectSpotRouteFence,
+    requested: ServiceDirectSpotRouteFence | undefined,
     payload: ServiceApplicationPayload,
     timeoutMs: number,
     onAdmitted?: () => void,
@@ -1575,7 +1575,7 @@ export class ServiceStatefulRuntime {
     const pending =
       (requestOperation as PendingOperation<ServiceStatefulResult> | undefined) ??
       this.operations.register(timeoutMs);
-    const target = this.acceptSpotAuthority(requested);
+    const target = requested === undefined ? undefined : this.acceptSpotAuthority(requested);
     if (target === undefined) {
       const result = internalFrameworkWireReply(ZLinkFrameworkInternalErrorKind.ActorLocationStale);
       if (receiver === undefined) pending.reply(result);
@@ -5940,7 +5940,11 @@ export class ServiceStatefulRuntime {
       : undefined;
   }
 
-  private tryEntrySpotFence(targetNodeRid: string): ServiceDirectSpotRouteFence | undefined {
+  /**
+   * Entry Spot owner fence: G is the target descriptor's lifecycle generation
+   * (spec 05-location-relocation/01-location-runtime). No descriptor, no fence.
+   */
+  tryEntrySpotFence(targetNodeRid: string): ServiceDirectSpotRouteFence | undefined {
     const targetNodeGeneration =
       targetNodeRid === this.nodeRid
         ? this.nodeGeneration
