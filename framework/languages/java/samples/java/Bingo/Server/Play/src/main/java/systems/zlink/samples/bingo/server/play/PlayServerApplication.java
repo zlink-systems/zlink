@@ -47,8 +47,10 @@ public final class PlayServerApplication {
     }
 
     @Bean
-    ZLinkFrameworkConfigurer playFramework(SampleTopology topology) {
+    ZLinkFrameworkConfigurer playFramework(
+            SampleTopology topology, ZLinkRedisLocationStore locations) {
         return options -> {
+            options.addLocationStore(locations);
             options.configureDispatch().messageFlow(topology.diagnosticsLevel());
             options.codecs().use(ZLinkProtobufCodec.defaultCodec());
             options.configureLocations();
