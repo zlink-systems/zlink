@@ -6,8 +6,6 @@ import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
-import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.configuration.ZLinkFrameworkRegistration;
 import systems.zlink.framework.runtime.diagnostics.ZLinkDispatchErrorReporter;
@@ -56,7 +54,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Executor;
 
 /**
  * Dispatches MeshNode application records through the framework's typed serializer and handler
@@ -153,7 +150,8 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                 routeNamespace(
                         mesh.envelopeNames(),
                         mesh.nodeHandlers(),
-                        framework.handlerExecutor(),
+                        ZLinkApplicationExecutionScheduler.shared(
+                                framework.handlerExecutor(), framework.workers().maxThreads()),
                         framework.suspendHandlerInvokers()));
         mesh.channelHandlers()
                 .forEach(
@@ -167,7 +165,9 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                                                 mesh.channelHandlerGroups()
                                                         .getOrDefault(name, List.of()),
                                                 scannedHandlers,
-                                                framework.handlerExecutor(),
+                                                ZLinkApplicationExecutionScheduler.shared(
+                                                        framework.handlerExecutor(),
+                                                        framework.workers().maxThreads()),
                                                 framework.suspendHandlerInvokers())));
         namespaces
                 .values()
@@ -874,9 +874,9 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
     private static Namespace routeNamespace(
             ZLinkChannelEnvelope.PreparedNames channelNames,
             List<MeshNodeRegistration.DispatchHandler> handlers,
-            Executor executor,
+            ZLinkApplicationExecutionScheduler scheduler,
             List<ZLinkSuspendInvocationAdapter> suspendInvokers) {
-        Namespace namespace = new Namespace(executor, channelNames);
+        Namespace namespace = new Namespace(scheduler, channelNames);
         for (MeshNodeRegistration.DispatchHandler handler : handlers) {
             String packetName = ZLinkPacketNames.resolve(handler.messageType());
             if (handler.request()) {
@@ -910,9 +910,9 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
             List<MeshNodeRegistration.DispatchHandler> handlers,
             List<String> handlerGroups,
             ZLinkScannedHandlerCatalog scannedHandlers,
-            Executor executor,
+            ZLinkApplicationExecutionScheduler scheduler,
             List<ZLinkSuspendInvocationAdapter> suspendInvokers) {
-        Namespace namespace = new Namespace(executor, channelNames);
+        Namespace namespace = new Namespace(scheduler, channelNames);
         Set<String> groups =
                 handlerGroups.isEmpty() ? Set.of(channelName) : Set.copyOf(handlerGroups);
         for (ZLinkScannedHandler handler :
@@ -1006,13 +1006,15 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
         private final Map<String, ChannelSendHandlerRegistration> channelSends = new HashMap<>();
         private final Map<String, ChannelRequestHandlerRegistration> channelRequests =
                 new HashMap<>();
-        private final ZLinkSerialExecutionQueue queue;
+        private final ZLinkApplicationExecutionScheduler.Owner queue;
 
         private final ZLinkChannelEnvelope.PreparedNames channelNames;
 
-        Namespace(Executor executor, ZLinkChannelEnvelope.PreparedNames channelNames) {
+        Namespace(
+                ZLinkApplicationExecutionScheduler scheduler,
+                ZLinkChannelEnvelope.PreparedNames channelNames) {
             this.channelNames = channelNames;
-            queue = new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.generic());
+            queue = scheduler.register();
         }
     }
 }
