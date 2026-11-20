@@ -923,7 +923,9 @@ task_t<std::vector<mesh_node_descriptor_t>> mesh_node_host_service_t::actor_plac
         if (descriptor.mesh_name != mesh_name
             || descriptor.state != framework_runtime_state_t::serving
             || descriptor.object_role != object_role_t::server || descriptor.placement_weight <= 0
-            || capability == descriptor.object_capabilities.end () || !capability->entry_accepted)
+            || capability == descriptor.object_capabilities.end () || !capability->entry_accepted
+            || !placement_capacity_available (descriptor, placement_object_kind_t::actor,
+                                              stable_type))
             continue;
         if (descriptor.rid == source_rid
             || source->has_admitted_peer (descriptor.rid, descriptor.lifecycle_generation))
