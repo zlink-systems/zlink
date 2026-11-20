@@ -35,6 +35,81 @@ pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 
 Scripts remove unique image tags after each invocation. Docker retains build layers for subsequent runs.
 
+## Client connection
+
+### Endpoint and first packet
+
+The Session `players` STREAM listener uses `StreamEndpoint` in `server/config/session.json`, defaulting to `ws://127.0.0.1:0`: loopback WebSocket, OS-assigned port, root path `/`. Use `streamEndpoint` from Session `READY` JSON, as `e2e/MyGame.E2E/MatchRun.cs` does. Match mesh listeners and Redis are internal endpoints.
+
+Send `QueueRequest(PlayerId, Mode)` first; `duel` is the default mode. Session creates/binds each Actor and matchmaking pairs two players in the same mode. Successful admission produces `MatchFound(RoomId)` and `RoomView` pushes; one player alone does not complete a match. Gameplay follows admission; `SessionInfoRequest` is request/reply after binding. The first operation is send/push. There is no product authentication; validate identity before binding when adding it.
+
+### Connector installation
+
+The default loopback listener is reachable only within its host/network namespace. Docker e2e nodes share the runner network namespace and are removed at the end. External clients need a deployment kept running with a reachable listener and an exposed container port. Browser, Unity WebGL, and Cocos Creator web clients can use this WebSocket endpoint; HTTPS pages require a secure `wss://` deployment. HTTP entry points also need a browser-accessible origin/CORS policy when called from a web client.
+
+Use the release pinned in `Directory.Packages.props`, at `PackageVersion Include="Zlink.Framework"` and `PackageVersion Include="Zlink.Stream.Connector"` (`Version` attributes). Replace `<version>` in the installation commands with that release. Check linked guides against that pin; engine adapters follow the linked repository READMEs. All clients use this template's packet contract.
+
+| Client                             | Connector installation                                                                                                                                                                                                                                                                                                                                                                                                                                                          | Documentation guide                                                                                                                                                          |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unity                              | Native/Editor: restore `Zlink.Stream.Connector` with NuGetForUnity. WebGL: add the `com.zlink.stream-connector.webgl` UPM Git package; include only the connector assembly for the active target. See the [Unity README](https://github.com/zlink-systems/zlink/blob/main/framework/languages/engines/Unity/README.md) and its package manifest.                                                                                                                                | [.NET engine integration](https://docs.zlink.systems/dotnet/guide/stream-connector/12-engine-integration/)                                                                   |
+| Unreal                             | Copy `framework/languages/cpp/connector/engines/unreal` into `Plugins/ZLinkStreamConnector`, then package the native connector under `ThirdParty/ZLink` as described in the [Unreal README](https://github.com/zlink-systems/zlink/blob/main/framework/languages/engines/Unreal/README.md).                                                                                                                                                                                     | [C++ engine integration](https://docs.zlink.systems/cpp/guide/stream-connector/12-engine-integration/)                                                                       |
+| Godot                              | .NET: add the NuGet package `Zlink.Stream.Connector` and run `dotnet restore`; see the [C# README](https://github.com/zlink-systems/zlink/blob/main/framework/languages/engines/Godot/csharp/README.md). GDExtension: build the C++ Godot adapter against the framework prebuilt and matching `godot-cpp`; see the [C++ README](https://github.com/zlink-systems/zlink/blob/main/framework/languages/engines/Godot/cpp/README.md). The .NET sample does not support Web export. | [.NET](https://docs.zlink.systems/dotnet/guide/stream-connector/12-engine-integration/), [C++](https://docs.zlink.systems/cpp/guide/stream-connector/12-engine-integration/) |
+| Cocos Creator                      | Web target: `npm install @zlink-systems/stream-connector@<version>`; see the [Cocos Creator README](https://github.com/zlink-systems/zlink/blob/main/framework/languages/engines/CocosCreator/README.md). This package does not provide a Creator native adapter.                                                                                                                                                                                                                  | [TypeScript engine integration](https://docs.zlink.systems/node/guide/stream-connector/12-engine-integration/)                                                               |
+| Axmol                              | Copy `framework/languages/cpp/connector/engines/axmol` into `third_party/zlink_axmol_connector` and link `zlink::stream_connector` from the installed C++ framework package; see the [Axmol README](https://github.com/zlink-systems/zlink/blob/main/framework/languages/engines/Axmol/README.md).                                                                                                                                                                              | [C++ engine integration](https://docs.zlink.systems/cpp/guide/stream-connector/12-engine-integration/)                                                                       |
+| Web browser (TypeScript connector) | `npm install @zlink-systems/stream-connector@<version>`; import the package root in the browser build. Use `ws://` or `wss://`, subject to the page's security policy.                                                                                                                                                                                                                                                                                                             | [TypeScript connector](https://docs.zlink.systems/node/guide/stream-connector/)                                                                                              |
+| C++                                | Install the C++ framework prebuilt containing the connector; use `find_package(zlink_stream_connector_cpp CONFIG REQUIRED)` and link `zlink::stream_connector`.                                                                                                                                                                                                                                                                                                                 | [C++ connector](https://docs.zlink.systems/cpp/guide/stream-connector/)                                                                                                      |
+| C#/.NET                            | `dotnet add package Zlink.Stream.Connector --version <version>`                                                                                                                                                                                                                                                                                                                                                                                                                    | [.NET connector](https://docs.zlink.systems/dotnet/guide/stream-connector/)                                                                                                  |
+| Java                               | Add Maven/Gradle dependency `systems.zlink:zlink-stream-connector:<version>`.                                                                                                                                                                                                                                                                                                                                                                                                      | [Java connector](https://docs.zlink.systems/java/guide/stream-connector/)                                                                                                    |
+| Kotlin                             | Add `systems.zlink:zlink-stream-connector:<version>` and `systems.zlink:zlink-framework-kotlin:<version>` for the coroutine wrapper.                                                                                                                                                                                                                                                                                                                                                  | [Kotlin connector](https://docs.zlink.systems/kotlin/guide/stream-connector/)                                                                                                |
+| Node                               | `npm install @zlink-systems/stream-connector@<version>`; use the package root and Node.js 22 or later.                                                                                                                                                                                                                                                                                                                                                     | [Node connector](https://docs.zlink.systems/node/guide/stream-connector/)                                                                                                    |
+
+### First match example
+
+Create a .NET 8 console project in a copy of the template, reference `server/MyGame.Shared/MyGame.Shared.csproj`, and add `Zlink.Stream.Connector` using the pinned version described above. Save as `Program.cs` and run `dotnet run --project <client-project> -- <actual-session-endpoint>` against separately running Session, Match nodes, and Redis. The e2e command removes its deployment. Use fresh player IDs; `e2e/MyGame.E2E/GameClient.cs` shows the complete flow.
+
+```csharp
+using MyGame.Shared;
+using Systems.Zlink.Stream.Connector;
+using Systems.Zlink.Stream.Connector.Contracts;
+
+using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+var ct = deadline.Token;
+async Task QueueAsync(string playerId)
+{
+    await using var client = ZlinkStreamConnectorFactory.Create(new ZlinkStreamConnectorOptions
+    {
+        Endpoint = new Uri(args[0]),
+        DispatchMode = ZlinkStreamDispatchMode.Immediate,
+        Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
+    });
+    var received = new TaskCompletionSource<MatchFound>(TaskCreationOptions.RunContinuationsAsynchronously);
+    using var found = client.On<MatchFound>((message, _) =>
+    {
+        received.TrySetResult(message.Payload!);
+        return ValueTask.CompletedTask;
+    });
+    using var rejected = client.On<ActionRejected>((message, _) =>
+    {
+        received.TrySetException(new InvalidOperationException(message.Payload!.ToString()));
+        return ValueTask.CompletedTask;
+    });
+    using var error = client.OnErrorReceived((message, _) =>
+    {
+        received.TrySetException(new IOException(message.Message));
+        return ValueTask.CompletedTask;
+    });
+    using var disconnected = client.OnDisconnected((_, _) =>
+    {
+        received.TrySetException(new IOException("Disconnected before MatchFound"));
+        return ValueTask.CompletedTask;
+    });
+    await client.Connect.Async(ct);
+    await client.Send(new QueueRequest(playerId, "duel")).Async(ct);
+    Console.WriteLine(await received.Task.WaitAsync(ct));
+}
+await Task.WhenAll(QueueAsync("guide-player-a"), QueueAsync("guide-player-b"));
+```
+
 ## Local e2e
 
 Both scripts build images and call the same C# orchestrator inside a runner container. A unique Compose project/network contains Redis and the runner. The runner checks structure before starting nodes. Nodes share its network namespace, preserving loopback listeners and OS-assigned ports without host port mappings. Redis publishes an ephemeral loopback port for local debugging.

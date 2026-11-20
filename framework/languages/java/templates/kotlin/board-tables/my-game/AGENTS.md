@@ -231,3 +231,7 @@ gh issue create --repo zlink-systems/zlink --title "<area>: <observed failure>" 
 ```
 
 Put the language and the failing behavior in the title (for example, `framework(kotlin): Spot startup fails with empty SpotId`). Record the filed issue number in the README, in a Known issues section that you add if it has none, so the project keeps the place to re-verify when a fixed package is released.
+
+## Client connection
+
+[README: Client connection](README.md#client-connection) owns the endpoint, initial flow, installation choices, and Kotlin example. Keep it aligned with this template's config, startup READY output, DTOs, and e2e client. Use the `frameworkVersion` pin in `build.gradle.kts` for connector dependencies; do not hard-code a release in documentation. Register push handlers before sending, preserve cleanup, and distinguish pushes from correlated replies. Preserve the initial admission packet and validate identity before Actor binding in production.
