@@ -1620,7 +1620,7 @@ Framework는 각 object의 완료 결과를 object 순서로 저장한다. 같�
 항목 수와 같아야 한다. 다르면 `DataLost`다. 원래 requester에게 reply를 보내는 일은 그 결과를 담은 CAS가 끝난 뒤에만
 한다. 교체로 더 이상 가리키지 않는 이전 payload는 보관 기한 뒤 삭제한다.
 
-전달 중 Store 오류나 연결 끊김이 있으면 target은 같은 실행 안에서 `reference`가 가리키는 payload의 `pending` 항목을 현재 route로 다시 보낸다. Target 실행이 끝난 뒤의 처리는 [Host relocation와 shutdown](05-host-relocation-flow.ko.md)의 장애 계약을 따른다. 그 뒤 그 object의 authority를 CAS로 얻어 활성화하는 runtime은 활성화 전에 `pending` 항목의 reply bytes만 다시 보낸다. Handler, Restore, 끝나지 않은 queue와 target 재선택은 다시 하지 않는다.
+전달 중 Store 오류나 연결 끊김이 있으면 target은 같은 실행 안에서 `reference`가 가리키는 payload의 `pending` 항목을 현재 route로 다시 보낸다. Target 실행이 끝난 뒤의 처리는 [Host relocation와 shutdown](05-host-relocation-flow.ko.md)의 장애 계약을 따른다. Target 실행이 끝나면 [실패 정책 §5](06-failure-failover-policy.ko.md#5-host-relocation-장애)대로 다른 runtime이 이 relocation을 이어받지 않으며, 저장한 완료 기록은 그 정책이 object를 다시 활성화하는 경우에만 쓰인다. 그때 그 runtime은 활성화 전에 `pending` 항목의 reply bytes만 다시 보내고, handler, Restore, 끝나지 않은 queue와 target 재선택은 다시 하지 않는다.
 
 결과를 더하면 encoded payload가 [Relocation Store](03-relocation-store-redis.ko.md)의 공통 blob 상한을 넘을 때는 그 request의 reply bytes 대신 `InternalFailure`(failure code `requestFailed`, [Framework error model §2](../00-foundation/07-framework-error-model.ko.md)) 실패 reply를 그 항목의 `reply`로 저장한다. Request는 이미 실행됐고 결과 bytes만 보관하지 못한 것이므로 새 error kind를 두지 않는다. 이미 저장한 항목은 바꾸지 않고 relocation도 실패로 바꾸지 않는다.
 
