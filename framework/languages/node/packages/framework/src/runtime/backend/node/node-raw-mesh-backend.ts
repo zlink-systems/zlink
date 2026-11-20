@@ -2026,7 +2026,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       const claim = runtime.mailbox.tryClaim(domain, MAX_DRAIN_RECORDS, Number.MAX_SAFE_INTEGER);
       if (claim === undefined) break;
       const owner =
-        claim.records[0]?.completion === undefined
+        (claim.record ?? claim.records[0]!).completion === undefined
           ? readyOwner(claim.owner, this.routingId, this.stateful, domain)
           : {
               ownerKind: ReadyOwnerKind.Node,
@@ -2467,6 +2467,7 @@ class RawReadyBatch implements ReadyBatch {
 
 class RawReceiveBatch implements ReceiveBatch {
   private receiveCapacity: number;
+  readonly records: ReceiveRecord[] = [];
 
   constructor(
     private readonly capacity: number,
@@ -2491,14 +2492,17 @@ class RawReceiveBatch implements ReceiveBatch {
       throw new RangeError('Receive limit must be within the batch capacity.');
     }
     this.receiveCapacity = messageCapacity;
+    this.records.length = 0;
   }
-  close(): void {}
+  close(): void {
+    this.records.length = 0;
+  }
 }
 
 class MailboxClaim implements RawClaim {
   private consumed = false;
   private released = false;
-  private remaining: ServiceMailboxRecord[] = [];
+  private remaining: readonly ServiceMailboxRecord[] | undefined;
 
   constructor(
     private readonly runtime: RawServiceMeshRuntime,
@@ -2506,13 +2510,16 @@ class MailboxClaim implements RawClaim {
   ) {}
 
   recvBatch(batch: ReceiveBatch) {
-    if (this.consumed) return { ok: false, records: [] };
+    if (this.consumed || this.released) return { ok: false, records: [] };
     this.consumed = true;
     const capacity = batch as RawReceiveBatch;
-    const records: ReceiveRecord[] = [];
+    const records = capacity.records;
+    records.length = 0;
     let parts = 0;
-    for (let index = 0; index < this.claim.records.length; index += 1) {
-      const record = this.claim.records[index]!;
+    const prefix = this.claim.records;
+    const count = prefix?.length ?? 1;
+    for (let index = 0; index < count; index += 1) {
+      const record = this.claim.record ?? prefix![index]!;
       let decoded: ReceiveRecord;
       try {
         decoded = decodeMultipartRecord(this.runtime, record);
@@ -2523,7 +2530,7 @@ class MailboxClaim implements RawClaim {
           continue;
         }
         this.runtime.mailbox.releaseClaimedPayload(record);
-        this.remaining = this.claim.records.slice(index + 1);
+        this.remaining = prefix?.slice(index + 1);
         // Nothing was transferred to the receive caller when decoding throws.
         // Earlier records therefore still belong to this failed batch.
         for (const decoded of records) {
@@ -2535,7 +2542,7 @@ class MailboxClaim implements RawClaim {
       const nextParts = decoded.parts.length;
       if (records.length >= capacity.messageCapacity || parts + nextParts > capacity.partCapacity) {
         for (const part of decoded.parts) part.close();
-        this.remaining = this.claim.records.slice(index);
+        this.remaining = prefix?.slice(index) ?? [record];
         break;
       }
       parts += nextParts;
@@ -2548,6 +2555,7 @@ class MailboxClaim implements RawClaim {
   release(): void {
     if (this.released) return;
     this.released = true;
+    if (!this.consumed) this.remaining = this.claim.records ?? [this.claim.record!];
     this.runtime.mailbox.release(this.claim, this.remaining);
   }
 }
