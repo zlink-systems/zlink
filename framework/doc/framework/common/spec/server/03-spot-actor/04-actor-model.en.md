@@ -578,12 +578,20 @@ joins the destroy of the same incarnation if one is in progress. A different gen
 Actor is handled as in the table above.
 
 The calling node doesn't wait for a reply from the owner; it observes the terminal through the authority
-in the Location Store. When the authority of the same generation is gone, the call ends with `true`. If
-the authority has a different generation, it ends with `InvalidOperation`; if it's sealed, with
-`Unavailable`. This observation waits only within the call's existing deadline. The calling node doesn't
-delete the authority in the Location Store itself — the owner is the single owner of the destroy steps.
-An Actor record with no owner, or whose owner lease has ended, follows the release rule of
-[Location runtime §6.1](../05-location-relocation/01-location-runtime.en.md#61-read-and-cas).
+in the Location Store. The result is decided by the authority read before sending the command and the
+observation after it.
+
+| Observation | Result |
+|---|---|
+| The authority read before sending already has a different generation. | Doesn't send the command; ends with `InvalidOperation`. |
+| The authority read before sending is sealed. | Doesn't send the command; ends with `Unavailable`. |
+| After sending, the authority of that generation is gone or changes to a larger generation. | Ends with `true`. Generations never go back, so the destroy of that incarnation has finished. |
+| The authority of that generation remains until the deadline. | Ends with the call's existing deadline result. The reason for an owner's destroy failure isn't relayed because there's no reply. |
+
+The calling node doesn't delete the authority of an Actor whose owner is alive — the owner is the single
+owner of the destroy steps. An Actor record with no owner, or whose owner lease has ended, follows the
+release rule of [Location runtime §6.1](../05-location-relocation/01-location-runtime.en.md#61-read-and-cas).
+That rule also releases a record whose owner ended after the destroy reached `Closing`.
 
 ## 7. Session Binding
 

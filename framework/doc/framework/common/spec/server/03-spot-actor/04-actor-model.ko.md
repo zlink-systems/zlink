@@ -513,12 +513,20 @@ authority record가 가리키는 owner에게 command 27 `actorDestroy`
 Owner는 받은 incarnation에 대해 위 순서의 destroy를 시작하거나, 같은 incarnation의 destroy가
 진행 중이면 그 destroy에 합류한다. Generation이 다르거나 seal 상태인 경우의 처리는 위 표와 같다.
 
-호출한 node는 owner의 응답을 기다리지 않고 Location Store의 authority로 terminal을 관찰한다.
-같은 generation의 authority가 없어지면 `true`로 끝난다. Authority가 다른 generation이면
-`InvalidOperation`, seal 상태이면 `Unavailable`로 끝난다. 이 관찰은 호출의 기존 deadline 안에서만
-기다린다. 호출한 node가 Location Store의 authority를 직접 지우지 않는다 — destroy 단계의 소유자는
+호출한 node는 owner의 응답을 기다리지 않고 Location Store의 authority로 terminal을 관찰한다. 결과는
+command를 보내기 전에 읽은 authority와 그 뒤의 관찰로 정한다.
+
+| 관찰 | 결과 |
+|---|---|
+| 보내기 전에 읽은 authority가 이미 다른 generation이다. | Command를 보내지 않고 `InvalidOperation`으로 끝난다. |
+| 보내기 전에 읽은 authority가 seal 상태다. | Command를 보내지 않고 `Unavailable`로 끝난다. |
+| 보낸 뒤 그 generation의 authority가 없어지거나 더 큰 generation으로 바뀐다. | `true`로 끝난다. Generation은 되돌아가지 않으므로 그 incarnation의 destroy가 끝난 것이다. |
+| Deadline까지 그 generation의 authority가 남아 있다. | 호출의 기존 deadline 결과로 끝난다. Owner의 destroy 실패 사유는 응답이 없어 전달되지 않는다. |
+
+호출한 node는 owner가 살아 있는 Actor의 authority를 직접 지우지 않는다 — destroy 단계의 소유자는
 owner 하나다. Owner가 없거나 owner lease가 끝난 Actor record는
 [Location runtime §6.1](../05-location-relocation/01-location-runtime.ko.md#61-read와-cas)의 해제 규칙을 따른다.
+Destroy가 `Closing`까지 진행된 뒤 owner가 끝난 record도 그 규칙이 해제한다.
 
 ## 7. Session binding
 
