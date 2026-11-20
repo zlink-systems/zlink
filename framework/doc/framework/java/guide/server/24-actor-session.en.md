@@ -66,6 +66,23 @@ When the client names its id, the Actor for that id is found or created and boun
 --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/sessions/AuthenticateHandler.java:session-actor-bind"
 ```
 
+Override `onSessionBound` on the Actor to receive notification after a bind is committed.
+
+```java
+@Override
+public CompletionStage<Void> onSessionBound(
+        ZLinkSessionBindingIdentity incoming,
+        ZLinkActorCallbackCancellation cancellation) {
+    return CompletableFuture.completedFuture(null);
+}
+```
+
+The callback runs in the Actor's handler order. An exception or timeout leaves the successful
+bind unchanged. The default implementation does nothing; without an override, binding does
+not wait for the Actor gate. See the
+[API reference](../../../java/reference/05-actor-relocation.en.md#zlinkactoronsessionbound) for cancellation
+and failure handling.
+
 **A client that returns with the same id binds to the Actor that is already there.** That is why creating and finding are one call.
 
 ### 3.2 Forwarding What Is Left
