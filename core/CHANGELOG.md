@@ -12,6 +12,15 @@ Libraries` workflow for a `core/vX.Y.Z` tag embeds that version's section.
 
 ## [Unreleased]
 
+## [1.26.0]
+
+### Fixed
+
+- `zlink_disconnect(endpoint)` ends only connect registrations and auto-reconnect intents; `zlink_unbind(endpoint)` ends only the bind registration and the connections accepted through it. Before, both closed every registration of the endpoint, so a disconnect could close a listener bound on the same address. `zlink_disconnect` on a bind-only endpoint returns `ZLINK_CONNECT_NOT_FOUND` (#4846, #4864).
+- A connecter uses the I/O thread of its own session (#3541, #4303).
+
+Public API and ABI are unchanged; linker SOVERSION remains 0.
+
 ## [1.25.0]
 
 ### Fixed
