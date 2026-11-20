@@ -86,6 +86,7 @@ final class ZLinkSpotDirectOutbound {
             RoutingId targetNodeRid,
             String spotId,
             long spotGeneration,
+            long targetNodeGeneration,
             ZLinkFrameworkMultipartView payload,
             Optional<String> packetName,
             String contentType,
@@ -109,7 +110,12 @@ final class ZLinkSpotDirectOutbound {
         try {
             submission =
                     spot.sendToSpot(
-                            targetNodeRid, spotId, spotGeneration, metadata.encode(), parts);
+                            targetNodeRid,
+                            spotId,
+                            spotGeneration,
+                            targetNodeGeneration,
+                            metadata.encode(),
+                            parts);
         } catch (RuntimeException | Error failure) {
             ZLinkFrameworkMultipartView.closeAll(parts);
             throw failure;

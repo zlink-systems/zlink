@@ -964,7 +964,7 @@ final class ZLinkNodeSubmitTurnTest {
                                         .class
                             },
                             (proxy, method, args) -> {
-                                if (method.getName().equals("sendToSpot") && args.length == 4) {
+                                if (method.getName().equals("sendToSpot") && args.length == 5) {
                                     spotSends.incrementAndGet();
                                     onSpotBinding.run();
                                     return CompletableFuture.completedFuture(null);

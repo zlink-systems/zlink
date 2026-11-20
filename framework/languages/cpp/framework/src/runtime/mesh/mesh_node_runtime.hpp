@@ -331,7 +331,8 @@ class mesh_node_runtime_t
                    std::uint64_t authority_owner_generation = 0,
                    std::uint64_t owner_lease_generation = 0,
                    std::optional<runtime::protocol::actor_message_header_t::bound_session_source_t>
-                     bound_session_source = std::nullopt);
+                     bound_session_source = std::nullopt,
+                   std::uint64_t node_generation = 0);
     task_t<zlink::submit_result_t> request_to_actor (
       const actor_ref_t &target,
       const std::vector<zlink::message_t> &parts,

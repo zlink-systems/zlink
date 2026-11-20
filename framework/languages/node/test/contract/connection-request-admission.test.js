@@ -29,6 +29,9 @@ const {
 const {
   SERVICE_WIRE_REQUIRED_CAPABILITY
 } = require('../../packages/framework/dist/runtime/foundation/service-wire-constants.generated');
+const {
+  ZLinkNodeRawMeshBackend
+} = require('../../packages/framework/dist/runtime/backend/node/node-raw-mesh-backend');
 const meshWire = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
 const wire = require('../../packages/framework/dist/runtime/foundation/service-stateful-wire-codec');
 const payload = {
@@ -467,6 +470,47 @@ test('ready admission creates no waiting subscriptions or attempt arrays', async
     } finally {
       f.close();
     }
+  }
+});
+
+// #4335: an Entry Spot request takes G from the target descriptor (01-location-runtime),
+// not from an admitted peer. With no admitted peer yet it waits on that G and submits once.
+test('Entry Spot request waits on the target descriptor generation before peer admission', async () => {
+  const f = fixture('spot');
+  const node = new ZLinkNodeRawMeshBackend(
+    'connection-admission',
+    'source',
+    {},
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    { raw: f.raw, stateful: f.stateful }
+  );
+  try {
+    assert.equal(f.raw.topology.peer('target'), undefined, 'no admitted peer before the request');
+    const completed = new Promise((resolve) => {
+      node
+        .entrySpot()
+        .requestToSpot(
+          'target',
+          'target',
+          7n,
+          Buffer.from('ask'),
+          { entrySpot: true, timeoutMs: 1000 },
+          (terminal) => resolve(terminal.terminalResult)
+        );
+    });
+    await turn();
+    assert.equal(f.submissions.length, 0, 'unadmitted peer must not receive the request');
+    await f.admit();
+    for (let i = 0; i < 10 && f.submissions.length === 0; i++) await turn();
+    assert.equal(f.submissions.length, 1, 'descriptor G must match the admitted peer and submit');
+    const header = wire.decodeStatefulHeader(f.submissions[0].parts[0]);
+    assert.equal(header.target.targetNodeGeneration, 7n);
+    assert.equal(await completed, RequestResult.Ok);
+  } finally {
+    f.close();
   }
 });
 

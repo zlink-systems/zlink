@@ -3787,6 +3787,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                             target.targetNodeRid(),
                             target.spotId(),
                             target.spotGeneration(),
+                            target.targetNodeGeneration(),
                             wireParts)
                     .thenApply(ignored -> Optional.<Message>empty());
         } finally {
