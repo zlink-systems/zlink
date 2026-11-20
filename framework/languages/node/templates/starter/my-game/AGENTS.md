@@ -108,3 +108,11 @@ Bash uses `export ZLINK_DEBUG_FRAMEWORK_RELOCATION=1`. Docker nodes do not inher
 ## Defect reporting
 
 Compare public API usage with the guide and a working sample first. Preserve the pinned versions, OS, reproduction command, first node failure, and flow/correlation records. Check existing [ZLink issues](https://github.com/zlink-systems/zlink/issues) and record the matching issue number in README Known issues. If a coding agent prepares a new public issue, show its body to the developer before publication. Remove credentials and personal information from attached logs.
+
+## Client connection
+
+The [README client connection section](README.md#client-connection) owns the shared client installation table and minimal TypeScript example. The Session `players` listener defaults to `ws://127.0.0.1:0` in `server/config/session.json` (WebSocket root path `/`, OS-assigned port). Use its actual STREAM address from `READY`; mesh and Redis are internal endpoints. External clients need a running deployment with a reachable interface and exposed port; HTTPS web clients require `wss://`.
+
+The starter has no game DTOs, packet handlers, Actors, or application login. The public connector performs the STREAM handshake; the existing e2e only connects and closes. Add typed contracts, server handlers, and tests before sending game packets.
+
+Match connector versions to `package.json` dependencies `@zlink-systems/framework` and `@zlink-systems/stream-connector`; check examples against the public connector source and pinned package. Preserve the endpoint, HTTP preconditions, packet names, and push/reply distinction when updating the README.

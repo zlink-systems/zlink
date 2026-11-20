@@ -469,8 +469,8 @@ final class ZLinkLocationRuntimeRecoveryTest {
                     0,
                     scheduler.tasks.stream()
                             .filter(task -> !task.isDone())
-                            // The owner deadline task (admission lifetime) is not a renewal.
-                            .filter(task -> task.getDelay(TimeUnit.SECONDS) < 10)
+                            // Owner admission and renew timeout tasks are not heartbeat tasks.
+                            .filter(task -> task.getDelay(TimeUnit.MILLISECONDS) < 1000)
                             .count(),
                     "a pending renewal must not schedule an overlapping renewal");
             var scheduled = scheduler.nextTask(task -> task.getDelay(TimeUnit.MILLISECONDS) < 1000);

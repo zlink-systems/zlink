@@ -193,6 +193,9 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
                                  std::shared_ptr<detail::mesh_node_builder_state_t> registration,
                                  std::string owner);
     std::optional<location_owner_token_t> current_location_owner () const;
+    // Caller holds _descriptor_publish_mutex. Null once a concurrent publication
+    // replaced the descriptor copied before a Store write.
+    mesh_node_descriptor_t *unchanged_published_descriptor (const mesh_node_descriptor_t &copied);
 };
 
 } // namespace zlink::framework::runtime

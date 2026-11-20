@@ -1031,37 +1031,55 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     public CompletionStage<Boolean> renewOwnerLeaseOnce() {
         return stateLane
                 .runAsync(() -> ownerLeaseRenewalCore(startupCompletion()))
+                .thenCompose(Supplier::get)
                 .thenCompose(Supplier::get);
     }
 
-    private Supplier<CompletionStage<Boolean>> ownerLeaseRenewalCore(
+    private Supplier<CompletionStage<Supplier<CompletionStage<Boolean>>>> ownerLeaseRenewalCore(
             CompletableFuture<Void> lifecycle) {
         RenewState state = new RenewState(nodeRid, ownerToken, outage);
-        return () -> renewOwnerLease(state, lifecycle);
+        return () -> {
+            if (state.nodeRid() == null) {
+                return CompletableFuture.failedFuture(
+                        new IllegalStateException(
+                                "Location runtime must be started before renewing its owner lease."));
+            }
+            return reportRenewalFailure(
+                            renewOwnerLease(state, lifecycle),
+                            lifecycle,
+                            () -> CompletableFuture.completedFuture(false))
+                    .thenApply(
+                            continuation ->
+                                    () ->
+                                            reportRenewalFailure(
+                                                    continuation.get(), lifecycle, false));
+        };
     }
 
-    private CompletionStage<Boolean> renewOwnerLease(
+    /** Completes after renewal adjudication; the continuation owns recovery and cleanup. */
+    private CompletionStage<Supplier<CompletionStage<Boolean>>> renewOwnerLease(
             RenewState state, CompletableFuture<Void> lifecycle) {
-        if (state.nodeRid() == null) {
-            return CompletableFuture.failedFuture(
-                    new IllegalStateException(
-                            "Location runtime must be started before renewing its owner lease."));
-        }
         ZLinkLocationOwnerToken token = state.token();
         if (token == null) {
-            return reportRenewalFailure(
-                    claimOwnerLease(lifecycle)
-                            .thenCompose(
-                                    ignored -> republishAfterOwnerLeaseRecovery(lifecycle, false))
-                            .thenApply(ignored -> true),
-                    lifecycle);
+            return claimOwnerLease(lifecycle)
+                    .thenApply(
+                            ignored ->
+                                    () ->
+                                            republishAfterOwnerLeaseRecovery(lifecycle, false)
+                                                    .thenApply(recovered -> true));
         }
         long operationStartedNanos = monotonicNow.getAsLong();
-        CompletionStage<Boolean> renewal =
+        CompletionStage<Supplier<CompletionStage<Boolean>>> renewal =
                 observeLeaseOperation(
                                 () ->
-                                        stores.ownerLeaseStore()
-                                                .renewOwnerLease(token, ownerLeaseTtl))
+                                        withinDeadline(
+                                                () ->
+                                                        stores.ownerLeaseStore()
+                                                                .renewOwnerLease(
+                                                                        token, ownerLeaseTtl),
+                                                saturatingAdd(
+                                                        operationStartedNanos,
+                                                        ownerLeaseRenewTimeout.toNanos())))
                         .handle(
                                 (result, failure) ->
                                         stateLane.<Supplier<CompletionStage<Boolean>>>runAsync(
@@ -1149,9 +1167,8 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                                                                             false))
                                                                     .thenApply(ignored -> true);
                                                 }))
-                        .thenCompose(stage -> stage)
-                        .thenCompose(Supplier::get);
-        return reportRenewalFailure(renewal, lifecycle);
+                        .thenCompose(stage -> stage);
+        return renewal;
     }
 
     private long ownerLeaseReclaimAfterCore() {
@@ -1883,8 +1900,8 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     }
 
     /** Records renewal failures only for the lifecycle that requested them. */
-    private CompletionStage<Boolean> reportRenewalFailure(
-            CompletionStage<Boolean> renewal, CompletableFuture<Void> lifecycle) {
+    private <T> CompletionStage<T> reportRenewalFailure(
+            CompletionStage<T> renewal, CompletableFuture<Void> lifecycle, T failedResult) {
         return renewal.exceptionallyCompose(
                 failure ->
                         stateLane.runAsync(
@@ -1892,7 +1909,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                     if (started && ownsStartupCore(lifecycle)) {
                                         recordRenewalFailureCore(failureMessage(failure));
                                     }
-                                    return false;
+                                    return failedResult;
                                 }));
     }
 
@@ -2478,14 +2495,15 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
     private void renewOwnerLeaseOnHeartbeat(CompletableFuture<Void> lifecycle, long scheduledAt) {
         long firedNanos = monotonicNow.getAsLong();
         stateLane
-                .<Supplier<CompletionStage<Boolean>>>runAsync(
+                .<Supplier<CompletionStage<Supplier<CompletionStage<Boolean>>>>>runAsync(
                         () -> {
                             if (!started || !ownsStartupCore(lifecycle)) {
-                                return () -> CompletableFuture.completedFuture(false);
+                                return () ->
+                                        CompletableFuture.completedFuture(
+                                                () -> CompletableFuture.completedFuture(false));
                             }
                             heartbeatTask = null;
-                            Supplier<CompletionStage<Boolean>> renewal =
-                                    ownerLeaseRenewalCore(lifecycle);
+                            var renewal = ownerLeaseRenewalCore(lifecycle);
                             return () -> {
                                 recordLeaseLateness(
                                         Duration.ofNanos(Math.max(0L, firedNanos - scheduledAt)));
@@ -2501,7 +2519,8 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                                 startHeartbeatCore();
                                             }
                                             return null;
-                                        }));
+                                        }))
+                .thenCompose(Supplier::get);
     }
 
     private void recordSuccessfulRenewalCore(

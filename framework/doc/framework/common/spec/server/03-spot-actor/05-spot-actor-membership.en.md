@@ -263,7 +263,12 @@ doesn't secretly move or destroy an Actor.
 
 `JoinSpot` takes the global Spot ID of the User Spot to move to.
 `JoinEntrySpot` doesn't take a target node RID. The framework finds the
-target Spot and owner node to use. If the Actor's and target Spot's owner
+target Spot and owner node to use. The target node of `JoinEntrySpot` is chosen by applying conditions 1-5 of
+[MeshNode §5.2](03-mesh-node.en.md) to the Actor's Mesh and stable type. Candidates are nodes that register an
+Entry Spot type accepting that Actor stable type (descriptor `entryAccepted` is `true`); the Actor's current node
+is a candidate under the same conditions. The framework does not prefer the current node and applies the
+node-wide placement weight to the remaining candidates. If the selected node is the Actor's current node, the
+Join is handled as a same-node Join; if there is no candidate, it ends with `Unavailable`. If the Actor's and target Spot's owner
 node differ, Actor relocation is also performed within the same Join
 operation. The framework handles same-node Actor Join directly through a
 single local Join path and submits neither a Mesh `actorJoin` request nor a

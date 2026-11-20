@@ -991,6 +991,7 @@ final class EntrySpotActorDispatchTests {
                             RoutingId.from("entry-node"),
                             backend.entrySpot.spotId(),
                             1,
+                            1,
                             List.of(packetName, payload))
                     .toCompletableFuture()
                     .get(5, TimeUnit.SECONDS);
@@ -1035,6 +1036,7 @@ final class EntrySpotActorDispatchTests {
                     .sendToSpot(
                             RoutingId.from("entry-node"),
                             backend.entrySpot.spotId(),
+                            1,
                             1,
                             List.of(packetName, payload))
                     .toCompletableFuture()
@@ -2229,7 +2231,11 @@ final class EntrySpotActorDispatchTests {
 
         @Override
         public CompletionStage<Void> sendToSpot(
-                RoutingId targetNodeRid, String spotId, long spotGeneration, List<Message> parts) {
+                RoutingId targetNodeRid,
+                String spotId,
+                long spotGeneration,
+                long targetNodeGeneration,
+                List<Message> parts) {
             routes.add(
                     new ZLinkBackendReceived(
                             ZLinkBackendRequestResult.OK,

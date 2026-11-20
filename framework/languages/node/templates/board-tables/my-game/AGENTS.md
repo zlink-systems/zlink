@@ -29,6 +29,12 @@ The project layout and feature procedure below describe where to add gameplay. T
 
 > **Documentation and package versions.** The [ZLink documentation](https://docs.zlink.systems/), [Node.js guide](https://docs.zlink.systems/node/guide/server/), [API reference](https://docs.zlink.systems/node/reference/), and [agent index](https://docs.zlink.systems/llms.txt) are the public documentation entry points. When a current guide describes a newer release, check its API against the package pinned in `package.json`.
 
+## Client connection
+
+Use the [README client connection section](README.md#client-connection) for the client installation table and minimal TypeScript example. The Session `players` STREAM listener defaults to `ws://127.0.0.1:0` in `server/config/session.json` (WebSocket root path `/`, OS-assigned port); use the actual endpoint from the Session's `READY` output. Table mesh listeners and Redis are not game client endpoints. Loopback and the Docker runner's shared network namespace limit default reachability; an external client needs a running deployment with a reachable listener and exposed port. HTTPS browser pages need `wss://`, which is not configured by default.
+
+Follow `e2e/client.mts`: connect, register a `TableView` receiver, send `JoinTableRequest(playerId, tableId)` with `send(...).submit()`, and receive the seating result as a push. Do not turn this first packet into a request/reply operation. After joining, `SessionInfoRequest` returns `SessionInfo` through `request(...).submit()`. Use this template's DTOs and packet names instead of the Engine Lobby sample contract, retain the default JSON codec, and validate identity before binding when adding authentication. Check public connector source and the package pinned in `package.json` before changing the example; keep the README and this guide consistent.
+
 ## Development commands
 
 Default builds and e2e run nodes and the runner in Docker without a host Node.js installation. Run these commands from this directory.
