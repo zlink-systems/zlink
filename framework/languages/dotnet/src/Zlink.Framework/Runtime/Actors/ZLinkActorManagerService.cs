@@ -633,17 +633,8 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
             innerException
         );
 
-    //  A compatible/live target: serving, a server, placeable, has an Entry
-    //  Spot, and advertises the Actor type. Capacity is a separate axis so an
-    //  no eligible target can host a new Actor, so the caller sees Unavailable.
-    //  Joins and relocations of an existing Actor use this condition.
-    internal static bool IsCompatibleCandidate(
-        ZLinkMeshNodeDescriptor candidate,
-        string actorType
-    ) => FindActorCapability(candidate, actorType) is not null;
-
-    //  The one new-Actor creation candidate filter: a compatible target whose
-    //  registered Entry Spot type accepts the Actor type (Actor model §6.3).
+    //  Creation and Entry Spot Join share the registered Entry Spot's acceptance
+    //  of the Actor stable type (Actor model §6.3, membership §4).
     private static bool IsCreationCandidate(ZLinkMeshNodeDescriptor candidate, string actorType) =>
         FindActorCapability(candidate, actorType) is { EntryAccepted: true };
 
@@ -677,7 +668,7 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
             < candidate.Capacity.Actors.Limit;
 
     internal static bool IsEligibleCandidate(ZLinkMeshNodeDescriptor candidate, string actorType) =>
-        IsCompatibleCandidate(candidate, actorType) && HasActorCapacity(candidate);
+        IsCreationCandidate(candidate, actorType) && HasActorCapacity(candidate);
 
     private static List<ZLinkMeshNodeDescriptor> FilterRouteReadyCandidates(
         ZLinkSpotNodeRuntime source,
