@@ -18,6 +18,8 @@
 #include "runtime/client_server/client_server_location_runtime.hpp"
 #include "runtime/mesh/user_spot_terminal_mapping.hpp"
 #include "runtime/streams/stream_runtime.hpp"
+#include "runtime/streams/stream_host_service.hpp"
+#include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/dispatch/coroutine_executor.hpp"
 #include "../support/owner_lease_time_store.hpp"
 
@@ -5314,6 +5316,82 @@ TEST (ZLinkFrameworkStoreLocationResolvers, AppStreamHostStartsAndStopsTcpListen
     ASSERT_NE (nullptr, client_ptr);
     EXPECT_TRUE (client_ptr->observed) << client_ptr->last_error_message ();
 }
+
+#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
+TEST (ZLinkFrameworkStoreLocationResolvers, ForcedStreamCloseCannotOutliveReader)
+{
+    namespace fw = zlink::framework;
+    fw::detail::configure_stream_dispatch_executor ();
+    struct executor_guard_t
+    {
+        ~executor_guard_t () { fw::detail::shutdown_stream_dispatch_executor (); }
+    } executor_guard;
+    fw::service_collection_t services;
+    fw::handler_registry_t handlers;
+    fw::serializer_registry_t serializers;
+    auto builder = fw::test::runtime_failure_builder ();
+    services.add_singleton<fw::detail::actor_gateway_runtime_t> ();
+    services.add_factory<fw::session_actor_manager_t> (
+      [] (fw::service_provider_t &scope) {
+          return std::make_unique<fw::session_actor_manager_t> (
+            scope.get_required<fw::detail::actor_gateway_runtime_t> ().manager ());
+      },
+      fw::service_lifetime_t::scoped);
+    services.add_singleton<echo_stream_session_t> ();
+    fw::zlink_framework_options_t options (services, handlers, serializers, builder);
+    options.add_stream_node ("shutdown-race")
+      .bind ("tcp://127.0.0.1:0")
+      .register_session ("shutdown-session");
+    options.apply ();
+    auto provider = services.build_provider ();
+    auto runtime = fw::detail::stream_runtime_t::from (builder);
+    auto statuses = std::make_shared<fw::runtime::listener_status_registry_t> ();
+    fw::runtime::stream_host_service_t host (
+      std::make_shared<fw::runtime::runtime_failure_collector_t> (), runtime, runtime.snapshots (),
+      {{"shutdown-session",
+        [] (fw::service_provider_t &scope) -> fw::packet_stream_session_t & {
+            return scope.get_required<echo_stream_session_t> ();
+        }}},
+      std::chrono::seconds (30), nullptr, {}, statuses);
+    host.start (provider);
+
+    std::promise<std::pair<std::weak_ptr<void>, std::weak_ptr<void>>> registered;
+    auto observed = registered.get_future ();
+    std::promise<bool> paused;
+    auto reached_pause = paused.get_future ();
+    std::promise<void> resume;
+    auto resumed = resume.get_future ().share ();
+    auto force_close = fw::runtime::stream_host_service_test_access_t::observe_shutdown (
+      host,
+      {[&] (auto listener, auto connection) { registered.set_value ({listener, connection}); },
+       [&] (bool in_lane) {
+           paused.set_value (in_lane);
+           resumed.wait ();
+       }});
+    boost::asio::io_context io;
+    boost::asio::ip::tcp::socket client (io);
+    const auto endpoint = statuses->find (fw::listener_kind_t::stream, "shutdown-race")->endpoint;
+    const auto port =
+      static_cast<unsigned short> (std::stoi (endpoint.substr (endpoint.rfind (':') + 1)));
+    client.connect ({boost::asio::ip::make_address ("127.0.0.1"), port});
+    ASSERT_EQ (std::future_status::ready, observed.wait_for (std::chrono::seconds (5)));
+    auto [listener, connection] = observed.get ();
+    auto forced = std::async (std::launch::async, std::move (force_close));
+    ASSERT_EQ (std::future_status::ready, reached_pause.wait_for (std::chrono::seconds (5)));
+    const bool in_lane = reached_pause.get ();
+    client.close ();
+    // Outside the registry lane the reader can finish before the forced post.
+    // Inside it, unregister must wait for the submission to finish.
+    if (!in_lane)
+        host.stop ();
+    resume.set_value ();
+    forced.get ();
+    host.stop ();
+    EXPECT_TRUE (connection.expired ());
+    EXPECT_TRUE (listener.expired ());
+    provider.close ();
+}
+#endif
 
 /* The descriptor owner order checks above rely on this observation: only the
  * observed flow's reads count, and a wrong order or a read from another flow
