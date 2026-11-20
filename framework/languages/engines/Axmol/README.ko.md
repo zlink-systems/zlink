@@ -14,7 +14,7 @@ Packet 이름과 JSON field는 [engine-lobby sample contract](https://github.com
 
 - Axmol 2.3.0 source tree (`AX_ROOT`)
 - C++20 compiler와 CMake 3.20 이상
-- ZLink C++ framework package 0.22.0 (`zlink_framework` CMake config)
+- 이 connector source와 같은 release의 ZLink C++ framework package (`zlink_framework` CMake config)
 - `nlohmann_json` CMake package
 - `framework/languages/cpp/connector/engines/axmol`의 connector source
 

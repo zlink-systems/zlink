@@ -166,8 +166,7 @@ The effective size of one transmitted chunk is the smallest of three values — 
 setting `RelocationPayloadChunkLimit` (encoded size of one chunk, default 256 KiB), the
 effective receive chunk limit the target advertised in a reply that already exists
 before the seal, and the effective in-flight budget of §5.3. On a path where no such
-negotiation reply exists (such as `JoinEntrySpot`, which has no approval round trip),
-the source uses a conservative 32 KiB chunk size that is safe in any deployment.
+negotiation reply exists, the source uses a conservative 32 KiB chunk size that is safe in any deployment.
 
 The source doesn't put the existing queue prefix and timers fixed by capture on the
 relay lane again. Relay must not recreate this saved-work reference, and the target must
