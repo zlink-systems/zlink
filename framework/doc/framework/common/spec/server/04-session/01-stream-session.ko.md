@@ -238,7 +238,7 @@ Heartbeat interval과 timeout은 양수이고 timeout이 interval보다 커야 �
 세션이 닫힐 때의 종료 사유는
 [Stream Connector §6.2](../../stream-connector/32-stream-connector.ko.md#62-종료-사유)의
 닫힌 집합과 정합하며, 계기는
-[runtime-metrics §4](../06-observability/02-runtime-metrics.ko.md)가 소유한다.
+[runtime-metrics §6](../06-observability/02-runtime-metrics.ko.md)가 소유한다.
 
 ## 8. Session에서 Actor로
 

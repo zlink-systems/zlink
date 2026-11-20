@@ -276,7 +276,7 @@ The heartbeat interval and timeout must be positive, and the timeout must be gre
 The termination reason when a session closes matches the closed set in
 [Stream Connector §6.2](../../stream-connector/32-stream-connector.en.md#62-close-reason),
 and the corresponding instrument is owned by
-[runtime-metrics §4](../06-observability/02-runtime-metrics.en.md).
+[runtime-metrics §6](../06-observability/02-runtime-metrics.en.md).
 
 ## 8. From Session to Actor
 
