@@ -2480,18 +2480,23 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     signal?: AbortSignal
   ): Promise<ZLinkOwnerLeaseReleaseResult> {
     const key = ownerKey(token.ownerId);
-    const current = await this.provider.read(key, signal);
-    if (current.kind === 'missing') return 'stale';
-    const record = decodeOwnerRecord(current.value.bytes);
-    if (BigInt(record.leaseGeneration) !== token.leaseGeneration) return 'stale';
-    const result = await this.provider.write(
-      {
-        conditions: [{ kind: 'version', key, expected: current.value.version }],
-        mutations: [{ kind: 'delete', key }]
-      },
-      signal
-    );
-    return result.kind === 'applied' ? 'released' : 'stale';
+    // 'stale' means the token no longer holds the lease. A version conflict on the same
+    // generation is a renewal of this token that landed first, so read again and retry.
+    for (;;) {
+      const current = await this.provider.read(key, signal);
+      if (current.kind === 'missing') return 'stale';
+      const record = decodeOwnerRecord(current.value.bytes);
+      if (BigInt(record.leaseGeneration) !== token.leaseGeneration) return 'stale';
+      const result = await this.provider.write(
+        {
+          conditions: [{ kind: 'version', key, expected: current.value.version }],
+          mutations: [{ kind: 'delete', key }]
+        },
+        signal
+      );
+      if (result.kind === 'applied') return 'released';
+      signal?.throwIfAborted();
+    }
   }
 
   override async updateMeshNode(
