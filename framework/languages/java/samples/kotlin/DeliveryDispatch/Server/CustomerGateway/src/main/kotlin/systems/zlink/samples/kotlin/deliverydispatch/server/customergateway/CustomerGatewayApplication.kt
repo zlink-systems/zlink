@@ -26,29 +26,31 @@ import systems.zlink.samples.kotlin.deliverydispatch.server.customergateway.spot
 )
 class CustomerGatewayApplication {
     @Bean
-    fun customerGatewayFramework(): ZLinkFrameworkConfigurer = ZLinkFrameworkConfigurer { options ->
-        options.useCoroutineHandlers(Dispatchers.Default)
-        options.addHandlersFromPackageOf<CustomerGatewayApplication>()
-        options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
+    fun customerGatewayFramework(locations: ZLinkRedisLocationStore): ZLinkFrameworkConfigurer =
+        ZLinkFrameworkConfigurer { options ->
+            options.addLocationStore(locations)
+            options.useCoroutineHandlers(Dispatchers.Default)
+            options.addHandlersFromPackageOf<CustomerGatewayApplication>()
+            options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
 
-        val node = options.addRouteMesh(SampleNames.CustomerSpotMesh)
-        node
-            .listen(SampleTopology.CustomerSpotRouterEndpoint)
-            .setRoutingIdPrefix("delivery-customer")
-        node.objects().server().addEntrySpot<CustomerEntrySpot>().addActorFactory<
-            CustomerActor,
-            CustomerActorFactory,
-        >(
-            SampleNames.CustomerActorType
-        ) {
-            disableRelocation()
+            val node = options.addRouteMesh(SampleNames.CustomerSpotMesh)
+            node
+                .listen(SampleTopology.CustomerSpotRouterEndpoint)
+                .setRoutingIdPrefix("delivery-customer")
+            node.objects().server().addEntrySpot<CustomerEntrySpot>().addActorFactory<
+                CustomerActor,
+                CustomerActorFactory,
+            >(
+                SampleNames.CustomerActorType
+            ) {
+                disableRelocation()
+            }
+            options
+                .addStreamNode(SampleNames.CustomerStreamNode)
+                .bind(SampleTopology.CustomerStreamEndpoint)
+                .enableActorDispatch()
+                .registerSession<CustomerSession>()
         }
-        options
-            .addStreamNode(SampleNames.CustomerStreamNode)
-            .bind(SampleTopology.CustomerStreamEndpoint)
-            .enableActorDispatch()
-            .registerSession<CustomerSession>()
-    }
 
     @Bean fun locationStore(): ZLinkRedisLocationStore = SampleLocationStore.create()
 
