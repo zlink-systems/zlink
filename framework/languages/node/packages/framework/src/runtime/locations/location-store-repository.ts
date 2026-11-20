@@ -571,6 +571,50 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           current: snapshot,
           membershipFailure: membershipConditions.failureKind
         };
+      let deletedCapacity: CapacityRecord | undefined;
+      if (capacityRead !== undefined) {
+        const capacity =
+          capacityRead.kind === 'found'
+            ? decodeJson<CapacityRecord>(capacityRead.value.bytes)
+            : emptyCapacityRecord();
+        try {
+          deletedCapacity = {
+            active: subtractCapacity(capacity.active, record.snapshot.allocation.capacity),
+            pending: capacity.pending
+          };
+        } catch (error) {
+          if (
+            !(error instanceof ZLinkFrameworkException) ||
+            error.kind !== ZLinkFrameworkErrorKind.DataLost
+          )
+            throw error;
+          const observed = await this.provider.read(rowKey, signal);
+          if (observed.kind === 'missing') {
+            this.ownerLeaseReleaseDelay.clearIfUnchanged(
+              releaseDelayScope,
+              releaseDelayObservation
+            );
+            return { kind: 'conflict', current: { kind: 'missing', storeNow: observed.storeNow } };
+          }
+          const observedRecord = decodeAuthorityRecord(observed.value.bytes);
+          if (
+            observed.value.version.value !== current.value.version.value ||
+            observedRecord.snapshot.objectGeneration !== record.snapshot.objectGeneration ||
+            observedRecord.snapshot.authorityOwnerGeneration !==
+              record.snapshot.authorityOwnerGeneration
+          )
+            return {
+              kind: 'conflict',
+              current: await this.projectAuthority(
+                observedRecord,
+                observed.value.version,
+                observed.value.storeNow,
+                signal
+              )
+            };
+          throw error;
+        }
+      }
       const result = await this.provider.write(
         {
           conditions: [
@@ -599,18 +643,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
                   {
                     kind: 'put',
                     key: capacityRowKey,
-                    bytes: encodeJson({
-                      active: subtractCapacity(
-                        capacityRead?.kind === 'found'
-                          ? decodeJson<CapacityRecord>(capacityRead.value.bytes).active
-                          : emptyCapacityRecord().active,
-                        record.snapshot.allocation.capacity
-                      ),
-                      pending:
-                        capacityRead?.kind === 'found'
-                          ? decodeJson<CapacityRecord>(capacityRead.value.bytes).pending
-                          : emptyCapacityRecord().pending
-                    } satisfies CapacityRecord)
+                    bytes: encodeJson(deletedCapacity!)
                   }
                 ]
               : [
