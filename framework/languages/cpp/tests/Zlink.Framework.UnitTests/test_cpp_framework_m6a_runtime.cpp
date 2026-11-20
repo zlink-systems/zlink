@@ -17,6 +17,11 @@
 #include "runtime/fanout/raw_fanout_owner.hpp"
 #include "runtime/client_server/raw_client_server_owner.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
+#include "runtime/locations/authority_key_codec.hpp"
+#include "runtime/locations/in_memory_location_store.hpp"
+#include "runtime/locations/live_location_reader.hpp"
+#include "runtime/mesh/mesh_node_runtime.hpp"
+#include "runtime/spots/spot_runtime.hpp"
 #include <zlink/Contracts/Core/context.hpp>
 #include <zlink/Contracts/Core/routing_id.hpp>
 #include <zlink/Contracts/Sockets/message_socket_contracts.hpp>
@@ -43,6 +48,7 @@
 #include <map>
 #include <memory>
 #include <stdexcept>
+#include <stop_token>
 #include <string>
 #include <thread>
 #include <type_traits>
@@ -3724,16 +3730,47 @@ void verify_authority_generation_request (std::string_view path, bool invalidate
         assert (!result.ready && !result.failed);
         if (invalidated)
             assert (await_task (source.expire_requests (deadline + 1s)) == 0);
-    } else if (path == "actor-create" || path == "instance") {
+    } else if (path == "actor-create" || path == "instance" || path == "user-spot-create"
+               || path == "user-spot-close") {
         std::promise<foundation::operation_terminal_t> promise;
         auto terminal = promise.get_future ();
         auto callback = [&promise] (auto result, auto) { promise.set_value (result); };
         const auto local = source.topology ().local_descriptor ();
+        const auto unix_deadline = static_cast<std::uint64_t> (
+          std::chrono::duration_cast<std::chrono::milliseconds> (
+            (std::chrono::system_clock::now () + 2s).time_since_epoch ())
+            .count ());
+        // User Spot create and close carry the reservation or close target's owner G.
         task_t<bool> pending =
           path == "actor-create"
             ? source.request_actor_create (remote.node_routing_id,
                                            actor_create_request (local, remote, "authority-actor"),
                                            2s, callback)
+          : path == "user-spot-create"
+            ? source.request_user_spot_create (
+                remote.node_routing_id,
+                protocol::user_spot_create_header_t{
+                  0,
+                  {local.lifecycle_generation, 92},
+                  local.node_routing_id,
+                  local.lifecycle_generation,
+                  "authority-spot",
+                  "room",
+                  {"authority-reservation", "authority-store", 1, 1, remote.node_routing_id,
+                   remote.lifecycle_generation, "authority-owner", 1, 1},
+                  unix_deadline},
+                2s, callback)
+          : path == "user-spot-close"
+            ? source.request_user_spot_close (remote.node_routing_id,
+                                              protocol::user_spot_close_header_t{
+                                                0,
+                                                {local.lifecycle_generation, 93},
+                                                local.node_routing_id,
+                                                local.lifecycle_generation,
+                                                {"authority-spot", 1, remote.node_routing_id,
+                                                 remote.lifecycle_generation, 1, "authority-store"},
+                                                unix_deadline},
+                                              std::chrono::steady_clock::now () + 2s, callback)
             : source.request_instance_spot_activation (
                 remote.node_routing_id,
                 protocol::instance_spot_activation_header_t{
@@ -3758,9 +3795,10 @@ void verify_authority_generation_request (std::string_view path, bool invalidate
         assert (terminal.get ()
                 == (invalidated ? foundation::operation_terminal_t::route_unavailable
                                 : foundation::operation_terminal_t::timed_out));
-        // Actor create reports registration; Instance Spot reports the failed admission.
+        // Actor and User Spot create/close report registration; Instance Spot reports the
+        // failed admission.
         const auto submitted = pending.result ();
-        if (path == "actor-create")
+        if (path != "instance")
             assert (submitted && submitted.value ());
         else
             assert (!submitted);
@@ -3803,6 +3841,67 @@ void verify_authority_generation_request (std::string_view path, bool invalidate
     assert (request_submissions.load () == 0);
     count_request_submissions.store (false);
 #endif
+    source.close ();
+    target.close ();
+}
+
+// Submit/completion section 5: a Spot or Actor send names the owner generation G
+// its authority resolved. A ready peer of another generation is not that route:
+// the send is NotConnected and no frame reaches the peer.
+void verify_authority_generation_send ()
+{
+    mesh::raw_mesh_node_owner_t source (zlink::framework::test::runtime_failure_options (
+      mesh::raw_mesh_node_options_t{descriptor ("authority-send-source")}));
+    mesh::raw_mesh_node_owner_t target (zlink::framework::test::runtime_failure_options (
+      mesh::raw_mesh_node_options_t{descriptor ("authority-send-target")}));
+    source.start ();
+    target.start ();
+    const auto remote = target.topology ().local_descriptor ();
+    admit_pair (source, target, remote);
+    const auto admitted_generation = remote.lifecycle_generation;
+    const auto authority_generation = admitted_generation + 1;
+    const protocol::application_payload_t payload{"AuthorityGenerationSend", "application/json",
+                                                  bytes ("{}")};
+    const auto send = [&] (bool spot, std::uint64_t generation) {
+        auto pending =
+          spot
+            ? source.send_to_spot_result (
+                remote.node_routing_id, "source-spot",
+                protocol::spot_route_fence_t{"spot", 1, remote.node_routing_id, generation, 1, 1},
+                payload)
+            : source.send_to_actor_result (
+                remote.node_routing_id, std::nullopt,
+                protocol::actor_route_fence_t{"actor", 1, remote.node_routing_id, generation, 1, 1},
+                payload);
+        return await_task (std::move (pending));
+    };
+    const auto received_by = [&] (std::chrono::steady_clock::duration window) {
+        std::size_t received = 0;
+        const auto until = std::chrono::steady_clock::now () + window;
+        while (std::chrono::steady_clock::now () < until) {
+            if (await_task (target.pump_one (mesh::service_liveness_registry_t::clock_t::now ()))
+                == mesh::raw_mesh_pump_result_t::application)
+                ++received;
+            std::this_thread::yield ();
+        }
+        return received;
+    };
+
+    // Authority G1, admitted peer G0: rejected before submission.
+    assert (send (true, authority_generation) == zlink::submit_result_t::not_connected);
+    assert (send (false, authority_generation) == zlink::submit_result_t::not_connected);
+    assert (peer_ready (source, remote.node_routing_id));
+    assert (received_by (200ms) == 0);
+    assert (!target.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 4096));
+
+    // The same peer at the authority generation is the route; both frames arrive.
+    assert (send (true, admitted_generation) == zlink::submit_result_t::ok);
+    assert (send (false, admitted_generation) == zlink::submit_result_t::ok);
+    std::size_t delivered = 0;
+    const auto deadline = std::chrono::steady_clock::now () + 2s;
+    while (delivered < 2 && std::chrono::steady_clock::now () < deadline)
+        delivered += received_by (10ms);
+    assert (delivered == 2);
     source.close ();
     target.close ();
 }
@@ -4317,11 +4416,37 @@ void verify_actor_join_mismatched_correlation_reply_classifies_protocol_error ()
     target.close ();
 }
 
+// The receiving admission owner reads this target Spot Authority row. Only
+// the target Spot key resolves; an Actor Authority read finds no row.
+class actor_join_target_authority_store_t final : public runtime::in_memory_location_repository_t
+{
+  public:
+    explicit actor_join_target_authority_store_t (zlink::framework::authority_snapshot_t target) :
+        _target (std::move (target))
+    {
+    }
+
+    zlink::framework::task_t<zlink::framework::authority_read_result_t>
+    read_authority_core (zlink::framework::authority_key_t key, std::stop_token) override
+    {
+        using read_t = zlink::framework::authority_read_result_t;
+        if (key.value == runtime::spot_authority_key ("spot-5").value)
+            return zlink::framework::task_t<read_t> (
+              zlink::framework::result_t<read_t>::success (read_t{_target}));
+        return zlink::framework::task_t<read_t> (zlink::framework::result_t<read_t>::success (
+          read_t{zlink::framework::authority_missing_t{std::chrono::system_clock::now ()}}));
+    }
+
+  private:
+    zlink::framework::authority_snapshot_t _target;
+};
+
 // Matching target RID and lifecycle generation permits sender admission.
 // The receiving owner independently rejects a stale target authority fence;
 // raw ingress must preserve that request for the receiving admission owner.
 void verify_actor_join_target_fence_reaches_admission ()
 {
+    namespace zf = zlink::framework;
     mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
       .descriptor = descriptor ("actor-join-thin-source"),
       .runtime_failures =
@@ -4350,20 +4475,66 @@ void verify_actor_join_target_fence_reaches_admission ()
     assert (claim && claim->records.size () == 1);
     assert (claim->records.front ()->correlation
             && *claim->records.front ()->correlation == request.correlation);
-    // This raw fixture models the receiving admission owner with a newer authority fence.
-    auto current_target = request.target_spot;
-    ++current_target.authority_owner_generation;
     const auto incoming = protocol::decode_actor_join_28 (
       zlink::framework::detail::backend::copy_binding_parts (claim->records.front ()->parts ()));
     assert (incoming.target_spot.target_node_rid == target_descriptor.node_routing_id);
     assert (incoming.target_spot.target_node_generation == target_descriptor.lifecycle_generation);
-    const auto admission_result = incoming.target_spot.expected_authority_owner_generation
-                                      == current_target.authority_owner_generation
-                                    ? protocol::actor_join_result_t::accepted
-                                    : protocol::actor_join_result_t::rejected;
-    assert (admission_result == protocol::actor_join_result_t::rejected);
-    assert (
-      target.reply_actor_join ((*claim->records.front ()), admission_result, std::nullopt, 0, 0));
+    // The receiving admission owner's Store holds a newer target authority than the request.
+    const auto target_rid = zlink::routing_id_t::from (target_descriptor.node_routing_id);
+    actor_join_target_authority_store_t store (zf::authority_snapshot_t{
+      .store_version = "actor-join-thin-target-v1",
+      .object_generation = request.target_spot.object_generation,
+      .authority_owner_generation = request.target_spot.authority_owner_generation + 1,
+      .owner = zf::location_owner_token_t{"actor-join-thin-target-owner",
+                                          static_cast<std::int64_t> (
+                                            request.target_spot.owner_lease_generation)},
+      .store_now = std::chrono::system_clock::now (),
+      .allocation = {
+        .state = zf::placement_allocation_state_t::active,
+        .object_kind = zf::placement_object_kind_t::user_spot,
+        .stable_type = "target",
+        .target = {.mesh_name = "m6a-mesh",
+                   .node_rid = zf::node_rid_t::from_string (target_rid.to_string ()),
+                   .node_lifecycle_generation = target_descriptor.lifecycle_generation,
+                   .owner = zf::location_owner_token_t{
+                     "actor-join-thin-target-owner",
+                     static_cast<std::int64_t> (request.target_spot.owner_lease_generation)}}}});
+    auto spot_state = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::spot_node_builder_state_t> ("actor-join-thin-target");
+    zlink::framework::detail::spot_node_runtime_t spots (spot_state);
+    zf::service_collection_t services;
+    services.add_factory<runtime::live_location_reader_t> (
+      [&store] (zf::service_provider_t &) {
+          return std::make_unique<runtime::live_location_reader_t> (store);
+      },
+      zf::service_lifetime_t::singleton);
+    auto provider = services.build_provider ();
+    spots.bind_service_provider (provider);
+    // The receiving owner judges the fence the wire carried, not the sender's copy.
+    const protocol::actor_join_request_t received{
+      incoming.correlation,
+      protocol::actor_route_fence_t{
+        incoming.actor.id, incoming.actor.generation, incoming.actor.target_node_rid,
+        incoming.actor.target_node_generation, incoming.actor.expected_authority_owner_generation,
+        incoming.actor.expected_owner_lease_generation},
+      incoming.entry,
+      protocol::spot_route_fence_t{incoming.target_spot.id, incoming.target_spot.generation,
+                                   incoming.target_spot.target_node_rid,
+                                   incoming.target_spot.target_node_generation,
+                                   incoming.target_spot.expected_authority_owner_generation,
+                                   incoming.target_spot.expected_owner_lease_generation}};
+    const auto admitted = zlink::framework::detail::admit_wire_actor_join (
+      spot_state, target_rid, received, std::nullopt, nullptr);
+    assert (admitted.join_result != protocol::actor_join_result_t::accepted);
+    assert (!admitted.spot);
+    assert (admitted.terminal_result
+            == static_cast<std::uint32_t> (protocol::request_terminal_result::protocolError));
+    assert (admitted.failure_code
+            == static_cast<std::uint32_t> (protocol::framework_error_code::requestProtocolError));
+    assert (target.reply_actor_join ((*claim->records.front ()), admitted.join_result,
+                                     admitted.spot, admitted.membership_epoch,
+                                     admitted.receive_chunk_limit_bytes, admitted.terminal_result,
+                                     admitted.failure_code, admitted.application_reply));
     assert (target.mailbox ().release (*claim));
 
     const auto deadline = std::chrono::steady_clock::now () + 2s;
@@ -4374,7 +4545,13 @@ void verify_actor_join_target_fence_reaches_admission ()
     }
     join_thread.join ();
     assert (settled.load (std::memory_order_acquire));
-    assert (outcome.reply && outcome.reply->join_result == protocol::actor_join_result_t::rejected);
+    // The source observes the receiving owner's rejection, not a fixture-computed one.
+    assert (outcome.reply);
+    assert (outcome.reply->header.correlation == request.correlation);
+    assert (outcome.reply->header.terminal_result == admitted.terminal_result);
+    assert (outcome.reply->header.failure_code == admitted.failure_code);
+    assert (!outcome.reply->spot);
+    spots.release_native_handles ();
     source.close ();
     target.close ();
 }
@@ -5162,9 +5339,11 @@ int main (int argc, char **argv)
     verify_actor_join_rejected_reply_completes_typed_failure ();
     verify_actor_join_wrong_source_generation_is_fenced ();
     verify_actor_join_mismatched_correlation_reply_classifies_protocol_error ();
-    for (const auto path : {"join", "prepare", "spot", "actor", "actor-create", "instance"})
+    for (const auto path : {"join", "prepare", "spot", "actor", "actor-create", "instance",
+                            "user-spot-create", "user-spot-close"})
         for (const bool invalidated : {false, true})
             verify_authority_generation_request (path, invalidated);
+    verify_authority_generation_send ();
     verify_actor_join_target_fence_reaches_admission ();
     return 0;
 }
