@@ -35,7 +35,7 @@ final class ZLinkChannelDispatchReporter {
             ZLinkBackendRouterSocket router,
             ZLinkBackendReceived received,
             ZLinkChannelEnvelope.Header header,
-            Message reply,
+            ZLinkFrameworkMultipartView reply,
             ZLinkChannelEnvelope.PreparedNames channelNames,
             ZLinkChannelEnvelope.PreparedNames names) {
         replyPartsAndClose(
