@@ -11,6 +11,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.function.BooleanSupplier;
 
 public interface ZLinkBackendStreamSocket extends ZLinkBackendSocket, ZLinkBackendReceiveSocket {
     /** Returns the actual endpoint selected by the most recent bind. */
@@ -29,6 +30,24 @@ public interface ZLinkBackendStreamSocket extends ZLinkBackendSocket, ZLinkBacke
 
     default void disconnectPeer(RoutingId routingId) {
         // Alternate test backends may not own a native STREAM transport.
+    }
+
+    /** Requests a physical peer close for a specific bound Actor slot. */
+    default CompletionStage<Void> disconnectBoundSessionPeerAsync(
+            RoutingId routingId, int actorSlot) {
+        try {
+            disconnectPeer(routingId);
+            return CompletableFuture.completedFuture(null);
+        } catch (RuntimeException | Error failure) {
+            return CompletableFuture.failedFuture(failure);
+        }
+    }
+
+    /** Requests a bound-peer close if the command is still pending when it reaches its lane. */
+    default CompletionStage<Void> disconnectBoundSessionPeerAsync(
+            RoutingId routingId, int actorSlot, BooleanSupplier requestPending) {
+        if (!requestPending.getAsBoolean()) return CompletableFuture.completedFuture(null);
+        return disconnectBoundSessionPeerAsync(routingId, actorSlot);
     }
 
     /**

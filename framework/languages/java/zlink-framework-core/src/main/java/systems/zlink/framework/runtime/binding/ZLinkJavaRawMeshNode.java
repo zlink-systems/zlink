@@ -125,6 +125,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
@@ -4220,14 +4221,18 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         return port.send(requireStarted(), targetNodeRid, List.of(record));
     }
 
-    private volatile java.util.function.Function<
-                    ZLinkServiceM6BWireCodec.BoundSessionClose, CompletionStage<Void>>
+    private volatile BiFunction<
+                    ZLinkServiceM6BWireCodec.BoundSessionClose,
+                    BooleanSupplier,
+                    CompletionStage<Void>>
             boundSessionCloseHandler;
 
     @Override
     public void setBoundSessionCloseHandler(
-            java.util.function.Function<
-                            ZLinkServiceM6BWireCodec.BoundSessionClose, CompletionStage<Void>>
+            BiFunction<
+                            ZLinkServiceM6BWireCodec.BoundSessionClose,
+                            BooleanSupplier,
+                            CompletionStage<Void>>
                     handler) {
         boundSessionCloseHandler = Objects.requireNonNull(handler);
     }
@@ -4242,9 +4247,17 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 session.sessionOwnerId(),
                 session.sessionOwnerLeaseGeneration())) return unconfirmedSessionFence();
         byte[] encoded = statefulWire.encodeBoundSessionClose(request);
-        if (request.session().sessionOwnerNodeRid().equals(routingId))
-            return acceptBoundSessionClose(statefulWire.decodeBoundSessionClose(encoded))
-                    .toCompletableFuture()
+        if (request.session().sessionOwnerNodeRid().equals(routingId)) {
+            var requestTerminal = new CompletableFuture<Void>();
+            acceptBoundSessionClose(
+                            statefulWire.decodeBoundSessionClose(encoded),
+                            () -> !requestTerminal.isDone())
+                    .whenComplete(
+                            (ignored, failure) -> {
+                                if (failure == null) requestTerminal.complete(null);
+                                else requestTerminal.completeExceptionally(failure);
+                            });
+            return requestTerminal
                     .orTimeout(timeout.toNanos(), TimeUnit.NANOSECONDS)
                     .handle(
                             (ignored, failure) -> {
@@ -4260,6 +4273,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                 }
                                 return (Void) null;
                             });
+        }
         var submitted =
                 requestApplication(
                         request.session().sessionOwnerNodeRid(), List.of(encoded), timeout, null);
@@ -4302,14 +4316,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     }
 
     private CompletionStage<Void> acceptBoundSessionClose(
-            ZLinkServiceM6BWireCodec.BoundSessionClose request) {
+            ZLinkServiceM6BWireCodec.BoundSessionClose request, BooleanSupplier requestPending) {
         var handler = boundSessionCloseHandler;
         if (handler == null)
             return CompletableFuture.failedFuture(
                     new ZLinkFrameworkException(
                             ZLinkFrameworkErrorKind.UNAVAILABLE, "Session owner is unavailable"));
         try {
-            return handler.apply(request);
+            return handler.apply(request, requestPending);
         } catch (RuntimeException failure) {
             return CompletableFuture.failedFuture(failure);
         }
@@ -4327,7 +4341,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             rejectProtocolRecord(inbound, "actor");
             return;
         }
-        acceptBoundSessionClose(request)
+        acceptBoundSessionClose(request, () -> true)
                 .whenComplete(
                         (ignored, failure) -> {
                             int[] result =

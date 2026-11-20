@@ -42,6 +42,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiFunction;
+import java.util.function.BooleanSupplier;
+import java.util.function.IntFunction;
 import java.util.function.LongFunction;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
@@ -1228,7 +1231,19 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     public CompletionStage<Void> closeCurrentBinding(
             ZLinkServiceM6BWireCodec.BoundSessionClose request,
             java.util.function.BooleanSupplier matchesPhysicalSession,
-            java.util.function.Supplier<CompletionStage<Void>> close) {
+            IntFunction<CompletionStage<Void>> close) {
+        return closeCurrentBinding(
+                request,
+                matchesPhysicalSession,
+                () -> true,
+                (actorSlot, ignoredPending) -> close.apply(actorSlot));
+    }
+
+    public CompletionStage<Void> closeCurrentBinding(
+            ZLinkServiceM6BWireCodec.BoundSessionClose request,
+            BooleanSupplier matchesPhysicalSession,
+            BooleanSupplier requestPending,
+            BiFunction<Integer, BooleanSupplier, CompletionStage<Void>> close) {
         return stateLane
                 .<CompletionStage<Void>>runAsync(
                         () -> {
@@ -1243,7 +1258,9 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                         systems.zlink.framework.errors.ZLinkFrameworkErrorKind
                                                 .UNAVAILABLE,
                                         "The requested session binding is no longer current");
-                            return close.get();
+                            return close.apply(
+                                    currentBoundActor(request.actorId()).actorSlot(),
+                                    requestPending);
                         })
                 .thenCompose(terminal -> terminal);
     }
