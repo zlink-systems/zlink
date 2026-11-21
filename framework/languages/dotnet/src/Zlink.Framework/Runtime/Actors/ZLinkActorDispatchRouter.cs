@@ -42,7 +42,8 @@ internal sealed class ZLinkActorDispatchRouter(
         ZlinkStreamHeader header,
         Message payload,
         bool relocationReplay,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        Action<ZLinkActorReply>? registerReply = null
     )
     {
         var state = await actorSessions
@@ -62,7 +63,8 @@ internal sealed class ZLinkActorDispatchRouter(
                 payload,
                 relocationReplay,
                 cancellationToken,
-                null
+                null,
+                registerReply
             )
             .ConfigureAwait(false);
     }
@@ -182,7 +184,8 @@ internal sealed class ZLinkActorDispatchRouter(
         Message payload,
         bool relocationReplay,
         CancellationToken cancellationToken,
-        RoutingId? sourceSessionRid
+        RoutingId? sourceSessionRid,
+        Action<ZLinkActorReply>? registerReply = null
     )
     {
         using var flow = ZLinkFlowContext.Enter(
@@ -196,17 +199,23 @@ internal sealed class ZLinkActorDispatchRouter(
         var replayAdmission = relocationReplay ? ZLinkSpotRelocationReplayScope.Current : null;
         return await state
             .ExecuteDispatchAsync(
-                ct =>
-                    SubmitByCurrentLocationForReplyAsync(
-                        actor,
-                        state,
-                        header,
-                        payload,
-                        relocationReplay,
-                        replayAdmission,
-                        ct,
-                        sourceSessionRid
-                    ),
+                async ct =>
+                {
+                    var reply = await SubmitByCurrentLocationForReplyAsync(
+                            actor,
+                            state,
+                            header,
+                            payload,
+                            relocationReplay,
+                            replayAdmission,
+                            ct,
+                            sourceSessionRid
+                        )
+                        .ConfigureAwait(false);
+                    // Register egress before releasing the Actor turn; admission is observed outside it.
+                    registerReply?.Invoke(reply);
+                    return reply;
+                },
                 countAsPendingRequest: true,
                 allowRelocationReplay: relocationReplay,
                 replayReservation: replayAdmission?.QueueReservation,
