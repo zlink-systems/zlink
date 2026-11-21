@@ -9,7 +9,7 @@ import type {
 } from '../../contracts';
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
 import type { ZLinkApplicationWorkClaim } from '../admission';
-import { zlinkMessageMetadata } from '../../contracts';
+import { ZLinkMessageMetadataEmpty, zlinkMessageMetadata } from '../../contracts';
 import { resolveMessageTypeForDecode } from '../../contracts/Common/HandlerMessageType';
 import {
   ZLinkRuntimeDispatchErrorAction as ZLinkDispatchErrorAction,
@@ -54,6 +54,7 @@ interface ZLinkRoutedSpotPacketContext {
   readonly channelName: string;
   readonly onAdmitted?: () => void;
   readonly contentType?: string;
+  readonly metadata?: ReadonlyMap<string, string> | Readonly<Record<string, string>>;
   readonly workOptions?: ZLinkSerialWorkOptions;
   readonly admissionTimeoutMs?: number;
   readonly signal?: AbortSignal;
@@ -197,6 +198,16 @@ export class ZLinkRoutedSpotPacketDispatch {
           const payload = decodePayload(
             resolveMessageTypeForDecode(currentRegistrations[0]?.messageType)
           );
+          const handlerContext = {
+            channelName: context.channelName,
+            contentType: context.contentType,
+            packetName: packetName!,
+            metadata:
+              context.metadata === undefined
+                ? ZLinkMessageMetadataEmpty
+                : zlinkMessageMetadata(context.metadata),
+            receivedAt
+          };
           for (const registration of currentRegistrations) {
             const handler = await resolveLifecycleHandler(
               current.spot,
@@ -210,13 +221,6 @@ export class ZLinkRoutedSpotPacketDispatch {
             resolveFirstHandlerTurn?.();
             resolveFirstHandlerTurn = undefined;
             context.activationRecord?.onHandlerTurnStarted?.();
-            const handlerContext = {
-              channelName: context.channelName,
-              contentType: context.contentType,
-              packetName: packetName!,
-              metadata: zlinkMessageMetadata({}),
-              receivedAt
-            };
             releaseApplicationJobPermitBeforeHandler();
             response = await handler.handle(current.spot, payload, handlerContext);
           }

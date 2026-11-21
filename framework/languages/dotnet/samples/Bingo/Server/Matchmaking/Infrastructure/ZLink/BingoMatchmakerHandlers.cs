@@ -1,5 +1,6 @@
 using Bingo.Server.Matchmaking.Application;
 using Bingo.Shared.Contracts;
+using Zlink.Framework.Contracts.Handlers;
 using Zlink.Framework.Contracts.Spots;
 using Zlink.Framework.Contracts.Timers;
 
@@ -10,6 +11,7 @@ internal sealed class ReserveBingoRoomHandler(IBingoMatchReservationStore reserv
 {
     public async ValueTask<ReserveBingoRoomRes> HandleAsync(
         BingoMatchmaker spot,
+        IZLinkMessageContext context,
         ReserveBingoRoomReq request,
         CancellationToken cancellationToken
     )

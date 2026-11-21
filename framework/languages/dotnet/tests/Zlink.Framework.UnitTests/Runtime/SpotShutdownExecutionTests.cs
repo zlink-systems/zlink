@@ -268,6 +268,7 @@ public sealed class SpotShutdownExecutionTests
     {
         public async ValueTask<string> HandleAsync(
             Target spot,
+            IZLinkMessageContext context,
             Hold request,
             CancellationToken cancellationToken
         )
