@@ -18,6 +18,7 @@ import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
+import java.util.function.UnaryOperator;
 
 /** A deterministic MVCC server with fault injection at the RPC boundary. */
 final class EtcdTestServer implements AutoCloseable {
@@ -30,6 +31,7 @@ final class EtcdTestServer implements AutoCloseable {
     final List<Long> deadlines = Collections.synchronizedList(new ArrayList<>());
     volatile BiConsumer<TxnRequest, StreamObserver<TxnResponse>> txnFault;
     volatile BiConsumer<RangeRequest, StreamObserver<RangeResponse>> rangeFault;
+    volatile UnaryOperator<AuthenticateResponse> authReply = UnaryOperator.identity();
     volatile long compacted;
     volatile long revision = 1;
     volatile long cluster = 42;
@@ -40,7 +42,8 @@ final class EtcdTestServer implements AutoCloseable {
     }
 
     EtcdTestServer(io.grpc.netty.shaded.io.netty.handler.ssl.SslContext tls) throws Exception {
-        var builder = NettyServerBuilder.forPort(0).maxInboundMessageSize(16 * 1024 * 1024);
+        // Unbounded here so that only the provider's own transport bounds reject a message.
+        var builder = NettyServerBuilder.forPort(0).maxInboundMessageSize(Integer.MAX_VALUE);
         if (tls != null) builder.sslContext(tls);
         server =
                 builder.addService(
@@ -73,19 +76,19 @@ final class EtcdTestServer implements AutoCloseable {
                                             AuthenticateRequest request,
                                             StreamObserver<AuthenticateResponse> out) {
                                         recordDeadline();
-                                        out.onNext(
-                                                AuthenticateResponse.newBuilder()
-                                                        .setToken(
-                                                                "token-"
-                                                                        + authCalls
-                                                                                .incrementAndGet())
-                                                        .build());
+                                        out.onNext(authReply.apply(authenticated()));
                                         out.onCompleted();
                                     }
                                 })
                         .build()
                         .start();
         clock(1000);
+    }
+
+    private AuthenticateResponse authenticated() {
+        return AuthenticateResponse.newBuilder()
+                .setToken("token-" + authCalls.incrementAndGet())
+                .build();
     }
 
     String endpoint() {

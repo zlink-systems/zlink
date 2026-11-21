@@ -766,11 +766,72 @@ final class ZLinkStreamRuntimeIngressTest {
                 message);
         List<String> expected =
                 Map.of(
-                                "DISCONNECTED", List.of("disconnected"),
+                                "DISCONNECTED", List.of("error:DISCONNECTED", "disconnected"),
                                 "transport failure",
                                         List.of("error:transport failure", "disconnected"))
                         .get(message);
         assertEquals(expected, session.transportClosed.get(5, TimeUnit.SECONDS));
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {0, 3, 4, 5})
+    void disconnectedReportsRawReasonOnceWithoutChangingCloseMetrics(int reason) throws Exception {
+        FakeStream stream = new FakeStream();
+        List<String> closeReasons = new CopyOnWriteArrayList<>();
+        try (var ignored = installClosedMetricSink(closeReasons)) {
+            runtimes.add(start(stream, 0));
+            stream.errorHandler.handle(PEER_A, MonitorEventType.CONNECTION_READY, 0, "ready");
+            TestSession session = TestSession.connected.get(5, TimeUnit.SECONDS);
+            stream.errorHandler.handle(PEER_A, MonitorEventType.DISCONNECTED, reason, "closed");
+            assertEquals(
+                    List.of("error:closed", "disconnected"),
+                    session.transportClosed.get(5, TimeUnit.SECONDS));
+            assertEquals(1, session.transportErrors.size());
+            ZLinkStreamError error = session.transportErrors.getFirst();
+            assertEquals(
+                    systems.zlink.framework.streams.ZLinkStreamSessionError.TRANSPORT_ERROR,
+                    error.error());
+            var observed = error.disconnectReason();
+            assertTrue(observed.isPresent(), "UNKNOWN=0 is present too");
+            assertEquals(reason, observed.orElseThrow().value());
+            // A repeated monitor event must not create a second callback or closed metric.
+            stream.errorHandler.handle(PEER_A, MonitorEventType.DISCONNECTED, reason, "closed");
+            runtimes.getLast().closeAsync().toCompletableFuture().join();
+            assertEquals(1, session.transportErrors.size());
+            assertEquals(List.of("transport_error"), closeReasons);
+        }
+    }
+
+    @Test
+    void nonDisconnectedErrorHasNoDisconnectReason() throws Exception {
+        FakeStream stream = new FakeStream();
+        List<String> closeReasons = new CopyOnWriteArrayList<>();
+        try (var ignored = installClosedMetricSink(closeReasons)) {
+            runtimes.add(start(stream, 0));
+            stream.errorHandler.handle(PEER_A, MonitorEventType.CONNECTION_READY, 0, "ready");
+            TestSession session = TestSession.connected.get(5, TimeUnit.SECONDS);
+            stream.errorHandler.handle(PEER_A, null, 4, "protocol failure");
+            assertEquals(
+                    List.of("error:protocol failure", "disconnected"),
+                    session.transportClosed.get(5, TimeUnit.SECONDS));
+            var error = session.transportErrors.getFirst();
+            assertEquals(Optional.empty(), error.disconnectReason());
+            assertEquals(List.of("protocol_error"), closeReasons);
+        }
+    }
+
+    @Test
+    void disconnectedWithoutSessionDoesNotCreateCallbackOrMetric() throws Exception {
+        FakeStream stream = new FakeStream();
+        List<String> closeReasons = new CopyOnWriteArrayList<>();
+        try (var ignored = installClosedMetricSink(closeReasons)) {
+            runtimes.add(start(stream, 0));
+            stream.errorHandler.handle(
+                    PEER_A, MonitorEventType.DISCONNECTED, 3, "handshake failed");
+            runtimes.getLast().closeAsync().toCompletableFuture().join();
+            assertEquals(0, TestSession.createdCount.get());
+            assertTrue(closeReasons.isEmpty());
+        }
     }
 
     @Test
@@ -1373,7 +1434,9 @@ final class ZLinkStreamRuntimeIngressTest {
         fixture.runtime().beginDrain();
         fixture.runtime().closeAsync().toCompletableFuture().get(5, TimeUnit.SECONDS);
 
-        assertEquals(List.of("disconnected"), session.transportClosed.get(5, TimeUnit.SECONDS));
+        assertEquals(
+                List.of("error:DISCONNECTED", "disconnected"),
+                session.transportClosed.get(5, TimeUnit.SECONDS));
         assertTrue(session.context().actors().bound().isEmpty());
         assertEquals(0, stream.actorUnboundSubmissions.get());
     }
@@ -1813,7 +1876,9 @@ final class ZLinkStreamRuntimeIngressTest {
         var seal = sessionSeal(relocation, actorRef, PEER_A, 1);
 
         stream.errorHandler.handle(PEER_A, MonitorEventType.DISCONNECTED, 0, "DISCONNECTED");
-        assertEquals(List.of("disconnected"), session.transportClosed.get(5, TimeUnit.SECONDS));
+        assertEquals(
+                List.of("error:DISCONNECTED", "disconnected"),
+                session.transportClosed.get(5, TimeUnit.SECONDS));
         awaitCondition(() -> disconnectCallbacks.get() == 1, "disconnect callback did not run");
 
         assertEquals(
@@ -2914,6 +2979,7 @@ final class ZLinkStreamRuntimeIngressTest {
     public static final class TestSession implements ZLinkSession {
         private static final AtomicReference<TestSession> lastSession = new AtomicReference<>();
         private static CompletableFuture<TestSession> connected = new CompletableFuture<>();
+        private final List<ZLinkStreamError> transportErrors = new CopyOnWriteArrayList<>();
         private final List<String> transportCallbacks = new ArrayList<>();
         private final CompletableFuture<List<String>> transportClosed = new CompletableFuture<>();
         private static final AtomicInteger createdCount = new AtomicInteger();
@@ -2976,6 +3042,7 @@ final class ZLinkStreamRuntimeIngressTest {
 
         @Override
         public CompletionStage<Void> onError(ZLinkStreamError error) {
+            transportErrors.add(error);
             transportCallbacks.add("error:" + error.message());
             return CompletableFuture.completedFuture(null);
         }
