@@ -25,7 +25,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
@@ -41,18 +40,7 @@ final class ZLinkSpotRelocationReplyRoutes {
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
 
     private <T> T inStateLane(Supplier<T> work) {
-        try {
-            return stateLane.runAsync(work).toCompletableFuture().join();
-        } catch (CompletionException failure) {
-            Throwable cause = failure.getCause();
-            if (cause instanceof RuntimeException runtimeFailure) {
-                throw runtimeFailure;
-            }
-            if (cause instanceof Error error) {
-                throw error;
-            }
-            throw failure;
-        }
+        return stateLane.awaitResult(work);
     }
 
     private <T> CompletionStage<T> onStateLane(Supplier<T> work) {
@@ -239,12 +227,9 @@ final class ZLinkSpotRelocationReplyRoutes {
                                 relocationRelease));
     }
 
+    /** Removes the route in lane order without waiting; the caller is a completion callback. */
     void completeLocal(OperationId operation) {
-        inStateLane(
-                () -> {
-                    routes.remove(operation);
-                    return null;
-                });
+        stateLane.runNowOrQueue(() -> routes.remove(operation));
     }
 
     void bindCommitted(
@@ -840,13 +825,16 @@ final class ZLinkSpotRelocationReplyRoutes {
         }
 
         void completeLocal() {
-            Registration current =
-                    inStateLane(
+            stateLane
+                    .runNowOrQueue(
                             () -> {
                                 if (delegate == null) completedLocally = true;
                                 return delegate;
+                            })
+                    .thenAccept(
+                            current -> {
+                                if (current != null) current.completeLocal();
                             });
-            if (current != null) current.completeLocal();
         }
 
         void releaseForRelocation() {
@@ -856,16 +844,7 @@ final class ZLinkSpotRelocationReplyRoutes {
         }
 
         private <T> T inStateLane(Supplier<T> work) {
-            try {
-                return stateLane.runAsync(work).toCompletableFuture().join();
-            } catch (CompletionException failure) {
-                Throwable cause = failure.getCause();
-                if (cause instanceof RuntimeException runtimeFailure) {
-                    throw runtimeFailure;
-                }
-                if (cause instanceof Error error) throw error;
-                throw failure;
-            }
+            return stateLane.awaitResult(work);
         }
     }
 
