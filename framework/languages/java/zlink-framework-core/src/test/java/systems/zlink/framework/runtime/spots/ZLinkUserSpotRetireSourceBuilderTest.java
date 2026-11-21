@@ -61,6 +61,11 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
     private static final RoutingId SOURCE_RID = RoutingId.from("source-node");
     private static final RoutingId TARGET_RID = RoutingId.from("target-node");
 
+    @org.junit.jupiter.api.AfterEach
+    void clearCaptureCheck() {
+        SnapshotAdapter.captureCheck.set(null);
+    }
+
     @Test
     void pendingUserSpotStateLaneReturnsSealAndAbortStagesWithoutWaiting() throws Exception {
         ZLinkInMemoryLocationStore locations = new ZLinkInMemoryLocationStore();
@@ -458,6 +463,15 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
                             nodeRegistration.relocatableActorFactories(),
                             runtime);
 
+            SnapshotAdapter.captureCheck.set(
+                    () ->
+                            systems.zlink.framework.runtime.internal.locations
+                                    .ZLinkProviderAuthorityRepositoryTestAccess
+                                    .assertRelocationPhase(
+                                            locations,
+                                            systems.zlink.framework.runtime.locations
+                                                    .ZLinkAuthorityKeyCodec.spot(SPOT_ID),
+                                            "preparing"));
             ZLinkUserSpotRetireSourceBuilder.PreparedSource prepared =
                     builder.prepare(
                                     SPOT_ID,
@@ -589,6 +603,11 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
                     "source capture must not publish target-local authority");
 
             prepared.abortPrecommit().toCompletableFuture().get();
+            systems.zlink.framework.runtime.internal.locations
+                    .ZLinkProviderAuthorityRepositoryTestAccess.assertRelocationPhase(
+                    locations,
+                    systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec.spot(SPOT_ID),
+                    "");
             assertSame(LiveSpot.last.get(), runtime.spotFor(SPOT_ID));
 
             assertEquals(
@@ -984,9 +1003,13 @@ final class ZLinkUserSpotRetireSourceBuilderTest {
     public static final class SnapshotAdapter implements ZLinkSpotRelocationAdapter<LiveSpot> {
         private static final AtomicReference<LiveSpot> captured = new AtomicReference<>();
 
+        private static final AtomicReference<Runnable> captureCheck = new AtomicReference<>();
+
         @Override
         public CompletionStage<byte[]> capture(
                 LiveSpot spot, ZLinkRelocationCancellation cancellation) {
+            Runnable check = captureCheck.getAndSet(null);
+            if (check != null) check.run();
             captured.set(spot);
             return CompletableFuture.completedFuture(new byte[] {7, 4, 1});
         }
