@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.spots;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -20,12 +21,15 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkRequestFailureMapping;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec;
 
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -278,6 +282,52 @@ final class ZLinkSpotRelocationReplyRoutesTest {
                 routes.relay(relay, target).toCompletableFuture().join());
         assertEquals(1, replies.get());
         assertEquals(1, routes.size());
+    }
+
+    @Test
+    void completeLocalDoesNotWaitForABusyRouteLane() throws Exception {
+        byte[] accepted =
+                ZLinkAcceptedJournalTestRecords.spot(
+                        "source-spot", "room-1", 41, "room.query", Map.of(), new byte[] {1});
+        var received =
+                new ZLinkBackendReceived(
+                        ZLinkBackendRequestResult.OK,
+                        Optional.of(RoutingId.from("journal-node")),
+                        Optional.of("room-1"),
+                        Optional.of(41L),
+                        new byte[0],
+                        accepted,
+                        List.of(),
+                        parts -> parts.forEach(Message::close),
+                        () -> {});
+        var routes = new ZLinkSpotRelocationReplyRoutes();
+        var registration = routes.register(accepted, received, "room-1", 1);
+        var field = ZLinkSpotRelocationReplyRoutes.class.getDeclaredField("stateLane");
+        field.setAccessible(true);
+        var lane = (ZLinkStateLane) field.get(routes);
+        var held = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        lane.runAsync(
+                () -> {
+                    held.countDown();
+                    try {
+                        release.await();
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                    }
+                    return null;
+                });
+        try {
+            assertTrue(held.await(2, TimeUnit.SECONDS));
+            var completing = new Thread(registration::completeLocal, "test-completion-callback");
+            completing.start();
+            completing.join(2_000);
+            assertFalse(
+                    completing.isAlive(), "a completion callback must not wait for the route lane");
+        } finally {
+            release.countDown();
+        }
+        assertEquals(0, routes.size(), "the route is removed in lane order after the busy turn");
     }
 
     @Test
