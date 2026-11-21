@@ -38,7 +38,7 @@ import type {
   ZLinkObjectCreationCompleteRequest,
   ZLinkObjectCreationCompleteResult,
   ZLinkObjectReserveResult
-} from '../../contracts/Locations/Authority';
+} from './internal-location-contracts';
 import type {
   ZLinkObjectReserveRequest,
   ZLinkEndedOwnerReleaseIntent
