@@ -2998,6 +2998,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_stream_framework
     tests/Zlink.Framework.UnitTests/test_cpp_framework_stream_framework.cpp
     "framework-integration;framework-regression;framework-zlink;framework-zlink-stream;stream")
+  if(ZLINK_FRAMEWORK_CPP_TEST_PROBES)
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_framework_core_session_lifecycle_boundaries
+      COMMAND test_cpp_framework_stream_framework --core-session-lifecycle-boundaries
+      LABELS "framework-unit;framework-contract;stream;stream-session"
+      TIER contract
+      TIMEOUT 30)
+  endif()
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_binding_submission_order
     COMMAND test_cpp_framework_stream_framework --binding-submission-order
