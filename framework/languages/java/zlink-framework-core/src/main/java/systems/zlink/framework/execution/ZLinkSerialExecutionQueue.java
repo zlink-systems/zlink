@@ -140,7 +140,9 @@ public final class ZLinkSerialExecutionQueue {
         else OUTSTANDING.getAndAdd(this, -1L);
     }
 
-    private long nextSequence = 1L;
+    // Package-private so the same-package test access can drive sequence exhaustion without
+    // reflection; guarded by this queue's monitor.
+    long nextSequence = 1L;
     private long nextRelocationSerial = 1L;
     volatile Entry active;
     private Entry suspendedLifecycle;

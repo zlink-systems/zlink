@@ -11,12 +11,9 @@ public final class ZLinkSerialExecutionQueueTestAccess {
         return queue.relocation;
     }
 
-    public static void exhaustSequence(ZLinkSerialExecutionQueue queue)
-            throws ReflectiveOperationException {
-        var sequence = ZLinkSerialExecutionQueue.class.getDeclaredField("nextSequence");
-        sequence.setAccessible(true);
+    public static void exhaustSequence(ZLinkSerialExecutionQueue queue) {
         synchronized (queue) {
-            sequence.setLong(queue, Long.MAX_VALUE);
+            queue.nextSequence = Long.MAX_VALUE;
         }
     }
 
