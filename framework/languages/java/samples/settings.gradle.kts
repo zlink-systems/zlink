@@ -3,8 +3,8 @@ pluginManagement {
         id("com.google.protobuf") version "0.9.4"
     }
     repositories {
-        gradlePluginPortal()
         mavenCentral()
+        gradlePluginPortal()
     }
 }
 
