@@ -3,9 +3,11 @@
 #include "runtime/execution/serial_execution_queue.hpp"
 #include "runtime/execution/serial_application_record.hpp"
 #include "runtime/execution/serial_handler_participant.hpp"
+#include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/dispatch/owned_task.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <limits>
 #include <stdexcept>
@@ -20,6 +22,22 @@ namespace
 {
 
 thread_local serial_execution_queue_t *current_shared_gate = nullptr;
+
+void invoke_serial_resume (const std::function<void ()> &continuation,
+                           std::optional<framework_error_kind_t> failure)
+{
+    if (failure)
+        detail::set_serial_resume_failure (
+          *failure, detail::registered_execution_context_shutting_down_message);
+    try {
+        continuation ();
+    }
+    catch (...) {
+        (void) detail::take_serial_resume_failure ();
+        throw;
+    }
+    (void) detail::take_serial_resume_failure ();
+}
 
 std::size_t normalized_byte_cost (const serial_work_options_t &options) noexcept
 {
@@ -661,6 +679,24 @@ class serial_turn_handle_impl_t final
         return std::holds_alternative<serial_execution_queue_t::handler_resume_t> (_origin);
     }
 
+    void reject_resume_wake ()
+    {
+        std::get<serial_execution_queue_t::handler_resume_t> (_origin).failure =
+          framework_error_kind_t::shutting_down;
+    }
+
+    void run_resume (const std::function<void ()> &continuation,
+                     serial_execution_queue_t::async_completion_t complete)
+    {
+        const auto &resume = std::get<serial_execution_queue_t::handler_resume_t> (_origin);
+        // Closing changes the result of the wait while preserving its turn.
+        auto failure = resume.failure;
+        if (!failure && _queue.closed ())
+            failure = framework_error_kind_t::shutting_down;
+        invoke_serial_resume (continuation, failure);
+        complete ([] {});
+    }
+
     bool accepted_continuation () const noexcept
     {
         return is_resume ()
@@ -737,47 +773,8 @@ class serial_turn_handle_impl_t final
             auto resume = [self, continuation] (const result_t<bool> &resumed) mutable {
                 if (resumed && resumed.value ())
                     return;
-                if (self->_queue.try_post_resume (
-                      self->_name + "-await-resume",
-                      [self, work = continuation] (auto complete) mutable {
-                          // Closing changes the wait result, not its right to run cleanup.
-                          if (self->_queue.closed ())
-                              detail::set_serial_resume_failure (
-                                framework_error_kind_t::shutting_down,
-                                detail::registered_execution_context_shutting_down_message);
-                          try {
-                              work ();
-                          }
-                          catch (...) {
-                              (void) detail::take_serial_resume_failure ();
-                              throw;
-                          }
-                          (void) detail::take_serial_resume_failure ();
-                          complete ([] {});
-                      },
-                      self->handler (), self->_holds_application_while_waiting)) {
-                    return;
-                }
-                // The continuation cannot reach the queue: the handler ends here.
-                self->end_chain (false);
-                if (continuation) {
-                    auto continuation_state =
-                      std::make_shared<std::function<void ()>> (std::move (continuation));
-                    if (!self->_queue._executor.try_submit_internal (
-                          [work = continuation_state] () mutable {
-                              detail::set_serial_resume_failure (
-                                framework_error_kind_t::shutting_down,
-                                detail::registered_execution_context_shutting_down_message);
-                              (*work) ();
-                              (void) detail::take_serial_resume_failure ();
-                          })) {
-                        detail::set_serial_resume_failure (
-                          framework_error_kind_t::shutting_down,
-                          detail::registered_execution_context_shutting_down_message);
-                        (*continuation_state) ();
-                        (void) detail::take_serial_resume_failure ();
-                    }
-                }
+                self->_queue.post_resume (self->_name + "-await-resume", std::move (continuation),
+                                          self->handler (), self->_holds_application_while_waiting);
             };
             if (self->_lane == serial_work_lane_t::lifecycle) {
                 auto pending = std::make_shared<task_t<bool>> (
@@ -1159,7 +1156,7 @@ void serial_execution_queue_t::set_application_start_policy (application_start_p
         if (!owns_shared_gate ())
             lock.lock ();
         _application_start_policy = std::move (policy);
-        (void) schedule_drain_locked ();
+        (void) schedule_drain_locked ({});
     });
 }
 
@@ -1184,7 +1181,7 @@ void serial_execution_queue_t::set_execution_policy (execution_admission_t polic
         std::unique_lock lock (_mutex, std::defer_lock);
         if (!owns_shared_gate ())
             lock.lock ();
-        (void) schedule_drain_locked ();
+        (void) schedule_drain_locked ({});
     });
 }
 
@@ -1213,7 +1210,7 @@ bool serial_execution_queue_t::fence_execution ()
         std::unique_lock lock (_mutex, std::defer_lock);
         if (!owns_shared_gate ())
             lock.lock ();
-        (void) schedule_drain_locked ();
+        (void) schedule_drain_locked ({});
     });
     return true;
 }
@@ -1289,7 +1286,7 @@ void serial_execution_queue_t::execution_operation_changed ()
         std::unique_lock lock (_mutex, std::defer_lock);
         if (!owns_shared_gate ())
             lock.lock ();
-        (void) schedule_drain_locked ();
+        (void) schedule_drain_locked ({});
     });
 }
 
@@ -1580,9 +1577,9 @@ bool serial_execution_queue_t::prepare_application_head_owned ()
                   grant->reset ();
                   if (self->shared_spot_gate ())
                       (void) self->submit_control (
-                        [self] { (void) self->schedule_drain_locked (); });
+                        [self] { (void) self->schedule_drain_locked ({}); }, nullptr, {});
                   else
-                      (void) self->schedule_drain_locked ();
+                      (void) self->schedule_drain_locked ({});
               });
           });
       },
@@ -1850,14 +1847,16 @@ task_t<bool> serial_execution_queue_t::adopt_application_prefix (
         bool scheduled = true;
         settle_application_owned (name, primary, [this, &lock, &scheduled] {
             if (shared_spot_gate ()) {
-                (void) submit_control ([actor = shared_from_this ()] {
-                    actor->_spot_gate->disconnect_actor_head (actor);
-                    actor->_spot_gate->connect_actor_head (actor);
-                });
+                (void) submit_control (
+                  [actor = shared_from_this ()] {
+                      actor->_spot_gate->disconnect_actor_head (actor);
+                      actor->_spot_gate->connect_actor_head (actor);
+                  },
+                  nullptr, {});
             } else {
                 if (!owns_shared_gate ())
                     lock.lock ();
-                scheduled = schedule_drain_locked ();
+                scheduled = schedule_drain_locked ({});
                 if (lock.owns_lock ())
                     lock.unlock ();
                 if (!scheduled)
@@ -1939,9 +1938,9 @@ serial_execution_queue_t::take_application_suffix (
                   retire (result_t<void>::success ());
           }
           if (shared_spot_gate ())
-              (void) submit_control ([actor = shared_from_this ()] {
-                  actor->_spot_gate->disconnect_actor_head (actor);
-              });
+              (void) submit_control (
+                [actor = shared_from_this ()] { actor->_spot_gate->disconnect_actor_head (actor); },
+                nullptr, {});
           return suffix;
       });
 }
@@ -1959,7 +1958,7 @@ serial_execution_queue_t::admit_native_application (std::function<void (bool)> p
             return _relocation_seal;
         const bool sealed = bool (_relocation_seal);
         if (lock.owns_lock ()) {
-            (void) schedule_drain_locked ();
+            (void) schedule_drain_locked ({});
             lock.unlock ();
         }
         if (publish)
@@ -2022,7 +2021,7 @@ task_t<bool> serial_execution_queue_t::release_relocation_seal (
         if (_relocation_seal != binding)
             return false;
         _relocation_seal.reset ();
-        return schedule_drain_locked ();
+        return schedule_drain_locked ({});
     });
 }
 
@@ -2221,11 +2220,13 @@ serial_execution_queue_t::cancel_submission_owned (serial_submission_id_t submis
     if (active_cancel)
         active_cancel ();
     if (shared_spot_gate ())
-        (void) submit_control ([actor = shared_from_this (), outcome] {
-            if (outcome == serial_cancel_submission_outcome_t::queued_cancelled)
-                actor->_spot_gate->disconnect_actor_head (actor);
-            actor->_spot_gate->connect_actor_head (actor);
-        });
+        (void) submit_control (
+          [actor = shared_from_this (), outcome] {
+              if (outcome == serial_cancel_submission_outcome_t::queued_cancelled)
+                  actor->_spot_gate->disconnect_actor_head (actor);
+              actor->_spot_gate->connect_actor_head (actor);
+          },
+          nullptr, {});
     return outcome;
 }
 
@@ -2329,18 +2330,43 @@ bool serial_execution_queue_t::try_post_continuation (
       0, {}, borrowed_callback_t{turn->fifo (), {}});
 }
 
-bool serial_execution_queue_t::try_post_resume (
+void serial_execution_queue_t::post_resume (
   std::string name,
-  async_work_t work,
+  std::function<void ()> continuation,
   const std::shared_ptr<serial_turn_handle_impl_t> &handler,
   bool holds_application_while_waiting)
 {
-    std::unique_lock lock (_mutex);
-    return enqueue_locked (
-      lock, std::move (name), std::move (work),
-      serial_work_options_t{.lane = handler->lane (),
-                            .holds_application_while_waiting = holds_application_while_waiting},
-      0, {}, handler_resume_t{handler});
+    struct pending_resume_t
+    {
+        explicit pending_resume_t (std::function<void ()> continuation) :
+            work (std::move (continuation))
+        {
+        }
+
+        std::atomic_bool started{false};
+        std::function<void ()> work;
+    };
+
+    auto resume = [pending = std::make_shared<pending_resume_t> (std::move (continuation))] {
+        if (pending->started.exchange (true, std::memory_order_relaxed))
+            return;
+        auto work = std::exchange (pending->work, {});
+        work ();
+    };
+    {
+        std::unique_lock lock (_mutex);
+        if (enqueue_locked (lock, std::move (name), {},
+                            serial_work_options_t{.lane = handler->lane (),
+                                                  .holds_application_while_waiting =
+                                                    holds_application_while_waiting},
+                            0, {}, handler_resume_t{handler, {}}, resume))
+            return;
+    }
+    handler_coroutine_executor ().post_native_continuation ([resume = std::move (resume), handler] {
+        (void) handler; // Keep the registered turn alive through terminal delivery.
+        offload_executor_t::run_application_turn (
+          [&] { invoke_serial_resume (resume, framework_error_kind_t::shutting_down); });
+    });
 }
 
 void serial_execution_queue_t::hold_lifecycle (std::shared_ptr<serial_turn_chain_t> chain)
@@ -2375,7 +2401,7 @@ void serial_execution_queue_t::release_lifecycle_hold_owned (const serial_turn_c
     if (_lifecycle_hold.get () != chain)
         return;
     _lifecycle_hold.reset ();
-    (void) schedule_drain_locked ();
+    (void) schedule_drain_locked ({});
 }
 
 void serial_execution_queue_t::schedule_after_settle ()
@@ -2388,7 +2414,7 @@ void serial_execution_queue_t::schedule_after_settle_owned ()
     std::unique_lock lock (_mutex, std::defer_lock);
     if (!owns_shared_gate ())
         lock.lock ();
-    (void) schedule_drain_locked ();
+    (void) schedule_drain_locked ({});
 }
 
 result_t<std::shared_ptr<detail::deferred_barrier_t>>
@@ -2442,44 +2468,46 @@ result_t<void> serial_execution_queue_t::retain_mailbox_until (task_t<void> term
         return result_t<void>::failure (framework_error_kind_t::shutting_down,
                                         "Actor mailbox is closed");
     auto pending = std::make_shared<task_t<void>> (std::move (terminal));
-    if (!submit_control ([this, retained = weak_from_this ().lock (), pending,
-                          cancel = std::move (cancel)] () mutable {
-            std::unique_lock lock (_mutex, std::defer_lock);
-            if (!owns_shared_gate ())
-                lock.lock ();
-            if (_closed.load (std::memory_order_acquire) != execution_status_t::allowed) {
-                if (lock.owns_lock ())
-                    lock.unlock ();
-                if (cancel)
-                    cancel ();
-                return;
-            }
-            if (current_turn_locked () && current_turn_locked ()->turn) {
-                current_turn_locked ()->turn->retain_until (std::move (*pending));
-                if (cancel) {
-                    auto previous = std::move (current_turn_locked ()->cancel);
-                    current_turn_locked ()->cancel = [previous = std::move (previous),
-                                                      cancel = std::move (cancel)] {
-                        if (previous)
-                            previous ();
-                        cancel ();
-                    };
-                }
-                return;
-            }
-            auto turn =
-              create_turn ("actor-mailbox-terminal", serial_work_lane_t::application, {}, true);
-            _handler_turns.emplace_back ();
-            ++_active;
-            current_turn_locked ()->turn = turn;
-            current_turn_locked ()->cancel = std::move (cancel);
-            turn->retain_until (std::move (*pending));
-            if (shared_spot_gate ())
-                _spot_gate->disconnect_actor_head (shared_from_this ());
-            if (lock.owns_lock ())
-                lock.unlock ();
-            (void) turn->complete ([] {});
-        }))
+    if (!submit_control (
+          [this, retained = weak_from_this ().lock (), pending,
+           cancel = std::move (cancel)] () mutable {
+              std::unique_lock lock (_mutex, std::defer_lock);
+              if (!owns_shared_gate ())
+                  lock.lock ();
+              if (_closed.load (std::memory_order_acquire) != execution_status_t::allowed) {
+                  if (lock.owns_lock ())
+                      lock.unlock ();
+                  if (cancel)
+                      cancel ();
+                  return;
+              }
+              if (current_turn_locked () && current_turn_locked ()->turn) {
+                  current_turn_locked ()->turn->retain_until (std::move (*pending));
+                  if (cancel) {
+                      auto previous = std::move (current_turn_locked ()->cancel);
+                      current_turn_locked ()->cancel = [previous = std::move (previous),
+                                                        cancel = std::move (cancel)] {
+                          if (previous)
+                              previous ();
+                          cancel ();
+                      };
+                  }
+                  return;
+              }
+              auto turn =
+                create_turn ("actor-mailbox-terminal", serial_work_lane_t::application, {}, true);
+              _handler_turns.emplace_back ();
+              ++_active;
+              current_turn_locked ()->turn = turn;
+              current_turn_locked ()->cancel = std::move (cancel);
+              turn->retain_until (std::move (*pending));
+              if (shared_spot_gate ())
+                  _spot_gate->disconnect_actor_head (shared_from_this ());
+              if (lock.owns_lock ())
+                  lock.unlock ();
+              (void) turn->complete ([] {});
+          },
+          nullptr, {}))
         return result_t<void>::failure (framework_error_kind_t::shutting_down,
                                         "Actor mailbox executor is stopping");
     return result_t<void>::success ();
@@ -2514,8 +2542,8 @@ serial_execution_queue_t::observe_handler_terminal ()
     // Actor retention precedes observation of its current handler. A Spot
     // observes all started handlers and leaves accepted Yield continuations
     // free to reacquire the gate until their final terminals.
-    const auto accepted =
-      submit_control ([this, retained = weak_from_this ().lock (), handler, observer] {
+    const auto accepted = submit_control (
+      [this, retained = weak_from_this ().lock (), handler, observer] {
           std::vector<task_t<void>> terminals;
           {
               std::unique_lock lock (_mutex, std::defer_lock);
@@ -2541,7 +2569,8 @@ serial_execution_queue_t::observe_handler_terminal ()
                 *pending,
                 [handler, pending] (const result_t<void> &result) { handler->complete (result); });
           }
-      });
+      },
+      nullptr, {});
     if (!accepted) {
         observer->cancel ();
         return result_t<std::shared_ptr<serial_handler_participant_t>>::failure (
@@ -2798,7 +2827,8 @@ void serial_execution_queue_t::cancel_pending_owned () noexcept
         cancel ();
     if (shared_spot_gate ())
         (void) submit_control (
-          [actor = shared_from_this ()] { actor->_spot_gate->disconnect_actor_head (actor); });
+          [actor = shared_from_this ()] { actor->_spot_gate->disconnect_actor_head (actor); },
+          nullptr, {});
 }
 
 std::size_t serial_execution_queue_t::pending_count () const
@@ -2835,8 +2865,21 @@ bool serial_execution_queue_t::closed () const
     return _closed.load (std::memory_order_acquire) != execution_status_t::allowed;
 }
 
-bool serial_execution_queue_t::schedule_drain_locked ()
+bool serial_execution_queue_t::schedule_drain_locked (
+  const std::function<void ()> &on_wake_rejected)
 {
+    const auto submit = [this, &on_wake_rejected] (auto drain) {
+        if (_executor.try_submit_internal (drain))
+            return true;
+        if (!on_wake_rejected)
+            return false;
+        // A published continuation already has a lane position. Transfer its
+        // pump to the application executor while retaining the gate claim.
+        on_wake_rejected ();
+        handler_coroutine_executor ().post_native_continuation (
+          [drain = std::move (drain)] { offload_executor_t::run_application_turn (drain); });
+        return true;
+    };
     if (shared_spot_gate ()) {
         if (current_shared_gate == _spot_gate.get ())
             _spot_gate->connect_actor_head (shared_from_this ());
@@ -2850,8 +2893,7 @@ bool serial_execution_queue_t::schedule_drain_locked ()
                                                   std::memory_order_acq_rel))
             return true;
         try {
-            if (_executor.try_submit_internal (
-                  [this, retained = weak_from_this ().lock ()] { run_shared_gate (); }))
+            if (submit ([this, retained = weak_from_this ().lock ()] { run_shared_gate (); }))
                 return true;
         }
         catch (...) {
@@ -2869,17 +2911,24 @@ bool serial_execution_queue_t::schedule_drain_locked ()
     if (!_claim_started_at)
         _claim_started_at = std::chrono::steady_clock::now ();
     _drain_scheduled = true;
-    if (!_executor.try_submit_internal ([this] { drain_loop (); })) {
+    try {
+        if (submit ([this] { drain_loop (); }))
+            return true;
+    }
+    catch (...) {
         _drain_scheduled = false;
         _claim_started_at.reset ();
-        return false;
+        throw;
     }
-    return true;
+    _drain_scheduled = false;
+    _claim_started_at.reset ();
+    return false;
 }
 
 bool serial_execution_queue_t::publish_locked (std::unique_ptr<publication_node_t> node,
                                                std::function<void ()> *continuation,
-                                               work_item_t *rejected)
+                                               work_item_t *rejected,
+                                               const std::function<void ()> &on_wake_rejected)
 {
     auto *previous = _publication_tail;
     auto *published = node.release ();
@@ -2892,8 +2941,8 @@ bool serial_execution_queue_t::publish_locked (std::unique_ptr<publication_node_
                                                 actor->import_publications ();
                                                 actor->_spot_gate->connect_actor_head (actor);
                                             },
-                                            continuation)
-                                        : schedule_drain_locked ();
+                                            continuation, on_wake_rejected)
+                                        : schedule_drain_locked (on_wake_rejected);
     }
     catch (...) {
         previous->next.store (nullptr, std::memory_order_release);
@@ -2962,7 +3011,8 @@ void serial_execution_queue_t::import_publications_until (publication_node_t *cu
 }
 
 bool serial_execution_queue_t::submit_control (std::function<void ()> control,
-                                               std::function<void ()> *continuation)
+                                               std::function<void ()> *continuation,
+                                               const std::function<void ()> &on_wake_rejected)
 {
     if (!owns_shared_gate ()) {
         control ();
@@ -2977,11 +3027,11 @@ bool serial_execution_queue_t::submit_control (std::function<void ()> control,
         return true;
     }
     if (shared_spot_gate ())
-        return _spot_gate->submit_control (std::move (control));
+        return _spot_gate->submit_control (std::move (control), nullptr, on_wake_rejected);
     auto node = std::make_unique<publication_node_t> ();
     node->control = std::move (control);
     std::lock_guard lock (_mutex);
-    return publish_locked (std::move (node));
+    return publish_locked (std::move (node), nullptr, nullptr, on_wake_rejected);
 }
 
 void serial_execution_queue_t::notify_control (std::string name, std::function<void ()> control)
@@ -2994,7 +3044,8 @@ void serial_execution_queue_t::notify_control (std::string name, std::function<v
               catch (const std::exception &) {
                   report_deferred_error (name, std::current_exception ());
               }
-          }))
+          },
+          nullptr, {}))
         report_deferred_error (
           name, std::make_exception_ptr (framework_exception_t (
                   framework_error_kind_t::shutting_down, "shared Spot gate executor is stopping")));
@@ -3063,7 +3114,7 @@ void serial_execution_queue_t::release_shared_gate ()
     _gate_state.store (gate_state_t::idle, std::memory_order_release);
     _gate_state.notify_all ();
     if (ready || _publication_cursor->next.load (std::memory_order_acquire))
-        (void) schedule_drain_locked ();
+        (void) schedule_drain_locked ({});
 }
 
 serial_execution_queue_t::lane_state_t &
@@ -3084,7 +3135,8 @@ bool serial_execution_queue_t::enqueue_locked (std::unique_lock<std::mutex> &pro
                                                serial_work_options_t options,
                                                serial_submission_id_t submission_id,
                                                std::function<void ()> cancel,
-                                               item_origin_t origin)
+                                               item_origin_t origin,
+                                               std::function<void ()> resume)
 {
     if (options.lane == serial_work_lane_t::application
         && std::holds_alternative<new_handler_t> (origin) && execution_paused ())
@@ -3097,8 +3149,15 @@ bool serial_execution_queue_t::enqueue_locked (std::unique_lock<std::mutex> &pro
     bool accepted;
     try {
         const auto bytes = normalized_byte_cost (options);
-        admitted_turn =
-          create_turn (name, options.lane, origin, options.holds_application_while_waiting);
+        admitted_turn = create_turn (name, options.lane, std::move (origin),
+                                     options.holds_application_while_waiting);
+        std::function<void ()> on_wake_rejected;
+        if (admitted_turn->is_resume ()) {
+            work = [turn = admitted_turn.get (), resume = std::move (resume)] (auto complete) {
+                turn->run_resume (resume, std::move (complete));
+            };
+            on_wake_rejected = [turn = admitted_turn.get ()] { turn->reject_resume_wake (); };
+        }
         item = work_item_t{std::move (name),
                            std::move (work),
                            options.lane,
@@ -3136,8 +3195,9 @@ bool serial_execution_queue_t::enqueue_locked (std::unique_lock<std::mutex> &pro
                 released = {};
             };
             try {
-                accepted = publish_locked (std::move (node),
-                                           shared_spot_gate () ? &continuation : nullptr, &item);
+                accepted =
+                  publish_locked (std::move (node), shared_spot_gate () ? &continuation : nullptr,
+                                  &item, on_wake_rejected);
             }
             catch (...) {
                 retire_work_locked (lane, 1, bytes);
@@ -3167,11 +3227,19 @@ bool serial_execution_queue_t::enqueue_locked (std::unique_lock<std::mutex> &pro
                       settled.second ();
               },
               nullptr, &item);
-            accepted = schedule_drain_locked ();
-            if (!accepted) {
+            const auto rollback = [&] {
                 mutate_fifo_locked (lane, [&] { lane.queue.pop_back (); }, &lane.queue.back ());
                 retire_work_locked (lane, 1, bytes);
+            };
+            try {
+                accepted = schedule_drain_locked (on_wake_rejected);
             }
+            catch (...) {
+                rollback ();
+                throw;
+            }
+            if (!accepted)
+                rollback ();
         }
         if (accepted && submission_id)
             ++_next_submission_id;
@@ -3198,7 +3266,7 @@ bool serial_execution_queue_t::enqueue_locked (std::unique_lock<std::mutex> &pro
         settle_application_owned (settlement_name, primary,
                                   [this, control = std::exchange (continuation, {})] () mutable {
                                       if (control)
-                                          (void) submit_control (std::move (control));
+                                          (void) submit_control (std::move (control), nullptr, {});
                                   });
         if (primary)
             std::rethrow_exception (primary);
@@ -3343,10 +3411,12 @@ serial_execution_queue_t::create_turn (const std::string &name,
         if (owns_shared_gate ()) {
             auto state = std::make_shared<std::pair<std::string, std::function<void ()>>> (
               std::move (name), std::move (completion));
-            if (!submit_control ([this, state, held_turn] () mutable {
-                    complete_turn (std::move (state->first), std::move (state->second), held_turn,
-                                   true);
-                }))
+            if (!submit_control (
+                  [this, state, held_turn] () mutable {
+                      complete_turn (std::move (state->first), std::move (state->second), held_turn,
+                                     true);
+                  },
+                  nullptr, [] {}))
                 report_deferred_error (state->first,
                                        std::make_exception_ptr (std::runtime_error (
                                          "shared Spot gate completion submission failed")));
@@ -3639,7 +3709,7 @@ void serial_execution_queue_t::execute_item (work_item_t item)
             _claim_started_at.reset ();
             if (!owns_shared_gate ())
                 _draining = false;
-            (void) schedule_drain_locked ();
+            (void) schedule_drain_locked ({});
             if (cancelled && item.application_record) {
                 if (lock.owns_lock ())
                     lock.unlock ();
@@ -3709,7 +3779,7 @@ void serial_execution_queue_t::suspend_lifecycle (work_item_t item)
     --_active;
     if (!owns_shared_gate ())
         _draining = false;
-    (void) schedule_drain_locked ();
+    (void) schedule_drain_locked ({});
 }
 
 task_t<bool> serial_execution_queue_t::try_resume_suspended (
@@ -3728,7 +3798,7 @@ bool serial_execution_queue_t::resume_suspended_owned (
         lock.lock ();
     if (_suspended_lifecycle && _suspended_lifecycle->turn == turn) {
         _suspended_lifecycle->work = [work = std::move (work)] (auto) mutable { work (); };
-        (void) schedule_drain_locked ();
+        (void) schedule_drain_locked ({});
         return true;
     }
     if (_active_lane == serial_work_lane_t::lifecycle && current_turn_locked ()
@@ -3753,7 +3823,7 @@ void serial_execution_queue_t::complete_turn (
             lock.lock ();
         if (_suspended_lifecycle && _suspended_lifecycle->turn == turn) {
             _suspended_lifecycle->suspended_completion = std::move (completion);
-            (void) schedule_drain_locked ();
+            (void) schedule_drain_locked ({});
             return;
         }
     }
@@ -3837,7 +3907,7 @@ void serial_execution_queue_t::complete_one (std::string name,
                 _draining = false;
                 if (claim_expired)
                     _claim_started_at.reset ();
-                schedule_drain_locked ();
+                schedule_drain_locked ({});
             }
         } else {
             _draining = false;
