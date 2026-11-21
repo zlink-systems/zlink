@@ -261,7 +261,11 @@ for (const entry of [true, false]) {
     const activation = entry
       ? undefined
       : {
-          serial: { execute: (callback) => callback() },
+          domain: { kind: 'user' },
+          serial: {
+            execute: (callback) => callback(),
+            executeLifecycleOperation: (callback) => callback()
+          },
           spot: {
             onActorJoin: async () => {
               callbacks++;
@@ -271,7 +275,10 @@ for (const entry of [true, false]) {
         };
     const manager = Object.assign(Object.create(DefaultZLinkSpotManager.prototype), {
       options: {
-        entryNodeRid: 'entry',
+        entrySpotIdProvider: () => 'entry',
+        dispatchEntryActorJoin: () => {
+          callbacks++;
+        },
         canonicalActorJoinResolver: async () => ({ actorType: 'player' })
       },
       activations: { resolve: () => activation },
@@ -294,13 +301,7 @@ for (const entry of [true, false]) {
       }
     };
     try {
-      await DefaultZLinkSpotManager.prototype.dispatchMeshActorJoinCore.call(
-        manager,
-        'play',
-        { spotId: entry ? 'entry' : 'room' },
-        record,
-        { targetCommitPublished: false }
-      );
+      await manager.dispatchMeshActorJoin('play', { spotId: entry ? 'entry' : 'room' }, record);
       assert.deepEqual(replies, [entry ? 0 : 1]);
       assert.equal(callbacks, entry ? 0 : 1);
     } finally {
