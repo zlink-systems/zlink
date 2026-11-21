@@ -189,9 +189,20 @@ When running inside Docker, the runner's absolute repository path must refer to 
 | `cleanup-before` | Before forwarding a cleanup Txn containing Delete upstream |
 | `clock-next` | After forwarding the selected clock Range response, before forwarding the next RPC for the same key |
 
-Without a host clock VM, those three items are recorded as `unverified` with a reason. The default run fails; only `--allow-unverified` permits them. Unverified results do not count as passes. The Node test entry point runs with `ZLINK_ETCD_CONFORMANCE=1`; set `ZLINK_ETCD_ALLOW_UNVERIFIED=1` to permit unverified items. Snapshot validity checks wait a real five minutes on the same instance.
+The three host clock cases run existing provider adapters and the single Node management CLI in a disposable QEMU guest. etcd and the observer stay outside that guest. Missing VM configuration, startup failures and ineffective clock changes fail the case, including with `--allow-unverified`. Snapshot validity checks wait a real five minutes on the same instance.
 
-The Node-only `location-etcd-host-clock.test.js` applies a `Date.now` preloader only to provider and management CLI processes with `ZLINK_ETCD_INTEGRATION=1`. It checks live and expired reads, conditional writes, snapshot pages and the management time increment bound under day-scale clock changes. This auxiliary test is to be removed when the stage-three VM checks are provided; it does not convert the shared runner's unverified results into passes.
+On Linux, prepare a matching kernel/module tree, static BusyBox and a prefix containing Dropbear and its shared libraries. Build the guest initramfs without installing host packages:
+
+```sh
+bash scripts/etcd/prepare-clock-vm.sh OUTPUT KERNEL MODULES_ROOT KERNEL_VERSION STATIC_BUSYBOX DROPBEAR_PREFIX
+export ZLINK_CLOCK_VM_CONFIG=/absolute/OUTPUT/config.json
+node --test scripts/etcd/clock-vm-self-test.mjs
+ZLINK_ETCD_ADAPTER_CONFIG=/absolute/adapters.json node scripts/etcd/clock-vm-test.mjs
+```
+
+The generated config has `kernel`, `initrd` and `privateKey` paths. Optional `qemu`, `accel` (default `kvm`), `args` and `env` select the QEMU installation; `tcg` supports machines without KVM access. `hostRoot` selects the host root exported from the QEMU process (default `/`). The guest mounts the host tree read-only and uses private tmpfs mounts for `/tmp`, `/run` and `/root`; no host time daemon or host clock is changed. The adapter commands and artifacts must be accessible at the same absolute paths inside the guest. Its fixed user-mode network maps host loopback endpoints to `10.0.2.2`. The repetition test runs all three cases 40 times per configured language; without an adapter config it runs Node. Clock evidence includes guest boot ID, paired realtime/monotonic samples, provider observations and successful case completion. The normal conformance runner uses the same executor.
+
+The Node-only `location-etcd-host-clock.test.js` applies a `Date.now` preloader only to provider and management CLI processes with `ZLINK_ETCD_INTEGRATION=1`. It checks live and expired reads, conditional writes, snapshot pages and the management time increment bound under day-scale clock changes. This auxiliary test uses process clock substitution and does not provide evidence of OS clock isolation.
 
 `ZLINK_ETCD_TEST_LOG_DIR` selects the directory for results, command output, manager logs, proxy observations and member logs. The default is `scripts/etcd/.conformance-logs/`. `unverified.json` lists unverified items; `cleanup.json` records remaining containers, networks, processes and temporary directories.
 
@@ -239,4 +250,4 @@ The F cancellation case checks abort after submission and unknown commit in .NET
 - Item 3: add `keys_only=true` tests in all four languages, tests on both sides of send and receive limits in .NET, Java and Node, and direct RPC cancellation tests in C++. Record execution results for existing .NET and Java TLS and auth unit tests. Distinguish real TLS and auth-enabled etcd harness results from fake server results.
 - Items 5 and 6: connect the pinned resolved graph to capability execution, and record .NET and Java lockfiles and transitive dependency license inventories for C++, .NET and Java. Evidence for disabling .NET retries and hedging requires configuration or contract evidence for the selected transport, separate from the observed absence of retransmission after a lost reply.
 - C++ pinning: the etcd-enabled gRPC Conan lock entry, vcpkg baseline and actual resolved gRPC/protobuf versions are absent. Pinning is a separate decision; this task does not change build files or lockfiles.
-- The shared runner's three host clock IDs (`etcd.provider-clock-independent`, `etcd.manager-wall-clock-jumps`, `spi.snapshot-clock`) remain `unverified`. The [runner](conformance-runner.mjs) blocks them before execution; a successful F step does not verify this scope.
+- The historical F run did not verify the three host clock IDs. Current runs require the QEMU configuration described above and preserve guest clock evidence.

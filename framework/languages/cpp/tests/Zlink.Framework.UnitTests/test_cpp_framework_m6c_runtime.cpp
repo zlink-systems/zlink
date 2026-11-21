@@ -2134,7 +2134,7 @@ class memory_aggregate_authority_t final : public aggregate_authority_port_t
                                         std::string relocation_reference,
                                         std::uint32_t checksum_crc32c,
                                         inventory_digest_t inventory_digest,
-                                        std::string) override
+                                        relocation_authority_fence_t) override
     {
         std::lock_guard lock (mutex);
         ++prepare_count;
@@ -3174,8 +3174,9 @@ void test_public_authority_store_adapter (test_context_t &test)
         target.node_id = "target";
         const zlink::framework::object_creation_target_t placement{
           "mesh", zlink::framework::node_rid_t::from_string ("target"), 2, target_owner};
-        const auto published = adapter.publish (source, target, target_owner, placement,
-                                                "spot-root", 42, digest_with (9));
+        const auto published =
+          adapter.publish (source, target, target_owner, placement, "spot-root", 42,
+                           digest_with (9), {}, "1", {}, source_owner);
         test.require (published.status == authority_publish_status_t::published,
                       "single Spot authority must commit to target");
         // Complete the test repository's placement projection as the real Store does.
@@ -3238,9 +3239,9 @@ void test_public_authority_store_adapter (test_context_t &test)
     conflicting_store.snapshot = store.snapshot;
     conflicting_store.remaining_authority_conflicts = 1;
     public_authority_store_adapter_t conflicting_adapter (conflicting_store);
-    const auto conflicted =
-      conflicting_adapter.publish (source, target, target_owner, target_placement, "root-public",
-                                   42, digest_with (9), relocated_application_payload);
+    const auto conflicted = conflicting_adapter.publish (
+      source, target, target_owner, target_placement, "root-public", 42, digest_with (9),
+      relocated_application_payload, store.snapshot->store_version, {}, store.snapshot->owner);
     test.require (
       conflicted.status == authority_publish_status_t::conflict && conflicted.current
         && conflicting_store.remaining_authority_conflicts == 0
@@ -3330,6 +3331,28 @@ void test_public_authority_store_adapter (test_context_t &test)
     test.require (captured_adapter.observe_relocation (other_owner)
                     == relocation_authority_t::source_preserved,
                   "another source lease must not inherit the captured source fence");
+    for (const auto changed : {"owner", "lease", "baseline", "empty-baseline"}) {
+        auto changed_fence = captured_fence;
+        if (std::string_view (changed) == "owner")
+            changed_fence.source_owner.owner_id += "-other";
+        if (std::string_view (changed) == "lease")
+            ++changed_fence.source_owner.lease_generation;
+        if (std::string_view (changed) == "baseline")
+            changed_fence.expected_store_version = captured_store.snapshot->store_version;
+        if (std::string_view (changed) == "empty-baseline")
+            changed_fence.expected_store_version.clear ();
+        test.require (captured_adapter.observe_relocation (changed_fence)
+                        == relocation_authority_t::source_preserved,
+                      "Captured authority must reject a changed coordinator fence");
+        const auto rejected = captured_adapter.publish (
+          source, target, target_owner, target_placement, "root-public", 42, digest_with (9),
+          relocated_application_payload, changed_fence.expected_store_version,
+          changed_fence.relocation, changed_fence.source_owner);
+        test.require (rejected.status == authority_publish_status_t::conflict
+                        && captured_store.snapshot->store_version == "2"
+                        && !captured_store.observed_target_owner,
+                      "Captured authority must reject NewOwner before changing the source");
+    }
     const auto captured_published = captured_adapter.publish (
       source, target, target_owner, target_placement, "root-public", 42, digest_with (9),
       relocated_application_payload, store.snapshot->store_version,
@@ -3338,9 +3361,9 @@ void test_public_authority_store_adapter (test_context_t &test)
                     && captured_store.observed_target_owner,
                   "matching Captured source must use its current provider version for target CAS");
     store.retarget_authority_generation_advance = 9;
-    const auto published =
-      adapter.publish (source, target, target_owner, target_placement, "root-public", 42,
-                       digest_with (9), relocated_application_payload);
+    const auto published = adapter.publish (
+      source, target, target_owner, target_placement, "root-public", 42, digest_with (9),
+      relocated_application_payload, store.snapshot->store_version, {}, store.snapshot->owner);
     test.require (
       published.status == authority_publish_status_t::published && published.current
         && published.current->source.mesh_name == "mesh"

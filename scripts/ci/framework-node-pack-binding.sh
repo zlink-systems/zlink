@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -eo pipefail
+prefix="${CORE_PREFIX}"
+if [ "${RUNNER_OS}" = "Windows" ]; then
+  prefix=$(cygpath -u "${prefix}")
+fi
+mkdir -p .artifacts/wsl/npm
+(
+  cd bindings/node
+  npm ci --ignore-scripts
+  npm run build
+  npm rebuild --foreground-scripts
+  # shellcheck disable=SC2016 # The template literal is evaluated by Node.
+  platform=$(node -p '`${process.platform}-${process.arch}`')
+  prebuild_dir="prebuilds/${platform}"
+  mkdir -p "${prebuild_dir}" provenance
+  cp build/Release/zlink.node "${prebuild_dir}/"
+  case "${RUNNER_OS}" in
+    Windows) cp "${prefix}"/bin/*.dll "${prebuild_dir}/" ;;
+    macOS) cp "${prefix}"/lib/*.dylib "${prebuild_dir}/" ;;
+    Linux) cp -L "${prefix}"/lib/libzlink.so.0 "${prebuild_dir}/" ;;
+  esac
+  cp "${prefix}/share/zlink/core-package-provenance.json" provenance/
+  npm pack --silent --pack-destination ../../.artifacts/wsl/npm
+)

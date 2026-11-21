@@ -194,9 +194,10 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
                 .ConfigureAwait(false);
             var snapshot = (authority as ZLinkAuthorityReadResult.Found)?.Snapshot;
             var raw = ProjectSpot(authority);
-            var (row, liveRowPresent) = await _liveRows
+            var (row, lease) = await _liveRows
                 .ResolveWithPresenceAsync(raw, static row => row.OwnerId, cancellationToken)
                 .ConfigureAwait(false);
+            var liveRowPresent = lease is not null;
             if (row is null)
             {
                 await InvalidateSpotRouteAsync(key).ConfigureAwait(false);
@@ -213,26 +214,17 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
             if (IsClosingSpot(authority))
             {
                 await InvalidateSpotRouteAsync(key).ConfigureAwait(false);
-                var remaining = await _leaseTracker
-                    .GetOwnerTokenRemainingAdmissionLifetimeAsync(
-                        new ZLinkLocationOwnerToken(row.OwnerId, row.LeaseGeneration),
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
-                return remaining is null
+                var admission = _leaseTracker.GetAdmissionLifetime(
+                    lease!,
+                    new ZLinkLocationOwnerToken(row.OwnerId, row.LeaseGeneration)
+                );
+                return admission is null
                     ? (null, liveRowPresent, ZLinkLocationResolutionKind.KnownUnavailable, snapshot)
                     : (row, liveRowPresent, ZLinkLocationResolutionKind.Closing, snapshot);
             }
 
             if (
-                !await AdmitAndCacheReadyRouteAsync(
-                        _spotRoutes,
-                        key,
-                        row,
-                        authority,
-                        cancellationToken,
-                        read
-                    )
+                !await AdmitAndCacheReadyRouteAsync(_spotRoutes, key, row, authority, lease!, read)
                     .ConfigureAwait(false)
             )
             {
@@ -301,9 +293,10 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
             )
             .ConfigureAwait(false);
         var raw = ProjectActor(authority, key.ActorId);
-        var (row, liveRowPresent) = await _liveRows
+        var (row, lease) = await _liveRows
             .ResolveWithPresenceAsync(raw, static row => row.OwnerId, cancellationToken)
             .ConfigureAwait(false);
+        var liveRowPresent = lease is not null;
         // Reference generation 0 marks a claimed-but-unpublished actor:
         // the claim precedes activation, so such a row is never a
         // resolvable reference (40-location-runtime §6).
@@ -322,13 +315,7 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
         }
 
         if (
-            !await AdmitAndCacheReadyRouteAsync(
-                    _actorRoutes,
-                    key,
-                    row,
-                    authority,
-                    cancellationToken
-                )
+            !await AdmitAndCacheReadyRouteAsync(_actorRoutes, key, row, authority, lease!)
                 .ConfigureAwait(false)
         )
         {
@@ -492,7 +479,9 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
                 return (false, (TRow?)null);
 
             var cacheAge = _time.GetElapsedTime(route.StoredAt);
-            var ownerLeaseAge = _time.GetElapsedTime(route.OwnerLeaseLifetimeMeasuredAt);
+            var ownerLeaseAge = _leaseTracker.TimeProvider.GetElapsedTime(
+                route.OwnerLeaseLifetimeMeasuredAt
+            );
             if (
                 cacheAge >= route.MaxAge
                 || ownerLeaseAge >= route.OwnerLeaseLifetime
@@ -515,7 +504,7 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
         TKey key,
         TRow row,
         ZLinkAuthorityReadResult authority,
-        CancellationToken cancellationToken,
+        ZLinkOwnerLeaseTracker.Snapshot lease,
         SpotRouteRead? read = null
     )
         where TKey : notnull
@@ -524,20 +513,11 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
         if (authority is not ZLinkAuthorityReadResult.Found found)
             return false;
 
-        // Measure the lease lifetime from before the asynchronous read. If the
-        // continuation is delayed, this makes cache expiry earlier rather than
-        // extending it past the owner's admission deadline.
-        var ownerLeaseLifetimeMeasuredAt = _time.GetTimestamp();
-        var remaining = await _leaseTracker
-            .GetOwnerTokenRemainingAdmissionLifetimeAsync(
-                new ZLinkLocationOwnerToken(
-                    found.Snapshot.OwnerId,
-                    found.Snapshot.OwnerLeaseGeneration
-                ),
-                cancellationToken
-            )
-            .ConfigureAwait(false);
-        if (remaining is not { } leaseLifetime)
+        var admission = _leaseTracker.GetAdmissionLifetime(
+            lease,
+            new ZLinkLocationOwnerToken(found.Snapshot.OwnerId, found.Snapshot.OwnerLeaseGeneration)
+        );
+        if (admission is not { } leaseLifetime)
             return false;
 
         var maxAge = _options.RouteCacheMaxAge;
@@ -552,8 +532,8 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
             found.Snapshot.OwnerLeaseGeneration,
             _time.GetTimestamp(),
             maxAge,
-            ownerLeaseLifetimeMeasuredAt,
-            leaseLifetime,
+            leaseLifetime.MeasuredAt,
+            leaseLifetime.Lifetime,
             _health?.RecoveryGeneration ?? 0
         );
         await _lane
