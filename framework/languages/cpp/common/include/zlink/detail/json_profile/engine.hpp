@@ -38,13 +38,18 @@ struct token
     std::size_t child_count = 0;
 };
 
+struct open_token_container
+{
+    std::size_t remaining;
+    bool object;
+};
+
 struct token_buffer
 {
     std::vector<token> tokens;
     std::string strings;
+    std::vector<open_token_container> open_containers;
 };
-
-inline thread_local token_buffer reusable_tokens;
 
 // Framework and Stream Connector each compile the engine under their own
 // namespace so a consumer of both links two distinct symbols. A target exports
@@ -61,8 +66,11 @@ inline thread_local token_buffer reusable_tokens;
 
 namespace ZLINK_JSON_PROFILE_ENGINE_NS
 {
+// Keep TLS initialization and destruction in the engine's library.
+token_buffer &reusable_tokens ();
 bool parse_tokens (std::string_view input, token_buffer &output);
 }
 using ZLINK_JSON_PROFILE_ENGINE_NS::parse_tokens;
+using ZLINK_JSON_PROFILE_ENGINE_NS::reusable_tokens;
 
 } // namespace zlink::detail::json_profile

@@ -589,6 +589,17 @@ while IFS= read -r target; do
   }
 done < <(grep -Eoh 'opentelemetry-cpp::[[:alnum:]_.:+-]+' "$prefix"/lib/cmake/zlink_*/*Targets*.cmake)
 
+# Exercise consumer-instantiated JSON headers against each installed shared engine.
+# The consumer keeps default visibility so TLS ownership is tested across the DSO.
+for engine in framework connector; do
+  CMAKE_BUILD_PARALLEL_LEVEL="$build_jobs" cmake \
+    "-DZLINK_TYPED_JSON_PREFIX_PATH=$prefix" \
+    "-DZLINK_TYPED_JSON_BUILD_DIR=$work_dir/typed-json-$engine" \
+    "-DZLINK_TYPED_JSON_ENGINE=$engine" \
+    "-DZLINK_TYPED_JSON_CXX_COMPILER=$cxx_compiler" \
+    -P "$source_dir/tests/Zlink.Framework.PackageTests/typed_json_consumer.cmake"
+done
+
 archive="$output_dir/zlink-framework-cpp-$version-$platform.tar.gz"
 source_date_epoch="${SOURCE_DATE_EPOCH:-0}"
 [[ "$source_date_epoch" =~ ^[0-9]+$ ]] || { echo "SOURCE_DATE_EPOCH must be a non-negative integer" >&2; exit 1; }

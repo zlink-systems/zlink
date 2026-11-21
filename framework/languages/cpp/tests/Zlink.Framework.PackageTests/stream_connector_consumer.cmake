@@ -157,3 +157,9 @@ execute_process(
 if(NOT build_result EQUAL 0)
   message(FATAL_ERROR "relocated stream connector consumer build failed")
 endif()
+
+set(ZLINK_TYPED_JSON_PREFIX_PATH "${consumer_install_prefix};${consumer_dependency_prefixes}")
+set(ZLINK_TYPED_JSON_BUILD_DIR "${consumer_run_dir}/typed-json")
+set(ZLINK_TYPED_JSON_CONFIGURATION "${ZLINK_FRAMEWORK_CPP_CONFIGURATION}")
+set(ZLINK_TYPED_JSON_ENGINE connector)
+include("${CMAKE_CURRENT_LIST_DIR}/typed_json_consumer.cmake")
