@@ -1,3 +1,8 @@
+import { isDeepStrictEqual } from 'node:util';
+import {
+  encodeAuthorityAggregate,
+  initialRelocationCompletion
+} from './authority-relocation-record';
 import { sameAuthorityIncarnation, type ZLinkDiscardedAuthorityFence } from './lifecycle-runtime';
 import { routingIdsEqual } from '../routing-id';
 import {
@@ -212,7 +217,10 @@ export class ZLinkInMemoryAuthorityStore {
         ...row.snapshot,
         ownerLeaseGeneration: mutation.targetOwner.leaseGeneration,
         storeVersion: version(nextVersion),
-        payload: Buffer.from(mutation.payload)
+        payload: Buffer.from(mutation.payload),
+        ...(mutation.relocation === undefined
+          ? {}
+          : { relocation: structuredClone(mutation.relocation) ?? undefined })
       };
       this.scanRevision++;
       return this.stored(row.snapshot);
@@ -231,7 +239,10 @@ export class ZLinkInMemoryAuthorityStore {
       row.snapshot = {
         ...row.snapshot,
         storeVersion: version(nextVersion),
-        payload: Buffer.from(mutation.payload)
+        payload: Buffer.from(mutation.payload),
+        ...(mutation.relocation === undefined
+          ? {}
+          : { relocation: structuredClone(mutation.relocation) ?? undefined })
       };
       this.scanRevision++;
       return this.stored(row.snapshot);
@@ -281,7 +292,10 @@ export class ZLinkInMemoryAuthorityStore {
           }
         : {}),
       storeVersion: version(nextVersion),
-      payload: Buffer.from(mutation.payload)
+      payload: Buffer.from(mutation.payload),
+      ...(mutation.relocation === undefined
+        ? {}
+        : { relocation: structuredClone(mutation.relocation) ?? undefined })
     };
     this.scanRevision++;
     return this.stored(row.snapshot);
@@ -425,7 +439,9 @@ export class ZLinkInMemoryAuthorityStore {
         )
           unavailable = true;
       }
-      unavailable ||= relocationAuthorityCodec.read(current.snapshot.payload) !== undefined;
+      unavailable ||=
+        current.snapshot.relocation !== undefined ||
+        relocationAuthorityCodec.read(current.snapshot.payload) !== undefined;
       const owner = {
         ownerId: current.snapshot.ownerId,
         leaseGeneration: current.snapshot.ownerLeaseGeneration
@@ -576,6 +592,7 @@ export class ZLinkInMemoryAuthorityStore {
               (participant) => participant.authorityKey.value === memberKey
             )
         ) ||
+        row.snapshot.relocation !== undefined ||
         relocationAuthorityCodec.read(row.snapshot.payload) !== undefined ||
         actor.state !== 'ready'
       ) {
@@ -949,6 +966,12 @@ export class ZLinkInMemoryAuthorityStore {
       aggregateGeneration: request.aggregateGeneration
     };
     this.adjustCapacity(this.pendingCapacity, target, 1);
+    for (const participant of request.participants) {
+      if (participant.relocation !== undefined) {
+        const row = this.rows.get(participant.authorityKey.value)!;
+        row.snapshot = { ...row.snapshot, relocation: structuredClone(participant.relocation) };
+      }
+    }
     this.aggregates.set(aggregateKey, {
       request: cloneAggregateRequest(request),
       fence,
@@ -1036,6 +1059,19 @@ export class ZLinkInMemoryAuthorityStore {
         entry.row.snapshot = {
           ...entry.row.snapshot,
           storeVersion: version(nextVersion),
+          relocation:
+            entry.participant.relocation === undefined
+              ? entry.row.snapshot.relocation
+              : {
+                  ...structuredClone(entry.participant.relocation),
+                  ...(fence.acceptedRequests?.has(entry.participant.authorityKey.value) === true
+                    ? {
+                        completion: initialRelocationCompletion(
+                          fence.acceptedRequests.get(entry.participant.authorityKey.value)!
+                        )
+                      }
+                    : {})
+                },
           payload: Buffer.from(entry.participant.authorityPayload)
         };
       } else {
@@ -1043,6 +1079,19 @@ export class ZLinkInMemoryAuthorityStore {
         this.adjustCapacity(this.activeCapacity, entry.row.snapshot.allocation, -1);
         entry.row.snapshot = {
           storeVersion: version(nextVersion),
+          relocation:
+            entry.participant.relocation === undefined
+              ? entry.row.snapshot.relocation
+              : {
+                  ...structuredClone(entry.participant.relocation),
+                  ...(fence.acceptedRequests?.has(entry.participant.authorityKey.value) === true
+                    ? {
+                        completion: initialRelocationCompletion(
+                          fence.acceptedRequests.get(entry.participant.authorityKey.value)!
+                        )
+                      }
+                    : {})
+                },
           payload: Buffer.from(entry.participant.authorityPayload),
           objectGeneration: entry.row.snapshot.objectGeneration,
           authorityOwnerGeneration: ++this.ownerGeneration,
@@ -1092,6 +1141,9 @@ export class ZLinkInMemoryAuthorityStore {
       kind: 'snapshot',
       ...snapshot,
       payload: Buffer.from(snapshot.payload),
+      ...(snapshot.relocation === undefined
+        ? {}
+        : { relocation: structuredClone(snapshot.relocation) }),
       allocation: cloneAllocation(snapshot.allocation),
       ...(snapshot.pendingCreation === undefined
         ? {}
@@ -1199,6 +1251,7 @@ export class ZLinkInMemoryAuthorityStore {
 }
 
 export function validateAuthorityMutation(mutation: ZLinkAuthorityMutation): void {
+  if (mutation.relocation != null) encodeAuthorityAggregate(undefined, mutation.relocation);
   if (mutation.kind === 'delete' || mutation.kind === 'restore') return;
   if (mutation.kind === 'rebindOwnerLease') {
     if (
@@ -1326,6 +1379,10 @@ function validateAggregateRequest(request: ZLinkAggregatePrepareRequest): void {
     throw new TypeError(`Aggregate inventory digest must contain ${SHA256_DIGEST_BYTES} bytes.`);
   }
   validateCapacityVector(request.capacity);
+  for (const participant of request.participants) {
+    if (participant.relocation !== undefined)
+      encodeAuthorityAggregate(undefined, participant.relocation);
+  }
   const keys = request.participants.map((participant) => participant.authorityKey.value);
   const sorted = [...keys].sort();
   if (new Set(keys).size !== keys.length || keys.some((key, index) => key !== sorted[index])) {
@@ -1562,6 +1619,7 @@ function sameAggregateRequest(
       participant.authorityKey.value === other.authorityKey.value &&
       participant.expectedStoreVersion.value === other.expectedStoreVersion.value &&
       participant.ownerTransition === other.ownerTransition &&
+      isDeepStrictEqual(participant.relocation, other.relocation) &&
       Buffer.from(participant.authorityPayload).equals(Buffer.from(other.authorityPayload)) &&
       Buffer.from(participant.membershipMutation).equals(Buffer.from(other.membershipMutation))
     );
@@ -1582,6 +1640,8 @@ function cloneAggregateRequest(
       ...participant,
       authorityKey: { ...participant.authorityKey },
       expectedStoreVersion: { ...participant.expectedStoreVersion },
+      relocation:
+        participant.relocation === undefined ? undefined : structuredClone(participant.relocation),
       authorityPayload: Buffer.from(participant.authorityPayload),
       membershipMutation: Buffer.from(participant.membershipMutation)
     }))
