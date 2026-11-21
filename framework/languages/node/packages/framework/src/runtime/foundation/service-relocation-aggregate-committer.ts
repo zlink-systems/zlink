@@ -1,4 +1,5 @@
 import type {
+  AuthorityRelocation,
   ZLinkAggregateFence,
   ZLinkAggregateId,
   ZLinkAggregateParticipant,
@@ -19,6 +20,7 @@ export interface ServiceRelocationAggregateParticipantPlan {
   readonly expected: ZLinkAuthoritySnapshot;
   readonly ownerTransition: 'preserve' | 'newOwner';
   readonly authorityPayload: Uint8Array;
+  readonly relocation?: AuthorityRelocation;
   readonly membershipMutation: Uint8Array;
 }
 
@@ -142,6 +144,7 @@ function validateAndEncodeParticipants(
       expectedStoreVersion: participant.expected.storeVersion,
       ownerTransition: participant.ownerTransition,
       authorityPayload: Buffer.from(participant.authorityPayload),
+      relocation: participant.relocation,
       membershipMutation: Buffer.from(participant.membershipMutation)
     };
   });
