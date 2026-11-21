@@ -42,6 +42,7 @@ import systems.zlink.framework.streams.ZLinkSessionContext
 import systems.zlink.framework.streams.ZLinkSessionDispatchContext
 import systems.zlink.framework.streams.ZLinkStreamCodec
 import systems.zlink.framework.streams.ZLinkStreamMessageKind
+import systems.zlink.framework.testsupport.ZLinkHostServing
 
 class KotlinDuplicateBindCallbackPresenceTest {
     @Test
@@ -129,6 +130,8 @@ class KotlinDuplicateBindCallbackPresenceTest {
                 ZLinkJavaBackendAdapterFactory(),
             )
         try {
+            ZLinkHostServing.await(actorRuntime)
+            ZLinkHostServing.await(sessionRuntime)
             val port =
                 URI.create(
                         sessionRuntime
