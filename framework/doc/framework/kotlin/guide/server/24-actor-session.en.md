@@ -66,6 +66,22 @@ When the client names its id, the Actor for that id is found or created and boun
 --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/sessions/SessionHandlers.kt:session-actor-bind"
 ```
 
+Override `onSessionBoundSuspending` on the Actor to receive notification after a bind is committed.
+
+```kotlin
+override suspend fun onSessionBoundSuspending(
+    incoming: ZLinkSessionBindingIdentity,
+    cancellation: ZLinkActorCallbackCancellation,
+) {
+    // Update application state using the committed binding.
+}
+```
+
+The default implementation does nothing. An overridden callback runs once in Actor handler order
+after the bind commits. Exceptions and timeouts preserve the successful bind. The callback checks
+`cancellation.isCancellationRequested` for cancellation requests. The Framework reports failures
+and timeouts as runtime task exceptions.
+
 **A client that returns with the same id binds to the Actor that is already there.** That is why creating and finding are one call.
 
 ### 3.2 Forwarding What Is Left
