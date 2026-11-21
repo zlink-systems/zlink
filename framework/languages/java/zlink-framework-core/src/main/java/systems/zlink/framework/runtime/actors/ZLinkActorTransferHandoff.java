@@ -21,7 +21,6 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -58,18 +57,7 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
     private boolean closed;
 
     private <T> T inStateLane(Supplier<T> work) {
-        try {
-            return stateLane.runAsync(work).toCompletableFuture().join();
-        } catch (CompletionException failure) {
-            Throwable cause = failure.getCause();
-            if (cause instanceof RuntimeException runtimeFailure) {
-                throw runtimeFailure;
-            }
-            if (cause instanceof Error error) {
-                throw error;
-            }
-            throw failure;
-        }
+        return stateLane.awaitResult(work);
     }
 
     void begin(String actorId) {
@@ -909,18 +897,7 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
         }
 
         private <T> T inStateLane(Supplier<T> work) {
-            try {
-                return stateLane.runAsync(work).toCompletableFuture().join();
-            } catch (CompletionException failure) {
-                Throwable cause = failure.getCause();
-                if (cause instanceof RuntimeException runtimeFailure) {
-                    throw runtimeFailure;
-                }
-                if (cause instanceof Error error) {
-                    throw error;
-                }
-                throw failure;
-            }
+            return stateLane.awaitResult(work);
         }
 
         boolean matchesSourceRoute(ZLinkServiceMessageFollowWireCodec.ActorRoute candidate) {

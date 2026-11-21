@@ -1220,18 +1220,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
                 boolean owner) {}
 
         private <T> T inStateLane(Supplier<T> work) {
-            try {
-                return stateLane.runAsync(work).toCompletableFuture().join();
-            } catch (CompletionException failure) {
-                Throwable cause = failure.getCause();
-                if (cause instanceof RuntimeException runtimeFailure) {
-                    throw runtimeFailure;
-                }
-                if (cause instanceof Error error) {
-                    throw error;
-                }
-                throw failure;
-            }
+            return stateLane.awaitResult(work);
         }
 
         private PreparedSource(
@@ -1799,18 +1788,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
         }
 
         private <T> T inStateLane(Supplier<T> work) {
-            try {
-                return stateLane.runAsync(work).toCompletableFuture().join();
-            } catch (CompletionException failure) {
-                Throwable cause = failure.getCause();
-                if (cause instanceof RuntimeException runtimeFailure) {
-                    throw runtimeFailure;
-                }
-                if (cause instanceof Error error) {
-                    throw error;
-                }
-                throw failure;
-            }
+            return stateLane.awaitResult(work);
         }
     }
 
