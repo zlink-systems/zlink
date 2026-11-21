@@ -126,7 +126,11 @@ public final class ZLinkSuspendInvocationContext {
         }
     }
 
-    public static void rejectSameSpotWait(String targetSpotId) {
+    public static void validateSpotRequest(String targetSpotId, boolean releaseTurn) {
+        if (releaseTurn) {
+            requireYieldAllowed("Spot request");
+            return;
+        }
         ApplicationExecution execution = APPLICATION_EXECUTION.get();
         if (execution != null
                 && execution.sharedSpotGate()
@@ -137,16 +141,22 @@ public final class ZLinkSuspendInvocationContext {
         }
     }
 
-    public static void rejectSameActorWait(String targetActorId) {
+    public static void validateActorRequest(String targetActorId, boolean releaseTurn) {
         ApplicationExecution execution = APPLICATION_EXECUTION.get();
-        if (execution == null || !execution.sharedSpotGate()) {
-            return;
+        if (execution != null) {
+            if (targetActorId.equals(execution.actorId())) {
+                throw invalid(
+                        "Awaiting a request to the current Actor would wait on its FIFO claim");
+            }
+            if (!releaseTurn
+                    && execution.sharedSpotGate()
+                    && execution.memberActor().test(targetActorId)) {
+                throw invalid(
+                        "Awaiting a request to a member Actor would wait on the same Spot gate");
+            }
         }
-        if (targetActorId.equals(execution.actorId())
-                || execution.memberActor().test(targetActorId)) {
-            throw invalid(
-                    "Awaiting a request to the current or another member Actor "
-                            + "would wait on the same User Spot gate");
+        if (releaseTurn) {
+            requireYieldAllowed("Actor request");
         }
     }
 
