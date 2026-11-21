@@ -381,11 +381,18 @@ public sealed class MeshPermitHandoffTests
         using var claim = ready.TakeClaim(0);
         using var received = new MeshReceiveBatch();
         Assert.True(claim.Receive(received, RecvFlags.DontWait));
-        Assert.Equal(2, received.Count);
+        Assert.Equal(1, received.Count);
         Assert.Equal(MeshRecordKind.NodeSend, received[0].Kind);
         Assert.Null(received[0].CaptureReplyRoute());
-        Assert.Equal(MeshRecordKind.NodeRequest, received[1].Kind);
-        var reply = received[1].CaptureReplyRoute();
+        // A second claim owns the request while the first claim is still alive.
+        using var requestReady = new MeshReadyBatch();
+        fixture.Node.DrainReady(MeshReadyDomains.Application, requestReady, RecvFlags.DontWait);
+        Assert.Equal(1, requestReady.Count);
+        using var requestReceived = new MeshReceiveBatch();
+        Assert.True(requestReady.TakeClaim(0).Receive(requestReceived, RecvFlags.DontWait));
+        Assert.Equal(1, requestReceived.Count);
+        Assert.Equal(MeshRecordKind.NodeRequest, requestReceived[0].Kind);
+        var reply = requestReceived[0].CaptureReplyRoute();
         Assert.NotNull(reply);
 
         // The capability submits one terminal on the native reply and then
@@ -415,15 +422,21 @@ public sealed class MeshPermitHandoffTests
 
     private static int DrainAndDisposeAllApplicationRecords(ZLinkManagedMeshNode node)
     {
-        using var ready = new MeshReadyBatch();
-        node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
         var records = 0;
-        for (var index = 0; index < ready.Count; index++)
+        while (true)
         {
-            using var claim = ready.TakeClaim(index);
-            using var received = new MeshReceiveBatch();
-            Assert.True(claim.Receive(received, RecvFlags.DontWait));
-            records += received.Count;
+            using var ready = new MeshReadyBatch();
+            node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
+            if (ready.Count == 0)
+                break;
+            for (var index = 0; index < ready.Count; index++)
+            {
+                using var claim = ready.TakeClaim(index);
+                using var received = new MeshReceiveBatch();
+                Assert.True(claim.Receive(received, RecvFlags.DontWait));
+                Assert.Equal(1, received.Count);
+                records += received.Count;
+            }
         }
         return records;
     }
@@ -645,19 +658,17 @@ public sealed class MeshPermitHandoffTests
         int expectedRecords
     )
     {
-        using var ready = new MeshReadyBatch();
-        node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
-        Assert.Equal(1, ready.Count);
-        var claim = ready.TakeClaim(0);
-        using (claim)
-        using (var received = new MeshReceiveBatch())
+        for (var index = 0; index < expectedRecords; index++)
         {
+            using var ready = new MeshReadyBatch();
+            node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
+            Assert.Equal(1, ready.Count);
+            using var claim = ready.TakeClaim(0);
+            using var received = new MeshReceiveBatch();
             Assert.True(claim.Receive(received, RecvFlags.DontWait));
-            Assert.Equal(expectedRecords, received.Count);
-            Assert.All(
-                Enumerable.Range(0, received.Count),
-                index => Assert.Equal(MeshRecordKind.NodeSend, received[index].Kind)
-            );
+            Assert.Equal(1, received.Count);
+            Assert.Equal(MeshRecordKind.NodeSend, received[0].Kind);
         }
+        Assert.Equal(0U, node.Status().PendingApplicationMessages);
     }
 }
