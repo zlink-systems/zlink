@@ -6,6 +6,8 @@ export interface ZLinkActor {
   readonly context: ZLinkActorContext;
   configure?(): void;
   onJoinCompleted?(completion: ZLinkActorJoinCompletion): Promise<void>;
+  /** Receives a committed binding in Actor handler order. Failures do not change the bind result. */
+  onSessionBound?(incoming: ZLinkSessionBindingIdentity, signal: AbortSignal): void | Promise<void>;
   onDuplicateBind?(
     current: ZLinkSessionBindingIdentity,
     incoming: ZLinkSessionBindingIdentity,

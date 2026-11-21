@@ -181,3 +181,28 @@ per call afterward.
 See the
 [Java Actor exact interface](../../common/spec/server/languages/java/interfaces/actors.en.md)
 (Korean-only) for the full rationale.
+
+
+## `ZLinkActor.onSessionBound`
+
+Called in the Actor's handler order after the Actor owner commits a bind.
+
+```java
+default CompletionStage<Void> onSessionBound(
+    ZLinkSessionBindingIdentity incoming,
+    ZLinkActorCallbackCancellation cancellation)
+```
+
+| Member | Meaning |
+| --- | --- |
+| `incoming` | Committed session owner node RID, lifecycle generation, and binding generation |
+| `cancellation` | Cancellation requested by the execution deadline, Actor termination, or runtime shutdown |
+| Return value | A `CompletionStage<Void>` representing notification completion |
+| Default | Completes without performing any work |
+
+An override uses the shared Spot gate in `SpotWide`, or the Actor gate for Entry and `PerActor`
+Actors. Without an override, this notification introduces no gate wait. Exceptions are reported
+once as runtime task exceptions and Actor execution continues. Exceeding
+`SessionReplacementCallbackTimeout` (30,000 ms by default) requests cancellation and reports once.
+Cancellation caused by Actor termination or runtime shutdown is not reported. Notification failure
+or cancellation does not change the bind result or the incoming bind reply.
