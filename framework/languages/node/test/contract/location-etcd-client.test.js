@@ -268,17 +268,17 @@ test('etcd send limit accepts exactly 16 MiB and fails one byte more before disp
   const port = await serve(server);
   const client = new EtcdClient({ endpoints: [`http://127.0.0.1:${port}`], namespace: 'limit' });
   try {
-    for (const excess of [0, 1]) {
+    for (const excess of [-1, 0, 1]) {
       const request = { name: 'u', password: 'p'.repeat(limit + excess - overhead) };
       assert.equal(authenticate.requestSerialize(request).length, limit + excess);
       const response = client.rpc('Auth', 'authenticate', request, client.operation());
-      if (excess === 0) assert.equal((await response).token, 'token');
+      if (excess <= 0) assert.equal((await response).token, 'token');
       else
         await assert.rejects(
           response,
           (error) => error.kind === 'storeFailure' && error.code === grpc.status.RESOURCE_EXHAUSTED
         );
-      assert.equal(calls, 1, `server calls after ${limit + excess} bytes`);
+      assert.equal(calls, excess === -1 ? 1 : 2, `server calls after ${limit + excess} bytes`);
     }
   } finally {
     client.close();
@@ -302,18 +302,18 @@ test('etcd receive limit accepts exactly 8 MiB and fails one byte more', async (
   const port = await serve(server);
   const client = new EtcdClient({ endpoints: [`http://127.0.0.1:${port}`], namespace: 'limit' });
   try {
-    for (const excess of [0, 1]) {
+    for (const excess of [-1, 0, 1]) {
       token = 't'.repeat(limit + excess - overhead);
       assert.equal(authenticate.responseSerialize({ token }).length, limit + excess);
       const response = client.rpc('Auth', 'authenticate', { name: 'u' }, client.operation());
-      if (excess === 0) assert.equal((await response).token.length, token.length);
+      if (excess <= 0) assert.equal((await response).token.length, token.length);
       else
         await assert.rejects(
           response,
           (error) => error.kind === 'storeFailure' && error.code === grpc.status.RESOURCE_EXHAUSTED
         );
     }
-    assert.equal(calls, 2);
+    assert.equal(calls, 3);
   } finally {
     client.close();
     server.forceShutdown();
