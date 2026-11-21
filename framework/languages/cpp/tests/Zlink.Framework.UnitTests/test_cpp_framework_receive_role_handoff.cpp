@@ -16,6 +16,7 @@
 #include <array>
 #include <algorithm>
 #include <iostream>
+#include <limits>
 
 #ifdef ZLINK_TEST_HANDOFF_TRYLOCK_WRAP
 #include <pthread.h>
@@ -616,8 +617,34 @@ TEST (SameOwner, ShutdownAgainstEnqueueAndSettlement)
 
 TEST (SameOwner, ClaimAllocationFailureRepublishesUntakenOriginal)
 {
-    auto &allocations_before_failure = zlink::framework::tests::allocations_before_failure;
-    for (int allocation = 0; allocation != 3; ++allocation) {
+    namespace tests = zlink::framework::tests;
+    auto &allocations_before_failure = tests::allocations_before_failure;
+    // Count only allocations before the consumer can take the original. A later
+    // ready publication has a different ownership boundary, tested separately.
+    std::size_t claim_allocations = 0;
+    {
+        mesh::service_mailbox_t probe;
+        ASSERT_TRUE (probe.try_enqueue (record ("node", 0)));
+        original_t original;
+        const mesh::service_mailbox_t::claimed_t before_take = [&] (const auto &claim) {
+            claim_allocations = tests::tracked_allocation_count;
+            tests::tracking_allocations = false;
+            original.emplace (std::move (*claim->records.front ()));
+            claim->records.front ()->application.reset ();
+        };
+        tests::tracked_allocation_size = 0;
+        tests::tracked_allocation_count = 0;
+        tests::tracking_allocations = true;
+        auto claim = probe.try_claim_owner (mesh::service_mailbox_domain_t::application, "node", 64,
+                                            65536, before_take);
+        tests::tracking_allocations = false;
+        ASSERT_TRUE (claim && original);
+        ASSERT_GT (claim_allocations, 0u);
+        EXPECT_TRUE (original->transferred ());
+        EXPECT_EQ (0u, probe.pending_messages (mesh::service_mailbox_domain_t::application));
+    }
+    std::cout << "claim-fault-sites before-transfer=" << claim_allocations << '\n';
+    for (std::size_t allocation = 0; allocation != claim_allocations; ++allocation) {
         SCOPED_TRACE (allocation);
         mesh::service_mailbox_t mailbox;
         unsigned publications = 0;
