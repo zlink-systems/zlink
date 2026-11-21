@@ -69,8 +69,8 @@ test('Actor send and request reuse client options without delivery provider disc
       }
     },
     leaseTracker: {
-      async remainingOwnerTokenLeaseMs() {
-        return 100000;
+      async ownerTokenLeaseDeadlineMs() {
+        return performance.now() + 100000;
       }
     }
   });
@@ -162,8 +162,8 @@ for (const present of [false, true]) {
         }
       },
       leaseTracker: {
-        async remainingOwnerTokenLeaseMs() {
-          return 100000;
+        async ownerTokenLeaseDeadlineMs() {
+          return performance.now() + 100000;
         }
       }
     });
@@ -237,8 +237,8 @@ test('canonical Actor authority unwraps once on route miss and creates no legacy
       }
     },
     leaseTracker: {
-      async remainingOwnerTokenLeaseMs() {
-        return 100000;
+      async ownerTokenLeaseDeadlineMs() {
+        return performance.now() + 100000;
       }
     }
   });

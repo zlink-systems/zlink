@@ -76,7 +76,7 @@ for (const row of [...fixture.joinFailureCases, {
         }
         return snapshot;
       }
-    }, (mesh) => mesh, undefined, { remainingOwnerTokenLeaseMs: async () => 60_000 });
+    }, (mesh) => mesh, undefined, { ownerTokenLeaseDeadlineMs: async () => performance.now() + 60_000 });
     const target = row.target === 'missing' ? 'missing-room' : owner.spotId;
     if (row.warmRoute) {
       if (row.target === 'missing') {

@@ -57,8 +57,8 @@ for (const [changedVersion, departed] of [
         }
       },
       leaseTracker: {
-        async remainingOwnerTokenLeaseMs() {
-          return 60_000;
+        async ownerTokenLeaseDeadlineMs() {
+          return performance.now() + 60_000;
         }
       }
     });

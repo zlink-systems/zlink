@@ -168,32 +168,14 @@ jobs:
       # build-essential meta package only added a dependency on the apt mirrors.
       - name: Check the Linux native toolchain
         if: startsWith(matrix.target.name, 'linux-')
-        run: gcc --version && g++ --version && make --version
+        run: bash scripts/ci/check-native-toolchain.sh
 
       - name: Prepare the Core release runtime for this platform
         id: core
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          binding_version=$(node -p "require('./framework/languages/node/packages/framework/package.json').dependencies['@zlink-systems/zlink']")
-          # The binding package version and the Core release it embeds differ
-          # (binding 0.17.6 ships Core 0.17.5); the Core version is owned by VERSION.
-          core_version=$(sed -n 's/^LIBZLINK_VERSION=//p' VERSION)
-          core_prefix=$(bash scripts/local-package/core/fetch-release.sh \
-            --version "${core_version}" \
-            --platform "${{ matrix.target.core_platform }}" \
-            --cache-dir .artifacts/core-release)
-          if [ "${RUNNER_OS}" = "Windows" ]; then
-            core_prefix=$(cygpath -w "${core_prefix}")
-            # The binding's Windows loader searches ZLINK_CORE_PREFIX\bin.
-            echo "ZLINK_CORE_PREFIX=${core_prefix}" >> "${GITHUB_ENV}"
-            echo "${core_prefix}\\bin" >> "${GITHUB_PATH}"
-          fi
-          echo "ZLINK_CORE_SOURCE=release" >> "${GITHUB_ENV}"
-          echo "ZLINK_CORE_PACKAGE_PREFIX=${core_prefix}" >> "${GITHUB_ENV}"
-          echo "prefix=${core_prefix}" >> "${GITHUB_OUTPUT}"
-          echo "binding_version=${binding_version}" >> "${GITHUB_OUTPUT}"
+        run: bash scripts/ci/framework-node-core-runtime.sh "${{ matrix.target.core_platform }}"
 
       - name: Build the checkout Node binding package
         uses: ./.github/actions/node-binding-package
@@ -205,34 +187,16 @@ jobs:
         env:
           # Git Bash: make ln -s create a real symlink for the compiler bootstrap.
           MSYS: winsymlinks:nativestrict
-        run: |
-          # The workspace manifest pins http-client to a local tarball; build its
-          # dist with the same bootstrap the local-package flow uses, fed by the
-          # checkout-built local binding tarball.
-          version="${{ steps.core.outputs.binding_version }}"
-          mkdir -p .artifacts/wsl/npm
-          bash scripts/local-package/http-client/build-wsl.sh node
-          tar tzf .artifacts/wsl/npm/zlink-systems-http-client-*.tgz > "${RUNNER_TEMP}/http-client-files.txt"
-          grep -q 'package/dist/index.js' "${RUNNER_TEMP}/http-client-files.txt"
+        run: bash scripts/ci/framework-node-http-client.sh .artifacts/wsl
 
       - name: Pin framework install to the checkout Node binding package
         working-directory: framework/languages/node
         shell: bash
-        run: |
-          version="${{ steps.core.outputs.binding_version }}"
-          export BINDING_VERSION="${version}"
-          node - <<'NODE'
-          const fs = require('node:fs');
-          const file = 'package.json';
-          const packageJson = JSON.parse(fs.readFileSync(file, 'utf8'));
-          packageJson.dependencies['@zlink-systems/zlink'] = `file:../../../.artifacts/wsl/npm/zlink-systems-zlink-${process.env.BINDING_VERSION}.tgz`;
-          fs.writeFileSync(file, `${JSON.stringify(packageJson, null, 2)}\n`);
-          NODE
-          BINDING_VERSION="${version}" npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+        run: bash ../../../scripts/ci/framework-node-pin-binding.sh "${{ steps.core.outputs.binding_version }}"
 
       - name: Install framework dependencies
         working-directory: framework/languages/node
-        run: npm ci
+        run: bash ../../../scripts/ci/framework-node-install.sh
 
       - name: Cache Chromium for browser connector E2E
         if: matrix.node-version == 22 && (matrix.target.name == 'linux-x64' || matrix.target.name == 'win-x64')
@@ -310,7 +274,7 @@ jobs:
       # check inside the gate always sees a fresh file. A diff here means the
       # source changed without the regenerated bundle being committed.
       - name: Verify the build left the committed WebGL bundle unchanged
-        run: git diff --exit-code -- framework/languages/unity/com.zlink.stream-connector.webgl
+        run: bash scripts/ci/framework-node-webgl-diff.sh
 
       - name: Run actual Chromium Stream Connector E2E
         if: matrix.node-version == 22 && (matrix.target.name == 'linux-x64' || matrix.target.name == 'win-x64')
@@ -350,48 +314,18 @@ jobs:
           dotnet-version: 8.0.x
 
       - name: Check the native toolchain
-        run: gcc --version && g++ --version && make --version
+        run: bash scripts/ci/check-native-toolchain.sh
 
       - name: Prepare the Core release runtime
         id: core
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          binding_version=$(node -p "require('./framework/languages/node/packages/framework/package.json').dependencies['@zlink-systems/zlink']")
-          core_version=$(sed -n 's/^LIBZLINK_VERSION=//p' VERSION)
-          core_prefix=$(bash scripts/local-package/core/fetch-release.sh \
-            --version "${core_version}" \
-            --platform linux-x64 \
-            --cache-dir .artifacts/core-release)
-          echo "ZLINK_CORE_SOURCE=release" >> "${GITHUB_ENV}"
-          echo "ZLINK_CORE_PACKAGE_PREFIX=${core_prefix}" >> "${GITHUB_ENV}"
-          echo "ZLINK_LIBRARY_PATH=${core_prefix}/lib/libzlink.so.${core_version}" >> "${GITHUB_ENV}"
-          echo "binding_version=${binding_version}" >> "${GITHUB_OUTPUT}"
-          echo "prefix=${core_prefix}" >> "${GITHUB_OUTPUT}"
-          echo "core_version=${core_version}" >> "${GITHUB_OUTPUT}"
+        run: bash scripts/ci/framework-node-cross-core.sh
 
       - name: Prepare the .NET local packages for the cross-language test host
         shell: bash
-        run: |
-          package_root="${GITHUB_WORKSPACE}/.artifacts/wsl"
-          nuget_source="${package_root}/nuget"
-          mkdir -p "${nuget_source}"
-          binding_version=$(sed -n 's/^ZLINK_BINDING_VERSION=//p' bindings/dotnet/VERSION)
-          core_version="${{ steps.core.outputs.core_version }}"
-          core_prefix="${{ steps.core.outputs.prefix }}"
-          dotnet pack bindings/dotnet/src/Zlink/Zlink.csproj \
-            -c Release \
-            -o "${nuget_source}" \
-            "-p:ZLinkCoreVersion=${core_version}" \
-            "-p:ZLinkCoreSource=local" \
-            "-p:ZLinkLinuxX64NativeRoot=${core_prefix}/lib" \
-            "-p:ZLinkCoreProvenancePath=${core_prefix}/share/zlink/core-package-provenance.json"
-          test -s "${nuget_source}/Zlink.${binding_version}.nupkg" \
-            || { echo "::error::Local Zlink ${binding_version} package was not created" >&2; exit 1; }
-          dotnet pack framework/languages/dotnet/src/Zlink.HttpClient/Zlink.HttpClient.csproj -c Release -o "${nuget_source}"
-          echo "ZLINK_LOCAL_PACKAGE_ROOT=${package_root}" >> "${GITHUB_ENV}"
-          echo "ZLinkLocalPackageRoot=${package_root}" >> "${GITHUB_ENV}"
+        run: bash scripts/ci/framework-node-cross-dotnet.sh "${{ steps.core.outputs.core_version }}" "${{ steps.core.outputs.prefix }}"
 
       - name: Build the checkout Node binding package
         uses: ./.github/actions/node-binding-package
@@ -403,33 +337,11 @@ jobs:
         env:
           # Git Bash: make ln -s create a real symlink for the compiler bootstrap.
           MSYS: winsymlinks:nativestrict
-        run: |
-          # The workspace manifest pins http-client to a local tarball; build its
-          # dist with the same bootstrap the local-package flow uses, fed by the
-          # checkout-built local binding tarball.
-          version="${{ steps.core.outputs.binding_version }}"
-          package_root="${ZLINK_LOCAL_PACKAGE_ROOT}"
-          npm_root="${package_root}/npm"
-          mkdir -p "${npm_root}"
-          ZLINK_LOCAL_PACKAGE_ROOT="${package_root}" bash scripts/local-package/http-client/build-wsl.sh node
-          tar tzf "${npm_root}"/zlink-systems-http-client-*.tgz > "${RUNNER_TEMP}/http-client-files.txt"
-          grep -q 'package/dist/index.js' "${RUNNER_TEMP}/http-client-files.txt"
+        run: bash scripts/ci/framework-node-http-client.sh "${ZLINK_LOCAL_PACKAGE_ROOT}"
 
       - name: Install and build the Node framework workspace
         working-directory: framework/languages/node
-        run: |
-          version="${{ steps.core.outputs.binding_version }}"
-          export BINDING_VERSION="${version}"
-          node - <<'NODE'
-          const fs = require('node:fs');
-          const file = 'package.json';
-          const packageJson = JSON.parse(fs.readFileSync(file, 'utf8'));
-          packageJson.dependencies['@zlink-systems/zlink'] = `file:../../../.artifacts/wsl/npm/zlink-systems-zlink-${process.env.BINDING_VERSION}.tgz`;
-          fs.writeFileSync(file, `${JSON.stringify(packageJson, null, 2)}\n`);
-          NODE
-          BINDING_VERSION="${version}" npm install --package-lock-only --ignore-scripts --no-audit --no-fund
-          npm ci
-          npm run build
+        run: bash ../../../scripts/ci/framework-node-cross-install.sh "${{ steps.core.outputs.binding_version }}"
 
       - name: Cache Chromium for browser connector E2E
         uses: ./.github/actions/main-cache

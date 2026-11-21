@@ -457,21 +457,21 @@ export class ZLinkStoreLocationResolvers
       ownerId: current.ownerId,
       leaseGeneration: current.ownerLeaseGeneration
     };
-    const remainingLeaseMs = await this.options.leaseTracker.remainingOwnerTokenLeaseMs(
+    const leaseDeadlineMs = await this.options.leaseTracker.ownerTokenLeaseDeadlineMs(
       currentOwner,
       signal
     );
-    if (remainingLeaseMs <= 0) {
+    if (leaseDeadlineMs <= this.monotonicNowMs()) {
       const unavailable = {
         kind: 'owner_unavailable' as const,
         authorityGeneration: current.authorityOwnerGeneration,
-        remainingLeaseMs
+        remainingLeaseMs: 0
       };
       if (isRelocationDebugEnabled()) {
         emitActorOwnerLeaseObservation({
           actorId,
           authorityGeneration: unavailable.authorityGeneration,
-          remainingLeaseMs,
+          remainingLeaseMs: 0,
           decision: 'owner_unavailable'
         });
       }
@@ -485,7 +485,7 @@ export class ZLinkStoreLocationResolvers
       const route = await this.cacheDirectActorRoute(
         actorId,
         projectCanonicalActorRoute(current, actorId),
-        remainingLeaseMs,
+        leaseDeadlineMs,
         cache
       );
       return route === undefined ? { kind: 'missing' } : { kind: 'ready', route };
@@ -507,14 +507,14 @@ export class ZLinkStoreLocationResolvers
         ? { spotId: decoded.spotId, spotGeneration: decoded.spotGeneration }
         : {})
     };
-    const cachedRoute = await this.cacheDirectActorRoute(actorId, route, remainingLeaseMs, cache);
+    const cachedRoute = await this.cacheDirectActorRoute(actorId, route, leaseDeadlineMs, cache);
     return cachedRoute === undefined ? { kind: 'missing' } : { kind: 'ready', route: cachedRoute };
   }
 
   private async cacheDirectActorRoute(
     actorId: string,
     route: ZLinkResolvedActorRoute | undefined,
-    remainingLeaseMs: number,
+    leaseDeadlineMs: number,
     cache: boolean
   ): Promise<ZLinkResolvedActorRoute | undefined> {
     return await this.lane.run(() => {
@@ -522,11 +522,14 @@ export class ZLinkStoreLocationResolvers
       const maxAgeMs =
         this.options.routeCacheMaxAgeMs ?? zlinkDefaultLocationOptions.routeCacheMaxAgeMs;
       if (cache && maxAgeMs > 0) {
-        this.directActorRoutes.set(actorId, {
-          row: route,
-          expiresAtMs: this.monotonicNowMs() + Math.min(maxAgeMs, remainingLeaseMs),
-          storeVersion: route.authorityStoreVersion
-        });
+        const now = this.monotonicNowMs();
+        if (leaseDeadlineMs > now) {
+          this.directActorRoutes.set(actorId, {
+            row: route,
+            expiresAtMs: Math.min(now + maxAgeMs, leaseDeadlineMs),
+            storeVersion: route.authorityStoreVersion
+          });
+        }
       }
       return route;
     });
@@ -755,16 +758,15 @@ export class ZLinkStoreLocationResolvers
   ): Promise<boolean> {
     const maxAgeMs =
       this.options.routeCacheMaxAgeMs ?? zlinkDefaultLocationOptions.routeCacheMaxAgeMs;
-    const remainingLeaseMs = await this.options.leaseTracker.remainingOwnerTokenLeaseMs(
+    const leaseDeadlineMs = await this.options.leaseTracker.ownerTokenLeaseDeadlineMs(
       { ownerId, leaseGeneration: ownerLeaseGeneration },
       signal
     );
-    if (remainingLeaseMs <= 0) return false;
-    if (maxAgeMs <= 0) return true;
-    const lifetimeMs = Math.min(maxAgeMs, remainingLeaseMs);
-    if (lifetimeMs <= 0) return false;
+    if (maxAgeMs <= 0) return leaseDeadlineMs > this.monotonicNowMs();
     return await this.lane.run(() => {
-      cache.set(key, { row, expiresAtMs: this.monotonicNowMs() + lifetimeMs });
+      const now = this.monotonicNowMs();
+      if (leaseDeadlineMs <= now) return false;
+      cache.set(key, { row, expiresAtMs: Math.min(now + maxAgeMs, leaseDeadlineMs) });
       return true;
     });
   }
@@ -945,6 +947,8 @@ export class ZLinkAuthoritySpotRouteResolver implements ZLinkSpotRouteResolver {
   ): Promise<ZLinkSpotRouteTarget | ZLinkInstanceReactivationRoute> {
     const key = String(spotId);
     const prepared = await this.lane.run(() => this.beginResolutionCore(key));
+    let cacheTarget: ZLinkSpotRouteTarget | undefined;
+    let leaseDeadlineMs: number | undefined;
     try {
       if (prepared.cached !== undefined) return prepared.cached;
 
@@ -960,17 +964,14 @@ export class ZLinkAuthoritySpotRouteResolver implements ZLinkSpotRouteResolver {
           decoded.ownerId === current.ownerId &&
           decoded.ownerLeaseGeneration === current.ownerLeaseGeneration
         ) {
-          const remainingLeaseMs =
-            this.leaseTracker === undefined
-              ? undefined
-              : await this.leaseTracker.remainingOwnerTokenLeaseMs(
-                  {
-                    ownerId: current.ownerId,
-                    leaseGeneration: current.ownerLeaseGeneration
-                  },
-                  signal
-                );
-          if (remainingLeaseMs !== undefined && remainingLeaseMs <= 0) {
+          leaseDeadlineMs = await this.leaseTracker?.ownerTokenLeaseDeadlineMs(
+            {
+              ownerId: current.ownerId,
+              leaseGeneration: current.ownerLeaseGeneration
+            },
+            signal
+          );
+          if (leaseDeadlineMs !== undefined && leaseDeadlineMs <= this.monotonicNowMs()) {
             if (instanceIntent === true && ready?.kind === 'instance_spot') {
               return {
                 kind: 'coldActivation',
@@ -1006,17 +1007,7 @@ export class ZLinkAuthoritySpotRouteResolver implements ZLinkSpotRouteResolver {
               signal
             )
           };
-          if (ready !== undefined) {
-            await this.lane.run(() =>
-              this.cacheResolutionCore(
-                key,
-                prepared.epoch,
-                target,
-                remainingLeaseMs,
-                current.storeVersion.value
-              )
-            );
-          }
+          if (ready !== undefined) cacheTarget = target;
           return target;
         }
       }
@@ -1035,7 +1026,15 @@ export class ZLinkAuthoritySpotRouteResolver implements ZLinkSpotRouteResolver {
         `SPOT '${spotId}' has no Ready authority.`
       );
     } finally {
-      await this.lane.run(() => this.finishResolutionCore(key));
+      await this.lane.run(() => {
+        try {
+          if (cacheTarget !== undefined) {
+            this.cacheResolutionCore(key, prepared.epoch, cacheTarget, leaseDeadlineMs);
+          }
+        } finally {
+          this.finishResolutionCore(key);
+        }
+      });
     }
   }
 
@@ -1072,16 +1071,20 @@ export class ZLinkAuthoritySpotRouteResolver implements ZLinkSpotRouteResolver {
     key: string,
     epoch: number,
     target: ZLinkSpotRouteTarget,
-    remainingLeaseMs: number | undefined,
-    storeVersion: string
+    leaseDeadlineMs: number | undefined
   ): void {
-    if (this.routeCacheMaxAgeMs <= 0 || this.currentEpochCore(key) !== epoch) return;
-    const lifetimeMs = Math.min(this.routeCacheMaxAgeMs, remainingLeaseMs ?? 0);
-    if (lifetimeMs <= 0 || this.currentEpochCore(key) !== epoch) return;
+    if (
+      this.routeCacheMaxAgeMs <= 0 ||
+      leaseDeadlineMs === undefined ||
+      this.currentEpochCore(key) !== epoch
+    )
+      return;
+    const now = this.monotonicNowMs();
+    if (leaseDeadlineMs <= now) return;
     this.cache.set(key, {
       row: target,
-      expiresAtMs: this.monotonicNowMs() + lifetimeMs,
-      storeVersion
+      expiresAtMs: Math.min(now + this.routeCacheMaxAgeMs, leaseDeadlineMs),
+      storeVersion: target.authorityStoreVersion
     });
   }
 

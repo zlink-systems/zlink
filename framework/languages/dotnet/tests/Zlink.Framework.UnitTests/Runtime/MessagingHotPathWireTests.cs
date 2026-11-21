@@ -275,6 +275,45 @@ public sealed class MessagingHotPathWireTests
     }
 
     [Theory]
+    [InlineData(null)]
+    [InlineData("한글 and \t control characters")]
+    public void Direct_reply_matches_the_header_and_body_multipart_wire(string? body)
+    {
+        var header = new ZLinkEnvelopeHeader(
+            ZLinkMessageKind.Response,
+            "채널",
+            "",
+            ZLinkEnvelopeCodec.DefaultContentType,
+            "req-1",
+            null,
+            null,
+            null,
+            null
+        )
+        {
+            Metadata = new Dictionary<string, string> { ["b"] = "2", ["a"] = "1" },
+        };
+        var parts = ZLinkEnvelopeCodec.EncodeParts(header, body, typeof(string), null);
+        try
+        {
+            using var direct = ZLinkEnvelopeCodec.EncodeMultipart(
+                header,
+                body,
+                typeof(string),
+                null
+            );
+            Assert.Equal(
+                ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(parts),
+                direct.ToArray()
+            );
+        }
+        finally
+        {
+            ZLinkMessageParts.DisposeAll(parts);
+        }
+    }
+
+    [Theory]
     [InlineData(1)]
     [InlineData(2)]
     [InlineData(3)]

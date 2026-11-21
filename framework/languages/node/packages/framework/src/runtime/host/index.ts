@@ -2481,7 +2481,7 @@ export class ZLinkFrameworkRuntimeHost
           message.close();
         }
       },
-      target: async (requestedMesh, stableType, signal, excludedNodeRids) => {
+      target: async (requestedMesh, stableType, signal, excludedHostRuns) => {
         const clientMeshes = [...this.options.registration.spotNodes]
           .filter(([, node]) => hasObjectClientCapability(node.objectRole))
           .map(([meshName]) => meshName);
@@ -2513,7 +2513,7 @@ export class ZLinkFrameworkRuntimeHost
             stableType,
             meshNode,
             signal,
-            excludedNodeRids
+            excludedHostRuns
           );
         if (selected === undefined) return undefined;
         const localStatus = meshNode?.status();
@@ -2614,7 +2614,7 @@ export class ZLinkFrameworkRuntimeHost
           message.close();
         }
       },
-      target: async (request, signal, excludedNodeRids) => {
+      target: async (request, signal, excludedHostRuns) => {
         const meshName = selectUserSpotMesh(request.meshName);
         const meshNode = this.spotNodeRuntime?.meshNode(meshName);
         const selected =
@@ -2624,7 +2624,7 @@ export class ZLinkFrameworkRuntimeHost
             request.stableType,
             meshNode,
             signal,
-            excludedNodeRids
+            excludedHostRuns
           );
         if (selected === undefined) return undefined;
         const localStatus = meshNode?.status();
