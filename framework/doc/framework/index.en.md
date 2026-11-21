@@ -82,6 +82,7 @@ to the guild is just the next line, with no callback or futures composition.
     {
         public async ValueTask<DefeatBossResult> HandleAsync(
             PlayerSpot player,
+            IZLinkMessageContext context,
             DefeatBossRequest request,
             CancellationToken ct)
         {
@@ -111,6 +112,7 @@ to the guild is just the next line, with no callback or futures composition.
     {
         public ValueTask<GuildBenefitResult> HandleAsync(
             GuildSpot guild,
+            IZLinkMessageContext context,
             GuildBenefitRequest request,
             CancellationToken ct)
         {

@@ -89,7 +89,7 @@
     {
       "kind": "logical",
       "goldenFixture": "golden/relocation-envelope-v1.json",
-      "goldenSha256": "10683139b018ad9cb4c35d220993422df2633a52aa67a65db00c876cc5bfdec2",
+      "goldenSha256": "472fcb0c14774aa83f1a92c864f65950385873782b709a72feceeae03e58a9d7",
       "surface": {
         "format": "relocation-envelope-v1",
         "type": "relocation-envelope-v1",

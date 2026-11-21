@@ -11,41 +11,24 @@ public sealed class test_writable_token_delivery
     {
         Type ownerType = CompletionOwnerTestAccess.RuntimeType(
             "Systems.Zlink.CompletionOwner");
-        Type attemptType = ownerType.GetNestedType("SendAttempt",
-            System.Reflection.BindingFlags.NonPublic)!;
-        object missingErrno = CompletionOwnerTestAccess.Create(
-            typeof(ZlinkSubmitException),
-            ZlinkSubmitException.ErrorCode.Backpressured, 0);
-        object wouldBlock = CompletionOwnerTestAccess.Create(
-            typeof(ZlinkSubmitException),
-            ZlinkSubmitException.ErrorCode.Backpressured,
-            CompletionOwnerTestAccess.Errno("EAgain"));
+        Type attemptType = ownerType.GetNestedType("SubmitAttempt",
+            BindingFlags.NonPublic)!;
+        int wouldBlock = CompletionOwnerTestAccess.Errno("EAgain");
 
-        object missingErrnoAttempt = CompletionOwnerTestAccess.Create(
-            attemptType, 73UL, missingErrno);
         // Core returned the typed BACKPRESSURED result; the errno is diagnostic
         // only and never reclassifies it.
-        Assert.True((bool)CompletionOwnerTestAccess.InvokeStatic(ownerType,
-            "IsWritableWait", missingErrnoAttempt)!);
+        Assert.True(IsWritableWait(73UL, SubmitResult.Backpressured, 0));
+        Assert.False(IsWritableWait(73UL, SubmitResult.NotFound, wouldBlock));
+        Assert.True(IsWritableWait(73UL, SubmitResult.Backpressured, wouldBlock));
+        Assert.False(IsWritableWait(0UL, SubmitResult.Backpressured, wouldBlock));
 
-        object notFound = CompletionOwnerTestAccess.Create(
-            typeof(ZlinkSubmitException),
-            ZlinkSubmitException.ErrorCode.NotFound,
-            CompletionOwnerTestAccess.Errno("EAgain"));
-        object notFoundAttempt = CompletionOwnerTestAccess.Create(
-            attemptType, 73UL, notFound);
-        Assert.False((bool)CompletionOwnerTestAccess.InvokeStatic(ownerType,
-            "IsWritableWait", notFoundAttempt)!);
-
-        object writableWait = CompletionOwnerTestAccess.Create(
-            attemptType, 73UL, wouldBlock);
-        Assert.True((bool)CompletionOwnerTestAccess.InvokeStatic(ownerType,
-            "IsWritableWait", writableWait)!);
-
-        object tokenless = CompletionOwnerTestAccess.Create(attemptType,
-            0UL, wouldBlock);
-        Assert.False((bool)CompletionOwnerTestAccess.InvokeStatic(ownerType,
-            "IsWritableWait", tokenless)!);
+        bool IsWritableWait(ulong id, SubmitResult result, int errno)
+        {
+            object attempt = CompletionOwnerTestAccess.Create(
+                attemptType, id, result, errno, null);
+            return (bool)CompletionOwnerTestAccess.InvokeStatic(ownerType,
+                "IsWritableWait", attempt)!;
+        }
     }
 
     [Fact]
@@ -71,12 +54,11 @@ public sealed class test_writable_token_delivery
 
         Assert.NotEqual(0UL, CompletionOwnerTestAccess.Property(
             attempt, "CompletionId"));
-        ZlinkSubmitException failure = Assert.IsType<ZlinkSubmitException>(
-            CompletionOwnerTestAccess.Property(attempt, "Failure"));
-        Assert.Equal(ZlinkSubmitException.ErrorCode.Backpressured,
-            failure.Result);
+        Assert.Equal(SubmitResult.Backpressured,
+            CompletionOwnerTestAccess.Property(attempt, "Result"));
         Assert.Equal(CompletionOwnerTestAccess.Errno("EAgain"),
-            failure.NativeErrno);
+            CompletionOwnerTestAccess.Property(attempt, "NativeErrno"));
+        Assert.Null(CompletionOwnerTestAccess.Property(attempt, "ManagedFailure"));
     }
 
     [Fact]
@@ -101,12 +83,11 @@ public sealed class test_writable_token_delivery
 
         Assert.NotEqual(0UL, CompletionOwnerTestAccess.Property(
             attempt, "CompletionId"));
-        ZlinkSubmitException failure = Assert.IsType<ZlinkSubmitException>(
-            CompletionOwnerTestAccess.Property(attempt, "Failure"));
-        Assert.Equal(ZlinkSubmitException.ErrorCode.Backpressured,
-            failure.Result);
+        Assert.Equal(SubmitResult.Backpressured,
+            CompletionOwnerTestAccess.Property(attempt, "Result"));
         Assert.Equal(CompletionOwnerTestAccess.Errno("EAgain"),
-            failure.NativeErrno);
+            CompletionOwnerTestAccess.Property(attempt, "NativeErrno"));
+        Assert.Null(CompletionOwnerTestAccess.Property(attempt, "ManagedFailure"));
     }
 
     [Theory]

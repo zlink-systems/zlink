@@ -1,0 +1,12 @@
+{
+  "name": "zlink-service-wire-tooling",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test *.test.mjs && node validate-service-wire-schema.mjs --self-test && node generate-service-wire-codecs.mjs --check && node verify-service-wire-decoder-fixtures.mjs"
+  },
+  "dependencies": {
+    "ajv": "8.17.1",
+    "canonicalize": "2.1.0"
+  }
+}

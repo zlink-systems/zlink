@@ -97,7 +97,7 @@ Actor는 자기에게 묶인 연결을 알고 있다. 응답이 아니라 **스�
 
 ### 3.4 Bind 통지
 
-.NET의 bind 확정 통지 `OnSessionBoundAsync`는 [Session binding 장 §7](39-session-binding.ko.md)에서 설명한다.
+.NET의 bind 확정 통지 `OnSessionBoundAsync`는 [Session binding 장 §6](39-session-binding.ko.md)에서 설명한다.
 
 ## 4. 접속하는 쪽 — mesh 밖의 client
 

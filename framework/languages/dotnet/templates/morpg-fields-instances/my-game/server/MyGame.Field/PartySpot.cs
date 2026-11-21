@@ -69,26 +69,42 @@ public sealed class PartySpot(IZLinkSpotContext context, IZLinkActorClient actor
 [ZLinkSpotRequestHandler(nameof(PartyCommand))]
 public sealed class PartyCommandHandler : IZLinkSpotRequestHandler<PartySpot, PartyCommand, PartyCommandResult>
 {
-    public ValueTask<PartyCommandResult> HandleAsync(PartySpot spot, PartyCommand request,
-        CancellationToken ct) => spot.CommandAsync(request, ct);
+    public ValueTask<PartyCommandResult> HandleAsync(
+        PartySpot spot,
+        IZLinkMessageContext context,
+        PartyCommand request,
+        CancellationToken ct
+    ) => spot.CommandAsync(request, ct);
 }
 [ZLinkSpotRequestHandler(nameof(DungeonMemberEntered))]
 public sealed class MemberEnteredHandler : IZLinkSpotRequestHandler<PartySpot, DungeonMemberEntered, PartyCommandResult>
 {
-    public ValueTask<PartyCommandResult> HandleAsync(PartySpot spot, DungeonMemberEntered request,
-        CancellationToken ct) => spot.ProgressAsync(request.RunId, request.ActorId);
+    public ValueTask<PartyCommandResult> HandleAsync(
+        PartySpot spot,
+        IZLinkMessageContext context,
+        DungeonMemberEntered request,
+        CancellationToken ct
+    ) => spot.ProgressAsync(request.RunId, request.ActorId);
 }
 [ZLinkSpotRequestHandler(nameof(RunStarted))]
 public sealed class RunStartedHandler : IZLinkSpotRequestHandler<PartySpot, RunStarted, PartyCommandResult>
 {
-    public ValueTask<PartyCommandResult> HandleAsync(PartySpot spot, RunStarted request,
-        CancellationToken ct) => spot.ProgressAsync(request.RunId, null);
+    public ValueTask<PartyCommandResult> HandleAsync(
+        PartySpot spot,
+        IZLinkMessageContext context,
+        RunStarted request,
+        CancellationToken ct
+    ) => spot.ProgressAsync(request.RunId, null);
 }
 [ZLinkSpotRequestHandler(nameof(RunCompleted))]
 public sealed class RunCompletedHandler : IZLinkSpotRequestHandler<PartySpot, RunCompleted, PartyCommandResult>
 {
-    public ValueTask<PartyCommandResult> HandleAsync(PartySpot spot, RunCompleted request,
-        CancellationToken ct) => spot.ProgressAsync(request.RunId, null, true);
+    public ValueTask<PartyCommandResult> HandleAsync(
+        PartySpot spot,
+        IZLinkMessageContext context,
+        RunCompleted request,
+        CancellationToken ct
+    ) => spot.ProgressAsync(request.RunId, null, true);
 }
 public sealed class PartyRelocation : IZLinkSpotRelocationAdapter<PartySpot>
 {

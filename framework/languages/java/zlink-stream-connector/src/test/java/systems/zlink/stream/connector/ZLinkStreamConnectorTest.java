@@ -32,6 +32,7 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -606,6 +607,14 @@ final class ZLinkStreamConnectorTest {
         lifecycle.state = ZLinkStreamConnectionState.CONNECTED;
         CompletableFuture<ZLinkStreamReplyReceivedContext> replyContext = new CompletableFuture<>();
         connector.onReplyReceived(replyContext::complete);
+        List<ZLinkStreamError> errors = new CopyOnWriteArrayList<>();
+        List<Boolean> connectedInHandler = new CopyOnWriteArrayList<>();
+        connector.onErrorReceived(
+                error -> {
+                    connectedInHandler.add(connector.isConnected());
+                    errors.add(error);
+                    return CompletableFuture.completedFuture(null);
+                });
 
         CompletableFuture<ZLinkStreamEncodedPayload> pending =
                 connector.request(payload("Pending", "a")).submit().toCompletableFuture();
@@ -631,6 +640,10 @@ final class ZLinkStreamConnectorTest {
                 replyContext.get(5, TimeUnit.SECONDS).error().code());
         assertEquals(Optional.of(ZLinkStreamCloseReason.TRANSPORT_ERROR), connector.closeReason());
         assertEquals(ZLinkStreamConnectionState.DISCONNECTED, connector.state());
+        assertEquals(1, errors.size());
+        assertEquals(List.of(false), connectedInHandler);
+        assertEquals(ZLinkStreamErrorCode.SEND_FAILED, errors.get(0).code());
+        assertEquals("broken pipe", errors.get(0).exception().getMessage());
         ConnectorTestAwait.await(connector.close());
     }
 
