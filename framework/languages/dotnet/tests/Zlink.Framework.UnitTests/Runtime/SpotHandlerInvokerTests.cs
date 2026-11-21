@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Systems.Zlink.Stream.Connector.Runtime.Protocol;
 using Zlink.Framework.Contracts.Messaging;
+using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Codecs;
 using Zlink.Framework.Runtime.Handlers;
 
@@ -10,7 +11,7 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed class SpotHandlerInvokerTests
 {
     [Fact]
-    public async Task InvokePacketAsync_Reuses_Unregistered_Handler_And_Disposes_It_Once()
+    public async Task InvokeMessageAsync_Reuses_Unregistered_Handler_And_Disposes_It_Once()
     {
         var lifetime = new HandlerLifetime();
         using var provider = new ServiceCollection().AddSingleton(lifetime).BuildServiceProvider();
@@ -27,8 +28,28 @@ public sealed class SpotHandlerInvokerTests
             ZLinkStreamProtocolDefaults.CreateLz4CompressionCodec()
         );
 
-        await invoker.InvokePacketAsync(descriptor, new HandlerMessage(), CancellationToken.None);
-        await invoker.InvokePacketAsync(descriptor, new HandlerMessage(), CancellationToken.None);
+        var header = ZLinkClientCallCodec.CreateEnvelope(
+            TimeProvider.System,
+            ZLinkMessageKind.Command,
+            "test-mesh",
+            nameof(HandlerMessage)
+        );
+        using var received = new ZLinkBackendRouteReceived([], null, null, null, null);
+        var message = new HandlerMessage();
+        await invoker.InvokeMessageAsync(
+            descriptor,
+            message,
+            header,
+            received,
+            CancellationToken.None
+        );
+        await invoker.InvokeMessageAsync(
+            descriptor,
+            message,
+            header,
+            received,
+            CancellationToken.None
+        );
 
         Assert.Equal(2, lifetime.Invocations.Count);
         Assert.Same(lifetime.Invocations[0], lifetime.Invocations[1]);
@@ -354,6 +375,7 @@ public sealed class SpotHandlerInvokerTests
     {
         public ValueTask HandleAsync(
             MemberLifecycleSpot spot,
+            IZLinkMessageContext context,
             HandlerMessage message,
             CancellationToken cancellationToken
         )
