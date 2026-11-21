@@ -2,6 +2,9 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const { ZLinkFrameworkRuntimeHost } = require('../../packages/framework/dist/runtime/host');
 const {
+  ZLinkRequestSourceResolver
+} = require('../../packages/framework/dist/runtime/locations/request-source-resolver');
+const {
   ZLinkActorNativeJoinCoordinator
 } = require('../../packages/framework/dist/runtime/actors/actor-remote-joiner');
 const {
@@ -30,21 +33,18 @@ function descriptor(rid, changes = {}) {
     ...changes
   };
 }
-function host(rows) {
-  const runtime = Object.create(ZLinkFrameworkRuntimeHost.prototype);
-  runtime.locationOwner = {
-    locationStore: () => ({
-      listMeshNodes: async (mesh) => ({ items: rows.filter((d) => d.meshName === mesh) })
-    }),
-    currentLeaseTracker: { isOwnerTokenLive: async (d) => d.ownerId !== 'expired' }
-  };
-  runtime.spotNodeRuntime = {
-    meshNode: () => ({
-      status: () => ({ routingId: 'source', lifecycleGeneration: 7n }),
-      isPeerRouteReady: () => true
-    })
-  };
-  return runtime;
+async function observePlacement(rows) {
+  const requestSources = new ZLinkRequestSourceResolver({
+    listLiveMeshNodes: async () => {
+      assert.fail('placement must use the discovery observation');
+    },
+    remainingOwnerTokenLeaseMs: async ({ ownerId }) => (ownerId === 'expired' ? 0 : 30_000)
+  });
+  await requestSources.observeLiveDescriptors(
+    'play',
+    rows.filter((row) => row.meshName === 'play')
+  );
+  return requestSources;
 }
 for (const [name, changes] of Object.entries({
   'non-serving': { state: ZLinkFrameworkRuntimeState.Draining },
@@ -65,8 +65,11 @@ for (const [name, changes] of Object.entries({
   'missing Entry Spot': { entrySpotId: undefined }
 })) {
   test(`Entry placement excludes ${name}`, async () => {
-    const runtime = host([descriptor('source', changes), descriptor('remote')]);
-    assert.equal((await runtime.selectActorPlacementDescriptor('play', 'player')).rid, 'remote');
+    const resolver = await observePlacement([descriptor('source', changes), descriptor('remote')]);
+    assert.equal(
+      (await resolver.selectPlacement('play', 'actor', 'player', undefined)).rid,
+      'remote'
+    );
   });
 }
 test('Entry placement applies weight without preferring the current node', async () => {
@@ -74,33 +77,34 @@ test('Entry placement applies weight without preferring the current node', async
   const crypto = require('node:crypto');
   const original = crypto.randomBytes;
   try {
-    const runtime = host([descriptor('source'), descriptor('remote', { placementWeight: 2 })]);
+    const resolver = await observePlacement([
+      descriptor('source'),
+      descriptor('remote', { placementWeight: 2 })
+    ]);
+    const node = {
+      status: () => ({ routingId: 'source', lifecycleGeneration: 7n }),
+      isPeerRouteReady: () => true
+    };
     crypto.randomBytes = (n) => Buffer.alloc(n, 0);
-    assert.equal((await runtime.selectActorPlacementDescriptor('play', 'player')).rid, 'source');
+    assert.equal((await resolver.selectPlacement('play', 'actor', 'player', node)).rid, 'source');
     crypto.randomBytes = (n) => Buffer.alloc(n, 1);
-    assert.equal((await runtime.selectActorPlacementDescriptor('play', 'player')).rid, 'remote');
+    assert.equal((await resolver.selectPlacement('play', 'actor', 'player', node)).rid, 'remote');
   } finally {
     crypto.randomBytes = original;
   }
 });
 test('Entry placement permits unlimited capacity and has no fallback candidate', async () => {
+  const unlimited = await observePlacement([
+    descriptor('source', {
+      populationCapacity: { actors: { active: 99, reserved: 9, limit: 0 } }
+    })
+  ]);
   assert.equal(
-    (
-      await host([
-        descriptor('source', {
-          populationCapacity: { actors: { active: 99, reserved: 9, limit: 0 } }
-        })
-      ]).selectActorPlacementDescriptor('play', 'player')
-    ).rid,
+    (await unlimited.selectPlacement('play', 'actor', 'player', undefined)).rid,
     'source'
   );
-  assert.equal(
-    await host([descriptor('source', { placementWeight: 0 })]).selectActorPlacementDescriptor(
-      'play',
-      'player'
-    ),
-    undefined
-  );
+  const zeroWeight = await observePlacement([descriptor('source', { placementWeight: 0 })]);
+  assert.equal(await zeroWeight.selectPlacement('play', 'actor', 'player', undefined), undefined);
 });
 function nativeAdmission() {
   const calls = [];
@@ -199,26 +203,24 @@ test('Entry Join with no eligible candidate returns Unavailable without local fa
   }
 });
 
-test('host wires Actor Mesh/type selection to the chosen Entry descriptor', async () => {
-  const {
-    ZLinkActorRuntimeOptionsFactory
-  } = require('../../packages/framework/dist/runtime/host/actor-runtime-options-factory');
+test('host wires Actor Mesh/type selection to the chosen Entry descriptor', async (t) => {
   const backend = nativeAdmission();
-  const selected = [];
-  const factory = new ZLinkActorRuntimeOptionsFactory({
-    registration: {},
-    primaryMeshNode: () => backend.node,
-    primaryMeshCompletions: () => backend.completions,
-    locationLifecycle: () => undefined,
+  const requestSources = await observePlacement([descriptor('remote')]);
+  const selection = t.mock.method(requestSources, 'selectPlacement');
+  const routeNode = { ...backend.node, isPeerRouteReady: () => true };
+  const host = Object.assign(Object.create(ZLinkFrameworkRuntimeHost.prototype), {
+    options: { registration: {} },
+    locationOwner: {},
+    meshRouters: { primaryMeshName: () => 'wrong-primary-mesh' },
     createLocationSpotRouteResolver: () => undefined,
-    shutdownSignal: () => undefined,
-    primaryMeshName: () => 'wrong-primary-mesh',
-    selectActorPlacementDescriptor: async (...args) => {
-      selected.push(args);
-      return descriptor('remote');
+    spotNodeRuntime: {
+      primaryMeshNode: backend.node,
+      primaryMeshCompletions: backend.completions,
+      meshNode: (meshName) => (meshName === 'play' ? routeNode : undefined),
+      locationAutoConnect: { requestSources }
     }
   });
-  const coordinator = factory.createActorManagerOptions().joinCoordinator;
+  const coordinator = host.actorRuntimeOptionsFactory().createActorManagerOptions().joinCoordinator;
   const controller = new AbortController();
   const request = ZLinkBufferMessage.from('{}');
   try {
@@ -230,7 +232,10 @@ test('host wires Actor Mesh/type selection to the chosen Entry descriptor', asyn
       1000,
       controller.signal
     );
-    assert.deepEqual(selected, [['play', 'player', controller.signal]]);
+    assert.deepEqual(
+      selection.mock.calls.map(({ arguments: args }) => args),
+      [['play', 'actor', 'player', routeNode, controller.signal]]
+    );
     assert.equal(backend.calls[0].target.targetNodeRid, 'remote');
     assert.equal(backend.calls[0].target.spot.spotId, 'entry-remote');
     assert.equal(backend.calls[0].target.ownerLeaseGeneration, 3n);

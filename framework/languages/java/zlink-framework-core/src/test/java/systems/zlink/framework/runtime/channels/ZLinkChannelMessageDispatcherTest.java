@@ -163,7 +163,7 @@ final class ZLinkChannelMessageDispatcherTest {
             assertFalse(probe.releaseFirst.isDone());
             assertFalse(probe.firstReply.isDone());
             assertEquals(2, activations.opened.get());
-            assertEquals(1, activations.closed.get());
+            awaitClosed(activations, 1);
             registry.sealClosingAdmission();
             var closing = registry.awaitQuiescence().toCompletableFuture();
             assertFalse(closing.isDone());
@@ -173,10 +173,109 @@ final class ZLinkChannelMessageDispatcherTest {
             if (firstRequest) probe.firstReply.get(2, TimeUnit.SECONDS);
             assertEquals(List.of("second", "first"), probe.completions);
             assertEquals(0, probe.running.get());
-            assertEquals(2, activations.closed.get());
+            awaitClosed(activations, 2);
         } finally {
             probe.releaseFirst.complete("first-reply");
             workers.drain();
+            gateProbe = null;
+        }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+        "false,false,false,false", "false,true,true,false", "false,false,true,false",
+        "true,false,false,false", "true,true,true,false", "true,false,true,false"
+    })
+    void channelOverlapsSynchronousHandlers(
+            boolean route, boolean firstRequest, boolean secondRequest, boolean nextBatch)
+            throws Exception {
+        GateProbe probe = new GateProbe();
+        probe.blockSynchronously = true;
+        var activations = new ZLinkTrackingHandlerActivator();
+        gateProbe = probe;
+        var workers = java.util.concurrent.Executors.newFixedThreadPool(2);
+        var registry = new ZLinkChannelDispatchRegistry(workers);
+        if (route) {
+            registry.registerRoute(
+                    "orders",
+                    Map.of(
+                            "Send",
+                            new ChannelRouteSendHandlerRegistration(
+                                    ProbeRouteSendHandler.class, String.class, "Send", List.of())),
+                    Map.of(
+                            "Request",
+                            new ChannelRouteRequestHandlerRegistration(
+                                    ProbeRouteRequestHandler.class,
+                                    String.class,
+                                    String.class,
+                                    "Request",
+                                    List.of())));
+        } else {
+            registry.registerClientServer(
+                    "orders",
+                    Map.of(
+                            "Send",
+                            new ChannelSendHandlerRegistration(
+                                    ProbeSendHandler.class, String.class, "Send", List.of())),
+                    Map.of(
+                            "Request",
+                            new ChannelRequestHandlerRegistration(
+                                    ProbeRequestHandler.class,
+                                    String.class,
+                                    String.class,
+                                    "Request",
+                                    List.of())));
+        }
+        var errors =
+                new ZLinkDispatchErrorReporter(
+                        new ZLinkDispatchOptionsRegistration(),
+                        ZLinkHandlerActivator.reflection(),
+                        Runnable::run);
+        var reporter = new ZLinkChannelDispatchReporter(errors, null);
+        var invoker = invoker(activations, List.of());
+        var client = new ZLinkChannelMessageDispatcher(registry, invoker, reporter, errors.flow());
+        var mesh =
+                new ZLinkChannelRouteDispatcher(
+                        null, registry, invoker, reporter, errors.flow(), null, ignored -> null);
+        try {
+            dispatch(
+                    route,
+                    client,
+                    mesh,
+                    "orders",
+                    firstRequest ? "Request" : "Send",
+                    "first",
+                    firstRequest ? probe.firstReply : null);
+            probe.firstEntered.get(2, TimeUnit.SECONDS);
+            dispatch(
+                    route,
+                    client,
+                    mesh,
+                    "orders",
+                    secondRequest ? "Request" : "Send",
+                    "second",
+                    secondRequest ? probe.laterReply : null);
+            probe.laterEntered.get(2, TimeUnit.SECONDS);
+            if (secondRequest) probe.laterReply.get(2, TimeUnit.SECONDS);
+            assertEquals(java.util.Set.of("first", "second"), java.util.Set.copyOf(probe.starts));
+            assertEquals(List.of("second"), probe.completions);
+            assertFalse(probe.releaseFirst.isDone());
+            assertFalse(probe.firstReply.isDone());
+            assertEquals(2, activations.opened.get());
+            awaitClosed(activations, 1);
+            registry.sealClosingAdmission();
+            var closing = registry.awaitQuiescence().toCompletableFuture();
+            assertFalse(closing.isDone());
+            probe.releaseFirst.complete("first-reply");
+            closing.get(2, TimeUnit.SECONDS);
+            if (firstRequest) probe.firstReply.get(2, TimeUnit.SECONDS);
+            assertEquals(List.of("second", "first"), probe.completions);
+            assertEquals(0, probe.running.get());
+            awaitClosed(activations, 2);
+        } finally {
+            probe.releaseFirst.complete("first-reply");
+            workers.shutdown();
+            assertTrue(workers.awaitTermination(2, TimeUnit.SECONDS));
             gateProbe = null;
         }
     }
@@ -205,7 +304,7 @@ final class ZLinkChannelMessageDispatcherTest {
             probe.laterReply.get(2, TimeUnit.SECONDS);
             assertEquals(List.of(1, 2), probe.filterStarts);
             assertEquals(List.of("second"), probe.starts);
-            assertEquals(1, activations.closed.get());
+            awaitClosed(activations, 1);
             assertFalse(probe.firstEntered.isDone());
             registry.sealClosingAdmission();
             var closing = registry.awaitQuiescence().toCompletableFuture();
@@ -216,7 +315,75 @@ final class ZLinkChannelMessageDispatcherTest {
             assertFalse(closing.isDone());
             probe.releaseFirst.complete("first-reply");
             closing.get(2, TimeUnit.SECONDS);
-            assertEquals(2, activations.closed.get());
+            awaitClosed(activations, 2);
+        } finally {
+            probe.filterRelease.complete(null);
+            probe.releaseFirst.complete("first-reply");
+            workers.drain();
+            gateProbe = null;
+        }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void asyncFilterKeepsPermitUntilItsHandlerStarts(boolean route) throws Exception {
+        var probe = new GateProbe();
+        gateProbe = probe;
+        var workers = new ZLinkManualDispatchExecutor();
+        var activations = new ZLinkTrackingHandlerActivator();
+        var registry = requestRegistry(route, workers);
+        var errors =
+                new ZLinkDispatchErrorReporter(
+                        new ZLinkDispatchOptionsRegistration(), activations, Runnable::run);
+        var reporter = new ZLinkChannelDispatchReporter(errors, null);
+        var invoker = invoker(activations, List.of(WaitingFilter.class));
+        var client = new ZLinkChannelMessageDispatcher(registry, invoker, reporter, errors.flow());
+        var mesh =
+                new ZLinkChannelRouteDispatcher(
+                        null, registry, invoker, reporter, errors.flow(), null, ignored -> null);
+        try (var jobs =
+                new systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue(
+                        systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile
+                                .BALANCED,
+                        java.util.OptionalLong.of(2),
+                        new systems.zlink.framework.runtime.internal.dispatch
+                                .ZLinkApplicationJobQueue.ProcessorCandidates(
+                                1, null, null, null))) {
+            var permit =
+                    jobs.acquire(
+                                    systems.zlink.framework.runtime.internal.dispatch
+                                            .ZLinkApplicationJobQueue.Origin.LOCAL)
+                            .toCompletableFuture()
+                            .join();
+            try (var context =
+                    systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext
+                            .enter(permit)) {
+                dispatch(route, client, mesh, "orders", "Request", "first", probe.firstReply);
+            } finally {
+                permit.abandonReservation();
+            }
+            dispatch(route, client, mesh, "orders", "Request", "second", probe.laterReply);
+            workers.drain();
+            probe.laterReply.get(2, TimeUnit.SECONDS);
+            assertEquals(List.of(1, 2), probe.filterStarts);
+            assertEquals(List.of("second"), probe.starts);
+            awaitClosed(activations, 1);
+            assertFalse(probe.firstEntered.isDone());
+            assertEquals(1, jobs.snapshot().permitsInUse(), "filter suspension retains the permit");
+            registry.sealClosingAdmission();
+            var closing = registry.awaitQuiescence().toCompletableFuture();
+            assertFalse(closing.isDone());
+            probe.filterRelease.complete(null);
+            probe.firstEntered.get(2, TimeUnit.SECONDS);
+            assertEquals(
+                    0,
+                    jobs.snapshot().permitsInUse(),
+                    "resumed next returns permit before handler");
+            assertEquals(List.of("second", "first"), probe.starts);
+            assertFalse(closing.isDone());
+            probe.releaseFirst.complete("first-reply");
+            closing.get(2, TimeUnit.SECONDS);
+            awaitClosed(activations, 2);
         } finally {
             probe.filterRelease.complete(null);
             probe.releaseFirst.complete("first-reply");
@@ -282,7 +449,7 @@ final class ZLinkChannelMessageDispatcherTest {
             probe.laterReply.get(2, TimeUnit.SECONDS);
             assertFalse(reported.isDone());
             assertFalse(probe.firstReply.isDone());
-            assertEquals(1, activations.closed.get());
+            awaitClosed(activations, 1);
             registry.sealClosingAdmission();
             var closing = registry.awaitQuiescence().toCompletableFuture();
             assertFalse(closing.isDone());
@@ -291,7 +458,7 @@ final class ZLinkChannelMessageDispatcherTest {
             var failure = reported.get(2, TimeUnit.SECONDS);
             assertTrue(failure.contains("reason=handler_exception"), failure);
             closing.get(2, TimeUnit.SECONDS);
-            assertEquals(2, activations.closed.get());
+            awaitClosed(activations, 2);
             assertEquals(List.of("second", "first"), probe.completions);
             if (request)
                 assertEquals("error:INTERNAL_FAILURE", probe.firstReply.get(2, TimeUnit.SECONDS));
@@ -391,7 +558,7 @@ final class ZLinkChannelMessageDispatcherTest {
             assertEquals(List.of("first", "second"), probe.starts);
             assertEquals(List.of("second"), probe.completions);
             assertEquals(2, activations.opened.get());
-            assertEquals(1, activations.closed.get());
+            awaitClosed(activations, 1);
             assertEquals(List.of("second"), probe.destroyed);
             assertFalse(probe.releaseFirst.isDone());
             registry.sealClosingAdmission();
@@ -402,7 +569,7 @@ final class ZLinkChannelMessageDispatcherTest {
             stopping.get(2, TimeUnit.SECONDS);
             assertEquals(List.of("second", "first"), probe.completions);
             assertEquals(List.of("second", "first"), probe.destroyed);
-            assertEquals(2, activations.closed.get());
+            awaitClosed(activations, 2);
         } finally {
             probe.releaseFirst.complete("first-reply");
             workers.drain();
@@ -589,7 +756,9 @@ final class ZLinkChannelMessageDispatcherTest {
             ZLinkDispatchErrorReporter errors =
                     new ZLinkDispatchErrorReporter(
                             options, ZLinkHandlerActivator.reflection(), Runnable::run);
-            ZLinkChannelDispatchRegistry registry = new ZLinkChannelDispatchRegistry(Runnable::run);
+            // This test asserts order on an explicitly single-threaded manual executor.
+            var workers = new ZLinkManualDispatchExecutor();
+            ZLinkChannelDispatchRegistry registry = new ZLinkChannelDispatchRegistry(workers);
             for (String channel : List.of("orders", "other")) {
                 if (route) {
                     registry.registerRoute(
@@ -643,10 +812,12 @@ final class ZLinkChannelMessageDispatcherTest {
                             ignored -> null);
 
             dispatch(route, client, mesh, "orders", "Request", "first", probe.firstReply);
+            workers.drain();
             probe.firstEntered.get(2, TimeUnit.SECONDS);
             dispatch(route, client, mesh, "orders", "Send", "send", null);
             dispatch(route, client, mesh, "orders", "Request", "later", probe.laterReply);
             dispatch(route, client, mesh, "other", "Request", "other", probe.otherReply);
+            workers.drain();
             probe.otherReply.get(2, TimeUnit.SECONDS);
 
             probe.sendEntered.get(2, TimeUnit.SECONDS);
@@ -765,6 +936,7 @@ final class ZLinkChannelMessageDispatcherTest {
     }
 
     private static final class GateProbe {
+        boolean blockSynchronously;
         private final CompletableFuture<Void> firstEntered = new CompletableFuture<>();
         private final CompletableFuture<Void> sendEntered = new CompletableFuture<>();
         private final CompletableFuture<Void> laterEntered = new CompletableFuture<>();
@@ -790,6 +962,7 @@ final class ZLinkChannelMessageDispatcherTest {
             maximumRunning.accumulateAndGet(active, Math::max);
             if (value.equals("first")) {
                 firstEntered.complete(null);
+                if (blockSynchronously) releaseFirst.join();
                 return releaseFirst.whenComplete(
                         (ignored, error) -> {
                             completions.add("first");
@@ -1061,5 +1234,16 @@ final class ZLinkChannelMessageDispatcherTest {
         public CompletionStage<String> handle(String request, ZLinkRouteMessageContext context) {
             return CompletableFuture.completedFuture("reply");
         }
+    }
+
+    // A handler's completion is recorded before its activation scope closes on the worker,
+    // so the close count is awaited (bounded) and then asserted exactly.
+    private static void awaitClosed(ZLinkTrackingHandlerActivator activations, int expected)
+            throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        while (activations.closed.get() < expected && System.nanoTime() < deadline) {
+            Thread.sleep(1);
+        }
+        assertEquals(expected, activations.closed.get());
     }
 }

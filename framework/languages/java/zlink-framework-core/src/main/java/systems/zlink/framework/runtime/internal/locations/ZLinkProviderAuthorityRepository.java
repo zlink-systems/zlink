@@ -662,8 +662,18 @@ final class ZLinkProviderAuthorityRepository {
                                                         rowKey,
                                                         found,
                                                         current.withPayload(
-                                                                ((ZLinkAuthorityPut) mutation)
-                                                                        .payload()),
+                                                                        ((ZLinkAuthorityPut)
+                                                                                        mutation)
+                                                                                .payload())
+                                                                .withRelocation(
+                                                                        ((ZLinkAuthorityPut)
+                                                                                                mutation)
+                                                                                        .replaceRelocation()
+                                                                                ? ((ZLinkAuthorityPut)
+                                                                                                mutation)
+                                                                                        .relocation()
+                                                                                : current
+                                                                                        .relocation()),
                                                         conditions,
                                                         cancellation,
                                                         key,
@@ -1247,6 +1257,7 @@ final class ZLinkProviderAuthorityRepository {
                         : discarded || current.pendingCreation().isEmpty())
                 || (!active
                         && (current.aggregate() != null
+                                || current.relocation() != null
                                 || ZLinkCanonicalRelocationAuthorityStateCodec.decode(
                                                 current.payload())
                                         != null)))
@@ -1291,6 +1302,7 @@ final class ZLinkProviderAuthorityRepository {
                                         } else {
                                             boolean steadyReady =
                                                     current.aggregate() == null
+                                                            && current.relocation() == null
                                                             && current.pendingCreation().isEmpty()
                                                             && ZLinkAuthoritySnapshot.steadyReady(
                                                                     current.payload(),
@@ -1324,6 +1336,8 @@ final class ZLinkProviderAuthorityRepository {
                                                                             StaleAuthorityReclaim
                                                                                     .OWNER_LIVE);
                                                                 if (current.aggregate() != null
+                                                                        || current.relocation()
+                                                                                != null
                                                                         || ZLinkCanonicalRelocationAuthorityStateCodec
                                                                                         .decode(
                                                                                                 current
@@ -1473,7 +1487,7 @@ final class ZLinkProviderAuthorityRepository {
             systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation,
             boolean requireSteadyReady) {
         return provider.scan(
-                        new ZLinkStoreScanRequest(AUTHORITY_PREIMAGE_PREFIX, cursor, 1000),
+                        new ZLinkStoreScanRequest(ACTOR_AUTHORITY_PREIMAGE_PREFIX, cursor, 1000),
                         cancellation)
                 .thenCompose(
                         result -> {
@@ -1568,6 +1582,7 @@ final class ZLinkProviderAuthorityRepository {
     /** Steady Ready: activated, outside any aggregate, no relocation in progress, Ready payload. */
     private static boolean isSteadyReadyMember(AuthorityRecord record) {
         return record.aggregate() == null
+                && record.relocation() == null
                 && record.pendingCreation().isEmpty()
                 && record.allocation().objectKind() == ZLinkPlacementObjectKind.ACTOR
                 && ZLinkAuthoritySnapshot.steadyReady(record.payload(), record.allocation());
@@ -1881,6 +1896,7 @@ final class ZLinkProviderAuthorityRepository {
                             }
                             AuthorityRecord current = decode(found.value().bytes());
                             if (current.aggregate() != null
+                                    || current.relocation() != null
                                     || !matches(found.value(), current, reservation)) {
                                 return completed(ZLinkObjectAbortResult.STALE);
                             }
@@ -3343,24 +3359,26 @@ final class ZLinkProviderAuthorityRepository {
                                                                 : current.allocation();
                                                 AuthorityRecord next =
                                                         new AuthorityRecord(
-                                                                payload,
-                                                                current.objectGeneration(),
-                                                                moves
-                                                                        ? marker
-                                                                                .targetAuthorityOwnerGeneration()
-                                                                        : current
-                                                                                .authorityOwnerGeneration(),
-                                                                moves
-                                                                        ? request.targetOwner()
-                                                                                .ownerId()
-                                                                        : current.ownerId(),
-                                                                moves
-                                                                        ? request.targetOwner()
-                                                                                .leaseGeneration()
-                                                                        : current
-                                                                                .ownerLeaseGeneration(),
-                                                                allocation,
-                                                                Optional.empty());
+                                                                        payload,
+                                                                        current.objectGeneration(),
+                                                                        moves
+                                                                                ? marker
+                                                                                        .targetAuthorityOwnerGeneration()
+                                                                                : current
+                                                                                        .authorityOwnerGeneration(),
+                                                                        moves
+                                                                                ? request.targetOwner()
+                                                                                        .ownerId()
+                                                                                : current.ownerId(),
+                                                                        moves
+                                                                                ? request.targetOwner()
+                                                                                        .leaseGeneration()
+                                                                                : current
+                                                                                        .ownerLeaseGeneration(),
+                                                                        allocation,
+                                                                        Optional.empty())
+                                                                .withCommittedRelocation(
+                                                                        current.relocation());
                                                 return provider.write(
                                                                 new ZLinkStoreWriteRequest(
                                                                         List.of(
@@ -3600,8 +3618,7 @@ final class ZLinkProviderAuthorityRepository {
                                                                                                             new ZLinkStorePut(
                                                                                                                     rowKey,
                                                                                                                     encode(
-                                                                                                                            current
-                                                                                                                                    .withAggregate(
+                                                                                                                            current.withAggregate(
                                                                                                                                             marker,
                                                                                                                                             current
                                                                                                                                                                     .visibleStoreVersion()
@@ -3610,7 +3627,15 @@ final class ZLinkProviderAuthorityRepository {
                                                                                                                                                             .version()
                                                                                                                                                             .value()
                                                                                                                                                     : current
-                                                                                                                                                            .visibleStoreVersion())),
+                                                                                                                                                            .visibleStoreVersion())
+                                                                                                                                    .withRelocation(
+                                                                                                                                            participant
+                                                                                                                                                                    .relocation()
+                                                                                                                                                            == null
+                                                                                                                                                    ? current
+                                                                                                                                                            .relocation()
+                                                                                                                                                    : participant
+                                                                                                                                                            .relocation())),
                                                                                                                     null));
                                                                                             return provider.write(
                                                                                                             new ZLinkStoreWriteRequest(
@@ -4442,6 +4467,9 @@ final class ZLinkProviderAuthorityRepository {
                                                                                 .ownerLeaseGeneration(),
                                                                         record.allocation(),
                                                                         record.pendingCreation());
+                                                projected =
+                                                        projected.withCommittedRelocation(
+                                                                record.relocation());
                                                 return snapshot(
                                                         projected,
                                                         found.value().version().value(),
@@ -4466,7 +4494,9 @@ final class ZLinkProviderAuthorityRepository {
                 record.ownerLeaseGeneration(),
                 record.allocation(),
                 record.pendingCreation(),
-                storeNow);
+                storeNow,
+                record.relocation(),
+                record.aggregate() == null ? 0 : record.aggregate().aggregateGeneration());
     }
 
     private static ZLinkAuthorityStored stored(
@@ -4516,7 +4546,7 @@ final class ZLinkProviderAuthorityRepository {
     // strings (64-bit values). Aggregate markers and visibleStoreVersion
     // use the shared top-level fields during aggregate recovery.
 
-    private static byte[] encode(AuthorityRecord value) {
+    static byte[] encode(AuthorityRecord value) {
         ObjectNode root = CANONICAL_JSON.createObjectNode();
         root.put(FIELD_RECORD_VERSION, AUTHORITY_RECORD_VERSION);
         root.put("payload", Base64.getEncoder().encodeToString(value.payload()));
@@ -4534,8 +4564,13 @@ final class ZLinkProviderAuthorityRepository {
         } else {
             root.putNull("pendingCreation");
         }
-        if (value.aggregate() != null) {
-            root.set("aggregate", encodeAggregateMarker(value.aggregate()));
+        if (value.aggregate() != null || value.relocation() != null) {
+            ObjectNode aggregate =
+                    value.aggregate() == null
+                            ? CANONICAL_JSON.createObjectNode()
+                            : encodeAggregateMarker(value.aggregate());
+            if (value.relocation() != null) aggregate.set("relocation", value.relocation().json());
+            root.set("aggregate", aggregate);
         }
         if (value.visibleStoreVersion() != null) {
             root.put("visibleStoreVersion", value.visibleStoreVersion());
@@ -4737,7 +4772,7 @@ final class ZLinkProviderAuthorityRepository {
         return value.intValue();
     }
 
-    private static AuthorityRecord decode(byte[] bytes) {
+    static AuthorityRecord decode(byte[] bytes) {
         try {
             JsonNode root = CANONICAL_JSON.readTree(bytes);
             if (root.path(FIELD_RECORD_VERSION).asInt(-1) != AUTHORITY_RECORD_VERSION) {
@@ -4758,10 +4793,10 @@ final class ZLinkProviderAuthorityRepository {
                             ? Optional.empty()
                             : Optional.of(decodePendingCreation(pendingNode));
             JsonNode markerNode = root.path("aggregate");
+            if (markerNode.isNull())
+                throw new IllegalStateException("Invalid null authority aggregate");
             AggregateParticipantMarker aggregate =
-                    markerNode.isMissingNode() || markerNode.isNull()
-                            ? null
-                            : decodeAggregateMarker(markerNode);
+                    markerNode.isMissingNode() ? null : decodeAggregateMarker(markerNode);
             JsonNode visible = root.path("visibleStoreVersion");
             String visibleStoreVersion = visible.isTextual() ? visible.asText() : null;
             return new AuthorityRecord(
@@ -4773,7 +4808,10 @@ final class ZLinkProviderAuthorityRepository {
                     allocation,
                     pending,
                     aggregate,
-                    visibleStoreVersion);
+                    visibleStoreVersion,
+                    markerNode.has("relocation")
+                            ? new ZLinkAuthorityRelocation(markerNode.get("relocation"))
+                            : null);
         } catch (IOException | RuntimeException failure) {
             throw new IllegalStateException("Location Store authority record is invalid", failure);
         }
@@ -4816,6 +4854,33 @@ final class ZLinkProviderAuthorityRepository {
     }
 
     private static AggregateParticipantMarker decodeAggregateMarker(JsonNode node) {
+        ZLinkAuthorityRelocation.object(node);
+        String[] fields = {
+            "aggregateId",
+            "aggregateGeneration",
+            "index",
+            "expectedStoreVersion",
+            "ownerTransition",
+            "targetAuthorityOwnerGeneration",
+            "authorityPayloadSha256",
+            "membershipMutationSha256"
+        };
+        int count = 0;
+        for (String field : fields) if (node.has(field)) count++;
+        if (count == 0 && node.has("relocation")) return null;
+        if (count != fields.length)
+            throw new IllegalStateException(
+                    "Authority aggregate marker must be complete or absent");
+        ZLinkAuthorityRelocation.uuid(node.get("aggregateId"));
+        ZLinkAuthorityRelocation.integer(node.get("aggregateGeneration"));
+        ZLinkAuthorityRelocation.integer(node.get("targetAuthorityOwnerGeneration"));
+        ZLinkAuthorityRelocation.text(node.get("expectedStoreVersion"));
+        ZLinkAuthorityRelocation.sha(node.get("authorityPayloadSha256"));
+        ZLinkAuthorityRelocation.sha(node.get("membershipMutationSha256"));
+        if (!node.path("index").isIntegralNumber()
+                || !node.path("index").canConvertToInt()
+                || node.path("index").intValue() < 0)
+            throw new IllegalStateException("Invalid aggregate index");
         return new AggregateParticipantMarker(
                 UUID.fromString(node.path("aggregateId").asText()),
                 Long.parseUnsignedLong(node.path("aggregateGeneration").asText()),
@@ -4943,11 +5008,13 @@ final class ZLinkProviderAuthorityRepository {
     // {Id} is the raw ActorId/SpotId, not the "zla1:..." wire form the rest
     // of this class carries as its authority-key contract value.
     private static final String AUTHORITY_PREIMAGE_PREFIX = "authority\0";
+    private static final String ACTOR_AUTHORITY_PREIMAGE_PREFIX =
+            AUTHORITY_PREIMAGE_PREFIX + "actor\0";
 
     private static String authorityScanPrefix(String prefix) {
         return switch (prefix) {
             case "" -> AUTHORITY_PREIMAGE_PREFIX;
-            case "zla1:a:" -> AUTHORITY_PREIMAGE_PREFIX + "actor\0";
+            case "zla1:a:" -> ACTOR_AUTHORITY_PREIMAGE_PREFIX;
             case "zla1:s:" -> AUTHORITY_PREIMAGE_PREFIX + "spot\0";
             default ->
                     throw new IllegalArgumentException(
@@ -5095,7 +5162,7 @@ final class ZLinkProviderAuthorityRepository {
         return result;
     }
 
-    private record AuthorityRecord(
+    record AuthorityRecord(
             byte[] payload,
             long objectGeneration,
             long authorityOwnerGeneration,
@@ -5104,7 +5171,31 @@ final class ZLinkProviderAuthorityRepository {
             ZLinkPlacementAllocation allocation,
             Optional<ZLinkPendingObjectCreation> pendingCreation,
             AggregateParticipantMarker aggregate,
-            String visibleStoreVersion) {
+            String visibleStoreVersion,
+            ZLinkAuthorityRelocation relocation) {
+        AuthorityRecord(
+                byte[] payload,
+                long objectGeneration,
+                long authorityOwnerGeneration,
+                String ownerId,
+                long ownerLeaseGeneration,
+                ZLinkPlacementAllocation allocation,
+                Optional<ZLinkPendingObjectCreation> pendingCreation,
+                AggregateParticipantMarker aggregate,
+                String visibleStoreVersion) {
+            this(
+                    payload,
+                    objectGeneration,
+                    authorityOwnerGeneration,
+                    ownerId,
+                    ownerLeaseGeneration,
+                    allocation,
+                    pendingCreation,
+                    aggregate,
+                    visibleStoreVersion,
+                    null);
+        }
+
         AuthorityRecord(
                 byte[] payload,
                 long objectGeneration,
@@ -5129,6 +5220,24 @@ final class ZLinkProviderAuthorityRepository {
             payload = payload.clone();
         }
 
+        AuthorityRecord withCommittedRelocation(ZLinkAuthorityRelocation value) {
+            return withRelocation(value == null ? null : value.phase("committed"));
+        }
+
+        AuthorityRecord withRelocation(ZLinkAuthorityRelocation next) {
+            return new AuthorityRecord(
+                    payload,
+                    objectGeneration,
+                    authorityOwnerGeneration,
+                    ownerId,
+                    ownerLeaseGeneration,
+                    allocation,
+                    pendingCreation,
+                    aggregate,
+                    visibleStoreVersion,
+                    next);
+        }
+
         AuthorityRecord withPayload(byte[] next) {
             return new AuthorityRecord(
                     next,
@@ -5139,7 +5248,8 @@ final class ZLinkProviderAuthorityRepository {
                     allocation,
                     pendingCreation,
                     aggregate,
-                    visibleStoreVersion);
+                    visibleStoreVersion,
+                    relocation);
         }
 
         AuthorityRecord withOwner(byte[] next, long generation, ZLinkLocationOwnerToken owner) {
@@ -5152,7 +5262,8 @@ final class ZLinkProviderAuthorityRepository {
                     allocation,
                     pendingCreation,
                     aggregate,
-                    visibleStoreVersion);
+                    visibleStoreVersion,
+                    relocation);
         }
 
         AuthorityRecord withAggregate(
@@ -5166,7 +5277,8 @@ final class ZLinkProviderAuthorityRepository {
                     allocation,
                     pendingCreation,
                     next,
-                    nextVisibleStoreVersion);
+                    nextVisibleStoreVersion,
+                    relocation);
         }
     }
 

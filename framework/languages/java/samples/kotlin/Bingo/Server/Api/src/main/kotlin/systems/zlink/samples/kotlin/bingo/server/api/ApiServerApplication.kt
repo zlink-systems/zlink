@@ -30,37 +30,40 @@ import systems.zlink.samples.kotlin.bingo.server.configuration.SampleTopology
 )
 class ApiServerApplication {
     @Bean
-    fun apiFramework(topology: SampleTopology): ZLinkFrameworkConfigurer =
-        ZLinkFrameworkConfigurer { options ->
-            options.addHandlersFromPackageOf<ApiServerApplication>()
-            options.useCoroutineHandlers(Dispatchers.Default)
-            options.configureDispatch { messageFlow(topology.diagnosticsLevel) }
-            // --8<-- [start:doc-codec-register]
-            // Every payload this process sends is encoded with Protobuf instead of the default
-            // codec.
-            options.codecs().use(ZLinkProtobufCodec.defaultCodec())
-            // --8<-- [end:doc-codec-register]
-            options.configureLocations()
-            val api =
-                options
-                    .addRouteMesh(SampleNames.Mesh)
-                    .setRoutingIdPrefix("api")
-                    .listen(topology.selectedApiMeshEndpoint())
-            api.objects().client()
-            val apiChannelEndpoint = URI.create(topology.selectedApiChannelEndpoint())
+    fun apiFramework(
+        topology: SampleTopology,
+        locations: ZLinkRedisLocationStore,
+    ): ZLinkFrameworkConfigurer = ZLinkFrameworkConfigurer { options ->
+        options.addLocationStore(locations)
+        options.addHandlersFromPackageOf<ApiServerApplication>()
+        options.useCoroutineHandlers(Dispatchers.Default)
+        options.configureDispatch { messageFlow(topology.diagnosticsLevel) }
+        // --8<-- [start:doc-codec-register]
+        // Every payload this process sends is encoded with Protobuf instead of the default
+        // codec.
+        options.codecs().use(ZLinkProtobufCodec.defaultCodec())
+        // --8<-- [end:doc-codec-register]
+        options.configureLocations()
+        val api =
             options
-                .addClientServerChannel(SampleNames.ApiChannel)
-                .server()
-                .setBindHost(apiChannelEndpoint.host)
-                .listen(apiChannelEndpoint.port)
-                .addHandlerGroup(SampleNames.ApiChannel)
-            options
-                .addRouteMesh(SampleNames.MatchmakingMesh)
-                .setRoutingIdPrefix("api-matchmaking")
-                .listen(topology.apiMatchmakingRouterEndpoint)
-                .objects()
-                .client()
-        }
+                .addRouteMesh(SampleNames.Mesh)
+                .setRoutingIdPrefix("api")
+                .listen(topology.selectedApiMeshEndpoint())
+        api.objects().client()
+        val apiChannelEndpoint = URI.create(topology.selectedApiChannelEndpoint())
+        options
+            .addClientServerChannel(SampleNames.ApiChannel)
+            .server()
+            .setBindHost(apiChannelEndpoint.host)
+            .listen(apiChannelEndpoint.port)
+            .addHandlerGroup(SampleNames.ApiChannel)
+        options
+            .addRouteMesh(SampleNames.MatchmakingMesh)
+            .setRoutingIdPrefix("api-matchmaking")
+            .listen(topology.apiMatchmakingRouterEndpoint)
+            .objects()
+            .client()
+    }
 
     @Bean
     fun locationStore(topology: SampleTopology): ZLinkRedisLocationStore =

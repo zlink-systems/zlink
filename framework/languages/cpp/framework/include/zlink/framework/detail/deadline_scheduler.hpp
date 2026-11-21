@@ -26,11 +26,7 @@ class deadline_scheduler_t
     friend struct deadline_scheduler_test_access_t;
 
   public:
-    static deadline_scheduler_t &instance ()
-    {
-        static deadline_scheduler_t scheduler;
-        return scheduler;
-    }
+    static deadline_scheduler_t &instance ();
 
     void schedule (std::chrono::steady_clock::time_point at,
                    std::shared_ptr<deadline_state_t> state,

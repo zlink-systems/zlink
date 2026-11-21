@@ -205,6 +205,7 @@ export interface ZLinkBackendMeshNode {
     }[]
   ): void;
   onPeerDisconnected?(handler: (endpoint: string) => void): void;
+  forgetPeer?(nodeRoutingId: string, lifecycleGeneration: bigint): void;
   expectPeer?(peer: {
     readonly nodeRoutingId: string;
     readonly endpoint: string;

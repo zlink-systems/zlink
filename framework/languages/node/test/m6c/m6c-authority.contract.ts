@@ -2687,6 +2687,7 @@ test('Actor creation replays a retained terminal after uncertain remote completi
     const actorId = `actor-replayed-${outcome}`;
     const reply = Buffer.from(`reply-${outcome}`);
     const targetCoordinator = new ZLinkActorPlacementCoordinator({
+      leaseTracker: creationLeaseTracker(store),
       store,
       target: async () => undefined,
       remoteCreate: async () => {
@@ -2694,6 +2695,7 @@ test('Actor creation replays a retained terminal after uncertain remote completi
       }
     });
     const coordinator = new ZLinkActorPlacementCoordinator({
+      leaseTracker: creationLeaseTracker(store),
       store,
       target: async () => target,
       remoteCreate: async (_mesh, _node, request) => {
@@ -2773,6 +2775,7 @@ test('Actor factory failure records and replays a typed failed terminal', async 
   );
   let operation: ZLinkCreationOperationIdentity | undefined;
   const targetCoordinator = new ZLinkActorPlacementCoordinator({
+    leaseTracker: creationLeaseTracker(store),
     store,
     target: async () => undefined,
     remoteCreate: async () => {
@@ -2780,6 +2783,7 @@ test('Actor factory failure records and replays a typed failed terminal', async 
     }
   });
   const coordinator = new ZLinkActorPlacementCoordinator({
+    leaseTracker: creationLeaseTracker(store),
     store,
     target: async () => target,
     remoteCreate: async (_mesh, _node, request) => {
@@ -2874,6 +2878,7 @@ test('Actor onCreateActor failure records and replays a typed failed terminal', 
   );
   let operation: ZLinkCreationOperationIdentity | undefined;
   const targetCoordinator = new ZLinkActorPlacementCoordinator({
+    leaseTracker: creationLeaseTracker(store),
     store,
     target: async () => undefined,
     remoteCreate: async () => {
@@ -2881,6 +2886,7 @@ test('Actor onCreateActor failure records and replays a typed failed terminal', 
     }
   });
   const coordinator = new ZLinkActorPlacementCoordinator({
+    leaseTracker: creationLeaseTracker(store),
     store,
     target: async () => target,
     remoteCreate: async (_mesh, _node, request) => {
@@ -2954,6 +2960,7 @@ test('Actor payload decode failure aborts without recording a terminal', async (
   const store = authority(new Set(['mesh:node-b:2:owner-b:2']));
   let operation: ZLinkCreationOperationIdentity | undefined;
   const targetCoordinator = new ZLinkActorPlacementCoordinator({
+    leaseTracker: creationLeaseTracker(store),
     store,
     target: async () => undefined,
     remoteCreate: async () => {
@@ -2961,6 +2968,7 @@ test('Actor payload decode failure aborts without recording a terminal', async (
     }
   });
   const coordinator = new ZLinkActorPlacementCoordinator({
+    leaseTracker: creationLeaseTracker(store),
     store,
     target: async () => target,
     remoteCreate: async (_mesh, _node, request) => {
@@ -3041,6 +3049,7 @@ test('Actor admission failure aborts without recording a terminal', async () => 
   );
   let operation: ZLinkCreationOperationIdentity | undefined;
   const targetCoordinator = new ZLinkActorPlacementCoordinator({
+    leaseTracker: creationLeaseTracker(store),
     store,
     target: async () => undefined,
     remoteCreate: async () => {
@@ -3048,6 +3057,7 @@ test('Actor admission failure aborts without recording a terminal', async () => 
     }
   });
   const coordinator = new ZLinkActorPlacementCoordinator({
+    leaseTracker: creationLeaseTracker(store),
     store,
     target: async () => target,
     remoteCreate: async (_mesh, _node, request) => {
@@ -3875,16 +3885,18 @@ test('exact User Spot manager call is single-use and returns the committed SpotR
 
   published = false;
   const spotWideSerial = new ZLinkSpotSerialTurnExecutor(true, 'owner');
-  let initialTurn = 0;
-  let resumedTurn = 0;
+  let initialSegment: object | undefined;
+  let resumedSegment: object | undefined;
   const yielded = await spotWideSerial.execute(async () => {
-    initialTurn = spotWideSerial.activeTurnId;
+    initialSegment = spotWideSerial.currentSegment;
+    assert.ok(initialSegment);
     const created = await manager.getOrCreate('room-yield', 'room').inMesh('mesh').yield();
-    resumedTurn = spotWideSerial.activeTurnId;
+    resumedSegment = spotWideSerial.currentSegment;
+    assert.ok(resumedSegment);
     return created;
   });
   assert.equal(yielded.state, ZLinkSpotCreateState.Created);
-  assert.notEqual(resumedTurn, initialTurn);
+  assert.notStrictEqual(resumedSegment, initialSegment);
 });
 
 test('User Spot create reports its first generated SpotId collision without another UUID or reservation', async () => {

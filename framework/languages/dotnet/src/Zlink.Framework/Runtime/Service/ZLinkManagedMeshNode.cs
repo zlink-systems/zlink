@@ -1268,6 +1268,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         var target = RoutingId.From(request.Session.SessionOwnerNodeRid.Value);
         if (target == _routingId)
         {
+            // The existing command deadline also cancels a close queued behind egress.
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadline.CancelAfter(timeout);
             try
             {
                 await AcceptBoundSessionCloseAsync(
@@ -1275,13 +1278,15 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                             encoded,
                             ServiceWireCodec.DecodeContext.Empty
                         ),
-                        cancellationToken
+                        deadline.Token
                     )
                     .AsTask()
-                    .WaitAsync(timeout, cancellationToken)
+                    .WaitAsync(deadline.Token)
                     .ConfigureAwait(false);
             }
-            catch (TimeoutException error)
+            catch (OperationCanceledException error)
+                when (!cancellationToken.IsCancellationRequested && deadline.IsCancellationRequested
+                )
             {
                 throw ZLinkRequestFailureMapper.CreateTimedOutRequestException(
                     "Bound-session close timed out.",
@@ -2889,8 +2894,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         RecvFlags flags = RecvFlags.None
     ) => AwaitStateLane(DrainReadyAsync(domains, batch, flags));
 
-    // The ready registry reserves each owner once. Its mailbox lane captures and
-    // drains the FIFO prefix together on the first receive.
+    // The ready registry reserves a take once. The mailbox owns its claim policy
+    // and restores readiness when the take leaves more independent records.
     public ValueTask<bool> DrainReadyAsync(
         MeshReadyDomains domains,
         MeshReadyBatch batch,
@@ -2921,25 +2926,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 var key = entries[index].Key;
                 if (!_readyMailboxes.TryUpdate(key, false, true))
                     continue;
-                // Keep the captured mailbox inside this scope: a full output
-                // batch must return before the compiler allocates its closure.
-                {
-                    if (!_ownedMailboxes.TryGetValue(key, out var mailbox))
-                        continue;
-                    entries[count++] = new(
-                        key,
-                        new MeshClaim
-                        {
-                            Receiver = (receiveBatch, receiveFlags) =>
-                                mailbox.ClaimAndDrainAsync(
-                                    receiveBatch,
-                                    Math.Min(ReceiveBatchSize, receiveBatch.MaximumRecords)
-                                ),
-                            Releaser = () => mailbox.Release(),
-                        },
-                        index
-                    );
-                }
+                if (!_ownedMailboxes.TryGetValue(key, out var mailbox))
+                    continue;
+                entries[count++] = new(key, mailbox.CreateClaim(key.OwnerKind), index);
             }
             return ValueTask.FromResult(false);
         }
@@ -6914,6 +6903,39 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         Func<SendOperation> captureSourceSend
     )
     {
+        if (head[3] == (byte)ServiceWireConstants.Command.Reject)
+        {
+            if (parts.Count != 1)
+                return false;
+            try
+            {
+                _ = ServiceWireCodec.DecodeReject3(head, ServiceWireCodec.DecodeContext.Empty);
+            }
+            catch (Exception error)
+                when (error is System.IO.InvalidDataException or System.IO.EndOfStreamException)
+            {
+                return false;
+            }
+            RunState(() =>
+            {
+                if (
+                    !_peersByRid.TryGetValue(sourceRid, out var peer)
+                    || peer.RouteGeneration != routeGeneration
+                )
+                    return;
+                // MeshNode §7.1: keep the route and intent; the existing
+                // unanswered-HELLO exchange owns admission retries.
+                peer.Admitted = false;
+                peer.Liveness = null;
+                peer.State = MeshPeerState.Connecting;
+                peer.LastChangedMs = checked((ulong)Environment.TickCount64);
+                RebuildChannelSelectionPlansUnderLock();
+                SetPeerLossStateUnderLock();
+                Publish(MeshMonitorEventKind.PeerRejected, peerRid: sourceRid);
+                SignalReceiveOwner();
+            });
+            return true;
+        }
         if (head[3] == (byte)ServiceWireConstants.Command.BoundSessionBind)
         {
             if (replyToken is null)
@@ -13203,13 +13225,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             recordsRemain =>
             {
                 if (recordsRemain)
-                {
                     _readyMailboxes[key] = true;
-                    SignalReadyIfNeeded();
-                }
                 else
                     _readyMailboxes.TryRemove(key, out _);
-            }
+            },
+            SignalReadyIfNeeded
         );
 
     private void RecordOwnedRecordEnqueued(ulong pendingBytes)

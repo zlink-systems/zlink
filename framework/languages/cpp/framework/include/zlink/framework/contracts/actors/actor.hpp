@@ -174,6 +174,14 @@ class actor_t
     {
         return task_t<void> (result_t<void>::success ());
     }
+    /// Runs after binding is committed, in the Actor lifecycle turn. Failure does not undo bind.
+    /// The host reports failures once and requests cancellation at SessionReplacementCallbackTimeout.
+    /// Actor/runtime shutdown cancellation is not reported. The default implementation is a no-op.
+    virtual task_t<void> on_session_bound (const actor_session_binding_identity_t &,
+                                           std::stop_token)
+    {
+        return task_t<void> (result_t<void>::success ());
+    }
     virtual task_t<std::optional<std::string>>
     on_duplicate_bind (const actor_session_binding_identity_t &,
                        const actor_session_binding_identity_t &,
@@ -855,13 +863,17 @@ class session_actor_t
       std::uint64_t binding_token = 0,
       std::shared_ptr<detail::session_actor_binding_context_t> binding_context = {});
     result_t<std::uint64_t> reserve_relay_sequence ();
-    task_t<void> relay_internal (detail::stream_header_t header,
-                                 std::uint64_t relay_sequence,
-                                 const message_t &message);
-    request_task_t<message_t> relay_request_internal (detail::stream_header_t header,
-                                                      std::uint64_t relay_sequence,
-                                                      zlink::message_t payload,
-                                                      std::chrono::milliseconds timeout);
+    task_t<void>
+    relay_internal (detail::stream_header_t header,
+                    std::uint64_t relay_sequence,
+                    std::shared_ptr<detail::stream_reply_submission_t> reply_submission,
+                    const message_t &message);
+    request_task_t<message_t>
+    relay_request_internal (detail::stream_header_t header,
+                            std::uint64_t relay_sequence,
+                            std::shared_ptr<detail::stream_reply_submission_t> reply_submission,
+                            zlink::message_t payload,
+                            std::chrono::milliseconds timeout);
 
     std::shared_ptr<detail::actor_gateway_state_t> _state;
     actor_ref_t _ref;
@@ -1007,8 +1019,8 @@ spot_node_builder_t &spot_node_builder_t::add_actor_factory (
           return static_cast<TActor *> (actor)->on_join_completed (completion);
       },
       relocation, std::move (capture), std::move (restore),
-      std::is_same_v<decltype (&TActor::on_duplicate_bind),
-                     decltype (&actor_t::on_duplicate_bind)>);
+      std::is_same_v<decltype (&TActor::on_duplicate_bind), decltype (&actor_t::on_duplicate_bind)>,
+      std::is_same_v<decltype (&TActor::on_session_bound), decltype (&actor_t::on_session_bound)>);
 }
 
 } // namespace zlink::framework

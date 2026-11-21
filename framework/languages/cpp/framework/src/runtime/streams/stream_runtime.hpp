@@ -61,11 +61,29 @@ class stream_state_t
     mutable std::mutex dispatch_mutex;
     std::shared_ptr<zlink::framework::runtime::session_serial_executor_t> session_serial_executor;
     std::mutex transport_writer_mutex;
-    std::function<task_t<void> (const stream_header_t &, const zlink::message_t &)>
+    std::shared_ptr<std::function<task_t<void> (const stream_header_t &, const zlink::message_t &)>>
       transport_writer;
     serializer_registry_t *serializers = nullptr;
     std::atomic<session_actor_manager_t *> actors{nullptr};
     std::shared_ptr<const stream_compression_codec_t> compression_codec;
+};
+
+class stream_reply_submission_t
+{
+  public:
+    bool try_claim () noexcept { return _submission.try_claim (); }
+    bool claimed () const noexcept { return _submission.claimed (); }
+    task_t<void> terminal () const { return _terminal.task (); }
+    void complete () { _terminal.complete (result_t<void>::success ()); }
+    void complete_if_unclaimed ()
+    {
+        if (!claimed ())
+            complete ();
+    }
+
+  private:
+    submit_once_t _submission;
+    task_completion_source_t<void> _terminal;
 };
 
 class stream_runtime_state_t

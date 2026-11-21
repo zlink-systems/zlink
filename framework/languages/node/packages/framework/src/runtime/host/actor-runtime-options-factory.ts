@@ -8,7 +8,7 @@ import {
 import type { ZLinkFrameworkRegistration } from '../configuration';
 import type { DefaultZLinkActorManager } from '../actors';
 import type { DefaultZLinkSpotManager } from '../spots';
-import { entrySpotRouteTarget, type ZLinkSpotRouteResolver } from '../spots/spot-routing-internal';
+import type { ZLinkSpotRouteResolver } from '../spots/spot-routing-internal';
 import {
   DefaultZLinkActorClient,
   ZLinkActorNativeJoinCoordinator,
@@ -27,6 +27,7 @@ import type { ZLinkActorTransferRuntime } from './actor-transfer-runtime';
 import type { ZLinkRuntimeAdmissionGate } from '../admission';
 import type { ZLinkRemoteActorPacketTarget } from '../actors';
 import type { ZLinkActorJoinRelocation } from '../actors/actor-join-relocation';
+import type { ZLinkActorNativeJoinCoordinatorOptions } from '../actors/actor-remote-joiner';
 
 export interface ZLinkActorRuntimeOptionsFactoryOptions {
   readonly requests?: RequestRuntime;
@@ -63,11 +64,9 @@ export interface ZLinkActorRuntimeOptionsFactoryOptions {
   readonly locationLifecycle: () => ZLinkLocationLifecycle | undefined;
   readonly primaryMeshName: () => string | undefined;
   readonly actorMeshName: (actorType: string) => string | undefined;
-  readonly selectActorPlacementDescriptor: (
-    meshName: string,
-    stableType: string,
-    signal?: AbortSignal
-  ) => Promise<import('../../contracts').ZLinkMeshNodeDescriptor | undefined>;
+  readonly entrySpotTargetSelector: NonNullable<
+    ZLinkActorNativeJoinCoordinatorOptions['entrySpotTargetSelector']
+  >;
   readonly createLocationSpotRouteResolver: () => ZLinkSpotRouteResolver | undefined;
   readonly createActorLocationResolver: () => ZLinkStoreLocationResolvers | undefined;
   readonly forgetDestroyedActorRef: (actorId: string) => void;
@@ -162,17 +161,7 @@ export class ZLinkActorRuntimeOptionsFactory {
         postCommitErrorReporter: this.options.reportPostCommitError,
         sourceTransfer: this.options.actorTransferRuntime,
         actorJoinRelocation: this.options.actorJoinRelocation,
-        entrySpotTargetSelector: async (meshName, stableType, signal) => {
-          const resolvedMeshName = meshName ?? this.options.primaryMeshName();
-          if (resolvedMeshName === undefined || stableType === undefined) return undefined;
-          const target = await this.options.selectActorPlacementDescriptor(
-            resolvedMeshName,
-            stableType,
-            signal
-          );
-          if (target === undefined) return undefined;
-          return entrySpotRouteTarget(resolvedMeshName, target);
-        },
+        entrySpotTargetSelector: this.options.entrySpotTargetSelector,
         remoteActorBinder: (actorRef, signal) =>
           this.options.streamBindingRuntime.commitActorRoute(actorRef, signal),
         messageSerializers: this.options.registration.messageSerializers,

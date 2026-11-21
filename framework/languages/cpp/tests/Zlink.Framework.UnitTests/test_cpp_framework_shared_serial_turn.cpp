@@ -10,7 +10,10 @@
 
 #include "runtime_context_hooks_environment.hpp"
 
+#include <atomic>
 #include <chrono>
+#include <mutex>
+#include <thread>
 
 namespace
 {
@@ -827,3 +830,114 @@ TEST (SpotPreparationDeathTest, CancelledCreationReleasesBlockingWorkerWhileDisc
       ::testing::ExitedWithCode (0), "cancelled=1");
 }
 #endif
+
+namespace zlink::framework::runtime
+{
+// Reaches the producer boundary of an Actor mailbox from a test thread.
+struct serial_execution_queue_test_access_t
+{
+    static std::mutex &producer_boundary (serial_execution_queue_t &queue) { return queue._mutex; }
+};
+} // namespace zlink::framework::runtime
+
+namespace
+{
+namespace rt = zlink::framework::runtime;
+
+bool eventually (const std::atomic_bool &flag)
+{
+    const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
+    while (!flag.load (std::memory_order_acquire)) {
+        if (std::chrono::steady_clock::now () >= deadline)
+            return false;
+        std::this_thread::sleep_for (std::chrono::milliseconds (1));
+    }
+    return true;
+}
+
+struct spot_wide_actor_lock_probe_t
+{
+    std::atomic_bool actor_a_ran{false};
+    std::atomic_bool actor_c_ran{false};
+    std::atomic_bool timer_ran{false};
+    // What had run while the producer boundary of Actor A was held.
+    bool actor_a_ran_while_held = false;
+    bool actor_c_ran_while_held = false;
+    bool timer_ran_while_held = false;
+};
+
+// Actor D holds the shared gate while Actors A and C and a Spot turn are already
+// imported and queued behind it. The test thread then holds A's producer boundary.
+// Every later turn of A, C and the Spot has to run without that lock.
+void run_spot_wide_actor_lock_probe (spot_wide_actor_lock_probe_t &probe)
+{
+    rt::offload_executor_t executor (3);
+    auto spot = std::make_shared<rt::serial_execution_queue_t> (
+      executor, rt::serial_execution_queue_options_t{},
+      rt::serial_execution_queue_t::error_handler_t{}, rt::serial_lane_policy_t::spot_wide ());
+    std::vector<std::shared_ptr<rt::serial_execution_queue_t>> actors;
+    for (int index = 0; index != 4; ++index) {
+        actors.push_back (std::make_shared<rt::serial_execution_queue_t> (executor));
+        actors.back ()->attach_spot_gate (spot);
+    }
+    const auto &actor_blocker = actors[0];
+    const auto &actor_d = actors[1];
+    const auto &actor_a = actors[2];
+    const auto &actor_c = actors[3];
+
+    std::atomic_bool blocker_entered{false}, blocker_release{false};
+    std::atomic_bool d_entered{false}, d_release{false};
+    const auto hold = [] (std::atomic_bool &entered, std::atomic_bool &release) {
+        return [&entered, &release] (auto complete) {
+            entered.store (true, std::memory_order_release);
+            while (!release.load (std::memory_order_acquire))
+                std::this_thread::sleep_for (std::chrono::milliseconds (1));
+            complete ([] {});
+        };
+    };
+    const auto mark = [] (std::atomic_bool &ran) {
+        return [&ran] (auto complete) {
+            ran.store (true, std::memory_order_release);
+            complete ([] {});
+        };
+    };
+    ASSERT_TRUE (
+      actor_blocker->try_post_async ("gate-holder", hold (blocker_entered, blocker_release)));
+    ASSERT_TRUE (eventually (blocker_entered));
+    ASSERT_TRUE (actor_d->try_post_async ("actor-d", hold (d_entered, d_release)));
+    ASSERT_TRUE (actor_a->try_post_async ("actor-a", mark (probe.actor_a_ran)));
+    ASSERT_TRUE (actor_c->try_post_async ("actor-c", mark (probe.actor_c_ran)));
+    ASSERT_TRUE (spot->try_post_async ("timer-like", mark (probe.timer_ran)));
+    blocker_release.store (true, std::memory_order_release);
+    // D owns the gate now; the publications of A and C were imported before it.
+    ASSERT_TRUE (eventually (d_entered));
+
+    auto &boundary = rt::serial_execution_queue_test_access_t::producer_boundary (*actor_a);
+    {
+        std::lock_guard producer (boundary);
+        d_release.store (true, std::memory_order_release);
+        probe.actor_a_ran_while_held = eventually (probe.actor_a_ran);
+        probe.actor_c_ran_while_held = eventually (probe.actor_c_ran);
+        probe.timer_ran_while_held = eventually (probe.timer_ran);
+    }
+    spot->drain ();
+    for (const auto &actor : actors)
+        actor->drain ();
+}
+
+TEST (ZLinkFrameworkSharedSerialTurn, SpotWideActorConsumerTakesNoActorLock)
+{
+    spot_wide_actor_lock_probe_t probe;
+    run_spot_wide_actor_lock_probe (probe);
+    EXPECT_TRUE (probe.actor_a_ran_while_held);
+}
+
+TEST (ZLinkFrameworkSharedSerialTurn, ProducerBoundaryHeldDoesNotStallOtherActorOrTimerTurns)
+{
+    spot_wide_actor_lock_probe_t probe;
+    run_spot_wide_actor_lock_probe (probe);
+    EXPECT_TRUE (probe.actor_c_ran_while_held);
+    EXPECT_TRUE (probe.timer_ran_while_held);
+}
+
+} // namespace

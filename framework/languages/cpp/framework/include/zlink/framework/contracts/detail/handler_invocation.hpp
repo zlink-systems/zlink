@@ -78,18 +78,25 @@ task_t<zlink::message_t> serialize_handler_result (TResult &&result,
 {
     using result_type = std::remove_cvref_t<TResult>;
     if constexpr (is_task_v<result_type>) {
-        using value_type = typename task_value_type_t<result_type>::type;
-        if constexpr (std::is_void_v<value_type>) {
-            co_await result;
-            co_return result_t<zlink::message_t>::success (zlink::message_t{});
-        } else {
-            auto value = co_await result;
-            co_return result_t<zlink::message_t>::success (
-              encoded_payload_to_raw (serializers.get<value_type> ().serialize (value)));
-        }
+        return [] (TResult pending, serializer_registry_t &registry) -> task_t<zlink::message_t> {
+            using value_type = typename task_value_type_t<result_type>::type;
+            if constexpr (std::is_void_v<value_type>) {
+                co_await pending;
+                co_return result_t<zlink::message_t>::success (zlink::message_t{});
+            } else {
+                auto value = co_await pending;
+                co_return result_t<zlink::message_t>::success (
+                  encoded_payload_to_raw (registry.get<value_type> ().serialize (value)));
+            }
+        }(std::forward<TResult> (result), serializers);
     } else {
-        co_return result_t<zlink::message_t>::success (
-          encoded_payload_to_raw (serializers.get<result_type> ().serialize (result)));
+        try {
+            return task_t<zlink::message_t> (result_t<zlink::message_t>::success (
+              encoded_payload_to_raw (serializers.get<result_type> ().serialize (result))));
+        }
+        catch (...) {
+            return task_t<zlink::message_t> (current_exception_result<zlink::message_t> ());
+        }
     }
 }
 
@@ -99,12 +106,20 @@ task_t<zlink::message_t> serialize_handler_result (TResult result,
                                                    std::shared_ptr<TPlan> codecs)
 {
     if constexpr (is_task_v<TResult>) {
-        auto value = co_await result;
-        co_return result_t<zlink::message_t>::success (
-          encoded_payload_to_raw (codecs->serialize (serializers, value)));
+        return [] (TResult pending, serializer_registry_t &registry,
+                   std::shared_ptr<TPlan> plan) -> task_t<zlink::message_t> {
+            auto value = co_await pending;
+            co_return result_t<zlink::message_t>::success (
+              encoded_payload_to_raw (plan->serialize (registry, value)));
+        }(std::move (result), serializers, std::move (codecs));
     } else {
-        co_return result_t<zlink::message_t>::success (
-          encoded_payload_to_raw (codecs->serialize (serializers, result)));
+        try {
+            return task_t<zlink::message_t> (result_t<zlink::message_t>::success (
+              encoded_payload_to_raw (codecs->serialize (serializers, result))));
+        }
+        catch (...) {
+            return task_t<zlink::message_t> (current_exception_result<zlink::message_t> ());
+        }
     }
 }
 

@@ -42,6 +42,7 @@ import systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
 import systems.zlink.framework.monitoring.ZLinkFrameworkRuntimeStatus;
+import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.monitoring.ZLinkObservedStatus;
 import systems.zlink.framework.spots.ZLinkSpotCreateResult;
 import systems.zlink.framework.spots.ZLinkSpotManager;
@@ -513,7 +514,8 @@ public final class Program {
             awaitPublishedPlacementWeight(locationStore, meshName,
                 args.require("node-rid"), placementWeight);
             sink.append("user-spot-created|spot=" + created.spot().spotId()
-                + "|nodeRid=" + targetNodeRid + "|state=" + created.state().name());
+                + "|nodeRid=" + targetNodeRid + "|state=" + created.state().name()
+                + "|endpoint=" + runtime.listenerStatus(ZLinkListenerKind.ROUTE_MESH, meshName).endpoint());
             // ApplicationRunners run before main() writes the ready file, and
             // the source only starts after it appears; write it here.
             writeReadyFile(args);

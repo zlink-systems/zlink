@@ -23,10 +23,11 @@ final class EtcdEncoding {
 
     record Version(long cluster, long revision) {}
 
+    static final String FAILURE_MESSAGE =
+            "The Location Store operation failed; its write outcome may be unknown.";
+
     static CompletionException failure() {
-        return new CompletionException(
-                new IOException(
-                        "The Location Store operation failed; its write outcome may be unknown."));
+        return new CompletionException(new IOException(FAILURE_MESSAGE));
     }
 
     static ByteString utf8(String value) {

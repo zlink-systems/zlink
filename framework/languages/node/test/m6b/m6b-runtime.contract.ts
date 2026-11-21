@@ -8295,10 +8295,12 @@ async function drainOne(backend: ZLinkNodeRawMeshBackend, domain: number): Promi
   const result = claim.recvBatch(receive);
   assert.equal(result.ok, true);
   assert.equal(result.records.length, 1);
+  // Received records belong to the receive batch; take the record before closing it.
+  const record = result.records[0]!;
   claim.release();
   receive.close();
   ready.close();
-  return result.records[0]!;
+  return record;
 }
 
 async function pollUntil(condition: () => boolean): Promise<void> {
@@ -8652,6 +8654,11 @@ for (const remote of [false, true]) {
   test(`bound Session close uses the physical close terminal and exact identity (remote=${remote})`, async () => {
     let ingress: ((record: RawServiceIngressRecord) => Promise<unknown>) | undefined;
     let physicalCloses = 0;
+    const closeEvents: string[] = [];
+    let notifyCloseStarted!: () => void;
+    const closeStarted = new Promise<void>((resolve) => {
+      notifyCloseStarted = resolve;
+    });
     let resolveClose!: () => void;
     const closeTerminal = new Promise<void>((resolve) => {
       resolveClose = resolve;
@@ -8678,6 +8685,7 @@ for (const remote of [false, true]) {
       },
       reserveLocalIngress: async () => testIngressJobOwner(),
       replyService(record: RawServiceIngressRecord, parts: readonly Buffer[]) {
+        closeEvents.push('reply');
         record.reply?.(parts);
       },
       sendService: async () => true
@@ -8693,7 +8701,10 @@ for (const remote of [false, true]) {
       undefined,
       async () => {
         physicalCloses++;
+        closeEvents.push('physical close started');
+        notifyCloseStarted();
         await closeTerminal;
+        closeEvents.push('physical close terminal');
       }
     ).promise;
     const binding = runtime.registry.binding(actor)!;
@@ -8742,19 +8753,24 @@ for (const remote of [false, true]) {
       { ...request.session, retiredBindingGeneration: binding.bindingGeneration + 1n }
     ]) {
       const result = await send({ ...request, session });
-      assert.notEqual(result.terminalResult, RequestResult.Ok);
+      assert.equal(
+        wireReplyFailureException(result.terminalResult, result.failureCode, 'invalid close').kind,
+        ZLinkFrameworkErrorKind.Unavailable
+      );
       assert.equal(physicalCloses, 0);
     }
-    let replied = false;
-    const terminal = send(request).then((reply) => {
-      replied = true;
-      return reply;
-    });
-    await new Promise((resolve) => setImmediate(resolve));
+    closeEvents.length = 0;
+    const terminal = remote
+      ? send(request)
+      : runtime.closeBoundSession(actor, binding.bindingGeneration, 1_000).promise;
+    await Promise.race([
+      closeStarted,
+      terminal.then(() => assert.fail('reply must follow transport close terminal'))
+    ]);
     assert.equal(physicalCloses, 1);
-    assert.equal(replied, false, 'reply must follow transport close terminal');
     resolveClose();
     assert.equal((await terminal).terminalResult, RequestResult.Ok);
+    assert.deepEqual(closeEvents, ['physical close started', 'physical close terminal', 'reply']);
     assert.notEqual(runtime.registry.binding(actor), undefined, 'close does not separately unbind');
     const malformed = await ingress!(
       withIngressOwner({
@@ -8878,14 +8894,16 @@ for (const remote of [false, true]) {
     );
     assert.equal(replacementCloses, 0);
     assert.equal(physicalCloses, 1);
-    const currentReply = await send({
-      ...request,
-      session: {
-        ...request.session,
-        sessionRid: Buffer.from('replacement-rid'),
-        retiredBindingGeneration: current.bindingGeneration
-      }
-    });
+    const currentReply = await (remote
+      ? send({
+          ...request,
+          session: {
+            ...request.session,
+            sessionRid: Buffer.from('replacement-rid'),
+            retiredBindingGeneration: current.bindingGeneration
+          }
+        })
+      : runtime.closeBoundSession(actor, current.bindingGeneration, 1_000).promise);
     assert.equal(currentReply.terminalResult, RequestResult.Ok);
     assert.equal(replacementCloses, 1);
     runtime.close();

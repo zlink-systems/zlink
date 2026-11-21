@@ -66,6 +66,22 @@ When the client names its id, the Actor for that id is found or created and boun
 --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/sessions/SessionHandlers.kt:session-actor-bind"
 ```
 
+Override `onSessionBoundSuspending` on the Actor to receive notification after a bind is committed.
+
+```kotlin
+override suspend fun onSessionBoundSuspending(
+    incoming: ZLinkSessionBindingIdentity,
+    cancellation: ZLinkActorCallbackCancellation,
+) {
+    // Update application state using the committed binding.
+}
+```
+
+The default implementation does nothing. An overridden callback runs once in Actor handler order
+after the bind commits. Exceptions and timeouts preserve the successful bind. The callback checks
+`cancellation.isCancellationRequested` for cancellation requests. The Framework reports failures
+and timeouts as runtime task exceptions.
+
 **A client that returns with the same id binds to the Actor that is already there.** That is why creating and finding are one call.
 
 ### 3.2 Forwarding What Is Left
@@ -98,6 +114,10 @@ An Actor knows the connection bound to it. This is not a reply but **a notificat
     push ends with `InvalidOperation` at the call's terminal, and the failure is observed through each
     language's asynchronous completion mechanism. The code above has already completed the rename
     before pushing, so it discards **only that failure**.
+
+### 3.4 Bind notification
+
+The Kotlin bind notification `onSessionBoundSuspending` is shown in the example in [§3.1](#31-binding).
 
 ## 4. The Attaching Side — a Client Outside the Mesh
 

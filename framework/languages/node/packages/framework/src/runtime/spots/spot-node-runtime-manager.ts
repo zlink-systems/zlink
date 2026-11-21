@@ -277,6 +277,7 @@ export class ZLinkSpotNodeRuntimeManager {
     const loops = [...this.autoConnectLoops];
     this.autoConnectLoops.length = 0;
     await Promise.allSettled(loops.map((loop) => loop.prepareTransportShutdown()));
+    this.locationAutoConnect?.requestSources.clear();
     for (const node of this.meshNodes.values()) {
       for (const peer of node.peers()) {
         if (peer.routingId !== null) {
@@ -484,6 +485,15 @@ export class ZLinkSpotNodeRuntimeManager {
           await node.markServiceReady?.();
         }
       }
+      // A confirmed local publication is a discovery mutation too. Refresh through the
+      // existing serialized loop before completing publication, including the first startup row.
+      await Promise.all(
+        [...this.meshNodes]
+          .filter(([meshName]) => selectedMeshName === undefined || meshName === selectedMeshName)
+          .map(([meshName, node]) =>
+            this.requestPeerReconcile(meshName, String(node.status().routingId))
+          )
+      );
     } finally {
       release();
     }
@@ -941,6 +951,7 @@ export class ZLinkSpotNodeRuntimeManager {
     };
     await settle(publishers.map(async (publisher) => publisher.close()));
     await settle(autoConnectLoops.map((loop) => loop.prepareTransportShutdown()));
+    this.locationAutoConnect?.requestSources.clear();
     await settle(
       entryActivations
         .reverse()

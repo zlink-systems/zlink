@@ -52,7 +52,7 @@ internal sealed class CompletionOwner
         try
         {
             var attempt = SubmitSend(target, parts, DontWait, context);
-            if (attempt.Failure is null)
+            if (attempt.Succeeded)
             {
                 if (attempt.CompletionId != 0)
                 {
@@ -98,8 +98,9 @@ internal sealed class CompletionOwner
                     entry.Task);
             }
 
-            entry?.AbortBeforeNativeWait(attempt.Failure);
-            throw attempt.Failure;
+            var submitFailure = attempt.CreateFailure();
+            entry?.AbortBeforeNativeWait(submitFailure);
+            throw submitFailure;
         }
         catch
         {
@@ -114,8 +115,8 @@ internal sealed class CompletionOwner
         _handle.EnsureSubmitOpen();
         ValidateSend(parts);
         var attempt = SubmitSend(target, parts, 0, IntPtr.Zero);
-        if (attempt.Failure is not null)
-            throw attempt.Failure;
+        if (!attempt.Succeeded)
+            throw attempt.CreateFailure();
         if (attempt.CompletionId != 0)
             throw CreateProtocolFailure();
     }
@@ -136,7 +137,7 @@ internal sealed class CompletionOwner
             Register(entry);
             var attempt = SubmitRequest(target, parts, timeoutMs, DontWait,
                 entry.Context);
-            if (attempt.Failure is null)
+            if (attempt.Succeeded)
             {
                 if (attempt.CompletionId == 0)
                 {
@@ -170,8 +171,9 @@ internal sealed class CompletionOwner
                     entry.Admitted, entry.Task);
             }
 
-            entry.AbortBeforeNativeWait(attempt.Failure);
-            throw attempt.Failure;
+            var submitFailure = attempt.CreateFailure();
+            entry.AbortBeforeNativeWait(submitFailure);
+            throw submitFailure;
         }
         catch
         {
@@ -194,10 +196,11 @@ internal sealed class CompletionOwner
             Register(entry);
             var attempt = SubmitRequest(target, parts, timeoutMs, 0,
                 entry.Context);
-            if (attempt.Failure is not null)
+            if (!attempt.Succeeded)
             {
-                entry.AbortBeforeNativeWait(attempt.Failure);
-                throw attempt.Failure;
+                var submitFailure = attempt.CreateFailure();
+                entry.AbortBeforeNativeWait(submitFailure);
+                throw submitFailure;
             }
             if (attempt.CompletionId == 0)
             {
@@ -440,7 +443,7 @@ internal sealed class CompletionOwner
         }
     }
 
-    private SendAttempt SubmitSend(RoutingId? target,
+    private SubmitAttempt SubmitSend(RoutingId? target,
         IReadOnlyList<Message> parts, int flags, IntPtr userContext)
     {
         var submitter = new SendMessageSubmitter
@@ -452,12 +455,14 @@ internal sealed class CompletionOwner
         };
         try
         {
-            RequestReplySupport.SubmitPreservingOnFailure(_handle, parts, ref submitter);
-            return new SendAttempt(submitter.CompletionId, null);
+            var (result, errno) = RequestReplySupport.TrySubmitPreservingOnFailure(
+                _handle, parts, ref submitter);
+            return new SubmitAttempt(submitter.CompletionId, result, errno);
         }
         catch (Exception exception)
         {
-            return new SendAttempt(submitter.CompletionId, exception);
+            return new SubmitAttempt(submitter.CompletionId, default, 0,
+                exception);
         }
     }
 
@@ -487,7 +492,7 @@ internal sealed class CompletionOwner
         }
     }
 
-    private SendAttempt SubmitRequest(RoutingId? target,
+    private SubmitAttempt SubmitRequest(RoutingId? target,
         IReadOnlyList<Message> parts, uint timeoutMs, int flags,
         IntPtr userContext)
     {
@@ -500,12 +505,14 @@ internal sealed class CompletionOwner
         };
         try
         {
-            RequestReplySupport.SubmitPreservingOnFailure(_handle, parts, ref submitter);
-            return new SendAttempt(submitter.CompletionId, null);
+            var (result, errno) = RequestReplySupport.TrySubmitPreservingOnFailure(
+                _handle, parts, ref submitter);
+            return new SubmitAttempt(submitter.CompletionId, result, errno);
         }
         catch (Exception exception)
         {
-            return new SendAttempt(submitter.CompletionId, exception);
+            return new SubmitAttempt(submitter.CompletionId, default, 0,
+                exception);
         }
     }
 
@@ -528,13 +535,8 @@ internal sealed class CompletionOwner
         }
     }
 
-    private static bool IsWritableWait(SendAttempt attempt)
-    {
-        return attempt.CompletionId != 0
-               && attempt.Failure is ZlinkSubmitException submit
-               && submit.Result ==
-               ZlinkSubmitException.ErrorCode.Backpressured;
-    }
+    private static bool IsWritableWait(SubmitAttempt attempt) =>
+        attempt.CompletionId != 0 && attempt.Result == SubmitResult.Backpressured;
 
     private static ZlinkSubmitException CreateProtocolFailure() =>
         new(SubmitResult.InternalError, (int)ErrorCode.EProto);
@@ -602,8 +604,17 @@ internal sealed class CompletionOwner
         }
     }
 
-    private readonly record struct SendAttempt(
-        ulong CompletionId, Exception? Failure);
+    private readonly record struct SubmitAttempt(
+        ulong CompletionId, SubmitResult Result, int NativeErrno,
+        Exception? ManagedFailure = null)
+    {
+        internal bool Succeeded => Result == SubmitResult.Ok && ManagedFailure is null;
+
+        internal Exception CreateFailure() =>
+            ManagedFailure ?? (Result == SubmitResult.Ok
+                ? CreateProtocolFailure()
+                : new ZlinkSubmitException(Result, NativeErrno));
+    }
 
     private interface CompletionEntry
     {
@@ -810,7 +821,7 @@ internal sealed class CompletionOwner
             var terminal = false;
             lock (this)
             {
-                if (attempt.Failure is null && attempt.CompletionId == 0)
+                if (attempt.Succeeded && attempt.CompletionId == 0)
                 {
                     _state = SendEntryState.Terminal;
                     ReleasePayloadLocked();
@@ -829,7 +840,7 @@ internal sealed class CompletionOwner
                 }
                 else
                 {
-                    var terminalFailure = attempt.Failure ?? CreateProtocolFailure();
+                    var terminalFailure = attempt.CreateFailure();
                     _state = SendEntryState.Terminal;
                     ReleasePayloadLocked();
                     SetExceptionLocked(terminalFailure);
@@ -1184,7 +1195,7 @@ internal sealed class CompletionOwner
             var terminal = false;
             lock (this)
             {
-                if (attempt.Failure is null && attempt.CompletionId != 0)
+                if (attempt.Succeeded && attempt.CompletionId != 0)
                 {
                     _completionId = attempt.CompletionId;
                     _state = RequestEntryState.WaitingRequest;
@@ -1206,7 +1217,7 @@ internal sealed class CompletionOwner
                 }
                 else
                 {
-                    var failure = attempt.Failure ?? CreateProtocolFailure();
+                    var failure = attempt.CreateFailure();
                     _state = RequestEntryState.Terminal;
                     ReleasePayloadLocked();
                     SetExceptionLocked(failure);
