@@ -1948,7 +1948,8 @@ int admitted_bound_session_delivery_keeps_original_session_after_rebind ()
           },
           replacement_route))
         return 3;
-    if (!(*admitted) ("push", stream_codec_t::message_pack, zlink::message_t::from ("body")))
+    if (!(*admitted) ("push", stream_codec_t::message_pack, zlink::message_t::from ("body"))
+           .result ())
         return 4;
     test::acknowledge_delivery ();
     events = observations->snapshot ();
@@ -1983,7 +1984,8 @@ int admitted_bound_session_delivery_keeps_original_session_after_rebind ()
           },
           replacement_route))
         return 8;
-    if ((*admitted) ("push", stream_codec_t::message_pack, zlink::message_t::from ("body")))
+    if ((*admitted) ("push", stream_codec_t::message_pack, zlink::message_t::from ("body"))
+          .result ())
         return 9;
     test::acknowledge_delivery ();
     events = observations->snapshot ();
@@ -2023,7 +2025,8 @@ int admitted_bound_session_delivery_keeps_original_session_after_rebind ()
           replacement_route))
         return 13;
     live_mode->store (message_flow_log_mode_t::detailed, std::memory_order_relaxed);
-    if (!(*admitted) ("push", stream_codec_t::message_pack, zlink::message_t::from ("body")))
+    if (!(*admitted) ("push", stream_codec_t::message_pack, zlink::message_t::from ("body"))
+           .result ())
         return 14;
     test::acknowledge_delivery ();
     events = observations->snapshot ();
@@ -6001,13 +6004,7 @@ int reconnect_push_reaches_new_session_across_two_hosts ()
                 throw framework_exception_t (framework_error_kind_t::not_configured,
                                              "new Session host rejected the push");
             }
-            const auto delivered = (*delivery) (std::move (packet_name), codec, payload);
-            if (!delivered) {
-                throw delivered.error ()
-                  ? *delivered.error ()
-                  : framework_exception_t (framework_error_kind_t::internal_failure,
-                                           "new Session client delivery failed");
-            }
+            co_await (*delivery) (std::move (packet_name), codec, payload);
             co_return;
         };
     };
@@ -9762,6 +9759,11 @@ int main (int argc, char **argv)
             return relocation_prepare_preserves_runtime_failure ();
         if (test == "--join-completion-callback")
             return join_completion_callback_failure_is_reported ();
+        if (test == "--join-completion-delivery") {
+            const auto result = join_completion_waits_for_bound_session_delivery_terminal ();
+            std::cerr << "Join completion delivery result=" << result << '\n';
+            return result;
+        }
         if (test == "--close-unbound")
             return close_unbound_session_reports_invalid_operation ();
         if (test == "--close-binding")
