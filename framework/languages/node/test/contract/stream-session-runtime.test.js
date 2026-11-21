@@ -1694,6 +1694,95 @@ test('stream session node runtime ignores unmatched monitor disconnect when mult
   await runtime.dispose();
 });
 
+test('public disconnect reason enum preserves Core numeric values', () => {
+  const { ZLinkDisconnectReason } = require('../../packages/framework/dist');
+  assert.deepEqual([
+    ZLinkDisconnectReason.Unknown, ZLinkDisconnectReason.HandshakeFailed,
+    ZLinkDisconnectReason.TransportError, ZLinkDisconnectReason.ContextTerminated
+  ], [0, 3, 4, 5]);
+});
+
+for (const reason of [0, 3, 4, 5]) {
+  for (const addressing of ['routingId', 'endpoint', 'deferred', 'readyQueue']) {
+    test(`DISCONNECTED preserves reason ${reason} (addressing=${addressing}) once before close`, async (t) => {
+      const callbacks = [];
+      const counts = [];
+      let monitorHandler;
+      const runtime = createStreamRuntime({
+        socket: new FakeStreamSocket(),
+        monitor: { onEvent(handler) { monitorHandler = handler; } },
+        metrics: {
+          change() {},
+          count(name, value, labels) { counts.push({ name, value, labels }); }
+        },
+        sessionFactory(context) {
+          return {
+            context,
+            async onError(ctx, error) { callbacks.push(error); },
+            async onDisconnected() { callbacks.push('disconnected'); }
+          };
+        }
+      });
+      t.after(() => runtime.dispose());
+      runtime.start();
+      // A failed handshake has no session to notify.
+      const event = {
+        nativeEvent: framework.ZLinkSocketNativeEventType.Disconnected,
+        value: BigInt(reason),
+        routingId: addressing === 'routingId' ? 'reason-session' : undefined,
+        localAddr: addressing === 'endpoint' ? 'tcp://local-reason' : undefined,
+        remoteAddr: addressing === 'endpoint' ? 'tcp://remote-reason' : undefined
+      };
+      monitorHandler(event);
+      await new Promise(resolve => setImmediate(resolve));
+      assert.deepEqual(callbacks, []);
+      if (addressing === 'readyQueue') {
+        monitorHandler({
+          nativeEvent: framework.ZLinkSocketNativeEventType.ConnectionReady,
+          readyEdge: true, value: 1n,
+          localAddr: 'tcp://local-reason', remoteAddr: 'tcp://remote-reason'
+        });
+      }
+      runtime.markConnected('reason-session',
+        addressing === 'endpoint' ? 'tcp://local-reason' : undefined,
+        addressing === 'endpoint' ? 'tcp://remote-reason' : undefined);
+      await new Promise(resolve => setImmediate(resolve));
+      monitorHandler(event);
+      monitorHandler(event);
+      await new Promise(resolve => setImmediate(resolve));
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(callbacks.length, 2);
+      assert.equal(callbacks[0].error, 'transportError');
+      assert.equal(Object.hasOwn(callbacks[0], 'disconnectReason'), true);
+      assert.equal(callbacks[0].disconnectReason, reason);
+      assert.equal(callbacks[1], 'disconnected');
+      assert.deepEqual(counts.filter(x => x.name === 'zlink.stream.connections.closed'), [{
+        name: 'zlink.stream.connections.closed', value: 1,
+        labels: { transport: 'tcp', close_reason: 'transport_error' }
+      }]);
+    });
+  }
+}
+
+test('non-DISCONNECTED transport error has no disconnectReason property', async (t) => {
+  const errors = [];
+  const runtime = createStreamRuntime({
+    socket: new FakeStreamSocket(),
+    sessionFactory(context) {
+      return { context, async onError(ctx, error) { errors.push(error); } };
+    }
+  });
+  t.after(() => runtime.dispose());
+  runtime.start();
+  runtime.markConnected('ordinary-error');
+  await new Promise(resolve => setImmediate(resolve));
+  runtime.markDisconnected('ordinary-error', new Error('ordinary transport failure'));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(errors.length, 1);
+  assert.equal(Object.hasOwn(errors[0], 'disconnectReason'), false);
+  assert.equal(errors[0].disconnectReason, undefined);
+});
+
 test('stream session node runtime uses monitor routing id to disconnect exactly one of multiple sessions', async () => {
   const socket = new FakeStreamSocket();
   const events = [];
