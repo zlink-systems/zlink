@@ -55,9 +55,11 @@ public final class Program {
     }
 
     @Bean
-    ZLinkFrameworkConfigurer sessionFramework(SampleTopology topology) {
+    ZLinkFrameworkConfigurer sessionFramework(
+            SampleTopology topology, ZLinkRedisLocationStore locations) {
         SampleTopology.Session session = topology.session();
         return options -> {
+            options.addLocationStore(locations);
             options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             options.configureLocations();
             // --8<-- [start:doc-sc-session-register]

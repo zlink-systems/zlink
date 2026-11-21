@@ -6,7 +6,12 @@ import {
   ZLinkRuntimeMessageFlowOutcome
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
 import type { ZLinkDispatchErrorReporter } from '../channels';
-import { flowIfEnabled } from '../diagnostics';
+import {
+  flowIfEnabled,
+  isRelocationDebugEnabled,
+  relocationDebug,
+  relocationDebugTerminal
+} from '../diagnostics';
 import { encodeFrameworkPayloadMessage } from '../messaging/payload-codec';
 import { ZLinkSubmitStatus, type ZLinkSubmitResult } from '../messaging/submission-result';
 import {
@@ -280,63 +285,134 @@ export class ZLinkBoundActorRelaySender {
   }
 
   async notifyPhysicalDisconnect(context: DefaultZLinkSessionContext): Promise<void> {
-    const snapshot = [...context.boundActors];
-    const timeoutMs = this.options.actorBindTimeoutMs ?? DEFAULT_RELAY_ACTOR_BIND_TIMEOUT_MS;
-    await Promise.allSettled(
-      snapshot.map(async (actor) => {
-        const detached = await this.lifecycle.run(actor.actorId, async () => {
-          const route = await this.routes.route(actor.actorId);
-          if (
-            route === undefined ||
-            route.context !== context ||
-            route.actor !== actor ||
-            route.bindingToken !== actor.bindingToken
-          ) {
-            return false;
+    if (isRelocationDebugEnabled())
+      relocationDebug('relay.notifyPhysicalDisconnect.enter', {
+        sessionId: context.stream.sessionId,
+        actors: [...context.boundActors].map((actor) => actor.actorId)
+      });
+    let failure: { error: unknown } | undefined;
+    try {
+      const snapshot = [...context.boundActors];
+      const timeoutMs = this.options.actorBindTimeoutMs ?? DEFAULT_RELAY_ACTOR_BIND_TIMEOUT_MS;
+      await Promise.allSettled(
+        snapshot.map(async (actor) => {
+          relocationDebug('relay.lifecycle.submit', {
+            sessionId: context.stream.sessionId,
+            actorId: actor.actorId
+          });
+          let detached;
+          let failure: { error: unknown } | undefined;
+          try {
+            detached = await this.lifecycle.run(actor.actorId, async () => {
+              relocationDebug('relay.lifecycle.enter', {
+                sessionId: context.stream.sessionId,
+                actorId: actor.actorId
+              });
+              let failure: { error: unknown } | undefined;
+              try {
+                const route = await this.routes.route(actor.actorId);
+                if (
+                  route === undefined ||
+                  route.context !== context ||
+                  route.actor !== actor ||
+                  route.bindingToken !== actor.bindingToken
+                ) {
+                  return false as const;
+                }
+                // The transport is already closed, so remove its exact route before
+                // invoking application lifecycle code. A reconnect can then install
+                // a successor while this best-effort notification is in flight.
+                const binding =
+                  context.stream instanceof ZLinkManagedStream
+                    ? context.stream.actorBinding(actor.actorId)
+                    : undefined;
+                await this.routes.unbind(
+                  actor.actorId,
+                  context,
+                  actor.bindingToken,
+                  ZLinkActorSessionBindingTermination.PhysicalDisconnect
+                );
+                return { binding, authorityFence: route.authorityFence };
+              } catch (error) {
+                failure = { error };
+                throw error;
+              } finally {
+                relocationDebugTerminal(
+                  'relay.lifecycle.exit',
+                  { sessionId: context.stream.sessionId, actorId: actor.actorId },
+                  failure
+                );
+              }
+            });
+          } catch (error) {
+            failure = { error };
+            throw error;
+          } finally {
+            relocationDebugTerminal(
+              'relay.lifecycle.terminal',
+              { sessionId: context.stream.sessionId, actorId: actor.actorId },
+              failure
+            );
           }
-          // The transport is already closed, so remove its exact route before
-          // invoking application lifecycle code. A reconnect can then install
-          // a successor while this best-effort notification is in flight.
-          const binding =
-            context.stream instanceof ZLinkManagedStream
-              ? context.stream.actorBinding(actor.actorId)
-              : undefined;
-          await this.routes.unbind(
-            actor.actorId,
-            context,
-            actor.bindingToken,
-            ZLinkActorSessionBindingTermination.PhysicalDisconnect
-          );
-          return { binding, authorityFence: route.authorityFence };
-        });
-        if (detached === false) return;
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), timeoutMs);
-        try {
-          await Promise.race([
-            this.options.notifyDisconnected?.(
-              actor,
-              controller.signal,
-              detached.binding,
-              detached.authorityFence
-            ) ?? Promise.resolve(),
-            new Promise<never>((_, reject) => {
-              controller.signal.addEventListener(
-                'abort',
-                () =>
-                  reject(
-                    new Error(
-                      `Actor '${actor.actorId}' disconnect notification exceeded ${timeoutMs} ms.`
-                    )
-                  ),
-                { once: true }
+          if (detached === false) return;
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), timeoutMs);
+          try {
+            relocationDebug('relay.remoteDisconnect.start', {
+              sessionId: context.stream.sessionId,
+              actorId: actor.actorId,
+              timeoutMs
+            });
+            let failure: { error: unknown } | undefined;
+            try {
+              await Promise.race([
+                this.options.notifyDisconnected?.(
+                  actor,
+                  controller.signal,
+                  detached.binding,
+                  detached.authorityFence
+                ) ?? Promise.resolve(),
+                new Promise<never>((_, reject) => {
+                  controller.signal.addEventListener(
+                    'abort',
+                    () =>
+                      reject(
+                        new Error(
+                          `Actor '${actor.actorId}' disconnect notification exceeded ${timeoutMs} ms.`
+                        )
+                      ),
+                    { once: true }
+                  );
+                })
+              ]);
+            } catch (error) {
+              failure = { error };
+              throw error;
+            } finally {
+              relocationDebugTerminal(
+                'relay.remoteDisconnect.terminal',
+                { sessionId: context.stream.sessionId, actorId: actor.actorId, timeoutMs },
+                failure
               );
-            })
-          ]);
-        } finally {
-          clearTimeout(timer);
-        }
-      })
-    );
+            }
+          } finally {
+            clearTimeout(timer);
+          }
+        })
+      );
+    } catch (error) {
+      failure = { error };
+      throw error;
+    } finally {
+      if (isRelocationDebugEnabled())
+        relocationDebugTerminal(
+          'relay.notifyPhysicalDisconnect.exit',
+          {
+            sessionId: context.stream.sessionId,
+            actors: [...context.boundActors].map((actor) => actor.actorId)
+          },
+          failure
+        );
+    }
   }
 }

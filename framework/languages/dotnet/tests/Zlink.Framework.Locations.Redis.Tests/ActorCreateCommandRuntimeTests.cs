@@ -38,7 +38,8 @@ public sealed class ActorCreateCommandRuntimeTests
                     "player",
                     ZLinkObjectMaintenancePolicyKind.Disabled,
                     false,
-                    0
+                    0,
+                    EntryAccepted: true
                 ),
                 new(
                     ZLinkPlacementObjectKind.UserSpot,

@@ -2420,11 +2420,13 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_use_zlink_gtest_main(test_cpp_framework_receive_role_handoff)
   target_include_directories(test_cpp_framework_receive_role_handoff PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  target_sources(test_cpp_framework_receive_role_handoff PRIVATE
+    tests/support/allocation_counter.cpp)
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     target_compile_definitions(test_cpp_framework_receive_role_handoff PRIVATE
-      ZLINK_TEST_HANDOFF_ALLOC_FAIL)
+      ZLINK_TEST_HANDOFF_TRYLOCK_WRAP)
     target_link_options(test_cpp_framework_receive_role_handoff PRIVATE
-      "LINKER:--wrap=_Znwm" "LINKER:--wrap=pthread_mutex_trylock")
+      "LINKER:--wrap=pthread_mutex_trylock")
   endif()
 
   add_zlink_framework_test(
@@ -2996,6 +2998,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_stream_framework
     tests/Zlink.Framework.UnitTests/test_cpp_framework_stream_framework.cpp
     "framework-integration;framework-regression;framework-zlink;framework-zlink-stream;stream")
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_stream_disconnect_reason
+    COMMAND test_cpp_framework_stream_framework --disconnect-reason
+    LABELS "framework-unit;framework-contract;stream;stream-session"
+    TIER contract
+    TIMEOUT 30)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_binding_submission_order
     COMMAND test_cpp_framework_stream_framework --binding-submission-order

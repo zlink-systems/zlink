@@ -213,7 +213,12 @@ authority를 유지한다. Caller가 명시적 leave 또는 destroy를 끝낸 �
 ## 4. Actor join과 commit 순서
 
 `JoinSpot`은 이동할 User Spot의 global Spot ID를 받는다. `JoinEntrySpot`은 target node
-RID를 받지 않는다. Framework가 사용할 target Spot과 owner node를 찾는다. Actor와 target
+RID를 받지 않는다. Framework가 사용할 target Spot과 owner node를 찾는다. `JoinEntrySpot`의 target node는
+[MeshNode §5.2](03-mesh-node.ko.md)의 조건 1~5를 그 Actor의 Mesh와 stable type에 적용해 고른다. 후보는 그 Actor
+stable type을 받는 Entry Spot type을 등록한 node(descriptor의 `entryAccepted`가 `true`)이며, Actor가 지금 속한
+node도 같은 조건으로 후보에 넣는다. 현재 node를 우선하지 않고 남은 후보에 node-wide placement weight를
+적용한다. 선택된 node가 Actor의 현재 node이면 same-node Join으로 처리하고, 후보가 없으면 `Unavailable`로
+끝낸다. Actor와 target
 Spot의 owner node가 다르면 같은 Join operation 안에서 Actor relocation도 수행한다.
 Framework는 같은 node의 Actor Join을 단일 local Join 경로에서 직접 처리하며, Mesh `actorJoin`
 요청과 그 요청을 대신하는 local control record를 제출하지 않는다.
@@ -463,7 +468,8 @@ Actor handler가 `JoinSpot(...)` 또는 `JoinEntrySpot(...)`을 호출한 뒤 �
    수신 상한을 함께 싣는다 — 이 값은 재계산에도 낮아지지 않는 안정 하한 기반의 보수값이다.
    `Accepted`이면 계속하고, `Rejected`이면 target이 같은 처리 안에서 등록한 temporary
    queue와 준비한 factory 자원을 제거하며 source membership을 유지한 채 끝낸다. Target이
-   Entry Spot이면 `OnActorJoin`을 호출하지 않는다. Join 요청을 받은 node는 자기 node의 활성 target Spot
+   Entry Spot이면 같은 승인 request를 처리하되 `OnActorJoin`을 호출하지 않는다 — temporary
+   queue 등록, factory 실행 준비와 승인 reply의 chunk 상한은 User Spot과 같다. Join 요청을 받은 node는 자기 node의 활성 target Spot
    항목으로만 Join을 수락한다. `Closing` 상태인 target은
    [Spot 주소 메시징 §9](06-spot-address-messaging.ko.md#9-실패와-관측)의 `Closing` 행을 따른다. 그 밖에
    항목이 없거나 활성화되지 않았으면 Spot을 생성하지 않고 `Unavailable`로 거절한다.
@@ -475,12 +481,10 @@ Actor handler가 `JoinSpot(...)` 또는 `JoinEntrySpot(...)`을 호출한 뒤 �
    payload 전체 크기, chunk 수와 checksum을 담은 manifest가 포함되고, payload는 같은
    ordered 연결로 chunk 단위로 뒤따라 전송된다 — chunk 크기·checksum 규칙은
    [Actor와 Spot relocation 전체 흐름](../05-location-relocation/04-relocation-flow.ko.md)이 정의한다. Target
-   dispatcher는 승인 처리에서 등록한 relocation temporary queue를 사용하고, 승인 왕복이
-   없는 Entry Spot join에서는 다음 packet을 dispatch하기 전에 temporary queue를 등록한다.
-   이후 같은 Actor로 들어오는 message는 application instance를 찾지 않고 temporary queue에
+   dispatcher는 승인 처리에서 등록한 relocation temporary queue를 사용한다. 이후 같은 Actor로 들어오는 message는 application instance를 찾지 않고 temporary queue에
    넣는다. Target은 조립한 payload의 checksum을 확인한 뒤 Actor를 만들고 application
    state와 기존 queue를 복원하지만 아직 application 작업을 실행하지 않는다.
-5. Source의 ingress hold와 boundary 전 relay는 [공통 relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 순서를 따른다. Target은 Join 승인 또는 Restore 요청 때 등록한 temporary queue를 사용한다.
+5. Source의 ingress hold와 boundary 전 relay는 [공통 relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 순서를 따른다. Target은 Join 승인 때 등록한 temporary queue를 사용한다.
 6. Cutover 검증 뒤 target의 owner·membership·capacity·generation CAS는 [공통 relocation §4.4–§4.5](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)를 따른다. Join membership 변경은 이 CAS에 포함한다.
 7. CAS 뒤 queue 병합과 regular route 전환은 [공통 relocation §4.6](../05-location-relocation/04-relocation-flow.ko.md#46-target은-기존-작업부터-점진적으로-queue를-연다)을 따른다. Target Spot의 `OnJoinedActor`를 호출하고 source Spot에 `OnLeaveActor`를 one-way로 보낸 뒤 Actor의 Join completion callback을 끝내고 dispatch를 연다.
 8. Actor가 Session에 bind되어 있으면 target runtime은 CAS와 queue 개방 뒤 command 44
@@ -500,11 +504,6 @@ temporary queue가 등록되어 있어도 Location Store CAS 전에는 applicati
 다른 identity의 승인이나 Restore가 도착하면 target은 기존 준비 상태를 먼저
 abort·정리한 뒤 새 identity의 준비를 만든다 — 나중 attempt가 유효하며, 이전 identity의
 늦은 chunk와 Restore는 조립에 연결하지 않고 폐기한다.
-
-`JoinEntrySpot`은 target에서 `OnActorJoin`을 호출하지 않아 승인 왕복 자체가 없으므로 이
-준비 동승이 없다. Entry Spot join은 Restore 요청에서 준비를 수행하고, 협상한 chunk
-상한이 없으므로 어느 배치에서도 보장되는 32 KiB의 보수 chunk 크기(chunk 하나의 encoded
-크기)로 전송한다.
 
 Relay-ready 뒤 target staging 폐기와 source 재개는 [공통 relocation §4.4](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 authority 판정을 따른다. Target
 commit(Location Store CAS)이 성공한 뒤부터는 이동이 확정된 것으로 보고, 실패해도 이미 이동한
@@ -568,9 +567,8 @@ sequenceDiagram
 
 이 다이어그램은 정상적으로 끝나는 경로만 보여준다. `OnActorJoin`이 `Rejected`를
 반환하거나 relay-ready reply가 accepted 상태가 되기 전에 명시적으로 실패하면 source membership을
-유지한다(위 규칙 참고). `OnLeaveActor`는 owner commit 뒤에만 보내므로 이 source 복구 경로에서는 호출하지 않는다. User Spot target은 승인 처리에서
-등록한 relocation temporary queue를 사용하고, Entry Spot join에서는 Restore 요청을 받은
-target이 temporary queue를 먼저 등록한다. 그동안 도착한 message와 request는 temporary queue에서
+유지한다(위 규칙 참고). `OnLeaveActor`는 owner commit 뒤에만 보내므로 이 source 복구 경로에서는 호출하지 않는다. Target은 승인 처리에서
+등록한 relocation temporary queue를 사용한다. 그동안 도착한 message와 request는 temporary queue에서
 기다리며 실제 Actor queue로 옮기기 전에는 실행하지 않는다. Target commit 뒤에 실패하면
 source로 되돌리지 않는다. 같은 target process가
 실행 중일 때만 deadline 안에서 다시 시도하며, process가 종료되면 relocation을 자동으로
@@ -889,16 +887,15 @@ Session owner 쪽 검증·처리 절차를 소유한다 — 이 문서는 그 �
   reservation ID와 aggregate commit ID를 재사용하지 않는다.
 - `Defer()` 뒤 source seal 전 message는 barrier 뒤 Actor queue에 두고, seal 뒤
   message만 [relocation ingress hold](../00-foundation/02-glossary.ko.md#relocation-ingress-hold)에 보관한다.
-- Cross-node Join의 target이 Actor instance보다 먼저 relocation temporary queue를
-  등록한다 — User Spot join은 `OnActorJoin` 승인 처리에서, Entry Spot join은 Restore 요청
-  처리에서 등록한다. Restore 중 message는 이 queue에서 application handler를 실행하지 않는다.
+- Cross-node Join의 target이 Join 승인 처리에서 Actor instance보다 먼저 relocation
+  temporary queue를 등록한다 — User Spot join과 Entry Spot join이 같다. Restore 중 message는 이 queue에서 application handler를 실행하지 않는다.
 - Join 승인이 `Rejected`이면 target에 temporary queue와 준비한 factory 자원이 남지 않는다.
 - 승인 왕복에서 준비를 마친 target도 Location Store CAS 전에는 application handler를
   실행하지 않으며, 이동이 시작되지 않으면 준비 유효시간 뒤 준비 자원이 제거된다.
 - 기존 준비가 남은 상태에서 다른 identity의 승인·Restore가 도착하면 기존 준비가
   먼저 정리되고 나중 attempt가 유효하다.
-- 승인 reply가 target의 유효 수신 chunk 상한을 실어 보내고, 승인 왕복이 없는
-  `JoinEntrySpot`은 32 KiB의 보수 chunk 크기를 사용한다.
+- 승인 reply가 target의 유효 수신 chunk 상한을 실어 보낸다. `JoinEntrySpot`의 승인
+  reply도 같다.
 - `Restore` 재시도의 payload 원본이 저장소가 아니라 source memory 재전송이다.
 - Queue 병합과 source 복구 결과는 [공통 relocation §4.4–§4.6](../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)을 따른다.
 - `RelocationId`, target attempt와 owner generation이 같은 중복 Restore는 작업을 다시

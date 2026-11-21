@@ -12,6 +12,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string>
+#include <condition_variable>
+#include <mutex>
 
 //  For AF_INET and IPPROTO_TCP
 #if defined _WIN32
@@ -88,6 +90,47 @@ static const fd_t retired_fd = -1;
 #endif
 
 #define LIBZLINK_UNUSED(object) (void) object
+
+class test_thread_release_gate_t
+{
+  public:
+    test_thread_release_gate_t () : done_ (false), release_ (false) {}
+
+    void complete_and_wait_for_release ()
+    {
+        std::unique_lock<std::mutex> lock (sync_);
+        done_ = true;
+        changed_.notify_all ();
+        changed_.wait (lock, [this] () { return release_; });
+    }
+
+    void wait_until_done ()
+    {
+        std::unique_lock<std::mutex> lock (sync_);
+        changed_.wait (lock, [this] () { return done_; });
+    }
+
+    bool is_done ()
+    {
+        std::lock_guard<std::mutex> lock (sync_);
+        return done_;
+    }
+
+    void release ()
+    {
+        {
+            std::lock_guard<std::mutex> lock (sync_);
+            release_ = true;
+        }
+        changed_.notify_all ();
+    }
+
+  private:
+    std::mutex sync_;
+    std::condition_variable changed_;
+    bool done_;
+    bool release_;
+};
 
 //  Bounce a message from client to server and back
 //  For REQ/REP or DEALER/DEALER pairs only

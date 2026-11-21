@@ -643,7 +643,7 @@ final class ZLinkFrameworkAutoConfigurationTest {
     }
 
     @Test
-    void locationStoreBeanConfiguresFrameworkLocationRuntime() throws Exception {
+    void explicitlyRegisteredLocationStoreConfiguresFrameworkLocationRuntime() throws Exception {
         try (AnnotationConfigApplicationContext context =
                 new AnnotationConfigApplicationContext()) {
             context.registerBean(
@@ -722,6 +722,11 @@ final class ZLinkFrameworkAutoConfigurationTest {
         @Bean
         ZLinkInMemoryLocationStore locationStore() {
             return new ZLinkInMemoryLocationStore();
+        }
+
+        @Bean
+        ZLinkFrameworkConfigurer locationStoreConfigurer(ZLinkInMemoryLocationStore locationStore) {
+            return options -> options.addLocationStore(locationStore);
         }
     }
 
@@ -888,8 +893,10 @@ final class ZLinkFrameworkAutoConfigurationTest {
         }
 
         @Bean
-        ZLinkFrameworkConfigurer spotNodeWithLocationStoreConfigurer() {
+        ZLinkFrameworkConfigurer spotNodeWithLocationStoreConfigurer(
+                ZLinkInMemoryLocationStore locationStore) {
             return options -> {
+                options.addLocationStore(locationStore);
                 var mesh = ZLinkLegacyTopology.addSpotMesh(options, "game");
                 mesh.enableRouter("inproc://play-router");
             };

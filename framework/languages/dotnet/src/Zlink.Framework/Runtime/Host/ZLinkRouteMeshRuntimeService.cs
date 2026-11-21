@@ -85,21 +85,19 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
             && !locationUnavailable;
         var previous = hub.LastStatus;
         var peers = ProjectPeers(nodeRuntime, hub, status.RoutingId, physicalPeers);
-        var readyPeerCount = 0;
-        var requiredPeerUnavailable = false;
-        foreach (var peer in peers)
-        {
-            if (peer.State == ZLinkPeerState.Ready)
-                readyPeerCount++;
-            if (peer.State is ZLinkPeerState.Connecting or ZLinkPeerState.NotConnected)
-                requiredPeerUnavailable = true;
-        }
+        var projectedPeers = previous?.Peers;
+        var samePeers = SamePeers(
+            projectedPeers,
+            peers,
+            physicalPeers,
+            out var readyPeerCount,
+            out var requiredPeerUnavailable
+        );
         if (state == ZLinkTopologyState.Ready && (locationUnavailable || requiredPeerUnavailable))
             state = ZLinkTopologyState.Degraded;
         var isReady =
             state == ZLinkTopologyState.Ready && hostState == ZLinkFrameworkRuntimeState.Serving;
-        var projectedPeers = previous?.Peers;
-        if (projectedPeers is null || !SamePeers(projectedPeers, peers, physicalPeers))
+        if (projectedPeers is null || !samePeers)
         {
             var changedPeers = peers.ToList();
             changedPeers.Sort(
@@ -565,12 +563,17 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
     )
     {
         foreach (var name in names)
-            if (
-                !previous.Any(channel =>
-                    string.Equals(channel.ChannelName, name, StringComparison.Ordinal)
-                )
-            )
+        {
+            var found = false;
+            for (var index = 0; index < previous.Count; index++)
+                if (string.Equals(previous[index].ChannelName, name, StringComparison.Ordinal))
+                {
+                    found = true;
+                    break;
+                }
+            if (!found)
                 return false;
+        }
         foreach (var channel in previous)
         {
             if (!names.Contains(channel.ChannelName, StringComparer.Ordinal))
@@ -591,18 +594,25 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
     {
         foreach (var peer in physicalPeers)
             yield return (peer.RoutingId, MapPeerState(peer.State));
+        var localHasServerChannel = nodeRuntime.Registration.ChannelMemberships.Any(
+            static membership => membership.IsServer
+        );
         foreach (var descriptor in hub.Descriptors())
         {
-            if (
-                descriptor.Rid == localRid
-                || physicalPeers.Any(peer => peer.RoutingId == descriptor.Rid)
-            )
+            if (descriptor.Rid == localRid)
+                continue;
+            var physical = false;
+            for (var index = 0; index < physicalPeers.Count; index++)
+                if (physicalPeers[index].RoutingId == descriptor.Rid)
+                {
+                    physical = true;
+                    break;
+                }
+            if (physical)
                 continue;
             var notRequired = ZLinkRouteMeshConnectionPolicy.IsNotRequired(
                 nodeRuntime.Registration.ObjectRole,
-                nodeRuntime.Registration.ChannelMemberships.Any(static membership =>
-                    membership.IsServer
-                ),
+                localHasServerChannel,
                 descriptor.ObjectRole,
                 descriptor.ChannelWeights.Count != 0
             );
@@ -614,21 +624,32 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
     }
 
     private static bool SamePeers(
-        IReadOnlyList<ZLinkPeerStatus> previous,
+        IReadOnlyList<ZLinkPeerStatus>? previous,
         IEnumerable<(RoutingId Rid, ZLinkPeerState State)> peers,
-        IReadOnlyList<MeshNodePeer> physicalPeers
+        IReadOnlyList<MeshNodePeer> physicalPeers,
+        out int readyPeerCount,
+        out bool requiredPeerUnavailable
     )
     {
+        readyPeerCount = 0;
+        requiredPeerUnavailable = false;
+        var same = previous is not null;
         // Multiple physical intents can project the same RID. Rebuild those
         // inputs with the existing sort before comparing their ordered values.
-        for (var index = 0; index < physicalPeers.Count; index++)
-        for (var other = 0; other < index; other++)
+        for (var index = 0; same && index < physicalPeers.Count; index++)
+        for (var other = 0; same && other < index; other++)
             if (physicalPeers[index].RoutingId == physicalPeers[other].RoutingId)
-                return false;
+                same = false;
         var count = 0;
         foreach (var peer in peers)
         {
             count++;
+            if (peer.State == ZLinkPeerState.Ready)
+                readyPeerCount++;
+            if (peer.State is ZLinkPeerState.Connecting or ZLinkPeerState.NotConnected)
+                requiredPeerUnavailable = true;
+            if (!same || previous is null)
+                continue;
             var low = 0;
             var high = previous.Count - 1;
             while (low <= high)
@@ -653,9 +674,9 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
                 || previous[low].NodeRid != peer.Rid
                 || previous[low].State != peer.State
             )
-                return false;
+                same = false;
         }
-        return count == previous.Count;
+        return same && count == previous!.Count;
     }
 
     private static ZLinkTopologyState MapTopologyState(MeshNodeState state) =>
@@ -730,7 +751,8 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
         public ZLinkMeshNodeDescriptor? LocalDescriptor(RoutingId rid) =>
             _descriptors.GetValueOrDefault(rid);
 
-        public IEnumerable<ZLinkMeshNodeDescriptor> Descriptors() => _descriptors.Values;
+        public Dictionary<RoutingId, ZLinkMeshNodeDescriptor>.ValueCollection Descriptors() =>
+            _descriptors.Values;
 
         public ZLinkRouteMeshStatus? LastStatus => _lastStatus;
 
