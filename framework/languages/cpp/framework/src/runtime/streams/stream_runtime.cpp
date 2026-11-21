@@ -172,7 +172,7 @@ class stream_write_call_state_t
     void compress () { _compressed = true; }
 
 
-    void reply_submission (std::shared_ptr<submit_once_t> submission)
+    void reply_submission (std::shared_ptr<stream_reply_submission_t> submission)
     {
         _reply_submission = std::move (submission);
     }
@@ -198,6 +198,8 @@ class stream_write_call_state_t
                                              _immediate->error () ? _immediate->error ()->what ()
                                                                   : "STREAM write failed");
             }
+            if (_reply_submission)
+                _reply_submission->complete ();
             return task_t<void> (result_t<void>::success ());
         }
         if (!_submit || !_header || !_payload) {
@@ -236,9 +238,18 @@ class stream_write_call_state_t
         if (auto actor_slot = _header->actor_slot ()) {
             header.with_actor_slot (*actor_slot);
         }
-        return _submit (header, payload);
+        auto submitted = _submit (header, payload);
+        if (_reply_submission) {
+            const auto reply_submission = _reply_submission;
+            detail::observe_task_completion (
+              submitted,
+              [reply_submission] (const result_t<void> &) { reply_submission->complete (); });
+        }
+        return submitted;
     }
     catch (...) {
+        if (_reply_submission)
+            _reply_submission->complete ();
         return task_t<void> (current_exception_result<void> ());
     }
 
@@ -252,7 +263,7 @@ class stream_write_call_state_t
     std::string _packet_name;
     bool _compressed = false;
     submit_once_t _submission;
-    std::shared_ptr<submit_once_t> _reply_submission;
+    std::shared_ptr<stream_reply_submission_t> _reply_submission;
 };
 
 class stream_session_dispatcher_t
@@ -467,6 +478,7 @@ struct packet_dispatch_state_t
 {
     explicit packet_dispatch_state_t (const stream_header_t &value) : header (value) {}
     stream_header_t header;
+    std::shared_ptr<stream_reply_submission_t> reply_submission;
     session_message_context_t context;
     message_t payload;
 };
@@ -475,8 +487,17 @@ task_t<void> dispatch_packet_session_callback (packet_stream_session_t *session,
                                                stream_t stream,
                                                std::shared_ptr<packet_dispatch_state_t> packet)
 {
+    struct reply_submission_handler_guard_t
+    {
+        std::shared_ptr<stream_reply_submission_t> submission;
+        ~reply_submission_handler_guard_t ()
+        {
+            if (submission)
+                submission->complete_if_unclaimed ();
+        }
+    } reply_submission_guard{packet->reply_submission};
     auto task = [&] {
-        const stream_relay_dispatch_scope_t relay_scope (packet->header);
+        const stream_relay_dispatch_scope_t relay_scope (packet->header, packet->reply_submission);
         return session->on_packet (stream, packet->context, packet->payload);
     }();
     co_return co_await task;
@@ -859,7 +880,9 @@ stream_runtime_t::stream_submitter (std::shared_ptr<stream_state_t> state)
             throw framework_exception_t (framework_error_kind_t::unavailable,
                                          "STREAM session is disconnected");
         }
-        std::function<task_t<void> (const stream_header_t &, const zlink::message_t &)> writer;
+        std::shared_ptr<
+          std::function<task_t<void> (const stream_header_t &, const zlink::message_t &)>>
+          writer;
         {
             const std::lock_guard<std::mutex> lock (state->transport_writer_mutex);
             if (state->closed.load (std::memory_order_acquire)) {
@@ -869,8 +892,11 @@ stream_runtime_t::stream_submitter (std::shared_ptr<stream_state_t> state)
             writer = state->transport_writer;
         }
         const auto submit = [&] (const stream_header_t &header, const zlink::message_t &payload) {
-            if (writer)
-                return writer (header, payload);
+            if (writer && *writer) {
+                auto submitted = (*writer) (header, payload);
+                detail::observe_task_completion (submitted, [writer] (const result_t<void> &) {});
+                return submitted;
+            }
             if (state->closed.load (std::memory_order_acquire)) {
                 throw framework_exception_t (framework_error_kind_t::unavailable,
                                              "STREAM session is disconnected");
@@ -2021,8 +2047,11 @@ result_t<void> stream_runtime_t::dispatch_packet (packet_stream_session_t &sessi
     auto current_flow = runtime::flow_context_t::current ();
     auto dispatch_stream = stream;
     dispatch_stream._reply_header = header;
-    dispatch_stream._reply_submission = std::make_shared<submit_once_t> ();
+    dispatch_stream._reply_submission.reset ();
+    if (header.request_seq ())
+        dispatch_stream._reply_submission = std::make_shared<stream_reply_submission_t> ();
     auto packet = std::make_shared<packet_dispatch_state_t> (header);
+    packet->reply_submission = dispatch_stream._reply_submission;
     packet->context.packet_name = std::string (header.packet_name ());
     packet->context.metadata = message_metadata_t (header.metadata ().values ());
     packet->context.can_reply = header.request_seq ().has_value ();
@@ -2089,8 +2118,11 @@ result_t<void> stream_runtime_t::dispatch_packet_async (packet_stream_session_t 
     auto current_flow = runtime::flow_context_t::current ();
     auto dispatch_stream = stream;
     dispatch_stream._reply_header = header;
-    dispatch_stream._reply_submission = std::make_shared<submit_once_t> ();
+    dispatch_stream._reply_submission.reset ();
+    if (header.request_seq ())
+        dispatch_stream._reply_submission = std::make_shared<stream_reply_submission_t> ();
     auto packet = std::make_shared<packet_dispatch_state_t> (header);
+    packet->reply_submission = dispatch_stream._reply_submission;
     packet->context.packet_name = std::string (header.packet_name ());
     packet->context.metadata = message_metadata_t (header.metadata ().values ());
     packet->context.can_reply = header.request_seq ().has_value ();
@@ -2185,7 +2217,14 @@ void stream_runtime_t::attach_transport_writer (
   stream_t &stream,
   std::function<task_t<void> (const stream_header_t &, const zlink::message_t &)> writer) const
 {
-    stream._state->transport_writer = std::move (writer);
+    std::shared_ptr<std::function<task_t<void> (const stream_header_t &, const zlink::message_t &)>>
+      retained;
+    if (writer)
+        retained = std::make_shared<
+          std::function<task_t<void> (const stream_header_t &, const zlink::message_t &)>> (
+          std::move (writer));
+    const std::lock_guard<std::mutex> lock (stream._state->transport_writer_mutex);
+    stream._state->transport_writer = std::move (retained);
 }
 
 std::vector<stream_header_t> stream_runtime_t::written_headers (const stream_t &stream) const

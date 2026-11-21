@@ -37,6 +37,7 @@ namespace detail
 {
 class stream_builder_state_t;
 class stream_state_t;
+class stream_reply_submission_t;
 class stream_runtime_t;
 class actor_gateway_runtime_t;
 class session_actor_manager_access_t;
@@ -238,7 +239,7 @@ class stream_t
 
     std::shared_ptr<detail::stream_state_t> _state;
     std::optional<detail::stream_header_t> _reply_header;
-    std::shared_ptr<detail::submit_once_t> _reply_submission;
+    std::shared_ptr<detail::stream_reply_submission_t> _reply_submission;
 };
 
 /* Typed session packet handler contract: the serializer registry decodes the

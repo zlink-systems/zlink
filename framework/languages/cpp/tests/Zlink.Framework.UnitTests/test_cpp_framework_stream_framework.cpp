@@ -1826,7 +1826,8 @@ int binding_submission_order ()
     if (gateway.admit_bound_session_delivery (actor, 0))
         return 3;
     if ((*delivery) ("retained.push", stream_codec_t::raw,
-                     zlink::message_t::from (std::string ("retained"))))
+                     zlink::message_t::from (std::string ("retained")))
+          .result ())
         return 4;
     const auto late = delayed.async ().result ();
     std::cout << "delayed_submit_accepted=" << bool (late)
