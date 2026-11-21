@@ -9,6 +9,7 @@
 #include "utils/config.hpp"
 #include "core/pipe_internal.hpp"
 #include "core/transport_pair_policy.hpp"
+#include "core/command.hpp"
 #include "core/ctx.hpp"
 #include "core/flow_state_frame.hpp"
 #include "protocol/zmp_protocol.hpp"
@@ -83,8 +84,7 @@ bool zlink::pipe_t::write_owner_started_message_observed (
         errno = EFAULT;
         return false;
     }
-    if (!observer_ (this, observer_userdata_,
-                    pipe_write_observer_prepare)) {
+    if (!observer_ (this, observer_userdata_, pipe_write_observer_prepare, NULL)) {
         const int observer_errno = errno;
         if (admission_out_) {
             *admission_out_ = observer_errno == ENOBUFS
@@ -99,8 +99,7 @@ bool zlink::pipe_t::write_owner_started_message_observed (
         return false;
     }
     if (!retain_lifetime_ref ()) {
-        (void) observer_ (this, observer_userdata_,
-                          pipe_write_observer_finish);
+        (void) observer_ (this, observer_userdata_, pipe_write_observer_finish, NULL);
         errno = EHOSTUNREACH;
         if (admission_out_)
             *admission_out_ = pipe_message_admission_inactive;
@@ -117,15 +116,14 @@ bool zlink::pipe_t::write_owner_started_message_observed (
             written = write_message_unlocked (msg_, write_mode_,
                                                admission_out_);
         if (written) {
-            committed = observer_ (this, observer_userdata_,
-                                   pipe_write_observer_commit);
+            committed = observer_ (this, observer_userdata_, pipe_write_observer_commit, NULL);
             zlink_assert (committed);
             if (committed && !more)
-                flush_unlocked ();
+                flush_unlocked (observer_, observer_userdata_);
         }
     }
 
-    (void) observer_ (this, observer_userdata_, pipe_write_observer_finish);
+    (void) observer_ (this, observer_userdata_, pipe_write_observer_finish, NULL);
     release_lifetime_ref ();
     if (written && !committed) {
         terminate (false);
@@ -1048,8 +1046,7 @@ bool zlink::pipe_t::write_message_observed (
             *admission_out_ = pipe_message_admission_invalid;
         return false;
     }
-    if (!observer_ (this, observer_userdata_,
-                    pipe_write_observer_prepare)) {
+    if (!observer_ (this, observer_userdata_, pipe_write_observer_prepare, NULL)) {
         const int observer_errno = errno;
         if (admission_out_) {
             *admission_out_ = observer_errno == ENOBUFS
@@ -1064,8 +1061,7 @@ bool zlink::pipe_t::write_message_observed (
         return false;
     }
     if (!retain_lifetime_ref ()) {
-        (void) observer_ (this, observer_userdata_,
-                          pipe_write_observer_finish);
+        (void) observer_ (this, observer_userdata_, pipe_write_observer_finish, NULL);
         errno = EHOSTUNREACH;
         if (admission_out_)
             *admission_out_ = pipe_message_admission_inactive;
@@ -1081,15 +1077,14 @@ bool zlink::pipe_t::write_message_observed (
             written = write_message_unlocked (
               msg_, more ? write_mode_ : pipe_write_final, admission_out_);
         if (written) {
-            committed = observer_ (this, observer_userdata_,
-                                   pipe_write_observer_commit);
+            committed = observer_ (this, observer_userdata_, pipe_write_observer_commit, NULL);
             zlink_assert (committed);
             if (committed && !more)
-                flush_unlocked ();
+                flush_unlocked (observer_, observer_userdata_);
         }
     }
 
-    (void) observer_ (this, observer_userdata_, pipe_write_observer_finish);
+    (void) observer_ (this, observer_userdata_, pipe_write_observer_finish, NULL);
     release_lifetime_ref ();
     if (written && !committed) {
         terminate (false);
@@ -1423,7 +1418,7 @@ void zlink::pipe_t::rollback_unlocked (bool publish_peer_control_)
     }
 }
 
-void zlink::pipe_t::flush_unlocked ()
+void zlink::pipe_t::flush_unlocked (pipe_write_observer_fn observer_, void *observer_userdata_)
 {
     //  The peer does not exist anymore at this point.
     if (_state == term_ack_sent)
@@ -1465,8 +1460,21 @@ void zlink::pipe_t::flush_unlocked ()
             expected, head_reclassify_queued, std::memory_order_acq_rel,
             std::memory_order_acquire);
     }
-    if (sleeping || explicit_reclassify)
-        send_activate_read (peer);
+    if (sleeping || explicit_reclassify) {
+        if (!observer_)
+            send_activate_read (peer);
+        else {
+            // The request observer keeps the prepared command until the
+            // public send scope releases its socket turn.
+            command_t cmd = {};
+            cmd.type = command_t::activate_read;
+            // A second flush in the same submit scope finds the observer slot
+            // taken; that wake goes out now so no reader is left sleeping.
+            if (prepare_pipe_command (peer, cmd)
+                && !observer_ (this, observer_userdata_, pipe_write_observer_defer_command, &cmd))
+                send_prepared_command (cmd);
+        }
+    }
     if (publish_pending_controls && !_session_pipe)
         (void) dispatch_pending_inproc_controls_unlocked ();
 }
