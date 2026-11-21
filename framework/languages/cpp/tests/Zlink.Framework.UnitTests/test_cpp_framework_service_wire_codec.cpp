@@ -1528,7 +1528,9 @@ int main (int argc, char **argv)
     const messaging::envelope_codec_t envelope_codec;
     const auto invalid_error_header = [&] (std::optional<std::string> error_code) {
         zlink::framework::channel::v1::ChannelHeader wire;
-        wire.set_kind (zlink::framework::channel::v1::ERROR);
+        // channel-header-v1.proto: ERROR = 5. Windows headers define ERROR as a macro,
+        // so name the value the way envelope_codec.cpp does (cast from the number).
+        wire.set_kind (static_cast<zlink::framework::channel::v1::ChannelKind> (5));
         wire.set_channel_name ("test");
         wire.set_message_name ("reply");
         wire.set_content_type ("application/json");

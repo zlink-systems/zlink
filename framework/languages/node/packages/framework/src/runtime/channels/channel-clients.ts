@@ -257,11 +257,11 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
   sendToChannel(channelName: string, message: unknown): ZLinkSendCall {
     return new DefaultZLinkSendCall(
       () => this.requireChannelRoute(channelName),
-      async (packetName, metadata) => {
+      (packetName, metadata) => {
         const route = this.requireChannelRoute(channelName);
         if (route.kind === 'route-mesh') {
           return normalizeSubmitResult(
-            await this.requireTransport().submitToChannel(
+            this.requireTransport().submitToChannel(
               route.meshName,
               channelName,
               packetName,
@@ -271,7 +271,7 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
           );
         }
         return normalizeSubmitResult(
-          await this.requireChannelTransport().send(channelName, packetName, message, metadata)
+          this.requireChannelTransport().send(channelName, packetName, message, metadata)
         );
       },
       undefined,
