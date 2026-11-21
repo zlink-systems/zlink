@@ -91,7 +91,7 @@ function resolverFor(resolveActor, now) {
     },
     leaseTracker: {
       isOwnerTokenLive: async () => true,
-      remainingOwnerTokenLeaseMs: async () => 60_000
+      ownerTokenLeaseDeadlineMs: async () => performance.now() + 60_000
     },
     spotMeshNames: ['play'],
     routeCacheMaxAgeMs: 15_000,
@@ -173,7 +173,7 @@ test('authority-backed Spot resolution uses the same positive-only cache boundar
     authority,
     (meshName) => meshName,
     undefined,
-    { remainingOwnerTokenLeaseMs: async () => 60_000 },
+    { ownerTokenLeaseDeadlineMs: async () => performance.now() + 60_000 },
     15_000,
     () => 0
   );
@@ -184,6 +184,76 @@ test('authority-backed Spot resolution uses the same positive-only cache boundar
   resolver.invalidate('room-1');
   await resolver.resolve('room-1');
   assert.equal(reads, 2);
+});
+
+test('Ready Spot caching keeps the observed lease deadline through target-state lookup', async () => {
+  let now = 0;
+  let leaseReads = 0;
+  let reads = 0;
+  const authority = {
+    async readAuthority() {
+      reads += 1;
+      return {
+        kind: 'snapshot',
+        storeVersion: { value: '1' },
+        payload: internal.encodeServiceUserSpotAuthorityPayload({
+          state: 'ready',
+          stableType: 'Room',
+          spotId: 'room-1',
+          ownerId: 'owner-a',
+          ownerLeaseGeneration: 2n,
+          ownerMeshName: 'play',
+          ownerNodeRid: 'node-a',
+          ownerNodeGeneration: 3n
+        }),
+        objectGeneration: 4n,
+        authorityOwnerGeneration: 5n,
+        ownerId: 'owner-a',
+        ownerLeaseGeneration: 2n,
+        allocation: {
+          state: 'active',
+          objectKind: 'user_spot',
+          stableType: 'Room',
+          descriptor: { meshName: 'play', nodeRid: 'node-a' },
+          descriptorLifecycleGeneration: 3n,
+          capacity: { actors: 0, spots: 1 }
+        },
+        storeNow: new Date()
+      };
+    }
+  };
+  const tracker = new internal.ZLinkOwnerLeaseTracker({
+    monotonicNowMs: () => now,
+    store: {
+      async readOwnerLease() {
+        leaseReads++;
+        return {
+          kind: 'found',
+          token: { ownerId: 'owner-a', leaseGeneration: 2n },
+          storeNow: new Date(now),
+          leaseExpiresAt: new Date(100)
+        };
+      }
+    }
+  });
+  const resolver = new internal.ZLinkAuthoritySpotRouteResolver(
+    authority,
+    (meshName) => meshName,
+    undefined,
+    tracker,
+    15_000,
+    () => now,
+    async () => { now = 90; }
+  );
+
+  assert.equal((await resolver.resolve('room-1')).targetNodeRid, 'node-a');
+  assert.equal((await resolver.resolve('room-1')).authorityOwnerGeneration, 5n);
+  assert.equal(reads, 1);
+  assert.equal(leaseReads, 1);
+  now = 100;
+  await assert.rejects(() => resolver.resolve('room-1'), /owner lease is unavailable/);
+  assert.equal(reads, 2);
+  assert.equal(leaseReads, 2);
 });
 
 test('Ready Instance authority with an expired owner remains unavailable instead of missing', async () => {
@@ -222,7 +292,7 @@ test('Ready Instance authority with an expired owner remains unavailable instead
     authority,
     (meshName) => meshName,
     undefined,
-    { remainingOwnerTokenLeaseMs: async () => 0 },
+    { ownerTokenLeaseDeadlineMs: async () => -Infinity },
     15_000,
     () => 0
   );
@@ -263,7 +333,7 @@ test('Closing Spot authority retains the owner route without caching it as Ready
   };
   const resolver = new internal.ZLinkAuthoritySpotRouteResolver(
     authority, meshName => meshName, undefined,
-    { remainingOwnerTokenLeaseMs: async () => 60_000 }, 15_000, () => 0
+    { ownerTokenLeaseDeadlineMs: async () => performance.now() + 60_000 }, 15_000, () => 0
   );
   assert.equal((await resolver.resolve('closing-room')).targetNodeRid, 'node-a');
   assert.equal((await resolver.resolve('closing-room')).targetSpotGeneration, 4n);
@@ -321,7 +391,7 @@ test('cached Ready direct Spot route applies host admission before Spot Close se
   };
   const resolver = new internal.ZLinkAuthoritySpotRouteResolver(
     authority, meshName => meshName, undefined,
-    { remainingOwnerTokenLeaseMs: async () => 60_000 }, 15_000, () => 0
+    { ownerTokenLeaseDeadlineMs: async () => performance.now() + 60_000 }, 15_000, () => 0
   );
   const owner = new ServiceStatefulRuntime({ setServiceIngress() {} }, 'node-a', 3n);
   owner.restoreUserSpotAuthority('room-direct', 'Room', 4n, 5n);
@@ -466,7 +536,7 @@ test('authority Spot resolution does not re-cache a route invalidated during the
     authority,
     (meshName) => meshName,
     undefined,
-    { remainingOwnerTokenLeaseMs: async () => 60_000 },
+    { ownerTokenLeaseDeadlineMs: async () => performance.now() + 60_000 },
     15_000,
     () => 0
   );
@@ -528,7 +598,7 @@ test('authority Actor route carries every fence and a changed StoreVersion inval
       actorStore: { resolveActor: unused },
       routeStore: { resolveRoute: unused }
     },
-    leaseTracker: { remainingOwnerTokenLeaseMs: async () => 60_000 },
+    leaseTracker: { ownerTokenLeaseDeadlineMs: async () => performance.now() + 60_000 },
     routeCacheMaxAgeMs: 15_000,
     monotonicNowMs: () => 0
   });
@@ -579,7 +649,7 @@ test('authority Actor route projects a foreign payload from the canonical outer 
       actorStore: { resolveActor: unused },
       routeStore: { resolveRoute: unused }
     },
-    leaseTracker: { remainingOwnerTokenLeaseMs: async () => 60_000 },
+    leaseTracker: { ownerTokenLeaseDeadlineMs: async () => performance.now() + 60_000 },
     routeCacheMaxAgeMs: 15_000,
     monotonicNowMs: () => 0
   });
@@ -641,7 +711,7 @@ test('Message Follow invalidation deletes only the exact cached Actor route fenc
       actorStore: { resolveActor: unused },
       routeStore: { resolveRoute: unused }
     },
-    leaseTracker: { remainingOwnerTokenLeaseMs: async () => 60_000 },
+    leaseTracker: { ownerTokenLeaseDeadlineMs: async () => performance.now() + 60_000 },
     routeCacheMaxAgeMs: 15_000,
     monotonicNowMs: () => 0
   });

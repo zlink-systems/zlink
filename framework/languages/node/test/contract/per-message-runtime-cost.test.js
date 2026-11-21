@@ -41,7 +41,7 @@ test('Actor send and request reuse client options without delivery provider disc
   const snapshot = authoritySnapshot();
   const resolver = new ZLinkStoreLocationResolvers({
     stores: { authorityStore: { async readAuthority() { return snapshot; } } },
-    leaseTracker: { async remainingOwnerTokenLeaseMs() { return 100000; } }
+    leaseTracker: { async ownerTokenLeaseDeadlineMs() { return performance.now() + 100000; } }
   });
   let providerLookups = 0;
   let sends = 0;
@@ -104,7 +104,7 @@ for (const present of [false, true]) {
     registeredGate = { async waitBeforeSubmit() { throw new Error('provider was read again'); } };
     const resolver = new ZLinkStoreLocationResolvers({
       stores: { authorityStore: { async readAuthority() { return authoritySnapshot(); } } },
-      leaseTracker: { async remainingOwnerTokenLeaseMs() { return 100000; } }
+      leaseTracker: { async ownerTokenLeaseDeadlineMs() { return performance.now() + 100000; } }
     });
     options.locationResolver = () => resolver;
     options.staleActorRefPredicate = undefined;
@@ -152,7 +152,7 @@ test('canonical Actor authority unwraps once on route miss and creates no legacy
   };
   const resolver = new ZLinkStoreLocationResolvers({
     stores: { authorityStore: { async readAuthority() { return snapshot; } } },
-    leaseTracker: { async remainingOwnerTokenLeaseMs() { return 100000; } }
+    leaseTracker: { async ownerTokenLeaseDeadlineMs() { return performance.now() + 100000; } }
   });
   assert.equal((await resolver.resolveDirectActorRoute('actor-a')).kind, 'ready');
   assert.equal(unwraps, 1);

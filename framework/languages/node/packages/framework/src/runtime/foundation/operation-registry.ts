@@ -57,6 +57,7 @@ export interface OperationObserver<T, Context> {
 }
 
 class RegistryOperation<T, Context> implements OperationHandle<T>, OperationObserver<T, Context> {
+  declare deadlinePosition?: number;
   promise?: Promise<T>;
   resolve?: (value: T | PromiseLike<T>) => void;
   reject?: (reason: unknown) => void;
@@ -69,7 +70,7 @@ class RegistryOperation<T, Context> implements OperationHandle<T>, OperationObse
   constructor(
     private readonly registry: OperationRegistry<T, Context>,
     readonly id: bigint,
-    public deadlineMs: number | undefined,
+    readonly deadlineMs: number | undefined,
     public context: Context | undefined
   ) {}
   complete(value: T, retentionMs = this.terminalRetentionMs): boolean {
@@ -204,6 +205,8 @@ class RegistryOperation<T, Context> implements OperationHandle<T>, OperationObse
 }
 type Entry<T, Context> = RegistryOperation<T, Context>;
 interface RetainedContext<Context> {
+  readonly id: bigint;
+  deadlinePosition?: number;
   context: Context;
   deadlineMs: number;
 }
@@ -219,14 +222,11 @@ const systemClock: OperationClock = {
 export class OperationRegistry<T, Context = unknown> {
   private readonly entries = new Map<bigint, IndexedOperation<T, Context>>();
   private nextId = 1n;
-  private lastVisitMs: number;
-  private deadlineCursor?: MapIterator<[bigint, IndexedOperation<T, Context>]>;
-  /**
-   * A lower bound of the earliest pending deadline. Completed entries only
-   * leave it early; a full expiry pass replaces it with the exact value.
-   */
-  private earliestDeadlineMs = Number.POSITIVE_INFINITY;
-  private scanEarliestDeadlineMs = Number.POSITIVE_INFINITY;
+  private nextRotationMs: number;
+  private reservedVisitMs = Infinity;
+  // A min-heap of references into entries. The table alone grants the terminal.
+  // Keep the root slot allocated across an empty registry.
+  private readonly deadlines: Array<IndexedOperation<T, Context> | undefined> = [undefined];
   private closed = false;
   private pendingCount = 0;
 
@@ -235,7 +235,7 @@ export class OperationRegistry<T, Context = unknown> {
     private readonly onPendingChanged?: () => void,
     private readonly terminalError: (reason: unknown) => unknown = (reason) => reason
   ) {
-    this.lastVisitMs = this.clock.now();
+    this.nextRotationMs = this.clock.now() + DEADLINE_ROTATION_MS;
   }
 
   register(
@@ -258,8 +258,7 @@ export class OperationRegistry<T, Context = unknown> {
       entry.resolve = resolve;
       entry.reject = reject;
     });
-    this.entries.set(id, entry);
-    this.notePending(deadlineMs);
+    this.registerPending(entry);
     return entry as PendingOperation<T>;
   }
 
@@ -284,8 +283,7 @@ export class OperationRegistry<T, Context = unknown> {
     const deadlineMs = this.clock.now() + timeoutMs;
     const entry = new RegistryOperation(this, id, deadlineMs, context);
     entry.observer = observer;
-    this.entries.set(id, entry);
-    this.notePending(deadlineMs);
+    this.registerPending(entry);
     return id;
   }
 
@@ -318,16 +316,19 @@ export class OperationRegistry<T, Context = unknown> {
   /** The time the next expiry pass has work, as a lower bound (spec 08 §4.2). */
   nextDeadlineMs(): number {
     if (this.entries.size === 0) return Number.POSITIVE_INFINITY;
-    if (this.deadlineCursor !== undefined)
-      return Math.min(this.lastVisitMs, this.earliestDeadlineMs);
-    return Math.min(this.earliestDeadlineMs, this.lastVisitMs + DEADLINE_ROTATION_MS);
+    // Keep the deadline offered to the scheduler even if that operation completes.
+    const deadline = this.deadlines[0]?.deadlineMs ?? Infinity;
+    if (deadline < this.nextRotationMs && deadline < this.reservedVisitMs) {
+      this.reservedVisitMs = deadline;
+    }
+    return Math.min(this.nextRotationMs, this.reservedVisitMs);
   }
 
-  private notePending(deadlineMs: number | undefined): void {
-    this.pendingCount++;
-    const earlier = deadlineMs !== undefined && deadlineMs < this.earliestDeadlineMs;
-    if (earlier) this.earliestDeadlineMs = deadlineMs;
-    if (earlier || this.pendingCount === 1) this.onPendingChanged?.();
+  private registerPending(entry: Entry<T, Context>): void {
+    this.entries.set(entry.id, entry);
+    const firstPending = ++this.pendingCount === 1;
+    const earlier = this.scheduleDeadline(entry);
+    if (earlier || firstPending) this.onPendingChanged?.();
   }
 
   complete(id: bigint, value: T, terminalContextRetentionMs = 0): boolean {
@@ -382,7 +383,9 @@ export class OperationRegistry<T, Context = unknown> {
   clear(reason: unknown): void {
     this.failAll(reason);
     this.entries.clear();
-    this.resetEmptyIndex();
+    this.deadlines.length = 1;
+    this.deadlines[0] = undefined;
+    this.reservedVisitMs = Infinity;
   }
 
   close(reason = 'Operation registry closed.'): void {
@@ -390,7 +393,9 @@ export class OperationRegistry<T, Context = unknown> {
     this.closed = true;
     for (const id of this.entries.keys()) this.cancel(id, reason);
     this.entries.clear();
-    this.resetEmptyIndex();
+    this.deadlines.length = 1;
+    this.deadlines[0] = undefined;
+    this.reservedVisitMs = Infinity;
   }
 
   failAll(reason: unknown): void {
@@ -403,30 +408,19 @@ export class OperationRegistry<T, Context = unknown> {
 
   expire(nowMs: number, turnDeadlineMs: number): number {
     if (this.entries.size === 0) return 0;
+    this.nextRotationMs = nowMs + DEADLINE_ROTATION_MS;
+    this.reservedVisitMs = Infinity;
     let expired = 0;
-    if (this.deadlineCursor === undefined) {
-      this.lastVisitMs = nowMs;
-      this.deadlineCursor = this.entries.entries();
-      this.scanEarliestDeadlineMs = Number.POSITIVE_INFINITY;
-    }
-    const cursor = this.deadlineCursor;
-    while (this.clock.now() < turnDeadlineMs) {
-      const current = cursor.next();
-      if (current.done === true) {
-        this.deadlineCursor = undefined;
-        // Entries registered during the pass are appended and were scanned.
-        this.earliestDeadlineMs = this.scanEarliestDeadlineMs;
-        break;
-      }
-      const [id, entry] = current.value;
-      if (entry.deadlineMs === undefined) continue;
-      if (entry.deadlineMs <= nowMs) {
-        if (!this.isPending(id)) {
-          this.entries.delete(id);
-          if (this.entries.size === 0) this.resetEmptyIndex();
-        } else if (this.fail(id, new OperationTimeoutError(id))) expired++;
-      } else if (entry.deadlineMs < this.scanEarliestDeadlineMs) {
-        this.scanEarliestDeadlineMs = entry.deadlineMs;
+    for (let next = this.deadlines[0]; next !== undefined; next = this.deadlines[0]) {
+      if (!(next.deadlineMs! <= nowMs && this.clock.now() < turnDeadlineMs)) break;
+      if (
+        next instanceof RegistryOperation &&
+        this.fail(next.id, new OperationTimeoutError(next.id))
+      ) {
+        expired++;
+      } else {
+        this.entries.delete(next.id);
+        this.removeDeadline(next);
       }
     }
     return expired;
@@ -436,17 +430,70 @@ export class OperationRegistry<T, Context = unknown> {
     const entry = this.pendingEntry(id);
     if (entry === undefined) return undefined;
     this.entries.delete(id);
-    if (this.entries.size === 0) this.resetEmptyIndex();
+    if (this.entries.size === 0) {
+      this.deadlines[0] = undefined;
+      this.reservedVisitMs = Infinity;
+    } else {
+      this.removeDeadline(entry);
+    }
     this.pendingCount--;
     entry.endAdmission();
     if (this.pendingCount === 0) this.onPendingChanged?.();
     return entry;
   }
 
-  private resetEmptyIndex(): void {
-    this.deadlineCursor = undefined;
-    this.earliestDeadlineMs = Number.POSITIVE_INFINITY;
-    this.scanEarliestDeadlineMs = Number.POSITIVE_INFINITY;
+  private scheduleDeadline(entry: IndexedOperation<T, Context>): boolean {
+    const deadline = entry.deadlineMs;
+    if (deadline === undefined || Number.isNaN(deadline)) return false;
+    const heap = this.deadlines;
+    if (heap[0] === undefined) {
+      heap[0] = entry;
+      return deadline < Infinity;
+    }
+    this.siftDeadlineUp(entry, heap.length);
+    return entry.deadlinePosition === 0;
+  }
+
+  private removeDeadline(entry: IndexedOperation<T, Context>): void {
+    let position = entry.deadlinePosition ?? 0;
+    const heap = this.deadlines;
+    if (heap[position] !== entry) return;
+    if (heap.length === 1) {
+      heap[0] = undefined;
+      return;
+    }
+    const last = heap.pop()!;
+    if (entry === last) return;
+    if (last.deadlineMs! < entry.deadlineMs!) {
+      this.siftDeadlineUp(last, position);
+      return;
+    }
+    for (let child = position * 2 + 1; child < heap.length; child = position * 2 + 1) {
+      if (child + 1 < heap.length && heap[child + 1]!.deadlineMs! < heap[child]!.deadlineMs!) {
+        child++;
+      }
+      const next = heap[child]!;
+      if (last.deadlineMs! <= next.deadlineMs!) break;
+      heap[position] = next;
+      next.deadlinePosition = position;
+      position = child;
+    }
+    heap[position] = last;
+    last.deadlinePosition = position;
+  }
+
+  private siftDeadlineUp(entry: IndexedOperation<T, Context>, position: number): void {
+    const heap = this.deadlines;
+    while (position > 0) {
+      const parent = Math.floor((position - 1) / 2);
+      const previous = heap[parent]!;
+      if (previous.deadlineMs! <= entry.deadlineMs!) break;
+      heap[position] = previous;
+      previous.deadlinePosition = position;
+      position = parent;
+    }
+    heap[position] = entry;
+    entry.deadlinePosition = position;
   }
 
   private pendingEntry(id: bigint): Entry<T, Context> | undefined {
@@ -459,9 +506,13 @@ export class OperationRegistry<T, Context = unknown> {
 
   private retainTerminal(id: bigint, entry: Entry<T, Context>, retentionMs: number): void {
     if (this.closed || entry.context === undefined || retentionMs === 0) return;
-    const retained = { context: entry.context, deadlineMs: this.clock.now() + retentionMs };
+    const retained = {
+      id,
+      context: entry.context,
+      deadlineMs: this.clock.now() + retentionMs
+    };
     this.entries.set(id, retained);
-    this.earliestDeadlineMs = Math.min(this.earliestDeadlineMs, retained.deadlineMs);
+    this.scheduleDeadline(retained);
     this.onPendingChanged?.();
   }
 }
