@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -13,16 +14,120 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueueTestAccess;
 import systems.zlink.framework.execution.ZLinkWorkerPool;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext;
 
 import java.time.Duration;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkYieldAdmissionTest {
+    @RepeatedTest(40)
+    void exhaustedYieldResumesOnlyAfterSiblingTurn() throws Exception {
+        yieldTerminalWaitsForSibling(YieldTerminal.EXHAUSTED);
+    }
+
+    @Test
+    void successfulYieldResumesOnlyAfterSiblingTurn() throws Exception {
+        yieldTerminalWaitsForSibling(YieldTerminal.SUCCESS);
+    }
+
+    @Test
+    void cancelledYieldResumesOnlyAfterSiblingTurn() throws Exception {
+        yieldTerminalWaitsForSibling(YieldTerminal.CANCELLED);
+    }
+
+    private enum YieldTerminal {
+        EXHAUSTED,
+        SUCCESS,
+        CANCELLED
+    }
+
+    private static void yieldTerminalWaitsForSibling(YieldTerminal outcome) throws Exception {
+        var executor = new ZLinkManualExecutor();
+        var queue = new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.spot());
+        new ZLinkSerialExecutionQueue.SharedSpotGate(queue);
+        var remote = new CompletableFuture<Integer>();
+        var siblingStarted = new CompletableFuture<Void>();
+        var releaseSibling = new CompletableFuture<Void>();
+        var terminals = new AtomicInteger();
+        var terminal = new CompletableFuture<Integer>();
+        var resumedInTurn = new AtomicReference<Boolean>();
+        try (var pool = new ZLinkWorkerPool(0, 1, Duration.ofSeconds(30))) {
+            var turn =
+                    queue.enqueue(
+                            () -> {
+                                try (var scope =
+                                        ZLinkSuspendInvocationContext.enterApplicationExecution(
+                                                application())) {
+                                    new DefaultZLinkIoWorkerCall<>(pool, signal -> remote)
+                                            .yield()
+                                            .whenComplete(
+                                                    (value, error) -> {
+                                                        terminals.incrementAndGet();
+                                                        resumedInTurn.set(queue.isCurrent());
+                                                        if (error != null)
+                                                            terminal.completeExceptionally(error);
+                                                        else terminal.complete(value);
+                                                    });
+                                    return terminal.handle((value, error) -> null);
+                                }
+                            },
+                            null);
+            var sibling =
+                    queue.enqueue(
+                            () -> {
+                                siblingStarted.complete(null);
+                                return releaseSibling;
+                            },
+                            null);
+            executor.drain();
+            assertTrue(siblingStarted.isDone());
+            assertFalse(sibling.toCompletableFuture().isDone());
+
+            if (outcome == YieldTerminal.EXHAUSTED) {
+                ZLinkSerialExecutionQueueTestAccess.exhaustSequence(queue);
+            }
+            if (outcome == YieldTerminal.CANCELLED) pool.close();
+            else assertTrue(remote.complete(7));
+            executor.drain();
+            var earlyFailure = terminal.handle((value, error) -> error).getNow(null);
+            assertEquals(
+                    0, terminals.get(), () -> "Yield terminal before B release: " + earlyFailure);
+
+            releaseSibling.complete(null);
+            executor.drain();
+            sibling.toCompletableFuture().join();
+            assertTrue(turn.toCompletableFuture().isDone());
+            turn.toCompletableFuture().join();
+            assertEquals(1, terminals.get());
+            assertEquals(Boolean.TRUE, resumedInTurn.get());
+            var failure = terminal.handle((value, error) -> error).join();
+            switch (outcome) {
+                case EXHAUSTED ->
+                        assertEquals(
+                                "queue sequence exhausted",
+                                assertInstanceOf(IllegalStateException.class, failure)
+                                        .getMessage());
+                case SUCCESS -> assertEquals(7, terminal.join());
+                case CANCELLED -> assertInstanceOf(CancellationException.class, failure);
+            }
+            var quiescent = queue.awaitQuiescence();
+            executor.drain();
+            assertTrue(quiescent.toCompletableFuture().isDone());
+        } finally {
+            releaseSibling.complete(null);
+            remote.complete(7);
+            executor.drain();
+            queue.close();
+            executor.drain();
+        }
+    }
+
     @Test
     void secondYieldRejectsBeforeActualIoSubmission() {
         var executor = new ZLinkManualExecutor();
