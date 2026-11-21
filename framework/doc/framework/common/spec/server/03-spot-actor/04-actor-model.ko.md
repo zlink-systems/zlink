@@ -489,7 +489,10 @@ Destroy는 membership 이동이 아니다. 따라서 성공 과정에서 `OnLeav
 
 Framework는 다음 순서로 destroy를 진행한다.
 
-1. 새로운 payload admission을 닫는다.
+1. 새로운 payload admission을 닫고, Location Store의 Actor authority record를 `Closing`으로
+   바꾼다. 이 변경은 현재 `objectGeneration`과 owner를 보존하는 CAS 한 번이다. 다른 node는 이
+   상태로 destroy가 진행 중임을 관찰한다(`GetOrCreate`의 대기는 [§6.5](#65-create와-getorcreate의-차이), `Create`의 결과는
+   [Location runtime §7](../05-location-relocation/01-location-runtime.ko.md#7-actor와-user-spot을-만든다) 결과 표의 `Closing` 행).
 2. 진행 중인 lifecycle 작업을 정리한다.
 3. Session binding을 제거한다.
 4. Location ownership과 registry entry를 제거한다.
@@ -497,11 +500,33 @@ Framework는 다음 순서로 destroy를 진행한다.
 | 상태 | Destroy 결과 |
 |---|---|
 | 같은 incarnation이 이미 없다. | Idempotent `false`를 반환한다. |
-| 같은 incarnation의 destroy가 진행 중이다. | 진행 중인 destroy의 terminal에 합류해 같은 결과를 받는다. |
+| 같은 incarnation의 destroy가 진행 중이다. | Owner node에서 호출했으면 진행 중인 destroy의 terminal에 합류해 같은 결과를 받는다. 다른 node에서 호출했으면 아래 결과 관찰 표를 따른다. |
 | 같은 ActorId의 다른 generation이 있다. | `InvalidOperation`으로 끝난다. |
 | Actor가 이동을 위한 seal 상태다. | `Unavailable`로 끝난다. |
 
 Framework는 current `ActorRef`를 다시 찾아 새 incarnation을 종료하지 않는다.
+
+Destroy는 Actor의 owner node만 실행한다. Owner가 아닌 node에서 destroy를 호출하면 그 node는
+authority record가 가리키는 owner에게 command 27 `actorDestroy`
+([wire command 표](../02-channel-transport/06-wire-protocol.ko.md#3-command-space))를 보낸다.
+이 command는 응답이 없는 infrastructure command이며, body는 `correlation`과 `ActorRef`의 ActorId·generation·owner fence를 담은 actor route fence다(규범 schema의 `actorDestroy`).
+Owner는 받은 incarnation에 대해 위 순서의 destroy를 시작하거나, 같은 incarnation의 destroy가
+진행 중이면 그 destroy에 합류한다. Generation이 다르거나 seal 상태인 경우의 처리는 위 표와 같다.
+
+호출한 node는 owner의 응답을 기다리지 않고 Location Store의 authority로 terminal을 관찰한다. 결과는
+command를 보내기 전에 읽은 authority와 그 뒤의 관찰로 정한다.
+
+| 관찰 | 결과 |
+|---|---|
+| 보내기 전에 읽은 authority가 이미 다른 generation이다. | Command를 보내지 않고 `InvalidOperation`으로 끝난다. |
+| 보내기 전에 읽은 authority가 seal 상태다. | Command를 보내지 않고 `Unavailable`로 끝난다. |
+| 보낸 뒤 그 generation의 authority가 없어지거나 더 큰 generation으로 바뀐다. | `true`로 끝난다. Generation은 되돌아가지 않으므로 그 incarnation의 destroy가 끝난 것이다. |
+| Deadline까지 그 generation의 authority가 남아 있다. | 호출의 기존 deadline 결과로 끝난다. Owner의 destroy 실패 사유는 응답이 없어 전달되지 않는다. |
+
+호출한 node는 owner가 살아 있는 Actor의 authority를 직접 지우지 않는다 — destroy 단계의 소유자는
+owner 하나다. Owner가 없거나 owner lease가 끝난 Actor record는
+[Location runtime §6.1](../05-location-relocation/01-location-runtime.ko.md#61-read와-cas)의 해제 규칙을 따른다.
+Destroy가 `Closing`까지 진행된 뒤 owner가 끝난 record도 그 규칙이 해제한다.
 
 ## 7. Session binding
 
