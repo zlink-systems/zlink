@@ -49,21 +49,56 @@ internal sealed class ZLinkSharedEnvelopeOwner : IDisposable
 }
 
 /// <summary>
-/// Bounded mailbox for records owned by one node, Spot or Actor.
+/// Mailbox for records owned by one Node, ChannelName, Spot or Actor.
 /// </summary>
 internal sealed class ZLinkMeshNodeOwnedMailbox(
     Action<ulong> onRecordEnqueued,
     Action<ulong> onRecordDequeued,
     Action? onReady = null,
-    Action<bool>? onReleased = null
+    Action<bool>? onReadinessChanged = null,
+    Action? onReadyChanged = null
 )
 {
     private readonly Queue<ZLinkMeshQueuedRecord> _records = new();
     private readonly ZLinkStateLane _lane = new();
 
-    // The ready registry reserves the owner. Its first receive captures the FIFO
-    // prefix and drains it in the same turn; later enqueues belong to the next claim.
+    // Only gated owners retain a FIFO prefix until release.
     private int _claimedRecordCount = -1;
+
+    internal MeshClaim CreateClaim(MeshOwnerKind ownerKind)
+    {
+        // ChannelName mailboxes also use Node, with the channel as their identity.
+        if (ownerKind == MeshOwnerKind.Node)
+            return new(singleReceive: true) { Receiver = TakeRecordAsync, Releaser = Release };
+        return new()
+        {
+            Receiver = (batch, _) =>
+                ClaimAndDrainAsync(
+                    batch,
+                    Math.Min(ZLinkReceiveBatchBudget.MaximumRecords, batch.MaximumRecords)
+                ),
+            Releaser = Release,
+        };
+    }
+
+    private async ValueTask<bool> TakeRecordAsync(MeshReceiveBatch batch, RecvFlags flags)
+    {
+        var result = await _lane
+            .RunAsync(
+                static state =>
+                {
+                    var received = state.Mailbox.DrainOnLane(state.Batch, 1);
+                    var ready = state.Mailbox.UpdateReadinessOnLane();
+                    return (Received: received != 0, Ready: ready);
+                },
+                (Mailbox: this, Batch: batch)
+            )
+            .ConfigureAwait(false);
+        // Publish the successor after the mailbox state turn has ended.
+        if (result.Ready)
+            onReadyChanged?.Invoke();
+        return result.Received;
+    }
 
     internal bool HasRecords => AwaitStateLane(_lane.RunAsync(() => _records.Count != 0));
 
@@ -105,20 +140,25 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
     {
         if (_claimedRecordCount < 0)
             _claimedRecordCount = _records.Count;
+        var count = DrainOnLane(batch, Math.Min(maximumRecords, _claimedRecordCount));
+        _claimedRecordCount -= count;
+        return count != 0;
+    }
+
+    private int DrainOnLane(MeshReceiveBatch batch, int limit)
+    {
         var count = 0;
-        var limit = Math.Min(maximumRecords, _claimedRecordCount);
         while (count < limit && _records.Count != 0)
         {
             var candidate = _records.Peek();
             if (!batch.CanAdd(checked((long)candidate.PayloadBytes)))
                 break;
             var record = _records.Dequeue();
-            _claimedRecordCount--;
             onRecordDequeued(record.PendingBytes);
             batch.Add(record.Record, record.TakeParts(), record.TakePayloadOwner());
             count++;
         }
-        return count != 0;
+        return count;
     }
 
     // Releasing a claim decides nothing for the releasing worker. The release
@@ -128,7 +168,15 @@ internal sealed class ZLinkMeshNodeOwnedMailbox(
     private void ReleaseOnLane()
     {
         _claimedRecordCount = -1;
-        onReleased?.Invoke(_records.Count != 0);
+        if (UpdateReadinessOnLane())
+            onReadyChanged?.Invoke();
+    }
+
+    private bool UpdateReadinessOnLane()
+    {
+        var ready = _records.Count != 0;
+        onReadinessChanged?.Invoke(ready);
+        return ready;
     }
 
     internal void Dispose()

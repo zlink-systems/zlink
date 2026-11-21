@@ -18,6 +18,7 @@ import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
@@ -32,6 +33,7 @@ final class ZLinkRelocationPublicationFailureTest {
 
     enum Fault {
         STORE_REPLY_LOST,
+        STORE_REPLY_LOST_WITH_RECONCILIATION_TIMEOUT,
         TYPED_VALIDATION,
         ROLLBACK_REPLY_LOST,
         EXTERNAL_SHUTDOWN_WINS
@@ -41,7 +43,8 @@ final class ZLinkRelocationPublicationFailureTest {
     @EnumSource(Fault.class)
     void publicationFailureWaitsForRollbackAndNeverReopensAnUnconfirmedHost(Fault fault)
             throws Exception {
-        var store = new AppliedWriteStore();
+        var store =
+                new AppliedWriteStore(fault == Fault.STORE_REPLY_LOST_WITH_RECONCILIATION_TIMEOUT);
         var options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(store);
         options.addRelocationStore(new InMemoryRelocationStore());
@@ -73,7 +76,6 @@ final class ZLinkRelocationPublicationFailureTest {
                 assertTrue(
                         store.descriptors().stream()
                                 .allMatch(d -> d.state() == ZLinkFrameworkRuntimeState.RELOCATING));
-                store.publicationFailed.set(true);
                 store.publicationReply.completeExceptionally(
                         fault == Fault.TYPED_VALIDATION
                                 ? new IllegalArgumentException("injected provider validation")
@@ -137,6 +139,8 @@ final class ZLinkRelocationPublicationFailureTest {
                 store.armed.set(false);
                 store.publicationReply.complete(null);
                 store.rollbackReply.complete(null);
+                store.delayedReconciliation.completeExceptionally(
+                        new IOException("descriptor reconciliation unavailable"));
             }
         }
     }
@@ -176,23 +180,31 @@ final class ZLinkRelocationPublicationFailureTest {
         final ZLinkProviderLocationRepository repository =
                 new ZLinkProviderLocationRepository(inner);
         final AtomicBoolean armed = new AtomicBoolean();
-        final AtomicBoolean publicationFailed = new AtomicBoolean();
         final CompletableFuture<Void> publicationReply = new CompletableFuture<>();
         final CompletableFuture<Void> rollbackReply = new CompletableFuture<>();
         final CompletableFuture<Void> relocatingApplied = new CompletableFuture<>();
         final CompletableFuture<Void> servingApplied = new CompletableFuture<>();
-        final java.util.Set<String> relocatingMeshes = ConcurrentHashMap.newKeySet();
-        final java.util.Set<String> servingMeshes = ConcurrentHashMap.newKeySet();
-        final java.util.Set<ZLinkStoreKey> failedReconciliationReads =
-                ConcurrentHashMap.newKeySet();
+        final CompletableFuture<ZLinkStoreReadResult> delayedReconciliation =
+                new CompletableFuture<>();
+        final Set<ZLinkStoreKey> relocatingKeys = ConcurrentHashMap.newKeySet();
+        final Set<ZLinkStoreKey> servingKeys = ConcurrentHashMap.newKeySet();
+        final Set<ZLinkStoreKey> failedReconciliationReads = ConcurrentHashMap.newKeySet();
+        final boolean delayReconciliation;
+
+        AppliedWriteStore(boolean delayReconciliation) {
+            this.delayReconciliation = delayReconciliation;
+        }
 
         @Override
         public CompletionStage<ZLinkStoreReadResult> read(
                 ZLinkStoreKey key, ZLinkStoreCancellation cancellation) {
-            if (failedReconciliationReads.remove(key))
-                return CompletableFuture.failedFuture(
-                        new IOException("descriptor reconciliation unavailable"));
-            return inner.read(key, cancellation);
+            if (!failedReconciliationReads.remove(key)) return inner.read(key, cancellation);
+            if (delayReconciliation
+                    && key.value().startsWith(DESCRIPTOR_PREFIX + MESHES.getLast() + "\0")) {
+                return delayedReconciliation;
+            }
+            return CompletableFuture.failedFuture(
+                    new IOException("descriptor reconciliation unavailable"));
         }
 
         @Override
@@ -204,49 +216,42 @@ final class ZLinkRelocationPublicationFailureTest {
         @Override
         public CompletionStage<ZLinkStoreWriteResult> write(
                 ZLinkStoreWriteRequest request, ZLinkStoreCancellation cancellation) {
+            if (!armed.get()) return inner.write(request, cancellation);
+            var descriptorKey =
+                    request.mutations().stream()
+                            .filter(ZLinkStorePut.class::isInstance)
+                            .map(ZLinkStorePut.class::cast)
+                            .map(ZLinkStorePut::key)
+                            .filter(key -> key.value().startsWith(DESCRIPTOR_PREFIX))
+                            .findFirst();
+            if (descriptorKey.isEmpty()) return inner.write(request, cancellation);
+
+            // Select the reply before making the write visible to another fixture thread.
+            ZLinkStoreKey key = descriptorKey.orElseThrow();
+            boolean rollback = publicationReply.isDone();
+            var reply = rollback ? rollbackReply : publicationReply;
+            var applied = rollback ? servingApplied : relocatingApplied;
+            var keys = rollback ? servingKeys : relocatingKeys;
             return inner.write(request, cancellation)
                     .thenCompose(
                             result -> {
-                                var descriptorKey =
-                                        request.mutations().stream()
-                                                .filter(
-                                                        m ->
-                                                                m instanceof ZLinkStorePut put
-                                                                        && put.key()
-                                                                                .value()
-                                                                                .startsWith(
-                                                                                        DESCRIPTOR_PREFIX))
-                                                .map(m -> ((ZLinkStorePut) m).key())
-                                                .findFirst();
-                                if (!armed.get() || descriptorKey.isEmpty())
+                                if (!(result instanceof ZLinkStoreWriteApplied)) {
                                     return CompletableFuture.completedFuture(result);
-                                var descriptors = descriptors();
-                                boolean rollback = publicationFailed.get();
-                                var meshes = rollback ? servingMeshes : relocatingMeshes;
-                                var expected =
-                                        rollback
-                                                ? ZLinkFrameworkRuntimeState.SERVING
-                                                : ZLinkFrameworkRuntimeState.RELOCATING;
-                                for (var descriptor : descriptors) {
-                                    if (descriptor.state() == expected)
-                                        meshes.add(descriptor.meshName());
                                 }
-                                if (meshes.containsAll(MESHES))
-                                    (rollback ? servingApplied : relocatingApplied).complete(null);
-                                return (rollback ? rollbackReply : publicationReply)
-                                        .handle(
+                                var confirmation =
+                                        reply.handle(
                                                 (ignored, failure) -> {
                                                     if (failure != null) {
-                                                        // The repository correctly reconciles a
-                                                        // lost write reply.
-                                                        // Make that read fail too, preserving the
-                                                        // original error.
-                                                        failedReconciliationReads.add(
-                                                                descriptorKey.orElseThrow());
+                                                        // A lost write reply is followed by a
+                                                        // read of the same descriptor.
+                                                        failedReconciliationReads.add(key);
                                                         throw new CompletionException(failure);
                                                     }
                                                     return result;
                                                 });
+                                keys.add(key);
+                                if (keys.size() == MESHES.size()) applied.complete(null);
+                                return confirmation;
                             });
         }
 
