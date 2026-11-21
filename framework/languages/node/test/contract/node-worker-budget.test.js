@@ -1,6 +1,7 @@
 'use strict';
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const { availableParallelism } = require('node:os');
 const { setImmediate: turn } = require('node:timers/promises');
 const {
   ZLinkMeshDispatchPump
@@ -9,7 +10,12 @@ const {
   ReadyDomain
 } = require('../../packages/framework/dist/runtime/foundation/service-runtime-contracts');
 
-for (const count of [2, 32]) {
+// The pump runs at most max(2, availableParallelism()) application workers, and
+// each takes ten records before its own yield. Mocked timers never fire here,
+// so the many-take case must fit in one budget per worker (macOS runners have
+// three CPUs: 3 x 10 = 30 < 32 left two records waiting for a yield timer).
+const workerLimit = Math.max(2, availableParallelism());
+for (const count of [2, Math.min(32, workerLimit * 10)]) {
   test(`each worker keeps its own continuous time budget across ${count} same-owner takes`, async (t) => {
     const workerIds = new WeakMap();
     let currentWorker;
