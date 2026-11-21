@@ -214,18 +214,18 @@ check_core_prefix() {
         CORE_STATUS="확인 실패 (버전 또는 플랫폼을 알 수 없음)"
         return 0
     fi
-    prefix="$cache_root/$version/$platform"
-    manifest="$prefix/share/zlink/core-package-provenance.json"
-    if [[ ! -f "$manifest" ]]; then
-        CORE_STATUS="없음 ($prefix)"
-        return 0
-    fi
-    manifest_version=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$manifest" | head -n1)
-    if [[ "$manifest_version" == "$version" ]]; then
-        CORE_STATUS="준비됨 ($prefix)"
-    else
+    CORE_STATUS="없음 ($cache_root)"
+    for prefix in "$cache_root/release/$version/$platform"/* \
+        "$cache_root/local/$version/$platform"/* "$cache_root/$version/$platform"; do
+        manifest="$prefix/share/zlink/core-package-provenance.json"
+        [[ -f "$manifest" ]] || continue
+        manifest_version=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$manifest" | head -n1)
+        if [[ "$manifest_version" == "$version" ]]; then
+            CORE_STATUS="준비됨 ($prefix)"
+            return 0
+        fi
         CORE_STATUS="version 불일치 ($prefix)"
-    fi
+    done
 }
 
 has_package() {
