@@ -6,6 +6,7 @@ import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.actors.ZLinkActorSpotRoutePackets;
 import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime.LocalActorReply;
+import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.backend.*;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAction;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
@@ -61,7 +62,7 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
     private final Set<ZLinkBackendReceived> activeRouteReceives =
             Collections.synchronizedSet(Collections.newSetFromMap(new IdentityHashMap<>()));
     private ZLinkBackendActorReceived pendingActorHeader;
-    private CompletionStage<Void> closingCallback;
+    private CompletableFuture<Void> closingCallback;
     private volatile ZLinkSpotCloseCoordinator closeCoordinator;
 
     final synchronized ZLinkSpotCloseCoordinator closeCoordinator(
@@ -91,16 +92,26 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
         }
     }
 
-    final synchronized CompletionStage<Void> closingCallback(
-            Supplier<CompletionStage<Void>> callback) {
-        if (closingCallback == null) {
-            try {
-                closingCallback = callback.get();
-            } catch (RuntimeException failure) {
-                closingCallback = CompletableFuture.failedFuture(failure);
+    final CompletionStage<Void> closingCallback(Supplier<CompletionStage<Void>> callback) {
+        CompletableFuture<Void> completion;
+        synchronized (this) {
+            if (closingCallback != null) {
+                return closingCallback;
             }
+            closingCallback = completion = new CompletableFuture<>();
         }
-        return closingCallback;
+        try {
+            CompletionStage<Void> stage = Objects.requireNonNull(callback.get(), "OnClosing stage");
+            ZLinkCompletionBridge.forwardCancellation(completion, stage);
+            stage.whenComplete(
+                    (ignored, failure) -> {
+                        if (failure == null) completion.complete(null);
+                        else completion.completeExceptionally(failure);
+                    });
+        } catch (Throwable failure) {
+            completion.completeExceptionally(failure);
+        }
+        return completion;
     }
 
     SpotActivationBase(

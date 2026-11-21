@@ -968,6 +968,171 @@ public sealed class MeshApplicationWorkerTests
         Assert.Equal(0UL, jobs.GetStatus().PermitsInUse);
     }
 
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(false, true, true)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, false)]
+    [InlineData(true, true, true)]
+    [InlineData(true, false, true)]
+    public async Task SameGatelessOwner_StartsNextRecordWhileSynchronousHandlerIsBlocked(
+        bool channel,
+        bool firstRequest,
+        bool secondRequest
+    )
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var source = new ZLinkManagedMeshNode(context, "same-owner");
+        using var jobs = new ZLinkApplicationJobQueue(
+            new(ZLinkApplicationJobQueueProfile.Balanced, 16, 2, 16)
+        );
+        await using var target = new ZLinkManagedMeshNode(
+            context,
+            "same-owner",
+            applicationJobQueue: jobs
+        );
+        var endpoint = $"inproc://same-owner-{Guid.NewGuid():N}";
+        var targetRid = RoutingId.From("same-owner-target");
+        source.SetRoutingId(RoutingId.From("same-owner-source"));
+        target.SetRoutingId(targetRid);
+        target.SetBind(endpoint);
+        target.AddChannel("same-owner-channel");
+        source.ConnectPeer(endpoint, targetRid);
+        var firstStarted = Signal();
+        var secondStarted = Signal();
+        using var release = new ManualResetEventSlim();
+        var failures = new Failures();
+        var runner = new ZLinkRuntimeTaskRunner(failures, CancellationToken.None);
+        await using var pump = new ZLinkMeshDispatchPump(
+            target,
+            new ZLinkMeshCompletionTable(),
+            jobs
+        );
+        pump.SetNodeRouteHandler(
+            (records, _) =>
+            {
+                foreach (var received in records)
+                {
+                    using (received)
+                    {
+                        received
+                            .ApplicationJobAdmission!.ReleaseForHandlerStartAsync()
+                            .GetAwaiter()
+                            .GetResult();
+                        var value = received.ApplicationPayloadView is { } view
+                            ? view.GetSpan(0)[0]
+                            : received.Parts[0].ToArray()[0];
+                        if (value == 0)
+                        {
+                            firstStarted.TrySetResult();
+                            Assert.True(release.Wait(TimeSpan.FromSeconds(10)));
+                        }
+                        else
+                            secondStarted.TrySetResult();
+                        if (received.CanReply)
+                        {
+                            using var reply = Message.From(new[] { value });
+                            Assert.Equal(SubmitResult.Ok, received.Reply([reply]));
+                        }
+                    }
+                }
+                return ValueTask.CompletedTask;
+            },
+            runner
+        );
+        target.Start();
+        source.Start();
+        pump.EnsureStarted();
+        var requests = new List<Task<ZLinkBackendRouteReceived>>();
+        try
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while (source.Status().AdmittedPeerCount != 1 || target.Status().AdmittedPeerCount != 1)
+            {
+                Assert.True(DateTime.UtcNow < deadline);
+                await Task.Delay(1);
+            }
+            Submit(0, firstRequest);
+            await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Submit(1, secondRequest);
+            // The first handler remains inside its synchronous call, without suspending.
+            await secondStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+            Assert.False(release.IsSet);
+            if (secondRequest)
+            {
+                using var reply = await requests[^1].WaitAsync(TimeSpan.FromSeconds(1));
+                Assert.True(reply.ApplicationPayloadView.HasValue);
+                Assert.Equal(1, reply.ApplicationPayloadView.Value.Count);
+                Assert.Equal(
+                    new byte[] { 1 },
+                    reply.ApplicationPayloadView.Value.GetSpan(0).ToArray()
+                );
+                requests.RemoveAt(requests.Count - 1);
+            }
+            if (firstRequest)
+                Assert.False(requests[0].IsCompleted);
+            Assert.Equal(0UL, jobs.GetStatus().PermitsInUse);
+            Assert.Equal(0UL, target.Status().PendingApplicationMessages);
+        }
+        finally
+        {
+            release.Set();
+        }
+        foreach (var request in requests)
+            using (var reply = await request.WaitAsync(TimeSpan.FromSeconds(5)))
+            {
+                Assert.True(reply.ApplicationPayloadView.HasValue);
+                Assert.Equal(1, reply.ApplicationPayloadView.Value.Count);
+                Assert.Equal(
+                    new byte[] { 0 },
+                    reply.ApplicationPayloadView.Value.GetSpan(0).ToArray()
+                );
+            }
+        await pump.DisposeAsync();
+        await runner.StopAsync();
+        Assert.Empty(failures.Errors);
+
+        void Submit(byte value, bool request)
+        {
+            using var payload = Message.From(new[] { value });
+            if (request)
+                requests.Add(
+                    (
+                        channel
+                            ? source.RequestToChannelDirectAsync(
+                                "",
+                                "same-owner-channel",
+                                [payload],
+                                SendFlags.None,
+                                default,
+                                TimeSpan.FromSeconds(5),
+                                CancellationToken.None
+                            )
+                            : source.RequestToNodeDirectAsync(
+                                targetRid,
+                                [payload],
+                                SendFlags.None,
+                                default,
+                                TimeSpan.FromSeconds(5),
+                                CancellationToken.None
+                            )
+                    ).AsTask()
+                );
+            else
+                Assert.Equal(
+                    SubmitResult.Ok,
+                    channel
+                        ? source.SendToChannel(
+                            "same-owner-channel",
+                            [payload],
+                            SendFlags.None,
+                            default
+                        )
+                        : source.SendToNode(targetRid, [payload])
+                );
+        }
+    }
+
     private static TaskCompletionSource Signal() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 

@@ -124,6 +124,8 @@ import {
   messageFlowTracingEnabled,
   runWithFlow,
   traceShutdownStep,
+  isRelocationDebugEnabled,
+  relocationDebug,
   ZLinkRuntimeMetrics,
   type ZLinkDiagnosticsContext,
   type ZLinkMessageFlowModeCell,
@@ -302,6 +304,11 @@ export class ZLinkFrameworkRuntimeHost
   channelRuntime?: ZLinkChannelRuntimeManager;
   spotNodeRuntime?: ZLinkSpotNodeRuntimeManager;
   private streamRuntime?: ZLinkStreamRuntimeManager;
+
+  /** Installs a stream runtime without starting native nodes, for shutdown tests. */
+  useStreamRuntimeForTesting(streamRuntime: ZLinkStreamRuntimeManager): void {
+    this.streamRuntime = streamRuntime;
+  }
   private statefulAuthorityRoutes?: ZLinkStatefulAuthorityRouteRuntime;
   readonly locationOwner: ZLinkLocationRuntimeOwner;
   private readonly meshRouters: MeshRouterResolver;
@@ -1093,6 +1100,19 @@ export class ZLinkFrameworkRuntimeHost
       return Promise.reject(new RangeError('Shutdown deadlineMs must be greater than zero.'));
     }
     if (this.shutdownOperation === undefined) {
+      if (isRelocationDebugEnabled()) {
+        const nodes = this.streamRuntime?.shutdownSnapshot() ?? [];
+        relocationDebug('host.shutdown.start', { deadlineMs, nodes });
+        for (const node of nodes) {
+          for (const session of node.sessions) {
+            relocationDebug('host.shutdown.session', {
+              nodeName: node.nodeName,
+              meshName: node.meshName,
+              ...session
+            });
+          }
+        }
+      }
       this.runtimeDeadline = new Date(Date.now() + deadlineMs);
       this.relocationStopStarting?.abort(new Error('Shutdown requested.'));
       this.shutdownOperationStartedAt = performance.now();
@@ -1852,11 +1872,8 @@ export class ZLinkFrameworkRuntimeHost
   ): Promise<void> {
     if (!this.ownerAdmissionOpen()) return;
     await this.publishOrStayPreparing(runtime, async (signal) => {
-      await spotNodeRuntime.publishMeshNodeState(ZLinkFrameworkRuntimeState.Preparing, signal);
+      await spotNodeRuntime.publishMeshNodeState(this.runtimeState, signal);
       if (runtime.ownerLeaseUsable === false) return;
-      if (this.runtimeState !== ZLinkFrameworkRuntimeState.Preparing) {
-        await spotNodeRuntime.publishMeshNodeState(this.runtimeState, signal);
-      }
       await spotNodeRuntime.startLocationAutoConnect(signal);
       await channelRuntime.startLocationAutoConnect(signal);
       await channelRuntime.reclaimLocationOwnerRows(signal);
