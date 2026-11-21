@@ -332,14 +332,7 @@ internal static class ZLinkApplicationPayloadEnvelopeCodec
         long encodedLength
     )
     {
-        ObserveEncoding("packed-write");
-        WriteEnvelopeHeader(result, checked((int)encodedLength));
-        var offset = 1 + sizeof(uint);
-        var payloadOffset = WriteMultipartEnvelopeFields(
-            result,
-            offset,
-            checked((uint)(encodedLength - GetEnvelopeLength(0)))
-        );
+        var payloadOffset = WriteFrameworkMultipartHeader(result, encodedLength);
         WriteMultipartPayload(result, payloadOffset, parts);
     }
 
@@ -349,15 +342,56 @@ internal static class ZLinkApplicationPayloadEnvelopeCodec
         long encodedLength
     )
     {
+        var payloadOffset = WriteFrameworkMultipartHeader(result, encodedLength);
+        WriteMultipartPayload(result, payloadOffset, parts);
+    }
+
+    internal static Message EncodeFrameworkMultipartMessage(
+        ZLinkEnvelopeCodec.EncodedHeader header,
+        ReadOnlySpan<byte> body
+    )
+    {
+        var headerSize = header.Size;
+        var encodedLength = GetEnvelopeLength(3L * sizeof(uint) + headerSize + body.Length);
+        EnsureRepresentableEncodedLength(encodedLength);
+        var result = Message.Allocate(checked((int)encodedLength));
+        try
+        {
+            var destination = result.AsSpan();
+            var offset = WriteFrameworkMultipartHeader(destination, encodedLength);
+            BinaryPrimitives.WriteUInt32BigEndian(destination[offset..], 2);
+            offset += sizeof(uint);
+            header.WriteTo(WritePartLength(destination, ref offset, headerSize));
+            body.CopyTo(WritePartLength(destination, ref offset, body.Length));
+            return result;
+        }
+        catch
+        {
+            result.Dispose();
+            throw;
+        }
+    }
+
+    private static int WriteFrameworkMultipartHeader(Span<byte> result, long encodedLength)
+    {
         ObserveEncoding("packed-write");
         WriteEnvelopeHeader(result, checked((int)encodedLength));
-        var offset = 1 + sizeof(uint);
-        var payloadOffset = WriteMultipartEnvelopeFields(
+        return WriteMultipartEnvelopeFields(
             result,
-            offset,
+            1 + sizeof(uint),
             checked((uint)(encodedLength - GetEnvelopeLength(0)))
         );
-        WriteMultipartPayload(result, payloadOffset, parts);
+    }
+
+    private static Span<byte> WritePartLength(Span<byte> result, scoped ref int offset, int size)
+    {
+        BinaryPrimitives.WriteUInt32BigEndian(
+            result.Slice(offset, sizeof(uint)),
+            checked((uint)size)
+        );
+        var part = result.Slice(offset + sizeof(uint), size);
+        offset += sizeof(uint) + size;
+        return part;
     }
 
     private static void WriteEnvelopeHeader(Span<byte> result, int encodedLength)
@@ -399,13 +433,7 @@ internal static class ZLinkApplicationPayloadEnvelopeCodec
         for (var index = 0; index < parts.Count; index++)
         {
             var part = parts[index];
-            BinaryPrimitives.WriteUInt32BigEndian(
-                result.Slice(offset, sizeof(uint)),
-                checked((uint)part.Size)
-            );
-            offset += sizeof(uint);
-            part.AsReadOnlySpan().CopyTo(result.Slice(offset, part.Size));
-            offset += part.Size;
+            part.AsReadOnlySpan().CopyTo(WritePartLength(result, ref offset, part.Size));
         }
     }
 
@@ -423,13 +451,7 @@ internal static class ZLinkApplicationPayloadEnvelopeCodec
         for (var index = 0; index < parts.Count; index++)
         {
             var part = parts[index];
-            BinaryPrimitives.WriteUInt32BigEndian(
-                result.Slice(offset, sizeof(uint)),
-                checked((uint)part.Length)
-            );
-            offset += sizeof(uint);
-            part.Span.CopyTo(result.Slice(offset, part.Length));
-            offset += part.Length;
+            part.Span.CopyTo(WritePartLength(result, ref offset, part.Length));
         }
     }
 

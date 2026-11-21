@@ -661,9 +661,7 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
 
     private async ValueTask SendHeartbeatPingAsync(CancellationToken cancellationToken)
     {
-        await _frameSender
-            .SendControlAsync(HeartbeatPingName, cancellationToken)
-            .ConfigureAwait(false);
+        await _frameSender.SendHeartbeatAsync(pong: false, cancellationToken).ConfigureAwait(false);
     }
 
     private static IZlinkStreamCompressionCodec? CreateCompressionCodec(
