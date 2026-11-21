@@ -1,8 +1,7 @@
-import { ConnectError, ConnectResult } from '@zlink-systems/zlink';
+import { ConnectError, ConnectResult, ConnectionAttemptState } from '@zlink-systems/zlink';
 import { disconnectSocketPeer } from '../../packages/framework/src/runtime/backend/node/node-socket-backend-adapter';
 import { inspectRuntime } from '../../packages/framework/src/runtime/internal-observation';
 import assert from 'node:assert/strict';
-import net from 'node:net';
 import { test } from 'node:test';
 import {
   SERVICE_WIRE_MAGIC,
@@ -91,24 +90,6 @@ function descriptor(
 
 function nativeTestEndpoint(name: string): string {
   return process.platform === 'win32' ? 'tcp://127.0.0.1:0' : `ipc:///tmp/${name}.sock`;
-}
-
-async function nativePrebindTestEndpoint(name: string): Promise<string> {
-  if (process.platform !== 'win32') return nativeTestEndpoint(name);
-  const server = net.createServer();
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', resolve);
-  });
-  const address = server.address();
-  if (address === null || typeof address === 'string') {
-    server.close();
-    throw new Error('Failed to reserve a Windows loopback test endpoint.');
-  }
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error === undefined ? resolve() : reject(error)));
-  });
-  return `tcp://127.0.0.1:${address.port}`;
 }
 
 function rawServiceRuntime(
@@ -2047,6 +2028,10 @@ test('bilateral endpoint-only manual connections learn peer RIDs and converge', 
   await verifyBilateralEndpointRequests();
 });
 
+test('bilateral TCP port-zero endpoints connect using their bound addresses', async () => {
+  await verifyBilateralEndpointRequests(undefined, () => 'tcp://127.0.0.1:0');
+});
+
 test('bilateral endpoint requests keep liveness progressing after re-admission', async () => {
   await verifyBilateralEndpointRequests((left, right) => {
     const rid = left.topology.localDescriptor().nodeRoutingId;
@@ -2073,21 +2058,23 @@ test('bilateral endpoint requests keep liveness progressing after re-admission',
 });
 
 async function verifyBilateralEndpointRequests(
-  afterFirstReply?: (left: RawServiceMeshRuntime, right: RawServiceMeshRuntime) => void
+  afterFirstReply?: (left: RawServiceMeshRuntime, right: RawServiceMeshRuntime) => void,
+  endpoint: (name: string) => string = nativeTestEndpoint
 ): Promise<void> {
   const endpointNonce = `${process.pid}-${Date.now()}`;
   const leftDescriptor = descriptor(
     'm6a-endpoint-left',
-    await nativePrebindTestEndpoint(`zlink-m6a-endpoint-left-${endpointNonce}`)
+    endpoint(`zlink-m6a-endpoint-left-${endpointNonce}`)
   );
   const rightDescriptor = descriptor(
     'm6a-endpoint-right',
-    await nativePrebindTestEndpoint(`zlink-m6a-endpoint-right-${endpointNonce}`)
+    endpoint(`zlink-m6a-endpoint-right-${endpointNonce}`)
   );
   const left = rawServiceRuntime({ descriptor: leftDescriptor });
   const right = rawServiceRuntime({ descriptor: rightDescriptor });
   const progress = async (): Promise<void> => {
     for (const runtime of [right, left]) {
+      await runtime.pumpBatch(false, false, true);
       await runtime.observeSelectedRoutes();
       await runtime.announceExpectedPeers();
     }
@@ -2097,10 +2084,11 @@ async function verifyBilateralEndpointRequests(
   };
   right.start();
   try {
-    right.connectPeerEndpoint(leftDescriptor.advertisedEndpoint);
-    await new Promise((resolve) => setTimeout(resolve, 20));
     left.start();
-    left.connectPeerEndpoint(rightDescriptor.advertisedEndpoint);
+    const leftEndpoint = left.topology.localDescriptor().advertisedEndpoint;
+    const rightEndpoint = right.topology.localDescriptor().advertisedEndpoint;
+    right.connectPeerEndpoint(leftEndpoint);
+    left.connectPeerEndpoint(rightEndpoint);
     for (const [source, target, targetRid] of [
       [left, right, rightDescriptor.nodeRoutingId],
       [right, left, leftDescriptor.nodeRoutingId]
@@ -2108,6 +2096,22 @@ async function verifyBilateralEndpointRequests(
       await pollUntil(async () => {
         await progress();
         return (
+          // Core's connect snapshot includes standby connections. Both outbound
+          // intents must finish before Ready describes the converged selection.
+          left
+            .observePeerRoute(rightDescriptor.nodeRoutingId)
+            .connectionAttempts?.some(
+              (attempt) =>
+                attempt.endpoint === rightEndpoint &&
+                attempt.state === ConnectionAttemptState.Connected
+            ) === true &&
+          right
+            .observePeerRoute(leftDescriptor.nodeRoutingId)
+            .connectionAttempts?.some(
+              (attempt) =>
+                attempt.endpoint === leftEndpoint &&
+                attempt.state === ConnectionAttemptState.Connected
+            ) === true &&
           left.isPeerRouteReady(rightDescriptor.nodeRoutingId) &&
           right.isPeerRouteReady(leftDescriptor.nodeRoutingId)
         );
@@ -2159,7 +2163,7 @@ async function verifyBilateralEndpointRequests(
       if (source === left) afterFirstReply?.(left, right);
     }
 
-    left.disconnectPeerEndpoint(rightDescriptor.advertisedEndpoint);
+    left.disconnectPeerEndpoint(rightEndpoint);
     assert.equal(left.topology.peer(rightDescriptor.nodeRoutingId), undefined);
   } finally {
     left.close();
