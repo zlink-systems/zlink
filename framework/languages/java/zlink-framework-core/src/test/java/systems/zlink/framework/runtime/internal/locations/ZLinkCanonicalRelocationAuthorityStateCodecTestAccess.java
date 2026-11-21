@@ -7,7 +7,6 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodecTestAccess {
             byte[] authorityPayload,
             ZLinkAggregateRelocationCoordinator.Request request,
             ZLinkAuthorityGenerationTransition transition) {
-        return ZLinkCanonicalRelocationAuthorityStateCodec.publish(
-                authorityPayload, request, transition);
+        return ZLinkLegacyRelocationAuthorityFixture.publish(authorityPayload, request, transition);
     }
 }
