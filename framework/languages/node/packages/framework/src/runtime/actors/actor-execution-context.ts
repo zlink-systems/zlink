@@ -1,4 +1,4 @@
-import { AsyncLocalStorage } from 'node:async_hooks';
+import { FrameworkContextField } from '../framework-context';
 
 interface ZLinkActorExecutionContext {
   readonly actorId: string;
@@ -6,7 +6,7 @@ interface ZLinkActorExecutionContext {
   active: boolean;
 }
 
-const actorExecutionStorage = new AsyncLocalStorage<ZLinkActorExecutionContext>();
+const actorExecutionStorage = new FrameworkContextField<ZLinkActorExecutionContext>();
 const hiddenActiveProperty = Object.freeze({ enumerable: false });
 
 /** Runs one Actor handler while retaining its Actor FIFO claim across Yield. */
