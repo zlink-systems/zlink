@@ -893,10 +893,6 @@ internal partial class ZLinkInMemoryLocationStore : IZLinkLocationRepository
                     -1
                 );
                 _authorities.Remove(pair.Key);
-                _ownerLeaseReleaseWait.ForgetIfTokenMatches(
-                    pair.Key,
-                    new ZLinkLocationOwnerToken(row.OwnerId, row.OwnerLeaseGeneration)
-                );
             }
             var removed = (long)owned.Length;
             return removed;
