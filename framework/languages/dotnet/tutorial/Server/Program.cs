@@ -148,6 +148,14 @@ builder.Services.AddZLinkFramework(options =>
 var app = builder.Build();
 
 app.MapGet(
+    "/ops/ready",
+    (IZLinkFrameworkRuntime runtime) =>
+        runtime.Status.IsReady
+            ? Results.Ok()
+            : Results.StatusCode(StatusCodes.Status503ServiceUnavailable)
+);
+
+app.MapGet(
     "/fanout/broadcast/ready",
     (IZLinkFanoutRuntime fanout) =>
         fanout.GetStatus("broadcast").IsReady
