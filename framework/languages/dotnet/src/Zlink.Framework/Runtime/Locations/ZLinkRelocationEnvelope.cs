@@ -286,14 +286,19 @@ internal static class ZLinkRelocationEnvelopeCodec
         writer.Flush();
     }
 
-    internal static ZLinkRelocationEnvelope Decode(ReadOnlySpan<byte> encoded)
+    internal static ZLinkRelocationEnvelope Decode(ReadOnlySpan<byte> encoded) =>
+        DecodeOwned(encoded.ToArray());
+
+    internal static ZLinkRelocationEnvelope DecodeOwned(
+        ReadOnlyMemory<byte> encoded,
+        ReadOnlyMemory<byte> inventoryDigest = default
+    )
     {
         if (encoded.Length < sizeof(uint))
             throw new InvalidDataException("The relocation logical stream is truncated.");
-        var bytes = encoded.ToArray();
-        if (BinaryPrimitives.ReadUInt32LittleEndian(encoded) != Magic)
-            return DecodeCanonical(bytes, default);
-        return DecodeVersioned(bytes);
+        return BinaryPrimitives.ReadUInt32LittleEndian(encoded.Span) != Magic
+            ? DecodeCanonical(encoded, inventoryDigest)
+            : DecodeVersioned(encoded);
     }
 
     internal static ZLinkRelocationEnvelope Decode(
@@ -303,14 +308,7 @@ internal static class ZLinkRelocationEnvelopeCodec
     {
         ArgumentNullException.ThrowIfNull(stream);
         if (!stream.CanSeek)
-        {
-            var memory = ReadNonSeekableOwnedMemory(stream);
-            if (memory.Length < sizeof(uint))
-                throw new InvalidDataException("The relocation logical stream is truncated.");
-            if (BinaryPrimitives.ReadUInt32LittleEndian(memory.Span) != Magic)
-                return DecodeCanonical(memory, inventoryDigest);
-            return DecodeVersioned(memory);
-        }
+            return DecodeOwned(ReadNonSeekableOwnedMemory(stream), inventoryDigest);
 
         var start = stream.Position;
         Span<byte> header = stackalloc byte[sizeof(uint)];
@@ -777,7 +775,7 @@ internal static class ZLinkRelocationEnvelopeCodec
         return result;
     }
 
-    private static byte[] EncodeCanonical(ReadOnlyMemory<byte> encoded)
+    internal static byte[] EncodeCanonical(ReadOnlyMemory<byte> encoded)
     {
         var generated = ServiceWirePilotCodec.DecodeRelocationEnvelopeV1(encoded.ToArray());
         return ServiceWirePilotCodec.EncodeRelocationEnvelopeV1(generated);
