@@ -1,0 +1,207 @@
+{
+  "description": "Observed etcd-enabled C++ gRPC package closure; an inventory, not a vcpkg lockfile. Build tools are included; system compiler and libc are outside this closure. Bundled notice sections are preserved without asserting that all sections are linked.",
+  "triplet": "x64-linux-zlink-release",
+  "manifestBaseline": "2ec0f1747d8186a5c9babe276e2ad57cd2b12d2a",
+  "root": "grpc",
+  "packages": {
+    "abseil": {
+      "version": "20260107.1",
+      "portVersion": 0,
+      "abi": "b2eec5d083d12bdeeeb131865b92ebb75745dd8b8a0c2d162d1bdf37da39435c",
+      "depends": [
+        "vcpkg-cmake",
+        "vcpkg-cmake-config"
+      ],
+      "licensesInNotice": [
+        "Apache-2.0"
+      ],
+      "notice": "licenses/abseil.txt",
+      "noticeSha256": "aac73b3148f6d1d7111dbca32099f68d26c644c6813ae1e4f05f6579aa2663fe",
+      "controlSha256": "be09cbb884394ad472eb3f0f964bebdaf658f19c11ee1efb89116e77276bde17",
+      "sourceNoticeSha256": "c79a7fea0e3cac04cd43f20e7b648e5a0ff8fa5344e644b0ee09ca1162b62747",
+      "features": []
+    },
+    "c-ares": {
+      "version": "1.34.9",
+      "portVersion": 0,
+      "abi": "b82c52664221f0a6c0b2e5613e316f90b1cebc8d9de94a330ddc4026623750c4",
+      "depends": [
+        "vcpkg-cmake",
+        "vcpkg-cmake-config"
+      ],
+      "licensesInNotice": [
+        "MIT"
+      ],
+      "notice": "licenses/c-ares.txt",
+      "noticeSha256": "63c85ed76e13b4a890910432c59647948f0a1212599007da1217c967d76bea3b",
+      "controlSha256": "4edcbdeffbb97f213356bf30c519b291f14cefba055b0b439a9712721632b486",
+      "sourceNoticeSha256": "460f5e768fda3752ca2169a95df062578a10fb126bfd65f3b9b1a1bed2f84807",
+      "features": []
+    },
+    "grpc": {
+      "version": "1.84.0",
+      "portVersion": 0,
+      "abi": "352898784bbaf82ab04f054c5ec5502aabfdbdf8a671eb2e07a34c48b7fc7bfe",
+      "depends": [
+        "abseil",
+        "c-ares",
+        "openssl",
+        "protobuf",
+        "re2",
+        "utf8-range",
+        "vcpkg-cmake",
+        "vcpkg-cmake-config",
+        "zlib"
+      ],
+      "licensesInNotice": [
+        "Apache-2.0",
+        "BSD-3-Clause",
+        "MPL-2.0"
+      ],
+      "notice": "licenses/grpc.txt",
+      "noticeSha256": "711e44a6d5792ffc66f149f0c2df0ec0cbf1ac2a63b9f3e95853276d1bb43d35",
+      "controlSha256": "ebe6db9c265af5712a4f5518498c2d5b491a33fca0ec59ea784ff1e0bec6e7bc",
+      "sourceNoticeSha256": "58c86a3f2b5cca0ebdf9ed3e7f4e6dc38e3b38796d8c3dc92064c62a4e39d0dd",
+      "features": [
+        "codegen"
+      ]
+    },
+    "openssl": {
+      "version": "3.6.5",
+      "portVersion": 2,
+      "abi": "887906a04cae134842ea87f24add30a510562115a2aa9545538604f980a74ed5",
+      "depends": [
+        "vcpkg-cmake",
+        "vcpkg-cmake-config",
+        "vcpkg-cmake-get-vars"
+      ],
+      "licensesInNotice": [
+        "Apache-2.0"
+      ],
+      "notice": "licenses/openssl.txt",
+      "noticeSha256": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a",
+      "controlSha256": "42f9b63d26ee8e83fc9d2eef3279cda6578ba10080cbb59cead777c921098a65",
+      "sourceNoticeSha256": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a",
+      "features": []
+    },
+    "protobuf": {
+      "version": "6.33.4",
+      "portVersion": 2,
+      "abi": "16eefb57097a168777e7941bd902acb9aa1e1cf7e8c6e300e7f8368bd484c126",
+      "depends": [
+        "abseil",
+        "utf8-range",
+        "vcpkg-cmake",
+        "vcpkg-cmake-config"
+      ],
+      "licensesInNotice": [
+        "BSD-3-Clause"
+      ],
+      "notice": "licenses/protobuf.txt",
+      "noticeSha256": "6e5e117324afd944dcf67f36cf329843bc1a92229a8cd9bb573d7a83130fea7d",
+      "controlSha256": "7557f96a1fd8ebf10d236e59f8a44f4fa5fb727d439788692ff43056a729cbda",
+      "sourceNoticeSha256": "6e5e117324afd944dcf67f36cf329843bc1a92229a8cd9bb573d7a83130fea7d",
+      "features": [
+        "libprotoc"
+      ]
+    },
+    "re2": {
+      "version": "2025-11-05",
+      "portVersion": 0,
+      "abi": "8852b609fd0fba96c624fd04c77765d30937a05877262d41a5577406ce64c20c",
+      "depends": [
+        "abseil",
+        "vcpkg-cmake",
+        "vcpkg-cmake-config"
+      ],
+      "licensesInNotice": [
+        "BSD-3-Clause"
+      ],
+      "notice": "licenses/re2.txt",
+      "noticeSha256": "6040cda75d90b1738292a631d89934c411ef7ffd543c4d6a1b7edfc8edf29449",
+      "controlSha256": "0442437d8bf17b8da1ea69b2703a3aa682fc31b868eb310bf43ff04c42f357d4",
+      "sourceNoticeSha256": "6040cda75d90b1738292a631d89934c411ef7ffd543c4d6a1b7edfc8edf29449",
+      "features": []
+    },
+    "utf8-range": {
+      "version": "7.36.2",
+      "portVersion": 0,
+      "abi": "e21048074b440c34011379b81831fac4c1cc1cd0b82fdb4c9f491fc338745e4c",
+      "depends": [
+        "abseil",
+        "vcpkg-cmake",
+        "vcpkg-cmake-config"
+      ],
+      "licensesInNotice": [
+        "MIT"
+      ],
+      "notice": "licenses/utf8-range.txt",
+      "noticeSha256": "02de69b64fc36d9e938f418e52723e42f0b2b226d58a9cb3c8dcbdf7059f5074",
+      "controlSha256": "20143cba5cf732049cba3445d0074818e5e4cffbfa686f81c77d8b698e68b953",
+      "sourceNoticeSha256": "02de69b64fc36d9e938f418e52723e42f0b2b226d58a9cb3c8dcbdf7059f5074",
+      "features": []
+    },
+    "vcpkg-cmake": {
+      "version": "2025-08-07",
+      "portVersion": 0,
+      "abi": "767ce8860e29b2cea539340b822d42088f42dff11b945c74440ba7e28dcd2f26",
+      "depends": [],
+      "licensesInNotice": [
+        "MIT"
+      ],
+      "notice": "licenses/vcpkg-cmake.txt",
+      "noticeSha256": "1ee376fc340e0aa6ad6a3581c94126e741468705096ac92263048a21daa86460",
+      "controlSha256": "f43d4881ab5dd5f836c7e93905282c1ff37dd5bd00298978fe4737f654ea0d91",
+      "sourceNoticeSha256": "1ee376fc340e0aa6ad6a3581c94126e741468705096ac92263048a21daa86460",
+      "features": []
+    },
+    "vcpkg-cmake-config": {
+      "version": "2026-07-21",
+      "portVersion": 0,
+      "abi": "ed377472bc5b49a1cb95a580b2aac8337f9d5ff4b0b77203ce8b648acb3c0e30",
+      "depends": [],
+      "licensesInNotice": [
+        "MIT"
+      ],
+      "notice": "licenses/vcpkg-cmake-config.txt",
+      "noticeSha256": "16e3c9cdb4fa14a8627bc4b5ef0237773a79c3ad1d012c288f37e29573e116cc",
+      "controlSha256": "1e66f029d46117c38676df738af8f80fef7c0229ddf74cd3dfcef500f5232388",
+      "sourceNoticeSha256": "04b60f99a43bfd7fefdc8364b24aac704a2160cef969b75ba6a38b62dc4c4b70",
+      "features": []
+    },
+    "vcpkg-cmake-get-vars": {
+      "version": "2025-05-29",
+      "portVersion": 0,
+      "abi": "ac6e1a5bad12ff6f8a8754bef9402ee6fa3b09f7ca5555625baf7cda44ede96e",
+      "depends": [
+        "vcpkg-cmake"
+      ],
+      "licensesInNotice": [
+        "MIT"
+      ],
+      "notice": "licenses/vcpkg-cmake-get-vars.txt",
+      "noticeSha256": "1ee376fc340e0aa6ad6a3581c94126e741468705096ac92263048a21daa86460",
+      "controlSha256": "c5dbbc0a872d11bcf04f39c8f086653af39dbb777af19468f24e03d2da2af0db",
+      "sourceNoticeSha256": "1ee376fc340e0aa6ad6a3581c94126e741468705096ac92263048a21daa86460",
+      "features": []
+    },
+    "zlib": {
+      "version": "1.3.2",
+      "portVersion": 3,
+      "abi": "9653f95ac25a7d82ed9a9393067b97b84f8aae417680fd96e03dd11a8d91b9e4",
+      "depends": [
+        "vcpkg-cmake",
+        "vcpkg-cmake-config"
+      ],
+      "licensesInNotice": [
+        "Zlib"
+      ],
+      "notice": "licenses/zlib.txt",
+      "noticeSha256": "e32ff4e00d9d94930537635291da39e7e612703334bf6fde8c7f1686fe8a45a2",
+      "controlSha256": "5372fc9f9c3c8377881d121a46d9bbf600fbcd095336dd6ead5b500039878906",
+      "sourceNoticeSha256": "e32ff4e00d9d94930537635291da39e7e612703334bf6fde8c7f1686fe8a45a2",
+      "features": []
+    }
+  },
+  "noticeNormalization": "Trailing whitespace and blank lines at EOF are removed; sourceNoticeSha256 records the original vcpkg notice bytes."
+}
