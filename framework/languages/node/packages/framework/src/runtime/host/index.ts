@@ -3472,80 +3472,111 @@ export class ZLinkFrameworkRuntimeHost
       current !== undefined && !samePhysicalSession(current, incomingTarget)
         ? actor?.onDuplicateBind
         : undefined;
-    if (duplicateCallback === undefined || actor === undefined || current === undefined) {
+    const boundCallback = actor?.onSessionBound;
+    if (actor === undefined || (duplicateCallback === undefined && boundCallback === undefined)) {
       state.installBoundSessionBinding(incomingTarget);
       replyBindingSuccess();
       return;
     }
 
-    let callbackStarted!: () => void;
-    const started = new Promise<void>((resolve) => {
-      callbackStarted = resolve;
-    });
     let callbackTimedOut = false;
+    const callbackState = { notifying: false };
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     const cancellation = new AbortController();
+    const lifecycleSignal = signal ?? this.executionState?.abortController.signal;
     const callbackSignal =
-      signal === undefined ? cancellation.signal : AbortSignal.any([signal, cancellation.signal]);
+      lifecycleSignal === undefined
+        ? cancellation.signal
+        : AbortSignal.any([lifecycleSignal, cancellation.signal]);
+    let finishWait!: (outcome: 'timedOut' | 'cancelled') => void;
+    const timeout = new Promise<'timedOut' | 'cancelled'>((resolve) => {
+      finishWait = resolve;
+    });
+    const startCallbackTimeout = (): void => {
+      if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+      timeoutHandle = setTimeout(() => {
+        callbackTimedOut = true;
+        finishWait('timedOut');
+      }, this.options.registration.sessionReplacementCallbackTimeoutMs);
+    };
+    const stopNotification = (): void => {
+      if (callbackState.notifying) finishWait('cancelled');
+    };
     const turn = spotManager.executeActorTurn(
       state.meshName,
-      state.actor?.context.spotId,
+      actor.context.spotId,
       state.actorId,
       async () => {
-        callbackStarted();
-        const decision = await duplicateCallback.call(
-          actor,
-          sessionBindingIdentity(current),
-          sessionBindingIdentity(incomingTarget),
-          callbackSignal
-        );
-        if (callbackTimedOut) return;
-        if (decision !== undefined && decision.length > 0) {
-          if (Buffer.byteLength(decision, 'utf8') > 0xffff) {
-            throw new RangeError('Duplicate bind rejection message exceeds Text16 capacity.');
+        if (duplicateCallback !== undefined && current !== undefined) {
+          startCallbackTimeout();
+          const decision = await duplicateCallback.call(
+            actor,
+            sessionBindingIdentity(current),
+            sessionBindingIdentity(incomingTarget),
+            callbackSignal
+          );
+          if (callbackTimedOut) return;
+          if (decision !== undefined && decision.length > 0) {
+            if (Buffer.byteLength(decision, 'utf8') > 0xffff) {
+              throw new RangeError('Duplicate bind rejection message exceeds Text16 capacity.');
+            }
+            if (
+              record.replyFailure?.(RequestResult.Rejected, 0, {
+                kind: 'streamBindRejected',
+                rejectionMessage: decision
+              }) !== SubmitResult.Ok
+            ) {
+              throw new ZLinkConfigurationException(
+                `MeshNode Actor binding target '${binding.actor.actorId}' rejection acknowledgement failed.`
+              );
+            }
+            return;
           }
-          if (
-            record.replyFailure?.(RequestResult.Rejected, 0, {
-              kind: 'streamBindRejected',
-              rejectionMessage: decision
-            }) !== SubmitResult.Ok
-          ) {
-            throw new ZLinkConfigurationException(
-              `MeshNode Actor binding target '${binding.actor.actorId}' rejection acknowledgement failed.`
-            );
-          }
-          return;
         }
         state.installBoundSessionBinding(incomingTarget);
         replyBindingSuccess();
+        if (boundCallback === undefined) return;
+        callbackState.notifying = true;
+        lifecycleSignal?.addEventListener('abort', stopNotification, { once: true });
+        startCallbackTimeout();
+        if (lifecycleSignal?.aborted === true) stopNotification();
+        await boundCallback.call(actor, sessionBindingIdentity(incomingTarget), callbackSignal);
       }
-    );
-    const timeout = started.then(
-      () =>
-        new Promise<'timedOut'>((resolve) => {
-          timeoutHandle = setTimeout(() => {
-            callbackTimedOut = true;
-            resolve('timedOut');
-          }, this.options.registration.sessionReplacementCallbackTimeoutMs);
-        })
     );
     try {
       const outcome = await Promise.race([turn.then(() => 'completed' as const), timeout]);
       if (outcome === 'timedOut') {
-        cancellation.abort(createDeadlineExceededError('Duplicate bind callback timed out.'));
-        if (record.replyFailure?.(RequestResult.TimedOut, 0) !== SubmitResult.Ok) {
-          throw new ZLinkConfigurationException(
-            `MeshNode Actor binding target '${binding.actor.actorId}' timeout acknowledgement failed.`
+        const error = createDeadlineExceededError(
+          callbackState.notifying
+            ? 'Session bound callback timed out.'
+            : 'Duplicate bind callback timed out.'
+        );
+        cancellation.abort(error);
+        if (callbackState.notifying) throw error;
+        else {
+          if (record.replyFailure?.(RequestResult.TimedOut, 0) !== SubmitResult.Ok) {
+            throw new ZLinkConfigurationException(
+              `MeshNode Actor binding target '${binding.actor.actorId}' timeout acknowledgement failed.`
+            );
+          }
+          void turn.catch((error: unknown) =>
+            this.runtimeOrPreStartErrorSink.reportRuntimeTaskException(
+              `duplicate bind callback '${binding.actor.actorId}'`,
+              error
+            )
           );
         }
-        void turn.catch((error: unknown) =>
-          this.runtimeOrPreStartErrorSink.reportRuntimeTaskException(
-            `duplicate bind callback '${binding.actor.actorId}'`,
-            error
-          )
+      }
+    } catch (error) {
+      if (!callbackState.notifying) throw error;
+      if (lifecycleSignal?.aborted !== true) {
+        this.runtimeOrPreStartErrorSink.reportRuntimeTaskException(
+          `session bound callback '${binding.actor.actorId}'`,
+          error
         );
       }
     } finally {
+      lifecycleSignal?.removeEventListener('abort', stopNotification);
       if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
     }
   }
