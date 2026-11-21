@@ -13,6 +13,7 @@ else()
 endif()
 
 set(unittests
+    unittest_pipe_wake_delivery
     unittest_auto_hwm_physical_attempt
     unittest_auto_hwm_incremental_plan
     unittest_zmp_engine_controls
