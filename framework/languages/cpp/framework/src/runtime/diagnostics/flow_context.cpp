@@ -37,6 +37,7 @@ struct ambient_context_snapshot_t
     std::optional<flow_value_t> flow;
     std::optional<actor_execution_context_t> actor;
     std::optional<framework::detail::stream_header_t> relay;
+    std::shared_ptr<framework::detail::stream_reply_submission_t> reply_submission;
 };
 
 class ambient_context_scope_t
@@ -49,7 +50,7 @@ class ambient_context_scope_t
         if (snapshot.actor)
             _actor.emplace (snapshot.actor->actor_key, snapshot.actor->spot_id);
         if (snapshot.relay)
-            _relay.emplace (*snapshot.relay);
+            _relay.emplace (*snapshot.relay, snapshot.reply_submission);
     }
 
   private:
@@ -63,7 +64,9 @@ std::shared_ptr<void> capture_ambient_flow ()
     const auto &current = flow_context_t::current ();
     const auto &actor = current_actor_execution;
     auto relay = framework::detail::current_stream_relay_dispatch ();
-    if (!current && actor.actor_key.empty () && actor.spot_id.empty () && !relay) {
+    auto reply_submission = framework::detail::current_stream_reply_submission ();
+    if (!current && actor.actor_key.empty () && actor.spot_id.empty () && !relay
+        && !reply_submission) {
         return nullptr;
     }
     auto snapshot = std::make_shared<ambient_context_snapshot_t> ();
@@ -72,6 +75,7 @@ std::shared_ptr<void> capture_ambient_flow ()
     if (!actor.actor_key.empty () || !actor.spot_id.empty ())
         snapshot->actor = actor;
     snapshot->relay = std::move (relay);
+    snapshot->reply_submission = std::move (reply_submission);
     return snapshot;
 }
 

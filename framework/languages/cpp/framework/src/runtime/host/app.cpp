@@ -43,6 +43,7 @@
 #include "runtime/configuration/service_scope.hpp"
 #include "runtime/diagnostics/flow_context.hpp"
 #include "runtime/diagnostics/message_flow_tracer.hpp"
+#include "runtime/streams/stream_runtime.hpp"
 #include "runtime/diagnostics/runtime_metrics.hpp"
 #include "runtime/diagnostics/host_state_metric.hpp"
 #include "runtime/diagnostics/runtime_observation.hpp"
@@ -2895,7 +2896,8 @@ void app_t::_apply_zlink_framework ()
         });
         actor_gateway_runtime.on_bound_session_close (
           [weak_application_mesh = std::weak_ptr (application_mesh)] (
-            actor_ref_t actor, detail::actor_bound_session_route_t route) -> task_t<void> {
+            actor_ref_t actor, detail::actor_bound_session_route_t route,
+            detail::actor_gateway_state_t::bound_session_close_submit_t submit) -> task_t<void> {
               const auto application_mesh = detail::lock_runtime_owner (weak_application_mesh);
               // Session-Actor binding §4: command 54 carries the stored identity unchanged.
               if (route.session_owner_id.empty () || route.session_owner_lease_generation == 0)
@@ -2911,7 +2913,16 @@ void app_t::_apply_zlink_framework ()
                     {route.node_rid.to_bytes (), route.node_generation, route.session_owner_id,
                      route.session_owner_lease_generation, route.session_rid->to_bytes (),
                      route.binding_generation}},
-                  application_mesh->default_request_timeout ());
+                  application_mesh->default_request_timeout (),
+                  [application_mesh, submit = std::move (submit)] (
+                    std::function<task_t<bool> ()> work,
+                    std::function<void (result_t<void>)> complete) mutable {
+                      return submit (
+                        [application_mesh, work = std::move (work)] () mutable -> task_t<bool> {
+                            co_return co_await work ();
+                        },
+                        std::move (complete));
+                  });
           });
         actor_gateway_runtime.on_bound_session_send (
           [weak_application_mesh = std::weak_ptr (application_mesh),
@@ -2934,12 +2945,14 @@ void app_t::_apply_zlink_framework ()
             std::shared_ptr<runtime::host::public_host_runtime_t> session_owner_runtime) mutable
           -> request_task_t<std::optional<zlink::message_t>> {
             const auto application_mesh = detail::lock_runtime_owner (weak_application_mesh);
-            detail::session_ingress_completion_t ingress;
+            auto ingress = std::make_shared<detail::session_ingress_completion_t> ();
             auto routed_actor = actor;
             runtime::protocol::actor_route_fence_t stale_route;
+            const auto reply_submission =
+              bound_session_source ? bound_session_source->reply_submission : nullptr;
             if (bound_session_source) {
                 auto &sessions = session_owner_runtime->sessions ();
-                ingress.arm (sessions, *dispatch);
+                ingress->arm (sessions, *dispatch);
                 routed_actor = detail::actor_ref_access_t::make (
                   node_rid_t::from_string (dispatch->binding.actor.node_id),
                   std::string (detail::actor_ref_access_t::actor_type (actor)),
@@ -2970,13 +2983,20 @@ void app_t::_apply_zlink_framework ()
             catch (...) {
                 relay_failure = std::current_exception ();
             }
-            const auto completed = ingress.complete ();
-            //  The original application error stays the single terminal;
-            //  fence completion above ran regardless, and its own failure
-            //  is reported only when the relay itself succeeded.
-            if (relay_failure)
+            if (relay_failure) {
+                (void) ingress->complete ();
                 std::rethrow_exception (relay_failure);
-            if (completed != runtime::stateful::stateful_error_t::none) {
+            }
+            if (header.kind () == detail::stream_message_kind_t::request && relayed
+                && reply_submission) {
+                auto terminal = std::make_shared<task_t<void>> (reply_submission->terminal ());
+                detail::observe_task_completion (
+                  *terminal, [ingress, terminal, session_owner_runtime] (const result_t<void> &) {
+                      (void) terminal;
+                      (void) session_owner_runtime;
+                      (void) ingress->complete ();
+                  });
+            } else if (ingress->complete () != runtime::stateful::stateful_error_t::none) {
                 co_return result_t<std::optional<zlink::message_t>>::failure (
                   framework_error_kind_t::internal_failure,
                   "bound Session ingress completion lost its exact fence");
@@ -3310,13 +3330,19 @@ void app_t::_apply_zlink_framework ()
                         stream_runtime] (std::vector<zlink::message_t> parts) mutable {
                     try {
                         auto [header, payload] = stream_runtime.decode_frame (parts);
-                        const auto dispatched =
+                        auto dispatched =
                           admitted (std::string (header.packet_name ()), header.codec (), payload);
-                        return dispatched ? runtime::stateful::stateful_error_t::none
-                                          : runtime::stateful::stateful_error_t::conflict;
+                        return detail::project_task_terminal<runtime::stateful::stateful_error_t> (
+                          dispatched, [] (const result_t<void> &terminal) {
+                              return result_t<runtime::stateful::stateful_error_t>::success (
+                                terminal ? runtime::stateful::stateful_error_t::none
+                                         : runtime::stateful::stateful_error_t::conflict);
+                          });
                     }
                     catch (...) {
-                        return runtime::stateful::stateful_error_t::invalid;
+                        return task_t<runtime::stateful::stateful_error_t> (
+                          result_t<runtime::stateful::stateful_error_t>::success (
+                            runtime::stateful::stateful_error_t::invalid));
                     }
                 };
             }});
