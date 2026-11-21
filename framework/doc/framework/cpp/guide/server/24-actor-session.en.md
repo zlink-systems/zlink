@@ -101,7 +101,7 @@ An Actor knows the connection bound to it. This is not a reply but **a notificat
 
 ### 3.4 Bind notification
 
-The C++ bind notification `on_session_bound` is described in [the Session binding chapter, §7](39-session-binding.en.md).
+The C++ bind notification `on_session_bound` is described in [the Session binding chapter, §6](39-session-binding.en.md).
 
 ## 4. The Attaching Side — a Client Outside the Mesh
 

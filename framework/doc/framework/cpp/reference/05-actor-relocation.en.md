@@ -26,7 +26,7 @@ Failure preserves bind success and is reported once as a runtime task exception.
 `set_session_replacement_callback_timeout(...)` (default `30,000 ms`) requests cancellation and reports once
 when exceeded. Actor or runtime shutdown cancellation is not reported.
 
-See [Session binding](../guide/server/39-session-binding.en.md#7-observing-a-committed-actor-binding) for usage.
+See [Session binding](../guide/server/39-session-binding.en.md#6-observing-a-committed-actor-binding) for usage.
 
 ---
 
