@@ -8321,10 +8321,13 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             } catch (IllegalArgumentException invalid) {
                 return () -> {};
             }
-            boolean newlyRejected = rejectedPeers.add(sourceRid);
+            rejectedPeers.remove(sourceRid);
+            boolean disconnected =
+                    disconnectAdmitted(sourceRid, routeConnectionId(inbound.routeGeneration()));
+            refreshAdmissionPending(nanoTime.getAsLong());
             return () -> {
                 finishSelectedRouteObservation(routeChanges);
-                if (newlyRejected) signalStateChanged(sourceRid);
+                if (disconnected) signalStateChanged(sourceRid);
             };
         }
         if (command == ServiceWireConstants.COMMAND_HELLO && peerAdmissionSealed.getAsBoolean()) {

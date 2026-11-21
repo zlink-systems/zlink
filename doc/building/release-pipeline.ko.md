@@ -178,6 +178,8 @@ TicTacToe·ZoneWorld)도 framework 빌드·CI·배포에 포함하지 않는다.
 | `examples-smoke.yml` | 내보낸 examples tree를 checkout 없는 job에서 README 명령만으로 빌드·실행(quickstart 빌드, tutorial 기동·검증, 샘플 하나 완주). `examples-mirror.yml`이 push 전에 호출하고, 매일 최신 framework 태그로 다시 돈다 | ubuntu-24.04 5언어, windows-2022는 dotnet·java·kotlin |
 | `docs.yml` | 문서 사이트 빌드·배포 | ubuntu |
 
+`framework-java.yml`의 `framework-java-results-<platform>` artifact는 각 Java 모듈의 `build/test-events/<task>.log`(시험별 STARTED·ENDED와 결과)와 `build/jvm-crashes/<task>/hs_err_pid*.log`(JVM crash 보고서)를 시험 실패 시에도 수집한다.
+
 Windows에서 실제로 빌드·테스트가 도는 것은 `framework-dotnet.yml`과 `framework-node.yml` 둘이다.
 `framework-cpp.yml`은 ubuntu 전용이고, Java framework 테스트는 `pr-verify.yml`의 ubuntu job에서만
 돈다. `pr-verify.yml`의 windows-2022 job은 `bindings/tools/verify-windows-x64-contract.ps1`의
