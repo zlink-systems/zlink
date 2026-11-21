@@ -1,6 +1,7 @@
 import 'reflect-metadata';
 import '../.zlink-framework-json-schemas.cjs';
 import assert from 'node:assert/strict';
+import { mkdirSync } from 'node:fs';
 import { Injectable } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import {
@@ -24,6 +25,7 @@ import {
   MoveRequest,
   PlayerView,
   RoomView,
+  RoomViewRequest,
   SessionInfoRequest,
   ShotResult
 } from '../server/shared/messages';
@@ -33,7 +35,12 @@ class WireSessionFactory implements ZLinkSessionFactory {
   async create(context: ZLinkSessionContext): Promise<ZLinkSession> {
     return {
       context,
-      async onDispatch(): Promise<void> {
+      async onDispatch(dispatch): Promise<void> {
+        if (dispatch.packetName === RoomViewRequest.name) {
+          await context.client.send(new RoomView('before-shot')).submit();
+          if (dispatch.canReply) await context.client.reply(new RoomView('after-shot')).submit();
+          return;
+        }
         await context.client.send(new MoveRequest(new Vec3(1, 0, -2), 7n)).submit();
         await context.client.send(new ShotResult('hit', null, MaxSequence)).submit();
         await context.client
@@ -127,6 +134,24 @@ export async function runWireChecks(): Promise<void> {
       })
     ]);
     console.log('Wire golden: 1/1 passed (4 samples)');
+    const { PlayerClient } = await import('./client.mjs');
+    mkdirSync('.logs', { recursive: true });
+    const player = new PlayerClient(endpoint, '.logs/view-checks.jsonl', 'view-check');
+    try {
+      await player.connect();
+      const view = await player.view();
+      assert.equal(view.roomId, 'after-shot', 'Room query selected an unsolicited broadcast.');
+      assert(
+        player.messages.some(
+          (message) =>
+            message.name === RoomView.name && (message.payload as RoomView).roomId === 'before-shot'
+        ),
+        'Room query must still receive unsolicited broadcasts.'
+      );
+      console.log('Room view correlation: 1/1 passed (broadcast before reply)');
+    } finally {
+      await player.close();
+    }
   } finally {
     await client.close();
     await app.close();
