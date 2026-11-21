@@ -872,6 +872,7 @@ test('backend mesh dispatch pump yields between continuous receive batches', asy
   const totalBatches = 32;
   let readyHandler;
   let receivedBatches = 0;
+  let nowMs = 0;
   let timerObservedAt;
   let complete;
   const completed = new Promise((resolve) => { complete = resolve; });
@@ -908,7 +909,9 @@ test('backend mesh dispatch pump yields between continuous receive batches', asy
   };
   const pump = new backend.ZLinkMeshDispatchPump(node, {
     applicationJobQueue: applicationJobQueue(),
+    monotonicNowMs: () => nowMs,
     dispatch() {
+      nowMs += 5;
       if (receivedBatches === totalBatches) complete();
     }
   });
@@ -924,7 +927,7 @@ test('backend mesh dispatch pump yields between continuous receive batches', asy
   }
 });
 
-test('backend mesh dispatch pump yields when elapsed receive time wins before the count limit', async () => {
+test('backend mesh dispatch pump yields when its worker consumes the continuous time budget', async () => {
   const totalBatches = 4;
   let readyHandler;
   let receivedBatches = 0;
@@ -963,7 +966,7 @@ test('backend mesh dispatch pump yields when elapsed receive time wins before th
   const pump = new backend.ZLinkMeshDispatchPump(node, {
     applicationJobQueue: applicationJobQueue(),
     monotonicNowMs: () => {
-      nowMs += 3;
+      nowMs += 6;
       return nowMs;
     },
     dispatch() {
@@ -1047,12 +1050,12 @@ test('backend mesh dispatch pump marks application and infrastructure execution 
 });
 
 test('backend mesh dispatch pump yields between continuous ready batches without messages', async () => {
-  //  The pump yields after 16 counted records, and every Application worker (up to
-  //  max(2, availableParallelism)) can already hold one uncounted drain in the same microtask wave.
-  //  The batch count must exceed both so the yield stays observable on any core count.
+  // Every worker has its own 10 ms interval. Give empty claims deterministic
+  // elapsed time and enough backlog to observe a timer before all workers finish.
   const totalBatches = 32 + 2 * Math.max(2, require('node:os').availableParallelism());
   let readyHandler;
   let drainedBatches = 0;
+  let nowMs = 0;
   let timerObservedAt;
   let complete;
   const completed = new Promise((resolve) => { complete = resolve; });
@@ -1078,6 +1081,7 @@ test('backend mesh dispatch pump yields between continuous ready batches without
     },
     drainReady() {
       drainedBatches += 1;
+      nowMs += 5;
       if (drainedBatches === totalBatches) complete();
       return {
         ok: true,
@@ -1088,6 +1092,7 @@ test('backend mesh dispatch pump yields between continuous ready batches without
   };
   const pump = new backend.ZLinkMeshDispatchPump(node, {
     applicationJobQueue: applicationJobQueue(),
+    monotonicNowMs: () => nowMs,
     dispatch() {}
   });
 
@@ -1199,6 +1204,7 @@ test('backend mesh dispatch pump yields before recursively signaled dispatch wor
   const totalDispatches = 64;
   let readyHandler;
   let dispatches = 0;
+  let nowMs = 0;
   let timerObservedAt;
   let complete;
   const completed = new Promise((resolve) => { complete = resolve; });
@@ -1237,7 +1243,9 @@ test('backend mesh dispatch pump yields before recursively signaled dispatch wor
   };
   const pump = new backend.ZLinkMeshDispatchPump(node, {
     applicationJobQueue: applicationJobQueue(),
+    monotonicNowMs: () => nowMs,
     dispatch() {
+      nowMs += 5;
       dispatches += 1;
       if (dispatches === totalDispatches) {
         complete();
