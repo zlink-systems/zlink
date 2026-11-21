@@ -216,12 +216,7 @@ jobs:
         if: ${{ !inputs.skip_tests }}
         env:
           ZLINK_BINDING_BUILD_JOBS: "2"
-        run: |
-          set -euo pipefail
-          core_version="$(sed -n 's/^LIBZLINK_VERSION=//p' VERSION)"
-          bash scripts/local-package/cpp/build-wsl.sh \
-            --core-prefix \
-            "${ZLINK_LOCAL_PACKAGE_ROOT}/install/zlink-core/${core_version}"
+        run: bash scripts/ci/framework-cpp-build-binding.sh
 
       - name: Give this runner its own sccache server
         if: ${{ !inputs.skip_tests }}
@@ -253,25 +248,7 @@ jobs:
       - name: Configure and build Framework C++ tests
         if: ${{ !inputs.skip_tests }}
         working-directory: framework/languages/cpp
-        run: |
-          set -euo pipefail
-          cmake --preset linux-ninja-release \
-            -DVCPKG_MANIFEST_FEATURES=etcd \
-            -DVCPKG_TARGET_TRIPLET="${ZLINK_VCPKG_TRIPLET}" \
-            -DVCPKG_HOST_TRIPLET="${ZLINK_VCPKG_TRIPLET}" \
-            -DVCPKG_OVERLAY_TRIPLETS="${GITHUB_WORKSPACE}/framework/languages/cpp/cmake/vcpkg-triplets" \
-            -DZLINK_FRAMEWORK_CPP_WITH_ETCD=ON \
-            -DZLINK_FRAMEWORK_CPP_TEST_PROBES=ON \
-            -DZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK=OFF \
-            -DCMAKE_C_COMPILER_LAUNCHER="${ZLINK_SCCACHE_LAUNCHER}" \
-            -DCMAKE_CXX_COMPILER_LAUNCHER="${ZLINK_SCCACHE_LAUNCHER}" \
-            -DCMAKE_TOOLCHAIN_FILE="${GITHUB_WORKSPACE}/.github/workflows/framework-cpp-system-toolchain.cmake" \
-            -DZLINK_FRAMEWORK_CPP_BUILD_SAMPLES=OFF \
-            -DZLINK_FRAMEWORK_CPP_BUILD_CROSS_LANGUAGE=OFF
-          cmake --build --preset linux-ninja-release --parallel "${BUILD_PARALLEL}"
-          if [[ -n "${ZLINK_SCCACHE_LAUNCHER}" ]]; then
-            sccache --show-stats
-          fi
+        run: bash ../../../scripts/ci/framework-cpp-configure-build.sh
 
       # Redis-backed tests fail instead of skipping once the job provides Redis (#4542).
       - name: Start Redis for Redis-backed tests
@@ -283,16 +260,7 @@ jobs:
         working-directory: framework/languages/cpp
         env:
           ZLINK_SINGLE_WORKER: ${{ inputs.single_worker }}
-        run: |
-          # No test is excluded. sample_parity and layout_contract were once
-          # believed to fail on main; they pass, and both read only the source
-          # tree, so BUILD_SAMPLES=OFF above does not change their result.
-          parallel_args=()
-          if [[ "${ZLINK_SINGLE_WORKER}" == "true" ]]; then
-            parallel_args=(--parallel 1)
-          fi
-          ctest --preset linux-ninja-release "${parallel_args[@]}" \
-            -L '^(unit|contract)$'
+        run: bash ../../../scripts/ci/framework-cpp-test.sh
 
       # Nightly only (#4082): the etcd Location Store 4x4 cross-language
       # conformance run reuses this job's etcd-enabled static build on the
