@@ -726,9 +726,12 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         if (!TryDecodeMetadata(record, out var metadata))
             return;
 
-        var reply = record.Kind is MeshRecordKind.NodeRequest or MeshRecordKind.ChannelRequest
-            ? record.CaptureReplyRoute()
-            : null;
+        var nativeReply = record.NativeApplicationReply;
+        var reply =
+            nativeReply is null
+            && record.Kind is MeshRecordKind.NodeRequest or MeshRecordKind.ChannelRequest
+                ? record.CaptureReplyRoute()
+                : null;
         var parts = record.ApplicationPayloadView is null
             ? RetainParts(batch, index)
             : Array.Empty<Message>();
@@ -750,7 +753,8 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             record.MessageFollowHopCount,
             record.SourceBindingGeneration,
             payloadOwner: payloadOwner,
-            applicationPayloadView: record.ApplicationPayloadView
+            applicationPayloadView: record.ApplicationPayloadView,
+            nativeApplicationReply: nativeReply
         );
         if (_nodeRouteHandler is null)
         {
