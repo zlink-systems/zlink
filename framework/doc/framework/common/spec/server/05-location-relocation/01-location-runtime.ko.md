@@ -1005,8 +1005,9 @@ authority token의 lease가 무효여야 하며, 복구 owner의 token 교체 CA
 `descriptorLifecycleGeneration`을 가지면 그 reservation의 target lifecycle은 끝난 것이다. 이때
 Framework는 그 reservation을 만든 자격 없이 `Reserved → Missing`으로 바꾸고 pending 수용 공간을
 반납한다. 요청은 처음 읽은 authority `StoreVersion`, 읽은 owner lease record의 상태(version 또는
-없음), 읽은 descriptor record의 상태와 수용 공간 record를 조건으로 함께 검사한다. 수용 공간
-record가 없으면 authority만 바꾼다. 수용 공간 record는 Mesh 이름과 RID마다 하나이고 MeshNode
+없음), 읽은 descriptor record의 상태와 수용 공간 record를 조건으로 함께 검사한다. 수용 공간은
+[Location Store §4.1](02-location-store-redis.ko.md)의 counter key이며 예약이 항상 만들므로, 반납할 key가 없으면
+Store 데이터 손상이다(v11에서 전환할 때 수용 공간 record를 counter key로 옮긴 뒤부터). 수용 공간 record는 Mesh 이름과 RID마다 하나이고 MeshNode
 lifecycle이 바뀌어도 이어진다 — 해제하지 않은 모든 allocation을 집계하며 descriptor를 다시
 게시해도 초기화하지 않는다. 따라서 이전 lifecycle의 reservation을 해제할 때 같은 record에서
 반납한다. 반납 결과가 0보다 작아지면 Store 데이터 손상으로 판정하고
@@ -1704,7 +1705,7 @@ owner에 따라 다르다.
   generation을 유지한다), 다른 node를 거쳐 첫 target으로 돌아왔다면 첫 target이 지금 보유한 authority의
   값이다. 어느 경우든 route가 전달하는 message는 그 값을 가진 현재 owner가 받는다.
 - **Owner가 첫 target도 source도 아니면**(첫 target에서 다음 이동이 이어졌다) 다시 읽은 authority에는
-  첫 target의 commit 값이 남지 않고, Store는 generation을 전역 counter로 발급하므로 source는 그 값을
+  첫 target의 commit 값이 남지 않고, Store는 그 뒤 이동마다 그 ID의 counter에서 새 generation을 발급하므로 source는 그 값을
   알 수 없다. Source는 §7.3의 route를 설치하지 않는다. 이 **연속 이동 예외**에서 이후 source로 도착한
   message는 §7.3의 route 없음 결과(`Unavailable`)로 끝난다. Source는 다시 읽은 현재 owner로 직접 가는
   route를 만들거나 첫 target의 generation을 추측하지 않는다. Bound Session의 route는 각 target의 command 44와 이후

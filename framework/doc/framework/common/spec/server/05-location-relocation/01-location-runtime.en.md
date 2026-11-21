@@ -1135,7 +1135,9 @@ reservation's target lifecycle has ended. The Framework then changes `Reserved �
 returns the pending capacity without the eligibility that created the reservation. The request
 checks, as conditions together, the authority `StoreVersion` as first read, the state of the owner
 lease record as read (version or absent), the state of the descriptor record as read, and the
-capacity record. If the capacity record is absent, only the authority changes. There's one capacity record per
+capacity record. Capacity is the counter
+keys of [Location Store §4.1](02-location-store-redis.en.md), which a reservation always creates, so a release whose
+key is absent means Store data corruption (once the v11 capacity records have been moved to counter keys). There's one capacity record per
 Mesh name and RID, and it carries over when the MeshNode lifecycle changes — it counts every
 unreleased allocation and isn't reset when the descriptor is published again. Releasing a previous
 lifecycle's reservation therefore returns capacity to the same record. If the return would
@@ -1909,7 +1911,7 @@ route depends on the reread owner.
   received by the current owner holding that value.
 - **If the owner is neither the first target nor the source** (a further move followed from the first
   target), the reread authority no longer holds the first target's commit value, and the Store issues
-  generations from a global counter, so the source cannot know it. The source installs no §7.3 route.
+  a new generation from that ID's counter on each later move, so the source cannot know it. The source installs no §7.3 route.
   Under this **chained-move exception**, a message that later reaches the source ends with §7.3's
   no-route result (`Unavailable`). The source neither creates a route straight to the reread current
   owner nor guesses the first target's generation. Bound Session routes are moved by each target's command 44
