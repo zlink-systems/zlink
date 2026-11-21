@@ -1,8 +1,8 @@
-import { AsyncLocalStorage } from 'node:async_hooks';
+import { FrameworkContextField } from '../framework-context';
 
 import type { ApplicationJobOrigin, ApplicationJobPermitPort } from './contracts';
 
-const applicationJobPermitScope = new AsyncLocalStorage<ApplicationJobPermitPort | undefined>();
+const applicationJobPermitScope = new FrameworkContextField<ApplicationJobPermitPort | undefined>();
 
 function releasePermitTurn(): void {
   releaseApplicationJobPermitTurn(applicationJobPermitScope.getStore());
@@ -23,18 +23,14 @@ export function releaseApplicationJobPermitTurn(
  * dispatcher that already continues on the handler result needs no second
  * continuation here.
  */
-export function enterApplicationJobPermitScope(
-  permit: ApplicationJobPermitPort
-): ApplicationJobPermitPort | undefined {
-  const previous = applicationJobPermitScope.getStore();
-  applicationJobPermitScope.enterWith(permit);
-  return previous;
+export function enterApplicationJobPermitScope(permit: ApplicationJobPermitPort) {
+  return applicationJobPermitScope.enterWith(permit);
 }
 
 export function leaveApplicationJobPermitScope(
-  previous: ApplicationJobPermitPort | undefined
+  previous: ReturnType<typeof enterApplicationJobPermitScope>
 ): void {
-  applicationJobPermitScope.enterWith(previous);
+  applicationJobPermitScope.restore(previous);
 }
 
 function releasePermitSuccess<TResult>(value: TResult): TResult {
@@ -67,8 +63,7 @@ export function runWithApplicationJobPermit<TResult, TFirst, TSecond>(
   first?: TFirst,
   second?: TSecond
 ): TResult | Promise<TResult> {
-  const previous = applicationJobPermitScope.getStore();
-  applicationJobPermitScope.enterWith(permit);
+  const previous = applicationJobPermitScope.enterWith(permit);
   try {
     const result = callback(first as TFirst, second as TSecond);
     if (result !== null && (typeof result === 'object' || typeof result === 'function')) {
@@ -80,7 +75,7 @@ export function runWithApplicationJobPermit<TResult, TFirst, TSecond>(
     releasePermitTurn();
     return Promise.reject(error);
   } finally {
-    applicationJobPermitScope.enterWith(previous);
+    applicationJobPermitScope.restore(previous);
   }
 }
 

@@ -1,3 +1,4 @@
+import type { ZLinkOwnerLeaseTracker } from '../locations/lease-tracker';
 import { sameAuthorityIncarnation } from '../locations/lifecycle-runtime';
 import { encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
 import {
@@ -62,6 +63,7 @@ export interface ZLinkActorPlacementTarget {
 }
 
 export interface ZLinkActorPlacementCoordinatorOptions {
+  readonly leaseTracker: Pick<ZLinkOwnerLeaseTracker, 'isOwnerTokenLive'>;
   readonly actorRelocationPolicy?: (
     meshName: string,
     stableType: string
@@ -71,7 +73,7 @@ export interface ZLinkActorPlacementCoordinatorOptions {
     meshName: string | undefined,
     stableType: string,
     signal?: AbortSignal,
-    excludedNodeRids?: ReadonlySet<string>
+    excludedHostRuns?: ReadonlyMap<string, bigint>
   ) => Promise<ZLinkActorPlacementTarget | undefined>;
   readonly remoteCreate: (
     meshName: string,
@@ -100,21 +102,36 @@ export class ZLinkActorPlacementCoordinator {
     const deadlineMs = performance.now() + remainingMs;
     const contentReference = encodeLocationCreationContent(requestPayload);
     const requestSha256 = createHash('sha256').update(requestPayload).digest();
-    const excluded = new Set<string>();
+    const excludedHostRuns = new Map<string, bigint>();
     const operationId = randomOperationId();
     try {
       for (;;) {
-        const target = await this.options.target(meshName, stableType, deadline.signal, excluded);
-        if (target === undefined) {
-          // Entry eligibility limits new creation, not lookup of a Ready Actor (Actor model §6.3, §6.5).
-          if (!createOnly) {
-            const current = await this.options.store.readAuthority(
-              encodeAuthorityKey('actor', actorId),
+        if (!createOnly) {
+          const current = await this.options.store.readAuthority(
+            encodeAuthorityKey('actor', actorId),
+            deadline.signal
+          );
+          const existing = existingActor(current, actorId, stableType);
+          if (
+            existing !== undefined &&
+            current.kind === 'snapshot' &&
+            (await this.options.leaseTracker.isOwnerTokenLive(
+              {
+                ownerId: current.ownerId,
+                leaseGeneration: current.ownerLeaseGeneration
+              },
               deadline.signal
-            );
-            const existing = existingActor(current, actorId, stableType);
-            if (existing !== undefined) return { status: 'existing', actor: existing };
-          }
+            ))
+          )
+            return { status: 'existing', actor: existing };
+        }
+        const target = await this.options.target(
+          meshName,
+          stableType,
+          deadline.signal,
+          excludedHostRuns
+        );
+        if (target === undefined) {
           throw createInternalFrameworkException(
             ZLinkFrameworkInternalErrorKind.PlacementCapacityExhausted,
             `No eligible Actor placement target is ready for '${stableType}'.`,
@@ -171,7 +188,7 @@ export class ZLinkActorPlacementCoordinator {
           );
         }
         if (reserved.kind === 'placementCapacityExhausted') {
-          excluded.add(encodeRoutingIdStorageHex(target.nodeRid));
+          excludedHostRuns.set(encodeRoutingIdStorageHex(target.nodeRid), target.nodeGeneration);
           continue;
         }
         if (reserved.kind === 'alreadyExists' || reserved.kind === 'conflict') {
@@ -222,7 +239,7 @@ export class ZLinkActorPlacementCoordinator {
         ) {
           //  The target refused before the callback and cancelled its reservation
           //  (Actor model §6.3); exclude this host run like a Reserve failure.
-          excluded.add(encodeRoutingIdStorageHex(target.nodeRid));
+          excludedHostRuns.set(encodeRoutingIdStorageHex(target.nodeRid), target.nodeGeneration);
           continue;
         }
         if (remote.terminalResult !== RequestResult.Ok || remote.failureCode !== 0) {
@@ -744,7 +761,14 @@ function createDeadline(timeoutMs: number, parent?: AbortSignal) {
   const abort = () => controller.abort(parent?.reason);
   parent?.addEventListener('abort', abort, { once: true });
   const timer = setTimeout(
-    () => controller.abort(new Error('Actor creation deadline exceeded.')),
+    () =>
+      controller.abort(
+        createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
+          'Actor creation deadline exceeded.',
+          true
+        )
+      ),
     Math.max(1, timeoutMs)
   );
   return {

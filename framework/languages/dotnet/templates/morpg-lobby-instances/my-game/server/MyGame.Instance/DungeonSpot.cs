@@ -94,6 +94,7 @@ public sealed class Prepare : IZLinkSpotRequestHandler<DungeonSpot, PrepareDunge
 {
     public ValueTask<DungeonPrepared> HandleAsync(
         DungeonSpot spot,
+        IZLinkMessageContext context,
         PrepareDungeon request,
         CancellationToken ct
     )

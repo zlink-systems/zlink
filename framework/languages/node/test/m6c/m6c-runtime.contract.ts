@@ -897,13 +897,13 @@ test('mailbox seal captures queued work, holds new ingress, and restores or rela
   assert.equal(mailbox.tryClaim('application', 16, 1_024), undefined);
   const infrastructure = mailbox.tryClaim('infrastructure', 4, 256);
   assert.ok(infrastructure);
-  assert.equal(firstPart(infrastructure.records[0]!), 'probe');
+  assert.equal(firstPart(infrastructure.records![0]!), 'probe');
   assert.equal(mailbox.release(infrastructure), true);
 
   assert.equal(mailbox.abortRelocation(first), true);
   const restored = mailbox.tryClaim('application', 16, 1_024);
   assert.ok(restored);
-  assert.deepEqual(restored.records.map(firstPart), ['one', 'two', 'three']);
+  assert.deepEqual(restored.records!.map(firstPart), ['one', 'two', 'three']);
   assert.equal(mailbox.release(restored), true);
 
   assert.equal(mailbox.tryEnqueue(mailboxRecord('spot:room', 'application', 'four')), true);
@@ -927,7 +927,7 @@ test('relocation ingress hold adds no relocation-specific message or byte cap', 
   assert.equal(byCount.tryEnqueue(mailboxRecord('spot:count', 'application', 'overflow')), true);
   assert.equal(byCount.abortRelocation(countSeal), true);
   const restored = byCount.tryClaim('application', 2048, 32 * 1024 * 1024);
-  assert.equal(restored?.records.length, 1025);
+  assert.equal(restored?.records!.length, 1025);
   assert.ok(restored);
   assert.equal(byCount.release(restored), true);
   byCount.close();
@@ -1157,12 +1157,12 @@ test('concrete standalone Actor owner preserves external membership and exact ge
   assert.equal(events.at(-1), 'source-abort:actor:solo');
 });
 
-test('concrete Instance Spot aggregate preserves Actor membership and relocation payload', async () => {
+test('concrete User Spot aggregate preserves Actor membership and relocation payload', async () => {
   const events: string[] = [];
   const captureOwner = new ServiceRelocationObjectCaptureOwner();
   const spot = captureUnit(events, {
-    authorityKey: 'instance:match:42',
-    objectKind: 'instance_spot',
+    authorityKey: 'user:match:42',
+    objectKind: 'user_spot',
     stableType: 'match',
     objectGeneration: 5n,
     authorityOwnerGeneration: 8n,
@@ -1183,7 +1183,7 @@ test('concrete Instance Spot aggregate preserves Actor membership and relocation
     timers: []
   });
 
-  const captured = await captureOwner.captureInstanceSpotAggregate(
+  const captured = await captureOwner.captureUserSpotAggregate(
     '44444444-4444-4444-8444-444444444444',
     3n,
     spot,
@@ -1191,7 +1191,7 @@ test('concrete Instance Spot aggregate preserves Actor membership and relocation
     [
       {
         actorKey: 'actor:player',
-        spotKey: 'instance:match:42',
+        spotKey: 'user:match:42',
         spotObjectGeneration: 5n,
         membershipEpoch: 12n
       }
@@ -1200,14 +1200,40 @@ test('concrete Instance Spot aggregate preserves Actor membership and relocation
 
   assert.deepEqual(
     captured.envelope.participants.map((participant) => participant.objectKind),
-    ['instance_spot', 'actor']
+    ['user_spot', 'actor']
   );
   assert.equal(captured.envelope.memberships[0]?.membershipEpoch, 12n);
   await captured.abortSource();
-  assert.deepEqual(events.slice(-2), [
-    'source-abort:actor:player',
-    'source-abort:instance:match:42'
-  ]);
+  assert.deepEqual(events.slice(-2), ['source-abort:actor:player', 'source-abort:user:match:42']);
+});
+
+test('concrete Instance Spot captures only its Spot payload and timers', async () => {
+  const events: string[] = [];
+  const owner = new ServiceRelocationObjectCaptureOwner();
+  const spot = captureUnit(events, {
+    authorityKey: 'instance:match:42',
+    objectKind: 'instance_spot',
+    stableType: 'match',
+    objectGeneration: 5n,
+    authorityOwnerGeneration: 8n,
+    state: 'instance-state',
+    journal: 'instance-journal',
+    queuedMessages: [],
+    timers: []
+  });
+  const captured = await owner.captureInstanceSpotAggregate(
+    '44444444-4444-4444-8444-444444444444',
+    3n,
+    spot
+  );
+  assert.deepEqual(
+    captured.envelope.participants.map(({ objectKind }) => objectKind),
+    ['instance_spot']
+  );
+  assert.deepEqual(captured.envelope.memberships, []);
+  assert.equal(captured.envelope.participants[0]!.applicationState.toString(), 'instance-state');
+  await captured.abortSource();
+  assert.equal(events.at(-1), 'source-abort:instance:match:42');
 });
 
 function captureUnit(

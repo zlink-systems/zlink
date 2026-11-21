@@ -139,6 +139,8 @@ The call that creates the Spot in that mesh follows.
 --8<-- "framework/languages/node/tutorial/Client/main.ts:spot-create-call"
 ```
 
+Spot creation reports deadlines and caller cancellation as described in [When creation exceeds its deadline](22-actor.en.md#creation-deadline).
+
 ### 4.2 Calling
 
 Give only the id received at creation. The Framework finds which node it is on right now.

@@ -1022,15 +1022,19 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                     2,
                     EVENTS.stream().filter("leave.handler"::equals).count(),
                     "the duplicate command 29 reaches the handler and is a no-op");
+            LEAVE_ENTERED.get().get(4, TimeUnit.SECONDS);
             if (scenario == Scenario.NORMAL) {
-                TimeUnit.MILLISECONDS.sleep(250);
+                long deadline = System.nanoTime() + TIMEOUT.toNanos();
+                while (sourceJoin.sourceAttemptCountForTest() != 0
+                        && System.nanoTime() - deadline < 0) {
+                    TimeUnit.MILLISECONDS.sleep(10);
+                }
                 assertEquals(
                         0,
                         sourceJoin.sourceAttemptCountForTest(),
                         "Message Follow retention must bound the source attempt even "
                                 + "while OnLeave remains pending");
             }
-            LEAVE_ENTERED.get().get(4, TimeUnit.SECONDS);
             assertEquals(
                     1,
                     EVENTS.stream().filter("source.leave"::equals).count(),

@@ -425,7 +425,8 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
     transfer?: {
       readonly adapterKey: string;
       readonly state: ZLinkMessage;
-    }
+    },
+    stageIngress?: () => (reason?: unknown) => void
   ): Promise<ZLinkActor> {
     if (this.states.has(actorId) || this.relocationStaged.has(actorId)) {
       throw new Error(`Actor '${actorId}' already exists on the relocation target.`);
@@ -437,6 +438,7 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
     }
     this.relocationStaged.add(actorId);
     let nativeRef: ZLinkBackendActorRef | undefined;
+    let cancelIngress: ((reason?: unknown) => void) | undefined;
     try {
       nativeRef = restore.call(
         node,
@@ -451,6 +453,8 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
       this.rememberActorMeshFromType(actorId, actorType);
       const state = this.getOrCreateState(actorId);
       state.setNativeActorRef(nativeRef);
+      state.setLocationGeneration(authorityOwnerGeneration);
+      cancelIngress = stageIngress?.();
       const operation = state.getOrStartCreation(actorType, false, () =>
         this.creation.materializeTransferredActor(actorId, actorType, state, undefined)
       );
@@ -466,11 +470,11 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
         }
         await registry.restore(transfer.adapterKey, actor, transfer.state, signal);
       }
-      state.setLocationGeneration(authorityOwnerGeneration);
       if (spotId !== undefined)
         state.setJoinedSpot(spotId, undefined, membershipEpoch, spotGeneration);
       return actor;
     } catch (error) {
+      cancelIngress?.(error);
       if (nativeRef !== undefined) node.discardRelocatedActor?.(nativeRef);
       this.relocationStaged.delete(actorId);
       const failedState = this.states.get(actorId);

@@ -10,6 +10,7 @@ import type {
   ApplicationJobQueuePort
 } from '../application-jobs/contracts';
 import { detachedMeshDispatchScope, runZLinkExecutionArea } from '../execution';
+import { ZLINK_DEFAULT_SERIAL_SCHEDULER_OPTIONS } from '../execution/serial-execution-queue';
 import {
   ReadyDomain,
   type Claim,
@@ -33,8 +34,6 @@ const DEFAULT_MESH_READY_CAPACITY = 32;
 
 const DEFAULT_MESH_PART_CAPACITY = 256;
 
-const MESH_DISPATCH_YIELD_RECORDS = 16;
-const MESH_DISPATCH_YIELD_INTERVAL_MS = 2;
 const MESH_DISPATCH_LIFECYCLE_CLAIM_BUDGET = 4;
 const MESH_DISPATCH_RECEIVE_CAPACITY = 64;
 const MESH_DISPATCH_MAX_APPLICATION_WORKERS = Math.max(2, availableParallelism());
@@ -78,12 +77,6 @@ export class ZLinkMeshDispatchPump {
   private readonly idleApplicationWorkers: Array<() => void> = [];
   private applicationWorkerCount = 0;
   private readonly capacityStop = new AbortController();
-  private recordsSinceYield = 0;
-  private yieldStartedAtMs = 0;
-  /** Drains in progress; the batch budget begins when work starts on an idle pump. */
-  private draining = 0;
-  /** The macrotask boundary every drain waits for once the shared budget is spent. */
-  private pendingYield?: Promise<void>;
 
   constructor(
     private readonly node: ZLinkBackendMeshNode,
@@ -124,8 +117,7 @@ export class ZLinkMeshDispatchPump {
     const startApplication =
       (domains & ReadyDomain.Application) !== 0 && (previous & ReadyDomain.Application) === 0;
     if (startInfrastructure && startApplication) {
-      const startTurn = this.yieldIfNeeded() ?? Promise.resolve();
-      this.scheduleInfrastructure(startTurn);
+      this.scheduleInfrastructure();
       return;
     }
     if (startInfrastructure) this.scheduleInfrastructure();
@@ -286,12 +278,12 @@ export class ZLinkMeshDispatchPump {
    * the infrastructure mailbox and prevent the relocation coordinator from
    * completing the drain that releases the application work.
    */
-  private scheduleInfrastructure(startTurn?: Promise<void>): void {
+  private scheduleInfrastructure(): void {
     if (this.infrastructureScheduled) {
       return;
     }
     this.infrastructureScheduled = true;
-    const drain = (startTurn ?? this.yieldIfNeeded() ?? Promise.resolve())
+    const drain = Promise.resolve()
       .then(() =>
         detachedMeshDispatchScope(() =>
           runZLinkExecutionArea('infrastructure', () => this.drainInfrastructure())
@@ -337,7 +329,6 @@ export class ZLinkMeshDispatchPump {
 
   private async drainDomain(readyBatch: ReadyBatch): Promise<boolean> {
     let claimsDrained = 0;
-    this.beginDrain();
     try {
       while (!this.disposed) {
         if (claimsDrained >= MESH_DISPATCH_LIFECYCLE_CLAIM_BUDGET) {
@@ -358,11 +349,9 @@ export class ZLinkMeshDispatchPump {
           const claim = readyBatch.takeClaim(index);
           claimsDrained += 1;
           const owner = drained.records[index]!;
-          this.beginDrain();
           const drain = this.drainClaim(ReadyDomain.Infrastructure, owner, claim);
           this.activeDrains.add(drain);
           void drain.finally(() => {
-            this.draining -= 1;
             this.activeDrains.delete(drain);
           });
         }
@@ -370,29 +359,11 @@ export class ZLinkMeshDispatchPump {
           this.wakeApplicationWorker();
           return true;
         }
-        // Empty ready claims also count as work, so they cannot monopolize
-        // the microtask queue without giving I/O and deadlines a turn.
-        this.recordsSinceYield += 1;
-        const yieldTurn = this.yieldIfNeeded();
-        if (yieldTurn !== undefined) await yieldTurn;
       }
       return false;
     } finally {
       readyBatch.reset();
-      this.draining -= 1;
     }
-  }
-
-  /**
-   * Time the pump spent idle is not batch work: when work starts on an idle
-   * pump, its batch budget starts with it (spec 08 §6).
-   */
-  private beginDrain(): void {
-    if (this.draining === 0) {
-      this.recordsSinceYield = 0;
-      this.yieldStartedAtMs = this.nowMs();
-    }
-    this.draining += 1;
   }
 
   /** Each worker reuses claim state; record terminals retain only their own record. */
@@ -407,7 +378,7 @@ export class ZLinkMeshDispatchPump {
       for (;;) {
         // This boundary also keeps the first handler off the receive stack.
         await this.waitForApplicationReady();
-        this.beginDrain();
+        let startedAt = this.nowMs();
         try {
           while (!this.disposed) {
             readyBatch.reset();
@@ -425,16 +396,20 @@ export class ZLinkMeshDispatchPump {
               claimDrain
             );
             if (pending !== undefined) await pending;
-            // Empty ready claims count toward the shared pump budget too.
-            this.recordsSinceYield += 1;
-            const nextTurn = this.yieldIfNeeded();
-            if (nextTurn !== undefined) await nextTurn;
+            // A worker keeps its own continuous budget across successive takes.
+            // Pending handler terminals are observed separately and do not occupy it.
+            if (
+              this.nowMs() - startedAt >=
+              ZLINK_DEFAULT_SERIAL_SCHEDULER_OPTIONS.ownerTimeBudget
+            ) {
+              await yieldToTimers();
+              startedAt = this.nowMs();
+            }
           }
         } catch (error) {
           this.reportDispatchError(error);
         } finally {
           readyBatch.reset();
-          this.draining -= 1;
         }
         if (this.disposed) return;
       }
@@ -453,7 +428,6 @@ export class ZLinkMeshDispatchPump {
     try {
       const pending = this.dispatchClaim(domain, owner, claim, this.createClaimDrain(receiveBatch));
       if (pending !== undefined) await pending;
-      await this.yieldIfNeeded();
     } catch (error) {
       this.reportDispatchError(error);
     }
@@ -530,7 +504,6 @@ export class ZLinkMeshDispatchPump {
       if (owner.ordinaryIngressPreAdmitted === true && permit === undefined) {
         throw new Error('Pre-admitted raw ingress record lost its Application Job Queue permit.');
       }
-      this.recordsSinceYield += 1;
       if (permit !== undefined) {
         if (state.domain === ReadyDomain.Application && record.applicationJobPermit === undefined)
           permit.markApplicationQueued();
@@ -620,31 +593,10 @@ export class ZLinkMeshDispatchPump {
           state.owner = undefined;
           state.claim = undefined;
           state.claimPermit = undefined;
+          state.suppliedReceiveBatch?.reset();
         }
       }
     }
-  }
-
-  /**
-   * The batch budget is shared by every drain of this pump, so once it is
-   * spent every drain waits for the same macrotask boundary; one drain that
-   * keeps running would otherwise hold the event loop the yield was for.
-   */
-  private yieldIfNeeded(): Promise<void> | undefined {
-    if (this.pendingYield !== undefined) return this.pendingYield;
-    const nowMs = this.nowMs();
-    if (
-      this.recordsSinceYield < MESH_DISPATCH_YIELD_RECORDS &&
-      nowMs - this.yieldStartedAtMs < MESH_DISPATCH_YIELD_INTERVAL_MS
-    )
-      return undefined;
-    this.recordsSinceYield = 0;
-    const pendingYield = yieldToTimers().then(() => {
-      this.pendingYield = undefined;
-      this.yieldStartedAtMs = this.nowMs();
-    });
-    this.pendingYield = pendingYield;
-    return pendingYield;
   }
 
   private nowMs(): number {

@@ -64,6 +64,22 @@ client가 자기 id를 보내면, 그 id의 Actor를 찾거나 만들어 이 연
 --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/sessions/AuthenticateHandler.java:session-actor-bind"
 ```
 
+Actor는 `onSessionBound`를 재정의해 bind 확정 통지를 받을 수 있다.
+
+```java
+@Override
+public CompletionStage<Void> onSessionBound(
+        ZLinkSessionBindingIdentity incoming,
+        ZLinkActorCallbackCancellation cancellation) {
+    return CompletableFuture.completedFuture(null);
+}
+```
+
+Callback은 Actor의 handler 순서에서 실행된다. 예외나 시간 초과는 이미 성공한 bind를
+바꾸지 않는다. 기본 구현은 아무것도 하지 않으며, 재정의하지 않으면 bind는 Actor gate를
+기다리지 않는다. [API reference](../../../java/reference/05-actor-relocation.ko.md#zlinkactoronsessionbound)에서
+취소와 오류 처리를 확인할 수 있다.
+
 **같은 id로 다시 접속하면 있던 Actor에 묶인다.** 그래서 만들기와 찾기를 한 호출로 처리한다.
 
 ### 3.2 남은 packet을 넘기기
@@ -94,6 +110,10 @@ Actor는 자기에게 묶인 연결을 알고 있다. 응답이 아니라 **스�
     같은 handler는 mesh 호출로도 불리며, 그때는 묶인 연결이 없다. 이 경우 push는 호출의 terminal에서
     `InvalidOperation`으로 끝나며, 언어별 비동기 완료 수단으로 그 실패를 관찰한다. 위 코드는 rename을
     이미 끝낸 뒤 push하므로 **그 실패만** 받아 버린다.
+
+### 3.4 Bind 통지
+
+Java의 bind 확정 통지 `onSessionBound`는 [§3.1](#31-묶기)의 예에서 설명한다.
 
 ## 4. 접속하는 쪽 — mesh 밖의 client
 

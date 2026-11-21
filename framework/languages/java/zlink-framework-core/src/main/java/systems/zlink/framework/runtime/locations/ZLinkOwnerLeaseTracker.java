@@ -68,6 +68,13 @@ final class ZLinkOwnerLeaseTracker {
                         });
     }
 
+    boolean hasObservedLiveLease(String ownerId, long expectedGeneration) {
+        ObservedLease current = observed.get(ownerId);
+        return current != null
+                && current.matches(ownerId, expectedGeneration)
+                && current.remaining(nanoTime.getAsLong()).compareTo(Duration.ZERO) > 0;
+    }
+
     private static Duration requirePositive(Duration value, String name) {
         if (value == null || value.isZero() || value.isNegative()) {
             throw new IllegalArgumentException(name + " must be positive.");

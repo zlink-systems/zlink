@@ -109,6 +109,7 @@ public sealed class Prepare : IZLinkSpotRequestHandler<DungeonSpot, PrepareDunge
 {
     public ValueTask<DungeonPrepared> HandleAsync(
         DungeonSpot spot,
+        IZLinkMessageContext context,
         PrepareDungeon request,
         CancellationToken ct
     )
@@ -141,6 +142,11 @@ public sealed class DungeonRelocation : IZLinkSpotRelocationAdapter<DungeonSpot>
 [ZLinkSpotActorSendHandler(nameof(ActionRejected))]
 public sealed class DungeonSpotActionRejectedNotification : IZLinkSpotActorSendHandler<DungeonSpot, PlayerActor, ActionRejected>
 {
-    public ValueTask HandleAsync(DungeonSpot spot, PlayerActor actor, IZLinkMessageContext context,
-        ActionRejected message, CancellationToken ct) => actor.DeliverAsync(message);
+    public ValueTask HandleAsync(
+        DungeonSpot spot,
+        PlayerActor actor,
+        IZLinkMessageContext context,
+        ActionRejected message,
+        CancellationToken ct
+    ) => actor.DeliverAsync(message);
 }

@@ -1,8 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const {
-  ZLinkHostServiceRelocationRuntime
-} = require('../../packages/framework/dist/internal');
+const { ZLinkHostServiceRelocationRuntime } = require('../../packages/framework/dist/internal');
 
 function target() {
   const runtime = new ZLinkHostServiceRelocationRuntime({});
@@ -55,46 +53,74 @@ test('the previous target move submits command 44 before its first handler start
   assert.ok(events.indexOf('committed') < events.indexOf('handler'));
 });
 
-test('target normalization precedes Join completion and cannot overwrite the next root', async () => {
+test('terminal cleanup follows Join completion and cannot overwrite the next root', async () => {
   const { runtime, stage, events } = target();
+  const {
+    encodeAuthorityKey
+  } = require('../../packages/framework/dist/runtime/locations/authority-key-codec');
+  const key = encodeAuthorityKey('actor', 'next-root');
+  stage.staging.primaryAuthorityKey = key;
   let root = 'first-root';
-  runtime.clearTargetRelocationPublication = async (_stage, authority) => {
-    assert.equal(root, 'first-root', 'normalization must use the previous committed root');
-    events.push('normalized');
-    root = 'steady';
-    return authority;
-  };
+  let version = '1';
+  let attempts = 0;
+  runtime.commitTargetReservation = async () => ({
+    storeVersion: { value: version },
+    payload: Buffer.from(root),
+    allocation: { objectKind: 'actor' }
+  });
+  runtime.options.locationStore = () => ({
+    async compareExchangeAuthority(actual, expected) {
+      attempts++;
+      events.push('normalized');
+      assert.equal(actual.value, key.value);
+      assert.equal(expected.value, '1', 'cleanup must retain its original authority fence');
+      assert.equal(version, '2');
+      return { kind: 'conflict' };
+    }
+  });
+  delete runtime.clearTargetRelocationPublication;
+  runtime.codec.read = () => ({ reference: 'first-root' });
+  runtime.codec.clear = () => Buffer.alloc(0);
   runtime.finalizeActorJoinProfiles = async () => {
-    assert.ok(events.includes('normalized'), 'normalization must precede OnJoinCompleted');
+    assert.equal(attempts, 0, 'terminal cleanup must follow OnJoinCompleted');
     root = 'second-root';
+    version = '2';
+    events.push('completion');
   };
   await finalize(runtime, stage);
   await finalize(runtime, stage);
   assert.equal(root, 'second-root');
-  assert.equal(events.filter((event) => event === 'normalized').length, 1);
+  assert.equal(attempts, 1);
+  assert.ok(events.indexOf('handler') < events.indexOf('normalized'));
 });
 
-test('request terminal relay uses the normalized authority StoreVersion', async () => {
-  const { runtime, stage } = target();
+test('request terminal relay uses the activated authority before terminal cleanup', async () => {
+  const { runtime, stage, events } = target();
   const packet = { index: 0, returnResponse: true, source: { replyRouteId: '1' } };
   const hidden = { actor: { context: { actorId: 'actor' } }, replayPackets: [packet] };
   stage.staging.hidden.set('actor', hidden);
   stage.staging.envelope.participants.push({ key: 'actor' });
   stage.finalize = Promise.resolve();
-  runtime.clearTargetRelocationPublication = async () => ({
-    storeVersion: { value: 'normalized-v2' }
-  });
+  runtime.clearTargetRelocationPublication = async () => {
+    events.push('normalized');
+    return { storeVersion: { value: 'normalized-v2' } };
+  };
   runtime.targetReplyRelayCoordinator = (_mesh, _stage, authority) => ({
     expectedAuthorityStoreVersion: authority.storeVersion.value
   });
   const observed = [];
-  runtime.relayTerminalReply = async (_mesh, _stage, coordinator) =>
+  runtime.relayTerminalReply = async (_mesh, _stage, coordinator) => {
+    events.push('relay');
     observed.push(coordinator.expectedAuthorityStoreVersion);
+  };
   stage.owner.normalize = async () => {
+    await hidden.replayStart;
     await hidden.onReplayResult(packet, { index: 0, ok: true, response: 'reply' });
   };
   await finalize(runtime, stage);
-  assert.deepEqual(observed, ['normalized-v2']);
+  assert.deepEqual(observed, ['1']);
+  assert.ok(events.indexOf('handler') < events.indexOf('relay'));
+  assert.ok(events.indexOf('relay') < events.indexOf('normalized'));
 });
 
 for (const primary of [false, true]) {

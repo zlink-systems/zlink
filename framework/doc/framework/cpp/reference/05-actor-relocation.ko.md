@@ -9,6 +9,25 @@ signature는 [Actor exact interface](../../common/spec/server/languages/cpp/inte
 
 ---
 
+
+## `actor_t::on_session_bound`
+
+```cpp
+virtual task_t<void> on_session_bound(
+    const actor_session_binding_identity_t& incoming,
+    std::stop_token cancellation);
+```
+
+확정된 session binding을 같은 Actor lifecycle turn에서 통지합니다. 기본 구현은 no-op입니다.
+`incoming`은 session owner node RID, node lifecycle generation과 binding generation을 담습니다.
+첫 bind·같은 session 재제출·session 교체에서 호출됩니다. Callback 실패는 bind 성공을 유지하며
+runtime task 예외로 한 번 보고됩니다. `set_session_replacement_callback_timeout(...)`(기본 `30,000 ms`)이
+지나면 취소를 전달하고 같은 방식으로 한 번 보고합니다. Actor·runtime 종료 취소는 보고하지 않습니다.
+
+사용 예시는 [Session binding](../guide/server/39-session-binding.ko.md#6-actor의-bind-확정-통지)을 참조합니다.
+
+---
+
 ## `actor_manager_t::create`
 
 새 Actor를 항상 새로 만든다.

@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -18,9 +19,22 @@ final class ZLinkStreamR3RegressionTest {
     @Test
     void transportCloseFailureBecomesDisconnectedEvent() {
         List<ZLinkStreamError> errors = new ArrayList<>();
+        var configuration =
+                ZLinkStreamConnectorConfiguration.from(
+                        ZLinkStreamConnectorOptions.createDefault(URI.create("tcp://127.0.0.1:1")));
         var lifecycle =
                 new ZLinkStreamConnectionLifecycle(
-                        null, null, null, null, null, errors::add, null, null, null, null, null);
+                        configuration,
+                        null,
+                        null,
+                        null,
+                        null,
+                        errors::add,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null);
         IllegalStateException failure = new IllegalStateException("transport close failure");
         lifecycle.publishCloseFailure(
                 lifecycle.closeQuietly(
