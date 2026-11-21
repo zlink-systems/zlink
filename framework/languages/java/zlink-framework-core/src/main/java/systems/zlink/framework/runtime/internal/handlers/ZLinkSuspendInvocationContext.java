@@ -112,6 +112,25 @@ public final class ZLinkSuspendInvocationContext {
         void requireYieldAllowed(String operation);
     }
 
+    /** Gate-free record context, also carried by coroutine resumes and managed completions. */
+    public interface ApplicationTurn {
+        systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext.Scope
+                enterApplicationJob();
+
+        <T> T call(java.util.function.Supplier<T> operation);
+
+        default void execute(Runnable command) {
+            call(
+                    () -> {
+                        command.run();
+                        return null;
+                    });
+        }
+
+        <T> java.util.concurrent.CompletionStage<T> manage(
+                java.util.concurrent.CompletionStage<T> stage);
+    }
+
     public static <T> T rejectYield(String operation) {
         throw invalid(operation + " does not support yield");
     }
