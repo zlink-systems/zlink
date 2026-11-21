@@ -54,7 +54,7 @@ export class Room implements ZLinkSpot<Player> {
     await this.broadcast(this.view());
   }
   async onLeaveActor(_actor: Player): Promise<void> {}
-  private view(): RoomView {
+  view(): RoomView {
     return new RoomView(
       String(this.context.spotId),
       this.config.id,
@@ -62,9 +62,6 @@ export class Room implements ZLinkSpot<Player> {
       this.state.phase,
       this.state.winner
     );
-  }
-  async sendView(actor: Player): Promise<void> {
-    await actor.context.boundSession.send(this.view()).submit();
   }
   private async broadcast(message: RoomView | MatchEnded): Promise<void> {
     for (const player of this.state.players)
@@ -76,7 +73,9 @@ export class Room implements ZLinkSpot<Player> {
       await actor.context.boundSession.send(rejected).submit();
       return;
     }
-    const player = this.state.players.find((candidate) => candidate.playerId === actor.context.actorId);
+    const player = this.state.players.find(
+      (candidate) => candidate.playerId === actor.context.actorId
+    );
     if (!player) throw new Error('Accepted movement has no player state.');
     await actor.context.boundSession
       .send(new MoveResult(player.position, request.sequence))
@@ -95,7 +94,10 @@ export class Room implements ZLinkSpot<Player> {
     if (this.state.winner !== null) await this.broadcast(new MatchEnded(this.state.winner));
   }
   capture(): Uint8Array {
-    const snapshot: HttpRoomSnapshot = { Game: this.state.capture(), Roster: this.roster.capture() };
+    const snapshot: HttpRoomSnapshot = {
+      Game: this.state.capture(),
+      Roster: this.roster.capture()
+    };
     return serialize(snapshot);
   }
   restore(payload: Uint8Array): void {
