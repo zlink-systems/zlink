@@ -1,3 +1,4 @@
+const { relocationAuthorityStore } = require('./fixtures/relocation-authority-store');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
@@ -6,9 +7,7 @@ const framework = require('../../packages/framework/dist/internal');
 const {
   ZLinkActorTransferRuntime
 } = require('../../packages/framework/dist/runtime/host/actor-transfer-runtime');
-const {
-  ZLinkHostServiceRelocationRuntime
-} = require('../../packages/framework/dist/internal');
+const { ZLinkHostServiceRelocationRuntime } = require('../../packages/framework/dist/internal');
 const {
   ZLinkSpotSerialTurnExecutor
 } = require('../../packages/framework/dist/runtime/spots/spot-serial-turn-executor');
@@ -264,19 +263,17 @@ test('Spot relocation seals every member Session before the Spot capture stops d
         ]
       ])
     },
-    locationStore: () => ({
-      readAuthority: async () => ({
-        kind: 'snapshot',
-        storeVersion: { value: 'v1' },
-        payload: Buffer.alloc(0),
-        objectGeneration: 5n,
-        authorityOwnerGeneration: 11n,
-        ownerId: 'owner',
-        ownerLeaseGeneration: 13n,
-        allocation: { state: 'active', objectKind: 'user_spot', stableType: 'Spot' },
-        storeNow: new Date()
-      })
-    }),
+    locationStore: relocationAuthorityStore(async () => ({
+      kind: 'snapshot',
+      storeVersion: { value: 'v1' },
+      payload: Buffer.alloc(0),
+      objectGeneration: 5n,
+      authorityOwnerGeneration: 11n,
+      ownerId: 'owner',
+      ownerLeaseGeneration: 13n,
+      allocation: { state: 'active', objectKind: 'user_spot', stableType: 'Spot' },
+      storeNow: new Date()
+    })),
     spotManager: () => ({
       pendingSpotCloseDecision: () => undefined,
       isSpotClosing: () => false
@@ -325,7 +322,7 @@ test('Spot relocation seals every member Session before the Spot capture stops d
         activation,
         'user_spot',
         states,
-        { rid: 'target' },
+        { rid: 'target', applicationVersion: 1n },
         undefined,
         undefined
       ),

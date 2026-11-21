@@ -3,7 +3,10 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const { setImmediate: barrier } = require('node:timers/promises');
 const zlink = require('@zlink-systems/zlink');
-const { encodeChannelHeader, decodeChannelHeader: decodeProtobufChannelHeader } = require('./helpers/protobuf-channel-header');
+const {
+  encodeChannelHeader,
+  decodeChannelHeader: decodeProtobufChannelHeader
+} = require('./helpers/protobuf-channel-header');
 const framework = require('../../packages/framework/dist/internal');
 const {
   RequestRuntime
@@ -2989,7 +2992,8 @@ for (const shared of [false, true]) {
           } = require('../../packages/framework/dist/runtime/foundation/service-stateful-runtime');
           const wire = require('../../packages/framework/dist/runtime/foundation/service-stateful-wire-codec');
           const {
-            RequestResult, ZLinkBackendResultError
+            RequestResult,
+            ZLinkBackendResultError
           } = require('../../packages/framework/dist/runtime/backend/runtime-values');
           let now = 1000;
           t.mock.method(performance, 'now', () => now);
@@ -3094,7 +3098,11 @@ for (const shared of [false, true]) {
               requests?.close();
             }
             if (terminal === 'lifecycle') {
-              assert.equal(intentRemoved, undefined, 'ready submission has no admission intent observer');
+              assert.equal(
+                intentRemoved,
+                undefined,
+                'ready submission has no admission intent observer'
+              );
               submitted.fail(new ZLinkBackendResultError('request', RequestResult.NotConnected));
             }
             if (terminal === 'deadline') {
@@ -3344,7 +3352,7 @@ for (const terminal of ['normal', 'hook-failure', 'cancel', 'deadline', 'shutdow
           compareExchangeAuthority: async (_key, expected, mutation) => {
             assert.equal(expected, sourceAuthority.storeVersion);
             assert.equal(mutation.generationTransition, 'preserve');
-            preserves++;
+            if (mutation.relocation === undefined) preserves++;
             return { ...sourceAuthority, kind: 'stored' };
           }
         }),
@@ -3527,7 +3535,8 @@ for (const shared of [false, true]) {
           const actor = runtime.createActor('local-actor').ref;
           if (kind === 'boundSessionClose')
             assert.equal(
-              (await runtime.bindSession('session', actor, 50, async () => true).promise).terminalResult,
+              (await runtime.bindSession('session', actor, 50, async () => true).promise)
+                .terminalResult,
               RequestResult.Ok
             );
           raw.reserveLocalIngress = () => permit.promise;

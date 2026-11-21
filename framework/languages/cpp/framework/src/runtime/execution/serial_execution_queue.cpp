@@ -1416,16 +1416,39 @@ void serial_execution_queue_t::settle_application_owned (const std::string &name
 }
 
 std::pair<runtime::handler_entry_t, std::function<void ()>>
-serial_execution_queue_t::accept_application_locked (
-  work_item_t &item, const std::shared_ptr<serial_application_record_t> &preceding) noexcept
+serial_execution_queue_t::accept_application_locked (work_item_t &item, bool tail_blocks) noexcept
 {
     runtime::handler_entry_t initial;
     if (item.lane != serial_work_lane_t::application || !item.application_record)
         return {};
-    if (item.application_record->saved_work ()
-        || (preceding && (preceding->admission.durable () || !preceding->admission.ready ())))
+    if (item.application_record->saved_work () || tail_blocks)
         item.application_record->admission.take_over (&initial);
     return {std::move (initial), std::exchange (item.application_record->transferred, {})};
+}
+
+bool serial_execution_queue_t::application_tail_blocks () const noexcept
+{
+    return _application_tail.load (std::memory_order_acquire) & 1;
+}
+
+void serial_execution_queue_t::refresh_application_tail () noexcept
+{
+    auto word = _application_tail.load (std::memory_order_acquire);
+    for (;;) {
+        // A shared Actor's producers own the tail until the gate owner imports their records.
+        if (shared_spot_gate () && _publication_cursor->next.load (std::memory_order_acquire))
+            return;
+        const auto found =
+          std::find_if (_application.queue.rbegin (), _application.queue.rend (),
+                        [] (const auto &item) { return bool (item.application_record); });
+        const bool blocks = found != _application.queue.rend ()
+                            && (found->application_record->admission.durable ()
+                                || !found->application_record->admission.ready ());
+        const auto desired = (word & ~std::uint64_t (1)) | std::uint64_t (blocks);
+        if (desired == word
+            || _application_tail.compare_exchange_weak (word, desired, std::memory_order_acq_rel))
+            return;
+    }
 }
 
 template <typename Mutation>
@@ -1435,17 +1458,11 @@ void serial_execution_queue_t::mutate_fifo_locked (lane_state_t &lane,
                                                    const work_item_t *appended)
 {
     const bool bulk = !removed && !appended;
-    const bool tail_removed = removed && removed->application_record
-                              && _application_tail_record.lock () == removed->application_record;
+    const bool tail_changed = (bulk && &lane == &_application)
+                              || (removed && removed->application_record)
+                              || (appended && appended->application_record);
     const bool barriers_changed =
       bulk || (removed && removed->turn->barrier ()) || (appended && appended->turn->barrier ());
-    const auto tail = [this] {
-        const auto found =
-          std::find_if (_application.queue.rbegin (), _application.queue.rend (),
-                        [] (const auto &item) { return bool (item.application_record); });
-        return found == _application.queue.rend () ? std::shared_ptr<serial_application_record_t>{}
-                                                   : found->application_record;
-    };
     const auto barriers = [this] {
         return std::size_t (
           std::count_if (_lifecycle.queue.begin (), _lifecycle.queue.end (),
@@ -1453,34 +1470,25 @@ void serial_execution_queue_t::mutate_fifo_locked (lane_state_t &lane,
     };
     try {
         std::forward<Mutation> (mutation) ();
-        if (appended) {
-            auto &accepted = lane.queue.back ();
-            if (accepted.lane == serial_work_lane_t::application && accepted.application_record)
-                _application_tail_record = accepted.application_record;
-        }
     }
     catch (...) {
         // A bulk admission callback may throw after changing the FIFO. Restore
         // its derived indexes before the existing error boundary observes it.
-        _application_tail_record = tail ();
+        refresh_application_tail ();
         _application_barriers = barriers ();
         throw;
     }
-    if (tail_removed || (bulk && &lane == &_application))
-        _application_tail_record = tail ();
+    if (tail_changed)
+        refresh_application_tail ();
     if (barriers_changed)
         _application_barriers = barriers ();
 #ifndef NDEBUG
-    assert (_application_tail_record.lock () == tail ());
     assert (_application_barriers == barriers ());
 #endif
 }
 
 bool serial_execution_queue_t::prepare_application_head_owned ()
 {
-    std::unique_lock admission (_mutex, std::defer_lock);
-    if (shared_spot_gate ())
-        admission.lock ();
     std::shared_ptr<serial_application_record_t> record;
     {
         const auto next = next_application_locked ().next;
@@ -1494,8 +1502,14 @@ bool serial_execution_queue_t::prepare_application_head_owned ()
         record = next->application_record;
         if (!record || record->admission.ready ())
             return false;
-        if (!record->admission.durable ())
+        if (!record->admission.durable ()) {
+            // Taking over a waiting head raises the tail decision producers read.
+            std::unique_lock producer (_mutex, std::defer_lock);
+            if (shared_spot_gate ())
+                producer.lock ();
             record->admission.take_over ();
+            refresh_application_tail ();
+        }
         auto &owned =
           std::get<serial_application_admission_t::durable_t> (record->admission.reservation);
         if (std::holds_alternative<application_job_queue_t::waiter_t> (owned.supply))
@@ -1504,8 +1518,6 @@ bool serial_execution_queue_t::prepare_application_head_owned ()
     }
     std::weak_ptr<serial_application_record_t> weak_record = record;
     auto self = shared_from_this ();
-    if (admission.owns_lock ())
-        admission.unlock ();
     auto registration = record->admission.jobs->register_supply (
       [self, weak_record] (std::optional<application_job_queue_t::permit_t> permit) {
           auto grant =
@@ -1517,7 +1529,7 @@ bool serial_execution_queue_t::prepare_application_head_owned ()
                   decltype (serial_application_admission_t::durable_t::supply) retired;
                   const auto record = weak_record.lock ();
                   std::unique_lock lock (self->_mutex, std::defer_lock);
-                  if (!self->owns_shared_gate () || self->shared_spot_gate ())
+                  if (!self->owns_shared_gate ())
                       lock.lock ();
                   if (!record || !record->admission.durable ())
                       return;
@@ -1553,8 +1565,6 @@ bool serial_execution_queue_t::prepare_application_head_owned ()
                       self->cancel_pending_owned ();
                       return;
                   }
-                  if (self->shared_spot_gate ())
-                      lock.unlock ();
                   grant->reset ();
                   if (self->shared_spot_gate ())
                       (void) self->submit_control (
@@ -1573,8 +1583,6 @@ bool serial_execution_queue_t::prepare_application_head_owned ()
     // Registration may invoke callbacks. Revalidate membership under admission;
     // no selected iterator or nested reservation reference crosses its boundary.
     decltype (serial_application_admission_t::durable_t::supply) retired;
-    if (shared_spot_gate ())
-        admission.lock ();
     {
         const auto next = next_application_locked ().next;
         auto pending = next;
@@ -1604,8 +1612,6 @@ bool serial_execution_queue_t::prepare_application_head_owned ()
             }
         }
     }
-    if (admission.owns_lock ())
-        admission.unlock ();
     // For a queued registration delivery settles released capacity and does
     // not inspect the moved waiter. Immediate success was consumed above.
     if (!registration.immediate)
@@ -1687,8 +1693,17 @@ task_t<bool> serial_execution_queue_t::adopt_application_prefix (
                                          work.options.holds_application_while_waiting);
                 bind_completion (item, std::move (work.options.completion));
             }
-            if (shared_spot_gate ())
-                lock.lock ();
+            if (shared_spot_gate ()) {
+                // The suffix takes over every accepted record: no publication may stay
+                // behind the boundary while producers decide against the old tail.
+                for (;;) {
+                    lock.lock ();
+                    if (!_publication_cursor->next.load (std::memory_order_acquire))
+                        break;
+                    lock.unlock ();
+                    import_publications ();
+                }
+            }
             if ((_closed.load (std::memory_order_acquire) == execution_status_t::allowed)) {
                 releases.reserve (2 * _application.queue.size () + 3 * prefix.size ());
                 lifecycle_start = _lifecycle.queue.size ();
@@ -1878,7 +1893,7 @@ serial_execution_queue_t::take_application_suffix (
                       it = _application.queue.erase (it);
                   }
               });
-              if (!producer_cut || !owns_shared_gate () || shared_spot_gate ())
+              if (!shared_spot_gate () && (!producer_cut || !owns_shared_gate ()))
                   return;
               // Published before the cut but not imported: the node keeps its control and
               // cursor; only its record leaves, so a later import finds nothing to queue.
@@ -1892,6 +1907,9 @@ serial_execution_queue_t::take_application_suffix (
                   retire_work_locked (_application, 1, item->byte_cost);
                   item.reset ();
               }
+              // Every accepted record left, published or imported: no tail remains.
+              if (shared_spot_gate ())
+                  _application_tail.fetch_and (~std::uint64_t (1), std::memory_order_acq_rel);
           };
           if (producer_cut) {
               if (!producer_cut (take))
@@ -2136,7 +2154,7 @@ serial_execution_queue_t::cancel_submission_owned (serial_submission_id_t submis
       serial_cancel_submission_outcome_t::already_terminal;
     {
         std::unique_lock<std::mutex> lock (_mutex, std::defer_lock);
-        if (!owns_shared_gate () || shared_spot_gate ())
+        if (!owns_shared_gate ())
             lock.lock ();
         const auto unlink = [&] (lane_state_t &lane) {
             const auto item =
@@ -2162,8 +2180,6 @@ serial_execution_queue_t::cancel_submission_owned (serial_submission_id_t submis
                 _empty.notify_all ();
             }
         } else {
-            if (shared_spot_gate ())
-                lock.unlock ();
             auto found = std::find_if (
               _handler_turns.begin (), _handler_turns.end (),
               [submission_id] (const auto &entry) { return entry.submission_id == submission_id; });
@@ -2598,15 +2614,6 @@ task_t<std::shared_ptr<const void>> serial_execution_queue_t::first_pending_mess
 
 std::shared_ptr<const void> serial_execution_queue_t::first_pending_message_or_close_owned ()
 {
-    if (shared_spot_gate ()) {
-        import_publications ();
-        std::lock_guard producer (_mutex);
-        for (const auto &item : _application.queue)
-            if (item.retained_message)
-                return item.retained_message;
-        close_locked ();
-        return {};
-    }
     if (owns_shared_gate ()) {
         for (;;) {
             publication_node_t *cut;
@@ -2650,7 +2657,7 @@ std::vector<std::shared_ptr<const void>> serial_execution_queue_t::pending_messa
     if (owns_shared_gate ())
         const_cast<serial_execution_queue_t *> (this)->import_publications_until (cut);
     std::unique_lock lock (_mutex, std::defer_lock);
-    if (!owns_shared_gate () || shared_spot_gate ())
+    if (!owns_shared_gate ())
         lock.lock ();
     std::vector<std::shared_ptr<const void>> messages;
     for (const auto &item : _application.queue)
@@ -2726,7 +2733,7 @@ void serial_execution_queue_t::cancel_pending_owned () noexcept
     std::vector<std::function<void ()>> active_cancellations;
     {
         std::unique_lock<std::mutex> lock (_mutex, std::defer_lock);
-        if (!owns_shared_gate () || shared_spot_gate ())
+        if (!owns_shared_gate ())
             lock.lock ();
         close_locked ();
         cancelled_items.reserve (_application.queue.size () + _lifecycle.queue.size ());
@@ -2754,8 +2761,6 @@ void serial_execution_queue_t::cancel_pending_owned () noexcept
         };
         clear_queued (_application);
         clear_queued (_lifecycle);
-        if (shared_spot_gate ())
-            lock.unlock ();
         for (auto &entry : _handler_turns) {
             if (entry.cancel && !entry.cancel_requested) {
                 entry.cancel_requested = true;
@@ -2925,27 +2930,34 @@ void serial_execution_queue_t::import_publications ()
 void serial_execution_queue_t::import_publications_until (publication_node_t *cut)
 {
     while (_publication_cursor != cut) {
-        std::pair<runtime::handler_entry_t, std::function<void ()>> released;
+        // Nothing published: the gate owner reads its own cursor without the producer lock.
+        if (!_publication_cursor->next.load (std::memory_order_acquire))
+            break;
+        std::optional<work_item_t> published;
         std::function<void ()> control;
         {
+            // Only the node hand-off shares the producer boundary: a failed publication may
+            // still unlink its node. The pending FIFO below belongs to the gate owner alone.
             std::unique_lock producer (_mutex, std::defer_lock);
             if (shared_spot_gate ())
                 producer.lock ();
             auto *next = _publication_cursor->next.load (std::memory_order_acquire);
             if (!next)
                 break;
-            if (next->item) {
-                auto &lane = lane_locked (next->item->lane);
-                const auto preceding = _application_tail_record.lock ();
-                mutate_fifo_locked (
-                  lane, [&] { lane.queue.push_back (std::move (*next->item)); }, nullptr,
-                  &*next->item);
-                released = accept_application_locked (lane.queue.back (), preceding);
-                next->item.reset ();
-            }
+            published = std::exchange (next->item, std::nullopt);
             control = std::move (next->control);
             delete _publication_cursor;
             _publication_cursor = next;
+        }
+        std::pair<runtime::handler_entry_t, std::function<void ()>> released;
+        if (published) {
+            auto &lane = lane_locked (published->lane);
+            // A shared Actor's producer accepted the record at its own boundary.
+            const bool decide = !shared_spot_gate () && application_tail_blocks ();
+            mutate_fifo_locked (
+              lane, [&] { lane.queue.push_back (std::move (*published)); }, nullptr, &*published);
+            if (!shared_spot_gate ())
+                released = accept_application_locked (lane.queue.back (), decide);
         }
         if (released.first)
             released.first ();
@@ -3117,78 +3129,57 @@ bool serial_execution_queue_t::enqueue_locked (std::unique_lock<std::mutex> &pro
                            std::move (options.retained_message),
                            std::move (options.application_record)};
         bind_completion (item, std::move (options.completion));
-        if (shared_spot_gate ()) {
-            assert (producer.owns_lock ());
-            if (item.lane == serial_work_lane_t::application) {
-                const auto preceding = _application_tail_record.lock ();
-                mutate_fifo_locked (
-                  lane, [&] { lane.queue.push_back (std::move (item)); }, nullptr, &item);
-                ++lane.messages;
-                lane.bytes += bytes;
-                const auto rollback = [&] {
-                    mutate_fifo_locked (
-                      lane,
-                      [&] {
-                          item = std::move (lane.queue.back ());
-                          lane.queue.pop_back ();
-                      },
-                      &lane.queue.back ());
-                    retire_work_locked (lane, 1, bytes);
-                };
-                try {
-                    accepted = submit_control (
-                      [actor = shared_from_this ()] {
-                          actor->_spot_gate->connect_actor_head (actor);
-                      },
-                      &continuation, on_wake_rejected);
-                }
-                catch (...) {
-                    rollback ();
-                    throw;
-                }
-                if (!accepted)
-                    rollback ();
-                else
-                    released = accept_application_locked (lane.queue.back (), preceding);
-            } else {
-                auto node = std::make_unique<publication_node_t> ();
-                node->item.emplace (std::move (item));
-                ++lane.messages;
-                lane.bytes += bytes;
-                try {
-                    accepted =
-                      publish_locked (std::move (node), &continuation, &item, on_wake_rejected);
-                }
-                catch (...) {
-                    retire_work_locked (lane, 1, bytes);
-                    throw;
-                }
-                if (!accepted)
-                    retire_work_locked (lane, 1, bytes);
-            }
-        } else if (owns_shared_gate ()) {
+        if (owns_shared_gate ()) {
+            // Both lanes cross to the gate owner only as publication nodes.
+            assert (!shared_spot_gate () || producer.owns_lock ());
+            // A shared Actor accepts an application record here, against the tail it
+            // published last; the gate owner never revisits that decision.
+            const auto record = shared_spot_gate () && item.lane == serial_work_lane_t::application
+                                  ? item.application_record
+                                  : nullptr;
+            if (record)
+                released = accept_application_locked (item, application_tail_blocks ());
+            const bool blocks =
+              record && (record->admission.durable () || !record->admission.ready ());
             auto node = std::make_unique<publication_node_t> ();
             node->item.emplace (std::move (item));
             ++lane.messages;
             lane.bytes += bytes;
+            const auto restore = [&] {
+                if (!record)
+                    return;
+                if (released.first)
+                    record->admission.retain_initial (std::move (released.first));
+                record->transferred = std::move (released.second);
+                released = {};
+            };
             try {
-                accepted = publish_locked (std::move (node), nullptr, &item, on_wake_rejected);
+                accepted =
+                  publish_locked (std::move (node), shared_spot_gate () ? &continuation : nullptr,
+                                  &item, on_wake_rejected);
             }
             catch (...) {
                 retire_work_locked (lane, 1, bytes);
+                restore ();
                 throw;
             }
-            if (!accepted)
+            if (!accepted) {
                 retire_work_locked (lane, 1, bytes);
+                restore ();
+            } else if (record) {
+                const auto word = _application_tail.load (std::memory_order_relaxed);
+                _application_tail.store (((word >> 1) + 1) << 1 | std::uint64_t (blocks),
+                                         std::memory_order_release);
+            }
         } else {
+            const bool tail_blocks = application_tail_blocks ();
             mutate_fifo_locked (
               lane,
               [&] {
                   lane.queue.push_back (std::move (item));
                   ++lane.messages;
                   lane.bytes += bytes;
-                  auto settled = accept_application_locked (lane.queue.back (),
-                                                            _application_tail_record.lock ());
+                  auto settled = accept_application_locked (lane.queue.back (), tail_blocks);
                   if (settled.first)
                       settled.first ();
                   if (settled.second)
@@ -3322,7 +3313,6 @@ serial_execution_queue_t::next_application_locked () noexcept
               if (!queue->execution_allowed ()) {
                   if (!item.actor_mailbox)
                       return false;
-                  std::lock_guard admission (item.actor_mailbox->_mutex);
                   const auto member = item.actor_mailbox->next_application_locked ();
                   // A shared ticket can still settle an already-started handler.
                   return member.ready && member.next->turn->is_resume ();
@@ -3332,7 +3322,6 @@ serial_execution_queue_t::next_application_locked () noexcept
           if ((owner ? owner : this)->_relocation_seal) {
               if (!item.actor_mailbox)
                   return false;
-              std::lock_guard admission (item.actor_mailbox->_mutex);
               return item.actor_mailbox->next_application_locked ().ready;
           }
           return !_application_start_policy || _application_start_policy (item.retained_message);
@@ -3498,13 +3487,11 @@ void serial_execution_queue_t::connect_actor_head (
 {
     assert (current_shared_gate == this);
     actor->import_publications ();
-    std::unique_lock admission (actor->_mutex);
     if (actor->_active != 0
         || (!actor->has_ready_locked ()
             && actor->next_application_locked ().next == actor->_application.queue.end ()))
         return;
     const auto lane = actor->select_next_lane_locked ();
-    admission.unlock ();
     const auto already_queued = [&actor] (const lane_state_t &ready_lane) {
         return std::find_if (
                  ready_lane.queue.begin (), ready_lane.queue.end (),
@@ -3554,14 +3541,11 @@ void serial_execution_queue_t::execute_actor_head (work_item_t spot_item)
     // Take the Actor claim only after the shared gate confirms execution.
     spot_item.work = [this, actor, spot_turn, lane] (auto spot_complete) mutable {
         actor->import_publications ();
-        std::unique_lock admission (actor->_mutex);
         if (!actor->has_ready_locked ()) {
-            admission.unlock ();
             spot_complete ([] {});
             return;
         }
         if (actor->select_next_lane_locked () != lane) {
-            admission.unlock ();
             spot_complete ([this, actor] { connect_actor_head (actor); });
             return;
         }
@@ -3570,7 +3554,6 @@ void serial_execution_queue_t::execute_actor_head (work_item_t spot_item)
         ++actor->_active;
         actor->_active_lane = actor_item->lane;
         actor->_active_bytes = actor_item->byte_cost;
-        admission.unlock ();
         if (actor_item->suspended_completion) {
             actor->complete_one (actor_item->name, std::move (*actor_item->suspended_completion));
             spot_complete ([] {});

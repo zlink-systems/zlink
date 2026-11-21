@@ -64,6 +64,22 @@ client가 자기 id를 보내면, 그 id의 Actor를 찾거나 만들어 이 연
 --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/sessions/SessionHandlers.kt:session-actor-bind"
 ```
 
+Actor는 `onSessionBoundSuspending`를 재정의해 bind 확정 통지를 받을 수 있다.
+
+```kotlin
+override suspend fun onSessionBoundSuspending(
+    incoming: ZLinkSessionBindingIdentity,
+    cancellation: ZLinkActorCallbackCancellation,
+) {
+    // 확정된 binding으로 application 상태를 갱신한다.
+}
+```
+
+기본 구현은 아무것도 하지 않는다. 재정의한 callback은 bind 확정 뒤 Actor handler 순서에서
+한 번 실행되며, 예외나 시간 초과는 성공한 bind를 바꾸지 않는다. Callback은 전달받은
+`cancellation.isCancellationRequested`로 취소 요청을 확인한다. Framework는 실패와 시간 초과를
+runtime task 예외로 보고한다.
+
 **같은 id로 다시 접속하면 있던 Actor에 묶인다.** 그래서 만들기와 찾기를 한 호출로 처리한다.
 
 ### 3.2 남은 packet을 넘기기
@@ -94,6 +110,10 @@ Actor는 자기에게 묶인 연결을 알고 있다. 응답이 아니라 **스�
     같은 handler는 mesh 호출로도 불리며, 그때는 묶인 연결이 없다. 이 경우 push는 호출의 terminal에서
     `InvalidOperation`으로 끝나며, 언어별 비동기 완료 수단으로 그 실패를 관찰한다. 위 코드는 rename을
     이미 끝낸 뒤 push하므로 **그 실패만** 받아 버린다.
+
+### 3.4 Bind 통지
+
+Kotlin의 bind 확정 통지 `onSessionBoundSuspending`은 [§3.1](#31-묶기)의 예에서 설명한다.
 
 ## 4. 접속하는 쪽 — mesh 밖의 client
 

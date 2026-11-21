@@ -636,7 +636,11 @@ public final class ZLinkChannelRuntime
         this.handlerExecutor =
                 ZLinkFlowContext.propagating(
                         Objects.requireNonNull(registration.handlerExecutor(), "handlerExecutor"));
-        this.dispatchRegistry = new ZLinkChannelDispatchRegistry(registration.serialExecutor());
+        this.dispatchRegistry =
+                new ZLinkChannelDispatchRegistry(
+                        registration.serialExecutor(),
+                        registration.handlerExecutor(),
+                        registration.workers().maxThreads());
         this.filterTypes = List.copyOf(registration.filters());
         this.channelHandlerInvoker =
                 new ZLinkChannelHandlerInvoker(

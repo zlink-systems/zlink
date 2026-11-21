@@ -119,7 +119,7 @@ reply가 Application 연결의 message를 앞지를 수 있으므로, handler는
 
 ## 4. API에 드러나는 backpressure
 
-### 4.1 send가 `async`인 이유
+### 4.1 send가 `async`인 이유 {#send-backpressure}
 
 send는 응답을 기다리지 않지만, 기다려야 하는 대상이 하나 있다 — **보낼 자리**다.
 
@@ -158,6 +158,7 @@ Framework는 binding operation 하나만 시작한다. Core는 capacity 대기 �
 `admitted` completion을 소유한다. Send는 시간 상한과 caller cancellation 없이 기다린다. Capacity 회복
 뒤 admission이면 정상 완료하고, 대기 중 route 제거는 `Unavailable`, socket close나 runtime shutdown은
 `ShuttingDown`으로 끝난다. Classic fanout publisher만 송신 timeout을 사용한다.
+Application은 capacity 대기의 최종 결과를 받으며 내부 `EAGAIN`을 직접 관찰하지 않는다.
 
 **Framework는 두 번째 operation을 만들거나 다시 보내지 않는다** — 최종 실패 뒤 새
 operation으로 재시도할지, 버릴지, 사용자에게 실패를 알릴지는 application이 정한다.

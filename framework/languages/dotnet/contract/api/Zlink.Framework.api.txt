@@ -17,6 +17,7 @@ assembly Zlink.Framework
     method virtual System.Void Configure() [return=read:not-null,write:not-null]
     method virtual System.Threading.Tasks.ValueTask<System.String?> OnDuplicateBindAsync(Zlink.Framework.Contracts.Actors.ZLinkSessionBindingIdentity current [nullability=read:not-null,write:not-null], Zlink.Framework.Contracts.Actors.ZLinkSessionBindingIdentity incoming [nullability=read:not-null,write:not-null], System.Threading.CancellationToken cancellationToken [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
     method virtual System.Threading.Tasks.ValueTask OnJoinCompletedAsync(Zlink.Framework.Contracts.Actors.ZLinkActorJoinCompletion completion [nullability=read:not-null,write:not-null], System.Threading.CancellationToken cancellationToken [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method virtual System.Threading.Tasks.ValueTask OnSessionBoundAsync(Zlink.Framework.Contracts.Actors.ZLinkSessionBindingIdentity incoming [nullability=read:not-null,write:not-null], System.Threading.CancellationToken cancellationToken [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
   type interface Zlink.Framework.Contracts.Actors.IZLinkActorClient
     method abstract Zlink.Framework.Contracts.Actors.IZLinkActorRequestCall RequestToActor<TRequest>(System.String actorId [nullability=read:not-null,write:not-null], TRequest? request [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
       generic TRequest variance=invariant nullable=nullable
@@ -1354,7 +1355,7 @@ assembly Zlink.Framework
     generic TSpot variance=invariant nullable=unspecified
     where TSpot : class
     generic TMessage variance=in nullable=nullable
-    method abstract System.Threading.Tasks.ValueTask HandleAsync(TSpot spot [nullability=read:not-null,write:not-null], TMessage? message [nullability=read:nullable,write:nullable], System.Threading.CancellationToken cancellationToken [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract System.Threading.Tasks.ValueTask HandleAsync(TSpot spot [nullability=read:not-null,write:not-null], Zlink.Framework.Contracts.Handlers.IZLinkMessageContext context [nullability=read:not-null,write:not-null], TMessage? message [nullability=read:nullable,write:nullable], System.Threading.CancellationToken cancellationToken [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
   type interface Zlink.Framework.Contracts.Spots.IZLinkSpotPublisherClient
     method abstract Zlink.Framework.Contracts.Channels.IZLinkPublishCall Publish<TEvent>(System.String channelName [nullability=read:not-null,write:not-null], System.String topic [nullability=read:not-null,write:not-null], TEvent? message [nullability=read:nullable,write:nullable]) [return=read:not-null,write:not-null]
       generic TEvent variance=invariant nullable=nullable
@@ -1379,7 +1380,7 @@ assembly Zlink.Framework
     where TSpot : class
     generic TRequest variance=in nullable=nullable
     generic TReply variance=invariant nullable=nullable
-    method abstract System.Threading.Tasks.ValueTask<TReply?> HandleAsync(TSpot spot [nullability=read:not-null,write:not-null], TRequest? request [nullability=read:nullable,write:nullable], System.Threading.CancellationToken cancellationToken [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
+    method abstract System.Threading.Tasks.ValueTask<TReply?> HandleAsync(TSpot spot [nullability=read:not-null,write:not-null], Zlink.Framework.Contracts.Handlers.IZLinkMessageContext context [nullability=read:not-null,write:not-null], TRequest? request [nullability=read:nullable,write:nullable], System.Threading.CancellationToken cancellationToken [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
   type interface Zlink.Framework.Contracts.Spots.IZLinkSpotSendCall : Zlink.Framework.Contracts.Channels.IZLinkMetadataCall<Zlink.Framework.Contracts.Spots.IZLinkSpotSendCall>
     method abstract System.Threading.Tasks.ValueTask Async() [return=read:not-null,write:not-null]
     method abstract Zlink.Framework.Contracts.Spots.IZLinkSpotSendCall InMesh(System.String meshName [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]

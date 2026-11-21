@@ -4,6 +4,8 @@ const path = require('node:path');
 module.exports = function nativeProcessHarness(fixture) {
   function startChild(children, options) {
     const child = fork(fixture, [], {
+      signal: options.signal,
+      killSignal: 'SIGKILL',
       cwd: path.resolve(__dirname, '../../..'),
       env: {
         ...process.env,
@@ -38,21 +40,15 @@ module.exports = function nativeProcessHarness(fixture) {
     const queuedEvents = new Map();
     const eventWaiters = new Map();
     const ready = new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error(`${options.role} readiness timed out.\n${stderr}`));
-      }, 10_000);
-      const onMessage = (message) => {
+      child.on('message', (message) => {
         if (message?.type === 'ready') {
-          clearTimeout(timeout);
           resolve(message);
         } else if (message?.type === 'fatal') {
-          clearTimeout(timeout);
           reject(new Error(message.message));
         }
-      };
-      child.on('message', onMessage);
-      child.once('exit', (code, signal) => {
-        clearTimeout(timeout);
+      });
+      child.on('error', reject);
+      child.once('close', (code, signal) => {
         reject(
           new Error(`${options.role} exited before ready: code=${code} signal=${signal}\n${stderr}`)
         );
@@ -141,7 +137,7 @@ module.exports = function nativeProcessHarness(fixture) {
 
   async function stopChild(entry) {
     const child = entry.child ?? entry;
-    if (child.exitCode !== null || child.signalCode !== null) return;
+    if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
     const exited = new Promise((resolve) => child.once('exit', resolve));
     if (child.connected) child.send({ type: 'stop' }, () => {});
     await exited;

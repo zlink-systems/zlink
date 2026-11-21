@@ -1022,6 +1022,226 @@ const char *expected_close_reason (connection_close_case_t close_case)
     throw std::logic_error ("unknown close case");
 }
 
+#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
+class core_lifecycle_session_t final : public zlink::framework::packet_stream_session_t
+{
+  public:
+    core_lifecycle_session_t (std::promise<zlink::routing_id_t> &connected,
+                              std::promise<void> &packet,
+                              std::function<void (std::size_t)> destroy) :
+        _connected (connected), _packet (packet), _destroy (std::move (destroy))
+    {
+    }
+
+    ~core_lifecycle_session_t () override { _destroy (_disconnected); }
+
+    zlink::framework::task_t<void> on_connected (zlink::framework::stream_t &stream) override
+    {
+        _connected.set_value (stream.routing_id ().value ());
+        co_return;
+    }
+
+    zlink::framework::task_t<void> on_disconnected (zlink::framework::stream_t &) override
+    {
+        ++_disconnected;
+        co_return;
+    }
+
+    zlink::framework::task_t<void> on_error (zlink::framework::stream_t &,
+                                             const zlink::framework::stream_error_t &) override
+    {
+        co_return;
+    }
+
+    zlink::framework::task_t<void> on_packet (zlink::framework::stream_t &,
+                                              const zlink::framework::session_message_context_t &,
+                                              const zlink::framework::message_t &) override
+    {
+        _packet.set_value ();
+        co_return;
+    }
+
+  private:
+    std::promise<zlink::routing_id_t> &_connected;
+    std::promise<void> &_packet;
+    std::size_t _disconnected = 0;
+    std::function<void (std::size_t)> _destroy;
+};
+
+enum class core_lifecycle_case_t
+{
+    normal,
+    drain,
+    factory_failure
+};
+
+int core_session_lifecycle_boundaries (core_lifecycle_case_t scenario)
+{
+    using namespace zlink::framework;
+    using namespace std::chrono_literals;
+    using access_t = runtime::stream_host_service_test_access_t;
+
+    service_collection_t services;
+    handler_registry_t handlers;
+    serializer_registry_t serializers;
+    auto builder = test::runtime_failure_builder ();
+    detail::zlink_builder_access_t::bind_shared_core_context (
+      builder, std::make_shared<zlink::context_t> ());
+    services.add_singleton<detail::actor_gateway_runtime_t> ();
+    services.add_factory<session_actor_manager_t> (
+      [] (service_provider_t &provider) {
+          return std::make_unique<session_actor_manager_t> (
+            provider.get_required<detail::actor_gateway_runtime_t> ().manager ());
+      },
+      service_lifetime_t::scoped);
+
+    std::promise<void> factory_entered;
+    auto entered_factory = factory_entered.get_future ();
+    std::promise<void> release_factory;
+    auto factory_released = release_factory.get_future ();
+    std::promise<void> destructor_entered;
+    auto entered_destructor = destructor_entered.get_future ();
+    std::promise<void> release_destructor;
+    auto destructor_released = release_destructor.get_future ();
+    std::atomic_size_t factory_calls{0};
+    std::atomic_size_t destroyed{0};
+    std::atomic_size_t disconnected_at_destruction{0};
+    std::promise<zlink::routing_id_t> connected;
+    std::promise<void> packet;
+    auto connected_rid = connected.get_future ();
+    auto received_packet = packet.get_future ();
+    services.add_factory<core_lifecycle_session_t> (
+      [&] (service_provider_t &) {
+          return std::make_unique<core_lifecycle_session_t> (
+            connected, packet, [&] (std::size_t disconnected) {
+                disconnected_at_destruction = disconnected;
+                if (++destroyed == 1)
+                    destructor_entered.set_value ();
+                if (scenario == core_lifecycle_case_t::normal)
+                    destructor_released.wait ();
+            });
+      },
+      service_lifetime_t::scoped);
+
+    zlink_framework_options_t options (services, handlers, serializers, builder);
+    options.add_route_mesh ("lifecycle-mesh")
+      .set_routing_id (zlink::routing_id_t::from ("lifecycle-node"))
+      .listen (loopback_tcp_any_port);
+    options.add_stream_node ("lifecycle-stream")
+      .bind (loopback_tcp_any_port)
+      .register_session ("lifecycle-session");
+    options.apply ();
+    for (const auto &registration : detail::mesh_node_runtime_t::registrations (builder))
+        registration->core_context = detail::zlink_builder_access_t::shared_core_context (builder);
+
+    dispatch_options_t dispatch;
+    dispatch.message_flow (message_flow_log_mode_t::normal);
+    detail::apply_dispatch_options (builder, dispatch);
+    auto provider = services.build_provider ();
+    auto mesh = detail::mesh_node_runtime_t::from (builder, "lifecycle-mesh");
+    mesh->bind_serializers (serializers);
+    auto stream_runtime = detail::stream_runtime_t::from (builder);
+    auto listeners = std::make_shared<runtime::listener_status_registry_t> ();
+    runtime::stream_host_service_t host (
+      std::make_shared<runtime::runtime_failure_collector_t> (), stream_runtime,
+      stream_runtime.snapshots (),
+      {{"lifecycle-session",
+        [&] (service_provider_t &scope) -> packet_stream_session_t & {
+            auto &created = scope.get_required<core_lifecycle_session_t> ();
+            if (++factory_calls == 1) {
+                factory_entered.set_value ();
+                factory_released.wait ();
+            }
+            if (scenario == core_lifecycle_case_t::factory_failure)
+                throw std::runtime_error ("STREAM session factory failure");
+            return created;
+        }}},
+      30s, mesh, {}, listeners);
+    auto draining = std::make_shared<std::atomic_bool> (false);
+    host.bind_drain_flag (draining);
+    mesh->start ().result ().value ();
+    host.start (provider);
+    auto client = connect_loopback (
+      endpoint_port (listener_endpoint (*listeners, listener_kind_t::stream, "lifecycle-stream")));
+
+    const bool monitor_entered =
+      client && entered_factory.wait_for (2s) == std::future_status::ready;
+    bool passed = monitor_entered;
+    if (monitor_entered) {
+        // Connect alone enters the monitor path. Queue the first application
+        // frame while that same RID's factory is still blocked.
+        if (scenario == core_lifecycle_case_t::normal) {
+            const detail::stream_header_t header (
+              detail::stream_message_kind_t::send, stream_codec_t::raw,
+              detail::stream_header_flags_t::none, std::nullopt, "lifecycle-packet", {});
+            send_native_bytes (client, make_native_stream_frame (stream_runtime, header,
+                                                                 zlink::message_t::from ("first")));
+        }
+        if (scenario == core_lifecycle_case_t::drain)
+            draining->store (true, std::memory_order_release);
+
+        auto registry = std::async (std::launch::async, [&] {
+            return scenario == core_lifecycle_case_t::drain
+                     ? host.drain_sessions_until (std::chrono::steady_clock::now () + 2s)
+                     : access_t::active_session_count (host) == 0;
+        });
+        const bool registry_progress = registry.wait_for (200ms) == std::future_status::ready;
+        release_factory.set_value ();
+        passed &= registry.get () && registry_progress;
+        std::cout << (registry_progress ? "PASS" : "FAIL")
+                  << " registry progresses during factory, case=" << static_cast<int> (scenario)
+                  << '\n';
+    } else {
+        release_factory.set_value ();
+    }
+
+    if (scenario == core_lifecycle_case_t::normal) {
+        const bool connected_once = connected_rid.wait_for (2s) == std::future_status::ready;
+        passed &= connected_once;
+        if (connected_once) {
+            const auto rid = connected_rid.get ();
+            passed &= received_packet.wait_for (2s) == std::future_status::ready;
+            auto probe_gate = access_t::probe_core_session_gate (host, rid);
+            close_native_client (client, true);
+            if (entered_destructor.wait_for (2s) == std::future_status::ready) {
+                const bool gate_available = probe_gate ();
+                const bool tracked = access_t::active_session_count (host) == 1;
+                const bool drained = host.drain_sessions_until (std::chrono::steady_clock::now ());
+                passed &= gate_available && tracked && !drained;
+                std::cout << (gate_available ? "PASS" : "FAIL")
+                          << " session gate available during scope destruction\n";
+            } else {
+                passed = false;
+            }
+        }
+        release_destructor.set_value ();
+    } else {
+        passed &= entered_destructor.wait_for (2s) == std::future_status::ready;
+    }
+
+    host.stop ();
+    close_native_client (client);
+    const runtime::stateful::stream_connection_t connection{
+      zlink::routing_id_t::from (std::uint32_t{1}).to_hex (), 1, mesh->routing_id (),
+      mesh->native_node ().status ().lifecycle_generation ()};
+    const bool residual = mesh->native_node ().sessions ().close (connection).closed;
+    mesh->stop ();
+    provider.close ();
+    const std::size_t expected_disconnected = scenario == core_lifecycle_case_t::normal ? 1 : 0;
+    const bool connected_observed =
+      connected_rid.valid () && connected_rid.wait_for (0s) == std::future_status::ready;
+    passed &= factory_calls == 1 && destroyed == 1 && !residual
+              && disconnected_at_destruction == expected_disconnected
+              && (scenario == core_lifecycle_case_t::normal || !connected_observed);
+    std::cout << (passed ? "PASS" : "FAIL")
+              << " Core STREAM lifecycle, case=" << static_cast<int> (scenario)
+              << " factory=" << factory_calls << " destroyed=" << destroyed
+              << " disconnected=" << disconnected_at_destruction << " residual=" << residual
+              << " unexpected_connected=" << connected_observed << '\n';
+    return passed ? 0 : 1;
+}
+#endif
+
 std::optional<std::uint32_t>
 observed_disconnect_reason (const zlink::framework::stream_error_t &error)
 {
@@ -2032,7 +2252,8 @@ int binding_submission_order ()
     if (gateway.admit_bound_session_delivery (actor, 0))
         return 3;
     if ((*delivery) ("retained.push", stream_codec_t::raw,
-                     zlink::message_t::from (std::string ("retained"))))
+                     zlink::message_t::from (std::string ("retained")))
+          .result ())
         return 4;
     const auto late = delayed.async ().result ();
     std::cout << "delayed_submit_accepted=" << bool (late)
@@ -2188,6 +2409,17 @@ int stream_write_terminal_during_host_shutdown (bool success)
 int main (int argc, char **argv)
 {
     zlink::framework::completion_owner_t completion_owner;
+#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
+    if (argc == 2 && std::string_view (argv[1]) == "--core-session-lifecycle-boundaries") {
+        zlink::framework::detail::configure_stream_dispatch_executor ();
+        const auto normal = core_session_lifecycle_boundaries (core_lifecycle_case_t::normal);
+        const auto drain = core_session_lifecycle_boundaries (core_lifecycle_case_t::drain);
+        const auto failure =
+          core_session_lifecycle_boundaries (core_lifecycle_case_t::factory_failure);
+        zlink::framework::detail::shutdown_stream_dispatch_executor ();
+        return normal | drain | failure;
+    }
+#endif
     if (argc == 2 && std::string_view (argv[1]) == "--write-terminal-shutdown") {
         if (const auto failed = stream_write_terminal_during_host_shutdown (true))
             return failed;

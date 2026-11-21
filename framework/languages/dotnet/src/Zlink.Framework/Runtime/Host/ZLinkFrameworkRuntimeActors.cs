@@ -3016,6 +3016,89 @@ internal sealed partial class ZLinkFrameworkRuntime
         return actorState.AdmitDurablePrefix([record])[0];
     }
 
+    private Task WaitForSessionBindingCallbackTimeoutAsync(CancellationToken cancellationToken) =>
+        Task.Delay(
+            Registration.SessionReplacementCallbackTimeout,
+            Registration.TimeProvider,
+            cancellationToken
+        );
+
+    private async ValueTask InvokeSessionBoundCallbackAsync(
+        ZLinkActorRuntimeState state,
+        IZLinkActor actor,
+        Zlink.Framework.Contracts.Actors.ZLinkSessionBindingIdentity incoming
+    )
+    {
+        var shutdown = ShutdownToken;
+        var report = ErrorSink.CaptureRuntimeTaskReporter();
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(shutdown);
+        using var timeoutCancellation = CancellationTokenSource.CreateLinkedTokenSource(shutdown);
+        var deadline = WaitForSessionBindingCallbackTimeoutAsync(timeoutCancellation.Token);
+        Task<Task>? callbackTerminal = null;
+        async Task<bool> ObserveTimeoutAsync()
+        {
+            try
+            {
+                await deadline.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (timeoutCancellation.IsCancellationRequested)
+            {
+                return false;
+            }
+            // Preserve terminal order even when timeout observation resumes after user code.
+            if (
+                Volatile.Read(ref callbackTerminal) is { IsCompletedSuccessfully: true } terminal
+                && terminal.Result != deadline
+            )
+                return false;
+            cancellation.Cancel();
+            if (
+                !shutdown.IsCancellationRequested
+                && !state.ContextInvalidated
+                && !state.IsTeardownPending
+            )
+                report(
+                    $"session-bound-callback:{state.ActorId}",
+                    new TimeoutException(
+                        $"Actor '{state.ActorId}' Session bound callback timed out."
+                    )
+                );
+            return true;
+        }
+        Task<bool> timeout;
+        // User code can wait synchronously for cancellation. Observe its timeout before invocation,
+        // without inheriting the running Actor's execution permission.
+        using (ExecutionContext.SuppressFlow())
+            timeout = ObserveTimeoutAsync();
+        Exception? failure = null;
+        try
+        {
+            var callback = actor.OnSessionBoundAsync(incoming, cancellation.Token).AsTask();
+            Volatile.Write(ref callbackTerminal, Task.WhenAny(deadline, callback));
+            // Keep the Actor turn until user code terminates, including after a timeout.
+            await callback.ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            failure = exception;
+        }
+        timeoutCancellation.Cancel();
+        var timedOut = await timeout.ConfigureAwait(false);
+        if (
+            failure is not null
+            && !timedOut
+            && !(
+                failure is OperationCanceledException
+                && (
+                    shutdown.IsCancellationRequested
+                    || state.ContextInvalidated
+                    || state.IsTeardownPending
+                )
+            )
+        )
+            report($"session-bound-callback:{state.ActorId}", failure);
+    }
+
     internal readonly record struct ActorHandoffTarget(
         string TargetRid,
         RoutingId NodeRid,
@@ -3134,33 +3217,39 @@ internal sealed partial class ZLinkFrameworkRuntime
             state.Actor
             ?? throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Unavailable,
-                $"Actor '{actorId}' is unavailable for duplicate bind."
+                $"Actor '{actorId}' is unavailable for session binding."
             );
         var actorInterfaceMap = actorForCallbackCheck
             .GetType()
             .GetInterfaceMap(typeof(IZLinkActor));
-        var duplicateBindMethodIndex = Array.FindIndex(
-            actorInterfaceMap.InterfaceMethods,
-            static method => method.Name == nameof(IZLinkActor.OnDuplicateBindAsync)
-        );
-        var hasDuplicateBindCallback =
-            duplicateBindMethodIndex >= 0
-            && actorInterfaceMap.TargetMethods[duplicateBindMethodIndex].DeclaringType
-                != typeof(IZLinkActor);
-        if (
-            !state.TryGetBoundSession(out var currentBinding)
-            || currentBinding.IsSamePhysicalSessionOwner(
-                sourceNodeRid,
-                sourceNodeGeneration,
-                sessionRid
-            )
-            || !hasDuplicateBindCallback
-        )
+        bool HasCallback(string name)
+        {
+            for (var index = 0; index < actorInterfaceMap.InterfaceMethods.Length; index++)
+                if (actorInterfaceMap.InterfaceMethods[index].Name == name)
+                    return actorInterfaceMap.TargetMethods[index].DeclaringType
+                        != typeof(IZLinkActor);
+            return false;
+        }
+        var hasSessionBoundCallback = HasCallback(nameof(IZLinkActor.OnSessionBoundAsync));
+        var hasDuplicateBindCallback = HasCallback(nameof(IZLinkActor.OnDuplicateBindAsync));
+        bool NeedsDuplicateDecision(out ZLinkActorBoundSession current) =>
+            state.TryGetBoundSession(out current)
+            && !current.IsSamePhysicalSessionOwner(sourceNodeRid, sourceNodeGeneration, sessionRid)
+            && hasDuplicateBindCallback;
+        if (!NeedsDuplicateDecision(out _) && !hasSessionBoundCallback)
         {
             ScheduleReplacementNotification(ReplaceBinding());
             return;
         }
 
+        var incomingIdentity = new Zlink.Framework.Contracts.Actors.ZLinkSessionBindingIdentity(
+            sourceNodeRid,
+            sourceNodeGeneration,
+            bindingGeneration
+        );
+        var bindingCommitted = new TaskCompletionSource<ZLinkActorSessionBindingTransition>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         using var callbackCancellation = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken
         );
@@ -3176,109 +3265,102 @@ internal sealed partial class ZLinkFrameworkRuntime
                         state.Actor
                         ?? throw new ZLinkFrameworkException(
                             ZLinkFrameworkErrorKind.Unavailable,
-                            $"Actor '{actorId}' is unavailable for duplicate bind."
+                            $"Actor '{actorId}' is unavailable for session binding."
                         );
-                    var currentIdentity =
-                        new Zlink.Framework.Contracts.Actors.ZLinkSessionBindingIdentity(
-                            currentBinding.SessionNodeRid
-                                ?? throw new ZLinkFrameworkException(
-                                    ZLinkFrameworkErrorKind.Unavailable,
-                                    $"Actor '{actorId}' current Session owner is unavailable."
-                                ),
-                            currentBinding.SessionOwnerNodeGeneration,
-                            currentBinding.BindingGeneration
-                        );
-                    callbackStarted.TrySetResult();
-                    string? rejectionMessage;
-                    try
+                    string? rejectionMessage = null;
+                    if (NeedsDuplicateDecision(out var currentBinding))
                     {
-                        rejectionMessage = await actor
-                            .OnDuplicateBindAsync(
-                                currentIdentity,
-                                new Zlink.Framework.Contracts.Actors.ZLinkSessionBindingIdentity(
-                                    sourceNodeRid,
-                                    sourceNodeGeneration,
-                                    bindingGeneration
-                                ),
-                                callbackCancellation.Token
-                            )
-                            .ConfigureAwait(false);
-                    }
-                    catch (OperationCanceledException) when (Volatile.Read(ref decision) == 2)
-                    {
-                        return (
-                            Transition: (ZLinkActorSessionBindingTransition?)null,
-                            Rejected: false
-                        );
+                        var currentIdentity =
+                            new Zlink.Framework.Contracts.Actors.ZLinkSessionBindingIdentity(
+                                currentBinding.SessionNodeRid
+                                    ?? throw new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.Unavailable,
+                                        $"Actor '{actorId}' current Session owner is unavailable."
+                                    ),
+                                currentBinding.SessionOwnerNodeGeneration,
+                                currentBinding.BindingGeneration
+                            );
+                        callbackStarted.TrySetResult();
+                        try
+                        {
+                            rejectionMessage = await actor
+                                .OnDuplicateBindAsync(
+                                    currentIdentity,
+                                    incomingIdentity,
+                                    callbackCancellation.Token
+                                )
+                                .ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException) when (Volatile.Read(ref decision) == 2)
+                        {
+                            return false;
+                        }
                     }
                     if (Interlocked.CompareExchange(ref decision, 1, 0) != 0)
-                        return (
-                            Transition: (ZLinkActorSessionBindingTransition?)null,
-                            Rejected: false
-                        );
+                        return false;
                     if (!string.IsNullOrEmpty(rejectionMessage))
                     {
                         reply(RequestResult.Rejected, 0, rejectionMessage);
-                        return (
-                            Transition: (ZLinkActorSessionBindingTransition?)null,
-                            Rejected: true
-                        );
+                        return true;
                     }
-                    return (
-                        Transition: (ZLinkActorSessionBindingTransition?)ReplaceBinding(),
-                        Rejected: false
-                    );
+                    bindingCommitted.TrySetResult(ReplaceBinding());
+                    if (hasSessionBoundCallback)
+                        await InvokeSessionBoundCallbackAsync(state, actor, incomingIdentity)
+                            .ConfigureAwait(false);
+                    return false;
                 },
                 cancellationToken
             )
             .AsTask();
+        using var timeoutCancellation = new CancellationTokenSource();
         async Task<bool> WaitCallbackTimeoutAsync()
         {
             if (
-                await Task.WhenAny(callbackStarted.Task, callbackTask).ConfigureAwait(false)
-                != callbackStarted.Task
+                await Task.WhenAny(callbackStarted.Task, callbackTask, bindingCommitted.Task)
+                    .ConfigureAwait(false) != callbackStarted.Task
             )
                 return false;
-            await Task.Delay(
-                    Registration.SessionReplacementCallbackTimeout,
-                    Registration.TimeProvider,
-                    CancellationToken.None
-                )
+            await WaitForSessionBindingCallbackTimeoutAsync(timeoutCancellation.Token)
                 .ConfigureAwait(false);
             return true;
         }
         var callbackTimeout = WaitCallbackTimeoutAsync();
+        var terminal = await Task.WhenAny(callbackTask, bindingCommitted.Task, callbackTimeout)
+            .ConfigureAwait(false);
         if (
-            await Task.WhenAny(callbackTask, callbackTimeout).ConfigureAwait(false)
-            == callbackTimeout
+            terminal == callbackTimeout
+            && !bindingCommitted.Task.IsCompleted
+            && await callbackTimeout.ConfigureAwait(false)
+            && Interlocked.CompareExchange(ref decision, 2, 0) == 0
         )
         {
-            if (
-                await callbackTimeout.ConfigureAwait(false)
-                && Interlocked.CompareExchange(ref decision, 2, 0) == 0
-            )
-            {
-                callbackCancellation.Cancel();
-                reply(RequestResult.TimedOut, 0, null);
-                ZLinkUnawaitedSubmit.Observe(
-                    new ValueTask(callbackTask),
-                    $"duplicate-bind-callback:{actorId}",
-                    ErrorSink
-                );
-                return;
-            }
-        }
-        var callbackResult = await callbackTask.ConfigureAwait(false);
-        if (callbackResult.Rejected)
-            return;
-        var replacement =
-            callbackResult.Transition
-            ?? throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.DeadlineExceeded,
-                $"Actor '{actorId}' duplicate bind callback timed out."
+            callbackCancellation.Cancel();
+            reply(RequestResult.TimedOut, 0, null);
+            ZLinkUnawaitedSubmit.Observe(
+                new ValueTask(callbackTask),
+                $"duplicate-bind-callback:{actorId}",
+                ErrorSink
             );
-
-        ScheduleReplacementNotification(replacement);
+            return;
+        }
+        await Task.WhenAny(callbackTask, bindingCommitted.Task).ConfigureAwait(false);
+        timeoutCancellation.Cancel();
+        if (bindingCommitted.Task.IsCompleted)
+        {
+            ScheduleReplacementNotification(await bindingCommitted.Task.ConfigureAwait(false));
+            ZLinkUnawaitedSubmit.Observe(
+                new ValueTask(callbackTask),
+                $"session-bind-callback:{actorId}",
+                ErrorSink
+            );
+            return;
+        }
+        if (await callbackTask.ConfigureAwait(false))
+            return;
+        throw new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.DeadlineExceeded,
+            $"Actor '{actorId}' duplicate bind callback timed out."
+        );
 
         void ScheduleReplacementNotification(ZLinkActorSessionBindingTransition replacement)
         {
@@ -3749,14 +3831,16 @@ internal sealed partial class ZLinkFrameworkRuntime
         string actorId,
         ZlinkStreamHeader header,
         Message payload,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        Action<ZLinkActorReply>? registerReply = null
     ) =>
         SubmitActorForReplyAsync(
             actorId,
             header,
             payload,
             relocationReplay: false,
-            cancellationToken
+            cancellationToken,
+            registerReply
         );
 
     internal ValueTask<ZLinkActorReply> SubmitActorForReplyAsync(
@@ -3764,7 +3848,8 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZlinkStreamHeader header,
         Message payload,
         bool relocationReplay,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        Action<ZLinkActorReply>? registerReply = null
     )
     {
         return _actorSessionManager.SubmitActorForReplyAsync(
@@ -3772,7 +3857,8 @@ internal sealed partial class ZLinkFrameworkRuntime
             header,
             payload,
             relocationReplay,
-            cancellationToken
+            cancellationToken,
+            registerReply
         );
     }
 
@@ -4983,15 +5069,6 @@ internal sealed partial class ZLinkFrameworkRuntime
     internal bool SendActorBoundSession(string actorId, IReadOnlyList<Message> parts)
     {
         return _actorBoundSessionCoordinator.Send(actorId, parts);
-    }
-
-    internal bool SendActorBoundSessionIfCurrent(
-        string actorId,
-        string expectedBindingToken,
-        IReadOnlyList<Message> parts
-    )
-    {
-        return _actorBoundSessionCoordinator.SendIfBoundTo(actorId, expectedBindingToken, parts);
     }
 
     internal ValueTask<ZLinkOneWaySubmitResult> SendActorBoundSessionIfCurrentAsync(

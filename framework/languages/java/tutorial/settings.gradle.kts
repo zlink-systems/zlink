@@ -3,8 +3,8 @@ import org.gradle.jvm.application.tasks.CreateStartScripts
 
 pluginManagement {
     repositories {
-        gradlePluginPortal()
         mavenCentral()
+        gradlePluginPortal()
     }
 }
 
