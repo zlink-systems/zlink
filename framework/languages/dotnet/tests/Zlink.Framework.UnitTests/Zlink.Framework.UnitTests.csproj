@@ -296,6 +296,7 @@
         <Compile Include="Runtime/SpotMessageFollowSubmitTests.cs"/>
         <Compile Include="Runtime/SpotOutboundTransportTests.cs"/>
         <Compile Include="Runtime/SpotRouteDispatcherTests.cs"/>
+        <Compile Include="Runtime/SpotMessageContextTests.cs"/>
         <Compile Include="Runtime/SpotPeerConnectorTests.cs"/>
         <Compile Include="Runtime/SpotAutoRegistrationScannerTests.cs"/>
         <Compile Include="Runtime/RequestFailureMappingTests.cs"/>
