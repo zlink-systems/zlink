@@ -2,6 +2,7 @@ using GameQuest.QuestMission.Application;
 using GameQuest.QuestMission.Infrastructure.Store;
 using GameQuest.Server.Configuration;
 using GameQuest.Shared;
+using Zlink.Framework.Contracts.Handlers;
 using Zlink.Framework.Contracts.Spots;
 
 namespace GameQuest.QuestMission.Infrastructure.ZLink.Spots.PlayerQuestSpot;
@@ -100,6 +101,7 @@ internal sealed class ClosePlayerQuestHandler
 {
     public ValueTask HandleAsync(
         PlayerQuestSpot spot,
+        IZLinkMessageContext context,
         ClosePlayerQuestMsg message,
         CancellationToken cancellationToken
     )
@@ -118,6 +120,7 @@ internal sealed class ApplyGameplayEventHandler
 {
     public ValueTask HandleAsync(
         PlayerQuestSpot spot,
+        IZLinkMessageContext context,
         GameplayMsg message,
         CancellationToken cancellationToken
     )
@@ -133,6 +136,7 @@ internal sealed class SyncQuestProgressHandler
 {
     public ValueTask<SyncQuestProgressRes> HandleAsync(
         PlayerQuestSpot spot,
+        IZLinkMessageContext context,
         SyncQuestProgressReq request,
         CancellationToken cancellationToken
     )

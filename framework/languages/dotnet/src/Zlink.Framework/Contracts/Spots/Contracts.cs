@@ -303,7 +303,12 @@ public interface IZLinkSpotPublisherClient
 public interface IZLinkSpotPacketHandler<TSpot, in TMessage>
     where TSpot : class
 {
-    ValueTask HandleAsync(TSpot spot, TMessage message, CancellationToken cancellationToken);
+    ValueTask HandleAsync(
+        TSpot spot,
+        IZLinkMessageContext context,
+        TMessage message,
+        CancellationToken cancellationToken
+    );
 }
 
 public interface IZLinkSpotRequestHandler<TSpot, in TRequest, TReply>
@@ -311,6 +316,7 @@ public interface IZLinkSpotRequestHandler<TSpot, in TRequest, TReply>
 {
     ValueTask<TReply> HandleAsync(
         TSpot spot,
+        IZLinkMessageContext context,
         TRequest request,
         CancellationToken cancellationToken
     );

@@ -186,6 +186,7 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         public async ValueTask HandleAsync(
             RecoveryRaceSpot spot,
+            IZLinkMessageContext context,
             RecoveryRaceEvent message,
             CancellationToken cancellationToken
         )
@@ -201,6 +202,7 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         public ValueTask<ProbeReply> HandleAsync(
             RecoveryRaceSpot spot,
+            IZLinkMessageContext context,
             ProbeRouteMessage message,
             CancellationToken cancellationToken
         ) => ValueTask.FromResult(new ProbeReply(message.Value + "-reply"));
@@ -514,6 +516,7 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         public ValueTask<ProbeReply> HandleAsync(
             ReclaimedColdSpot spot,
+            IZLinkMessageContext context,
             ProbeRouteMessage message,
             CancellationToken cancellationToken
         ) => ValueTask.FromResult(new ProbeReply("new"));
@@ -680,6 +683,7 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         public ValueTask HandleAsync(
             JoinedColdSpot spot,
+            IZLinkMessageContext context,
             JoinedColdEvent message,
             CancellationToken cancellationToken
         )
@@ -694,6 +698,7 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         public ValueTask<ProbeReply> HandleAsync(
             JoinedColdSpot spot,
+            IZLinkMessageContext context,
             ProbeRouteMessage message,
             CancellationToken cancellationToken
         ) =>
