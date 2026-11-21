@@ -37,12 +37,18 @@ export interface ServiceMailboxRecord {
   readonly completion?: ReceiveRecord;
 }
 
-export interface ServiceMailboxClaim {
+interface MailboxClaimIdentity {
   readonly owner: string;
   readonly domain: ServiceMailboxDomain;
-  readonly serial: bigint;
-  readonly records: readonly ServiceMailboxRecord[];
+  serial: bigint;
 }
+
+/** Independent claims move one original without allocating a prefix array. */
+export type ServiceMailboxClaim = MailboxClaimIdentity &
+  (
+    | { readonly record: ServiceMailboxRecord; readonly records?: undefined }
+    | { readonly record?: undefined; readonly records: readonly ServiceMailboxRecord[] }
+  );
 
 export interface ServiceMailboxRelocationSeal {
   readonly owner: string;
@@ -65,7 +71,7 @@ interface DomainState {
   bytes: number;
 }
 
-/** Level-triggered queues with one active application claim per owner. */
+/** Level-triggered queues; only gated owners retain a prefix claim. */
 export class ServiceMailbox {
   private readonly application: DomainState;
   private readonly infrastructure: DomainState;
@@ -131,11 +137,7 @@ export class ServiceMailbox {
     queue.bytes += bytes;
     target.messages++;
     target.bytes += bytes;
-    if (!queue.claimed && !target.indexed.has(record.owner)) {
-      target.indexed.add(record.owner);
-      target.ready.push(record.owner);
-      this.onReady?.(record.domain);
-    }
+    this.publishReady(target, record.owner, queue, record.domain);
     return true;
   }
 
@@ -153,6 +155,19 @@ export class ServiceMailbox {
       source.indexed.delete(owner);
       const queue = source.owners.get(owner);
       if (queue === undefined || queue.claimed || queue.records.length === 0) continue;
+
+      // Owner kind is the sole policy decision. An independent take never
+      // holds the queue's prefix reservation or revokes a successor's ready.
+      if (domain === 'application' && (owner.startsWith('node:') || owner.startsWith('channel:'))) {
+        const record = queue.records.shift()!;
+        const bytes = retainedBytes(record);
+        queue.bytes -= bytes;
+        source.messages--;
+        source.bytes -= bytes;
+        if (queue.records.length === 0) source.owners.delete(owner);
+        else this.publishReady(source, owner, queue, domain);
+        return { owner, domain, serial: 1n, record };
+      }
 
       queue.claimed = true;
       const serial = this.nextClaimSerial++;
@@ -174,27 +189,50 @@ export class ServiceMailbox {
     }
   }
 
-  release(claim: ServiceMailboxClaim, remaining: readonly ServiceMailboxRecord[] = []): boolean {
+  release(claim: ServiceMailboxClaim, remaining?: readonly ServiceMailboxRecord[]): boolean {
     const target = this.domain(claim.domain);
-    const queue = target.owners.get(claim.owner);
-    if (queue === undefined || !queue.claimed || queue.claimSerial !== claim.serial) return false;
-    if (remaining.length > 0) {
+    let queue = target.owners.get(claim.owner);
+    if (claim.record !== undefined) {
+      // The existing serial is the release token; independent takes need no
+      // owner reservation or additional consumed/released state.
+      if (claim.serial === 0n) return false;
+      claim.serial = 0n;
+      if (remaining === undefined || remaining.length === 0) return true;
+      if (this.closed) {
+        closeRecords(remaining);
+        return true;
+      }
+      if (queue === undefined) {
+        queue = { records: new MailboxQueue(), bytes: 0, claimed: false, claimSerial: 0n };
+        target.owners.set(claim.owner, queue);
+      }
+    } else {
+      if (queue === undefined || !queue.claimed || queue.claimSerial !== claim.serial) return false;
+      queue.claimed = false;
+      queue.claimSerial = 0n;
+    }
+    if (remaining !== undefined && remaining.length > 0) {
       const bytes = remaining.reduce((sum, record) => sum + retainedBytes(record), 0);
       queue.records.prepend(remaining);
       queue.bytes += bytes;
       target.messages += remaining.length;
       target.bytes += bytes;
     }
-    queue.claimed = false;
-    queue.claimSerial = 0n;
-    if (queue.records.length === 0) {
-      target.owners.delete(claim.owner);
-    } else if (!target.indexed.has(claim.owner)) {
-      target.indexed.add(claim.owner);
-      target.ready.push(claim.owner);
-      this.onReady?.(claim.domain);
-    }
+    if (queue.records.length === 0) target.owners.delete(claim.owner);
+    else this.publishReady(target, claim.owner, queue, claim.domain);
     return true;
+  }
+
+  private publishReady(
+    target: DomainState,
+    owner: string,
+    queue: OwnerQueue,
+    domain: ServiceMailboxDomain
+  ): void {
+    if (queue.claimed || target.indexed.has(owner)) return;
+    target.indexed.add(owner);
+    target.ready.push(owner);
+    this.onReady?.(domain);
   }
 
   trySealApplicationOwner(owner: string): ServiceMailboxRelocationSeal | undefined {
@@ -220,17 +258,9 @@ export class ServiceMailbox {
     const records = [...current.captured, ...current.held];
     if (records.length === 0) return true;
     const bytes = records.reduce((sum, record) => sum + retainedBytes(record), 0);
-    this.application.owners.set(seal.owner, {
-      records: new MailboxQueue(records),
-      bytes,
-      claimed: false,
-      claimSerial: 0n
-    });
-    if (!this.application.indexed.has(seal.owner)) {
-      this.application.indexed.add(seal.owner);
-      this.application.ready.push(seal.owner);
-    }
-    this.onReady?.('application');
+    const queue = { records: new MailboxQueue(records), bytes, claimed: false, claimSerial: 0n };
+    this.application.owners.set(seal.owner, queue);
+    this.publishReady(this.application, seal.owner, queue, 'application');
     return true;
   }
 
