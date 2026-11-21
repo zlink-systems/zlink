@@ -81,7 +81,11 @@ for (const count of [2, 32]) {
     try {
       pump.start();
       ready(ReadyDomain.Application);
-      await turn();
+      // Timers stay mocked and never fire here, so every record taken below
+      // comes from workers continuing without a yield. How many setImmediate
+      // turns that takes depends on the platform's event-loop ordering
+      // (macOS needed more than one), so wait for the pump to go quiet.
+      for (let turns = 0; turns < 20 && remaining > 0; turns += 1) await turn();
       if (count === 2)
         assert.equal(timers.length, 0, 'another worker consumes no part of this worker budget');
       else {
