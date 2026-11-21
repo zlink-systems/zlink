@@ -5,6 +5,9 @@ const test = require('node:test');
 const framework = require('../../packages/framework/dist/internal');
 const { createMeshHost } = require('./fixtures/mesh-host');
 const {
+  createSpotNodeLocationAutoConnectContext
+} = require('../../packages/framework/dist/runtime/spots/spot-node-autoconnect');
+const {
   ZLinkLocationStoreRepository
 } = require('../../packages/framework/dist/runtime/locations/location-store-repository');
 
@@ -31,8 +34,13 @@ for (const leaseState of ['expired', 'missing', 'replaced', 'live']) {
       placementWeight: 100,
       ownerId: 'owner',
       leaseGeneration: 1n,
+      descriptorRevision: 1n,
+      endpoint: 'tcp://peer',
+      channelWeights: {},
+      securityIdentity: '',
       objectCapabilities: [{ objectKind: 'user_spot', stableType: 'room' }],
       populationCapacity: {
+        actors: { active: 0, reserved: 0, limit: 1 },
         spots: { active: 0, reserved: 0, limit: 1 },
         spotTypes: [
           { objectKind: 'user_spot', stableType: 'room', active: 0, reserved: 0, limit: 1 }
@@ -65,6 +73,15 @@ for (const leaseState of ['expired', 'missing', 'replaced', 'live']) {
       registerUserSpotOperationHandler() {},
       status: () => ({ routingId: 'node-a', lifecycleGeneration: 1n })
     });
+    const runtime = host.locationOwner.ensureRuntime('play');
+    const discovery = createSpotNodeLocationAutoConnectContext(
+      runtime,
+      host.locationOwner.currentStores,
+      {}
+    );
+    meshRuntime.locationAutoConnect = discovery;
+    const discoverySignal = new AbortController().signal;
+    await discovery.resolver.listLivePeers({ meshName: 'play' }, discoverySignal);
     const spots = host.createPublicSpotManager({});
     const create = () => spots.getOrCreate('lease-room', 'room').inMesh('play').submit();
 
@@ -117,12 +134,15 @@ for (const leaseState of ['expired', 'missing', 'replaced', 'live']) {
       ownerId: 'owner',
       leaseGeneration: 1n,
       entrySpotId: 'entry-a',
+      descriptorRevision: 1n,
+      endpoint: 'tcp://peer',
+      channelWeights: {},
+      securityIdentity: '',
       objectCapabilities: [{ objectKind: 'actor', stableType: 'room', entryAccepted: true }],
       populationCapacity: {
+        actors: { active: 0, reserved: 0, limit: 1 },
         spots: { active: 0, reserved: 0, limit: 1 },
-        spotTypes: [
-          { objectKind: 'actor', stableType: 'room', active: 0, reserved: 0, limit: 1 }
-        ]
+        spotTypes: [{ objectKind: 'actor', stableType: 'room', active: 0, reserved: 0, limit: 1 }]
       }
     };
     const store = ZLinkLocationStoreRepository.prototype;
@@ -165,11 +185,19 @@ for (const leaseState of ['expired', 'missing', 'replaced', 'live']) {
       },
       status: () => ({ routingId: 'node-a', lifecycleGeneration: 1n })
     });
+    const runtime = host.locationOwner.ensureRuntime('play');
+    const discovery = createSpotNodeLocationAutoConnectContext(
+      runtime,
+      host.locationOwner.currentStores,
+      {}
+    );
+    meshRuntime.locationAutoConnect = discovery;
+    const discoverySignal = new AbortController().signal;
+    await discovery.resolver.listLivePeers({ meshName: 'play' }, discoverySignal);
     host.createPublicSpotManager({});
     const { placementCreate } = host.createActorManagerOptions();
-    const create = () => placementCreate(
-      'lease-actor', 'room', false, { meshName: 'play', timeoutMs: 1000 }
-    );
+    const create = () =>
+      placementCreate('lease-actor', 'room', false, { meshName: 'play', timeoutMs: 1000 });
 
     if (leaseState === 'live') {
       await assert.rejects(create(), /Unexpected Actor transport call\./u);
