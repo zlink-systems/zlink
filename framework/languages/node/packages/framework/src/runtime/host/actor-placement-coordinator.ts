@@ -1,3 +1,4 @@
+import { createObjectCreationDeadline } from './object-creation-deadline';
 import type { ZLinkOwnerLeaseTracker } from '../locations/lease-tracker';
 import { sameAuthorityIncarnation } from '../locations/lifecycle-runtime';
 import { encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
@@ -98,7 +99,7 @@ export class ZLinkActorPlacementCoordinator {
   ): Promise<ZLinkActorCreateResult> {
     const deadlineUnixMs = Date.now() + timeoutMs;
     const remainingMs = Math.max(0, deadlineUnixMs - Date.now());
-    const deadline = createDeadline(remainingMs, signal);
+    const deadline = createObjectCreationDeadline(remainingMs, 'Actor', signal);
     const deadlineMs = performance.now() + remainingMs;
     const contentReference = encodeLocationCreationContent(requestPayload);
     const requestSha256 = createHash('sha256').update(requestPayload).digest();
@@ -416,7 +417,7 @@ export class ZLinkActorPlacementCoordinator {
         );
       }
     } catch (error) {
-      const cleanup = createDeadline(1_000);
+      const cleanup = createObjectCreationDeadline(1_000, 'Actor');
       try {
         await this.options.store.abort(
           {
@@ -748,30 +749,6 @@ function terminalPublication(record: ServiceActorCreateRecord, terminalEnvelope:
     },
     terminalEnvelope,
     operationDeadline: new Date(Number(record.deadlineUnixMs))
-  };
-}
-
-function createDeadline(timeoutMs: number, parent?: AbortSignal) {
-  const controller = new AbortController();
-  const abort = () => controller.abort(parent?.reason);
-  parent?.addEventListener('abort', abort, { once: true });
-  const timer = setTimeout(
-    () =>
-      controller.abort(
-        createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
-          'Actor creation deadline exceeded.',
-          true
-        )
-      ),
-    Math.max(1, timeoutMs)
-  );
-  return {
-    signal: controller.signal,
-    close: () => {
-      clearTimeout(timer);
-      parent?.removeEventListener('abort', abort);
-    }
   };
 }
 
