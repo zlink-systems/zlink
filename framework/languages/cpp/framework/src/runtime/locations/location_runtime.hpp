@@ -375,13 +375,16 @@ class location_runtime_t
         });
     }
 
-    explicit location_runtime_t (location_repository_t &store,
-                                 location_options_t options = {},
-                                 std::string owner_id = make_owner_id ()) :
+    explicit location_runtime_t (
+      location_repository_t &store,
+      location_options_t options = {},
+      std::string owner_id = make_owner_id (),
+      std::function<void (authority_key_t, std::optional<std::string>)> observe_route = {}) :
         _store (&store), _options (options), _owner_id (std::move (owner_id))
     {
         _store->configure_reclaim_margin (_options.owner_lease_fencing_margin);
         auto access = std::make_shared<location_repository_t::access_t> ();
+        access->observe_route = std::move (observe_route);
         access->admit = [lease = _owner_lease, clock = _lease_now] {
             const auto snapshot =
               std::atomic_load_explicit (lease.get (), std::memory_order_acquire);
@@ -396,6 +399,14 @@ class location_runtime_t
             });
         };
         _store->configure_access (std::move (access));
+    }
+
+    location_runtime_t (
+      location_repository_t &store,
+      location_options_t options,
+      std::function<void (authority_key_t, std::optional<std::string>)> observe_route) :
+        location_runtime_t (store, std::move (options), make_owner_id (), std::move (observe_route))
+    {
     }
 
     ~location_runtime_t ()
