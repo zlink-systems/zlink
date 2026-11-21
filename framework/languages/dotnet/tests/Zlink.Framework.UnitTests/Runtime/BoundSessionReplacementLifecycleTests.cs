@@ -1768,7 +1768,7 @@ public sealed partial class BoundSessionReplacementLifecycleTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
-    private sealed class ReplacementTimeProvider : TimeProvider
+    internal sealed class ReplacementTimeProvider : TimeProvider
     {
         private readonly object _gate = new();
         private readonly HashSet<ReplacementTimer> _timers = [];

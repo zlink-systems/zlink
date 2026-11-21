@@ -88,11 +88,44 @@ When the client names its id, the Actor for that id is found or created and boun
     --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/sessions/AuthenticateHandler.java:session-actor-bind"
     ```
 
+    Override `onSessionBound` on the Actor to receive notification after a bind is committed.
+
+    ```java
+    @Override
+    public CompletionStage<Void> onSessionBound(
+            ZLinkSessionBindingIdentity incoming,
+            ZLinkActorCallbackCancellation cancellation) {
+        return CompletableFuture.completedFuture(null);
+    }
+    ```
+
+    The callback runs in the Actor's handler order. An exception or timeout leaves the successful
+    bind unchanged. The default implementation does nothing; without an override, binding does
+    not wait for the Actor gate. See the
+    [API reference](../../../java/reference/05-actor-relocation.en.md#zlinkactoronsessionbound) for cancellation
+    and failure handling.
+
 === "Kotlin"
 
     ```kotlin
     --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/sessions/SessionHandlers.kt:session-actor-bind"
     ```
+
+    Override `onSessionBoundSuspending` on the Actor to receive notification after a bind is committed.
+
+    ```kotlin
+    override suspend fun onSessionBoundSuspending(
+        incoming: ZLinkSessionBindingIdentity,
+        cancellation: ZLinkActorCallbackCancellation,
+    ) {
+        // Update application state using the committed binding.
+    }
+    ```
+
+    The default implementation does nothing. An overridden callback runs once in Actor handler order
+    after the bind commits. Exceptions and timeouts preserve the successful bind. The callback checks
+    `cancellation.isCancellationRequested` for cancellation requests. The Framework reports failures
+    and timeouts as runtime task exceptions.
 
 === "Node/TypeScript"
 
@@ -184,6 +217,51 @@ An Actor knows the connection bound to it. This is not a reply but **a notificat
     push ends with `InvalidOperation` at the call's terminal, and the failure is observed through each
     language's asynchronous completion mechanism. The code above has already completed the rename
     before pushing, so it discards **only that failure**.
+
+=== "Node/TypeScript"
+
+    ### 3.4 Bind notification
+
+    An Actor can receive its committed binding through the optional `onSessionBound(incoming, signal)`
+    callback. `incoming` is a `ZLinkSessionBindingIdentity` containing the session owner node RID,
+    lifecycle generation, and binding generation. The callback runs once for each successful bind,
+    including the first bind and a resubmission from the same physical Session.
+
+    ```typescript
+    onSessionBound(incoming: ZLinkSessionBindingIdentity, signal: AbortSignal): void | Promise<void>
+    ```
+
+    The Framework commits the binding and sends the success reply before invoking the callback in
+    the same Actor handler order. Omitting the callback performs no work; a bind without callbacks
+    does not wait for the Actor gate. A rejected duplicate bind does not trigger this notification.
+
+    Callback failures leave the bind result intact and are reported once as runtime task exceptions.
+    After `sessionReplacementCallbackTimeoutMs` (default `30000 ms`), the Framework cancels `signal`
+    and reports the timeout once. Cancellation caused by Actor or runtime shutdown is not reported.
+
+=== "C#/.NET"
+
+    ### 3.4 Bind notification
+
+    The .NET bind notification `OnSessionBoundAsync` is described in [the Session binding chapter, §7](39-session-binding.en.md).
+
+=== "C++"
+
+    ### 3.4 Bind notification
+
+    The C++ bind notification `on_session_bound` is described in [the Session binding chapter, §7](39-session-binding.en.md).
+
+=== "Java"
+
+    ### 3.4 Bind notification
+
+    The Java bind notification `onSessionBound` is shown in the example in [§3.1](#31-binding).
+
+=== "Kotlin"
+
+    ### 3.4 Bind notification
+
+    The Kotlin bind notification `onSessionBoundSuspending` is shown in the example in [§3.1](#31-binding).
 
 ## 4. The Attaching Side — a Client Outside the Mesh
 
