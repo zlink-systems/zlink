@@ -1,0 +1,648 @@
+{
+  "format": "authority-aggregate-relocation-v1",
+  "consumers": [
+    "cpp",
+    "dotnet",
+    "jvm",
+    "node"
+  ],
+  "spec": "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md \u00a73.4 aggregate, aggregate.relocation, aggregate.relocation.completion (#4995, #5041)",
+  "notes": {
+    "shape": "value of the authority record's `aggregate` JSON field. Writers must produce JSON that parses to exactly this value (member order free); readers must accept 'accept' cases preserving every field on re-write and reject 'reject' cases.",
+    "integers": "64-bit integers are decimal strings; marker.index is a JSON number",
+    "matrix": "cross-language test: each language's real provider writer produces these accept values, every other language's reader reads them back and re-writes them unchanged (4x4)"
+  },
+  "cases": [
+    {
+      "name": "relocation-only-preparing",
+      "expect": "accept",
+      "aggregate": {
+        "relocation": {
+          "relocationId": "0f1e2d3c-4b5a-4968-8778-a1b2c3d4e5f6",
+          "phase": "preparing",
+          "source": {
+            "nodeRid": "0a0b",
+            "nodeGeneration": "3",
+            "ownerId": "owner-src",
+            "ownerLeaseGeneration": "7"
+          },
+          "target": null,
+          "coordinator": {
+            "nodeRid": "0a0b",
+            "nodeGeneration": "3",
+            "ownerId": "owner-src",
+            "ownerLeaseGeneration": "7",
+            "expectedStoreVersion": "opaque-v1"
+          },
+          "sourceInventorySha256": "abababababababababababababababababababababababababababababababab",
+          "applicationVersion": "42"
+        }
+      }
+    },
+    {
+      "name": "relocation-only-captured",
+      "expect": "accept",
+      "aggregate": {
+        "relocation": {
+          "relocationId": "0f1e2d3c-4b5a-4968-8778-a1b2c3d4e5f6",
+          "phase": "captured",
+          "source": {
+            "nodeRid": "0a0b",
+            "nodeGeneration": "3",
+            "ownerId": "owner-src",
+            "ownerLeaseGeneration": "7"
+          },
+          "target": null,
+          "coordinator": {
+            "nodeRid": "0a0b",
+            "nodeGeneration": "3",
+            "ownerId": "owner-src",
+            "ownerLeaseGeneration": "7",
+            "expectedStoreVersion": "opaque-v1"
+          },
+          "sourceInventorySha256": "abababababababababababababababababababababababababababababababab",
+          "applicationVersion": "42"
+        }
+      }
+    },
+    {
+      "name": "relocation-only-prepared",
+      "expect": "accept",
+      "aggregate": {
+        "relocation": {
+          "relocationId": "0f1e2d3c-4b5a-4968-8778-a1b2c3d4e5f6",
+          "phase": "prepared",
+          "source": {
+            "nodeRid": "0a0b",
+            "nodeGeneration": "3",
+            "ownerId": "owner-src",
+            "ownerLeaseGeneration": "7"
+          },
+          "target": {
+            "nodeRid": "0c0d",
+            "nodeGeneration": "5",
+            "ownerId": "owner-tgt",
+            "ownerLeaseGeneration": "18446744073709551615",
+            "attemptGeneration": "2"
+          },
+          "coordinator": {
+            "nodeRid": "0a0b",
+            "nodeGeneration": "3",
+            "ownerId": "owner-src",
+            "ownerLeaseGeneration": "7",
+            "expectedStoreVersion": "opaque-v1"
+          },
+          "sourceInventorySha256": "abababababababababababababababababababababababababababababababab",
+          "applicationVersion": "42"
+        }
+      }
+    },
+    {
+      "name": "marker-and-committed",
+      "expect": "accept",
+      "aggregate": {
+        "aggregateId": "11111111-2222-4333-8444-555555555555",
+        "aggregateGeneration": "9",
+        "index": 0,
+        "expectedStoreVersion": "opaque-v0",
+        "ownerTransition": "newOwner",
+        "targetAuthorityOwnerGeneration": "12",
+        "authorityPayloadSha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "membershipMutationSha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+        "relocation": {
+          "relocationId": "0f1e2d3c-4b5a-4968-8778-a1b2c3d4e5f6",
+          "phase": "committed",
+          "source": {
+            "nodeRid": "0a0b",
+            "nodeGeneration": "3",
+            "ownerId": "owner-src",
+            "ownerLeaseGeneration": "7"
+          },
+          "target": {
+            "nodeRid": "0c0d",
+            "nodeGeneration": "5",
+            "ownerId": "owner-tgt",
+            "ownerLeaseGeneration": "18446744073709551615",
+            "attemptGeneration": "2"
+          },
+          "coordinator": {
+            "nodeRid": "0a0b",
+            "nodeGeneration": "3",
+            "ownerId": "owner-src",
+            "ownerLeaseGeneration": "7",
+            "expectedStoreVersion": "opaque-v1"
+          },
+          "sourceInventorySha256": "abababababababababababababababababababababababababababababababab",
+          "applicationVersion": "42",
+          "completion": {
+            "acceptedRequests": "2",
+            "completedResults": "0",
+            "pendingDeliveries": "0",
+            "reference": null,
+            "sha256": null
+          }
+        }
+      }
+    },
+    {
+      "name": "marker-only",
+      "expect": "accept",
+      "aggregate": {
+        "aggregateId": "11111111-2222-4333-8444-555555555555",
+        "aggregateGeneration": "9",
+        "index": 0,
+        "expectedStoreVersion": "opaque-v0",
+        "ownerTransition": "newOwner",
+        "targetAuthorityOwnerGeneration": "12",
+        "authorityPayloadSha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "membershipMutationSha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef"
+      }
+    },
+    {
+      "name": "activated-with-completion",
+      "expect": "accept",
+      "aggregate": {
+        "relocation": {
+          "relocationId": "0f1e2d3c-4b5a-4968-8778-a1b2c3d4e5f6",
+          "phase": "activated",
+          "source": {
+            "nodeRid": "0a0b",
+            "nodeGeneration": "3",
+            "ownerId": "owner-src",
+            "ownerLeaseGeneration": "7"
+          },
+          "target": {
+            "nodeRid": "0c0d",
+            "nodeGeneration": "5",
+            "ownerId": "owner-tgt",
+            "ownerLeaseGeneration": "18446744073709551615",
+            "attemptGeneration": "2"
+          },
+          "coordinator": {
+            "nodeRid": "0a0b",
+            "nodeGeneration": "3",
+            "ownerId": "owner-src",
+            "ownerLeaseGeneration": "7",
+            "expectedStoreVersion": "opaque-v1"
+          },
+          "sourceInventorySha256": "abababababababababababababababababababababababababababababababab",
+          "applicationVersion": "42",
+          "completion": {
+            "acceptedRequests": "2",
+            "completedResults": "1",
+            "pendingDeliveries": "1",
+            "reference": "ref-1",
+            "sha256": "1212121212121212121212121212121212121212121212121212121212121212"
+          }
+        }
+      }
+    },
+    {
+      "name": "aborted-from-captured-null-target",
+      "expect": "accept",
+      "aggregate": {
+        "relocation": {
+          "relocationId": "0f1e2d3c-4b5a-4968-8778-a1b2c3d4e5f6",
+          "phase": "aborted",
+          "source": {
+            "nodeRid": "0a0b",
+            "nodeGeneration": "3",
+            "ownerId": "owner-src",
+            "ownerLeaseGeneration": "7"
+          },
+          "target": null,
+          "coordinator": {
+            "nodeRid": "0a0b",
+            "nodeGeneration": "3",
+            "ownerId": "owner-src",
+            "ownerLeaseGeneration": "7",
+            "expectedStoreVersion": "opaque-v1"
+          },
+          "sourceInventorySha256": "abababababababababababababababababababababababababababababababab",
+          "applicationVersion": "42"
+        }
+      }
+    },
+    {
+      "name": "aborted-from-prepared-full-target",
+      "expect": "accept",
+      "aggregate": {
+        "relocation": {
+          "relocationId": "0f1e2d3c-4b5a-4968-8778-a1b2c3d4e5f6",
+          "phase": "aborted",
+          "source": {
+            "nodeRid": "0a0b",
+            "nodeGeneration": "3",
+            "ownerId": "owner-src",
+            "ownerLeaseGeneration": "7"
+          },
+          "target": {
+            "nodeRid": "0c0d",
+            "nodeGeneration": "5",
+            "ownerId": "owner-tgt",
+            "ownerLeaseGeneration": "18446744073709551615",
+            "attemptGeneration": "2"
+          },
+          "coordinator": {
+            "nodeRid": "0a0b",
+            "nodeGeneration": "3",
+            "ownerId": "owner-src",
+            "ownerLeaseGeneration": "7",
+            "expectedStoreVersion": "opaque-v1"
+          },
+          "sourceInventorySha256": "abababababababababababababababababababababababababababababababab",
+          "applicationVersion": "42"
+        }
+      }
+    },
+    {
+      "name": "completed",
+      "expect": "accept",
+      "aggregate": {
+        "relocation": {
+          "relocationId": "0f1e2d3c-4b5a-4968-8778-a1b2c3d4e5f6",
+          "phase": "completed",
+          "source": {
+            "nodeRid": "0a0b",
+            "nodeGeneration": "3",
+            "ownerId": "owner-src",
+            "ownerLeaseGeneration": "7"
+          },
+          "target": {
+            "nodeRid": "0c0d",
+            "nodeGeneration": "5",
+            "ownerId": "owner-tgt",
+            "ownerLeaseGeneration": "18446744073709551615",
+            "attemptGeneration": "2"
+          },
+          "coordinator": {
+            "nodeRid": "0a0b",
+            "nodeGeneration": "3",
+            "ownerId": "owner-src",
+            "ownerLeaseGeneration": "7",
+            "expectedStoreVersion": "opaque-v1"
+          },
+          "sourceInventorySha256": "abababababababababababababababababababababababababababababababab",
+          "applicationVersion": "42",
+          "completion": {
+            "acceptedRequests": "2",
+            "completedResults": "2",
+            "pendingDeliveries": "0",
+            "reference": "ref-1",
+            "sha256": "1212121212121212121212121212121212121212121212121212121212121212"
+          }
+        }
+      }
+    },
+    {
+      "name": "prepared-null-target",
+      "expect": "reject",
+      "reason": "target must be full from prepared on (except aborted from preparing/captured)",
+      "aggregate": {
+        "relocation": {
+          "relocationId": "0f1e2d3c-4b5a-4968-8778-a1b2c3d4e5f6",
+          "phase": "prepared",
+          "source": {
+            "nodeRid": "0a0b",
+            "nodeGeneration": "3",
+            "ownerId": "owner-src",
+            "ownerLeaseGeneration": "7"
+          },
+          "target": null,
+          "coordinator": {
+            "nodeRid": "0a0b",
+            "nodeGeneration": "3",
+            "ownerId": "owner-src",
+            "ownerLeaseGeneration": "7",
+            "expectedStoreVersion": "opaque-v1"
+          },
+          "sourceInventorySha256": "abababababababababababababababababababababababababababababababab",
+          "applicationVersion": "42"
+        }
+      }
+    },
+    {
+      "name": "preparing-with-target",
+      "expect": "reject",
+      "reason": "target must be null in preparing/captured",
+      "aggregate": {
+        "relocation": {
+          "relocationId": "0f1e2d3c-4b5a-4968-8778-a1b2c3d4e5f6",
+          "phase": "preparing",
+          "source": {
+            "nodeRid": "0a0b",
+            "nodeGeneration": "3",
+            "ownerId": "owner-src",
+            "ownerLeaseGeneration": "7"
+          },
+          "target": {
+            "nodeRid": "0c0d",
+            "nodeGeneration": "5",
+            "ownerId": "owner-tgt",
+            "ownerLeaseGeneration": "18446744073709551615",
+            "attemptGeneration": "2"
+          },
+          "coordinator": {
+            "nodeRid": "0a0b",
+            "nodeGeneration": "3",
+            "ownerId": "owner-src",
+            "ownerLeaseGeneration": "7",
+            "expectedStoreVersion": "opaque-v1"
+          },
+          "sourceInventorySha256": "abababababababababababababababababababababababababababababababab",
+          "applicationVersion": "42"
+        }
+      }
+    },
+    {
+      "name": "partial-marker",
+      "expect": "reject",
+      "reason": "marker fields all or none",
+      "aggregate": {
+        "aggregateId": "11111111-2222-4333-8444-555555555555",
+        "index": 0,
+        "expectedStoreVersion": "opaque-v0",
+        "ownerTransition": "newOwner",
+        "targetAuthorityOwnerGeneration": "12",
+        "authorityPayloadSha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "membershipMutationSha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+        "relocation": {
+          "relocationId": "0f1e2d3c-4b5a-4968-8778-a1b2c3d4e5f6",
+          "phase": "prepared",
+          "source": {
+            "nodeRid": "0a0b",
+            "nodeGeneration": "3",
+            "ownerId": "owner-src",
+            "ownerLeaseGeneration": "7"
+          },
+          "target": {
+            "nodeRid": "0c0d",
+            "nodeGeneration": "5",
+            "ownerId": "owner-tgt",
+            "ownerLeaseGeneration": "18446744073709551615",
+            "attemptGeneration": "2"
+          },
+          "coordinator": {
+            "nodeRid": "0a0b",
+            "nodeGeneration": "3",
+            "ownerId": "owner-src",
+            "ownerLeaseGeneration": "7",
+            "expectedStoreVersion": "opaque-v1"
+          },
+          "sourceInventorySha256": "abababababababababababababababababababababababababababababababab",
+          "applicationVersion": "42"
+        }
+      }
+    },
+    {
+      "name": "empty-aggregate",
+      "expect": "reject",
+      "reason": "empty aggregate object is invalid",
+      "aggregate": {}
+    },
+    {
+      "name": "number-generation",
+      "expect": "reject",
+      "reason": "64-bit integers are strings",
+      "aggregate": {
+        "relocation": {
+          "relocationId": "0f1e2d3c-4b5a-4968-8778-a1b2c3d4e5f6",
+          "phase": "prepared",
+          "source": {
+            "nodeRid": "0a0b",
+            "nodeGeneration": 3,
+            "ownerId": "owner-src",
+            "ownerLeaseGeneration": "7"
+          },
+          "target": {
+            "nodeRid": "0c0d",
+            "nodeGeneration": "5",
+            "ownerId": "owner-tgt",
+            "ownerLeaseGeneration": "18446744073709551615",
+            "attemptGeneration": "2"
+          },
+          "coordinator": {
+            "nodeRid": "0a0b",
+            "nodeGeneration": "3",
+            "ownerId": "owner-src",
+            "ownerLeaseGeneration": "7",
+            "expectedStoreVersion": "opaque-v1"
+          },
+          "sourceInventorySha256": "abababababababababababababababababababababababababababababababab",
+          "applicationVersion": "42"
+        }
+      }
+    },
+    {
+      "name": "unknown-phase",
+      "expect": "reject",
+      "reason": "phase value set",
+      "aggregate": {
+        "relocation": {
+          "relocationId": "0f1e2d3c-4b5a-4968-8778-a1b2c3d4e5f6",
+          "phase": "moving",
+          "source": {
+            "nodeRid": "0a0b",
+            "nodeGeneration": "3",
+            "ownerId": "owner-src",
+            "ownerLeaseGeneration": "7"
+          },
+          "target": {
+            "nodeRid": "0c0d",
+            "nodeGeneration": "5",
+            "ownerId": "owner-tgt",
+            "ownerLeaseGeneration": "18446744073709551615",
+            "attemptGeneration": "2"
+          },
+          "coordinator": {
+            "nodeRid": "0a0b",
+            "nodeGeneration": "3",
+            "ownerId": "owner-src",
+            "ownerLeaseGeneration": "7",
+            "expectedStoreVersion": "opaque-v1"
+          },
+          "sourceInventorySha256": "abababababababababababababababababababababababababababababababab",
+          "applicationVersion": "42"
+        }
+      }
+    },
+    {
+      "name": "uppercase-uuid",
+      "expect": "reject",
+      "reason": "relocationId lowercase canonical UUID",
+      "aggregate": {
+        "relocation": {
+          "relocationId": "0F1E2D3C-4B5A-4968-8778-A1B2C3D4E5F6",
+          "phase": "prepared",
+          "source": {
+            "nodeRid": "0a0b",
+            "nodeGeneration": "3",
+            "ownerId": "owner-src",
+            "ownerLeaseGeneration": "7"
+          },
+          "target": {
+            "nodeRid": "0c0d",
+            "nodeGeneration": "5",
+            "ownerId": "owner-tgt",
+            "ownerLeaseGeneration": "18446744073709551615",
+            "attemptGeneration": "2"
+          },
+          "coordinator": {
+            "nodeRid": "0a0b",
+            "nodeGeneration": "3",
+            "ownerId": "owner-src",
+            "ownerLeaseGeneration": "7",
+            "expectedStoreVersion": "opaque-v1"
+          },
+          "sourceInventorySha256": "abababababababababababababababababababababababababababababababab",
+          "applicationVersion": "42"
+        }
+      }
+    },
+    {
+      "name": "bad-inventory-sha",
+      "expect": "reject",
+      "reason": "sourceInventorySha256 lowercase hex 64",
+      "aggregate": {
+        "relocation": {
+          "relocationId": "0f1e2d3c-4b5a-4968-8778-a1b2c3d4e5f6",
+          "phase": "prepared",
+          "source": {
+            "nodeRid": "0a0b",
+            "nodeGeneration": "3",
+            "ownerId": "owner-src",
+            "ownerLeaseGeneration": "7"
+          },
+          "target": {
+            "nodeRid": "0c0d",
+            "nodeGeneration": "5",
+            "ownerId": "owner-tgt",
+            "ownerLeaseGeneration": "18446744073709551615",
+            "attemptGeneration": "2"
+          },
+          "coordinator": {
+            "nodeRid": "0a0b",
+            "nodeGeneration": "3",
+            "ownerId": "owner-src",
+            "ownerLeaseGeneration": "7",
+            "expectedStoreVersion": "opaque-v1"
+          },
+          "sourceInventorySha256": "ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB",
+          "applicationVersion": "42"
+        }
+      }
+    },
+    {
+      "name": "target-missing-attempt",
+      "expect": "reject",
+      "reason": "target has attemptGeneration",
+      "aggregate": {
+        "relocation": {
+          "relocationId": "0f1e2d3c-4b5a-4968-8778-a1b2c3d4e5f6",
+          "phase": "prepared",
+          "source": {
+            "nodeRid": "0a0b",
+            "nodeGeneration": "3",
+            "ownerId": "owner-src",
+            "ownerLeaseGeneration": "7"
+          },
+          "target": {
+            "nodeRid": "0c0d",
+            "nodeGeneration": "5",
+            "ownerId": "owner-tgt",
+            "ownerLeaseGeneration": "18446744073709551615"
+          },
+          "coordinator": {
+            "nodeRid": "0a0b",
+            "nodeGeneration": "3",
+            "ownerId": "owner-src",
+            "ownerLeaseGeneration": "7",
+            "expectedStoreVersion": "opaque-v1"
+          },
+          "sourceInventorySha256": "abababababababababababababababababababababababababababababababab",
+          "applicationVersion": "42"
+        }
+      }
+    },
+    {
+      "name": "completion-reference-without-sha",
+      "expect": "reject",
+      "reason": "reference and sha256 both null or both set",
+      "aggregate": {
+        "relocation": {
+          "relocationId": "0f1e2d3c-4b5a-4968-8778-a1b2c3d4e5f6",
+          "phase": "activated",
+          "source": {
+            "nodeRid": "0a0b",
+            "nodeGeneration": "3",
+            "ownerId": "owner-src",
+            "ownerLeaseGeneration": "7"
+          },
+          "target": {
+            "nodeRid": "0c0d",
+            "nodeGeneration": "5",
+            "ownerId": "owner-tgt",
+            "ownerLeaseGeneration": "18446744073709551615",
+            "attemptGeneration": "2"
+          },
+          "coordinator": {
+            "nodeRid": "0a0b",
+            "nodeGeneration": "3",
+            "ownerId": "owner-src",
+            "ownerLeaseGeneration": "7",
+            "expectedStoreVersion": "opaque-v1"
+          },
+          "sourceInventorySha256": "abababababababababababababababababababababababababababababababab",
+          "applicationVersion": "42",
+          "completion": {
+            "acceptedRequests": "2",
+            "completedResults": "1",
+            "pendingDeliveries": "1",
+            "reference": "ref-1",
+            "sha256": null
+          }
+        }
+      }
+    },
+    {
+      "name": "completion-pending-over-completed",
+      "expect": "reject",
+      "reason": "pendingDeliveries <= completedResults <= acceptedRequests",
+      "aggregate": {
+        "relocation": {
+          "relocationId": "0f1e2d3c-4b5a-4968-8778-a1b2c3d4e5f6",
+          "phase": "activated",
+          "source": {
+            "nodeRid": "0a0b",
+            "nodeGeneration": "3",
+            "ownerId": "owner-src",
+            "ownerLeaseGeneration": "7"
+          },
+          "target": {
+            "nodeRid": "0c0d",
+            "nodeGeneration": "5",
+            "ownerId": "owner-tgt",
+            "ownerLeaseGeneration": "18446744073709551615",
+            "attemptGeneration": "2"
+          },
+          "coordinator": {
+            "nodeRid": "0a0b",
+            "nodeGeneration": "3",
+            "ownerId": "owner-src",
+            "ownerLeaseGeneration": "7",
+            "expectedStoreVersion": "opaque-v1"
+          },
+          "sourceInventorySha256": "abababababababababababababababababababababababababababababababab",
+          "applicationVersion": "42",
+          "completion": {
+            "acceptedRequests": "2",
+            "completedResults": "1",
+            "pendingDeliveries": "5",
+            "reference": "ref-1",
+            "sha256": "1212121212121212121212121212121212121212121212121212121212121212"
+          }
+        }
+      }
+    }
+  ]
+}

@@ -261,6 +261,7 @@ test('GetOrCreate returns a Ready Actor when no new-creation target remains', as
   let current = authority;
   let authorityReads = 0;
   const coordinator = new ZLinkActorPlacementCoordinator({
+    leaseTracker: { isOwnerTokenLive: async () => true },
     store: {
       async readAuthority(key) {
         authorityReads += 1;
@@ -316,6 +317,7 @@ test('the requester excludes a target that refuses with routeNotConnected and pi
   const targetsAsked = [];
   const remoteAsked = [];
   const store = {
+    async readAuthority() { return { kind: 'missing' }; },
     async reserve(request) {
       const target = request.target;
       return {
@@ -338,6 +340,7 @@ test('the requester excludes a target that refuses with routeNotConnected and pi
     }
   };
   const coordinator = new ZLinkActorPlacementCoordinator({
+    leaseTracker: { isOwnerTokenLive: async () => true },
     store,
     target: async (meshName, stableType, signal, excluded) => {
       targetsAsked.push([...excluded]);

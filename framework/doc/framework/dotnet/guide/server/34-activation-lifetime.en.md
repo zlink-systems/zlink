@@ -80,7 +80,7 @@ Single activation after manually clearing the location store or losing location 
 records is outside this guarantee. That condition cannot be treated as normal close or owner
 failure recovery.
 
-### 1.2 Durable State and Public Generation Values
+### 1.2 Durable State and Public Generation Values {#object-generation}
 
 **Durable financial state, such as a shared jackpot, also needs protection in the application
 store.** An Instance Spot runs its callbacks serially. It does not put another service's DB writes
@@ -90,13 +90,15 @@ protecting other write paths too. After timeout or connection loss, the applicat
 previous result or prevents duplicate effects with the same business request id before starting
 another operation.
 
-The public Instance Spot context exposes `ObjectGeneration` to **distinguish recreation of the
-same id**.
+The public Instance Spot context exposes `ObjectGeneration` to distinguish logical incarnations
+of the same ID.
 
 Read it through `IZLinkInstanceSpotContext.ObjectGeneration`.
 
-Relocation moves the same object and does not change `ObjectGeneration`. This value cannot serve
-as a fencing token that distinguishes owner changes. Fencing means the store rejects a mutation
+Join and relocation preserve `ObjectGeneration`. Relocation with `RecreateOnRelocation`
+constructs a new application object for the same logical incarnation. The Location Store issues
+a new value when the incarnation ends and the same ID is created again. Keep application data ordering, versioning, and write
+authorization independent of this value. Fencing means the store rejects a mutation
 carrying an old write authorization. When needed, the application store issues that authorization
 and validates it on every write. The Framework context does not supply an owner-change token.
 Ordering against earlier generation values cannot be assumed after location-store generation

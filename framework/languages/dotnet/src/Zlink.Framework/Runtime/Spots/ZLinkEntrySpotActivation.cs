@@ -387,26 +387,6 @@ internal sealed partial class ZLinkEntrySpotActivation
         return _actorHandlers.TryResolve(actorType, header, out descriptor);
     }
 
-    public bool TryResolvePacket(ZLinkEnvelopeHeader header, out ZLinkSpotDescriptor? descriptor)
-    {
-        return _packets.TryResolve(header, out descriptor);
-    }
-
-    public async ValueTask InvokePacketAsync(
-        ZLinkSpotDescriptor descriptor,
-        object? message,
-        CancellationToken cancellationToken
-    )
-    {
-        await ExecuteAsync(
-                static (activation, state, ct) =>
-                    activation._invoker.InvokePacketAsync(state.Descriptor, state.Message, ct),
-                (Descriptor: descriptor, Message: message),
-                cancellationToken
-            )
-            .ConfigureAwait(false);
-    }
-
     public bool TryResolveActorJoined(
         Type actorType,
         out ZLinkSpotActorLifecycleDescriptor? descriptor

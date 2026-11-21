@@ -9,7 +9,27 @@ public record ZLinkAggregateParticipant(
         String expectedStoreVersion,
         ZLinkAuthorityGenerationTransition ownerTransition,
         byte[] authorityPayload,
-        byte[] membershipMutation) {
+        byte[] membershipMutation,
+        ZLinkAuthorityRelocation relocation) {
+    public ZLinkAggregateParticipant(
+            String authorityKey,
+            long objectGeneration,
+            long sourceAuthorityOwnerGeneration,
+            String expectedStoreVersion,
+            ZLinkAuthorityGenerationTransition ownerTransition,
+            byte[] authorityPayload,
+            byte[] membershipMutation) {
+        this(
+                authorityKey,
+                objectGeneration,
+                sourceAuthorityOwnerGeneration,
+                expectedStoreVersion,
+                ownerTransition,
+                authorityPayload,
+                membershipMutation,
+                null);
+    }
+
     public ZLinkAggregateParticipant {
         Objects.requireNonNull(authorityKey, "authorityKey");
         if (objectGeneration <= 0 || sourceAuthorityOwnerGeneration <= 0) {

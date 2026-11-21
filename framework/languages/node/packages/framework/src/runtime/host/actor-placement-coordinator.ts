@@ -1,4 +1,5 @@
 import { createObjectCreationDeadline } from './object-creation-deadline';
+import type { ZLinkOwnerLeaseTracker } from '../locations/lease-tracker';
 import { sameAuthorityIncarnation } from '../locations/lifecycle-runtime';
 import { encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
 import {
@@ -63,6 +64,7 @@ export interface ZLinkActorPlacementTarget {
 }
 
 export interface ZLinkActorPlacementCoordinatorOptions {
+  readonly leaseTracker: Pick<ZLinkOwnerLeaseTracker, 'isOwnerTokenLive'>;
   readonly actorRelocationPolicy?: (
     meshName: string,
     stableType: string
@@ -105,17 +107,27 @@ export class ZLinkActorPlacementCoordinator {
     const operationId = randomOperationId();
     try {
       for (;;) {
+        if (!createOnly) {
+          const current = await this.options.store.readAuthority(
+            encodeAuthorityKey('actor', actorId),
+            deadline.signal
+          );
+          const existing = existingActor(current, actorId, stableType);
+          if (
+            existing !== undefined &&
+            current.kind === 'snapshot' &&
+            (await this.options.leaseTracker.isOwnerTokenLive(
+              {
+                ownerId: current.ownerId,
+                leaseGeneration: current.ownerLeaseGeneration
+              },
+              deadline.signal
+            ))
+          )
+            return { status: 'existing', actor: existing };
+        }
         const target = await this.options.target(meshName, stableType, deadline.signal, excluded);
         if (target === undefined) {
-          // Entry eligibility limits new creation, not lookup of a Ready Actor (Actor model §6.3, §6.5).
-          if (!createOnly) {
-            const current = await this.options.store.readAuthority(
-              encodeAuthorityKey('actor', actorId),
-              deadline.signal
-            );
-            const existing = existingActor(current, actorId, stableType);
-            if (existing !== undefined) return { status: 'existing', actor: existing };
-          }
           throw createInternalFrameworkException(
             ZLinkFrameworkInternalErrorKind.PlacementCapacityExhausted,
             `No eligible Actor placement target is ready for '${stableType}'.`,

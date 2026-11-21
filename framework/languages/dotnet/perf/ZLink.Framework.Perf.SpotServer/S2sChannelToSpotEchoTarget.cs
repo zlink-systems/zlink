@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Zlink.Framework.Contracts.Channels;
 using Zlink.Framework.Contracts.Configuration;
+using Zlink.Framework.Contracts.Handlers;
 using Zlink.Framework.Contracts.Spots;
 
 namespace ZLink.Framework.Perf;
@@ -50,6 +51,7 @@ public sealed class S2sSendEchoHandler(Measurement measurement, RoleConfig confi
 {
     public async ValueTask HandleAsync(
         S2sSendEchoSpot spot,
+        IZLinkMessageContext context,
         PerfEchoRequest message,
         CancellationToken cancellationToken
     )

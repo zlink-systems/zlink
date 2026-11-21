@@ -1,11 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import {
   zlinkEntrySpotActorSendHandler,
+  zlinkSpotActorRequestHandler,
   zlinkSpotActorSendHandler,
   zlinkSpotPacketHandler
 } from '@zlink-systems/nestjs';
 import type {
   ZLinkMessageContext,
+  ZLinkSpotActorRequestHandler,
   ZLinkSpotRequestHandler
 } from '@zlink-systems/framework';
 import { PacketNames } from '../shared/constants';
@@ -68,23 +70,23 @@ export class Reconnect {
       request.roomId !== String(spot.context.spotId)
     )
       throw new Error('Reconnect identity mismatch');
-    await spot.sendView(actor);
+    await actor.context.boundSession.send(spot.view()).submit();
   }
 }
 @Injectable()
-@zlinkSpotActorSendHandler({
+@zlinkSpotActorRequestHandler({
   spot: () => Room,
   actor: () => Player,
   packetName: PacketNames.roomViewRequest
 })
-export class View {
+export class View implements ZLinkSpotActorRequestHandler<Room, Player, RoomViewRequest, RoomView> {
   async handle(
     spot: Room,
-    actor: Player,
+    _actor: Player,
     _context: ZLinkMessageContext,
     _request: RoomViewRequest
-  ): Promise<void> {
-    await spot.sendView(actor);
+  ): Promise<RoomView> {
+    return spot.view();
   }
 }
 @Injectable()
