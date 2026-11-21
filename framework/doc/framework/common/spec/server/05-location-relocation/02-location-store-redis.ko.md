@@ -154,9 +154,12 @@ key**(§8의 counter와 같은 형식: sign·leading zero 없는 `0..2^63-1`)로
   전체가 `Corrupt`로 끝나고 mutation은 0이다. `Corrupt`는 `Conflict`와 다른 결과이며 Store 데이터 손상을
   뜻한다([Location runtime §6.1](01-location-runtime.ko.md)의 반납 음수 판정).
 
-Provider는 이 두 연산이 가리키는 key만 숫자로 해석한다. 다른 key는 여전히 opaque다. 같은 batch의
+Limit이 `0`(제한 없음, [Location runtime §3.3](01-location-runtime.ko.md))인 차원에는 `SumAtMost`를
+넣지 않는다. Provider는 이 두 연산이 가리키는 key만 숫자로 해석한다. 다른 key는 여전히 opaque다. 같은 batch의
 `SumAtMost`와 `Add`는 하나의 commit에서 평가·적용된다. `Add`만 있고 조건이 없는 batch는 다른
-caller의 `Add`와 충돌하지 않는다.
+caller의 `Add`와 충돌하지 않는다. 값 비교 compare만 있는 Store(공식 etcd provider)는 읽고 계산한 뒤
+revision compare로 commit하고, 그 사이 다른 caller가 같은 key를 바꿨으면 provider 안에서 다시 시도한다 —
+이 재시도는 Framework에 `Conflict`로 보이지 않는다. `SumAtMost`가 거짓이면 그때만 `Conflict`다.
 
 Framework는 MeshNode 수용 공간을 Mesh 이름·RID·차원(Actor 총수, Spot 총수, Spot 종류·type별 수)·상태
 (`active`, `pending`)마다 counter key 하나로 둔다. 예약은 차원마다 `SumAtMost([active, pending], n,
@@ -272,8 +275,8 @@ incarnation과 owner 순서만 구분하고, 서로 다른 ID의 값을 비교�
   발급한다. 전역 연속 범위를 나눠 주지 않는다.
 
 각 value는 sign, leading zero, JSON envelope, `recordVersion`이 없는 bare UTF-8 canonical
-decimal이다. 행이 없으면 다음 값은 `1`이고, `v`를 발급하면 CAS로 `v + 1`을 Put한다. `n`개
-묶음은 `v..v+n-1`을 발급하고 `v+n`을 Put한다. 저장 가능한 counter 범위는 `1..2^63-1`이며,
+decimal이다. 행이 없으면 다음 값은 `owner-counter`는 `1`, ID별 counter는 아래 전환 기준값이다. `v`를 발급하면 CAS로
+`v + 1`을 Put한다. `n`개 묶음 발급은 `owner-counter`에만 쓰며 `v..v+n-1`을 발급하고 `v+n`을 Put한다. 저장 가능한 counter 범위는 `1..2^63-1`이며,
 `0`은 저장하거나 발급하지 않는다. `2^63-1`을 저장한 행은 소진 상태이며 typed
 `GenerationExhausted` 결과를 반환하고 record와 counter를 모두 바꾸지 않는다. 따라서 최대로
 발급할 수 있는 값은 `2^63-2`다.

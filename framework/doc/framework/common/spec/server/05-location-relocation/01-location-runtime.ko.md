@@ -1005,8 +1005,9 @@ authority token의 lease가 무효여야 하며, 복구 owner의 token 교체 CA
 `descriptorLifecycleGeneration`을 가지면 그 reservation의 target lifecycle은 끝난 것이다. 이때
 Framework는 그 reservation을 만든 자격 없이 `Reserved → Missing`으로 바꾸고 pending 수용 공간을
 반납한다. 요청은 처음 읽은 authority `StoreVersion`, 읽은 owner lease record의 상태(version 또는
-없음), 읽은 descriptor record의 상태와 수용 공간 record를 조건으로 함께 검사한다. 수용 공간
-record가 없으면 authority만 바꾼다. 수용 공간 record는 Mesh 이름과 RID마다 하나이고 MeshNode
+없음), 읽은 descriptor record의 상태와 수용 공간 record를 조건으로 함께 검사한다. 수용 공간은
+[Location Store §4.1](02-location-store-redis.ko.md)의 counter key이며 예약이 항상 만들므로, 반납할 key가 없으면
+Store 데이터 손상이다(v11에서 전환할 때 수용 공간 record를 counter key로 옮긴 뒤부터). 수용 공간 record는 Mesh 이름과 RID마다 하나이고 MeshNode
 lifecycle이 바뀌어도 이어진다 — 해제하지 않은 모든 allocation을 집계하며 descriptor를 다시
 게시해도 초기화하지 않는다. 따라서 이전 lifecycle의 reservation을 해제할 때 같은 record에서
 반납한다. 반납 결과가 0보다 작아지면 Store 데이터 손상으로 판정하고

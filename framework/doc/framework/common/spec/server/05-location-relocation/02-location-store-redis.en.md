@@ -180,9 +180,13 @@ without sign or leading zero) and use only these two operations.
   and means Store data corruption (the negative-release rule of
   [Location runtime §6.1](01-location-runtime.en.md)).
 
-The provider interprets only the keys these two operations name as numbers; every other key stays
+A dimension whose limit is `0` (no limit, [Location runtime §3.3](01-location-runtime.en.md)) gets no
+`SumAtMost`. The provider interprets only the keys these two operations name as numbers; every other key stays
 opaque. `SumAtMost` and `Add` in one batch are evaluated and applied in one commit. A batch with `Add`
-and no condition does not conflict with other callers' `Add`.
+and no condition does not conflict with other callers' `Add`. A Store that only offers value-comparing
+compares (the official etcd provider) reads, computes, and commits with a revision compare, and retries
+inside the provider if another caller changed the same key in between — the retry is not visible to
+the Framework as `Conflict`. Only a false `SumAtMost` is a `Conflict`.
 
 The Framework keeps MeshNode capacity as one counter key per Mesh name, RID, dimension (Actor total,
 Spot total, per Spot kind and type) and state (`active`, `pending`). A reservation puts, per dimension,
@@ -326,9 +330,10 @@ condition.
   `authority-owner-counter`. It does not hand out a global contiguous range.
 
 Each value is bare UTF-8 canonical decimal: no sign, leading zero, JSON
-envelope, or `recordVersion`. A missing row means the next value is `1`;
-issuing `v` CAS-puts `v + 1`. A block of `n` issues `v..v+n-1` and puts
-`v+n`. The valid stored counter range is `1..2^63-1`; `0` is never stored or
+envelope, or `recordVersion`. A missing row means the next value is `1`
+for `owner-counter` and the transition floor below for a per-ID counter;
+issuing `v` CAS-puts `v + 1`. Block issue of `n` is used only for
+`owner-counter`: it issues `v..v+n-1` and puts `v+n`. The valid stored counter range is `1..2^63-1`; `0` is never stored or
 issued. A row storing `2^63-1` is exhausted and returns the typed
 `GenerationExhausted` result without changing either record or counter.
 Therefore, the maximum issued value is `2^63-2`.
