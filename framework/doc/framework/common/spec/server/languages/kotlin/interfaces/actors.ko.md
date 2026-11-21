@@ -135,6 +135,16 @@ abstract class ZLinkSuspendingActor : ZLinkActor {
  incoming: ZLinkSessionBindingIdentity,
  cancellation: ZLinkActorCallbackCancellation,
  ): String? = null
+
+ final override fun onSessionBound(
+ incoming: ZLinkSessionBindingIdentity,
+ cancellation: ZLinkActorCallbackCancellation,
+ ): CompletionStage<Void>
+
+ open suspend fun onSessionBoundSuspending(
+ incoming: ZLinkSessionBindingIdentity,
+ cancellation: ZLinkActorCallbackCancellation,
+ ) {}
 }
 
 abstract class ZLinkSuspendingActorFactory : ZLinkActorFactory {

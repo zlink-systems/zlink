@@ -26,6 +26,7 @@ final class ZLinkSpotRouterNodeDispatcher {
             RoutingId targetNodeRid,
             String targetSpotId,
             long targetSpotGeneration,
+            long targetNodeGeneration,
             long authorityOwnerGeneration,
             long ownerLeaseGeneration,
             List<Message> spotParts) {
@@ -39,7 +40,12 @@ final class ZLinkSpotRouterNodeDispatcher {
                 authorityOwnerGeneration,
                 ownerLeaseGeneration);
         entrySpot
-                .sendToSpot(targetNodeRid, targetSpotId, targetSpotGeneration, spotParts)
+                .sendToSpot(
+                        targetNodeRid,
+                        targetSpotId,
+                        targetSpotGeneration,
+                        targetNodeGeneration,
+                        spotParts)
                 .whenComplete(
                         (ignored, failure) -> {
                             if (failure == null) {

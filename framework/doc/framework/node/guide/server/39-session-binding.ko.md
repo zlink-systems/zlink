@@ -110,14 +110,12 @@ Framework가 합치므로, 직접 호출한 직후에 연결이 끊겨도 Spot�
 [Location](25-location.ko.md#5-조회-결과의-사용-범위--node-이름은-호출-주소가-아니다)이 그 경계를
 다룬다.
 
-## 5. 관련 문서
+## 5. 중복 연결은 Actor가 결정한다 {#duplicate-session-bind}
 
-- 묶기까지의 절차 — [Session과 Actor 연결](24-actor-session.ko.md)
-- 연결을 받는 자리 — [STREAM](23-stream.ko.md) · [STREAM의 동작 원리](38-stream-boundary.ko.md)
-- 묶이는 대상 — [Actor](22-actor.ko.md)
-- 옮겨 가는 동안의 처리 — [Relocation](37-relocation.ko.md)
-
-## 6. 중복 연결은 Actor가 결정한다
+Callback이 없으면 Framework는 다른 Session의 유효한 bind를 기본적으로 수락한다.
+중복 로그인을 막으려면 Actor의 중복 bind callback에서 새 연결을 거부한다. 교체를 허용하려면
+같은 callback에서 수락한다. 클라이언트가 제시한 ID는 인증을 마치고 그 ID가 인증된 계정에
+속하는지 확인한 뒤 사용한다.
 
 다른 session이 current인 Actor를 새 session에 bind하면 Framework는 Actor 순서 안에서
 `onDuplicateBind(current, incoming, signal)`을 호출한다. 두 인자는 session owner node, 그 node의
@@ -156,11 +154,24 @@ class MatchActor {
 }
 ```
 
-callback이 없으면 기존 동작처럼 새 session을 받아들인다. 거부하거나 callback이 제한 시간 안에 끝나지
-않으면 current binding을 유지하고 incoming bind만 오류로 끝낸다. Framework는 incoming 연결을 끊지 않고
-command 51도 보내지 않는다. 받아들이면 새 session을 current로 등록하고 이전 연결에 기존 교체 절차를
-적용한다. callback 제한 시간의 설정은 [Session–Actor binding §6](../../../common/spec/server/04-session/02-session-actor-binding.ko.md#6-rebind와-이전-연결-교체)이 소유한다.
+Callback이 거부하거나 제한 시간 안에 끝나지 않으면 Framework는 current binding을 유지하고
+incoming bind만 오류로 완료한다. Incoming 연결은 유지되고, current Session에는 교체 통지가 가지 않는다.
+Callback이 수락하면 Framework는 새 Session을 current로 등록하고 이전 연결에 교체 절차를
+적용한다. Callback 제한 시간은 [Session–Actor binding §6](../../../common/spec/server/04-session/02-session-actor-binding.ko.md#6-rebind와-이전-연결-교체)을 따른다.
+
+<!-- language-specific notification -->
+
+## 6. Actor의 bind 확정 통지
+
+Node의 `onSessionBound`는 [Actor와 session 장 §3.4](24-actor-session.ko.md)에서 설명한다.
 
 <script>
 (function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>
+
+## 7. 관련 문서
+
+- 묶기까지의 절차 — [Session과 Actor 연결](24-actor-session.ko.md)
+- 연결을 받는 자리 — [STREAM](23-stream.ko.md) · [STREAM의 동작 원리](38-stream-boundary.ko.md)
+- 묶이는 대상 — [Actor](22-actor.ko.md)
+- 옮겨 가는 동안의 처리 — [Relocation](37-relocation.ko.md)

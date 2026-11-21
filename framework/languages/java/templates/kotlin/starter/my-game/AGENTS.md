@@ -73,6 +73,8 @@ The channels in `mmo-world-channels` are player-selected game spaces within a wo
 
 After each addition, extend settings and registrations, `zlink.structure.json`, its checker, and e2e together. Keep game rules in application modules apart from the Framework callbacks and transport adapters that call them. Do not create empty layers in this starter.
 
+`Hosting.configure` registers the Location Store explicitly with `options.addLocationStore` once per node. A Spring Store bean alone does not register it with Framework. Keep Store registration in this shared hosting setup; role configurers must not register it again.
+
 ## Public API boundaries
 
 Use the [documentation](https://docs.zlink.systems/), [Kotlin server guide](https://docs.zlink.systems/kotlin/guide/server/), [API reference](https://docs.zlink.systems/kotlin/reference/), and [agent index](https://docs.zlink.systems/llms.txt). Check API availability against `build.gradle.kts` because online guides may describe a newer release.
@@ -100,3 +102,7 @@ For supplementary STREAM connector tracing in the e2e runner, set `ZLINK_JAVA_ST
 ## Defect reporting
 
 Compare public API usage with the guide and a working sample first. Preserve the pinned versions, OS, reproduction command, first node failure, and flow/correlation records. Check existing [ZLink issues](https://github.com/zlink-systems/zlink/issues) and record the matching issue number in README Known issues. If a coding agent prepares a new public issue, show its body to the developer before publication. Remove credentials and personal information from attached logs.
+
+## Client connection
+
+[README: Client connection](README.md#client-connection) owns the endpoint, initial flow, installation choices, and Kotlin example. Keep it aligned with this template's config, startup READY output, DTOs, and e2e client. Use the `frameworkVersion` pin in `build.gradle.kts` for connector dependencies; do not hard-code a release in documentation. Register push handlers before sending, preserve cleanup, and distinguish pushes from correlated replies. This starter accepts connections but registers no application packets.

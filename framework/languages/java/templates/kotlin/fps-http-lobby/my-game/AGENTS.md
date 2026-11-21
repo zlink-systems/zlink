@@ -75,3 +75,7 @@ Dispatch diagnostics are Normal in `Hosting.kt`; node stderr contains message-fl
 For local process discovery diagnostics, set `ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY=1` before launching nodes. Docker nodes do not inherit arbitrary host environment variables. Do not change timeout, fixed waits, or assertions to hide failures. The runner cleans up its own processes and Compose project; retain cleanup errors and do not stop other workloads.
 
 If a documented public API fails, preserve package versions, OS, command or minimal public API reproduction, expected result, first node exception and stack, and relevant flow/corr records. Check [existing issues](https://github.com/zlink-systems/zlink/issues) before proposing a report. Remove credentials and private data. Show the draft to the developer before publishing an issue; document confirmed affected versions in the README's Known issues.
+
+## Client connection
+
+[README: Client connection](README.md#client-connection) owns the endpoint, initial flow, installation choices, and Kotlin example. Keep it aligned with this template's config, startup READY output, DTOs, and e2e client. Use the `frameworkVersion` pin in `build.gradle.kts` for connector dependencies; do not hard-code a release in documentation. Register push handlers before sending, preserve cleanup, and distinguish pushes from correlated replies. Preserve the initial admission packet and validate identity before Actor binding in production.

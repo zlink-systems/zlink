@@ -1,3 +1,8 @@
+import {
+  initialRelocationCompletion,
+  encodeAuthorityAggregate
+} from '../../packages/framework/src/runtime/locations/authority-relocation-record';
+import { LegacyRelocationAuthorityFixture } from './legacy-relocation-authority-fixture';
 import { MessageChannel } from 'node:worker_threads';
 import { ZLinkSpotActivation } from '../../packages/framework/src/runtime/spots/spot-activation-state';
 import { ZLinkSpotActorMembership } from '../../packages/framework/src/runtime/spots/spot-actor-membership';
@@ -56,10 +61,7 @@ import {
   type ServiceSessionRelocationSeal,
   type ServiceSessionRelocationSealed
 } from '../../packages/framework/src/runtime/foundation/service-stateful-wire-codec';
-import {
-  crc32c,
-  ServiceRelocationAuthorityPayloadCodec
-} from '../../packages/framework/src/runtime/foundation/service-relocation-runtime';
+import { crc32c } from '../../packages/framework/src/runtime/foundation/service-relocation-runtime';
 import { encodeAuthorityKey } from '../../packages/framework/src/runtime/locations/authority-key-codec';
 import { ZLinkActorTransferRuntime } from '../../packages/framework/src/runtime/host/actor-transfer-runtime';
 import { ZLinkActorSerialExecutor } from '../../packages/framework/src/runtime/actors/actor-mailbox';
@@ -1046,7 +1048,7 @@ function targetCasFixture() {
         // Only a verified cutover lets the target submit its CAS (spec 28 §4.4).
         cutoverReceived: true,
         boundaryRelay: [],
-        staging: { primaryAuthorityKey: actorKey, envelope }
+        staging: { primaryAuthorityKey: actorKey, envelope, hidden: new Map() }
       },
       {
         prepared: {
@@ -1347,7 +1349,7 @@ test('host relocation reports units settled on both sides as an authority error,
   await run(new Set(['actor-a', 'actor-b']));
 });
 
-test('target-ready authority keeps aggregate, attempt and coordinator StoreVersion distinct', () => {
+test('target-ready application authority contains no relocation publication', () => {
   const runtime = new ZLinkHostServiceRelocationRuntime({
     requests: fixtureRequestRuntime()
   } as never);
@@ -1371,23 +1373,11 @@ test('target-ready authority keeps aggregate, attempt and coordinator StoreVersi
   });
   const projected = (
     runtime as unknown as {
-      authorityPayloadForPublication(
-        payload: Uint8Array,
-        publication: unknown,
-        target: unknown
-      ): Uint8Array;
+      authorityPayloadForTarget(payload: Uint8Array, target: unknown): Uint8Array;
     }
-  ).authorityPayloadForPublication(
+  ).authorityPayloadForTarget(
     sourceAuthority,
-    {
-      reference: 'root/1',
-      checksumCrc32c: 0x0102_0304,
-      aggregateId: '00000000-0000-0001-0000-000000000002',
-      aggregateGeneration: 2n,
-      inventoryDigest: '0'.repeat(64),
-      targetOwnerId: target.ownerId,
-      targetOwnerLeaseGeneration: target.ownerLeaseGeneration
-    },
+
     {
       owner: {
         ownerId: target.ownerId,
@@ -1397,21 +1387,13 @@ test('target-ready authority keeps aggregate, attempt and coordinator StoreVersi
       nodeRid: target.nodeRid,
       nodeGeneration: target.nodeGeneration,
       objectGeneration: object.objectGeneration,
-      targetAttemptGeneration: 3n,
-      coordinatorExpectedStoreVersion: 'source-v1',
       actorSpotId: 'target-entry',
       actorSpotGeneration: target.nodeGeneration,
       actorSpotKind: ZLinkSpotKind.Entry
     }
   );
-  const publication = new ServiceRelocationAuthorityPayloadCodec().read(projected)!;
-
-  assert.equal(publication.aggregateGeneration, 2n);
-  assert.equal(publication.targetAttemptGeneration, 3n);
-  assert.equal(publication.coordinatorExpectedStoreVersion, 'source-v1');
-  assert.equal(publication.sourceNodeRid, coordinator.nodeRid);
-  assert.equal(publication.targetNodeRid, target.nodeRid);
-  assert.equal(publication.coordinatorOwnerId, target.ownerId);
+  assert.equal(new LegacyRelocationAuthorityFixture().read(projected), undefined);
+  assert.equal(Buffer.from(projected).subarray(0, 4).toString(), 'ZLAU');
 });
 
 test('ActorJoin target keeps the route cache intact and preserves post-open relay order', async () => {
@@ -1527,21 +1509,21 @@ test('ActorJoin target keeps the route cache intact and preserves post-open rela
   assert.deepEqual(events, [
     'cas',
     'route:closed',
-    'publication:clear',
     'queue:merged',
     'onJoined',
     'sourceLeave:submit',
     'sourceLeave:warning',
     'accepted',
     'command44',
-    'dispatch:open'
+    'dispatch:open',
+    'publication:clear'
   ]);
 });
 
 test('target admission opens after one publication-clear conflict and a later cleanup clears it', async () => {
   const events: string[] = [];
   const key = encodeAuthorityKey('actor', 'actor-clear-retry');
-  const codec = new ServiceRelocationAuthorityPayloadCodec();
+  const codec = new LegacyRelocationAuthorityFixture();
   const publication = {
     reference: 'relocation-root',
     checksumCrc32c: 7,
@@ -1582,7 +1564,7 @@ test('target admission opens after one publication-clear conflict and a later cl
       async compareExchangeAuthority(
         _key: unknown,
         _version: unknown,
-        mutation: { payload: Uint8Array }
+        mutation: { payload: Uint8Array; relocation?: ZLinkAuthoritySnapshot['relocation'] | null }
       ) {
         clearAttempts += 1;
         if (conflictsRemaining > 0) {
@@ -1592,7 +1574,11 @@ test('target admission opens after one publication-clear conflict and a later cl
         current = {
           ...current,
           storeVersion: { value: `target-v${clearAttempts + 2}` } as never,
-          payload: Buffer.from(mutation.payload)
+          payload: Buffer.from(mutation.payload),
+          relocation:
+            mutation.relocation === undefined
+              ? current.relocation
+              : (mutation.relocation ?? undefined)
         };
         return { kind: 'stored' };
       }
@@ -1684,8 +1670,38 @@ test('public ActorJoin profile crosses the Host Prepare READY DATA CUTOVER owner
     assert.equal(harness.location.commits, 1, 'only the target owner may commit Location CAS');
     assert.equal(harness.targetActorManager.published, 0, 'dispatch stays closed before Accepted');
 
+    await harness.joinTargetControl();
+    assert.equal(
+      harness.targetActorManager.published,
+      0,
+      'one-way control must finish while target lifecycle is still held'
+    );
     harness.releaseAccepted();
     await harness.targetIdle();
+    assert.deepEqual(
+      harness.location.progress.map((record) => record?.phase),
+      [
+        'preparing',
+        'captured',
+        'prepared',
+        'committed',
+        'activating',
+        'activated',
+        'cleaning',
+        'completed',
+        undefined
+      ]
+    );
+    for (const record of harness.location.progress.filter((value) => value !== undefined)) {
+      const coordinatorRecord = record!.coordinator as { expectedStoreVersion: string };
+      assert.equal(coordinatorRecord.expectedStoreVersion, 'source-v1');
+      assert.equal(typeof record!.applicationVersion, 'string');
+      assert.equal(
+        record!.target === null,
+        record!.phase === 'preparing' || record!.phase === 'captured'
+      );
+    }
+
     assert.deepEqual(
       harness.events.filter(
         (value) =>
@@ -2108,7 +2124,7 @@ for (const observed of [
     );
     try {
       await readEntered;
-      await harness.joinTargetControl();
+      await harness.targetIdle();
       const first = await harness.location.readAuthority();
       assert.equal(first.kind, 'snapshot');
       assert.equal(first.ownerId, 'target-owner');
@@ -2121,7 +2137,7 @@ for (const observed of [
         window !== undefined && window.frameCount !== undefined && window.frameCount > 0,
         'the source retains the boundary batch while its read is blocked'
       );
-      const codec = new ServiceRelocationAuthorityPayloadCodec();
+      const codec = new LegacyRelocationAuthorityFixture();
       assert.equal(codec.read(first.payload), undefined, 'B is normalized before the source read');
       // A restarted node keeps its OwnerId and takes a new OwnerLeaseGeneration;
       // only the (OwnerId, OwnerLeaseGeneration) pair names the same owner.
@@ -2150,11 +2166,11 @@ for (const observed of [
           targetDescriptorLifecycleGeneration: second.generation
         });
       if (observed !== 'normalized-target')
-        assert.deepEqual(await harness.location.commitAggregate(), { kind: 'committed' });
+        assert.deepEqual(await harness.location.commitAggregate({}), { kind: 'committed' });
       if (observed === 'steady') {
         const current = await harness.location.readAuthority();
         assert.equal(current.kind, 'snapshot');
-        const codec = new ServiceRelocationAuthorityPayloadCodec();
+        const codec = new LegacyRelocationAuthorityFixture();
         const publication = codec.read(current.payload);
         await harness.location.compareExchangeAuthority(undefined, current.storeVersion, {
           kind: 'put',
@@ -3560,8 +3576,41 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     ownerLeaseGeneration: 14n,
     storeVersion: 'target-entry-v1'
   });
+  const completionBlobs = new Map<string, Buffer>();
+  const relocationStore = {
+    async put(reference: { value: string }, bytes: Uint8Array, retentionMs: number) {
+      completionBlobs.set(reference.value, Buffer.from(bytes));
+      return {
+        kind: 'stored' as const,
+        storeNow: new Date(),
+        expiresAt: new Date(Date.now() + retentionMs)
+      };
+    },
+    async read(reference: { value: string }) {
+      const bytes = completionBlobs.get(reference.value);
+      return bytes === undefined
+        ? { kind: 'missing' as const, storeNow: new Date() }
+        : {
+            kind: 'found' as const,
+            bytes,
+            storeNow: new Date(),
+            expiresAt: new Date(Date.now() + 86400000)
+          };
+    },
+    async delete(reference: { value: string }) {
+      completionBlobs.delete(reference.value);
+    },
+    async renew(_reference: { value: string }, retentionMs: number) {
+      return {
+        kind: 'renewed' as const,
+        storeNow: new Date(),
+        expiresAt: new Date(Date.now() + retentionMs)
+      };
+    }
+  };
   const common = {
     registration,
+    relocationStore,
     locationStore: () => location,
     liveDescriptors: async () => [targetDescriptor],
     completions: () => undefined,
@@ -3576,7 +3625,9 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
       options.missingAfterTargetCommit
         ? {
             ...location,
-            async compareExchangeAuthority() {
+            async compareExchangeAuthority(key: unknown, expected: any, mutation: any) {
+              if (mutation.relocation !== undefined)
+                return location.compareExchangeAuthority(key, expected, mutation);
               assert.fail('Missing must not attempt source Preserve');
             },
             async readAuthority() {
@@ -4027,7 +4078,12 @@ function actorJoinLocationStore(initial: ZLinkAuthoritySnapshot, events: string[
   let commits = 0;
   let aborts = 0;
   let preserves = 0;
+  let phaseWrites = 0;
+  const progress: (Record<string, unknown> | undefined)[] = [];
   return {
+    get progress() {
+      return [...progress];
+    },
     get commits() {
       return commits;
     },
@@ -4042,6 +4098,15 @@ function actorJoinLocationStore(initial: ZLinkAuthoritySnapshot, events: string[
     },
     async prepareAggregate(request: any) {
       prepared = request;
+      if (request.participants[0]?.relocation !== undefined) {
+        current = { ...current, relocation: request.participants[0].relocation };
+        progress.push(
+          encodeAuthorityAggregate(undefined, current.relocation)?.relocation as Record<
+            string,
+            unknown
+          >
+        );
+      }
       return {
         kind: 'prepared',
         fence: {
@@ -4050,7 +4115,7 @@ function actorJoinLocationStore(initial: ZLinkAuthoritySnapshot, events: string[
         }
       };
     },
-    async commitAggregate() {
+    async commitAggregate(fence: any) {
       commits += 1;
       events.push('cas');
       const participant = prepared.participants[0];
@@ -4061,6 +4126,15 @@ function actorJoinLocationStore(initial: ZLinkAuthoritySnapshot, events: string[
         ...current,
         storeVersion: { value: `target-v${commits + 1}` } as never,
         payload: Buffer.from(participant.authorityPayload),
+        relocation:
+          participant.relocation === undefined
+            ? undefined
+            : {
+                ...participant.relocation,
+                completion: initialRelocationCompletion(
+                  fence.acceptedRequests?.get(participant.authorityKey.value) ?? 0n
+                )
+              },
         authorityOwnerGeneration: current.authorityOwnerGeneration + 1n,
         ownerId: prepared.targetOwner.ownerId,
         ownerLeaseGeneration: prepared.targetOwner.leaseGeneration,
@@ -4083,11 +4157,27 @@ function actorJoinLocationStore(initial: ZLinkAuthoritySnapshot, events: string[
         removed = true;
         return { kind: 'deleted', storeNow: new Date() };
       }
-      if (mutation.generationTransition === 'preserve') preserves += 1;
+      if (mutation.relocation !== undefined) {
+        progress.push(
+          encodeAuthorityAggregate(undefined, mutation.relocation ?? undefined)?.relocation as
+            Record<string, unknown> | undefined
+        );
+      }
+      const settlesOwner =
+        mutation.relocation === undefined ||
+        (mutation.relocation === null &&
+          (current.ownerId !== initial.ownerId ||
+            current.ownerLeaseGeneration !== initial.ownerLeaseGeneration));
+      if (mutation.generationTransition === 'preserve' && settlesOwner) preserves += 1;
+      else if (mutation.relocation !== undefined) phaseWrites += 1;
       current = {
         ...current,
-        storeVersion: { value: `normalized-v${commits + preserves + 1}` } as never,
-        payload: Buffer.from(mutation.payload)
+        storeVersion: { value: `normalized-v${commits + preserves + phaseWrites + 1}` } as never,
+        payload: Buffer.from(mutation.payload),
+        relocation:
+          mutation.relocation === undefined
+            ? current.relocation
+            : (mutation.relocation ?? undefined)
       };
       return { ...current, kind: 'stored' };
     },
@@ -4444,6 +4534,7 @@ test('processed PREPARE holds real source FIFO until Store Preserve response con
   });
   const compare = harness.location.compareExchangeAuthority.bind(harness.location);
   harness.location.compareExchangeAuthority = async (key, expected, mutation) => {
+    if (mutation.relocation !== undefined) return compare(key, expected, mutation);
     assert.equal(mutation.generationTransition, 'preserve');
     entered();
     await held;
@@ -4501,6 +4592,7 @@ test('uncertain Preserve response retains real source FIFO until Store readback 
     return read();
   };
   harness.location.compareExchangeAuthority = async (key, expected, mutation) => {
+    if (mutation.relocation !== undefined) return compare(key, expected, mutation);
     const result = await compare(key, expected, mutation);
     if (uncertain) {
       uncertain = false;

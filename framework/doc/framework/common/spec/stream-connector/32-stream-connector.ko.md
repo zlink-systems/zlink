@@ -329,7 +329,7 @@ response에만** 들어간다.
 | `Request` 전송 | 새 `request_seq`를 부여하고 pending map에 등록한다 |
 | `Response` 수신 — `request_seq`가 pending request와 일치 | 해당 request를 **성공으로 완료**한다 |
 | `Response` 수신 — terminal request 또는 일치하는 pending request 없음 | 버린다. 두 번째 terminal을 만들지 않는다 |
-| `Error` 수신 — `request_seq`가 pending request와 일치 | 해당 request를 **실패로 완료**한다 |
+| `Error` 수신 — `request_seq`가 pending request와 일치 | 해당 request를 **실패로 완료**한다. 단 입장 거절(§5.8)은 완료하지 않고 대기한다 |
 | `Error` 수신 — `request_seq`가 없거나 pending request와 불일치 | pending request와 무관한 **stream 수준 오류**로 error 표면에 전달한다(§9) |
 
 - **pending request 매칭은 `request_seq`가 정본이다.** `Response`와 `Error`에는 **packet name
@@ -436,6 +436,26 @@ Send와 push 수신에는 적용하지 않는다.
 - **reply received hook은 결과를 읽기만 한다.** hook은 reply나 오류를 바꾸거나 막지 못한다.
 - **hook이 실패해도 request 결과는 바뀌지 않는다.** 실패는 다른 callback 실패와 같이 다룬다(§7).
 - hook과 context의 이름은 언어 문서가 소유한다.
+
+### 5.8 입장 대기와 자동 재시도
+
+서버가 인증 request를 입장 거절하면([인증 입장 제한 §1.3](../server/04-session/03-authentication-admission.ko.md#13-거절-결과))
+connector가 같은 연결에서 그 request를 자동으로 다시 보낸다. 앱은 재시도 루프를 만들지 않는다.
+
+- 입장 거절은 `unavailable` code의 Error packet이고 header metadata에 `$zlink.admission.retryAfterMs`가 있는 경우뿐이다.
+  이 metadata가 없는 `unavailable`은 지금처럼 `RemoteError`로 그 request를 끝낸다.
+- `$zlink.admission.retryAfterMs` 값이 부호·선행 0 없는 10진 밀리초 문자열이 아니거나 0 이상 2^31 − 1 이하가
+  아니면 `FrameDecodeFailed`로 그 request만 끝내고 다시 보내지 않는다. 연결은 유지한다(§9 표의 admission metadata 행).
+- 다시 보낼 시각은 거절을 받은 시각(connector의 단조 시계)에 `retryAfterMs`와 0~50ms의 무작위 지연을 더한 시각이다.
+  서버 시계를 읽지 않는다.
+- 다시 보낼 때 같은 packet 이름, payload, application metadata, correlation을 그대로 쓰고 request sequence만 새로 받는다.
+- 거절을 받을 때마다 앱의 `OnAdmissionWaiting` callback을 한 번 부른다. 재시도는 요청 hook(§5.7)과 request callback의
+  실행 횟수를 늘리지 않는다. 횟수와 caller 취소 때의 규칙은 §5.7을 그대로 따른다(caller가 취소한 request에는
+  reply received hook을 실행하지 않는다).
+- 대기의 마감은 원래 request deadline과 `처음 거절을 받은 시각 + MaxAdmissionWait` 중 이른 쪽이다. 원래 deadline을
+  늘리지 않는다. 마감까지 성공하지 못하면 `RequestTimeout`으로 끝내고 마감 뒤에는 보내지 않는다.
+  `MaxAdmissionWait`의 기본값은 그 request의 유효 request timeout이다.
+- 연결이 끊기면 대기 중인 request는 기존 연결 생명주기(§6) 규칙대로 끝난다. 재접속이 대기 중인 request를 복원하지 않는다.
 
 ## 6. 연결 생명주기
 
@@ -693,10 +713,13 @@ terminal 여부, 종료 사유와 reconnect 조건을 바꾸지 않는다.
 | `Disconnected` — `close` | 진행 중인 operation 실패 | `Disconnected` | `ClientClose` | 안 함 |
 | `FrameDecodeFailed` — frame·header | 해당 frame을 전달하지 않고 pending request를 실패시킴 | 종료 | `ProtocolError` | reconnect option이 켜져 있으면 적용 |
 | `FrameDecodeFailed` — Error JSON payload | [§5.2](#52-request-correlation)의 `request_seq` 수신 대상 | 유지 | 없음 | 안 함 |
+| `FrameDecodeFailed` — admission metadata | 해당 request만 실패([§5.8](#58-입장-대기와-자동-재시도)) | 유지 | 없음 | 안 함 |
 | `FrameTooLarge` | 해당 frame을 전달하지 않고 pending request를 실패시킴 | 종료 | `ProtocolError` | reconnect option이 켜져 있으면 적용 |
 | `CompressionFailed` | 해당 송신 operation만 실패 | 유지 | 없음 | 안 함 |
 | `DecompressionFailed` | 해당 수신 packet 또는 pending request만 실패 | 유지 | 없음 | 안 함 |
 | `UserCallbackFailed`, `RemoteError` | 오류 event 또는 관련 callback/request로 전달 | 유지 | 없음 | 안 함 |
+
+transport 끊김, heartbeat timeout, transport write 실패, `FrameDecodeFailed`·`FrameTooLarge`로 연결이 끝나면 connector는 종료를 확정한 직후 그 원인을 오류 event로 **한 번** 전달한다. 이미 끝난 연결에서 늦게 관측한 같은 원인은 다시 전달하지 않는다. `Immediate` dispatch의 오류 handler 안에서 connector는 연결되지 않은 상태이며, 그 안에서 시작한 operation은 `Disconnected`로 끝난다.
 
 종료 처리 중 transport close가 실패하면 연결은 닫힌 것으로 확정하고, 종료를 시작한 원인의 종료 사유와 자동 reconnect 정책을 유지하며, close 실패는 `Disconnected` 오류 event로 전달한다. 정리를 마친 명시적 close 호출의 결과는 close 실패 때문에 실패가 되지 않는다.
 

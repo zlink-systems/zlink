@@ -871,9 +871,9 @@ class actor_client_impl_t final : public actor_client_t,
           detail::encode_actor_packet (header, detail::message_to_raw (message, _serializers));
         try {
             auto copied = parts.items ();
-            const auto submit = co_await runtime->send_to_actor (actor.native_ref, copied, {},
-                                                                 actor.authority_owner_generation,
-                                                                 actor.owner_lease_generation);
+            const auto submit = co_await runtime->send_to_actor (
+              actor.native_ref, copied, {}, actor.authority_owner_generation,
+              actor.owner_lease_generation, std::nullopt, actor.node_generation);
             if (submit != zlink::submit_result_t::ok) {
                 if (submit == zlink::submit_result_t::terminated) {
                     co_return detail::boundary_failure<void> (detail::boundary_error_t::shutdown,

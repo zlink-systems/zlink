@@ -369,7 +369,7 @@ struct bound_session_bind_operation_result_t
 struct bound_session_operations_t
 {
     using delivery_capability_t =
-      std::function<stateful::stateful_error_t (std::vector<zlink::message_t>)>;
+      std::function<task_t<stateful::stateful_error_t> (std::vector<zlink::message_t>)>;
     /* Session-Actor binding §4: the owner token of the Session owner's
      * admitted MeshNode descriptor of that lifecycle that passed the owner
      * lease check, or nullopt when there is none. */
@@ -847,7 +847,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
       std::uint64_t authority_owner_generation = 0,
       std::uint64_t owner_lease_generation = 0,
       std::optional<protocol::actor_message_header_t::bound_session_source_t> bound_session_source =
-        std::nullopt);
+        std::nullopt,
+      std::uint64_t node_generation = 0);
     task_t<zlink::submit_result_t>
     send_bound_session (const actor_ref_t &actor,
                         const zlink::routing_id_t &session_owner,
@@ -1135,7 +1136,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                                 std::function<void ()> before_application_handler,
                                 std::string actor_type,
                                 const mesh::service_mailbox_t::application_dispatch_t &dispatch);
-    bool dispatch_bound_session_send (const mesh::service_mailbox_record_t &record);
+    task_t<bool> dispatch_bound_session_send (const mesh::service_mailbox_record_t &record);
 
     host_options_t _options;
     instance_spot_metrics_t _instance_activation_metrics{_options.mesh.descriptor.mesh_name};

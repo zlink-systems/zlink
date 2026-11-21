@@ -22,6 +22,7 @@ import java.util.function.Supplier;
 
 final class ZLinkStreamConnectionLifecycle {
     private final ZLinkStreamConnectorConfiguration configuration;
+    private final Supplier<CompletionStage<? extends ZLinkStreamTransportConnection>> openTransport;
     private final ScheduledExecutorService timeouts;
     private final ZLinkStreamDispatchQueue dispatchQueue;
     private final ZLinkStreamPendingRequests pendingRequests;
@@ -62,6 +63,11 @@ final class ZLinkStreamConnectionLifecycle {
             Function<String, CompletionStage<Void>> controlSender,
             Runnable connectionEndedNotifier) {
         this.configuration = configuration;
+        this.openTransport =
+                switch (configuration.transport().kind()) {
+                    case WEB_SOCKET, WEB_SOCKET_SECURE -> this::connectWebSocketStage;
+                    case TCP, TLS -> ZLinkNettyTransportConnection.opener(configuration);
+                };
         this.timeouts = timeouts;
         this.dispatchQueue = dispatchQueue;
         this.pendingRequests = pendingRequests;
@@ -276,18 +282,7 @@ final class ZLinkStreamConnectionLifecycle {
                         TimeUnit.MILLISECONDS);
         attempt.whenComplete((transport, failure) -> deadline.cancel(false));
         try {
-            CompletionStage<? extends ZLinkStreamTransportConnection> opening =
-                    switch (configuration.transport().kind()) {
-                        case WEB_SOCKET, WEB_SOCKET_SECURE -> connectWebSocketStage();
-                        case TCP, TLS ->
-                                ZLinkNettyTransportConnection.connectStage(
-                                        configuration.endpoint(),
-                                        configuration.transport().kind(),
-                                        configuration.limits().receivePayload(),
-                                        configuration
-                                                .transport()
-                                                .skipServerCertificateValidation());
-                    };
+            var opening = openTransport.get();
             attempt.whenComplete(
                     (transport, failure) -> {
                         if (failure != null) opening.toCompletableFuture().cancel(true);
@@ -385,16 +380,15 @@ final class ZLinkStreamConnectionLifecycle {
                         (frame, ex) -> {
                             if (ex != null) {
                                 ZLinkStreamException violation = protocolViolation(ex);
-                                if (violation != null) {
-                                    errorPublisher.accept(violation.error());
-                                }
+                                ZLinkStreamException failure =
+                                        violation != null
+                                                ? violation
+                                                : ZLinkStreamException.of(
+                                                        ZLinkStreamErrorCode.DISCONNECTED,
+                                                        "Transport read failed.",
+                                                        ex);
                                 handleReceiveFailure(
-                                        transport,
-                                        ex,
-                                        closeReasonFor(
-                                                violation == null
-                                                        ? ZLinkStreamErrorCode.DISCONNECTED
-                                                        : violation.errorCode()));
+                                        transport, failure, closeReasonFor(failure.errorCode()));
                                 return;
                             }
                             try {
@@ -410,16 +404,15 @@ final class ZLinkStreamConnectionLifecycle {
                                 //  control - or decompressed over the receive limit, so it
                                 //  is a protocol violation (spec 32 9).
                                 ZLinkStreamException violation = protocolViolation(dispatchEx);
-                                ZLinkStreamError error =
+                                ZLinkStreamException error =
                                         violation != null
-                                                ? violation.error()
-                                                : new ZLinkStreamError(
+                                                ? violation
+                                                : ZLinkStreamException.of(
                                                         ZLinkStreamErrorCode.FRAME_DECODE_FAILED,
                                                         "Receive frame dispatch failed.",
                                                         dispatchEx);
-                                errorPublisher.accept(error);
                                 handleReceiveFailure(
-                                        transport, dispatchEx, closeReasonFor(error.code()));
+                                        transport, error, closeReasonFor(error.errorCode()));
                             }
                         });
     }
@@ -427,9 +420,9 @@ final class ZLinkStreamConnectionLifecycle {
     /**
      * Spec 32 9: the receive path is where a protocol violation is detected - a frame that does not
      * decode ({@code FrameDecodeFailed}) or a payload over the receive limit ({@code
-     * FrameTooLarge}). It is a stream-level error, published on the error event, and it ends the
-     * connection with {@code ProtocolError}. Returns null for any other failure, which on the read
-     * is the transport failing.
+     * FrameTooLarge}). It is a stream-level error and it ends the connection with {@code
+     * ProtocolError}; {@link #handleReceiveFailure} publishes it on the error event once the ending
+     * is claimed. Returns null for any other failure, which on the read is the transport failing.
      */
     private static ZLinkStreamException protocolViolation(Throwable failure) {
         Throwable cause =
@@ -450,8 +443,16 @@ final class ZLinkStreamConnectionLifecycle {
                 : ZLinkStreamCloseReason.TRANSPORT_ERROR;
     }
 
+    /**
+     * Ends {@code failed} because of {@code failure} when it is still the current connection, and
+     * does nothing otherwise. The cause is published only after the connection is claimed, so an
+     * {@code Immediate} error handler runs on a connector that is no longer connected, and a send
+     * or request it makes fails with {@code Disconnected} (spec 32 9).
+     */
     private void handleReceiveFailure(
-            ZLinkStreamTransportConnection failed, Throwable ex, ZLinkStreamCloseReason reason) {
+            ZLinkStreamTransportConnection failed,
+            ZLinkStreamException failure,
+            ZLinkStreamCloseReason reason) {
         synchronized (connectionAttemptLock) {
             if (connection != failed || state != ZLinkStreamConnectionState.CONNECTED) {
                 return;
@@ -464,7 +465,8 @@ final class ZLinkStreamConnectionLifecycle {
             //  event and happens elsewhere.
             connection = null;
         }
-        Throwable closeFailure = endConnection(failed, ex);
+        errorPublisher.accept(failure.error());
+        Throwable closeFailure = endConnection(failed, failure);
         reconnectOrDisconnect(reason);
         publishCloseFailure(closeFailure);
     }

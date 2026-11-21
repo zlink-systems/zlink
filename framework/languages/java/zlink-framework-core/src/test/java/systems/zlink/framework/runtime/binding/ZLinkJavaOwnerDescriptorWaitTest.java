@@ -449,6 +449,7 @@ final class ZLinkJavaOwnerDescriptorWaitTest {
                                     fixture.target.routingId(),
                                     "target-spot",
                                     5,
+                                    fixture.target.lifecycleGeneration(),
                                     null,
                                     List.of(payload))
                             .toCompletableFuture();
@@ -484,6 +485,79 @@ final class ZLinkJavaOwnerDescriptorWaitTest {
         }
     }
 
+    /**
+     * Spec 01-submit-and-completion §5 (:201, :205): a one-way send takes the owner generation G
+     * from the Location authority. When the admitted peer runs another lifecycle generation the
+     * send is NotConnected and nothing reaches the router.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"spot", "bound-actor", "exact-actor"})
+    void sendToAdmittedPeerOfAnotherGenerationIsNotConnectedWithoutSubmit(String path)
+            throws Exception {
+        var clock = new AtomicLong(System.nanoTime());
+        try (var fixture = new Fixture(clock::get);
+                var payload = Message.from(new byte[] {1})) {
+            long authorityGeneration = fixture.target.lifecycleGeneration();
+            var admitted = fixture.admitOtherGeneration();
+            assertNotEquals(authorityGeneration, admitted.lifecycleGeneration());
+            // The admitted route is ready, so only the generation fence can reject the send.
+            assertTrue(
+                    fixture.topology()
+                            .isReady(
+                                    fixture.topology()
+                                            .peerFromOwner(fixture.target.routingId())
+                                            .orElseThrow()));
+            var spots = (ZLinkJavaRawSpotNode) fixture.source.spotNode();
+            var actor = new ZLinkBackendActorRef(fixture.target.routingId(), "actor", 3);
+            fixture.source
+                    .sourceTransportLane()
+                    .runNowOrQueue(() -> null)
+                    .toCompletableFuture()
+                    .get(3, TimeUnit.SECONDS);
+            int sendsBefore = fixture.targetSends.get();
+            var send =
+                    switch (path) {
+                        case "spot" -> {
+                            spots.rememberSpotAuthority(
+                                    fixture.target.routingId(), "target-spot", 5, 9, 11);
+                            yield fixture.source.sendSpot(
+                                    "source-spot",
+                                    fixture.target.routingId(),
+                                    "target-spot",
+                                    5,
+                                    authorityGeneration,
+                                    null,
+                                    List.of(payload));
+                        }
+                        case "bound-actor" -> {
+                            spots.observeActorAuthority(actor, 9, 11, authorityGeneration);
+                            yield fixture.source.sendBoundActor(
+                                    actor, fixture.source.routingId(), 7, 1, List.of(payload));
+                        }
+                        case "exact-actor" ->
+                                fixture.source.sendActor(
+                                        new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                                                actor, authorityGeneration, 9, 11),
+                                        List.of(payload));
+                        default -> throw new AssertionError(path);
+                    };
+            var failure =
+                    assertThrows(
+                            ExecutionException.class,
+                            () -> send.toCompletableFuture().get(3, TimeUnit.SECONDS));
+            assertEquals(
+                    SubmitResult.NOT_CONNECTED,
+                    assertInstanceOf(ZlinkSubmitException.class, failure.getCause()).getResult());
+            fixture.source
+                    .sourceTransportLane()
+                    .runNowOrQueue(() -> null)
+                    .toCompletableFuture()
+                    .get(3, TimeUnit.SECONDS);
+            assertEquals(sendsBefore, fixture.targetSends.get());
+            assertEquals(admitted, fixture.admittedDescriptor());
+        }
+    }
+
     private static void assertFailure(CompletableFuture<?> result, ZLinkFrameworkErrorKind kind) {
         var failure = assertThrows(ExecutionException.class, () -> result.get(3, TimeUnit.SECONDS));
         assertEquals(
@@ -494,6 +568,7 @@ final class ZLinkJavaOwnerDescriptorWaitTest {
         final Context context = Zlink.createContext();
         final AtomicInteger received = new AtomicInteger();
         final AtomicInteger bindingRequests = new AtomicInteger();
+        final AtomicInteger targetSends = new AtomicInteger();
         final ZLinkJavaRawMeshNode source;
         final ZLinkJavaRawMeshNode target = new ZLinkJavaRawMeshNode(context, "descriptor-wait");
 
@@ -537,6 +612,20 @@ final class ZLinkJavaOwnerDescriptorWaitTest {
                                                                             .getName()
                                                                             .equals("request"))
                                                                         bindingRequests
+                                                                                .incrementAndGet();
+                                                                    if (socketMethod
+                                                                                    .getName()
+                                                                                    .equals("send")
+                                                                            && socketArguments
+                                                                                    != null
+                                                                            && socketArguments
+                                                                                            .length
+                                                                                    == 1
+                                                                            && target.routingId()
+                                                                                    .equals(
+                                                                                            socketArguments[
+                                                                                                    0]))
+                                                                        targetSends
                                                                                 .incrementAndGet();
                                                                     return invoke(
                                                                             nativeSocket,

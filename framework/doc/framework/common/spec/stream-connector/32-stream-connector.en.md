@@ -379,7 +379,7 @@ is put **only in request/response/error response.**
 | `Request` sent | A new `request_seq` is assigned and registered in the pending map |
 | `Response` received — `request_seq` matches a pending request | That request **completes as success** |
 | `Response` received — terminal request or no matching pending request | Discarded without a second terminal |
-| `Error` received — `request_seq` matches a pending request | That request **completes as failure** |
+| `Error` received — `request_seq` matches a pending request | That request **completes as failure**, except an admission rejection (§5.8), which keeps waiting instead |
 | `Error` received — `request_seq` is absent or does not match a pending request | Delivered to the error surface as a **stream-level error** unrelated to a pending request (§9) |
 
 - **`request_seq` is canonical for pending request matching.** Since
@@ -515,6 +515,30 @@ mode (§7). The reply received hook follows the dispatch mode like any other cal
 - **A hook failure does not change the request result.** It is handled like any other callback
   failure (§7).
 - The per-language document owns the names of the hooks and their contexts.
+
+### 5.8 Admission Wait and Automatic Retry
+
+When the server rejects an authentication request at admission
+([Authentication admission §1.3](../server/04-session/03-authentication-admission.en.md#13-rejection-result)), the connector sends
+that request again on the same connection automatically. Applications don't build their own retry loop.
+
+- An admission rejection is only an Error packet with code `unavailable` whose header metadata carries
+  `$zlink.admission.retryAfterMs`. An `unavailable` without this metadata ends the request with `RemoteError` as today.
+- If the `$zlink.admission.retryAfterMs` value isn't a decimal millisecond string with no sign and no leading zeros, or
+  isn't between 0 and 2^31 − 1, only that request ends with `FrameDecodeFailed` and isn't sent again. The
+  connection stays open (the admission metadata row of the §9 table).
+- The resend time is the time the rejection was received (on the connector's monotonic clock) plus `retryAfterMs` and a
+  random delay of 0–50 ms. The server's clock is never read.
+- A resend uses the same packet name, payload, application metadata, and correlation, and only takes a new request
+  sequence.
+- The application's `OnAdmissionWaiting` callback is called once for each rejection received. Retries don't add runs
+  of the request hooks (§5.7) or the request callback; their counts and the caller-cancellation rule follow §5.7
+  unchanged (a request the caller cancelled doesn't run the reply received hook).
+- The wait ends at the earlier of the original request deadline and `first rejection time + MaxAdmissionWait`; the
+  original deadline is never extended. If the request hasn't succeeded by then, it ends with `RequestTimeout`, and
+  nothing is sent after that point. `MaxAdmissionWait` defaults to the request's effective request timeout.
+- If the connection drops, a waiting request ends by the existing connection lifecycle rules (§6). Reconnecting
+  doesn't restore a waiting request.
 
 ## 6. Connection Lifecycle
 
@@ -831,10 +855,13 @@ reason, or the reconnect condition.
 | `Disconnected` — `close` | The in-progress operation fails | `Disconnected` | `ClientClose` | Not done |
 | `FrameDecodeFailed` — frame/header | That frame isn't delivered, and the pending request fails | Ended | `ProtocolError` | Applied if the reconnect option is on |
 | `FrameDecodeFailed` — Error JSON payload | The `request_seq` recipient defined by [§5.2](#52-request-correlation) | Kept | None | Not done |
+| `FrameDecodeFailed` — admission metadata | Only that request fails ([§5.8](#58-admission-wait-and-automatic-retry)) | Kept | None | Not done |
 | `FrameTooLarge` | That frame isn't delivered, and the pending request fails | Ended | `ProtocolError` | Applied if the reconnect option is on |
 | `CompressionFailed` | Only that send operation fails | Kept | None | Not done |
 | `DecompressionFailed` | Only that receive packet or pending request fails | Kept | None | Not done |
 | `UserCallbackFailed`, `RemoteError` | Delivered as an error event or the related callback/request | Kept | None | Not done |
+
+When a connection ends because the transport dropped, the heartbeat timed out, a transport write failed, or a frame was `FrameDecodeFailed` or `FrameTooLarge`, the connector delivers that cause as an error event **once**, right after it confirms the ending. A cause observed late on a connection that already ended isn't delivered again. Inside an error handler under `Immediate` dispatch the connector isn't connected, and an operation started there ends with `Disconnected`.
 
 If the transport close fails during close handling, the connection is confirmed closed, the close reason and automatic reconnect policy of the cause that started the close are kept, and the close failure is delivered as a `Disconnected` error event. An explicit close call that finished its cleanup doesn't fail because of the close failure.
 

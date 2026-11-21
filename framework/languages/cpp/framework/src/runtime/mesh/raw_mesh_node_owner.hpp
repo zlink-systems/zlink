@@ -382,8 +382,11 @@ class raw_mesh_node_owner_t
     task_t<bool>
     send_bound_session_replaced (const std::vector<std::uint8_t> &retired_session_owner_routing_id,
                                  const protocol::bound_session_replaced_t &record);
+    using infrastructure_submit_t =
+      std::function<bool (std::function<task_t<bool> ()>, std::function<void (result_t<void>)>)>;
     task_t<void> request_bound_session_close (protocol::bound_session_close_t record,
-                                              std::chrono::milliseconds timeout);
+                                              std::chrono::milliseconds timeout,
+                                              infrastructure_submit_t submit = {});
     bool reply_bound_session_bind (
       const service_mailbox_record_t &request,
       std::uint32_t terminal_result = 0,
@@ -622,7 +625,8 @@ class raw_mesh_node_owner_t
                              protocol::application_payload_t application_payload,
                              detail::backend::raw_send_stage_trace_t trace = {},
                              bool target_claimed = false,
-                             std::optional<std::vector<std::uint8_t>> metadata = {});
+                             std::optional<std::vector<std::uint8_t>> metadata = {},
+                             std::uint64_t target_lifecycle_generation = 0);
     task_t<bool> send_header_only (const std::vector<std::uint8_t> &target_routing_id,
                                    std::vector<std::uint8_t> header);
     task_t<bool> send_control (std::vector<std::uint8_t> target_routing_id,
@@ -677,7 +681,9 @@ class raw_mesh_node_owner_t
       const std::function<std::vector<std::uint8_t> (const detail::backend::raw_message_t &)>
         &decode_reply,
       foundation::operation_registry_t::clock_t::time_point deadline,
-      foundation::operation_registry_t::callback_t callback);
+      foundation::operation_registry_t::callback_t callback,
+      std::uint64_t target_lifecycle_generation = 0,
+      infrastructure_submit_t submit = {});
     static void observe_request (std::shared_ptr<foundation::operation_registry_t> operations,
                                  foundation::call_id_t operation,
                                  std::uint64_t correlation,

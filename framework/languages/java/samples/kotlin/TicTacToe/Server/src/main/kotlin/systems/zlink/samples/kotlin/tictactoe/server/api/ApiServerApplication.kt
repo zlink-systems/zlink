@@ -34,8 +34,13 @@ import systems.zlink.samples.kotlin.tictactoe.server.configuration.TicTacToeRead
 )
 class ApiServerApplication {
     @Bean
-    fun apiFramework(settings: SampleSettings): ZLinkFrameworkConfigurer =
-        ApiServer.configure(settings)
+    fun apiFramework(
+        settings: SampleSettings,
+        locations: ZLinkRedisLocationStore,
+    ): ZLinkFrameworkConfigurer = ZLinkFrameworkConfigurer { options ->
+        options.addLocationStore(locations)
+        ApiServer.configure(settings).configure(options)
+    }
 
     @Bean(destroyMethod = "close")
     fun locationStore(settings: SampleSettings): ZLinkRedisLocationStore =

@@ -381,6 +381,12 @@ process에 있어도 같은 판정을 거친다. Session owner의 binding aggreg
 검증하며, Session owner는 Actor authority를 다시 조회하지 않는다. Relocation seal과 route 적용은 유효한 current binding의
 close를 지연시키지 않는다.
 
+**Close는 같은 binding으로 먼저 제출된 reply와 push 뒤에 수행한다.** Actor owner는 close 요청을 그 binding의
+reply·push와 같은 순서로 Session owner에 보내고, Session owner는 먼저 받은 reply·push를 Core에 제출한 뒤 physical
+connection close를 시작한다. 이 순서를 위한 별도 timer·ack·재전송은 두지 않으며, 먼저 제출된 송신이 끝나지 않으면
+command 54의 기존 deadline으로 끝난다. Core에 수락된 write의 완료는
+[STREAM session §4.1](01-stream-session.ko.md#41-transport-종료-경계)이 소유한다.
+
 Close reply는 transport close terminal을 전달하며, 이 close가 일으킨 §7의 disconnect callback·tombstone·local cleanup
 완료를 기다리지 않는다. Binding 정리와 Actor 통지는 §7이 한 번 수행하며, close 요청 경로는 binding을 따로 해제하지
 않는다. Command 54의 request/reply는 기존 correlation·deadline·취소·오류 terminal 계약을 따른다.
@@ -427,6 +433,25 @@ idempotent 재제출이거나, callback이 없는 bind는 사용자 코드를 �
 Actor owner는 §5의 fence 검증 뒤 이 bind의 binding 반영을 Actor gate·lifecycle lane에 넣지 않고 바로
 확정한다([Handler turn과 execution gate §1·§13](../01-execution/02-handler-turn-and-execution-gate.ko.md)).
 Actor gate를 쓰는지는 callback을 호출하는지 하나로 정한다.
+
+**Actor가 bind 통지 callback을 정의했으면 Actor owner는 bind를 확정하는 같은 Actor handler 순서 안에서 그 callback을 한 번
+호출한다.** 인자는 확정한 binding identity다. Callback은 bind 결과를 바꾸지 않는다. 이 bind는 callback을 호출하므로 Actor gate를
+사용하고, callback이 없으면 지금처럼 gate를 기다리지 않는다. Actor가 자기 차례에서 destroy를 시작한 뒤 도착한 bind는 §12의
+결과로 끝난다. 기본 구현은 아무것도 하지 않는다.
+
+Callback은 bind를 확정한 뒤 실행되므로 그 실패는 bind 결과와 incoming bind reply를 바꾸지 않는다. Callback이 예외로 끝나면
+Framework는 그 예외를 runtime task 예외로 한 번 보고하고 Actor를 계속 실행한다. 실행 제한 시간은 위 `SessionReplacementCallbackTimeout`이며,
+넘으면 callback에 취소를 전달하고 같은 방식으로 한 번 보고한다. Actor 종료나 runtime 종료로 취소된 callback은 보고하지 않는다.
+
+| 언어 | 공개 callback |
+| --- | --- |
+| .NET | `ValueTask OnSessionBoundAsync(ZLinkSessionBindingIdentity incoming, CancellationToken cancellationToken)` |
+| Java | `default CompletionStage<Void> onSessionBound(ZLinkSessionBindingIdentity incoming, ZLinkActorCallbackCancellation cancellation)` |
+| Kotlin | `open suspend fun onSessionBoundSuspending(incoming: ZLinkSessionBindingIdentity, cancellation: ZLinkActorCallbackCancellation)` |
+| Node.js | `onSessionBound?(incoming: ZLinkSessionBindingIdentity, signal: AbortSignal): void \| Promise<void>` |
+| C++ | `task_t<void> on_session_bound(const actor_session_binding_identity_t &incoming, std::stop_token)` |
+
+인자 type과 취소 표현은 각 언어의 중복 bind callback(`OnDuplicateBindAsync`·`onDuplicateBind`·`on_duplicate_bind`)과 같다.
 
 Callback 실행 제한 시간은 server 설정 `SessionReplacementCallbackTimeout`이며 기본값은 `30,000 ms`다.
 이 값은 Actor owner의 중복 bind callback에도 적용한다. 제한 시간 안에 결과가 없으면 incoming bind를 `DeadlineExceeded`로
@@ -994,6 +1019,8 @@ lane 정책 타입, 검증 지점 하나)은 [§10](#10-실행과-수명)·[§11
 - `NotifyDisconnected`와 physical disconnect가 경쟁해도 같은 binding에 대한 callback은 최대 한
   번이다.
 - Disconnect 통지 뒤에도 Actor는 destroy되지 않고 Spot membership도 그대로다.
+- Actor가 reply를 반환한 뒤 다음 handler 순서에서 close를 요청하면 client는 그 reply를 받은 뒤 연결 종료를
+  관찰한다. push 뒤 close도 같다.
 - Client가 재접속하면 이전 binding이 복원되지 않고 새 bind가 필요하다.
 - Session owner와 Actor owner가 다른 언어여도 disconnect 통지는 §7의 본문 형식으로 같은 binding
   identity를 전하며, Actor owner는 같은 binding이면 callback을 실행하고 다른 current binding이 있으면

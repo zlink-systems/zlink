@@ -74,6 +74,7 @@ import {
   type ReceiveRecord,
   type ServiceSpot,
   type StreamSessionActorAuthorityFence,
+  type ServiceStreamSessionBinding,
   type StreamSessionService,
   MeshNodeRuntimeState,
   MeshPeerRuntimeState,
@@ -623,6 +624,13 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     this.stateful?.setRequestSourceAcceptance(acceptance);
   }
 
+  forgetPeer(nodeRoutingId: string, lifecycleGeneration: bigint): void {
+    const runtime = this.requireRuntime();
+    const endpoint = runtime.observePeerRoute(nodeRoutingId, lifecycleGeneration).endpoint;
+    if (this.hasPeerConnectionIntent(nodeRoutingId, endpoint)) return;
+    runtime.forgetPeerExpectation(nodeRoutingId, lifecycleGeneration);
+  }
+
   expectPeer(peer: {
     readonly nodeRoutingId: string;
     readonly endpoint: string;
@@ -728,7 +736,12 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
 
   hasPeerRouteOrConnectionIntent(targetRid: unknown, endpoint: string): boolean {
     const rid = String(targetRid);
-    if (this.requireRuntime().hasSelectedPeerRoute(rid)) return true;
+    return (
+      this.requireRuntime().hasSelectedPeerRoute(rid) || this.hasPeerConnectionIntent(rid, endpoint)
+    );
+  }
+
+  private hasPeerConnectionIntent(rid: string, endpoint: string | undefined): boolean {
     for (const intent of this.peerIntents.values()) {
       if (
         intent.nodeRoutingId === rid ||
@@ -1297,16 +1310,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     this.requireStateful().rememberSpotRoute(route, expectedCurrentRoute);
   }
 
-  entrySpotRouteFence(targetNodeRid: string): ServiceDirectSpotRouteFence {
-    const generation = this.peerGeneration(targetNodeRid);
-    return {
-      spot: { spotId: targetNodeRid, generation },
-      targetNodeRid,
-      targetNodeGeneration: generation,
-      authorityOwnerGeneration: generation,
-      ownerLeaseGeneration: generation,
-      storeVersion: entrySpotFenceVersion(generation)
-    };
+  entrySpotRouteFence(targetNodeRid: string): ServiceDirectSpotRouteFence | undefined {
+    return this.requireStateful().tryEntrySpotFence(targetNodeRid);
   }
 
   sealSpotMessageFollowIngress(
@@ -1643,7 +1648,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
 
   async sendFromSpot(
     source: ServiceSpotState,
-    target: ServiceDirectSpotRouteFence,
+    target: ServiceDirectSpotRouteFence | undefined,
     parts: MessageLike | readonly MessageLike[]
   ): Promise<SubmitResultValue> {
     return (await this.requireStateful().sendToSpot(
@@ -1655,7 +1660,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
 
   requestFromSpot(
     source: ServiceSpotState,
-    target: ServiceDirectSpotRouteFence,
+    target: ServiceDirectSpotRouteFence | undefined,
     parts: MessageLike | readonly MessageLike[],
     timeoutMs: number,
     onAdmitted?: () => void,
@@ -2026,7 +2031,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       const claim = runtime.mailbox.tryClaim(domain, MAX_DRAIN_RECORDS, Number.MAX_SAFE_INTEGER);
       if (claim === undefined) break;
       const owner =
-        claim.records[0]?.completion === undefined
+        (claim.record ?? claim.records[0]!).completion === undefined
           ? readyOwner(claim.owner, this.routingId, this.stateful, domain)
           : {
               ownerKind: ReadyOwnerKind.Node,
@@ -2054,13 +2059,6 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   private requireStateful(): ServiceStatefulRuntime {
     if (this.stateful === undefined) throw new Error('Stateful MeshNode is not started.');
     return this.stateful;
-  }
-
-  private peerGeneration(nodeRid: string): bigint {
-    if (nodeRid === this.routingId) {
-      return this.requireRuntime().topology.localDescriptor().lifecycleGeneration;
-    }
-    return this.requireRuntime().topology.peer(nodeRid)?.descriptor.lifecycleGeneration ?? 1n;
   }
 
   private requireNotStarted(): void {
@@ -2137,14 +2135,12 @@ class RawServiceSpot implements ServiceSpot {
     }
   ): Promise<SubmitResultValue> {
     this.requireOpen();
-    const routeFence = requireDirectSpotRouteFence(
-      options?.routeFence,
-      String(targetNodeRid),
-      String(targetSpotId),
+    const routeFence = this.directSpotRouteFence(
+      targetNodeRid,
+      targetSpotId,
       targetSpotGeneration,
-      options?.entrySpot === true
-        ? this.backend.entrySpotRouteFence(String(targetNodeRid))
-        : undefined
+      options?.routeFence,
+      options?.entrySpot
     );
     return this.backend.sendFromSpot(this.state, routeFence, parts);
   }
@@ -2164,14 +2160,12 @@ class RawServiceSpot implements ServiceSpot {
     completion?: import('../mesh-completion-table').ZLinkMeshCompletionHandler
   ): MeshOperationId {
     this.requireOpen();
-    const routeFence = requireDirectSpotRouteFence(
-      options?.routeFence,
-      String(targetNodeRid),
-      String(targetSpotId),
+    const routeFence = this.directSpotRouteFence(
+      targetNodeRid,
+      targetSpotId,
       targetSpotGeneration,
-      options?.entrySpot === true
-        ? this.backend.entrySpotRouteFence(String(targetNodeRid))
-        : undefined
+      options?.routeFence,
+      options?.entrySpot
     );
     return this.backend.requestFromSpot(
       this.state,
@@ -2225,6 +2219,28 @@ class RawServiceSpot implements ServiceSpot {
     this.close();
   }
 
+  /**
+   * An Entry Spot target without a resolved fence uses the target descriptor
+   * fence; undefined (no descriptor) reaches the stateful no-authority decision.
+   */
+  private directSpotRouteFence(
+    targetNodeRid: unknown,
+    targetSpotId: unknown,
+    targetSpotGeneration: bigint,
+    routeFence: ServiceDirectSpotRouteFence | undefined,
+    entrySpot: boolean | undefined
+  ): ServiceDirectSpotRouteFence | undefined {
+    if (routeFence === undefined && entrySpot === true) {
+      return this.backend.entrySpotRouteFence(String(targetNodeRid));
+    }
+    return requireDirectSpotRouteFence(
+      routeFence,
+      String(targetNodeRid),
+      String(targetSpotId),
+      targetSpotGeneration
+    );
+  }
+
   private requireOpen(): void {
     if (this.closed) throw new Error(`Spot '${this.routingId}' is closed.`);
   }
@@ -2238,12 +2254,8 @@ function requireDirectSpotRouteFence(
   route: ServiceDirectSpotRouteFence | undefined,
   targetNodeRid: string,
   targetSpotId: string,
-  targetSpotGeneration: bigint,
-  entryRoute: ServiceDirectSpotRouteFence | undefined
+  targetSpotGeneration: bigint
 ): ServiceDirectSpotRouteFence {
-  if (route === undefined && entryRoute !== undefined) {
-    return entryRoute;
-  }
   if (
     route === undefined ||
     route.targetNodeRid !== targetNodeRid ||
@@ -2253,10 +2265,6 @@ function requireDirectSpotRouteFence(
     throw new TypeError('Direct Spot submission requires the exact resolved authority fence.');
   }
   return route;
-}
-
-function entrySpotFenceVersion(generation: bigint): string {
-  return `entry:${generation}`;
 }
 
 class RawStreamSessionService implements StreamSessionService {
@@ -2349,6 +2357,10 @@ class RawStreamSessionService implements StreamSessionService {
 
   bindings(sessionRid: RoutingId) {
     return this.stateful.sessionBindings(sessionRid);
+  }
+
+  captureSubmission(binding: ServiceStreamSessionBinding) {
+    return this.stateful.captureSessionSubmission(binding);
   }
 
   async sendToActor(
@@ -2467,6 +2479,7 @@ class RawReadyBatch implements ReadyBatch {
 
 class RawReceiveBatch implements ReceiveBatch {
   private receiveCapacity: number;
+  readonly records: ReceiveRecord[] = [];
 
   constructor(
     private readonly capacity: number,
@@ -2491,14 +2504,17 @@ class RawReceiveBatch implements ReceiveBatch {
       throw new RangeError('Receive limit must be within the batch capacity.');
     }
     this.receiveCapacity = messageCapacity;
+    this.records.length = 0;
   }
-  close(): void {}
+  close(): void {
+    this.records.length = 0;
+  }
 }
 
 class MailboxClaim implements RawClaim {
   private consumed = false;
   private released = false;
-  private remaining: ServiceMailboxRecord[] = [];
+  private remaining: readonly ServiceMailboxRecord[] | undefined;
 
   constructor(
     private readonly runtime: RawServiceMeshRuntime,
@@ -2506,13 +2522,16 @@ class MailboxClaim implements RawClaim {
   ) {}
 
   recvBatch(batch: ReceiveBatch) {
-    if (this.consumed) return { ok: false, records: [] };
+    if (this.consumed || this.released) return { ok: false, records: [] };
     this.consumed = true;
     const capacity = batch as RawReceiveBatch;
-    const records: ReceiveRecord[] = [];
+    const records = capacity.records;
+    records.length = 0;
     let parts = 0;
-    for (let index = 0; index < this.claim.records.length; index += 1) {
-      const record = this.claim.records[index]!;
+    const prefix = this.claim.records;
+    const count = prefix?.length ?? 1;
+    for (let index = 0; index < count; index += 1) {
+      const record = this.claim.record ?? prefix![index]!;
       let decoded: ReceiveRecord;
       try {
         decoded = decodeMultipartRecord(this.runtime, record);
@@ -2523,7 +2542,7 @@ class MailboxClaim implements RawClaim {
           continue;
         }
         this.runtime.mailbox.releaseClaimedPayload(record);
-        this.remaining = this.claim.records.slice(index + 1);
+        this.remaining = prefix?.slice(index + 1);
         // Nothing was transferred to the receive caller when decoding throws.
         // Earlier records therefore still belong to this failed batch.
         for (const decoded of records) {
@@ -2535,7 +2554,7 @@ class MailboxClaim implements RawClaim {
       const nextParts = decoded.parts.length;
       if (records.length >= capacity.messageCapacity || parts + nextParts > capacity.partCapacity) {
         for (const part of decoded.parts) part.close();
-        this.remaining = this.claim.records.slice(index);
+        this.remaining = prefix?.slice(index) ?? [record];
         break;
       }
       parts += nextParts;
@@ -2548,6 +2567,7 @@ class MailboxClaim implements RawClaim {
   release(): void {
     if (this.released) return;
     this.released = true;
+    if (!this.consumed) this.remaining = this.claim.records ?? [this.claim.record!];
     this.runtime.mailbox.release(this.claim, this.remaining);
   }
 }

@@ -8,18 +8,22 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.CoroutineDispatcher
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertInstanceOf
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.RepeatedTest
 import org.junit.jupiter.api.Test
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind
 import systems.zlink.framework.errors.ZLinkFrameworkException
 import systems.zlink.framework.execution.ZLinkExecutionLanePolicy
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueueTestAccess
 import systems.zlink.framework.execution.ZLinkWorkerPool
 import systems.zlink.framework.kotlin.ProfileReply
 import systems.zlink.framework.kotlin.ProfileRequest
 import systems.zlink.framework.kotlin.ZLinkCoroutineSuspendHandlerInvoker
 import systems.zlink.framework.kotlin.await
+import systems.zlink.framework.kotlin.yieldWorker
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerMethodInvoker
 import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
 
@@ -72,14 +76,60 @@ class KotlinYieldAdmissionTest {
         assertEquals(null, handler.secondFailure)
     }
 
+    @RepeatedTest(40)
+    fun exhaustedYieldResumesCoroutineOnlyAfterSiblingTurn() {
+        val handler = YieldAdmissionHandler(false)
+        val releaseSibling = CompletableFuture<Void>()
+        runHandler(handler, terminalTest = true) { serial, dispatcher, queue ->
+            handler.ownsTurn = queue::isCurrent
+            serial.drain()
+            dispatcher.drain()
+            assertEquals(1, handler.submissions.get())
+            val siblingStarted = CompletableFuture<Void>()
+            val sibling =
+                queue.enqueue(
+                    {
+                        siblingStarted.complete(null)
+                        releaseSibling
+                    },
+                    null,
+                )
+            try {
+                serial.drain()
+                assertTrue(siblingStarted.isDone)
+                assertFalse(sibling.toCompletableFuture().isDone)
+
+                ZLinkSerialExecutionQueueTestAccess.exhaustSequence(queue)
+                assertTrue(handler.first.complete(7))
+                serial.drain()
+                dispatcher.drain()
+                assertEquals(
+                    0,
+                    handler.terminalEvents.size,
+                    "Yield terminal before B release: ${handler.terminalEvents}",
+                )
+            } finally {
+                releaseSibling.complete(null)
+            }
+            serial.drain()
+            dispatcher.drain()
+            assertTrue(sibling.toCompletableFuture().isDone)
+            assertEquals(listOf("queue sequence exhausted", "finally"), handler.terminalEvents)
+            assertTrue(handler.terminalInTurn)
+        }
+    }
+
     private fun runHandler(
         handler: YieldAdmissionHandler,
+        terminalTest: Boolean = false,
         exercise: (ManualTasks, ManualDispatcher, ZLinkSerialExecutionQueue) -> Unit,
     ) {
         val serial = ManualTasks()
         val dispatcher = ManualDispatcher()
         val queue = ZLinkSerialExecutionQueue(serial, ZLinkExecutionLanePolicy.spot())
-        val method = handler.javaClass.methods.single { it.name == "request" }
+        if (terminalTest) ZLinkSerialExecutionQueue.SharedSpotGate(queue)
+        val methodName = if (terminalTest) "terminalRequest" else "request"
+        val method = handler.javaClass.methods.single { it.name == methodName }
         val invocation =
             ZLinkHandlerMethodInvoker.prepare(
                 method,
@@ -126,7 +176,8 @@ class KotlinYieldAdmissionTest {
         }
         assertTrue(turn.toCompletableFuture().isDone(), "handler and resumed turns must settle")
         turn.toCompletableFuture().join()
-        assertEquals(ProfileReply(if (handler.sequential) "2" else "1"), result.join())
+        val expected = if (terminalTest) "rejected" else if (handler.sequential) "2" else "1"
+        assertEquals(ProfileReply(expected), result.join())
     }
 }
 
@@ -181,6 +232,28 @@ class YieldAdmissionHandler(val sequential: Boolean) {
             secondFailure = error
         }
         return ProfileReply(initial.await().toString())
+    }
+
+    val terminalEvents = mutableListOf<String>()
+    var ownsTurn: () -> Boolean = { false }
+    var terminalInTurn = false
+        private set
+
+    suspend fun terminalRequest(request: ProfileRequest): ProfileReply {
+        try {
+            val worker =
+                DefaultZLinkIoWorkerCall(pool) {
+                    submissions.incrementAndGet()
+                    first
+                }
+            return ProfileReply(worker.yieldWorker().toString())
+        } catch (failure: IllegalStateException) {
+            terminalInTurn = ownsTurn()
+            terminalEvents.add(failure.message.orEmpty())
+            return ProfileReply("rejected")
+        } finally {
+            terminalEvents.add("finally")
+        }
     }
 
     private fun submitYield(remote: CompletionStage<Int>): CompletionStage<Int> {

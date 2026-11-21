@@ -470,41 +470,54 @@ static void count_ctx_term_interrupt (int)
 //  term keeps waiting until the last socket closes, then succeeds.
 void test_ctx_term_resumes_after_signal ()
 {
+    void *ctx = zlink_ctx_new ();
+    TEST_ASSERT_NOT_NULL (ctx);
+    void *socket = zlink_socket (ctx, ZLINK_SOCKET_PAIR);
+    TEST_ASSERT_NOT_NULL (socket);
+
     struct sigaction action = {};
     struct sigaction previous = {};
     action.sa_handler = count_ctx_term_interrupt;
     sigemptyset (&action.sa_mask);
     TEST_ASSERT_EQUAL_INT (0, sigaction (SIGURG, &action, &previous));
 
-    void *ctx = zlink_ctx_new ();
-    TEST_ASSERT_NOT_NULL (ctx);
-    void *socket = zlink_socket (ctx, ZLINK_SOCKET_PAIR);
-    TEST_ASSERT_NOT_NULL (socket);
-
-    std::atomic<bool> done (false);
+    ctx_term_interrupts.store (0);
+    test_thread_release_gate_t release_gate;
     zlink_close_result_t result = ZLINK_CLOSE_INTERNAL_ERROR;
     std::thread terminator ([&] {
         result = zlink_ctx_term (ctx);
-        done.store (true);
+        release_gate.complete_and_wait_for_release ();
     });
-    ctx_term_interrupts.store (0);
     const pthread_t target = terminator.native_handle ();
-    for (int elapsed = 0; elapsed < 300 && !done.load (); elapsed += 10) {
-        TEST_ASSERT_EQUAL_INT (0, pthread_kill (target, SIGURG));
+    int signal_calls = 0;
+    int first_signal_error = 0;
+    for (int i = 0; i < 30; ++i) {
+        const int rc = pthread_kill (target, SIGURG);
+        ++signal_calls;
+        if (rc != 0 && first_signal_error == 0)
+            first_signal_error = rc;
         msleep (10);
     }
-    const bool ended_by_signal = done.load ();
+    const bool ended_by_signal = release_gate.is_done ();
 
-    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_close (socket));
+    const zlink_close_result_t socket_close_result = zlink_close (socket);
+    release_gate.release ();
     terminator.join ();
-    if (ended_by_signal)
-        (void) zlink_ctx_term (ctx);
-    TEST_ASSERT_EQUAL_INT (0, sigaction (SIGURG, &previous, NULL));
 
+    const int restore_rc = sigaction (SIGURG, &previous, NULL);
+    zlink_close_result_t repeated_term_result = ZLINK_CLOSE_OK;
+    if (ended_by_signal)
+        repeated_term_result = zlink_ctx_term (ctx);
+
+    TEST_ASSERT_EQUAL_INT (30, signal_calls);
+    TEST_ASSERT_EQUAL_INT (0, first_signal_error);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, socket_close_result);
+    TEST_ASSERT_EQUAL_INT (0, restore_rc);
     TEST_ASSERT_TRUE (ctx_term_interrupts.load () > 0);
     TEST_ASSERT_FALSE_MESSAGE (ended_by_signal,
                                "zlink_ctx_term ended while a socket was open");
     TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, result);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, repeated_term_result);
 }
 #endif
 

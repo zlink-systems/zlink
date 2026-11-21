@@ -148,7 +148,7 @@ final class ZLinkActorLocationCoordinator {
             return CompletableFuture.completedFuture(Optional.empty());
         }
         return resolvers
-                .readActor(actorId)
+                .findActor(actorId)
                 .thenApply(row -> row == null ? Optional.empty() : Optional.of(row.actorRef()));
     }
 

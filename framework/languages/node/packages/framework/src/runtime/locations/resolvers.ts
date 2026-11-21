@@ -400,7 +400,8 @@ export class ZLinkStoreLocationResolvers
   }
 
   async resolveActorRef(actorId: string, signal?: AbortSignal): Promise<ActorRef | undefined> {
-    const direct = await this.resolveDirectActorRoute(actorId, signal);
+    // Find observes the current authority; only a request resolution reads or writes the route cache.
+    const direct = await this.readDirectActorRoute(actorId, signal, false);
     if (direct.kind === 'ready') {
       return {
         ...direct.route.actorRef,
@@ -431,7 +432,7 @@ export class ZLinkStoreLocationResolvers
     const cached = await this.lane.run(() => this.getCachedCore(this.directActorRoutes, actorId));
     if (cached !== undefined) return { kind: 'ready', route: cached };
     this.requireRouteLookup();
-    const resolving = this.resolveUncachedDirectActorRoute(actorId, signal);
+    const resolving = this.readDirectActorRoute(actorId, signal, true);
     if (requestOperation === undefined) {
       remainingActorRequestTimeout(actorId, deadlineMs);
       return await awaitWithAbort(resolving, signal);
@@ -439,9 +440,10 @@ export class ZLinkStoreLocationResolvers
     return await resolving;
   }
 
-  private async resolveUncachedDirectActorRoute(
+  private async readDirectActorRoute(
     actorId: string,
-    signal?: AbortSignal
+    signal: AbortSignal | undefined,
+    cache: boolean
   ): Promise<ZLinkDirectActorRouteResolution> {
     const current = await this.options.stores.authorityStore.readAuthority(
       encodeAuthorityKey('actor', actorId),
@@ -483,7 +485,8 @@ export class ZLinkStoreLocationResolvers
       const route = await this.cacheDirectActorRoute(
         actorId,
         projectCanonicalActorRoute(current, actorId),
-        remainingLeaseMs
+        remainingLeaseMs,
+        cache
       );
       return route === undefined ? { kind: 'missing' } : { kind: 'ready', route };
     }
@@ -504,20 +507,21 @@ export class ZLinkStoreLocationResolvers
         ? { spotId: decoded.spotId, spotGeneration: decoded.spotGeneration }
         : {})
     };
-    const cachedRoute = await this.cacheDirectActorRoute(actorId, route, remainingLeaseMs);
+    const cachedRoute = await this.cacheDirectActorRoute(actorId, route, remainingLeaseMs, cache);
     return cachedRoute === undefined ? { kind: 'missing' } : { kind: 'ready', route: cachedRoute };
   }
 
   private async cacheDirectActorRoute(
     actorId: string,
     route: ZLinkResolvedActorRoute | undefined,
-    remainingLeaseMs: number
+    remainingLeaseMs: number,
+    cache: boolean
   ): Promise<ZLinkResolvedActorRoute | undefined> {
     return await this.lane.run(() => {
       if (route === undefined) return undefined;
       const maxAgeMs =
         this.options.routeCacheMaxAgeMs ?? zlinkDefaultLocationOptions.routeCacheMaxAgeMs;
-      if (maxAgeMs > 0) {
+      if (cache && maxAgeMs > 0) {
         this.directActorRoutes.set(actorId, {
           row: route,
           expiresAtMs: this.monotonicNowMs() + Math.min(maxAgeMs, remainingLeaseMs),

@@ -15,7 +15,7 @@
   "bin": {"zlink-location-etcd-admin": "dist/admin.js"},
   "files": ["dist", "LICENSE", "README.ko.md"],
   "scripts": {
-    "build": "node ../../node_modules/typescript/bin/tsc -b && node copy-proto.cjs",
+    "build": "node ../../node_modules/typescript/bin/tsc -b && node ../../scripts/generate-channel-header.mjs --dist && node copy-proto.cjs",
     "prepack": "npm run build"
   },
   "dependencies": {

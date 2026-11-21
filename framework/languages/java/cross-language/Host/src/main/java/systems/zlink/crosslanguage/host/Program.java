@@ -41,6 +41,7 @@ import systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
 import systems.zlink.framework.monitoring.ZLinkFrameworkRuntimeStatus;
+import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.monitoring.ZLinkObservedStatus;
 import systems.zlink.framework.spots.ZLinkSpotCreateResult;
 import systems.zlink.framework.spots.ZLinkSpotManager;
@@ -487,7 +488,8 @@ public final class Program {
             awaitPublishedPlacementWeight(locationStore, meshName,
                 args.require("node-rid"), placementWeight);
             sink.append("user-spot-created|spot=" + created.spot().spotId()
-                + "|nodeRid=" + targetNodeRid + "|state=" + created.state().name());
+                + "|nodeRid=" + targetNodeRid + "|state=" + created.state().name()
+                + "|endpoint=" + runtime.listenerStatus(ZLinkListenerKind.ROUTE_MESH, meshName).endpoint());
             // ApplicationRunners run before main() writes the ready file, and
             // the source only starts after it appears; write it here.
             writeReadyFile(args);
@@ -624,34 +626,30 @@ public final class Program {
             Thread.currentThread().interrupt();
             return;
         }
-        long deadlineNanos = System.nanoTime() + Duration.ofSeconds(90).toNanos();
-        String lastFailure = "none";
-        while (System.nanoTime() < deadlineNanos) {
-            try {
-                UserSpotProbeRes reply = actorClient
-                    .requestToActor(actorId, new UserSpotProbeReq("target-owner-probe"))
-                    .timeout(Duration.ofSeconds(5))
-                    .submit(UserSpotProbeRes.class)
-                    .toCompletableFuture()
-                    .get(7, TimeUnit.SECONDS);
-                if (targetNodeRid.equals(reply.nodeRid())) {
-                    sink.append("user-spot-probe|nodeRid=" + reply.nodeRid()
-                        + "|targetRid=" + targetNodeRid
-                        + "|actor=" + reply.actorId()
-                        + "|stateVersion=" + reply.stateVersion());
-                    return;
-                }
-                lastFailure = "unexpected-owner:" + reply.nodeRid();
-            } catch (ExecutionException | TimeoutException error) {
-                lastFailure = describe(error);
-            } catch (InterruptedException error) {
-                Thread.currentThread().interrupt();
+        // One request right after joined: a retry loop would hide a first request that fails (#4743).
+        String failure;
+        try {
+            UserSpotProbeRes reply = actorClient
+                .requestToActor(actorId, new UserSpotProbeReq("target-owner-probe"))
+                .timeout(Duration.ofSeconds(5))
+                .submit(UserSpotProbeRes.class)
+                .toCompletableFuture()
+                .get(7, TimeUnit.SECONDS);
+            if (targetNodeRid.equals(reply.nodeRid())) {
+                sink.append("user-spot-probe|nodeRid=" + reply.nodeRid()
+                    + "|targetRid=" + targetNodeRid
+                    + "|actor=" + reply.actorId()
+                    + "|stateVersion=" + reply.stateVersion());
                 return;
             }
-            sleepQuietly(500);
+            failure = "unexpected-owner:" + reply.nodeRid();
+        } catch (ExecutionException | TimeoutException error) {
+            failure = describe(error);
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            return;
         }
-        sink.append("user-spot-probe-timeout|targetRid=" + targetNodeRid
-            + "|failure=" + lastFailure);
+        sink.append("user-spot-probe-timeout|targetRid=" + targetNodeRid + "|failure=" + failure);
     }
 
     private static void startDaemon(String name, Runnable body) {

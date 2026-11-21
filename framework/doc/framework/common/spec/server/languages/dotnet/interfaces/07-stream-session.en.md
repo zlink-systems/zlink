@@ -113,9 +113,18 @@ public enum ZLinkStreamSessionError
  HandshakeFailed = 2
 }
 
+public enum ZLinkDisconnectReason
+{
+ Unknown = 0,
+ HandshakeFailed = 3,
+ TransportError = 4,
+ ContextTerminated = 5
+}
+
 public readonly record struct ZLinkStreamError(
  ZLinkStreamSessionError Error,
- string? Message);
+ string? Message,
+ ZLinkDisconnectReason? DisconnectReason = null);
 
 public sealed class ZLinkSessionDispatchContext
 {

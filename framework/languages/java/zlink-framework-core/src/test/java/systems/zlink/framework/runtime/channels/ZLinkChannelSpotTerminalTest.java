@@ -117,7 +117,14 @@ final class ZLinkChannelSpotTerminalTest {
                                         .ZLinkHandlerActivator.reflection(),
                                 Runnable::run),
                         null,
-                        (channel, node, spot, generation, authority, lease, parts) -> {
+                        (channel,
+                                node,
+                                spot,
+                                generation,
+                                nodeGeneration,
+                                authority,
+                                lease,
+                                parts) -> {
                             probe.submissions++;
                             return CompletableFuture.failedFuture(terminal);
                         },
@@ -148,6 +155,7 @@ final class ZLinkChannelSpotTerminalTest {
                                 probe.address.targetNodeRid(),
                                 probe.address.spotId(),
                                 probe.address.spotGeneration(),
+                                probe.address.targetNodeGeneration(),
                                 probe.address.authorityOwnerGeneration(),
                                 probe.address.ownerLeaseGeneration(),
                                 payload);

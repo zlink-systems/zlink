@@ -29,33 +29,35 @@ import systems.zlink.samples.kotlin.deliverydispatch.server.configuration.Sample
 )
 class DispatchServerApplication {
     @Bean
-    fun dispatchFramework(): ZLinkFrameworkConfigurer = ZLinkFrameworkConfigurer { options ->
-        options.useCoroutineHandlers(Dispatchers.Default)
-        // #895: configuration package scanning has no Kotlin form in the spec.
-        options.addHandlersFromPackageOf<DispatchServerApplication>()
-        options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
+    fun dispatchFramework(locations: ZLinkRedisLocationStore): ZLinkFrameworkConfigurer =
+        ZLinkFrameworkConfigurer { options ->
+            options.addLocationStore(locations)
+            options.useCoroutineHandlers(Dispatchers.Default)
+            // #895: configuration package scanning has no Kotlin form in the spec.
+            options.addHandlersFromPackageOf<DispatchServerApplication>()
+            options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
 
-        // --8<-- [start:doc-dd-dispatch-register]
-        options.addClientServerChannel(SampleNames.CourierChannel).client()
-        // The courier's decision comes back here as its own one-way message, so dispatch has
-        // to be a channel server (common sample spec section 7.4).
-        val dispatchEndpoint = URI.create(SampleTopology.DispatchChannelEndpoint)
-        options.addClientServerChannel(SampleNames.DispatchChannel).client()
-        options
-            .addClientServerChannel(SampleNames.DispatchChannel)
-            .server()
-            .setBindHost(dispatchEndpoint.host)
-            .setAdvertiseHost(dispatchEndpoint.host)
-            .listen(dispatchEndpoint.port)
-            .addHandlerGroup(SampleNames.DispatchChannel)
-        options.addClientServerChannel(SampleNames.TrackingChannel).client()
-        val courierRoutes = options.addRouteMesh(SampleNames.CourierSpotMesh)
-        courierRoutes
-            .listen(SampleTopology.DispatchSpotEndpoint)
-            .setRoutingIdPrefix("delivery-dispatch")
-        courierRoutes.objects().client()
-        // --8<-- [end:doc-dd-dispatch-register]
-    }
+            // --8<-- [start:doc-dd-dispatch-register]
+            options.addClientServerChannel(SampleNames.CourierChannel).client()
+            // The courier's decision comes back here as its own one-way message, so dispatch has
+            // to be a channel server (common sample spec section 7.4).
+            val dispatchEndpoint = URI.create(SampleTopology.DispatchChannelEndpoint)
+            options.addClientServerChannel(SampleNames.DispatchChannel).client()
+            options
+                .addClientServerChannel(SampleNames.DispatchChannel)
+                .server()
+                .setBindHost(dispatchEndpoint.host)
+                .setAdvertiseHost(dispatchEndpoint.host)
+                .listen(dispatchEndpoint.port)
+                .addHandlerGroup(SampleNames.DispatchChannel)
+            options.addClientServerChannel(SampleNames.TrackingChannel).client()
+            val courierRoutes = options.addRouteMesh(SampleNames.CourierSpotMesh)
+            courierRoutes
+                .listen(SampleTopology.DispatchSpotEndpoint)
+                .setRoutingIdPrefix("delivery-dispatch")
+            courierRoutes.objects().client()
+            // --8<-- [end:doc-dd-dispatch-register]
+        }
 
     @Bean fun locationStore(): ZLinkRedisLocationStore = SampleLocationStore.create()
 

@@ -506,8 +506,9 @@ An Actor record whose owner has ended (for example, by a forced termination) fol
 
 `GetOrCreate` returns the current incarnation as `Existing`, with no new
 reservation or callback execution, if a Ready Actor of the same type exists.
-If an Actor of the same type is Creating, it re-checks authority with bounded
-backoff until that state ends. Even if multiple processes concurrently call
+If an Actor of the same type is Creating or being destroyed, it re-checks authority with bounded
+backoff until that state ends. Once the destroy ends and the authority is gone, it competes to create a
+new incarnation within the remaining deadline. Even if multiple processes concurrently call
 `GetOrCreate` for the same ActorId, only the caller whose Location Store
 [reservation](../00-foundation/02-glossary.en.md#reservation-id) CAS succeeds owns
 the creation execution.
@@ -549,7 +550,11 @@ a successful destroy.
 
 The framework proceeds with destroy in the following order.
 
-1. Closes new payload admission.
+1. Closes new payload admission and changes the Actor authority record in the Location
+   Store to `Closing`. This change is a single CAS that preserves the current
+   `objectGeneration` and owner. Other nodes observe through this state that a destroy is
+   in progress (the `GetOrCreate` wait is in [§6.5](#65-the-difference-between-create-and-getorcreate); the `Create` result is
+   the `Closing` row of the result table in [Location runtime §7](../05-location-relocation/01-location-runtime.en.md#7-creating-an-actor-or-user-spot)).
 2. Cleans up in-progress lifecycle work.
 3. Removes the session binding.
 4. Removes location ownership and the registry entry.
@@ -557,11 +562,36 @@ The framework proceeds with destroy in the following order.
 | State | Destroy result |
 |---|---|
 | That incarnation no longer exists. | Returns idempotent `false`. |
+| A destroy of that incarnation is in progress. | When called on the owner node, joins the in-progress destroy's terminal and receives the same result. When called on another node, follows the result-observation table below. |
 | A different generation of the same ActorId exists. | Ends with `InvalidOperation`. |
 | The Actor is sealed for a move. | Ends with `Unavailable`. |
 
 The framework doesn't re-find the current `ActorRef` and terminate a new
 incarnation.
+
+Only the Actor's owner node runs a destroy. When destroy is called on a node that isn't the owner,
+that node sends command 27 `actorDestroy`
+([wire command table](../02-channel-transport/06-wire-protocol.en.md#3-command-space)) to the owner the
+authority record names. This command is an infrastructure command with no reply. Its body is `correlation` and the actor
+route fence carrying the `ActorRef`'s ActorId, generation, and owner fence (`actorDestroy` in the normative schema). The owner starts the destroy above for the received incarnation, or
+joins the destroy of the same incarnation if one is in progress. A different generation or a sealed
+Actor is handled as in the table above.
+
+The calling node doesn't wait for a reply from the owner; it observes the terminal through the authority
+in the Location Store. The result is decided by the authority read before sending the command and the
+observation after it.
+
+| Observation | Result |
+|---|---|
+| The authority read before sending already has a different generation. | Doesn't send the command; ends with `InvalidOperation`. |
+| The authority read before sending is sealed. | Doesn't send the command; ends with `Unavailable`. |
+| After sending, the authority of that generation is gone or changes to a larger generation. | Ends with `true`. Generations never go back, so the destroy of that incarnation has finished. |
+| The authority of that generation remains until the deadline. | Ends with the call's existing deadline result. The reason for an owner's destroy failure isn't relayed because there's no reply. |
+
+The calling node doesn't delete the authority of an Actor whose owner is alive — the owner is the single
+owner of the destroy steps. An Actor record with no owner, or whose owner lease has ended, follows the
+release rule of [Location runtime §6.1](../05-location-relocation/01-location-runtime.en.md#61-read-and-cas).
+That rule also releases a record whose owner ended after the destroy reached `Closing`.
 
 ## 7. Session Binding
 

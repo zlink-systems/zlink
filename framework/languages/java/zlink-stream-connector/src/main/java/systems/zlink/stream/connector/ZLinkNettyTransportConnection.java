@@ -29,6 +29,7 @@ import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ThreadFactory;
+import java.util.function.Supplier;
 
 import javax.net.ssl.SSLException;
 import javax.net.ssl.SSLParameters;
@@ -46,16 +47,23 @@ final class ZLinkNettyTransportConnection implements ZLinkStreamTransportConnect
 
     private ZLinkNettyTransportConnection() {}
 
-    static CompletionStage<ZLinkNettyTransportConnection> connectStage(
-            URI endpoint,
-            ZLinkStreamTransport transport,
-            int maxReceivePayloadSize,
-            boolean skipServerCertificateValidation) {
+    /** Prepares the shared event loop before a connection attempt starts its deadline. */
+    static Supplier<CompletionStage<? extends ZLinkStreamTransportConnection>> opener(
+            ZLinkStreamConnectorConfiguration configuration) {
+        return () -> connectStage(configuration);
+    }
+
+    private static CompletionStage<ZLinkNettyTransportConnection> connectStage(
+            ZLinkStreamConnectorConfiguration configuration) {
+        URI endpoint = configuration.endpoint();
+        var transport = configuration.transport();
+        int maxReceivePayloadSize = configuration.limits().receivePayload();
+        boolean skipServerCertificateValidation = transport.skipServerCertificateValidation();
         CompletableFuture<ZLinkNettyTransportConnection> result = new CompletableFuture<>();
         ZLinkNettyTransportConnection connection = new ZLinkNettyTransportConnection();
         SslContext sslContext;
         try {
-            if (transport == ZLinkStreamTransport.TLS) {
+            if (transport.kind() == ZLinkStreamTransport.TLS) {
                 SslContextBuilder builder = SslContextBuilder.forClient();
                 if (skipServerCertificateValidation) {
                     builder.trustManager(InsecureTrustManagerFactory.INSTANCE);

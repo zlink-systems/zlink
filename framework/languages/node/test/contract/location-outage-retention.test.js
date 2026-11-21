@@ -323,29 +323,41 @@ for (const provider of [false, true]) {
       s.fail();
       await s.runtime.renewOwnerLeaseOnce();
       const cutoff = retention ? 1300 : 1000;
+      let schedulerNow = 0;
+      t.mock.method(performance, 'now', () => schedulerNow);
       s.advance(cutoff - 1);
       await serial.execute(() => {
         calls++;
+        // Exhaust the scheduler time budget before the next turn.
+        schedulerNow = 20;
       });
       assert.equal(calls, 1);
-      let finish;
-      const running = serial.execute(
-        () =>
-          new Promise((resolve) => {
-            finish = resolve;
-          })
-      );
-      for (let i = 0; i < 10 && finish === undefined; i++) await Promise.resolve();
-      assert.equal(typeof finish, 'function');
-      const queued = serial.execute(() => {
-        calls++;
+
+      let enter;
+      const entered = new Promise((resolve) => {
+        enter = resolve;
       });
-      const refused = assert.rejects(queued);
-      s.advance(cutoff);
-      assert.equal(discarded, 1, 'latch cleanup does not wait for the running turn');
-      finish();
-      await running;
-      await refused;
+      let finish;
+      const held = new Promise((resolve) => {
+        finish = resolve;
+      });
+      const running = serial.execute(() => {
+        enter();
+        return held;
+      });
+      let refused;
+      try {
+        await Promise.race([entered, running]);
+        const queued = serial.execute(() => {
+          calls++;
+        });
+        refused = assert.rejects(queued, { kind: internal.ZLinkFrameworkErrorKind.NotFound });
+        s.advance(cutoff);
+        assert.equal(discarded, 1, 'latch cleanup does not wait for the running turn');
+      } finally {
+        finish();
+        await Promise.all([running, refused]);
+      }
       assert.equal(calls, 1);
       s.lease.renewOwnerLease = (...args) => s.store.renewOwnerLease(...args);
       await s.runtime.renewOwnerLeaseOnce();

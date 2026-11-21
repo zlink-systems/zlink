@@ -1,5 +1,9 @@
 # MyGame development guide
 
+## Client connection
+
+Use [Client connection in README](README.md#client-connection) for this template's endpoint, first application flow, connector choices and Java example. Keep the endpoint and packet order consistent with `server/config/`, Session startup, shared DTOs and the e2e client. Register push handlers before sending; preserve the documented join and HTTP preconditions. TCP listeners cannot serve browser, WebGL or Cocos Creator web targets. Use the release pinned by `build.gradle.kts` extra `frameworkVersion` for connectors and `bindingVersion` for the binding; `<version>` and `<binding-version>` in this file refer to those keys. Do not add literal release versions or copy engine sample packets into this template.
+
 ## Rules for AI
 
 Every server process in this project is a stateful ZLink node. Before writing code, decide which kind you are editing.
@@ -72,6 +76,8 @@ The feature paths below are relative to the ZLink repository's `framework/langua
 The channels in `mmo-world-channels` are player-selected game spaces within a world. They differ from messaging subscription channels, and that sample registers no pub/sub subscriptions. Use the actual registrations and handlers in `mmo-seamless` for border messaging subscriptions.
 
 After each addition, extend settings and registrations, `zlink.structure.json`, its checker, and e2e together. Keep game rules in application modules apart from the Framework callbacks and transport adapters that call them. Do not create empty layers in this starter.
+
+`Hosting.configure` registers the Location Store explicitly with `options.addLocationStore` once per node. A Spring Store bean alone does not register it with Framework. Keep Store registration in this shared hosting setup; role configurers must not register it again.
 
 ## Public API boundaries
 

@@ -454,24 +454,26 @@ test('same-Spot Async rejects while Yield resumes on a new FIFO turn', async () 
     error instanceof framework.ZLinkFrameworkException &&
     error.kind === framework.ZLinkFrameworkErrorKind.InvalidOperation;
 
-  let initialTurn;
-  let resumedTurn;
+  let initialSegment;
+  let resumedSegment;
   let earlier;
   await serial.execute(async () => {
-    initialTurn = serial.activeTurnId;
+    initialSegment = serial.currentSegment;
+    assert.ok(initialSegment);
     assert.throws(
       () => outbound.requestToSpot('same-spot', { requestId: 'async' }).submit(),
       isInvalidOperation
     );
     earlier = serial.post(() => events.push('queued:earlier'));
     const reply = await outbound.requestToSpot('same-spot', { requestId: 'yield' }).yield();
-    resumedTurn = serial.activeTurnId;
+    resumedSegment = serial.currentSegment;
+    assert.ok(resumedSegment);
     events.push(`resumed:${reply.marker}`);
   });
   await earlier;
 
   await outbound.sendToSpot('same-spot', { requestId: 'send', marker: 'self-send' }).submit();
-  assert.notEqual(resumedTurn, initialTurn);
+  assert.notStrictEqual(resumedSegment, initialSegment);
   assert.deepEqual(events, ['queued:earlier', 'resumed:unexpected-reply']);
   assert.deepEqual(
     submissions.map(({ kind }) => kind),

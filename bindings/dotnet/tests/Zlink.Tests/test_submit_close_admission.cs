@@ -45,9 +45,7 @@ public sealed class test_submit_close_admission
                         received.RoutingId!.Value, received.ReplyToken, parts),
                     _ => throw new ArgumentOutOfRangeException(nameof(operation))
                 };
-                if (attempt is not null && CompletionOwnerTestAccess.Property(attempt, "Failure")
-                        is Exception failure)
-                    throw failure;
+                ThrowSubmitFailure(attempt);
             }), CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
             Exception? closeFailure;
             try
@@ -154,12 +152,17 @@ public sealed class test_submit_close_admission
                     new FailingParts()),
                 _ => throw new ArgumentOutOfRangeException(nameof(operation))
             };
-            if (attempt is not null && CompletionOwnerTestAccess.Property(attempt, "Failure")
-                    is Exception failure)
-                throw failure;
+            ThrowSubmitFailure(attempt);
         });
         Assert.IsType<ArgumentException>(exception);
         socket.Dispose();
+    }
+
+    private static void ThrowSubmitFailure(object? attempt)
+    {
+        if (attempt is not null
+            && !(bool)CompletionOwnerTestAccess.Property(attempt, "Succeeded"))
+            throw (Exception)CompletionOwnerTestAccess.Invoke(attempt, "CreateFailure")!;
     }
 
     [Theory]

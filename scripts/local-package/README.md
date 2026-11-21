@@ -34,6 +34,25 @@ Ordinary local-package builds and cache hits check the versions and exit on a mi
 changing a version file, run `--sync-versions` above explicitly. The Framework package versions
 themselves and the per-language sample pins are part of the same synchronization.
 
+`--write` regenerates the Node quickstart, StreamClient and board-tables consumer locks with
+`npm install --package-lock-only --ignore-scripts --no-audit --no-fund`; npm and access to the
+pinned registry versions are required. For unpublished package builds, run
+`python3 scripts/local-package/sync-version.py --write --local-packages` instead. This updates
+consumer root pins without regenerating their registry trees. These interim consumer locks are
+not inputs for `npm ci`: local template installation deletes them and installs the actual local
+tarballs. Run normal `--write` again before publishing consumer changes.
+
+The Node workspace lock is regenerated once its referenced local tarballs exist. If they are
+not present yet, synchronization reports the deferral; run `--write --local-packages` again
+after creating them and before `npm ci`. The binding's own lock only changes its root version.
+
+`--check` remains offline. It compares root/workspace declarations, matching installed package
+manifests and available local tarballs, and checks required dependency entries referenced by
+roots, workspaces and managed packages. A registry
+package's complete dependency declarations cannot be independently verified without that
+version's manifest or tarball; missing declarations in an unavailable registry package are
+therefore outside the offline check. It does not validate all npm version-range constraints.
+
 ### Genre template pins
 
 Genre templates use only published packages ([template authoring rules](../../framework/templates/TEMPLATE-AUTHORING.ko.md)),

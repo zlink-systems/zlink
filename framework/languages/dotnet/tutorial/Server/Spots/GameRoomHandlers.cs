@@ -1,4 +1,5 @@
 using Tutorial.Shared;
+using Zlink.Framework.Contracts.Handlers;
 using Zlink.Framework.Contracts.Spots;
 
 namespace Tutorial.Server.Spots;
@@ -12,6 +13,7 @@ public sealed class PostChatHandler : IZLinkSpotPacketHandler<GameRoom, PostChat
 {
     public ValueTask HandleAsync(
         GameRoom room,
+        IZLinkMessageContext context,
         PostChat message,
         CancellationToken cancellationToken
     )
@@ -28,6 +30,7 @@ public sealed class GetRoomStateHandler
 {
     public ValueTask<RoomState> HandleAsync(
         GameRoom room,
+        IZLinkMessageContext context,
         GetRoomState request,
         CancellationToken cancellationToken
     )

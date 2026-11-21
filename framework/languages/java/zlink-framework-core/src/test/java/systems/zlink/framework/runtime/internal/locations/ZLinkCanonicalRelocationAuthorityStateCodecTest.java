@@ -41,7 +41,7 @@ final class ZLinkCanonicalRelocationAuthorityStateCodecTest {
         assertThrows(
                 IllegalArgumentException.class,
                 () ->
-                        ZLinkCanonicalRelocationAuthorityStateCodec.publish(
+                        ZLinkLegacyRelocationAuthorityFixture.publish(
                                 authorityPayload(),
                                 request,
                                 ZLinkAuthorityGenerationTransition.PRESERVE));
@@ -58,7 +58,7 @@ final class ZLinkCanonicalRelocationAuthorityStateCodecTest {
                                         ZLinkAuthorityGenerationTransition.NEW_OWNER,
                                         authorityPayload())));
         byte[] canonical =
-                ZLinkCanonicalRelocationAuthorityStateCodec.publish(
+                ZLinkLegacyRelocationAuthorityFixture.publish(
                         authorityPayload(), initial, ZLinkAuthorityGenerationTransition.NEW_OWNER);
         byte[] application =
                 ZLinkCanonicalRelocationAuthorityStateCodec.applicationPayloadOrOriginal(canonical);
@@ -71,7 +71,7 @@ final class ZLinkCanonicalRelocationAuthorityStateCodecTest {
                                 participant(
                                         ZLinkAuthorityGenerationTransition.PRESERVE, canonical)));
         byte[] next =
-                ZLinkCanonicalRelocationAuthorityStateCodec.publish(
+                ZLinkLegacyRelocationAuthorityFixture.publish(
                         canonical, successor, ZLinkAuthorityGenerationTransition.PRESERVE);
 
         assertArrayEquals(
@@ -92,7 +92,7 @@ final class ZLinkCanonicalRelocationAuthorityStateCodecTest {
 
         var publication =
                 ZLinkCanonicalRelocationAuthorityStateCodec.decode(
-                        ZLinkCanonicalRelocationAuthorityStateCodec.publish(
+                        ZLinkLegacyRelocationAuthorityFixture.publish(
                                 authorityPayload(),
                                 request,
                                 ZLinkAuthorityGenerationTransition.NEW_OWNER));
@@ -115,7 +115,7 @@ final class ZLinkCanonicalRelocationAuthorityStateCodecTest {
                                         ZLinkAuthorityGenerationTransition.NEW_OWNER,
                                         authorityPayload())));
         byte[] canonical =
-                ZLinkCanonicalRelocationAuthorityStateCodec.publish(
+                ZLinkLegacyRelocationAuthorityFixture.publish(
                         authorityPayload(), initial, ZLinkAuthorityGenerationTransition.NEW_OWNER);
 
         UUID differentAggregate = new UUID(0, 10);
@@ -131,7 +131,7 @@ final class ZLinkCanonicalRelocationAuthorityStateCodecTest {
         assertThrows(
                 IllegalArgumentException.class,
                 () ->
-                        ZLinkCanonicalRelocationAuthorityStateCodec.publish(
+                        ZLinkLegacyRelocationAuthorityFixture.publish(
                                 canonical, successor, ZLinkAuthorityGenerationTransition.PRESERVE));
     }
 
@@ -146,7 +146,7 @@ final class ZLinkCanonicalRelocationAuthorityStateCodecTest {
                                         ZLinkAuthorityGenerationTransition.NEW_OWNER,
                                         authorityPayload())));
         byte[] canonical =
-                ZLinkCanonicalRelocationAuthorityStateCodec.publish(
+                ZLinkLegacyRelocationAuthorityFixture.publish(
                         authorityPayload(), request, ZLinkAuthorityGenerationTransition.NEW_OWNER);
         byte[] malformed = canonical.clone();
         malformed[relocationSlotOffset(malformed)] = 2;
@@ -155,7 +155,7 @@ final class ZLinkCanonicalRelocationAuthorityStateCodecTest {
         assertThrows(
                 IllegalArgumentException.class,
                 () ->
-                        ZLinkCanonicalRelocationAuthorityStateCodec.publish(
+                        ZLinkLegacyRelocationAuthorityFixture.publish(
                                 malformed, request, ZLinkAuthorityGenerationTransition.NEW_OWNER));
     }
 
@@ -177,7 +177,7 @@ final class ZLinkCanonicalRelocationAuthorityStateCodecTest {
             assertGoldenState(vector.path("decoded"), state, name);
             assertArrayEquals(
                     encoded,
-                    ZLinkCanonicalRelocationAuthorityStateCodec.encodeState(state),
+                    ZLinkLegacyRelocationAuthorityFixture.encodeState(state),
                     "golden re-encode differs: " + name);
             assertNotNull(
                     ZLinkCanonicalRelocationAuthorityStateCodec.decode(
@@ -223,7 +223,7 @@ final class ZLinkCanonicalRelocationAuthorityStateCodecTest {
         assertThrows(
                 IllegalArgumentException.class,
                 () ->
-                        ZLinkCanonicalRelocationAuthorityStateCodec.publish(
+                        ZLinkLegacyRelocationAuthorityFixture.publish(
                                 malformed, request, ZLinkAuthorityGenerationTransition.NEW_OWNER));
     }
 
@@ -329,22 +329,7 @@ final class ZLinkCanonicalRelocationAuthorityStateCodecTest {
     }
 
     private static byte[] withRelocationSlot(byte[] payload, byte[] state) {
-        int slotOffset = relocationSlotOffset(payload);
-        byte[] body = new byte[payload.length - 11 - 4 - 5 + state.length];
-        int slotInBody = slotOffset - 11;
-        System.arraycopy(payload, 11, body, 0, slotInBody);
-        System.arraycopy(state, 0, body, slotInBody, state.length);
-        int tailSource = slotOffset + 5;
-        int tailLength = payload.length - 4 - tailSource;
-        System.arraycopy(payload, tailSource, body, slotInBody + state.length, tailLength);
-        ByteBuffer envelope = ByteBuffer.allocate(11 + body.length + 4).order(ByteOrder.BIG_ENDIAN);
-        envelope.put(payload, 0, 7);
-        envelope.putInt(body.length);
-        envelope.put(body);
-        CRC32C checksum = new CRC32C();
-        checksum.update(envelope.array(), 0, envelope.position());
-        envelope.putInt((int) checksum.getValue());
-        return envelope.array();
+        return ZLinkLegacyRelocationAuthorityFixture.withRelocationSlot(payload, state);
     }
 
     private static Path authorityRelocationFixture() {

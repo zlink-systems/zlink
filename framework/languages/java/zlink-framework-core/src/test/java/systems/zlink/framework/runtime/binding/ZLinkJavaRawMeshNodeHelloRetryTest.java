@@ -30,6 +30,129 @@ import java.util.concurrent.atomic.AtomicLong;
 final class ZLinkJavaRawMeshNodeHelloRetryTest {
     private static final Duration IO_DEADLINE = Duration.ofSeconds(2);
 
+    @ParameterizedTest
+    @CsvSource({
+        "false,false,false", "true,false,false", "false,true,false", "true,true,false",
+        "false,false,true", "true,false,true", "false,true,true", "true,true,true"
+    })
+    void rejectClearsAdmissionAndRetriesHelloWithoutEndingIntent(
+            boolean admitted, boolean withIntent, boolean priorLocalRejection) throws Exception {
+        var localRid = RoutingId.from("reject-local");
+        var remoteRid = RoutingId.from("reject-remote");
+        var wire = new ZLinkServiceM6AWireCodec();
+        try (var context = Zlink.createContext();
+                var node = new ZLinkJavaRawMeshNode(context, "hello-retry");
+                var peerPort = new ZLinkJavaRawServicePort(context);
+                var peer = peerPort.openRouter(remoteRid)) {
+            var port = node.port;
+            var router = port.openRouter(localRid);
+            node.router = router;
+            node.localDescriptor = descriptor(localRid, 2);
+            node.topology =
+                    new ZLinkServiceTopologyRegistry(node.localDescriptor, port.stateLane());
+            node.topology.observeChanges(node::publishPeerObservation);
+            String endpoint = descriptor(remoteRid, 2).advertisedEndpoint();
+            if (withIntent) {
+                peer.bind(endpoint);
+                node.connectPeer(endpoint, remoteRid);
+            } else {
+                router.bind(endpoint);
+                peer.options().probe(true);
+                peer.connect(endpoint);
+            }
+            port.ensureReceivePollerRegistered(router);
+            long deadline = System.nanoTime() + IO_DEADLINE.toNanos();
+            while (port.routesSnapshot(router).isEmpty()) {
+                assertTrue(System.nanoTime() < deadline, "Core route did not become selectable");
+                port.waitForReady(router, IO_DEADLINE);
+            }
+            node.observeTransportState(ZLinkJavaSocketReceivePoller.ROUTE_CHANGED);
+            tick(node, 0);
+            node.helloExchanges
+                    .get(remoteRid)
+                    .submission()
+                    .get(2, java.util.concurrent.TimeUnit.SECONDS);
+            assertEquals(ServiceWireConstants.COMMAND_HELLO, receive(peerPort, peer, wire));
+            var intents = node.connectionIntentIds();
+            if (admitted) {
+                var remote = descriptor(remoteRid, 2);
+                peerPort.send(
+                                peer,
+                                localRid,
+                                List.of(
+                                        wire.encodeAdmission(
+                                                ServiceWireConstants.COMMAND_ADMIT, remote)))
+                        .toCompletableFuture()
+                        .get(2, java.util.concurrent.TimeUnit.SECONDS);
+                dispatchNext(node, port, router, ServiceWireConstants.COMMAND_ADMIT);
+                assertEquals(1, node.readyPeerCount());
+                assertNotNull(node.livenessForTest().connection(remoteRid));
+                // A buffered REJECT from another generation cannot revoke this admission.
+                node.dispatch(
+                        new ZLinkJavaRawServicePort.Inbound(
+                                remoteRid,
+                                null,
+                                List.of(
+                                        wire.encodeReject(
+                                                ZLinkServiceM6AWireCodec
+                                                        .IDENTITY_MISMATCH_REJECT_REASON)),
+                                new systems.zlink.contracts.messaging.Received()));
+                assertEquals(1, node.readyPeerCount());
+                // A malformed selected-route REJECT also leaves admission intact.
+                byte[] malformed =
+                        wire.encodeReject(ZLinkServiceM6AWireCodec.IDENTITY_MISMATCH_REJECT_REASON);
+                peerPort.send(
+                                peer,
+                                localRid,
+                                List.of(java.util.Arrays.copyOf(malformed, malformed.length - 1)))
+                        .toCompletableFuture()
+                        .get(2, java.util.concurrent.TimeUnit.SECONDS);
+                dispatchNext(node, port, router, ServiceWireConstants.COMMAND_REJECT);
+                assertEquals(1, node.readyPeerCount());
+            }
+            // A prior expected-route mismatch can leave this local rejection observation.
+            if (priorLocalRejection) node.rejectedPeers.add(remoteRid);
+            peerPort.send(
+                            peer,
+                            localRid,
+                            List.of(
+                                    wire.encodeReject(
+                                            ZLinkServiceM6AWireCodec
+                                                    .IDENTITY_MISMATCH_REJECT_REASON)))
+                    .toCompletableFuture()
+                    .get(2, java.util.concurrent.TimeUnit.SECONDS);
+            dispatchNext(node, port, router, ServiceWireConstants.COMMAND_REJECT);
+            assertTrue(node.topology.peer(remoteRid).isEmpty(), "REJECT must remove admission");
+            assertNull(
+                    node.livenessForTest().connection(remoteRid),
+                    "REJECT must remove liveness admission");
+            assertEquals(
+                    intents, node.connectionIntentIds(), "REJECT must retain connection intent");
+            assertFalse(
+                    node.rejectedPeers.contains(remoteRid),
+                    "REJECT must not create a terminal peer state");
+            assertFalse(node.observePeerRoute(remoteRid).ready());
+            tick(node, Duration.ofSeconds(5).toNanos());
+            tick(node, Duration.ofSeconds(10).toNanos());
+            var retry = node.helloExchanges.get(remoteRid);
+            assertNotNull(retry, "REJECT must resume the existing ADMIT wait");
+            retry.submission().get(2, java.util.concurrent.TimeUnit.SECONDS);
+            assertEquals(ServiceWireConstants.COMMAND_HELLO, receive(peerPort, peer, wire));
+            peerPort.send(
+                            peer,
+                            localRid,
+                            List.of(
+                                    wire.encodeAdmission(
+                                            ServiceWireConstants.COMMAND_ADMIT,
+                                            descriptor(remoteRid, 2))))
+                    .toCompletableFuture()
+                    .get(2, java.util.concurrent.TimeUnit.SECONDS);
+            dispatchNext(node, port, router, ServiceWireConstants.COMMAND_ADMIT);
+            assertEquals(1, node.readyPeerCount(), "ADMIT after REJECT must restore readiness");
+            assertNotNull(node.livenessForTest().connection(remoteRid));
+        }
+    }
+
     @Test
     void admitBeforeFirstHelloRetainsSnapshotUntilRemoteAdmit() throws Exception {
         var localRid = RoutingId.from("admit-first-local");
@@ -233,11 +356,6 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
                         events.observedReadyCount.get(),
                         "READY handler reenters the final root");
 
-                // Finish the original UPDATEs before the next expected command in each FIFO.
-                dispatchNext(local, localPort, localRouter, ServiceWireConstants.COMMAND_UPDATE);
-                assertEquals(
-                        ServiceWireConstants.COMMAND_UPDATE,
-                        receive(remotePort, remoteRouter, wire));
                 local.observePeerAdmissionExpectation(
                                 remoteRid,
                                 remoteDescriptor.advertisedEndpoint(),
@@ -578,7 +696,6 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
                     .toCompletableFuture()
                     .get(2, java.util.concurrent.TimeUnit.SECONDS);
             dispatchNext(node, port, router);
-            assertEquals(ServiceWireConstants.COMMAND_UPDATE, receive(peerPort, peer, wire));
             assertEquals(1, node.status().admittedPeerCount(), "duplicate ADMIT is idempotent");
             assertEquals(
                     1, readyEvents.count.get(), "duplicate ADMIT must not announce ready again");
@@ -587,7 +704,10 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
                 node.sendNode(remoteRid, null, List.of(body))
                         .toCompletableFuture()
                         .get(2, java.util.concurrent.TimeUnit.SECONDS);
-                assertEquals(ServiceWireConstants.COMMAND_NODE_SEND, receive(peerPort, peer, wire));
+                assertEquals(
+                        ServiceWireConstants.COMMAND_NODE_SEND,
+                        receive(peerPort, peer, wire),
+                        "duplicate ADMIT must not emit an UPDATE");
                 node.sendChannel("orders", null, List.of(body))
                         .toCompletableFuture()
                         .get(2, java.util.concurrent.TimeUnit.SECONDS);

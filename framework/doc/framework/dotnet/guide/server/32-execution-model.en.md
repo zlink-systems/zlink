@@ -143,6 +143,31 @@ terminator line is where the room Spot gives its turn back.
 --8<-- "framework/languages/dotnet/samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/BingoRoom.cs:doc-bingo-room-join"
 ```
 
+### 5.1 Waiting for DB or file I/O in a handler {#io-worker-wait}
+
+Submit work that starts asynchronous DB or file I/O to the framework's worker scheduler.
+The terminator determines what happens to the handler's execution permission while it awaits the I/O result.
+In `SpotWide`, an ordinary async terminal keeps the turn until the write completes. Choose it when other handlers
+in the same Spot must not see the state before the write is stored; choose `Yield` to let other handlers run during the wait.
+
+| Spot kind and handler | Terminator that lets other handlers run | What proceeds during the wait | What waits |
+| --- | --- | --- | --- |
+| Member Actor handler in a `SpotWide` User Spot or Instance Spot | `Yield` | Other Actors, Spot handlers, and timers in the same Spot | The next message for the same Actor |
+| Actor handler in an Entry Spot or `PerActor` User Spot | Ordinary async terminal | Other Actors and Spot work | The next message for the same Actor. The handler retains the per-Actor gate. |
+| Spot handler, timer, or lifecycle callback in an Entry Spot | Ordinary async terminal | Actor handlers that use per-Actor gates | Other Spot handlers, timers, and lifecycle callbacks that use the same Spot gate |
+
+When a member Actor resumes after `Yield`, other messages for that Actor have made no
+changes to the state it owns exclusively.
+Recheck shared Spot state and other Actors' state before using it.
+Await DB I/O in an Actor handler when Entry Spot work needs to proceed independently of the DB response.
+
+A turn can use `Yield` for one call. A second `Yield` in the same turn fails with the error
+below before submission.
+
+| I/O worker declaration | Ordinary async / Yield | Error on second Yield |
+| --- | --- | --- |
+| `IZLinkWorkerCall<TResult> RunIoWorker<TResult>(Func<CancellationToken, ValueTask<TResult>> work)` | `Async(cancellationToken)` / `Yield(cancellationToken)` | `ZLinkFrameworkErrorKind.InvalidOperation` |
+
 ## 6. Related Documents
 
 - State objects called by id — [Spot](21-spot.en.md) · [Actor](22-actor.en.md)

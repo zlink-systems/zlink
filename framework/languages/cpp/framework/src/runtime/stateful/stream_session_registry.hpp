@@ -47,7 +47,8 @@ struct stream_binding_t
 
 struct stream_ingress_drain_t
 {
-    std::set<std::pair<std::uint64_t, std::uint64_t>> active;
+    std::map<std::pair<std::uint64_t, std::uint64_t>, task_completion_source_t<void>> active;
+    bool accepts_ingress = true;
     bool accepts_completion = true;
 };
 

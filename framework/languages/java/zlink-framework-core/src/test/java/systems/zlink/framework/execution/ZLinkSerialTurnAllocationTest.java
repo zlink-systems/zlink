@@ -26,8 +26,10 @@ public final class ZLinkSerialTurnAllocationTest {
     // #1673 dispatch loop: 39881 objects / 1556976 bytes over 1000 dispatches.
     // #4570 drops Message's direct-scope field (56 -> 48 bytes): request + reply = -16 bytes.
     // Round each per-dispatch mean to the nearest integer; .5 rounds up (Math.round).
-    private static final long EXPECTED_OBJECTS_PER_DISPATCH = 41;
-    private static final long EXPECTED_BYTES_PER_DISPATCH = 1573;
+    // Reply body view (view + part array) replaces the bare reply Message for the string serializer
+    // in this fixture: +2 objects / +56 bytes. JSON replies drop their native Message instead.
+    private static final long EXPECTED_OBJECTS_PER_DISPATCH = 43;
+    private static final long EXPECTED_BYTES_PER_DISPATCH = 1629;
     private static final String UNFILTERED_WINDOW_EVENT = "systems.zlink.UnfilteredDispatchWindow";
 
     @Name(UNFILTERED_WINDOW_EVENT)

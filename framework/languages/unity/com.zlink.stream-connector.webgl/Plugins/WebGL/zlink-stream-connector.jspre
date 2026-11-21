@@ -206,6 +206,9 @@ var ZlinkStreamConnectorBundle = (() => {
     return ZlinkStreamCloseReasonCode2;
   })(ZlinkStreamCloseReasonCode || {});
   var unicodeWhiteSpaceOnly = /^\p{White_Space}*$/u;
+  var utf8Encoder = new TextEncoder();
+  var utf8Decoder = new TextDecoder();
+  var controlTextDecoder = new TextDecoder("utf-8", { fatal: true });
   var validMessageKinds = new Set(
     Object.values(ZlinkStreamMessageKind).filter((value) => typeof value === "number")
   );
@@ -292,7 +295,7 @@ var ZlinkStreamConnectorBundle = (() => {
     return { closeReason, diagnostic };
   }
   function decodeControlText(value) {
-    return new TextDecoder("utf-8", { fatal: true }).decode(value);
+    return controlTextDecoder.decode(value);
   }
   function splitStreamWireFrames(chunk) {
     if (chunk.length === 0) throw new Error("Stream frame prefix is incomplete.");
@@ -600,10 +603,10 @@ var ZlinkStreamConnectorBundle = (() => {
     return lz4UnpicklePayload(payload, maxDecompressedSize != null ? maxDecompressedSize : defaultMaxDecompressedPayloadSize);
   }
   function utf8Encode(value) {
-    return new TextEncoder().encode(value);
+    return utf8Encoder.encode(value);
   }
   function utf8Decode(value) {
-    return new TextDecoder().decode(value);
+    return utf8Decoder.decode(value);
   }
   function decodeStreamWireHeaderMetadata(header, offset) {
     if (header.length - offset < UINT16_BYTES) {

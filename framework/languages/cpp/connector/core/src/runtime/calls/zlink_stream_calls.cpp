@@ -1377,6 +1377,11 @@ bool connection_ended (const std::shared_ptr<connector_state_t> &state,
 {
     connection_operations_t operations;
     std::shared_ptr<boost::asio::steady_timer> heartbeat_timer;
+    /* The ending is recorded under transport_mutex. The handlers it schedules
+     * are user code that can call back into the connector surface, so Immediate
+     * runs them after the lock is released, on a connector that is already
+     * disconnected (stream-connector §7, §9). */
+    deferred_delivery_scope_t deliveries (*state);
     {
         std::lock_guard<std::mutex> lock (state->transport_mutex);
         if (state->connection != observed_connection) {
@@ -1390,6 +1395,7 @@ bool connection_ended (const std::shared_ptr<connector_state_t> &state,
         heartbeat_timer = std::move (state->heartbeat_timer);
         operations = take_connection_operations_locked (*state);
     }
+    deliveries.deliver ();
     cancel_timer (heartbeat_timer);
     fail_connection_operations (state, std::move (operations), error.message);
     observed_connection->shutdown_and_close_async ([state] (boost::system::error_code close_error) {

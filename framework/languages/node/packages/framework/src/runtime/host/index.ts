@@ -7,12 +7,11 @@ import { ZLinkProviderRelocationRepository } from '../locations/relocation-blob'
 import type { ApplicationJobOrigin } from '../application-jobs/contracts';
 import { currentApplicationJobOrigin } from '../application-jobs/application-job-queue-scope';
 import { listAllMeshNodeDescriptors } from '../locations/location-store-pages';
-import { ZLinkLiveRowFilter } from '../locations/lease-tracker';
 import { ZLinkDescriptorPublicationUnconfirmedError } from '../locations/descriptor-publication';
 import { ZLinkOwnerLeaseReleaseDelayPendingError } from '../locations/owner-lease-release-delay';
 import { ZLinkMeshNodeDescriptorConflictException } from '../spots/spot-node-runtime-manager';
 import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import {
   type ActorRef,
@@ -125,6 +124,8 @@ import {
   messageFlowTracingEnabled,
   runWithFlow,
   traceShutdownStep,
+  isRelocationDebugEnabled,
+  relocationDebug,
   ZLinkRuntimeMetrics,
   type ZLinkDiagnosticsContext,
   type ZLinkMessageFlowModeCell,
@@ -242,7 +243,6 @@ import { decodeRemoteActorPacketRelay } from '../spots/spot-remote-route-codec';
 import { decodeStreamHeader } from '../streams/protocol';
 
 const HOST_SHUTDOWN_POLL_INTERVAL_MS = 100;
-const HANDOFF_ACCEPTANCE_POLL_INTERVAL_MS = 10;
 const DEFAULT_HOST_CONTROL_TIMEOUT_MS = 30_000;
 
 export interface ZLinkFrameworkRuntimeLifecycle {
@@ -304,6 +304,11 @@ export class ZLinkFrameworkRuntimeHost
   channelRuntime?: ZLinkChannelRuntimeManager;
   spotNodeRuntime?: ZLinkSpotNodeRuntimeManager;
   private streamRuntime?: ZLinkStreamRuntimeManager;
+
+  /** Installs a stream runtime without starting native nodes, for shutdown tests. */
+  useStreamRuntimeForTesting(streamRuntime: ZLinkStreamRuntimeManager): void {
+    this.streamRuntime = streamRuntime;
+  }
   private statefulAuthorityRoutes?: ZLinkStatefulAuthorityRouteRuntime;
   readonly locationOwner: ZLinkLocationRuntimeOwner;
   private readonly meshRouters: MeshRouterResolver;
@@ -878,6 +883,7 @@ export class ZLinkFrameworkRuntimeHost
       sourceQuiescenceChanged: () => this.publishCurrentRuntimeStatus(),
       providerResolver: options.providerResolver,
       locationStore: () => this.locationOwner.currentStores?.locationStore,
+      relocationStore: this.relocationStore,
       currentOwner: () => this.locationOwner.currentRuntime?.currentOwnerToken,
       liveDescriptors: (meshName, signal) =>
         this.locationOwner.currentRuntime?.listLiveMeshNodes(meshName, signal) ??
@@ -1095,6 +1101,19 @@ export class ZLinkFrameworkRuntimeHost
       return Promise.reject(new RangeError('Shutdown deadlineMs must be greater than zero.'));
     }
     if (this.shutdownOperation === undefined) {
+      if (isRelocationDebugEnabled()) {
+        const nodes = this.streamRuntime?.shutdownSnapshot() ?? [];
+        relocationDebug('host.shutdown.start', { deadlineMs, nodes });
+        for (const node of nodes) {
+          for (const session of node.sessions) {
+            relocationDebug('host.shutdown.session', {
+              nodeName: node.nodeName,
+              meshName: node.meshName,
+              ...session
+            });
+          }
+        }
+      }
       this.runtimeDeadline = new Date(Date.now() + deadlineMs);
       this.relocationStopStarting?.abort(new Error('Shutdown requested.'));
       this.shutdownOperationStartedAt = performance.now();
@@ -1126,6 +1145,15 @@ export class ZLinkFrameworkRuntimeHost
       // maintenance operation must observe that publication before it writes
       // Retiring/Draining, otherwise two descriptor revisions can race and
       // make a valid drain look like a Store failure.
+      if (await this.serviceRelocation.hasPendingDeliveries()) {
+        return this.resetBlockedRelocation(
+          blockedRelocation(
+            mode,
+            effectiveTargetApplicationVersion,
+            ZLinkFrameworkRelocationReason.OperationInProgress
+          )
+        );
+      }
       await this.spotNodeRuntime?.waitForRuntimeWeightPublication();
       const blocker = await this.preflightAutomaticPeerReadiness(
         deadlineAtMs,
@@ -1854,11 +1882,8 @@ export class ZLinkFrameworkRuntimeHost
   ): Promise<void> {
     if (!this.ownerAdmissionOpen()) return;
     await this.publishOrStayPreparing(runtime, async (signal) => {
-      await spotNodeRuntime.publishMeshNodeState(ZLinkFrameworkRuntimeState.Preparing, signal);
+      await spotNodeRuntime.publishMeshNodeState(this.runtimeState, signal);
       if (runtime.ownerLeaseUsable === false) return;
-      if (this.runtimeState !== ZLinkFrameworkRuntimeState.Preparing) {
-        await spotNodeRuntime.publishMeshNodeState(this.runtimeState, signal);
-      }
       await spotNodeRuntime.startLocationAutoConnect(signal);
       await channelRuntime.startLocationAutoConnect(signal);
       await channelRuntime.reclaimLocationOwnerRows(signal);
@@ -2428,10 +2453,10 @@ export class ZLinkFrameworkRuntimeHost
     if (locationStore === undefined) {
       throw new ZLinkConfigurationException('User Spot creation requires a Location Store.');
     }
-    const liveRows = new ZLinkLiveRowFilter();
     const leaseTracker = this.locationOwner.currentLeaseTracker!;
     this.actorPlacement ??= new ZLinkActorPlacementCoordinator({
       store: locationStore,
+      leaseTracker,
       actorRelocationPolicy: (meshName, stableType) =>
         this.options.registration.spotNodes.get(meshName)?.actorFactoryRegistrations?.[stableType]
           ?.relocation.kind,
@@ -2481,29 +2506,15 @@ export class ZLinkFrameworkRuntimeHost
           );
         }
         const meshNode = this.spotNodeRuntime?.meshNode(meshName);
-        const descriptors = await liveRows.filter(
-          await listAllMeshNodeDescriptors(locationStore, meshName, signal),
-          (descriptor, signal) => leaseTracker.isOwnerTokenLive(descriptor, signal),
-          signal
-        );
-        const selected = await selectReadyLocationPlacementDescriptor(
-          descriptors,
-          meshNode,
-          signal,
-          (descriptor) => {
-            const capability = descriptor.objectCapabilities.find(
-              (candidate) => candidate.objectKind === 'actor' && candidate.stableType === stableType
-            );
-            return (
-              descriptor.state === ZLinkFrameworkRuntimeState.Serving &&
-              descriptor.objectRole === 'server' &&
-              descriptor.placementWeight > 0 &&
-              descriptor.entrySpotId !== undefined &&
-              excludedNodeRids?.has(encodeRoutingIdStorageHex(descriptor.rid)) !== true &&
-              capability?.entryAccepted === true
-            );
-          }
-        );
+        const selected =
+          await this.spotNodeRuntime?.locationAutoConnect?.requestSources.selectPlacement(
+            meshName,
+            'actor',
+            stableType,
+            meshNode,
+            signal,
+            excludedNodeRids
+          );
         if (selected === undefined) return undefined;
         const localStatus = meshNode?.status();
         if (localStatus === undefined) {
@@ -2606,38 +2617,15 @@ export class ZLinkFrameworkRuntimeHost
       target: async (request, signal, excludedNodeRids) => {
         const meshName = selectUserSpotMesh(request.meshName);
         const meshNode = this.spotNodeRuntime?.meshNode(meshName);
-        const descriptors = await liveRows.filter(
-          await listAllMeshNodeDescriptors(locationStore, meshName, signal),
-          (descriptor, signal) => leaseTracker.isOwnerTokenLive(descriptor, signal),
-          signal
-        );
-        const selected = await selectReadyLocationPlacementDescriptor(
-          descriptors,
-          meshNode,
-          signal,
-          (descriptor) => {
-            const capability = descriptor.objectCapabilities.find(
-              (candidate) =>
-                candidate.objectKind === 'user_spot' && candidate.stableType === request.stableType
-            );
-            const spotTypeCapacity = descriptor.populationCapacity.spotTypes.find(
-              (candidate) =>
-                candidate.objectKind === 'user_spot' && candidate.stableType === request.stableType
-            );
-            const spots = descriptor.populationCapacity.spots;
-            return (
-              descriptor.state === 1 &&
-              descriptor.objectRole === 'server' &&
-              descriptor.placementWeight > 0 &&
-              excludedNodeRids?.has(encodeRoutingIdStorageHex(descriptor.rid)) !== true &&
-              (spots.limit === 0 || spots.active + spots.reserved < spots.limit) &&
-              capability !== undefined &&
-              (spotTypeCapacity === undefined ||
-                spotTypeCapacity.limit === 0 ||
-                spotTypeCapacity.active + spotTypeCapacity.reserved < spotTypeCapacity.limit)
-            );
-          }
-        );
+        const selected =
+          await this.spotNodeRuntime?.locationAutoConnect?.requestSources.selectPlacement(
+            meshName,
+            'user_spot',
+            request.stableType,
+            meshNode,
+            signal,
+            excludedNodeRids
+          );
         if (selected === undefined) return undefined;
         const localStatus = meshNode?.status();
         return {
@@ -2921,8 +2909,13 @@ export class ZLinkFrameworkRuntimeHost
         this.spotNodeRuntime?.discardActorActivation(actor, error);
         this.spotManager?.discardActorActivation(actor, error);
       },
-      terminateActorActivation: (actor, terminal) =>
-        this.spotNodeRuntime?.terminateActorActivation(actor, terminal) ?? terminal(),
+      terminateActorActivation: (actor, terminal) => {
+        const cleanup = async () => {
+          await this.serviceRelocation.drainTargetActorRelocation(actor);
+          await terminal();
+        };
+        return this.spotNodeRuntime?.terminateActorActivation(actor, cleanup) ?? cleanup();
+      },
       registration: this.options.registration,
       messageFlow: () => this.createDispatchErrorReporter(this.runtimeOrPreStartErrorSink).flow,
       routeTransport: this.routeTransport,
@@ -3449,86 +3442,125 @@ export class ZLinkFrameworkRuntimeHost
       return;
     }
 
-    const current = state.boundSession;
     const actor = state.actor;
-    const duplicateCallback =
-      current !== undefined && !samePhysicalSession(current, incomingTarget)
-        ? actor?.onDuplicateBind
-        : undefined;
-    if (duplicateCallback === undefined || actor === undefined || current === undefined) {
+    const boundCallback = actor?.onSessionBound;
+    const currentAtAdmission = state.boundSession;
+    if (
+      actor === undefined ||
+      (boundCallback === undefined &&
+        (actor.onDuplicateBind === undefined ||
+          currentAtAdmission === undefined ||
+          samePhysicalSession(currentAtAdmission, incomingTarget)))
+    ) {
       state.installBoundSessionBinding(incomingTarget);
       replyBindingSuccess();
       return;
     }
 
-    let callbackStarted!: () => void;
-    const started = new Promise<void>((resolve) => {
-      callbackStarted = resolve;
-    });
     let callbackTimedOut = false;
+    const callbackState = { notifying: false };
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     const cancellation = new AbortController();
+    const lifecycleSignal = signal ?? this.executionState?.abortController.signal;
     const callbackSignal =
-      signal === undefined ? cancellation.signal : AbortSignal.any([signal, cancellation.signal]);
+      lifecycleSignal === undefined
+        ? cancellation.signal
+        : AbortSignal.any([lifecycleSignal, cancellation.signal]);
+    let finishWait!: (outcome: 'timedOut' | 'cancelled') => void;
+    const timeout = new Promise<'timedOut' | 'cancelled'>((resolve) => {
+      finishWait = resolve;
+    });
+    const startCallbackTimeout = (): void => {
+      if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+      timeoutHandle = setTimeout(() => {
+        callbackTimedOut = true;
+        finishWait('timedOut');
+      }, this.options.registration.sessionReplacementCallbackTimeoutMs);
+    };
+    const stopNotification = (): void => {
+      if (callbackState.notifying) finishWait('cancelled');
+    };
     const turn = spotManager.executeActorTurn(
       state.meshName,
-      state.actor?.context.spotId,
+      actor.context.spotId,
       state.actorId,
       async () => {
-        callbackStarted();
-        const decision = await duplicateCallback.call(
-          actor,
-          sessionBindingIdentity(current),
-          sessionBindingIdentity(incomingTarget),
-          callbackSignal
-        );
-        if (callbackTimedOut) return;
-        if (decision !== undefined && decision.length > 0) {
-          if (Buffer.byteLength(decision, 'utf8') > 0xffff) {
-            throw new RangeError('Duplicate bind rejection message exceeds Text16 capacity.');
+        const current = state.boundSession;
+        const duplicateCallback = actor.onDuplicateBind;
+        if (
+          duplicateCallback !== undefined &&
+          current !== undefined &&
+          !samePhysicalSession(current, incomingTarget)
+        ) {
+          startCallbackTimeout();
+          const decision = await duplicateCallback.call(
+            actor,
+            sessionBindingIdentity(current),
+            sessionBindingIdentity(incomingTarget),
+            callbackSignal
+          );
+          if (callbackTimedOut) return;
+          if (decision !== undefined && decision.length > 0) {
+            if (Buffer.byteLength(decision, 'utf8') > 0xffff) {
+              throw new RangeError('Duplicate bind rejection message exceeds Text16 capacity.');
+            }
+            if (
+              record.replyFailure?.(RequestResult.Rejected, 0, {
+                kind: 'streamBindRejected',
+                rejectionMessage: decision
+              }) !== SubmitResult.Ok
+            ) {
+              throw new ZLinkConfigurationException(
+                `MeshNode Actor binding target '${binding.actor.actorId}' rejection acknowledgement failed.`
+              );
+            }
+            return;
           }
-          if (
-            record.replyFailure?.(RequestResult.Rejected, 0, {
-              kind: 'streamBindRejected',
-              rejectionMessage: decision
-            }) !== SubmitResult.Ok
-          ) {
-            throw new ZLinkConfigurationException(
-              `MeshNode Actor binding target '${binding.actor.actorId}' rejection acknowledgement failed.`
-            );
-          }
-          return;
         }
         state.installBoundSessionBinding(incomingTarget);
         replyBindingSuccess();
+        if (boundCallback === undefined) return;
+        callbackState.notifying = true;
+        lifecycleSignal?.addEventListener('abort', stopNotification, { once: true });
+        startCallbackTimeout();
+        if (lifecycleSignal?.aborted === true) stopNotification();
+        await boundCallback.call(actor, sessionBindingIdentity(incomingTarget), callbackSignal);
       }
-    );
-    const timeout = started.then(
-      () =>
-        new Promise<'timedOut'>((resolve) => {
-          timeoutHandle = setTimeout(() => {
-            callbackTimedOut = true;
-            resolve('timedOut');
-          }, this.options.registration.sessionReplacementCallbackTimeoutMs);
-        })
     );
     try {
       const outcome = await Promise.race([turn.then(() => 'completed' as const), timeout]);
       if (outcome === 'timedOut') {
-        cancellation.abort(createDeadlineExceededError('Duplicate bind callback timed out.'));
-        if (record.replyFailure?.(RequestResult.TimedOut, 0) !== SubmitResult.Ok) {
-          throw new ZLinkConfigurationException(
-            `MeshNode Actor binding target '${binding.actor.actorId}' timeout acknowledgement failed.`
+        const error = createDeadlineExceededError(
+          callbackState.notifying
+            ? 'Session bound callback timed out.'
+            : 'Duplicate bind callback timed out.'
+        );
+        cancellation.abort(error);
+        if (callbackState.notifying) throw error;
+        else {
+          if (record.replyFailure?.(RequestResult.TimedOut, 0) !== SubmitResult.Ok) {
+            throw new ZLinkConfigurationException(
+              `MeshNode Actor binding target '${binding.actor.actorId}' timeout acknowledgement failed.`
+            );
+          }
+          void turn.catch((error: unknown) =>
+            this.runtimeOrPreStartErrorSink.reportRuntimeTaskException(
+              `duplicate bind callback '${binding.actor.actorId}'`,
+              error
+            )
           );
         }
-        void turn.catch((error: unknown) =>
-          this.runtimeOrPreStartErrorSink.reportRuntimeTaskException(
-            `duplicate bind callback '${binding.actor.actorId}'`,
-            error
-          )
+      }
+    } catch (error) {
+      if (!callbackState.notifying) throw error;
+      if (lifecycleSignal?.aborted !== true) {
+        this.runtimeOrPreStartErrorSink.reportRuntimeTaskException(
+          `session bound callback '${binding.actor.actorId}'`,
+          error
         );
       }
     } finally {
+      lifecycleSignal?.removeEventListener('abort', stopNotification);
       if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
     }
   }
@@ -4030,92 +4062,6 @@ function isStreamPayloadCodec(codec: unknown): codec is ZLinkStreamPayloadCodec 
     codec !== null &&
     typeof (codec as { encode?: unknown }).encode === 'function'
   );
-}
-
-function selectLocationPlacementDescriptor(
-  descriptors: readonly ZLinkMeshNodeDescriptor[]
-): ZLinkMeshNodeDescriptor | undefined {
-  const total = descriptors.reduce(
-    (sum, descriptor) => sum + BigInt(descriptor.placementWeight),
-    0n
-  );
-  if (total === 0n) return undefined;
-  let point = randomBigIntBelow(total);
-  for (const descriptor of descriptors) {
-    const weight = BigInt(descriptor.placementWeight);
-    if (point < weight) return descriptor;
-    point -= weight;
-  }
-  return descriptors.at(-1);
-}
-
-async function selectReadyLocationPlacementDescriptor(
-  descriptors: readonly ZLinkMeshNodeDescriptor[],
-  node: ZLinkBackendMeshNode | undefined,
-  signal: AbortSignal | undefined,
-  isEligible: (descriptor: ZLinkMeshNodeDescriptor) => boolean
-): Promise<ZLinkMeshNodeDescriptor | undefined> {
-  const eligible = descriptors.filter(isEligible);
-  if (eligible.length === 0) return undefined;
-  for (;;) {
-    const localStatus = node?.status();
-    const selected = selectLocationPlacementDescriptor(
-      eligible.filter((descriptor) => isPlacementTargetReady(node, localStatus, descriptor))
-    );
-    if (selected !== undefined) return selected;
-    try {
-      await waitForPlacementReadiness(signal);
-    } catch {
-      return undefined;
-    }
-  }
-}
-
-function isPlacementTargetReady(
-  node: ZLinkBackendMeshNode | undefined,
-  localStatus: ReturnType<ZLinkBackendMeshNode['status']> | undefined,
-  descriptor: ZLinkMeshNodeDescriptor
-): boolean {
-  if (node === undefined) return true;
-  if (
-    localStatus !== undefined &&
-    routingIdsEqual(localStatus.routingId, descriptor.rid) &&
-    localStatus.lifecycleGeneration === descriptor.lifecycleGeneration
-  ) {
-    return true;
-  }
-  return node.isPeerRouteReady?.(descriptor.rid, descriptor.lifecycleGeneration) ?? true;
-}
-
-function waitForPlacementReadiness(signal?: AbortSignal): Promise<void> {
-  if (signal?.aborted === true) return Promise.reject(signal.reason);
-  return new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      signal?.removeEventListener('abort', abort);
-      resolve();
-    }, HANDOFF_ACCEPTANCE_POLL_INTERVAL_MS);
-    const abort = () => {
-      clearTimeout(timer);
-      signal?.removeEventListener('abort', abort);
-      reject(signal?.reason);
-    };
-    signal?.addEventListener('abort', abort, { once: true });
-  });
-}
-
-function randomBigIntBelow(exclusiveUpperBound: bigint): bigint {
-  if (exclusiveUpperBound <= 0n) {
-    throw new RangeError('Random selection upper bound must be positive.');
-  }
-  const bitLength = exclusiveUpperBound.toString(2).length;
-  const byteLength = Math.ceil(bitLength / 8);
-  const highBitMask = 0xff >> (byteLength * 8 - bitLength);
-  for (;;) {
-    const bytes = randomBytes(byteLength);
-    bytes[0] = bytes[0]! & highBitMask;
-    const value = BigInt(`0x${bytes.toString('hex')}`);
-    if (value < exclusiveUpperBound) return value;
-  }
 }
 
 function relocationReason(reason: string): ZLinkFrameworkRelocationReason {

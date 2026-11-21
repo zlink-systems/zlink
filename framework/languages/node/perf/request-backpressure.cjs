@@ -7,7 +7,6 @@ const { createHook } = require('node:async_hooks');
 const { performance } = require('node:perf_hooks');
 const { Session } = require('node:inspector');
 const { setImmediate: immediate } = require('node:timers/promises');
-const net = require('node:net');
 require('reflect-metadata');
 const { Module, Injectable } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
@@ -48,17 +47,6 @@ function pressureMetrics() {
   };
 }
 
-async function endpoint() {
-  const server = net.createServer();
-  await new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', resolve);
-  });
-  const port = server.address().port;
-  await new Promise((resolve) => server.close(resolve));
-  return `tcp://127.0.0.1:${port}`;
-}
-
 async function until(ready) {
   const deadline = performance.now() + DEADLINE_MS;
   while (!ready()) {
@@ -79,7 +67,7 @@ async function frameworkPair(messageFlow) {
     }
   }
   Injectable()(Echo);
-  const address = await endpoint();
+  let address;
   const meters = [];
   async function host(server) {
     class Host {}
@@ -96,7 +84,7 @@ async function frameworkPair(messageFlow) {
             builder.configureInboundDispatch().coreHwmBudgetBytes(CORE_BUDGET);
             const mesh = builder
               .addRouteMesh('bp')
-              .listen(server ? address : 'tcp://127.0.0.1:0')
+              .listen('tcp://127.0.0.1:0')
               .routingId(server ? 'bp-server' : 'bp-client');
             if (server) mesh.addRequestHandler('BenchPayload', Echo);
             else mesh.peerConnections().connect('bp-server', address);
@@ -109,6 +97,9 @@ async function frameworkPair(messageFlow) {
     return NestFactory.createApplicationContext(Host, { logger: false, abortOnError: false });
   }
   const server = await host(true);
+  address = server
+    .get(nest.ZLINK_FRAMEWORK_RUNTIME, { strict: false })
+    .getListenerStatus('routeMesh', 'bp').endpoint;
   const client = await host(false);
   const topology = client.get(nest.ZLINK_ROUTE_MESH_RUNTIME, { strict: false });
   await until(() => topology.snapshot('bp').readyPeerCount === 1);
@@ -148,9 +139,8 @@ async function bindingPair() {
   client.setRoutingId(zlink.RoutingId.from(Buffer.from('bp-client')));
   client.options.mandatory = true;
   client.options.setConnectRoutingId(peer);
-  const address = await endpoint();
-  server.bind(address);
-  client.connect(address);
+  server.bind('tcp://127.0.0.1:0');
+  client.connect(server.options.lastEndpoint);
   const received = new zlink.Received();
   const poller = zlink.createPoller();
   const events = zlink.createPollEvents(1);

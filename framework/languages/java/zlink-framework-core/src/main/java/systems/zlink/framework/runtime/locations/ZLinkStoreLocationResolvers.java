@@ -6,28 +6,40 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.ZLinkLocationOptions;
 import systems.zlink.framework.locations.ZLinkLocationRole;
+import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
+import systems.zlink.framework.locations.ZLinkObjectCapability;
 import systems.zlink.framework.locations.ZLinkPageRequest;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
+import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeState;
+import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectPeer;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectPeerResolver;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectType;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor;
+import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocationState;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceMessageFollowWireCodec;
 import systems.zlink.framework.spots.ZLinkSpotKind;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.UnaryOperator;
 
 /** Resolves public handles from durable authority without legacy location rows. */
 public final class ZLinkStoreLocationResolvers
@@ -37,11 +49,31 @@ public final class ZLinkStoreLocationResolvers
     private final ZLinkLiveLocationRows liveRows;
     private final Duration routeCacheMaxAge;
     private final Map<String, CachedRoute<SpotRoute>> spotRoutes = new ConcurrentHashMap<>();
+    // Entries exist only while a store resolution is in flight. All changes to a key's
+    // read eligibility and positive route use spotRoutes.compute for the same key.
+    private final Map<String, SpotRouteRead> spotRouteReads = new ConcurrentHashMap<>();
+
+    private static final class SpotRouteRead {
+        private String storeVersion;
+    }
+
     private final Map<String, CachedRoute<ActorRoute>> actorRoutes = new ConcurrentHashMap<>();
     private final ZLinkServiceAuthorityPayloadCodec spotAuthorityCodec =
             new ZLinkServiceAuthorityPayloadCodec();
     private final ZLinkActorAuthorityPayloadCodec actorAuthorityCodec =
             new ZLinkActorAuthorityPayloadCodec();
+    private final Map<String, PlacementObservation> placement = new HashMap<>();
+    private boolean closed;
+
+    // A null node list means discovery has not observed this mesh yet. An empty list is a
+    // published observation and must produce Unavailable rather than waiting for another poll.
+    private record PlacementObservation(
+            List<ZLinkMeshNodeDescriptor> nodes, CompletableFuture<Void> changed) {
+        private PlacementObservation() {
+            this(null, new CompletableFuture<>());
+        }
+    }
+
     private Runnable routeReadAdmission = () -> {};
 
     public void routeReadAdmission(Runnable admission) {
@@ -67,11 +99,18 @@ public final class ZLinkStoreLocationResolvers
         if (cached != null) {
             return CompletableFuture.completedFuture(cached);
         }
-        routeReadAdmission.run();
-        return observeAuthorityRead(
-                        stores.unifiedStore()
-                                .read(ZLinkAuthorityKeyCodec.spot(spotId), () -> false))
-                .thenCompose(read -> resolveReadySpot(spotId, read));
+        SpotRouteRead pending = beginSpotRead(spotId);
+        try {
+            routeReadAdmission.run();
+            return observeAuthorityRead(
+                            stores.unifiedStore()
+                                    .read(ZLinkAuthorityKeyCodec.spot(spotId), () -> false))
+                    .thenCompose(read -> resolveReadySpot(spotId, read, pending))
+                    .whenComplete((value, failure) -> endSpotRead(spotId, pending));
+        } catch (RuntimeException | Error failure) {
+            endSpotRead(spotId, pending);
+            throw failure;
+        }
     }
 
     public CompletionStage<ActorRoute> resolveActor(String actorId) {
@@ -84,17 +123,51 @@ public final class ZLinkStoreLocationResolvers
 
     /** Reads current authority directly; a failed read preserves the positive route cache. */
     public CompletionStage<ActorRoute> readActor(String actorId) {
+        return readActor(actorId, actorRoutes);
+    }
+
+    /**
+     * Reads current authority for a public {@code Find}. The result is an observation: it neither
+     * stores nor removes a positive route, so only a request resolution decides which owner later
+     * requests use (04-actor-model §6.6, 08-routing §2.2).
+     */
+    public CompletionStage<ActorRoute> findActor(String actorId) {
+        return readActor(actorId, null);
+    }
+
+    private CompletionStage<ActorRoute> readActor(
+            String actorId, Map<String, CachedRoute<ActorRoute>> cache) {
         routeReadAdmission.run();
         return observeAuthorityRead(
                         stores.unifiedStore()
                                 .read(ZLinkAuthorityKeyCodec.actor(actorId), () -> false))
-                .thenCompose(read -> resolveReadyActor(actorId, read));
+                .thenCompose(read -> resolveReadyActor(actorId, read, cache));
     }
 
     @Override
     public CompletionStage<List<ZLinkAutoConnectPeer>> listPeers(
             ZLinkAutoConnectType type, String meshName, ZLinkLocationRole role) {
+        PlacementObservation readFrom;
+        synchronized (placement) {
+            readFrom =
+                    closed
+                            ? null
+                            : placement.computeIfAbsent(
+                                    meshName, ignored -> new PlacementObservation());
+        }
         return listLiveMeshNodes(meshName)
+                .thenApply(
+                        nodes -> {
+                            updatePlacement(
+                                    meshName,
+                                    current ->
+                                            current == readFrom
+                                                    ? new PlacementObservation(
+                                                            List.copyOf(nodes),
+                                                            new CompletableFuture<>())
+                                                    : current);
+                            return nodes;
+                        })
                 .thenApply(
                         nodes ->
                                 nodes.stream()
@@ -138,6 +211,198 @@ public final class ZLinkStoreLocationResolvers
                                         .toList());
     }
 
+    private void updatePlacement(String meshName, UnaryOperator<PlacementObservation> update) {
+        PlacementObservation previous;
+        synchronized (placement) {
+            if (closed) return;
+            previous = placement.get(meshName);
+            PlacementObservation next = update.apply(previous);
+            if (next == previous) return;
+            placement.put(meshName, next);
+        }
+        if (previous != null) previous.changed().complete(null);
+    }
+
+    /** A confirmed local Store publication is another discovery observation, not a request read. */
+    public CompletionStage<Void> observePublishedMeshNode(ZLinkMeshNodeDescriptor descriptor) {
+        return liveRows.meshNodes(List.of(descriptor))
+                .thenAccept(
+                        live ->
+                                updatePlacement(
+                                        descriptor.meshName(),
+                                        previous -> {
+                                            List<ZLinkMeshNodeDescriptor> nodes = new ArrayList<>();
+                                            if (previous != null && previous.nodes() != null) {
+                                                for (var node : previous.nodes()) {
+                                                    if (!node.rid().equals(descriptor.rid()))
+                                                        nodes.add(node);
+                                                    else if (node.lifecycleGeneration()
+                                                                    == descriptor
+                                                                            .lifecycleGeneration()
+                                                            && node.descriptorRevision()
+                                                                    > descriptor
+                                                                            .descriptorRevision())
+                                                        return previous;
+                                                }
+                                            }
+                                            nodes.addAll(live);
+                                            return new PlacementObservation(
+                                                    List.copyOf(nodes), new CompletableFuture<>());
+                                        }));
+    }
+
+    /** MeshNode §5.2: placement consumes the observation owned by automatic discovery. */
+    public CompletionStage<ZLinkMeshNodeDescriptor> selectPlacement(
+            String meshName,
+            ZLinkPlacementObjectKind kind,
+            String stableType,
+            boolean newActor,
+            ZLinkInternalMeshNode source,
+            Set<ZLinkMeshNodeDescriptorKey> excluded,
+            long deadline) {
+        PlacementObservation observation;
+        synchronized (placement) {
+            if (closed)
+                return CompletableFuture.failedFuture(
+                        new java.util.concurrent.CancellationException("discovery closed"));
+            observation =
+                    placement.computeIfAbsent(meshName, ignored -> new PlacementObservation());
+        }
+        if (System.currentTimeMillis() >= deadline) {
+            return CompletableFuture.failedFuture(
+                    new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                            "Placement deadline exceeded"));
+        }
+        List<ZLinkMeshNodeDescriptor> live =
+                observation.nodes() == null
+                        ? List.of()
+                        : observation.nodes().stream()
+                                .filter(liveRows::hasObservedLiveLease)
+                                .toList();
+        PlacementDecision decision =
+                observation.nodes() == null
+                        ? new PlacementDecision(List.of(), true)
+                        : classifyPlacement(live, kind, stableType, newActor, source, excluded);
+        boolean changed;
+        synchronized (placement) {
+            changed = closed || observation != placement.get(meshName);
+        }
+        if (changed)
+            return selectPlacement(
+                    meshName, kind, stableType, newActor, source, excluded, deadline);
+        if (!decision.candidates().isEmpty()) {
+            long total =
+                    decision.candidates().stream()
+                            .mapToLong(ZLinkMeshNodeDescriptor::placementWeight)
+                            .sum();
+            long choice = ThreadLocalRandom.current().nextLong(total);
+            for (var candidate : decision.candidates()) {
+                choice -= candidate.placementWeight();
+                if (choice < 0) return CompletableFuture.completedFuture(candidate);
+            }
+        }
+        if (!decision.waitForDiscovery()) {
+            return CompletableFuture.failedFuture(
+                    new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.UNAVAILABLE, "Placement is unavailable"));
+        }
+        // A dependent future owns this request's deadline; it must never time out the shared
+        // notification.
+        return observation
+                .changed()
+                .thenApply(ignored -> (Void) null)
+                .orTimeout(
+                        Math.max(1L, deadline - System.currentTimeMillis()), TimeUnit.MILLISECONDS)
+                .exceptionallyCompose(
+                        failure ->
+                                CompletableFuture.failedFuture(
+                                        failure instanceof TimeoutException
+                                                ? new ZLinkFrameworkException(
+                                                        ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                                                        "Placement deadline exceeded",
+                                                        failure)
+                                                : failure))
+                .thenCompose(
+                        ignored ->
+                                selectPlacement(
+                                        meshName,
+                                        kind,
+                                        stableType,
+                                        newActor,
+                                        source,
+                                        excluded,
+                                        deadline));
+    }
+
+    public record PlacementDecision(
+            List<ZLinkMeshNodeDescriptor> candidates, boolean waitForDiscovery) {}
+
+    public static PlacementDecision classifyPlacement(
+            List<ZLinkMeshNodeDescriptor> nodes,
+            ZLinkPlacementObjectKind kind,
+            String stableType,
+            boolean newActor,
+            ZLinkInternalMeshNode source,
+            Set<ZLinkMeshNodeDescriptorKey> excluded) {
+        List<ZLinkMeshNodeDescriptor> candidates = new ArrayList<>();
+        boolean waiting = false;
+        for (var node : nodes) {
+            if (node.objectRole() != ZLinkMeshNodeObjectRole.SERVER
+                    || node.placementWeight() <= 0
+                    || excluded.contains(
+                            new ZLinkMeshNodeDescriptorKey(node.meshName(), node.rid()))
+                    || node.objectCapabilities().stream()
+                            .noneMatch(
+                                    capability ->
+                                            capability.objectKind() == kind
+                                                    && capability.stableType().equals(stableType)
+                                                    && (!newActor || capability.entryAccepted())
+                                                    && ((kind == ZLinkPlacementObjectKind.ACTOR
+                                                                    && !newActor)
+                                                            || hasPlacementCapacity(
+                                                                    node, capability)))) continue;
+            if (node.state() == ZLinkFrameworkRuntimeState.SERVING && exactReady(node, source))
+                candidates.add(node);
+            else waiting = true;
+        }
+        return new PlacementDecision(List.copyOf(candidates), waiting);
+    }
+
+    public static boolean hasPlacementCapacity(
+            ZLinkMeshNodeDescriptor node, ZLinkObjectCapability capability) {
+        if (capability.objectKind() == ZLinkPlacementObjectKind.ACTOR)
+            return node.capacity().actors().hasRoomFor(1);
+        return node.capacity().spots().hasRoomFor(1)
+                && node.capacity().spotTypes().stream()
+                        .anyMatch(
+                                type ->
+                                        type.objectKind() == capability.objectKind()
+                                                && type.stableType().equals(capability.stableType())
+                                                && type.usage().hasRoomFor(1));
+    }
+
+    private static boolean exactReady(
+            ZLinkMeshNodeDescriptor candidate, ZLinkInternalMeshNode source) {
+        if (source == null) return false;
+        try {
+            var local = source.status();
+            if (candidate.rid().equals(local.routingId()))
+                return candidate.meshName().equals(local.meshName())
+                        && local.state() == MeshNodeState.READY
+                        && candidate.lifecycleGeneration() == local.lifecycleGeneration();
+            return source.peers().stream()
+                    .anyMatch(
+                            peer ->
+                                    peer.routingId().equals(candidate.rid())
+                                            && peer.lifecycleGeneration()
+                                                    == candidate.lifecycleGeneration()
+                                            && peer.state() == MeshPeerState.ADMITTED);
+        } catch (RuntimeException unavailableSource) {
+            return false;
+        }
+    }
+
     public CompletionStage<List<ZLinkMeshNodeDescriptor>> listLiveMeshNodes(String meshName) {
         return listMeshNodes(meshName).thenCompose(liveRows::meshNodes);
     }
@@ -173,7 +438,17 @@ public final class ZLinkStoreLocationResolvers
     }
 
     public void invalidateSpotRoute(String spotId) {
-        spotRoutes.remove(Objects.requireNonNull(spotId, "spotId"));
+        invalidateSpotRoute(spotId, null);
+    }
+
+    private void invalidateSpotRoute(String spotId, SpotRouteRead source) {
+        spotRoutes.compute(
+                Objects.requireNonNull(spotId, "spotId"),
+                (key, cached) -> {
+                    if (source != null && spotRouteReads.get(key) != source) return cached;
+                    spotRouteReads.remove(key);
+                    return null;
+                });
     }
 
     /**
@@ -211,7 +486,16 @@ public final class ZLinkStoreLocationResolvers
                 || cached.ownerLeaseGeneration() != spot.ownerLeaseGeneration()) {
             return false;
         }
-        return spotRoutes.remove(spot.spotId(), cached);
+        boolean[] removed = {false};
+        spotRoutes.compute(
+                spot.spotId(),
+                (key, current) -> {
+                    if (current != cached) return current;
+                    spotRouteReads.remove(key);
+                    removed[0] = true;
+                    return null;
+                });
+        return removed[0];
     }
 
     public boolean invalidateRouteIfMatches(ZLinkServiceMessageFollowWireCodec.Notice notice) {
@@ -220,13 +504,76 @@ public final class ZLinkStoreLocationResolvers
     }
 
     public void invalidateAllRoutes() {
+        spotRouteReads.keySet().forEach(this::invalidateSpotRoute);
         spotRoutes.clear();
         actorRoutes.clear();
     }
 
+    private SpotRouteRead beginSpotRead(String spotId) {
+        SpotRouteRead pending = new SpotRouteRead();
+        spotRoutes.compute(
+                spotId,
+                (key, cached) -> {
+                    spotRouteReads.put(key, pending);
+                    return cached;
+                });
+        return pending;
+    }
+
+    private void endSpotRead(String spotId, SpotRouteRead pending) {
+        spotRoutes.compute(
+                spotId,
+                (key, cached) -> {
+                    spotRouteReads.remove(key, pending);
+                    return cached;
+                });
+    }
+
+    private void observeSpotAuthority(String spotId, String storeVersion, SpotRouteRead source) {
+        spotRoutes.compute(
+                spotId,
+                (key, cached) -> {
+                    SpotRouteRead pending = spotRouteReads.get(key);
+                    if (source != null && pending != source) return cached;
+                    if (pending != null) {
+                        if (storeVersion == null
+                                || (pending.storeVersion != null
+                                        && !pending.storeVersion.equals(storeVersion))) {
+                            spotRouteReads.remove(key);
+                        } else {
+                            pending.storeVersion = storeVersion;
+                        }
+                    }
+                    // StoreVersion is opaque; a different observation invalidates the snapshot.
+                    return cached != null && !cached.storeVersion().equals(storeVersion)
+                            ? null
+                            : cached;
+                });
+    }
+
     public CompletionStage<SpotRoute> resolveReadySpot(String spotId, Object read) {
+        observeSpotAuthority(
+                spotId,
+                read instanceof ZLinkAuthoritySnapshot snapshot ? snapshot.storeVersion() : null,
+                null);
+        SpotRouteRead pending = beginSpotRead(spotId);
+        try {
+            return resolveReadySpot(spotId, read, pending)
+                    .whenComplete((value, failure) -> endSpotRead(spotId, pending));
+        } catch (RuntimeException | Error failure) {
+            endSpotRead(spotId, pending);
+            throw failure;
+        }
+    }
+
+    private CompletionStage<SpotRoute> resolveReadySpot(
+            String spotId, Object read, SpotRouteRead pending) {
+        observeSpotAuthority(
+                spotId,
+                read instanceof ZLinkAuthoritySnapshot snapshot ? snapshot.storeVersion() : null,
+                pending);
         if (!(read instanceof ZLinkAuthoritySnapshot snapshot)) {
-            spotRoutes.remove(spotId);
+            invalidateSpotRoute(spotId, pending);
             return CompletableFuture.completedFuture(null);
         }
         var authority = spotAuthorityCodec.decode(snapshot.payload()).orElse(null);
@@ -239,7 +586,7 @@ public final class ZLinkStoreLocationResolvers
                 || !authority.spotId().equals(spotId)
                 || !authority.ownerId().equals(snapshot.ownerId())
                 || authority.ownerLeaseGeneration() != snapshot.ownerLeaseGeneration()) {
-            spotRoutes.remove(spotId);
+            invalidateSpotRoute(spotId, pending);
             return CompletableFuture.completedFuture(null);
         }
         SpotRoute route =
@@ -257,7 +604,7 @@ public final class ZLinkStoreLocationResolvers
                         snapshot.storeVersion(),
                         authority.state());
         if (authority.state() != ZLinkServiceAuthorityPayloadCodec.State.READY) {
-            spotRoutes.remove(spotId);
+            invalidateSpotRoute(spotId, pending);
             return CompletableFuture.completedFuture(route);
         }
         return admitPositiveRoute(
@@ -266,14 +613,16 @@ public final class ZLinkStoreLocationResolvers
                 route,
                 snapshot.ownerId(),
                 snapshot.ownerLeaseGeneration(),
-                snapshot.storeVersion());
+                snapshot.storeVersion(),
+                pending);
     }
 
-    private CompletionStage<ActorRoute> resolveReadyActor(String actorId, Object read) {
+    private CompletionStage<ActorRoute> resolveReadyActor(
+            String actorId, Object read, Map<String, CachedRoute<ActorRoute>> cache) {
         if (!(read instanceof ZLinkAuthoritySnapshot snapshot)
                 || snapshot.allocation().state() != ZLinkPlacementAllocationState.ACTIVE
                 || snapshot.allocation().objectKind() != ZLinkPlacementObjectKind.ACTOR) {
-            actorRoutes.remove(actorId);
+            forget(cache, actorId);
             return CompletableFuture.completedFuture(null);
         }
         var authority = actorAuthorityCodec.decode(snapshot.payload()).orElse(null);
@@ -284,11 +633,11 @@ public final class ZLinkStoreLocationResolvers
                 || authority.ownerLeaseGeneration() != snapshot.ownerLeaseGeneration()) {
             ActorRoute canonical = projectCanonicalActor(snapshot, actorId);
             if (canonical == null) {
-                actorRoutes.remove(actorId);
+                forget(cache, actorId);
                 return CompletableFuture.completedFuture(null);
             }
             return admitPositiveRoute(
-                    actorRoutes,
+                    cache,
                     actorId,
                     canonical,
                     snapshot.ownerId(),
@@ -311,7 +660,7 @@ public final class ZLinkStoreLocationResolvers
                         snapshot.authorityOwnerGeneration(),
                         snapshot.ownerLeaseGeneration());
         return admitPositiveRoute(
-                actorRoutes,
+                cache,
                 actorId,
                 route,
                 snapshot.ownerId(),
@@ -361,6 +710,18 @@ public final class ZLinkStoreLocationResolvers
             String ownerId,
             long ownerLeaseGeneration,
             String storeVersion) {
+        return admitPositiveRoute(
+                cache, key, value, ownerId, ownerLeaseGeneration, storeVersion, null);
+    }
+
+    private <V> CompletionStage<V> admitPositiveRoute(
+            Map<String, CachedRoute<V>> cache,
+            String key,
+            V value,
+            String ownerId,
+            long ownerLeaseGeneration,
+            String storeVersion,
+            SpotRouteRead pending) {
         return liveRows.ownerLeaseRemaining(ownerId, ownerLeaseGeneration)
                 .thenCompose(
                         remaining -> {
@@ -371,23 +732,40 @@ public final class ZLinkStoreLocationResolvers
                                                 ZLinkFrameworkErrorKind.UNAVAILABLE,
                                                 "location owner lease is unavailable: " + ownerId));
                             }
-                            if (!routeCacheMaxAge.isZero()) {
+                            if (cache != null && !routeCacheMaxAge.isZero()) {
                                 Duration lifetime =
                                         remaining.compareTo(routeCacheMaxAge) < 0
                                                 ? remaining
                                                 : routeCacheMaxAge;
-                                cache.put(
-                                        key,
+                                CachedRoute<V> route =
                                         new CachedRoute<>(
                                                 value,
                                                 storeVersion,
                                                 ownerId,
                                                 ownerLeaseGeneration,
                                                 System.nanoTime(),
-                                                boundedNanos(lifetime)));
+                                                boundedNanos(lifetime));
+                                cache.compute(
+                                        key,
+                                        (id, cached) -> {
+                                            if (pending != null
+                                                    && (spotRouteReads.get(id) != pending
+                                                            || (pending.storeVersion != null
+                                                                    && !pending.storeVersion.equals(
+                                                                            storeVersion)))) {
+                                                return cached;
+                                            }
+                                            return route;
+                                        });
                             }
                             return CompletableFuture.completedFuture(value);
                         });
+    }
+
+    private static <V> void forget(Map<String, CachedRoute<V>> cache, String key) {
+        if (cache != null) {
+            cache.remove(key);
+        }
     }
 
     private static <V> V cached(Map<String, CachedRoute<V>> cache, String key) {
@@ -422,6 +800,18 @@ public final class ZLinkStoreLocationResolvers
     }
 
     private void invalidateOwnerLease(String ownerId, long ownerLeaseGeneration) {
+        // An in-flight read may not yet have projected its owner; none may cache a
+        // snapshot admitted before this owner lease invalidation.
+        spotRouteReads
+                .keySet()
+                .forEach(
+                        key ->
+                                spotRoutes.compute(
+                                        key,
+                                        (id, cached) -> {
+                                            spotRouteReads.remove(id);
+                                            return cached;
+                                        }));
         spotRoutes
                 .entrySet()
                 .removeIf(entry -> entry.getValue().sameOwner(ownerId, ownerLeaseGeneration));
@@ -432,6 +822,19 @@ public final class ZLinkStoreLocationResolvers
 
     @Override
     public void close() {
+        List<PlacementObservation> pending;
+        synchronized (placement) {
+            closed = true;
+            pending = List.copyOf(placement.values());
+            placement.clear();
+        }
+        pending.forEach(
+                observation ->
+                        observation
+                                .changed()
+                                .completeExceptionally(
+                                        new java.util.concurrent.CancellationException(
+                                                "discovery closed")));
         invalidateAllRoutes();
     }
 

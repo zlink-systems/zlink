@@ -320,6 +320,11 @@ changes, Core discards the pending records of the standby pipe right before prom
 the peer. HELLO is idempotent for the same identity. No separate timer is added for this, and HELLO
 is not sent again once ADMIT has been received.
 
+**A node that receives REJECT on the selected route leaves that route not admitted.** If the peer was admitted,
+the node removes its admitted record and liveness admission. REJECT does not remove the connection intent; after it
+the node follows the ADMIT wait rule above (HELLO is sent again every liveness management cycle). No separate peer
+state or timer exists for REJECT.
+
 **Until admission is confirmed by a handshake on the selected route, records other than the
 handshake received on that route are discarded without processing, and no response is sent.** The
 same applies to records the peer sent before the handshake of a new route after the selected route

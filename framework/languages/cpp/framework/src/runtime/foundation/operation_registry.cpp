@@ -17,6 +17,21 @@
 #include <stdexcept>
 #include <utility>
 
+namespace zlink::framework::detail
+{
+
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__ ((visibility ("default")))
+#endif
+deadline_scheduler_t &
+deadline_scheduler_t::instance ()
+{
+    static deadline_scheduler_t scheduler;
+    return scheduler;
+}
+
+} // namespace zlink::framework::detail
+
 namespace zlink::framework::runtime::foundation
 {
 

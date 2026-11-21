@@ -636,7 +636,11 @@ public final class ZLinkChannelRuntime
         this.handlerExecutor =
                 ZLinkFlowContext.propagating(
                         Objects.requireNonNull(registration.handlerExecutor(), "handlerExecutor"));
-        this.dispatchRegistry = new ZLinkChannelDispatchRegistry(registration.serialExecutor());
+        this.dispatchRegistry =
+                new ZLinkChannelDispatchRegistry(
+                        registration.serialExecutor(),
+                        registration.handlerExecutor(),
+                        registration.workers().maxThreads());
         this.filterTypes = List.copyOf(registration.filters());
         this.channelHandlerInvoker =
                 new ZLinkChannelHandlerInvoker(
@@ -1386,22 +1390,15 @@ public final class ZLinkChannelRuntime
             String routerChannelId,
             RoutingId targetNodeRid,
             String targetSpotId,
-            List<Message> spotParts) {
-        return sendToSpotViaRouterChannel(
-                routerChannelId, targetNodeRid, targetSpotId, 0L, spotParts);
-    }
-
-    public CompletionStage<Void> sendToSpotViaRouterChannel(
-            String routerChannelId,
-            RoutingId targetNodeRid,
-            String targetSpotId,
             long targetSpotGeneration,
+            long targetNodeGeneration,
             List<Message> spotParts) {
         return sendToSpotViaRouterChannel(
                 routerChannelId,
                 targetNodeRid,
                 targetSpotId,
                 targetSpotGeneration,
+                targetNodeGeneration,
                 0L,
                 0L,
                 spotParts);
@@ -1412,6 +1409,7 @@ public final class ZLinkChannelRuntime
             RoutingId targetNodeRid,
             String targetSpotId,
             long targetSpotGeneration,
+            long targetNodeGeneration,
             long authorityOwnerGeneration,
             long ownerLeaseGeneration,
             List<Message> spotParts) {
@@ -1441,6 +1439,7 @@ public final class ZLinkChannelRuntime
                                                 targetNodeRid,
                                                 targetSpotId,
                                                 targetSpotGeneration,
+                                                targetNodeGeneration,
                                                 authorityOwnerGeneration,
                                                 ownerLeaseGeneration,
                                                 spotParts)));
