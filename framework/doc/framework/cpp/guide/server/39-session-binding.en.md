@@ -158,11 +158,13 @@ task_t<std::optional<std::string>> on_duplicate_bind(
 }
 ```
 
-Without a callback, the framework accepts the new session. Rejection or a callback that
+Without a callback, the framework accepts the new session as before. Rejection or a callback that
 doesn't finish within its timeout keeps the current binding and ends only the incoming bind with an
 error. The framework doesn't close the incoming connection or send command 51. Acceptance registers
 the new session as current and applies the existing replacement procedure to the previous
 connection. [Session–Actor binding §6](../../../common/spec/server/04-session/02-session-actor-binding.en.md#6-rebind-and-replacing-the-previous-connection) owns the callback timeout setting.
+
+<!-- language-specific notification -->
 
 ## 7. Observing a Committed Actor Binding
 

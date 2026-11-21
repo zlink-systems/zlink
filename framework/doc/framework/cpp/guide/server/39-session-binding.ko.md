@@ -154,10 +154,14 @@ task_t<std::optional<std::string>> on_duplicate_bind(
 }
 ```
 
+<!-- language-specific binding result -->
+
 callback이 없으면 새 session을 받아들인다. 거부하거나 callback이 제한 시간 안에 끝나지
 않으면 current binding을 유지하고 incoming bind만 오류로 끝낸다. Framework는 incoming 연결을 끊지 않고
 command 51도 보내지 않는다. 받아들이면 새 session을 current로 등록하고 이전 연결에 기존 교체 절차를
 적용한다. callback 제한 시간의 설정은 [Session–Actor binding §6](../../../common/spec/server/04-session/02-session-actor-binding.ko.md#6-rebind와-이전-연결-교체)이 소유한다.
+
+<!-- language-specific notification -->
 
 ## 7. Actor의 bind 확정 통지
 

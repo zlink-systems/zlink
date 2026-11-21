@@ -157,6 +157,8 @@ error. The framework doesn't close the incoming connection or send command 51. A
 the new session as current and applies the existing replacement procedure to the previous
 connection. [Session–Actor binding §6](../../../common/spec/server/04-session/02-session-actor-binding.en.md#6-rebind-and-replacing-the-previous-connection) owns the callback timeout setting.
 
+<!-- language-specific notification -->
+
 ## 7. Notification after binding commits
 
 Implement this callback when an Actor needs to update application state after a bind commits.
