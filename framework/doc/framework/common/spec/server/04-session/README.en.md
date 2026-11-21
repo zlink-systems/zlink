@@ -71,6 +71,7 @@ points to.
 |---|---|---|
 | [STREAM Server Session](01-stream-session.en.md) | Accepting one connection, registration, packet framing, and the codec and error boundaries — the contract the application observes | Contract |
 | [Session And Actor Binding](02-session-actor-binding.en.md) | The bind/relay/rebind/disconnect/relocation contract connecting a session to an Actor, and the execution-structure decisions every language runtime follows so the result is the same everywhere | Contract + implementation spec (decisions every language runtime follows) |
+| [Authentication Admission and the Login Queue](03-authentication-admission.en.md) | Per-node concurrent authentication limit, the rejection result and connector automatic retry (stage 1), and the global-position login queue (stage 2) | Contract |
 
 ## 5. Find by Question
 
