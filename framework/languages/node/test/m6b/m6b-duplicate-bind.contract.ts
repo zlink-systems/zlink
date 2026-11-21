@@ -11,6 +11,11 @@ import {
 
 import { RequestResult, SubmitResult } from '@zlink-systems/zlink';
 import { ZLinkFrameworkRuntimeHost } from '../../packages/framework/src/runtime/host';
+import { DefaultZLinkSpotManager } from '../../packages/framework/src/runtime/spots';
+import { ZLinkEntrySpotActivation } from '../../packages/framework/src/runtime/spots/spot-entry-activation';
+import { ZLinkSpotSerialExecutor } from '../../packages/framework/src/runtime/spots/spot-serial-executor';
+import { ZLinkSpotSerialTurnExecutor } from '../../packages/framework/src/runtime/spots/spot-serial-turn-executor';
+import { ZLinkUserSpotExecutionMode } from '../../packages/framework/src/contracts';
 import {
   ReadyDomain,
   ReceiveKind,
@@ -66,6 +71,7 @@ function makeFixture(
     }
   };
   const gateCalls: unknown[][] = [];
+  const errors: unknown[] = [];
   const host = Object.assign(Object.create(ZLinkFrameworkRuntimeHost.prototype), {
     options: { registration: { sessionReplacementCallbackTimeoutMs: timeoutMs } },
     actorManager: { getState: () => state },
@@ -89,9 +95,17 @@ function makeFixture(
         return (args.at(-1) as () => Promise<void>)();
       }
     },
-    runtimeOrPreStartErrorSink: { reportRuntimeTaskException() {} }
+    runtimeOrPreStartErrorSink: {
+      reportRuntimeTaskException(_name: string, error: unknown) {
+        errors.push(error);
+      }
+    }
   }) as unknown as {
-    dispatchMeshActorBinding(meshName: string, record: ReceiveRecord): Promise<void>;
+    dispatchMeshActorBinding(
+      meshName: string,
+      record: ReceiveRecord,
+      signal?: AbortSignal
+    ): Promise<void>;
   };
   const record = {
     kind: ReceiveKind.ActorBinding,
@@ -135,7 +149,7 @@ function makeFixture(
       return SubmitResult.Ok;
     }
   } as unknown as ReceiveRecord;
-  return { host, state, current, installed, replies, gateCalls, record };
+  return { host, state, current, installed, replies, gateCalls, record, errors };
 }
 
 test('duplicate bind acceptance commits through the Actor gate', async () => {
@@ -329,4 +343,260 @@ for (const scenario of sameNodeCases) {
       runtime.close();
     }
   });
+}
+
+for (const kind of ['first', 'duplicate', 'idempotent'] as const) {
+  test(`session bound notification commits before callback and reply: ${kind}`, async () => {
+    const fixture = makeFixture(async () => undefined);
+    if (kind === 'first') Object.assign(fixture.state, { boundSession: undefined });
+    if (kind === 'idempotent')
+      Object.assign(fixture.state, {
+        boundSession: {
+          ...fixture.current,
+          sessionNodeRid: 'session-node-incoming',
+          sessionRid: 'session-incoming',
+          sessionOwnerNodeGeneration: 6n
+        }
+      });
+    const calls: unknown[] = [];
+    Object.assign(fixture.state.actor, {
+      onSessionBound(incoming: unknown, signal: AbortSignal) {
+        assert.equal(fixture.installed.length, 1);
+        assert.equal(fixture.replies.length, 1);
+        assert.equal(signal.aborted, false);
+        calls.push(incoming);
+      }
+    });
+    await fixture.host.dispatchMeshActorBinding('actor-mesh', fixture.record);
+    assert.deepEqual(calls, [
+      {
+        sessionOwnerNodeRid: 'session-node-incoming',
+        sessionOwnerNodeGeneration: 6n,
+        bindingGeneration: 2n
+      }
+    ]);
+    assert.equal(fixture.gateCalls.length, 1);
+    assert.equal(fixture.replies.length, 1);
+    assert.deepEqual(fixture.errors, []);
+  });
+}
+
+test('rejected bind does not notify', async () => {
+  const fixture = makeFixture(async () => 'rejected');
+  let calls = 0;
+  Object.assign(fixture.state.actor, {
+    onSessionBound() {
+      calls++;
+    }
+  });
+  await fixture.host.dispatchMeshActorBinding('actor-mesh', fixture.record);
+  assert.equal(calls, 0);
+  assert.equal(fixture.replies[0]?.terminal, RequestResult.Rejected);
+});
+
+for (const asynchronous of [false, true]) {
+  test(`bound notification failure is reported once without changing bind: async=${asynchronous}`, async () => {
+    const fixture = makeFixture();
+    const failure = new Error('notification failed');
+    Object.assign(fixture.state.actor, {
+      onSessionBound() {
+        if (asynchronous) return Promise.reject(failure);
+        throw failure;
+      }
+    });
+    await fixture.host.dispatchMeshActorBinding('actor-mesh', fixture.record);
+    assert.deepEqual(fixture.errors, [failure]);
+    assert.equal(fixture.replies.length, 1);
+    assert.equal(fixture.replies[0]?.terminal, RequestResult.Ok);
+    assert.equal(fixture.installed.length, 1);
+  });
+}
+
+for (const cancel of [false, true]) {
+  test(`bound notification cancellation preserves bind and reports only timeout: shutdown=${cancel}`, async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const fixture = makeFixture(undefined, 100);
+    const lifecycle = new AbortController();
+    let callbackSignal: AbortSignal | undefined;
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let release!: () => void;
+    Object.assign(fixture.state.actor, {
+      async onSessionBound(_incoming: unknown, signal: AbortSignal) {
+        callbackSignal = signal;
+        entered();
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        throw new Error('late callback failure');
+      }
+    });
+    const dispatch = fixture.host.dispatchMeshActorBinding(
+      'actor-mesh',
+      fixture.record,
+      lifecycle.signal
+    );
+    // A missing callback must fail deterministically instead of awaiting an unfulfilled promise.
+    assert.equal(fixture.gateCalls.length, 1);
+    await started;
+    if (cancel) lifecycle.abort();
+    // Allow the callback-start continuation to arm its existing timeout.
+    await Promise.resolve();
+    t.mock.timers.tick(100);
+    await dispatch;
+    assert.equal(callbackSignal?.aborted, true);
+    assert.equal(fixture.errors.length, cancel ? 0 : 1);
+    assert.equal(fixture.replies.length, 1);
+    assert.equal(fixture.replies[0]?.terminal, RequestResult.Ok);
+    release();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(fixture.errors.length, cancel ? 0 : 1);
+  });
+}
+
+for (const mode of ['SpotWide', 'PerActor', 'Entry'] as const) {
+  for (const outcome of ['throw', 'reject', 'timeout', 'abort'] as const) {
+    test(
+      `bound notification preserves the real Actor gate: ${mode}/${outcome}`,
+      { timeout: 5000 },
+      async (t) => {
+        t.mock.timers.enable({ apis: ['setTimeout'] });
+        const fixture = makeFixture(undefined, 100);
+        const serial = new ZLinkSpotSerialTurnExecutor(mode === 'SpotWide');
+        const executor = new ZLinkSpotSerialExecutor(
+          serial,
+          mode === 'SpotWide'
+            ? ZLinkUserSpotExecutionMode.SpotWide
+            : ZLinkUserSpotExecutionMode.PerActor,
+          'user-spot-a'
+        );
+        const manager = Object.assign(Object.create(DefaultZLinkSpotManager.prototype), {
+          options: {
+            executeEntryActor: (_mesh: string, actorId: string, operation: () => Promise<void>) =>
+              ZLinkEntrySpotActivation.prototype.executeActor.call(
+                { spotSerialExecutor: executor } as unknown as ZLinkEntrySpotActivation,
+                actorId,
+                operation
+              )
+          },
+          resolveApplicationActivation: () => ({ serialExecutor: executor })
+        }) as DefaultZLinkSpotManager;
+        if (mode === 'Entry') Object.assign(fixture.state.actor.context, { spotId: undefined });
+        const turnResults: unknown[] = [];
+        const reports: Array<{ task: string; error: unknown }> = [];
+        let turn!: Promise<void>;
+        const reportTurnResults: unknown[][] = [];
+        Object.assign(fixture.host, {
+          spotManager: {
+            executeActorTurn: (
+              ...args: Parameters<DefaultZLinkSpotManager['executeActorTurn']>
+            ) => {
+              turn = manager.executeActorTurn(...args) as Promise<void>;
+              void turn.then(
+                () => turnResults.push('completed'),
+                (error: unknown) => turnResults.push(error)
+              );
+              return turn;
+            }
+          },
+          runtimeOrPreStartErrorSink: {
+            reportRuntimeTaskException(task: string, error: unknown) {
+              reports.push({ task, error });
+              reportTurnResults.push([...turnResults]);
+            }
+          }
+        });
+        const lifecycle = new AbortController();
+        const failure = new Error('session bound notification failed');
+        let entered!: () => void;
+        const started = new Promise<void>((resolve) => {
+          entered = resolve;
+        });
+        let release!: () => void;
+        const held = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        let callbackSignal!: AbortSignal;
+        Object.assign(fixture.state.actor, {
+          onSessionBound(_incoming: unknown, signal: AbortSignal) {
+            callbackSignal = signal;
+            entered();
+            if (outcome === 'throw') throw failure;
+            if (outcome === 'reject') return Promise.reject(failure);
+            return held.then(() => {
+              throw failure;
+            });
+          }
+        });
+        const actor = fixture.state.actor;
+        const identity = fixture.state.nativeActorRef;
+        let messages = 0;
+        const dispatch = fixture.host.dispatchMeshActorBinding(
+          'actor-mesh',
+          fixture.record,
+          lifecycle.signal
+        );
+        let next!: Promise<void>;
+        try {
+          await started;
+          next = executor.executeActor('actor-a', (actorSerial) =>
+            actorSerial.execute(async () => {
+              assert.equal(fixture.state.actor, actor);
+              assert.equal(fixture.state.nativeActorRef, identity);
+              assert.equal(fixture.state.boundSession.sessionRid, 'session-incoming');
+              messages++;
+            })
+          );
+          if (outcome === 'timeout' || outcome === 'abort') {
+            // Arm the callback timeout, then complete the wait without wall-clock sleeps.
+            await Promise.resolve();
+            if (outcome === 'abort') lifecycle.abort();
+            else t.mock.timers.tick(100);
+            await dispatch;
+            assert.equal(callbackSignal.aborted, true);
+            assert.equal(messages, 0, 'the unfinished callback still owns the Actor gate');
+            assert.deepEqual(turnResults, []);
+            assert.equal(reports.length, outcome === 'abort' ? 0 : 1);
+            release();
+          }
+          await dispatch;
+          await assert.doesNotReject(turn, 'notification failure must not reject the Actor turn');
+          await next;
+          assert.deepEqual(
+            turnResults,
+            ['completed'],
+            'notification failure must not reject the Actor turn'
+          );
+          assert.equal(messages, 1, 'the same Actor must process its next message');
+          assert.equal(fixture.replies.length, 1);
+          assert.equal(fixture.replies[0]?.terminal, RequestResult.Ok);
+          assert.equal(fixture.installed.length, 1);
+          assert.equal(reports.length, outcome === 'abort' ? 0 : 1);
+          if (outcome === 'throw' || outcome === 'reject') {
+            assert.equal(reports[0]?.error, failure);
+            assert.deepEqual(
+              reportTurnResults,
+              [['completed']],
+              'report only after the successful turn'
+            );
+          }
+          if (outcome === 'timeout')
+            assert.match(String(reports[0]?.error), /Session bound callback timed out/);
+          if (outcome !== 'abort')
+            assert.equal(reports[0]?.task, "session bound callback 'actor-a'");
+          // Drain another turn so a late rejection or duplicate report cannot escape the assertion.
+          await executor.executeActor('actor-a', (actorSerial) =>
+            actorSerial.execute(async () => {})
+          );
+          assert.equal(reports.length, outcome === 'abort' ? 0 : 1);
+        } finally {
+          release();
+          await Promise.allSettled([dispatch, turn, next]);
+          await executor.closeChildren();
+        }
+      }
+    );
+  }
 }
