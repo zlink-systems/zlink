@@ -152,7 +152,7 @@ connection의 다른 object message가 섞여 전송될 수 있다.
 전송 chunk 하나의 유효 크기는 다음 세 값 중 가장 작은 값이다 — server 설정
 `RelocationPayloadChunkLimit`(chunk 하나의 encoded 크기, 기본 256 KiB), target이 seal 전에
 이미 존재하는 reply로 알린 자기 유효 수신 chunk 상한, §5.3의 유효 in-flight 예산. 이 협상
-reply가 존재하지 않는 경로(승인 왕복이 없는 `JoinEntrySpot` 등)에서는 어느 배치에서도 안전한
+reply가 존재하지 않는 경로에서는 어느 배치에서도 안전한
 32 KiB 보수값을 chunk 크기로 사용한다.
 
 Capture로 확정한 기존 queue prefix와 timer를 source는 relay lane에 다시 넣지 않는다. 이

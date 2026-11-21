@@ -506,7 +506,7 @@ public sealed class SharedSerialGateTests
     }
 
     [Fact]
-    public async Task LifecycleResumePublicationIsRejectedBySharedConsumer()
+    public async Task LifecycleYieldRejectsDuplicateBeforeSubmissionAndDeliversCloseOnGate()
     {
         using var errors = new ZLinkRuntimeErrorSink();
         var runner = new ZLinkRuntimeTaskRunner(errors, CancellationToken.None);
@@ -522,61 +522,89 @@ public sealed class SharedSerialGateTests
         var busy = Signal();
         var release = Signal();
         var published = Signal();
+        var terminal = Signal();
         var notifications = 0;
+        var submissions = 0;
+
+        ValueTask Submit(CancellationToken _)
+        {
+            Interlocked.Increment(ref submissions);
+            return new ValueTask(external.Task);
+        }
+
         var lifecycle = queue
             .RunLifecycleAsync(
-                async _ =>
+                async cancellationToken =>
                 {
-                    var turn = ZLinkSerialTurn.Current!;
-                    var first = turn.YieldFrameworkCallAsync(
-                            _ => new ValueTask(external.Task),
-                            CancellationToken.None
-                        )
-                        .AsTask();
-                    var duplicate = turn.YieldFrameworkCallAsync(
-                            _ => new ValueTask(external.Task),
-                            CancellationToken.None
-                        )
-                        .AsTask();
-                    suspended.TrySetResult();
-                    var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
-                        Task.WhenAll(first, duplicate)
+                    using var scope = ZLinkApplicationExecutionContext.Push(
+                        new("spot", ZLinkUserSpotExecutionMode.SpotWide, null, YieldAllowed: true)
                     );
-                    Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, failure.Kind);
+                    var first = ZLinkApplicationExecutionContext
+                        .RequireYieldTurn("test")
+                        .YieldFrameworkCallAsync(Submit, cancellationToken)
+                        .AsTask();
+                    var duplicate = Assert.Throws<ZLinkFrameworkException>(() =>
+                    {
+                        _ = ZLinkApplicationExecutionContext
+                            .RequireYieldTurn("test")
+                            .YieldFrameworkCallAsync(Submit, CancellationToken.None);
+                    });
+                    Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, duplicate.Kind);
+                    Assert.Equal(1, Volatile.Read(ref submissions));
+                    suspended.TrySetResult();
+
+                    try
+                    {
+                        var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                            first
+                        );
+                        Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, failure.Kind);
+                    }
+                    finally
+                    {
+                        terminal.TrySetResult();
+                    }
                 },
                 CancellationToken.None
             )
             .AsTask();
-        await suspended.Task.WaitAsync(CompletionTimeout);
-        var blocker = queue
-            .RunAsync(
-                async _ =>
-                {
-                    busy.TrySetResult();
-                    await release.Task.ConfigureAwait(false);
-                },
-                CancellationToken.None
-            )
-            .AsTask();
-        await busy.Task.WaitAsync(CompletionTimeout);
-        queue.GateOperation = operation =>
-        {
-            if (
-                operation == ZLinkSerialGateOperation.Notify
-                && Interlocked.Increment(ref notifications) == 2
-            )
-                published.TrySetResult();
-        };
+        var blocker = Task.CompletedTask;
         try
         {
+            await suspended.Task.WaitAsync(CompletionTimeout);
+            blocker = queue
+                .RunAsync(
+                    async _ =>
+                    {
+                        busy.TrySetResult();
+                        await release.Task.ConfigureAwait(false);
+                    },
+                    CancellationToken.None
+                )
+                .AsTask();
+            await busy.Task.WaitAsync(CompletionTimeout);
+            queue.Complete();
+            queue.GateOperation = operation =>
+            {
+                if (operation == ZLinkSerialGateOperation.Notify)
+                {
+                    Interlocked.Increment(ref notifications);
+                    published.TrySetResult();
+                }
+            };
             external.TrySetResult();
             await published.Task.WaitAsync(CompletionTimeout);
+            Assert.Equal(1, Volatile.Read(ref notifications));
+            Assert.False(terminal.Task.IsCompleted);
         }
         finally
         {
+            queue.GateOperation = null;
+            external.TrySetResult();
             release.TrySetResult();
+            await Task.WhenAll(blocker, lifecycle).WaitAsync(CompletionTimeout);
         }
-        await Task.WhenAll(blocker, lifecycle).WaitAsync(CompletionTimeout);
+        Assert.True(terminal.Task.IsCompletedSuccessfully);
     }
 
     [Fact]

@@ -890,10 +890,9 @@ public sealed class SerialExecutorTests
         const int iterations = 1000;
         var item = new ZLinkSerialWorkItem(static _ => ValueTask.CompletedTask);
         var turn = new ZLinkSerialTurn(
-            static (_, _) => ZLinkSerialPostAdmission.Closed,
+            static _ => Task.CompletedTask,
             static _ => false,
             static _ => { },
-            CancellationToken.None,
             item
         );
         using var phases = new Barrier(2);
@@ -933,10 +932,9 @@ public sealed class SerialExecutorTests
         const int iterations = 1000;
         var item = new ZLinkSerialWorkItem(static _ => ValueTask.CompletedTask);
         var turn = new ZLinkSerialTurn(
-            static (_, _) => ZLinkSerialPostAdmission.Closed,
+            static _ => Task.CompletedTask,
             static _ => false,
             static _ => { },
-            CancellationToken.None,
             item
         );
         using var phases = new Barrier(4);
@@ -1215,10 +1213,9 @@ public sealed class SerialExecutorTests
     {
         var item = new ZLinkSerialWorkItem(static _ => ValueTask.CompletedTask);
         var turn = new ZLinkSerialTurn(
-            static (_, _) => ZLinkSerialPostAdmission.Closed,
+            static _ => Task.CompletedTask,
             static _ => false,
             static _ => { },
-            CancellationToken.None,
             item
         );
         var first = turn.Suspended;
@@ -1269,10 +1266,9 @@ public sealed class SerialExecutorTests
         );
         item.BindTerminalRelease(queue);
         var turn = new ZLinkSerialTurn(
-            static (_, _) => ZLinkSerialPostAdmission.Closed,
+            static _ => Task.CompletedTask,
             static _ => false,
             static _ => { },
-            cancellation.Token,
             item
         );
         var invocation = item.InvokeAsync(static _ => { }, cancellation.Token, turn).AsTask();
@@ -2213,6 +2209,133 @@ public sealed class SerialExecutorTests
         releaseCallback.TrySetResult();
         await disposeTask.WaitAsync(TimeSpan.FromSeconds(1));
         operation.TrySetResult();
+    }
+
+    [Theory]
+    [InlineData(false, false, false, false)]
+    [InlineData(false, false, false, true)]
+    [InlineData(false, false, true, false)]
+    [InlineData(false, true, true, false)]
+    [InlineData(false, true, true, true)]
+    [InlineData(true, false, false, true)]
+    [InlineData(true, false, true, false)]
+    [InlineData(true, true, true, false)]
+    [InlineData(true, true, true, true)]
+    public async Task YieldTerminalWaitsForTheActiveTurn(
+        bool shared,
+        bool lifecycle,
+        bool close,
+        bool cancel
+    )
+    {
+        var timeout = TimeSpan.FromSeconds(5);
+        using var stop = new CancellationTokenSource();
+        using var errors = new ZLinkRuntimeErrorSink();
+        await using var queue = new ZLinkSerialExecutionQueue(
+            new ZLinkRuntimeTaskRunner(errors, stop.Token),
+            errors,
+            stop.Token,
+            ZLinkExecutionLanePolicy.Default,
+            sharedGate: shared
+        );
+        var io = new TaskCompletionSource<int>();
+        var yielded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var terminal = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        int cleanup = 0;
+
+        async ValueTask Yielding(CancellationToken _)
+        {
+            var turn = ZLinkSerialTurn.Current!;
+            try
+            {
+                if (lifecycle)
+                {
+                    var waiting = turn.YieldFrameworkCallAsync(
+                        _ => new ValueTask(io.Task),
+                        CancellationToken.None
+                    );
+                    yielded.SetResult();
+                    await waiting.ConfigureAwait(false);
+                }
+                else
+                {
+                    var waiting = turn.YieldFrameworkCallAsync(
+                        _ => new ValueTask<int>(io.Task),
+                        CancellationToken.None
+                    );
+                    yielded.SetResult();
+                    Assert.Equal(42, await waiting.ConfigureAwait(false));
+                }
+                terminal.SetResult(false);
+            }
+            catch (Exception error)
+            {
+                terminal.SetException(error);
+            }
+            finally
+            {
+                Interlocked.Increment(ref cleanup);
+            }
+        }
+
+        var first = (
+            lifecycle
+                ? queue.RunLifecycleAsync(Yielding, CancellationToken.None)
+                : queue.RunAsync(Yielding, CancellationToken.None)
+        ).AsTask();
+        try
+        {
+            await yielded.Task.WaitAsync(timeout);
+            Assert.True(
+                queue.TryPost(
+                    async _ =>
+                    {
+                        entered.SetResult();
+                        await release.Task.ConfigureAwait(false);
+                    },
+                    out _
+                )
+            );
+            await entered.Task.WaitAsync(timeout);
+            if (close)
+                queue.Complete();
+            if (cancel)
+                await stop.CancelAsync();
+            await Task.Run(() => io.SetResult(42)).WaitAsync(timeout);
+
+            Assert.False(terminal.Task.IsCompleted);
+            Assert.Equal(0, Volatile.Read(ref cleanup));
+        }
+        finally
+        {
+            io.TrySetResult(42);
+            release.TrySetResult();
+        }
+
+        if (close)
+        {
+            var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                terminal.Task.WaitAsync(timeout)
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, error.Kind);
+        }
+        else if (cancel)
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                terminal.Task.WaitAsync(timeout)
+            );
+        else
+            Assert.False(await terminal.Task.WaitAsync(timeout));
+
+        if (cancel)
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first.WaitAsync(timeout));
+        else
+            await first.WaitAsync(timeout);
+        Assert.Equal(1, cleanup);
+        await queue.DisposeAsync().AsTask().WaitAsync(timeout);
     }
 
     [Fact]

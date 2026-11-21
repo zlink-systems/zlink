@@ -495,10 +495,121 @@ test('framework host republishes the current lifecycle state after owner lease r
   recoveryHandler();
   await new Promise((resolve) => setImmediate(resolve));
 
-  assert.deepEqual(publishedStates, [
-    framework.ZLinkFrameworkRuntimeState.Preparing,
-    framework.ZLinkFrameworkRuntimeState.Draining
-  ]);
+  assert.deepEqual(publishedStates, [framework.ZLinkFrameworkRuntimeState.Draining]);
+  host.removeOwnerLeaseRecoveryPublication();
+});
+
+// Hold recovery after its first Store publication, before another write can hide it.
+for (let iteration = 1; iteration <= 40; iteration++) {
+  test(`Serving cleanup preserves Actor placement at the publication boundary (${iteration}/40)`, async () => {
+    const now = () => new Date(1000);
+    const provider = new framework.ZLinkInMemoryProviderLocationStore(now);
+    const { host, meshRuntime } = createMeshHost({
+      registration: framework.createFrameworkRegistration({
+        locations: { storeInstance: provider },
+        spotNodes: {
+          play: { router: { bind: 'tcp://local-play', routingId: 'node-a' }, objectRole: 'client' }
+        }
+      })
+    });
+    const store = host.locationOwner.locationStore();
+    const lease = await store.claimOwnerLease('cleanup-owner', 60_000);
+    assert.equal(lease.kind, 'claimed');
+    const descriptor = {
+      meshName: 'play', rid: rid('node-a'), lifecycleGeneration: 1n, descriptorRevision: 1n,
+      endpoint: 'tcp://local-play', objectRole: 'server', placementWeight: 100,
+      entrySpotId: 'entry', ...lease.token, updatedAt: now(),
+      populationCapacity: {
+        actors: { active: 0, reserved: 0, limit: 0 },
+        spots: { active: 0, reserved: 0, limit: 0 }, spotTypes: []
+      },
+      activationConcurrency: { active: 0, limit: 1 }, channelWeights: {},
+      applicationVersion: 1n, spotTypes: [], securityIdentity: 'default',
+      objectCapabilities: [{ objectKind: 'actor', stableType: 'SessionActor', entryAccepted: true }],
+      state: framework.ZLinkFrameworkRuntimeState.Serving
+    };
+    assert.equal(
+      (await store.updateMeshNode(descriptor, framework.ZLinkLocationWriteIntent.NewClaim)).status,
+      framework.ZLinkLocationWriteStatus.Stored
+    );
+    let handler;
+    const runtime = {
+      currentOwnerToken: lease.token, ownerLeaseUsable: true, ownerLeaseRecoveryRequired: true,
+      addOwnerLeaseRenewedHandler(callback) { handler = callback; },
+      removeOwnerLeaseRenewedHandler() {},
+      closeOwnerLeaseAdmission(error) { throw error; }
+    };
+    host.locationOwner.runtime = runtime;
+    host.runtimeState = framework.ZLinkFrameworkRuntimeState.Serving;
+    host.createPublicSpotManager({});
+    meshRuntime.meshNode = () => ({ status: () => ({ routingId: rid('node-a'), lifecycleGeneration: 1n }) });
+    const select = () => host.actorPlacement.options.target('play', 'SessionActor');
+    assert.equal((await store.updateMeshNode({
+      ...descriptor, descriptorRevision: 2n, state: framework.ZLinkFrameworkRuntimeState.Preparing
+    }, framework.ZLinkLocationWriteIntent.Renew)).status, framework.ZLinkLocationWriteStatus.Stored);
+    assert.equal(await select(), undefined, 'Preparing descriptor remains excluded');
+    assert.equal((await store.updateMeshNode({
+      ...descriptor, descriptorRevision: 3n
+    }, framework.ZLinkLocationWriteIntent.Renew)).status, framework.ZLinkLocationWriteStatus.Stored);
+    const applied = deferredRegressionStep();
+    const release = deferredRegressionStep();
+    const states = [];
+    let cleanupCalls = 0;
+    const publisher = {
+      async publishMeshNodeState(state) {
+        states.push(state);
+        const result = await store.updateMeshNode({
+          ...descriptor, descriptorRevision: BigInt(states.length + 3), state
+        }, framework.ZLinkLocationWriteIntent.Renew);
+        assert.equal(result.status, framework.ZLinkLocationWriteStatus.Stored);
+        if (states.length === 1) {
+          applied.resolve();
+          await release.promise;
+        }
+      },
+      async startLocationAutoConnect() {}
+    };
+    host.installOwnerLeaseRecoveryPublication(runtime, publisher, {
+      async startLocationAutoConnect() {},
+      async reclaimLocationOwnerRows() { cleanupCalls++; }
+    });
+    const recovery = waitForNextHostOwnerRecovery(host);
+    try {
+      assert.ok(await select(), 'Serving host starts as an eligible candidate');
+      handler(undefined, true);
+      await Promise.race([applied.promise, recovery.then(() => { throw new Error('recovery ended before publication'); })]);
+      assert.equal((await store.readOwnerLease(lease.token.ownerId)).kind, 'found');
+      assert.ok(await select(), 'cleanup publication must preserve the Serving candidate');
+    } finally {
+      release.resolve();
+      await recovery;
+      host.removeOwnerLeaseRecoveryPublication();
+    }
+    assert.deepEqual(states, [framework.ZLinkFrameworkRuntimeState.Serving]);
+    assert.equal(cleanupCalls, 1, 'owner row cleanup still runs');
+    assert.ok(await select(), 'candidate remains eligible after cleanup');
+  });
+}
+
+test('Preparing host without a usable owner lease stays excluded during recovery', async () => {
+  const host = new framework.ZLinkFrameworkRuntimeHost({ registration: framework.createFrameworkRegistration() });
+  const states = [];
+  let handler;
+  const runtime = {
+    ownerLeaseUsable: false,
+    addOwnerLeaseRenewedHandler(callback) { handler = callback; },
+    removeOwnerLeaseRenewedHandler() {}
+  };
+  host.locationOwner.runtime = runtime;
+  host.runtimeState = framework.ZLinkFrameworkRuntimeState.Preparing;
+  host.installOwnerLeaseRecoveryPublication(runtime, {
+    async publishMeshNodeState(state) { states.push(state); }
+  }, {});
+  handler(undefined, false);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(states, []);
+  assert.equal(host.status.state, framework.ZLinkFrameworkRuntimeState.Preparing);
+  assert.equal(host.status.isReady, false);
   host.removeOwnerLeaseRecoveryPublication();
 });
 

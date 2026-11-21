@@ -114,6 +114,7 @@ final class ZLinkJavaSocketMonitor implements ZLinkBackendSocketMonitor {
                 event.routingId(),
                 event.localAddr(),
                 event.remoteAddr(),
-                event.flags());
+                event.flags(),
+                event.value());
     }
 }

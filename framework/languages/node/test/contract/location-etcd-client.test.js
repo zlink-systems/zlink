@@ -4,6 +4,7 @@ const path = require('node:path');
 const test = require('node:test');
 const grpc = require('@grpc/grpc-js');
 const {
+  CHANNEL_OPTIONS,
   EtcdClient,
   protoDefinition
 } = require('../../packages/framework-locations-etcd/dist/internal/client');
@@ -252,7 +253,7 @@ const authenticate = Object.values(definitions.Auth.service).find(
 );
 
 test('etcd send limit accepts exactly 16 MiB and fails one byte more before dispatch', async () => {
-  const limit = 16 * 1024 * 1024;
+  const limit = CHANNEL_OPTIONS['grpc.max_send_message_length'];
   // Both password lengths need a four-byte varint, so the field overhead is the same.
   const probe = { name: 'u', password: 'p'.repeat(limit) };
   const overhead = authenticate.requestSerialize(probe).length - limit;
@@ -286,7 +287,7 @@ test('etcd send limit accepts exactly 16 MiB and fails one byte more before disp
 });
 
 test('etcd receive limit accepts exactly 8 MiB and fails one byte more', async () => {
-  const limit = 8 * 1024 * 1024;
+  const limit = CHANNEL_OPTIONS['grpc.max_receive_message_length'];
   // Both token lengths need a four-byte varint, so the field overhead is the same.
   const overhead = authenticate.responseSerialize({ token: 't'.repeat(limit) }).length - limit;
   let token = '';
