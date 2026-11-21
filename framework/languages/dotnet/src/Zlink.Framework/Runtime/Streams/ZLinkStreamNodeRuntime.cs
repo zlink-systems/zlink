@@ -672,7 +672,8 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                         disconnectedSession.EnqueueDisconnected(
                             new ZLinkStreamError(
                                 ZLinkStreamSessionError.TransportError,
-                                monitorEvent.NativeEvent.ToString()
+                                monitorEvent.NativeEvent.ToString(),
+                                (ZLinkDisconnectReason)monitorEvent.Value
                             )
                         );
                 });
