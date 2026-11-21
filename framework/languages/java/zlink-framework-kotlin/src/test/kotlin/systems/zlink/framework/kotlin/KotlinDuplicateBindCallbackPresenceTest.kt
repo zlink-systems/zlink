@@ -2,6 +2,8 @@ package systems.zlink.framework.kotlin
 
 import java.io.EOFException
 import java.io.InputStream
+import java.net.InetAddress
+import java.net.ServerSocket
 import java.net.Socket
 import java.net.URI
 import java.nio.ByteBuffer
@@ -40,6 +42,7 @@ import systems.zlink.framework.streams.ZLinkSessionContext
 import systems.zlink.framework.streams.ZLinkSessionDispatchContext
 import systems.zlink.framework.streams.ZLinkStreamCodec
 import systems.zlink.framework.streams.ZLinkStreamMessageKind
+import systems.zlink.framework.testsupport.ZLinkHostServing
 
 class KotlinDuplicateBindCallbackPresenceTest {
     @Test
@@ -127,6 +130,8 @@ class KotlinDuplicateBindCallbackPresenceTest {
                 ZLinkJavaBackendAdapterFactory(),
             )
         try {
+            ZLinkHostServing.await(actorRuntime)
+            ZLinkHostServing.await(sessionRuntime)
             val port =
                 URI.create(
                         sessionRuntime
@@ -167,6 +172,32 @@ class KotlinDuplicateBindCallbackPresenceTest {
             sessionRuntime.close()
             actorRuntime.close()
             disconnectGates.clear()
+        }
+    }
+
+    @Test
+    fun replyReaderAnswersAHeartbeatPingThatArrivesBeforeTheReply() {
+        ServerSocket(0, 1, InetAddress.getLoopbackAddress()).use { server ->
+            Socket(server.inetAddress, server.localPort).use { client ->
+                client.soTimeout = CLIENT_TIMEOUT_MILLIS
+                server.accept().use { peer ->
+                    peer.soTimeout = CLIENT_TIMEOUT_MILLIS
+                    writeFrame(
+                        peer,
+                        ZLinkStreamMessageKind.CONTROL,
+                        null,
+                        HEARTBEAT_PING_PACKET,
+                        byteArrayOf(),
+                    )
+                    writeFrame(peer, ZLinkStreamMessageKind.RESPONSE, 1, "", json("bound"))
+
+                    assertReply(client, 1, "\"bound\"")
+
+                    val pong = readFrame(peer)
+                    assertEquals(ZLinkStreamMessageKind.CONTROL, pong.header.kind())
+                    assertEquals(HEARTBEAT_PONG_PACKET, pong.header.name())
+                }
+            }
         }
     }
 
@@ -246,13 +277,22 @@ class KotlinDuplicateBindCallbackPresenceTest {
 
     private data class InboundFrame(val header: ZLinkStreamHeader, val body: ByteArray)
 
-    private fun sendRequest(socket: Socket, sequence: Long, packetName: String, body: ByteArray) {
+    private fun sendRequest(socket: Socket, sequence: Long, packetName: String, body: ByteArray) =
+        writeFrame(socket, ZLinkStreamMessageKind.REQUEST, sequence, packetName, body)
+
+    private fun writeFrame(
+        socket: Socket,
+        kind: ZLinkStreamMessageKind,
+        sequence: Long?,
+        packetName: String,
+        body: ByteArray,
+    ) {
         val header =
             ZLinkStreamHeader(
-                ZLinkStreamMessageKind.REQUEST,
+                kind,
                 ZLinkStreamCodec.RAW,
                 EnumSet.noneOf(ZLinkStreamHeaderFlag::class.java),
-                Optional.of(sequence),
+                Optional.ofNullable(sequence),
                 packetName,
                 emptyMap(),
                 Optional.empty(),
@@ -262,49 +302,51 @@ class KotlinDuplicateBindCallbackPresenceTest {
     }
 
     private fun assertBoundControl(socket: Socket, actorId: String) {
-        while (true) {
-            val frame = readFrame(socket)
-            val header = frame.header
-            if (
-                header.kind() == ZLinkStreamMessageKind.CONTROL &&
-                    header.name() == HEARTBEAT_PING_PACKET
-            ) {
-                val pong =
-                    ZLinkStreamHeader(
-                        ZLinkStreamMessageKind.CONTROL,
-                        ZLinkStreamCodec.RAW,
-                        EnumSet.noneOf(ZLinkStreamHeaderFlag::class.java),
-                        Optional.empty(),
-                        HEARTBEAT_PONG_PACKET,
-                        emptyMap(),
-                    )
-                socket
-                    .getOutputStream()
-                    .write(frame(ZLinkStreamHeaderCodec.encode(pong), byteArrayOf()))
-                socket.getOutputStream().flush()
-                continue
-            }
-            assertEquals(
-                ZLinkStreamMessageKind.CONTROL,
-                header.kind(),
-                "unexpected stream frame header=$header body=${String(frame.body, StandardCharsets.UTF_8)}",
-            )
-            assertEquals("\$zlink.actor.bound", header.name())
-            val payload = ByteBuffer.wrap(frame.body)
-            assertEquals(1, payload.get().unsigned())
-            assertTrue(payload.short.unsigned() > 0)
-            val actorLength = payload.get().unsigned()
-            assertEquals(actorLength, payload.remaining())
-            assertEquals(actorId, String(frame.body, 4, actorLength, StandardCharsets.UTF_8))
-            return
-        }
+        val frame = readNonHeartbeatFrame(socket)
+        val header = frame.header
+        assertEquals(
+            ZLinkStreamMessageKind.CONTROL,
+            header.kind(),
+            "unexpected stream frame header=$header body=${String(frame.body, StandardCharsets.UTF_8)}",
+        )
+        assertEquals("\$zlink.actor.bound", header.name())
+        val payload = ByteBuffer.wrap(frame.body)
+        assertEquals(1, payload.get().unsigned())
+        assertTrue(payload.short.unsigned() > 0)
+        val actorLength = payload.get().unsigned()
+        assertEquals(actorLength, payload.remaining())
+        assertEquals(actorId, String(frame.body, 4, actorLength, StandardCharsets.UTF_8))
     }
 
     private fun assertReply(socket: Socket, sequence: Long, expectedBody: String) {
-        val frame = readFrame(socket)
-        assertEquals(ZLinkStreamMessageKind.RESPONSE, frame.header.kind())
+        val frame = readNonHeartbeatFrame(socket)
+        assertEquals(
+            ZLinkStreamMessageKind.RESPONSE,
+            frame.header.kind(),
+            "unexpected stream frame header=${frame.header}",
+        )
         assertEquals(sequence, frame.header.requestSequence().orElseThrow())
         assertEquals(expectedBody, String(frame.body, StandardCharsets.UTF_8))
+    }
+
+    /** Heartbeat ping is a control frame the server may send between any two frames. */
+    private fun readNonHeartbeatFrame(socket: Socket): InboundFrame {
+        while (true) {
+            val frame = readFrame(socket)
+            if (
+                frame.header.kind() != ZLinkStreamMessageKind.CONTROL ||
+                    frame.header.name() != HEARTBEAT_PING_PACKET
+            ) {
+                return frame
+            }
+            writeFrame(
+                socket,
+                ZLinkStreamMessageKind.CONTROL,
+                null,
+                HEARTBEAT_PONG_PACKET,
+                byteArrayOf(),
+            )
+        }
     }
 
     private fun readFrame(socket: Socket): InboundFrame {

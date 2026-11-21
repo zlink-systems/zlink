@@ -1,4 +1,5 @@
 using Tutorial.Shared;
+using Zlink.Framework.Contracts.Handlers;
 using Zlink.Framework.Contracts.Spots;
 
 namespace Tutorial.Server.Spots;
@@ -27,6 +28,7 @@ public sealed class JoinMatchQueueHandler
 {
     public ValueTask<MatchQueueStatus> HandleAsync(
         MatchQueue queue,
+        IZLinkMessageContext context,
         JoinMatchQueue request,
         CancellationToken cancellationToken
     )

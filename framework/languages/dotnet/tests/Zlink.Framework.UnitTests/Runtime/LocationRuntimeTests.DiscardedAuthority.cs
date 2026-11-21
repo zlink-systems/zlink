@@ -28,6 +28,7 @@ public sealed partial class LocationRuntimeTests
         var flaky = new OutageLeaseStore(store);
         await using var first = await DiscardedAuthorityHost.Start(flaky, time);
         var locations = first.Locations;
+        var renewal = new OwnerLeaseRenewalProbe(locations);
         await first
             .Provider.GetRequiredService<IZLinkSpotManager>()
             .GetOrCreate("discarded-spot", "outage-execution")
@@ -62,11 +63,14 @@ public sealed partial class LocationRuntimeTests
             var episode = locations.GetHealthSnapshot().StoreOutage!;
             var remaining = episode.Lifetime - time.GetElapsedTime(episode.LeaseOperationStartedAt);
             var beforeDiscard = flaky.DiscardedCleanupCalls;
+            renewal.Arm();
             if (expired)
                 time.Advance(remaining);
             else
                 time.AdvanceMonotonic(remaining);
             Assert.Equal(beforeDiscard, flaky.DiscardedCleanupCalls);
+            // The heartbeat operation this advance started ends before the test submits renewals.
+            await renewal.SettledAsync();
         }
         else
         {
@@ -85,20 +89,20 @@ public sealed partial class LocationRuntimeTests
         if (expired)
         {
             Assert.IsType<ZLinkAuthorityReadResult.Found>(await store.ReadAuthorityAsync(actorKey));
-            time.AdvanceMonotonic(TimeSpan.FromSeconds(15) - TimeSpan.FromTicks(1));
+            time.AdvanceMonotonicWithoutTimers(TimeSpan.FromSeconds(15) - TimeSpan.FromTicks(1));
             Assert.True(await locations.RenewOwnerLeaseOnceAsync());
             Assert.IsType<ZLinkAuthorityReadResult.Found>(await store.ReadAuthorityAsync(actorKey));
-            time.AdvanceMonotonic(TimeSpan.FromTicks(1));
+            time.AdvanceMonotonicWithoutTimers(TimeSpan.FromTicks(1));
             Assert.True(await locations.RenewOwnerLeaseOnceAsync());
         }
         Assert.IsType<ZLinkAuthorityReadResult.Missing>(await store.ReadAuthorityAsync(actorKey));
         if (expired)
         {
             Assert.IsType<ZLinkAuthorityReadResult.Found>(await store.ReadAuthorityAsync(spotKey));
-            time.AdvanceMonotonic(TimeSpan.FromSeconds(15) - TimeSpan.FromTicks(1));
+            time.AdvanceMonotonicWithoutTimers(TimeSpan.FromSeconds(15) - TimeSpan.FromTicks(1));
             Assert.True(await locations.RenewOwnerLeaseOnceAsync());
             Assert.IsType<ZLinkAuthorityReadResult.Found>(await store.ReadAuthorityAsync(spotKey));
-            time.AdvanceMonotonic(TimeSpan.FromTicks(1));
+            time.AdvanceMonotonicWithoutTimers(TimeSpan.FromTicks(1));
             Assert.True(await locations.RenewOwnerLeaseOnceAsync());
         }
         Assert.IsType<ZLinkAuthorityReadResult.Missing>(await store.ReadAuthorityAsync(spotKey));
@@ -264,6 +268,33 @@ public sealed partial class LocationRuntimeTests
             await store.CleanupDiscardedAuthorityAsync(key, spot, first.Locations.OwnerToken)
         );
         Assert.IsType<ZLinkAuthorityReadResult.Missing>(await store.ReadAuthorityAsync(key));
+    }
+
+    [Fact]
+    public async Task DiscardedAuthority_Spot_Membership_Snapshot_Reads_Only_Actor_Authorities()
+    {
+        var time = new ControllableTimeProvider();
+        var raw = new DiscardedAuthorityProvider(new ZLinkInMemoryProviderLocationStore(time));
+        var store = new ZLinkProviderLocationRepository(raw, time);
+        await using var host = await DiscardedAuthorityHost.Start(store, time);
+        var spots = host.Provider.GetRequiredService<IZLinkSpotManager>();
+        foreach (var id in new[] { "prefix-spot", "unrelated-spot" })
+            await spots.GetOrCreate(id, "outage-execution").InMesh("discarded-authority").Async();
+        var key = ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey("prefix-spot");
+        var spot = Assert
+            .IsType<ZLinkAuthorityReadResult.Found>(await store.ReadAuthorityAsync(key))
+            .Snapshot;
+        raw.ScanPrefixes.Clear();
+        Assert.True(
+            await store.CleanupDiscardedAuthorityAsync(key, spot, host.Locations.OwnerToken)
+        );
+        var authorityScans = raw
+            .ScanPrefixes.Where(prefix =>
+                prefix.StartsWith("authority\0", StringComparison.Ordinal)
+            )
+            .ToArray();
+        Assert.NotEmpty(authorityScans);
+        Assert.All(authorityScans, prefix => Assert.Equal("authority\0actor\0", prefix));
     }
 
     [Fact]
@@ -664,6 +695,8 @@ public sealed partial class LocationRuntimeTests
     private sealed class DiscardedAuthorityProvider(IZLinkLocationStore inner) : IZLinkLocationStore
     {
         internal int Scans;
+        internal readonly System.Collections.Concurrent.ConcurrentQueue<string> ScanPrefixes =
+            new();
         internal bool FailScan;
         internal bool ExpireScanOnce;
 
@@ -689,6 +722,7 @@ public sealed partial class LocationRuntimeTests
         )
         {
             Interlocked.Increment(ref Scans);
+            ScanPrefixes.Enqueue(request.Prefix);
             if (FailScan)
                 throw new InvalidOperationException("Injected membership snapshot failure.");
             if (ExpireScanOnce)

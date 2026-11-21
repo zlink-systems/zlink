@@ -41,6 +41,7 @@ import systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
 import systems.zlink.framework.monitoring.ZLinkFrameworkRuntimeStatus;
+import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.monitoring.ZLinkObservedStatus;
 import systems.zlink.framework.spots.ZLinkSpotCreateResult;
 import systems.zlink.framework.spots.ZLinkSpotManager;
@@ -51,6 +52,8 @@ import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions;
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore;
 import systems.zlink.framework.locationprovider.ZLinkLocationStore;
+import systems.zlink.framework.locations.ZLinkPageRequest;
+import systems.zlink.framework.runtime.internal.locations.ZLinkProviderLocationRepository;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationMode;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationResult;
@@ -351,6 +354,7 @@ public final class Program {
             if ("user-spot-target".equals(mode)) {
                 runUserSpotTarget(
                     args,
+                    locationStoreProvider.getIfAvailable(),
                     sink,
                     observer,
                     lifecycleProvider.getObject().runtimeBean(),
@@ -448,6 +452,7 @@ public final class Program {
 
     private static void runUserSpotTarget(
         HostArgs args,
+        ZLinkLocationStore locationStore,
         EventSink sink,
         UserSpotJoinObserver observer,
         ZLinkFrameworkRuntime runtime,
@@ -476,10 +481,15 @@ public final class Program {
             // cross-node admission rather than a local self-join. A cell that
             // wants the create itself to travel here passes
             // --placement-weight 100 and gives the source 0 instead.
-            runtimeOptions.mesh(meshName).setPlacementWeight(
-                Integer.parseInt(args.option("placement-weight", "0")));
+            int placementWeight = Integer.parseInt(args.option("placement-weight", "0"));
+            runtimeOptions.mesh(meshName).setPlacementWeight(placementWeight);
+            // The publisher writes the change on its own schedule; the source
+            // starts after the ready file, so wait until the Store carries it.
+            awaitPublishedPlacementWeight(locationStore, meshName,
+                args.require("node-rid"), placementWeight);
             sink.append("user-spot-created|spot=" + created.spot().spotId()
-                + "|nodeRid=" + targetNodeRid + "|state=" + created.state().name());
+                + "|nodeRid=" + targetNodeRid + "|state=" + created.state().name()
+                + "|endpoint=" + runtime.listenerStatus(ZLinkListenerKind.ROUTE_MESH, meshName).endpoint());
             // ApplicationRunners run before main() writes the ready file, and
             // the source only starts after it appears; write it here.
             writeReadyFile(args);
@@ -496,6 +506,32 @@ public final class Program {
         } catch (InterruptedException error) {
             Thread.currentThread().interrupt();
         }
+    }
+
+    /**
+     * A runtime placement-weight change reaches the Location Store through the
+     * publisher, not before the setter returns. Test code reads the row through
+     * the internal repository, like the Java unit tests do.
+     */
+    private static void awaitPublishedPlacementWeight(
+            ZLinkLocationStore store, String meshName, String nodeRid, int weight)
+            throws InterruptedException, ExecutionException, TimeoutException {
+        var repository = new ZLinkProviderLocationRepository(store);
+        var rid = RoutingId.from(nodeRid);
+        long deadlineNanos = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+        while (System.nanoTime() < deadlineNanos) {
+            var rows = repository
+                .listMeshNodes(meshName, ZLinkPageRequest.firstPage())
+                .toCompletableFuture()
+                .get(10, TimeUnit.SECONDS)
+                .items();
+            if (rows.stream().anyMatch(
+                    row -> rid.equals(row.rid()) && row.placementWeight() == weight)) {
+                return;
+            }
+            Thread.sleep(25);
+        }
+        throw new TimeoutException("placement weight " + weight + " was not published");
     }
 
     private static void awaitServing(ZLinkFrameworkRuntime runtime)
@@ -590,34 +626,30 @@ public final class Program {
             Thread.currentThread().interrupt();
             return;
         }
-        long deadlineNanos = System.nanoTime() + Duration.ofSeconds(90).toNanos();
-        String lastFailure = "none";
-        while (System.nanoTime() < deadlineNanos) {
-            try {
-                UserSpotProbeRes reply = actorClient
-                    .requestToActor(actorId, new UserSpotProbeReq("target-owner-probe"))
-                    .timeout(Duration.ofSeconds(5))
-                    .submit(UserSpotProbeRes.class)
-                    .toCompletableFuture()
-                    .get(7, TimeUnit.SECONDS);
-                if (targetNodeRid.equals(reply.nodeRid())) {
-                    sink.append("user-spot-probe|nodeRid=" + reply.nodeRid()
-                        + "|targetRid=" + targetNodeRid
-                        + "|actor=" + reply.actorId()
-                        + "|stateVersion=" + reply.stateVersion());
-                    return;
-                }
-                lastFailure = "unexpected-owner:" + reply.nodeRid();
-            } catch (ExecutionException | TimeoutException error) {
-                lastFailure = describe(error);
-            } catch (InterruptedException error) {
-                Thread.currentThread().interrupt();
+        // One request right after joined: a retry loop would hide a first request that fails (#4743).
+        String failure;
+        try {
+            UserSpotProbeRes reply = actorClient
+                .requestToActor(actorId, new UserSpotProbeReq("target-owner-probe"))
+                .timeout(Duration.ofSeconds(5))
+                .submit(UserSpotProbeRes.class)
+                .toCompletableFuture()
+                .get(7, TimeUnit.SECONDS);
+            if (targetNodeRid.equals(reply.nodeRid())) {
+                sink.append("user-spot-probe|nodeRid=" + reply.nodeRid()
+                    + "|targetRid=" + targetNodeRid
+                    + "|actor=" + reply.actorId()
+                    + "|stateVersion=" + reply.stateVersion());
                 return;
             }
-            sleepQuietly(500);
+            failure = "unexpected-owner:" + reply.nodeRid();
+        } catch (ExecutionException | TimeoutException error) {
+            failure = describe(error);
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            return;
         }
-        sink.append("user-spot-probe-timeout|targetRid=" + targetNodeRid
-            + "|failure=" + lastFailure);
+        sink.append("user-spot-probe-timeout|targetRid=" + targetNodeRid + "|failure=" + failure);
     }
 
     private static void startDaemon(String name, Runnable body) {

@@ -136,13 +136,30 @@ class stream_host_service_t final : public hosted_service_t, public hosted_servi
     std::thread _liveness_thread;
 };
 
+#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
+struct stream_host_shutdown_test_hooks_t
+{
+    std::function<void (std::weak_ptr<void>, std::weak_ptr<void>)> registered;
+    std::function<void (bool)> before_terminate;
+};
+#endif
+
 struct stream_host_service_test_access_t
 {
+#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
+    static std::size_t active_session_count (stream_host_service_t &service);
+    static std::function<bool ()> probe_core_session_gate (stream_host_service_t &service,
+                                                           const zlink::routing_id_t &rid);
+    static std::function<void ()> observe_shutdown (stream_host_service_t &service,
+                                                    stream_host_shutdown_test_hooks_t hooks);
+#endif
     static std::shared_ptr<void> retain_connection (service_provider_t &services,
                                                     stream_t stream,
                                                     host::public_host_runtime_t &node);
     static void create_core_sessions (stream_host_service_t &service,
                                       const std::vector<zlink::routing_id_t> &rids);
+    static void deliver_core_monitor_event (stream_host_service_t &service,
+                                            const zlink::monitor_event_t &event);
     static void expire_core_sessions (stream_host_service_t &service,
                                       const std::vector<zlink::routing_id_t> &rids);
 };

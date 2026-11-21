@@ -21,6 +21,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <vector>
 
 namespace zlink::framework::detail
@@ -172,6 +173,8 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
     location_runtime_t *_location_runtime = nullptr;
     std::vector<mesh_node_descriptor_key_t> _published_mesh_nodes;
     std::vector<mesh_node_descriptor_t> _published_mesh_descriptors;
+    // Meshes whose runtime option change the renew schedule has not published yet.
+    std::set<std::string> _changed_mesh_descriptors;
     std::mutex _descriptor_publish_mutex;
     std::atomic_bool _stop{false};
     std::atomic_bool _accept_application_dispatch{false};
@@ -190,6 +193,9 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
                                  std::shared_ptr<detail::mesh_node_builder_state_t> registration,
                                  std::string owner);
     std::optional<location_owner_token_t> current_location_owner () const;
+    // Caller holds _descriptor_publish_mutex. Null once a concurrent publication
+    // replaced the descriptor copied before a Store write.
+    mesh_node_descriptor_t *unchanged_published_descriptor (const mesh_node_descriptor_t &copied);
 };
 
 } // namespace zlink::framework::runtime

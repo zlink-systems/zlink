@@ -40,3 +40,34 @@ if(NOT nlohmann_json_FOUND)
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
   FetchContent_MakeAvailable(nlohmann_json)
 endif()
+
+find_package(yyjson CONFIG QUIET)
+if(NOT yyjson_FOUND)
+  FetchContent_Declare(
+    yyjson
+    URL https://codeload.github.com/ibireme/yyjson/tar.gz/refs/tags/0.12.0
+    URL_HASH SHA256=b16246f617b2a136c78d73e5e2647c6f1de1313e46678062985bdcf1f40bb75d
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+  # Compile the pinned source directly; do not execute downloaded build scripts.
+  FetchContent_GetProperties(yyjson)
+  if(NOT yyjson_POPULATED)
+    FetchContent_Populate(yyjson)
+  endif()
+  enable_language(C)
+  add_library(yyjson STATIC "${yyjson_SOURCE_DIR}/src/yyjson.c")
+  set_target_properties(yyjson PROPERTIES POSITION_INDEPENDENT_CODE ON)
+  target_include_directories(yyjson PUBLIC
+    $<BUILD_INTERFACE:${yyjson_SOURCE_DIR}/src>
+    $<INSTALL_INTERFACE:include>)
+  add_library(yyjson::yyjson ALIAS yyjson)
+  # Match the upstream package's target/config names for installed consumers.
+  export(TARGETS yyjson NAMESPACE yyjson::
+    FILE "${yyjson_BINARY_DIR}/yyjson-config.cmake")
+  set(yyjson_DIR "${yyjson_BINARY_DIR}")
+  install(TARGETS yyjson EXPORT yyjson-targets
+    ARCHIVE DESTINATION lib LIBRARY DESTINATION lib RUNTIME DESTINATION bin)
+  install(EXPORT yyjson-targets FILE yyjson-config.cmake
+    NAMESPACE yyjson:: DESTINATION lib/cmake/yyjson)
+  install(FILES "${yyjson_SOURCE_DIR}/src/yyjson.h" DESTINATION include)
+  install(FILES "${yyjson_SOURCE_DIR}/LICENSE" DESTINATION share/licenses/yyjson)
+endif()

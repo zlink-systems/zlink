@@ -80,3 +80,11 @@ Dispatch diagnostics are `normal` in `server/shared/hosting.ts`; node stderr con
 For local process discovery diagnostics, set `ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY=1` before launching nodes. Docker nodes do not inherit arbitrary host environment variables. Do not change timeout, fixed waits, or assertions to hide failures. The runner cleans up its own processes and Compose project; retain cleanup errors and do not stop other workloads.
 
 If a documented public API fails, preserve package versions, OS, command or minimal public API reproduction, expected result, first node exception/stack, and relevant flow/corr records. Check [existing issues](https://github.com/zlink-systems/zlink/issues) before proposing a report. Remove credentials and private data. Show the draft to the developer before publishing an issue; document confirmed affected versions in the README's Known issues.
+
+## Client connection
+
+The [README client connection section](README.md#client-connection) owns the shared client installation table and minimal TypeScript example. The Session `players` listener defaults to `ws://127.0.0.1:0` in `server/config/session.json` (WebSocket root path `/`, OS-assigned port). Use its actual STREAM address from `READY`; mesh and Redis are internal endpoints. External clients need a running deployment with a reachable interface and exposed port; HTTPS web clients require `wss://`.
+
+Start with two same-mode `POST /match` requests on Lobby HTTP. Use each returned `sessionEndpoint` and assigned `roomId` for the first STREAM packet, `JoinRoomRequest`; successful entry produces `MatchFound` and `RoomView` pushes. Keep the Lobby advertised Session address consistent with Session READY. Register push handlers before sending with `send(...).submit()`; do not turn admission into request/reply. Request `SessionInfoRequest` only after Actor binding. Retain the default typed JSON path and validate identity before binding when adding authentication.
+
+Match connector versions to `package.json` dependencies `@zlink-systems/framework` and `@zlink-systems/stream-connector`; check examples against the public connector source and pinned package. Preserve the endpoint, HTTP preconditions, packet names, and push/reply distinction when updating the README.

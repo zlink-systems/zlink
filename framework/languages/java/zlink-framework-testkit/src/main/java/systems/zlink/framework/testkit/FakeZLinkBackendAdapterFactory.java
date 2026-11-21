@@ -57,6 +57,7 @@ import systems.zlink.framework.runtime.internal.binding.spot.ReadyRecord;
 import systems.zlink.framework.runtime.internal.binding.spot.ReceiveRecord;
 import systems.zlink.framework.runtime.internal.binding.spot.RecordKind;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
+import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
@@ -330,7 +331,21 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
                                         0,
                                         2),
                                 List.of(
-                                        Message.from(packetName.getBytes(StandardCharsets.UTF_8)),
+                                        ZLinkChannelEnvelope.encodeHeader(
+                                                new ZLinkChannelEnvelope.Header(
+                                                        ZLinkChannelEnvelope.KIND_COMMAND,
+                                                        channelName,
+                                                        packetName,
+                                                        ZLinkChannelEnvelope.DEFAULT_CONTENT_TYPE,
+                                                        null,
+                                                        null,
+                                                        null,
+                                                        null,
+                                                        null,
+                                                        null,
+                                                        Map.of(),
+                                                        null,
+                                                        null)),
                                         Message.from(
                                                 jsonPayload.getBytes(StandardCharsets.UTF_8)))));
     }
@@ -1766,7 +1781,11 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
 
         @Override
         public CompletionStage<Void> sendToSpot(
-                RoutingId targetNodeRid, String spotId, long spotGeneration, List<Message> parts) {
+                RoutingId targetNodeRid,
+                String spotId,
+                long spotGeneration,
+                long targetNodeGeneration,
+                List<Message> parts) {
             record("sendToSpot." + targetNodeRid + "." + spotId + "." + firstPart(parts));
             return CompletableFuture.completedFuture(null);
         }
@@ -1776,10 +1795,11 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
                 RoutingId targetNodeRid,
                 String spotId,
                 long spotGeneration,
+                long targetNodeGeneration,
                 byte[] metadata,
                 List<Message> parts) {
             owner.captureApplicationMetadata(metadata);
-            return sendToSpot(targetNodeRid, spotId, spotGeneration, parts);
+            return sendToSpot(targetNodeRid, spotId, spotGeneration, targetNodeGeneration, parts);
         }
 
         @Override

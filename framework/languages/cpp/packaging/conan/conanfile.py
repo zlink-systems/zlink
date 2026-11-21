@@ -20,6 +20,7 @@ ZLINK_FRAMEWORK_CPP_THIRD_PARTY_REQUIREMENTS = (
     "opentelemetry-cpp/1.26.0",
     "boost/1.85.0",
     "nlohmann_json/3.11.3",
+    "yyjson/0.12.0",
     "openssl/[>=3.0 <4]",
     "lz4/1.9.4",
     # gRPC 1.84.0 and vcpkg baseline 2ec0f1747d both resolve these (#4077); vcpkg has
@@ -65,7 +66,7 @@ class ZlinkFrameworkConan(ConanFile):
                 setattr(self.options["grpc/*"], plugin + "_plugin", False)
 
     def requirements(self):
-        self.requires("zlink-cpp/1.25.1", transitive_headers=True,
+        self.requires("zlink-cpp/1.26.0", transitive_headers=True,
                       transitive_libs=True)
         for dependency in ZLINK_FRAMEWORK_CPP_THIRD_PARTY_REQUIREMENTS:
             self.requires(dependency, transitive_headers=True, transitive_libs=True)

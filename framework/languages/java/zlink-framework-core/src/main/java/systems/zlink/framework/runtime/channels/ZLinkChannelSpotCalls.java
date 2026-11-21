@@ -9,6 +9,7 @@ import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.internal.backend.*;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import systems.zlink.framework.runtime.internal.calls.ZLinkRequestStages;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRequestMetrics;
 import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds;
@@ -354,6 +355,7 @@ final class RouteSpotSendCall implements ZLinkSpotSendCall, Runnable {
                             address.targetNodeRid(),
                             address.spotId(),
                             address.spotGeneration(),
+                            address.targetNodeGeneration(),
                             address.authorityOwnerGeneration(),
                             address.ownerLeaseGeneration(),
                             sendParts)
@@ -663,6 +665,12 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall, Runnable {
 
     @Override
     public <TReply> ZLinkRequestStage<TReply> submit(Class<TReply> replyType) {
+        return submit(replyType, false);
+    }
+
+    private <TReply> ZLinkRequestStage<TReply> submit(
+            Class<TReply> replyType, boolean releaseTurn) {
+        ZLinkSuspendInvocationContext.validateSpotRequest(target, releaseTurn);
         CompletionStage<TReply> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate, this);
         if (duplicate != null)
             return ZLinkRequestStages.observe(duplicate, new CompletableFuture<>());
@@ -671,7 +679,6 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall, Runnable {
     }
 
     private <TReply> CompletionStage<TReply> submitReply(Class<TReply> replyType) {
-
         long started =
                 ZLinkRequestMetrics.durationEnabled()
                         ? runtime.nanoTime()
@@ -679,8 +686,6 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall, Runnable {
         try (var flowScope = runtime.enterApplicationFlow()) {
             ZLinkInstanceSpotCallRuntime activation;
             try {
-                systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
-                        .rejectSameSpotWait(target);
                 activation = instanceSpots == null ? null : instanceSpots.get();
             } catch (RuntimeException | Error failure) {
                 ZLinkRequestMetrics.Series metric =
@@ -860,9 +865,7 @@ final class RouteSpotRequestCall implements ZLinkSpotRequestCall, Runnable {
 
     @Override
     public <TReply> CompletionStage<TReply> yield(Class<TReply> replyType) {
-        systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
-                .requireYieldAllowed("Spot request");
-        return ZLinkSerialExecutionQueue.yieldCurrent(submit(replyType));
+        return ZLinkSerialExecutionQueue.yieldCurrent(submit(replyType, true));
     }
 }
 

@@ -50,6 +50,7 @@ import {
   DEFAULT_SERVICE_PEER_TIMEOUT_MS,
   DEFAULT_SERVICE_PROBE_INTERVAL_MS
 } from '../foundation/service-liveness-registry';
+import { routingIdWireHex } from '../routing-id';
 import { ServiceWireProtocolError } from '../foundation/service-wire-m6a-codec';
 import {
   createInternalFrameworkException,
@@ -1472,9 +1473,10 @@ export class ZLinkChannelSocketRegistry {
       .clientServerDescriptors(connection.channelName)
       .find((value) => value.serverRoutingId === identity.serverRoutingId);
     if (current === undefined) return;
+    const candidate = admissionToDiscoveryDescriptor(admission);
     if (
-      admission.channelName !== current.channelName ||
-      admission.serverRid !== current.serverRoutingId ||
+      candidate.channelName !== current.channelName ||
+      candidate.serverRoutingId !== current.serverRoutingId ||
       admission.lifecycleGeneration !== current.lifecycleGeneration ||
       admission.securityIdentity !== current.securityIdentity ||
       admission.advertisedEndpoint !== current.advertisedEndpoint
@@ -1483,7 +1485,6 @@ export class ZLinkChannelSocketRegistry {
         `ClientServer '${connection.channelName}' descriptor update changed immutable identity.`
       );
     }
-    const candidate = admissionToDiscoveryDescriptor(admission);
     if (candidate.effectiveMaxMessageBytes !== current.effectiveMaxMessageBytes) {
       throw new ServiceWireProtocolError(
         `ClientServer '${connection.channelName}' descriptor update changed the admitted message bound.`
@@ -1875,18 +1876,42 @@ async function requestClientServerAdmission(
   }
 }
 
-function admissionToDiscoveryDescriptor(admission: ZLinkClientServerAdmission) {
+/**
+ * The one place a server routing id (opaque bytes on the wire) becomes the discovery descriptor's
+ * string identity: printable ids stay text, opaque ids use their hex (NUL-free and injective).
+ */
+export function toClientServerDiscoveryDescriptor(
+  source: Pick<
+    ZLinkClientServerServerDescriptor,
+    | 'channelName'
+    | 'serverRid'
+    | 'lifecycleGeneration'
+    | 'descriptorRevision'
+    | 'weight'
+    | 'state'
+    | 'securityIdentity'
+    | 'endpoint'
+  >,
+  effectiveMaxMessageBytes: number
+) {
   return {
-    channelName: admission.channelName,
-    serverRoutingId: admission.serverRid,
-    lifecycleGeneration: admission.lifecycleGeneration,
-    descriptorRevision: admission.descriptorRevision,
-    weight: admission.weight,
-    state: discoveryAvailabilityForRuntimeState(admission.state),
-    securityIdentity: admission.securityIdentity,
-    effectiveMaxMessageBytes: admission.normalizedEffectiveMaxMessageBytes,
-    advertisedEndpoint: admission.advertisedEndpoint
+    channelName: source.channelName,
+    serverRoutingId: routingIdWireHex(source.serverRid) ?? String(source.serverRid),
+    lifecycleGeneration: source.lifecycleGeneration,
+    descriptorRevision: source.descriptorRevision,
+    weight: source.weight,
+    state: discoveryAvailabilityForRuntimeState(source.state),
+    securityIdentity: source.securityIdentity,
+    effectiveMaxMessageBytes,
+    advertisedEndpoint: source.endpoint
   };
+}
+
+function admissionToDiscoveryDescriptor(admission: ZLinkClientServerAdmission) {
+  return toClientServerDiscoveryDescriptor(
+    { ...admission, endpoint: admission.advertisedEndpoint },
+    admission.normalizedEffectiveMaxMessageBytes
+  );
 }
 
 function sameClientServerDiscoveryDescriptor(

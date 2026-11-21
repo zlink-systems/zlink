@@ -426,7 +426,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       }
       if (
         record.snapshot.allocation.state !== 'active' ||
-        (record.visibleStoreVersion ?? current.value.version.value) !== expectedStoreVersion.value
+        current.value.version.value !== expectedStoreVersion.value
       ) {
         return { kind: 'conflict', current: snapshot };
       }
@@ -571,6 +571,50 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           current: snapshot,
           membershipFailure: membershipConditions.failureKind
         };
+      let deletedCapacity: CapacityRecord | undefined;
+      if (capacityRead !== undefined) {
+        const capacity =
+          capacityRead.kind === 'found'
+            ? decodeJson<CapacityRecord>(capacityRead.value.bytes)
+            : emptyCapacityRecord();
+        try {
+          deletedCapacity = {
+            active: subtractCapacity(capacity.active, record.snapshot.allocation.capacity),
+            pending: capacity.pending
+          };
+        } catch (error) {
+          if (
+            !(error instanceof ZLinkFrameworkException) ||
+            error.kind !== ZLinkFrameworkErrorKind.DataLost
+          )
+            throw error;
+          const observed = await this.provider.read(rowKey, signal);
+          if (observed.kind === 'missing') {
+            this.ownerLeaseReleaseDelay.clearIfUnchanged(
+              releaseDelayScope,
+              releaseDelayObservation
+            );
+            return { kind: 'conflict', current: { kind: 'missing', storeNow: observed.storeNow } };
+          }
+          const observedRecord = decodeAuthorityRecord(observed.value.bytes);
+          if (
+            observed.value.version.value !== current.value.version.value ||
+            observedRecord.snapshot.objectGeneration !== record.snapshot.objectGeneration ||
+            observedRecord.snapshot.authorityOwnerGeneration !==
+              record.snapshot.authorityOwnerGeneration
+          )
+            return {
+              kind: 'conflict',
+              current: await this.projectAuthority(
+                observedRecord,
+                observed.value.version,
+                observed.value.storeNow,
+                signal
+              )
+            };
+          throw error;
+        }
+      }
       const result = await this.provider.write(
         {
           conditions: [
@@ -599,18 +643,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
                   {
                     kind: 'put',
                     key: capacityRowKey,
-                    bytes: encodeJson({
-                      active: subtractCapacity(
-                        capacityRead?.kind === 'found'
-                          ? decodeJson<CapacityRecord>(capacityRead.value.bytes).active
-                          : emptyCapacityRecord().active,
-                        record.snapshot.allocation.capacity
-                      ),
-                      pending:
-                        capacityRead?.kind === 'found'
-                          ? decodeJson<CapacityRecord>(capacityRead.value.bytes).pending
-                          : emptyCapacityRecord().pending
-                    } satisfies CapacityRecord)
+                    bytes: encodeJson(deletedCapacity!)
                   }
                 ]
               : [
@@ -844,8 +877,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         if (
           record.aggregate !== undefined ||
           record.snapshot.allocation.state !== 'active' ||
-          (record.visibleStoreVersion ?? current.value.version.value) !==
-            participant.expectedStoreVersion.value
+          current.value.version.value !== participant.expectedStoreVersion.value
         ) {
           await this.clearAggregateMarkers(fence, installed, signal);
           await this.abortAggregateStaging(fence, signal);
@@ -894,7 +926,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
                 bytes: encodeAuthorityRecord({
                   ...record,
                   aggregate: marker,
-                  visibleStoreVersion: record.visibleStoreVersion ?? current.value.version.value
+                  visibleStoreVersion: current.value.version.value
                 } satisfies AuthorityRecord)
               },
               ...(reservingOwnerGenerationBlock
@@ -2480,18 +2512,23 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     signal?: AbortSignal
   ): Promise<ZLinkOwnerLeaseReleaseResult> {
     const key = ownerKey(token.ownerId);
-    const current = await this.provider.read(key, signal);
-    if (current.kind === 'missing') return 'stale';
-    const record = decodeOwnerRecord(current.value.bytes);
-    if (BigInt(record.leaseGeneration) !== token.leaseGeneration) return 'stale';
-    const result = await this.provider.write(
-      {
-        conditions: [{ kind: 'version', key, expected: current.value.version }],
-        mutations: [{ kind: 'delete', key }]
-      },
-      signal
-    );
-    return result.kind === 'applied' ? 'released' : 'stale';
+    // 'stale' means the token no longer holds the lease. A version conflict on the same
+    // generation is a renewal of this token that landed first, so read again and retry.
+    for (;;) {
+      const current = await this.provider.read(key, signal);
+      if (current.kind === 'missing') return 'stale';
+      const record = decodeOwnerRecord(current.value.bytes);
+      if (BigInt(record.leaseGeneration) !== token.leaseGeneration) return 'stale';
+      const result = await this.provider.write(
+        {
+          conditions: [{ kind: 'version', key, expected: current.value.version }],
+          mutations: [{ kind: 'delete', key }]
+        },
+        signal
+      );
+      if (result.kind === 'applied') return 'released';
+      signal?.throwIfAborted();
+    }
   }
 
   override async updateMeshNode(
@@ -3636,13 +3673,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   ): Promise<ZLinkAuthoritySnapshot> {
     const marker = record.aggregate;
     if (marker === undefined) {
-      return authoritySnapshot(
-        record.snapshot,
-        record.visibleStoreVersion === undefined
-          ? version
-          : ({ value: record.visibleStoreVersion } as ZLinkStoreVersion),
-        storeNow
-      );
+      return authoritySnapshot(record.snapshot, version, storeNow);
     }
     const aggregateRead = await this.provider.read(
       aggregateKey(aggregateFence(aggregateId(marker.aggregateId), marker.aggregateGeneration)),
@@ -3913,7 +3944,8 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
               key,
               bytes: encodeAuthorityRecord({
                 ...record,
-                aggregate: undefined
+                aggregate: undefined,
+                visibleStoreVersion: undefined
               } satisfies AuthorityRecord)
             }
           ]
@@ -4611,9 +4643,8 @@ function encodeAuthorityRecord(record: AuthorityRecord): Uint8Array {
             requestEncodedSize: Number(snapshot.pendingCreation.requestEncodedSize)
           }
   };
-  // These fields gate Node-only creation/aggregate recovery.  They are absent
-  // from normal authority values (including the golden vector), while the
-  // interoperable envelope above remains byte-canonical.
+  // Aggregate progress shares the authority envelope across languages
+  // (Location runtime §3.4). Normal authority records omit both progress fields.
   if (record.terminal !== undefined) envelope.terminal = record.terminal;
   if (record.aggregate !== undefined) envelope.aggregate = canonicalize(record.aggregate);
   if (record.visibleStoreVersion !== undefined)

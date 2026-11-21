@@ -540,6 +540,11 @@ number precision).
 | `ownerId`, `ownerLeaseGeneration` | The current owner's `(OwnerId, LeaseGeneration)` (§3.1). |
 | `allocation` | Placement information (§3.3), derived from dotnet's internal `ZLinkPlacementAllocation`. Includes `state` (`reserved \| active`), `objectKind` (`actor \| userSpot \| instanceSpot` — no Entry Spot; an Entry Spot's Actor is counted as `actor`, §4), `stableType`, `descriptor` (`{meshName, routingIdHex}`, the same shape as a MeshNode descriptor key), `descriptorLifecycleGeneration` (the target MeshNode's `lifecycleGeneration`, CAS-checked against it), and `capacity`. `capacity` is `{actors, spots, spotType}`: `actors`/`spots` are the integer slot counts this allocation secured, and `spotType` is `null` unless the object is a Spot, in which case it's `{objectKind, stableType, count}` (§3.3's "1 Spot slot plus 1 slot of that Spot kind/stable type" — a single flat counter can't express which `(spotKind, stableType)` pair was secured). |
 | `pendingCreation` | Creation-in-progress state (§7). `null` when absent; when present, includes `reservationId`, `requestContentReference`, `requestSha256` (hex, 64 characters), and `requestEncodedSize` (integer). `requestContentReference` has the form `inline-v1:{base64url}`, where `{base64url}` encodes the creation request bytes over the alphabet `A-Z a-z 0-9 - _` with no `=` padding. No other form is recognized. |
+| `aggregate` | Progress of the aggregate change this record takes part in (§8.1). The field is omitted when absent. When present, it includes `aggregateId` (lowercase canonical UUID), `aggregateGeneration` (integer as a string), `index` (JSON number, position in the participant list), `expectedStoreVersion`, `ownerTransition` (`preserve \| newOwner`), `targetAuthorityOwnerGeneration` (integer as a string), and `authorityPayloadSha256`·`membershipMutationSha256` (64 hex characters). |
+| `visibleStoreVersion` | While `aggregate` is present, the value the framework exposes as the public `StoreVersion`. Even when aggregate preparation rewrites this record, the public `StoreVersion` stays at its pre-preparation value. The field is omitted when `aggregate` is absent. |
+| `aggregate.relocation` | Relocation progress of this authority record (§9.1). Includes `relocationId` (lowercase canonical UUID), `phase` (`preparing \| captured \| prepared \| committed \| activating \| activated \| cleaning \| completed \| aborted`), `source`, `target`, `coordinator`, `sourceInventorySha256` (64 hex characters), and `applicationVersion` (integer as a string). `source` and `target` hold `nodeRid`, `nodeGeneration`, `ownerId`, and `ownerLeaseGeneration`; `target` also holds `attemptGeneration`. `target` is `null` in `preparing` and `captured` and complete from `prepared` on. `aborted` keeps the `target` of the phase it aborted from, so it is `null` after an abort from `preparing` or `captured` and complete after an abort from `prepared` or later. 64-bit integers are strings. |
+| `aggregate.relocation.completion` | Progress of the §9.3 completion record. First written in the target commit CAS, and removed together with the relocation progress information. `acceptedRequests` is the number of requests the source accepted and the target finishes: the requests in the queue fixed by capture plus the requests relayed before the cutover boundary ([Relocation flow §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover)). It's fixed at target commit and never changed afterwards. A request that arrives after the boundary is an ordinary request the target received and isn't counted. The other fields are `completedResults`, `pendingDeliveries` (all string integers), `reference` (the root-list reference of the completion record payload, `null` while there is no completion result), and `sha256` (SHA-256 of that payload's full bytes, 64 hex characters, `null` when `reference` is `null`). With no accepted request, `acceptedRequests` is `"0"`. Sends, events, and timers aren't counted in `acceptedRequests`. |
+| `aggregate.relocation.coordinator.expectedStoreVersion` | The original authority StoreVersion the coordinator that started the move read. An opaque string compared only for equality. Distinct from the current expected StoreVersion of a phase CAS. |
 
 The node that runs the creation decodes `requestContentReference` and verifies that the
 decoded bytes have the length `requestEncodedSize` and the SHA-256 `requestSha256`. If
@@ -553,7 +558,13 @@ and `pendingCreation.reservationId` identifies it. No logical key is reserved fo
 completing or aborting a reservation another node created is decided from this record and
 §7's final-result record alone. Reservation state isn't held outside the fields in the
 table above — reservation information placed in a field only one language reads doesn't
-survive another language's update of that record.
+survive another language's update of that record. Aggregate and relocation progress is also state of this record, not a
+separate lock record; whether one is in progress and the pre-commit values are decided from the `aggregate` and
+`visibleStoreVersion` fields alone. The keys and body formats of the aggregate record, the participant inventory, and participant change bytes are defined in [§8.3](#83-storage-format-of-aggregate-records-and-the-participant-inventory).
+
+The `aggregate` field holds the aggregate marker fields and an optional `relocation` field. In a relocation whose aggregate marker has not been materialized yet, `aggregate` may hold only `relocation`; that shape does not mean an aggregate transaction marker is prepared. When `aggregate` is present, the marker fields are either all present or all absent, and an empty object is invalid. An authority change that materializes or updates the aggregate marker preserves the existing `aggregate.relocation`, and meanwhile `visibleStoreVersion` keeps the public StoreVersion from before aggregate preparation. Relocation progress is removed by the existing terminal cleanup's conditional authority change; if no marker remains after removal, the `aggregate` field is omitted.
+
+`aggregate.relocation` owns this record's durable relocation phase and the source, target, and coordinator fences. The same facts are not also recorded in `payload` or `visibleStoreVersion`; `payload` stays application-defined opaque bytes. The aggregate generation is owned only by the same record's aggregate marker (`aggregate.aggregateGeneration`), with no copy in `aggregate.relocation`. A Direct Join whose marker doesn't exist yet receives the aggregate generation from the fence of the move request its caller holds. Source cleanup progress is represented by the single phase `cleaning`, with no separate cleanup-state field. Earlier language-specific relocation encodings are read only as compatibility input, and new writers write this one representation. The field is an optional extension of `recordVersion` 1. Existing records without it are read as is, but its absence is not taken to mean there is no relocation. Finish in-flight relocations before upgrading to a runtime that writes this field, and do not roll back to an earlier version while records still carry it.
 
 Payloads the Relocation Store holds (the cold-activation envelope, completion records)
 don't use this opaque record. A separately versioned key space and raw-bytes storage
@@ -1138,9 +1149,13 @@ operation that creates a new incarnation of the same ID is an Actor `Create` or 
 Spot `GetOrCreate`, or a new message with [Instance intent](../00-foundation/02-glossary.en.md#instance-intent). When such an operation reads a
 steady `Ready` record whose owner lease is missing, has a different `LeaseGeneration`, or has
 expired, and the relocation policy registered for that type on the node that `Reserve`s the new
-incarnation is `Disabled`, the Location repository releases that record. `Closing` and an incomplete
-initial activation aren't eligible merely because their allocation is `Active`; they follow their
-own lifecycle or recovery procedures. The node that `Reserve`s is the node that requested
+incarnation is `Disabled`, the Location repository releases that record. A User Spot's `Closing` and
+an incomplete initial activation aren't eligible merely because their allocation is `Active`; they
+follow their own lifecycle or recovery procedures. An Actor's `Closing` is a state in which the destroy
+has already closed admission, so if its owner lease is missing, has a different `LeaseGeneration`, or
+has expired, it's released by the same conditional batch. In that case the relocation policy condition
+doesn't apply, and both a creating operation and a call that destroys the same generation start this
+release. The node that `Reserve`s is the node that requested
 creation for an Actor or User Spot, and the target that received the activation envelope for an
 Instance Spot. If the type isn't registered on that node, the policy isn't treated as `Disabled`. A
 User Spot is released only when every Actor membership remaining for that SpotId and
@@ -1172,7 +1187,7 @@ the release decision (a different type keeps the existing `TypeMismatch`). If th
 valid, the existing result for the type and operation is returned. If the owner lease is invalid
 and the release conditions aren't met, `Unavailable` is returned. Ordinary messages and `Find`
 don't start this release. This release is a conditional repository batch, distinct from `Delete`,
-which requires a valid owner lease. Besides create operations, only the post-discard cleanup of
+which requires a valid owner lease. Besides create operations and a call that destroys an Actor in `Closing`, only the post-discard cleanup of
 §5.1 starts this release, when the owner's own same-incarnation record points at its own old
 invalid token. The conditions are the same, but no new incarnation is created, so the type's
 relocation policy condition does not apply.
@@ -1294,7 +1309,7 @@ in the table below apply only to a record whose owner lease is valid.
 |---|---|---|
 | `Ready` of the same type | `AlreadyExists` | existing ref |
 | `Creating` of the same type | `AlreadyExists` | waits for the in-progress creation result. |
-| `Closing` of the same type | `AlreadyExists` | For User Spots, follows the authority-change wait and subsequent steps in [Spot address messaging §3.2](../03-spot-actor/06-spot-address-messaging.en.md#32-convergence-of-concurrent-requests). |
+| `Closing` of the same type | `AlreadyExists` | For Actors and User Spots, follows the authority-change wait and subsequent steps in [Spot address messaging §3.2](../03-spot-actor/06-spot-address-messaging.en.md#32-convergence-of-concurrent-requests). |
 | A different Actor type | `TypeMismatch` | `TypeMismatch` |
 | A different Spot kind or type | `TypeMismatch` | `TypeMismatch` |
 
@@ -1655,6 +1670,119 @@ Target factory and `Restore` finish before recording `Prepared`. The order of qu
 merge, regular-route switch, callback, and dispatch opening is defined by
 [04 "4. Normal Processing Order"](04-relocation-flow.en.md).
 
+### 8.3 Storage Format of Aggregate Records and the Participant Inventory
+
+This section defines the keys and body formats of the aggregate record, the participant list
+(inventory), and the participant change bytes that an aggregate change (such as the whole
+`SpotWide` User Spot move of §8.1) leaves in the Location Store. All four runtimes write the
+same bytes under the same keys and read records the others wrote. The Location Store provider
+treats these records as opaque bytes and doesn't interpret them
+([02 §4](02-location-store-redis.en.md#4-conditional-atomic-batch)).
+
+**Keys.** `{prefix}` is the same provider storage namespace prefix as for the authority record.
+`aggregateId` is a lowercase canonical UUID (8-4-4-4-12), and `aggregateGeneration`, `index`,
+and `level` are decimal integers without leading zeros.
+
+| Record | Key |
+|---|---|
+| Aggregate record | `{prefix}aggregate:{aggregateId}:{aggregateGeneration}` |
+| Inventory root | `{prefix}aggregate-inventory:{aggregateId}:{aggregateGeneration}:root` |
+| Inventory page | `{prefix}aggregate-inventory:{aggregateId}:{aggregateGeneration}:page:{level}:{index}` |
+| A participant's new authority payload | `{prefix}aggregate-inventory:{aggregateId}:{aggregateGeneration}:participant:{index}:authorityPayload` |
+| A participant's membership change | `{prefix}aggregate-inventory:{aggregateId}:{aggregateGeneration}:participant:{index}:membershipMutation` |
+
+**Participant change bytes.** A participant's new authority payload record and membership change
+record store bytes as they are, not JSON. The new authority payload record is the
+application-defined opaque bytes that become the participant authority's `payload` at commit, and
+the membership change record is the body bytes of the normative schema's
+`aggregate-participant-mutation-bytes`. The common body rules below don't apply to these two records.
+
+**Common body rules.** The bodies of the aggregate record and the inventory root and pages are UTF-8
+JSON objects, stored exactly as the bytes produced by
+[RFC 8785](https://www.rfc-editor.org/rfc/rfc8785) (JSON Canonicalization Scheme, JCS). 64-bit
+integers (generations) are decimal strings, counts and positions (32-bit range) are JSON numbers,
+and SHA-256 values are 64 lowercase hex characters. A record that has a field not in the tables
+below, or lacks a field in them, is treated as corrupt. There's no format version field — runtimes
+using this format are upgraded in all four languages at once, after in-progress aggregates finish.
+
+**Aggregate record.** It holds the preparation request and the progress state of one aggregate
+change. Whether two requests are the same is decided by whether all fields except `state` are
+equal (`AlreadyPrepared` and `Conflict` of §8.1).
+
+| Field | Format | Meaning |
+|---|---|---|
+| `aggregateId`, `aggregateGeneration` | UUID string, decimal string | Must equal the values in the key. |
+| `state` | `preparing \| prepared \| committed \| aborted` | Progress state. It changes only from `preparing` to `prepared` or `aborted`, and from `prepared` to `committed` or `aborted`. It's a different value from the relocation phase (`aggregate.relocation.phase`). |
+| `participantCount` | number | Total number of inventory entries. |
+| `inventoryDigestSha256` | 64 hex | Equals the inventory root's `digestSha256`. |
+| `targetDescriptor` | `{meshName, routingIdHex}` | Target MeshNode fixed by the preparation request. Same shape as the authority's `allocation.descriptor` (§3.3). |
+| `targetDescriptorLifecycleGeneration` | decimal string | Target execution generation fixed by the preparation request. |
+| `targetOwner` | `{ownerId, ownerLeaseGeneration}` | Target owner fixed by the preparation request. `ownerLeaseGeneration` is a decimal string. |
+| `capacity` | `{actors, spots, spotType}` | Total capacity reserved. Same shape as the authority's `allocation.capacity` (§3.3). |
+
+**Inventory root and pages.** The inventory sorts participants by the UTF-8 bytes of their
+canonical authority key in ascending order and numbers them (`index`) from 0. A saved-work
+participant ID is `index + 1` (the normative schema's `saved-work-vector`). A level-0 page (leaf)
+holds entries, and a page at level 1 or above holds references to pages one level below. One page
+holds at most 1,024 entries or references and at most 1 MiB encoded
+([02 §4](02-location-store-redis.en.md#4-conditional-atomic-batch)).
+
+Pages are split from the stored bytes alone, so the same inventory gives the same pages and check
+values whichever language wrote it. The size of one entry varies with its authority key (at most 776
+bytes) and `expectedStoreVersion` (at most 4,096 bytes), so a count alone can't keep the 1 MiB bound.
+
+1. A level-0 page is filled with entries in `index` order. If adding the next entry would make the
+   page's stored bytes exceed 1 MiB or make it hold 1,025 entries, the next page starts from that
+   entry. Page `index` starts at 0 and increases by 1.
+2. When a level has two or more pages, the level above is built. Pages of level `L + 1` are filled
+   with the references to level-`L` pages in page `index` order, the same way (1 MiB and 1,024).
+3. The level with exactly one page is the top level. The root's `topLevel` is that level, and
+   `topPages` is the reference to that one page.
+4. With zero entries no page is created. The root has `totalCount` 0, `topLevel` 0, and an empty
+   `topPages`.
+
+The stored bytes of one entry are far below 1 MiB, so every page holds at least one entry or
+reference.
+
+| Record and field | Format | Meaning |
+|---|---|---|
+| root `totalCount` | number | Total number of entries. Equals the aggregate record's `participantCount`. |
+| root `topLevel` | number | Level of the topmost pages. |
+| root `topPages` | array of references | References to the pages at the top level. |
+| root `digestSha256` | 64 hex | Check value of the whole inventory (digest rules below). |
+| page `level`, `index` | number | Must equal the values in the key. |
+| page `startIndex`, `entryCount` | number | First `index` and number of the entries under this page. |
+| page `entries` | array of entries | Holds entries only at level 0; an empty array at level 1 or above. |
+| page `children` | array of references | Holds references only at level 1 or above; an empty array at level 0. |
+| reference `level`, `index`, `startIndex`, `entryCount` | number | Equal to the same fields of the referenced page. |
+| reference `sha256` | 64 hex | SHA-256 of the entire stored bytes (JCS bytes) of the referenced page. |
+| entry `index` | number | Position in the inventory. |
+| entry `authorityKey` | string | The participant's canonical authority key. |
+| entry `expectedStoreVersion` | string | The participant authority's `StoreVersion` read at preparation. It's opaque and only compared for equality. |
+| entry `ownerTransition` | `preserve \| newOwner` | Equals the participant authority's `aggregate.ownerTransition`. |
+| entry `authorityPayloadSha256`, `membershipMutationSha256` | 64 hex | SHA-256 of the stored bytes of the participant change records with the same `index` (key table above). Equal to the values of the same names in the participant authority's `aggregate`. |
+
+**Digest rules.** Every check value is the SHA-256 of stored bytes. Because the stored bytes are
+JCS bytes, the same content gives the same check value whichever language wrote it.
+
+- A page reference's `sha256` takes as input the entire stored bytes of one page record (with all
+  of that page's fields). A single entry or the `entries` array alone isn't hashed separately.
+- The root's `digestSha256` takes as input the JCS bytes of the root object without its
+  `digestSha256` field (`totalCount`, `topLevel`, `topPages`). Because references carry the check
+  values of the pages below, this value fixes the whole inventory.
+- The aggregate record's `inventoryDigestSha256` is the same value as the root's `digestSha256`.
+  It isn't computed separately or recorded twice.
+- The authority's `aggregate.relocation.sourceInventorySha256` is also the same value as the
+  `digestSha256` of the participant inventory root fixed at the seal. Because an entry's
+  `expectedStoreVersion` is the value read at preparation, this value doesn't change after
+  `preparing`. A move of a single Actor with no aggregate record uses the root `digestSha256` of an
+  inventory whose only entry is that Actor.
+
+The inventory root, pages, and participant change records aren't modified once written. Records
+of the same `(aggregateId, aggregateGeneration)` aren't rewritten with different content; different
+content uses a new `aggregateGeneration`. Cleaning up these records after commit or abort is done
+by the progress-information removal change of §8.1.
+
 ## 9. Restore, Completion Records, and Their Relationship to the Store
 
 Queue stopping, the number of concurrent moves, payload composition, and timer/Session
@@ -1783,6 +1911,31 @@ completion result and payload in the Relocation Store first, then changes the Lo
 Store's payload location, checksum, completion count, and delivery-pending count in a
 single CAS.**
 
+The completion record payload is a JSON object stored in the [Relocation Store common blob format](03-relocation-store-redis.en.md),
+serialized in [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785) canonical form. Integers are decimal strings with no sign and no leading zeros. `OperationId` is written like the §3.4 creation terminal key: its big-endian 16 bytes as 32 lowercase hex characters. `ReplyRouteId` (`u64`) is a decimal string. `nodeRid` is the RoutingId raw bytes in lowercase hex. `reply` is [RFC 4648 §4](https://www.rfc-editor.org/rfc/rfc4648#section-4) standard base64 (with padding, no line breaks). Object order is the UTF-8 authority-key byte order of [Relocation flow §4.2](04-relocation-flow.en.md#42-stop-source-execution-not-message-reception).
+
+| Field | Meaning |
+|---|---|
+| `formatVersion` | Currently `1`. Any other value isn't read and is handled as `DataLost`. |
+| `relocationId` | The relocation this record belongs to. Must equal the Location Store's `aggregate.relocation.relocationId`. |
+| `entries` | Array of completion results, in object order and, within one object, in the order the source accepted the requests. |
+| `entries[].objectKey` | Authority logical key of the object that produced the result. |
+| `entries[].source` | The source request information from the table above (`ownerId`, `leaseGeneration`, `nodeRid`, `nodeGeneration`). |
+| `entries[].operationId`, `entries[].replyRouteId` | The values from the table above. |
+| `entries[].reply` | The final reply bytes produced by the existing reply serialization, base64-encoded. Holds both success and failure results. |
+| `entries[].delivery` | One of `pending`, `terminalReceived`, `alreadyTerminal`, `sourceLeaseExpired`. Changes from `pending` to the matching value once, when the basis in the table below is obtained. |
+
+Adding a completion result or changing `delivery` never edits the existing payload. The Framework stores the whole
+payload under a new reference, verifies it, then changes `reference`, `sha256`, `completedResults`, and
+`pendingDeliveries` in a single CAS. Several results or confirmations can be combined into one replacement.
+`completedResults` must equal the number of `entries` and `pendingDeliveries` the number of entries whose `delivery`
+is `pending`; otherwise it's `DataLost`. A reply is sent to the original requester only after the CAS that holds its
+result. A previous payload that's no longer referenced after a replacement is deleted after its retention.
+
+After a Store error or a dropped connection during delivery, the target sends the `pending` entries of the payload `reference` points to again on the current route, within the same execution. What happens after the target's execution ends follows the failure contract of [Host relocation and shutdown](05-host-relocation-flow.en.md). After the target's execution ends, no other runtime takes over this relocation, per [failure policy §5](06-failure-failover-policy.en.md#5-host-relocation-failure); the stored completion record is used only when that policy activates the object again. In that case the runtime sends only the reply bytes of the `pending` entries again before activation, and doesn't run the handler, Restore, unfinished queue work, or target selection again.
+
+If adding a result would make the encoded payload exceed the common blob limit of the [Relocation Store](03-relocation-store-redis.en.md), the Framework stores an `InternalFailure` failure reply (failure code `requestFailed`, [Framework error model §2](../00-foundation/07-framework-error-model.en.md)) as that entry's `reply` instead of the request's reply bytes. The request already ran and only its result bytes couldn't be kept, so no new error kind is added. Entries already stored don't change, and the relocation doesn't become a failure.
+
 `Completed` is only recorded when the accepted request count equals the completion
 result count and the delivery-pending count is 0. Otherwise it's a recovery error.
 
@@ -1793,9 +1946,15 @@ result count and the delivery-pending count is 0. Otherwise it's a recovery erro
 | `SourceLeaseExpired` | The Location Store confirmed the source owner lease has ended. |
 
 Connection closure or reconnection alone isn't judged as having received the completion
-result. The target keeps delivering on the current route. If the `Relocate` deadline
-passes while the source owner lease is still valid, it's `ForceStopped`. In this case
-the relocation root, payload, and reply bytes are retained for 24 hours.
+result. The target keeps delivering on the current route. The `Relocate` deadline only ends the `Relocate`
+call; it doesn't stop delivery. Until `pendingDeliveries` reaches 0 — until every entry has obtained a basis from
+the table above — the Framework keeps `aggregate.relocation.completion` and the payload `reference` points to, and
+extends the retention of the payload's data chunks and root list by the renew rule of the
+[Relocation Store](03-relocation-store-redis.en.md). While `pendingDeliveries` is greater than 0, the next
+`Relocate` of that object ends as `Blocked/OperationInProgress`, and the Framework writes to the runtime log that the
+reason is a pending delivery, together with the `RelocationId` and `pendingDeliveries`. Languages whose result
+carries a description string put the same reason in that string as well. When `pendingDeliveries` reaches 0,
+the existing terminal cleanup removes the relocation progress information and the payload.
 
 ### 9.4 Cancellation Before Relay-Ready Is Accepted
 
@@ -2074,7 +2233,7 @@ store record golden fixture. Each item maps to one test.
   ended-owner members, a new Instance intent for a steady `Ready` Instance Spot) verify a new `ObjectGeneration`,
   return of the old allocation's capacity, and one factory execution. Inputs that break one release
   condition each (a valid lease, a type that isn't `Disabled` or isn't registered, a User Spot with a
-  member whose owner lease is valid or that is moving, members exceeding the provider's single-batch bound, a recovery pointer, `Closing`, aggregate or relocation progress, an ordinary
+  member whose owner lease is valid or that is moving, members exceeding the provider's single-batch bound, a recovery pointer, a User Spot's `Closing`, an Actor `Closing` with a valid owner lease, aggregate or relocation progress, an ordinary
   message or `Find`) verify that authority, membership, capacity, and factory execution count don't
   change. Inputs whose registered policies differ between the requesting node and the factory
   target (for an Instance, the source and the receiving target) verify the policy source. Releasing a User

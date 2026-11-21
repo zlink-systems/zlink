@@ -70,6 +70,24 @@ export function relocationDebug(marker: string, detail: Record<string, unknown>)
   console.error('[zlink.runtime.relocation]', marker, detail);
 }
 
+export function relocationDebugTerminal(
+  marker: string,
+  detail: Record<string, unknown>,
+  failure?: { error: unknown }
+): void {
+  if (!isRelocationDebugEnabled()) return;
+  relocationDebug(marker, {
+    ...detail,
+    outcome: failure === undefined ? 'resolved' : 'rejected',
+    errorType:
+      failure === undefined
+        ? undefined
+        : failure.error instanceof Error
+          ? failure.error.name
+          : typeof failure.error
+  });
+}
+
 /** Observes shutdown completion without owning its ordering or error policy. */
 export async function traceShutdownStep<T>(
   stage: string,

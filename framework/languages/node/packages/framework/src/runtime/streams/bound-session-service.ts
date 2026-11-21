@@ -20,7 +20,10 @@ import {
   type ZLinkActorSessionRoute
 } from './actor-session-binding-registry';
 import type { DefaultZLinkSessionActor, DefaultZLinkSessionContext } from './session-context';
-import { boundSessionErrorPayload } from './bound-session-response-target';
+import {
+  boundSessionErrorPayload,
+  captureBoundSessionSubmission
+} from './bound-session-response-target';
 import { ZLinkStreamFrameMessageFactory } from './stream-frame-factory';
 import { ZLinkManagedStream } from './managed-stream';
 import type { ZLinkSessionBindingIdentity } from './stream-binding-runtime-ports';
@@ -128,7 +131,7 @@ export class ZLinkBoundSessionService {
       return (
         (await this.routes.submitCurrent(actorId, route.bindingToken, (current) => {
           throwIfAborted(signal);
-          return current.context.stream.submitRaw(frame);
+          return captureBoundSessionSubmission(current.context, actorId)(frame);
         })) ?? { status: ZLinkSubmitStatus.TargetNotFound }
       );
     } finally {
@@ -372,7 +375,7 @@ export class ZLinkBoundSessionService {
     );
     try {
       const result = await this.routes.submitCurrent(actorId, route.bindingToken, (current) =>
-        current.context.stream.submitRaw(frame)
+        captureBoundSessionSubmission(current.context, actorId)(frame)
       );
       if (result === undefined) {
         return false;

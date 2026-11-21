@@ -459,6 +459,7 @@ catch (...) {
 raw_mesh_node_owner_t::raw_mesh_node_owner_t (raw_mesh_node_options_t options,
                                               std::shared_ptr<zlink::context_t> context) :
     _options (std::move (options)),
+    _owns_context (!context),
     _context (context ? std::move (context) : std::make_shared<zlink::context_t> ()),
     _liveness (_lane),
     _topology (_lane,
@@ -670,10 +671,15 @@ void raw_mesh_node_owner_t::send_descriptor_update_on_lane (
 
 void raw_mesh_node_owner_t::close ()
 {
-    auto [resources, operations] =
+    auto [resources, operations, owned_context] =
       _lane
         .run ([this] {
             std::shared_ptr<foundation::operation_registry_t> operations;
+            // Only the owner that created the Core context ends it. A context
+            // passed in stays with its creator.
+            auto owned_context = std::exchange (_owns_context, false)
+                                   ? _context
+                                   : std::shared_ptr<zlink::context_t> ();
             if (!_closed) {
                 _receive_flow_registration.close ();
                 _mailbox.close ();
@@ -681,9 +687,9 @@ void raw_mesh_node_owner_t::close ()
                 operations = _operations;
             }
             std::lock_guard lifecycle_lock (_lifecycle_mutex);
-            return std::pair{
+            return std::tuple{
               std::tuple{std::move (_port), std::move (_ingress_poller), std::move (_router)},
-              std::move (operations)};
+              std::move (operations), std::move (owned_context)};
         })
         .get ();
     // Only an open owner's close borrows the Registry for draining outside
@@ -700,14 +706,18 @@ void raw_mesh_node_owner_t::close ()
         failure = std::current_exception ();
     }
     _lane
-      .run ([this, &resources, &failure] {
+      .run ([this, &resources, &failure, &owned_context] {
           std::lock_guard lifecycle_lock (_lifecycle_mutex);
           std::tie (_port, _ingress_poller, _router) = std::move (resources);
           _closed = !failure;
+          _owns_context = failure && owned_context;
       })
       .get ();
     if (failure)
         std::rethrow_exception (failure);
+    // The sockets and poller are closed, so termination does not wait on them.
+    if (owned_context)
+        owned_context->term ();
 }
 
 bool raw_mesh_node_owner_t::started () const noexcept
@@ -1871,12 +1881,18 @@ raw_mesh_node_owner_t::send_with_header_result (std::span<const std::uint8_t> ta
                                                 protocol::application_payload_t application_payload,
                                                 detail::backend::raw_send_stage_trace_t trace,
                                                 bool target_claimed,
-                                                std::optional<std::vector<std::uint8_t>> metadata)
+                                                std::optional<std::vector<std::uint8_t>> metadata,
+                                                std::uint64_t target_lifecycle_generation)
 {
     try {
         if (!target_claimed) {
+            // Submit/completion §5: a stateful send names the owner lifecycle
+            // generation G its Location authority resolved. Only a ready peer of
+            // that generation is its route; any other peer is NotConnected.
             const auto peer = _topology.peer (target_routing_id);
-            if (!peer || !peer->ready) {
+            if (!peer || !peer->ready
+                || (target_lifecycle_generation != 0
+                    && peer->descriptor.lifecycle_generation != target_lifecycle_generation)) {
                 if (trace)
                     trace ("router_admission_submit", "not_connected");
                 return task_t<zlink::submit_result_t> (result_t<zlink::submit_result_t>::success (
@@ -2429,7 +2445,7 @@ raw_mesh_node_owner_t::send_to_spot_result (const std::vector<std::uint8_t> &tar
         protocol::command::spotSend, source_spot_id, target,
         operation.value_or (protocol::wire_operation_id_t{local.lifecycle_generation, *sequence}),
         std::nullopt, message_follow_hop_count),
-      std::move (application_payload));
+      std::move (application_payload), {}, false, std::nullopt, target.target_node_generation);
 }
 
 task_t<bool>
@@ -2494,7 +2510,7 @@ task_t<zlink::submit_result_t> raw_mesh_node_owner_t::send_to_actor_result (
         protocol::command::actorSend, source_actor, target,
         operation.value_or (protocol::wire_operation_id_t{local.lifecycle_generation, *sequence}),
         std::nullopt, message_follow_hop_count, std::move (bound_session_source)),
-      std::move (application_payload));
+      std::move (application_payload), {}, false, std::nullopt, target.target_node_generation);
 }
 
 task_t<bool> raw_mesh_node_owner_t::request_to_actor (
@@ -2547,6 +2563,8 @@ task_t<bool> raw_mesh_node_owner_t::request_user_spot_create (
         || request.reservation.target_node_routing_id != target_routing_id) {
         throw std::invalid_argument ("User Spot create source or target fence is inconsistent");
     }
+    // Submit/completion §5: the reservation's owner generation G admits the request.
+    const auto target_generation = request.reservation.target_node_generation;
     co_return co_await request_infrastructure (
       target_routing_id,
       [request = std::move (request)] (std::uint64_t correlation) mutable {
@@ -2565,7 +2583,7 @@ task_t<bool> raw_mesh_node_owner_t::request_user_spot_create (
               (void) protocol::decode_application_payload (parts[1], false);
           return protocol::pack_infrastructure_reply (parts);
       },
-      deadline, std::move (callback));
+      deadline, std::move (callback), target_generation);
 }
 
 task_t<bool> raw_mesh_node_owner_t::send_bound_session (
@@ -2682,7 +2700,8 @@ task_t<bool> raw_mesh_node_owner_t::send_bound_session_replaced (
 
 task_t<void>
 raw_mesh_node_owner_t::request_bound_session_close (protocol::bound_session_close_t record,
-                                                    std::chrono::milliseconds timeout)
+                                                    std::chrono::milliseconds timeout,
+                                                    infrastructure_submit_t submit)
 {
     const auto deadline = capture_request_deadline (timeout);
     const auto target = record.session.session_owner_node_routing_id;
@@ -2724,7 +2743,8 @@ raw_mesh_node_owner_t::request_bound_session_close (protocol::bound_session_clos
               completion->complete (
                 result_t<void>::failure (framework_error_kind_t::protocol_error, error.what ()));
           }
-      });
+      },
+      0, std::move (submit));
     if (!submitted)
         completion->complete (result_t<void>::failure (framework_error_kind_t::unavailable,
                                                        "Session close was not admitted"));
@@ -3118,6 +3138,8 @@ task_t<bool> raw_mesh_node_owner_t::request_user_spot_close (
         || request.target.target_node_routing_id != target_routing_id) {
         throw std::invalid_argument ("User Spot close source or target fence is inconsistent");
     }
+    // Submit/completion §5: the close target's owner generation G admits the request.
+    const auto target_generation = request.target.target_node_generation;
     co_return co_await request_infrastructure (
       target_routing_id,
       [request = std::move (request)] (std::uint64_t correlation) mutable {
@@ -3131,7 +3153,7 @@ task_t<bool> raw_mesh_node_owner_t::request_user_spot_close (
           (void) protocol::decode_user_spot_close_reply (parts.front ());
           return protocol::pack_infrastructure_reply (parts);
       },
-      deadline, std::move (callback));
+      deadline, std::move (callback), target_generation);
 }
 
 task_t<bool> raw_mesh_node_owner_t::request_infrastructure (
@@ -3140,7 +3162,9 @@ task_t<bool> raw_mesh_node_owner_t::request_infrastructure (
   const std::function<std::vector<std::uint8_t> (const detail::backend::raw_message_t &)>
     &decode_reply,
   foundation::operation_registry_t::clock_t::time_point deadline,
-  foundation::operation_registry_t::callback_t callback)
+  foundation::operation_registry_t::callback_t callback,
+  std::uint64_t target_lifecycle_generation,
+  infrastructure_submit_t submit)
 {
     std::shared_ptr<detail::backend::raw_route_port_t> port;
     std::uint64_t correlation = 0;
@@ -3164,27 +3188,56 @@ task_t<bool> raw_mesh_node_owner_t::request_infrastructure (
           target_routing_id, {}, {}, detail::current_wait_owner ())) {
         co_return false;
     }
-    if (target_routing_id == local.node_routing_id) {
-        const auto accepted = _mailbox.try_enqueue (service_mailbox_record_t::from_parts (
-          owner_key (local.node_routing_id), service_mailbox_domain_t::infrastructure,
-          detail::backend::materialize_binding_parts ({header (correlation)}),
-          local.node_routing_id, correlation));
+    auto dispatch = [this, target_routing_id, header, decode_reply, deadline,
+                     port = std::move (port), local, correlation, id, ended,
+                     target_lifecycle_generation] () mutable -> task_t<bool> {
+        if (ended->task ().await_ready ())
+            co_return true;
+        if (foundation::operation_registry_t::clock_t::now () >= deadline) {
+            (void) _operations->fail (id, foundation::operation_terminal_t::timed_out);
+            co_return true;
+        }
+        if (target_routing_id == local.node_routing_id) {
+            const auto accepted = _mailbox.try_enqueue (service_mailbox_record_t::from_parts (
+              owner_key (local.node_routing_id), service_mailbox_domain_t::infrastructure,
+              detail::backend::materialize_binding_parts ({header (correlation)}),
+              local.node_routing_id, correlation));
+            if (!accepted)
+                (void) _operations->fail (id, foundation::operation_terminal_t::transport_failed);
+            if (accepted)
+                signal_activity ();
+            co_return accepted;
+        }
+        const auto operations = _operations;
+        detail::backend::raw_message_t request_parts{header (correlation)};
+        const auto remaining = std::chrono::ceil<std::chrono::milliseconds> (
+          deadline - foundation::operation_registry_t::clock_t::now ());
+        if (remaining <= std::chrono::milliseconds::zero ())
+            co_return true;
+        co_return co_await submit_registered_request (
+          std::move (port), observe_request_peer (target_routing_id), std::move (operations), id,
+          correlation, target_routing_id, std::move (request_parts), decode_reply, deadline,
+          ended->task (), {}, {}, {}, target_lifecycle_generation);
+    };
+    if (submit) {
+        const bool accepted = submit (
+          [dispatch = std::move (dispatch), ended] () mutable -> task_t<bool> {
+              return [] (decltype (dispatch) action, decltype (ended) completion) -> task_t<bool> {
+                  const bool submitted = co_await action ();
+                  if (submitted)
+                      co_await completion->task ();
+                  co_return submitted;
+              }(std::move (dispatch), ended);
+          },
+          [operations = _operations, id] (result_t<void> terminal) {
+              if (!terminal)
+                  (void) operations->fail (id, foundation::operation_terminal_t::transport_failed);
+          });
         if (!accepted)
             (void) _operations->fail (id, foundation::operation_terminal_t::transport_failed);
-        if (accepted)
-            signal_activity ();
         co_return accepted;
     }
-    const auto operations = _operations;
-    detail::backend::raw_message_t request_parts{header (correlation)};
-    const auto remaining = std::chrono::ceil<std::chrono::milliseconds> (
-      deadline - foundation::operation_registry_t::clock_t::now ());
-    if (remaining <= std::chrono::milliseconds::zero ())
-        co_return true;
-    co_return co_await submit_registered_request (
-      std::move (port), observe_request_peer (target_routing_id), std::move (operations), id,
-      correlation, target_routing_id, std::move (request_parts), decode_reply, deadline,
-      ended->task ());
+    co_return co_await dispatch ();
 }
 
 bool raw_mesh_node_owner_t::reply_infrastructure (service_mailbox_reply_view_t request,

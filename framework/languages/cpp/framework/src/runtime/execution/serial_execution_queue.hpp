@@ -411,8 +411,10 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     bool resume_suspended_owned (const std::shared_ptr<serial_turn_handle_impl_t> &turn,
                                  std::function<void ()> work);
     bool prepare_application_head_owned ();
-    std::pair<runtime::handler_entry_t, std::function<void ()>> accept_application_locked (
-      work_item_t &item, const std::shared_ptr<serial_application_record_t> &preceding) noexcept;
+    std::pair<runtime::handler_entry_t, std::function<void ()>>
+    accept_application_locked (work_item_t &item, bool tail_blocks) noexcept;
+    bool application_tail_blocks () const noexcept;
+    void refresh_application_tail () noexcept;
     template <typename Mutation>
     void mutate_fifo_locked (lane_state_t &lane,
                              Mutation &&mutation,
@@ -528,11 +530,16 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     std::condition_variable _empty;
     lane_state_t _application;
     lane_state_t _lifecycle;
-    // Actor pending membership and these indexes share the producer mutex;
-    // Spot pending membership remains exclusive to its execution gate.
+    // The producer mutex guards only publication (tail, cursor hand-off, close).
+    // Pending membership and these indexes belong to the execution gate in every
+    // gated mode; a standalone queue still shares them with its producers.
     // Derived FIFO membership indexes; mutable barrier phases are read by
     // the readiness decision and never copied here.
-    std::weak_ptr<serial_application_record_t> _application_tail_record;
+    // The one decision a producer takes from the tail: (generation << 1) | whether the
+    // last accepted application record is durable or waiting, so its successors take over.
+    // Producers store it at acceptance; the gate owner lowers it by compare-exchange
+    // and raises it only inside the producer boundary.
+    std::atomic<std::uint64_t> _application_tail{0};
     std::shared_ptr<stateful::relocation_seal_binding_t> _relocation_seal;
     std::size_t _application_barriers = 0;
     // P changes tail; the shared-gate consumer changes cursor. The cursor

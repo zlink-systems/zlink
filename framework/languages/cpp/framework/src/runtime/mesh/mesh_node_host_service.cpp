@@ -923,7 +923,9 @@ task_t<std::vector<mesh_node_descriptor_t>> mesh_node_host_service_t::actor_plac
         if (descriptor.mesh_name != mesh_name
             || descriptor.state != framework_runtime_state_t::serving
             || descriptor.object_role != object_role_t::server || descriptor.placement_weight <= 0
-            || capability == descriptor.object_capabilities.end () || !capability->entry_accepted)
+            || capability == descriptor.object_capabilities.end () || !capability->entry_accepted
+            || !placement_capacity_available (descriptor, placement_object_kind_t::actor,
+                                              stable_type))
             continue;
         if (descriptor.rid == source_rid
             || source->has_admitted_peer (descriptor.rid, descriptor.lifecycle_generation))
@@ -3207,6 +3209,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
         }
         _published_mesh_nodes.clear ();
         _published_mesh_descriptors.clear ();
+        _changed_mesh_descriptors.clear ();
         for (std::size_t index = 0; _location_runtime && index < _nodes.size (); ++index) {
             const auto &node = _nodes[index];
             const auto &registration = _registrations[index];
@@ -3328,30 +3331,34 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                     _published_mesh_nodes.push_back ({descriptor.mesh_name, descriptor.rid});
             }
             _published_mesh_descriptors.push_back (descriptor);
+            // A runtime option change only records its value in the descriptor that the
+            // renew schedule publishes (republish_after_store_recovery), then wakes that schedule.
             node->bind_descriptor_publisher (
               [this, index] (const std::map<std::string, int> &channel_weights,
                              int placement_weight, std::uint64_t descriptor_revision) {
-                  std::lock_guard lock (_descriptor_publish_mutex);
-                  const auto owner = current_location_owner ();
-                  if (!_location_store || !owner || index >= _published_mesh_descriptors.size ())
-                      throw framework_exception_t (
-                        framework_error_kind_t::protocol_error,
-                        "MeshNode Location descriptor publisher is not active");
-                  auto descriptor = _published_mesh_descriptors[index];
-                  descriptor.owner_id = owner->owner_id;
-                  descriptor.lease_generation = owner->lease_generation;
-                  descriptor.channel_weights = channel_weights;
-                  descriptor.placement_weight = placement_weight;
-                  descriptor.descriptor_revision = descriptor_revision;
-                  const auto written =
-                    _location_store->update_mesh_node (descriptor, location_write_intent_t::renew)
-                      .result ()
-                      .value ();
-                  if (written.status != location_write_status_t::stored)
-                      throw framework_exception_t (
-                        framework_error_kind_t::protocol_error,
-                        "MeshNode Location descriptor update was fenced");
-                  _published_mesh_descriptors[index] = std::move (descriptor);
+                  location_runtime_t *location_runtime = nullptr;
+                  {
+                      std::lock_guard lock (_descriptor_publish_mutex);
+                      if (!_location_store || !_location_runtime
+                          || index >= _published_mesh_descriptors.size ())
+                          throw framework_exception_t (
+                            framework_error_kind_t::protocol_error,
+                            "MeshNode Location descriptor publisher is not active");
+                      auto &descriptor = _published_mesh_descriptors[index];
+                      // Every change takes a revision above the cached one, so a publication in
+                      // flight sees the change at completion and leaves it recorded.
+                      if (descriptor.descriptor_revision
+                          == std::numeric_limits<std::uint64_t>::max ())
+                          throw framework_exception_t (framework_error_kind_t::internal_failure,
+                                                       "MeshNode descriptor revision is exhausted");
+                      descriptor.channel_weights = channel_weights;
+                      descriptor.placement_weight = placement_weight;
+                      descriptor.descriptor_revision =
+                        std::max (descriptor.descriptor_revision + 1, descriptor_revision);
+                      _changed_mesh_descriptors.insert (descriptor.mesh_name);
+                      location_runtime = _location_runtime;
+                  }
+                  location_runtime->wake_owner_lease_observers ();
               });
         }
         for (std::size_t index = 0; index < _nodes.size (); ++index) {
@@ -3530,15 +3537,24 @@ bool mesh_node_host_service_t::publish_descriptor_state (framework_runtime_state
                 node->native_node ().transport ().publish_draining ().result ().value ();
             }
         }
-        // Native publication belongs to the raw owner. Take the Store publication
-        // mutex only after that executor completes, before reading any descriptor
-        // state, so recovery can progress while native draining is pending.
-        std::lock_guard lock (_descriptor_publish_mutex);
-        const auto owner = current_location_owner ();
-        if (!_location_store || !owner)
-            return _published_mesh_descriptors.empty ();
-        for (std::size_t index = 0; index < _published_mesh_descriptors.size ();) {
-            auto current = _published_mesh_descriptors[index];
+        // Store completion continuations, such as the renew commit, take the
+        // publication mutex. Each Store wait therefore runs outside it: copy the
+        // descriptors, read and write the Store, then record a result only while
+        // the cached descriptor is still the copied one.
+        std::optional<location_owner_token_t> owner;
+        std::vector<mesh_node_descriptor_t> descriptors;
+        {
+            std::lock_guard lock (_descriptor_publish_mutex);
+            owner = current_location_owner ();
+            if (!_location_store || !owner)
+                return _published_mesh_descriptors.empty ();
+            descriptors = _published_mesh_descriptors;
+        }
+        for (const auto &original : descriptors) {
+            const auto same_key = [&original] (const auto &value) {
+                return value.mesh_name == original.mesh_name && value.rid == original.rid;
+            };
+            auto current = original;
             location_page_request_t page;
             bool found = false;
             do {
@@ -3565,36 +3581,32 @@ bool mesh_node_host_service_t::publish_descriptor_state (framework_runtime_state
                  * descriptor to be present so it keeps the store failure
                  * signal. */
                 if (state == framework_runtime_state_t::draining) {
-                    _published_mesh_descriptors.erase (_published_mesh_descriptors.begin ()
-                                                       + index);
-                    std::erase_if (_published_mesh_nodes, [&current] (const auto &key) {
-                        return key.mesh_name == current.mesh_name && key.rid == current.rid;
-                    });
+                    std::lock_guard lock (_descriptor_publish_mutex);
+                    std::erase_if (_published_mesh_descriptors, same_key);
+                    std::erase_if (_published_mesh_nodes, same_key);
                     continue;
                 }
                 return false;
             }
-            if (current.state == state) {
-                _published_mesh_descriptors[index] = std::move (current);
-                ++index;
-                continue;
+            if (current.state != state) {
+                if (current.descriptor_revision == std::numeric_limits<std::uint64_t>::max ())
+                    return false;
+                current.state = state;
+                current.owner_id = owner->owner_id;
+                current.lease_generation = owner->lease_generation;
+                ++current.descriptor_revision;
+                const auto written = infrastructure_result ([&] {
+                                         return _location_store->update_mesh_node (
+                                           current, location_write_intent_t::renew);
+                                     }).value ();
+                if (written.status != location_write_status_t::stored)
+                    return false;
             }
-            if (current.descriptor_revision == std::numeric_limits<std::uint64_t>::max ()) {
+            std::lock_guard lock (_descriptor_publish_mutex);
+            auto *const cached = unchanged_published_descriptor (original);
+            if (!cached)
                 return false;
-            }
-            current.state = state;
-            current.owner_id = owner->owner_id;
-            current.lease_generation = owner->lease_generation;
-            ++current.descriptor_revision;
-            const auto written = infrastructure_result ([&] {
-                                     return _location_store->update_mesh_node (
-                                       current, location_write_intent_t::renew);
-                                 }).value ();
-            if (written.status != location_write_status_t::stored) {
-                return false;
-            }
-            _published_mesh_descriptors[index] = std::move (current);
-            ++index;
+            *cached = std::move (current);
         }
         return true;
     }
@@ -3623,8 +3635,10 @@ task_t<bool> mesh_node_host_service_t::republish_after_store_recovery (
         auto descriptor = original;
         const auto key = mesh_node_descriptor_key_t{descriptor.mesh_name, descriptor.rid};
         bool first_publication;
+        bool changed;
         {
             std::lock_guard lock (_descriptor_publish_mutex);
+            changed = _changed_mesh_descriptors.contains (descriptor.mesh_name);
             first_publication =
               std::find_if (_published_mesh_nodes.begin (), _published_mesh_nodes.end (),
                             [&key] (const auto &published) {
@@ -3633,7 +3647,7 @@ task_t<bool> mesh_node_host_service_t::republish_after_store_recovery (
                             })
               == _published_mesh_nodes.end ();
         }
-        if (!first_publication && descriptor.owner_id == owner->owner_id
+        if (!first_publication && !changed && descriptor.owner_id == owner->owner_id
             && descriptor.lease_generation == owner->lease_generation)
             continue;
         // First publication retries still require a newly observed lease renewal.
@@ -3667,18 +3681,11 @@ task_t<bool> mesh_node_host_service_t::republish_after_store_recovery (
               if (!written || cancellation.stop_requested ())
                   return task_t<bool> (result_t<bool>::success (false));
               std::lock_guard lock (_descriptor_publish_mutex);
-              const auto current =
-                std::find_if (_published_mesh_descriptors.begin (),
-                              _published_mesh_descriptors.end (), [&key] (const auto &value) {
-                                  return value.mesh_name == key.mesh_name && value.rid == key.rid;
-                              });
-              // A concurrent state/weight publication owns its newer descriptor.
-              if (current == _published_mesh_descriptors.end ()
-                  || current->descriptor_revision != original.descriptor_revision
-                  || current->owner_id != original.owner_id
-                  || current->lease_generation != original.lease_generation)
+              auto *const current = unchanged_published_descriptor (original);
+              if (!current)
                   return task_t<bool> (result_t<bool>::success (false));
               *current = std::move (descriptor);
+              _changed_mesh_descriptors.erase (key.mesh_name);
               if (first_publication)
                   _published_mesh_nodes.push_back (key);
               return task_t<bool> (result_t<bool>::success (true));
@@ -3743,9 +3750,13 @@ void mesh_node_host_service_t::stop () noexcept
                 }).value ();
             });
         }
-    _published_mesh_nodes.clear ();
-    _published_mesh_descriptors.clear ();
-    _location_runtime = nullptr;
+    {
+        std::lock_guard lock (_descriptor_publish_mutex);
+        _published_mesh_nodes.clear ();
+        _published_mesh_descriptors.clear ();
+        _changed_mesh_descriptors.clear ();
+        _location_runtime = nullptr;
+    }
     for (auto &node : _nodes) {
         _runtime_failures->capture ([&] { node->stop (); });
         if (_listener_statuses)
@@ -3753,6 +3764,23 @@ void mesh_node_host_service_t::stop () noexcept
                 _listener_statuses->remove (listener_kind_t::route_mesh, node->mesh_name ());
             });
     }
+}
+
+mesh_node_descriptor_t *
+mesh_node_host_service_t::unchanged_published_descriptor (const mesh_node_descriptor_t &copied)
+{
+    const auto cached =
+      std::find_if (_published_mesh_descriptors.begin (), _published_mesh_descriptors.end (),
+                    [&copied] (const auto &value) {
+                        return value.mesh_name == copied.mesh_name && value.rid == copied.rid;
+                    });
+    // A concurrent state/weight publication owns its newer descriptor.
+    if (cached == _published_mesh_descriptors.end ()
+        || cached->descriptor_revision != copied.descriptor_revision
+        || cached->owner_id != copied.owner_id
+        || cached->lease_generation != copied.lease_generation)
+        return nullptr;
+    return &*cached;
 }
 
 std::optional<location_owner_token_t> mesh_node_host_service_t::current_location_owner () const

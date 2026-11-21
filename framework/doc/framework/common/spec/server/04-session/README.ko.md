@@ -65,6 +65,7 @@ Actor가 다른 node로 옮겨가는 relocation은
 |---|---|---|
 | [STREAM 서버 session](01-stream-session.ko.md) | Connection 하나의 수락, 등록, packet framing, codec 경계와 오류 경계 — Application이 관찰하는 계약 | 계약 |
 | [Session과 Actor binding](02-session-actor-binding.ko.md) | Session과 Actor를 잇는 bind·relay·rebind·disconnect·relocation 계약과, 모든 언어 runtime이 그 결과를 같게 내도록 따르는 실행 구조 결정 | 계약 + 구현 스펙(모든 언어 runtime이 따르는 결정) |
+| [인증 입장 제한과 로그인 대기열](03-authentication-admission.ko.md) | node별 동시 인증 한도, 거절 결과와 connector 자동 재시도(1단계), 전역 순번 로그인 대기열(2단계) | 계약 |
 
 ## 5. 질문으로 찾기
 

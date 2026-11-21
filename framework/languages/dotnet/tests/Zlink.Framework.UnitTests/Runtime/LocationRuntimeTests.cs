@@ -256,7 +256,7 @@ public sealed partial class LocationRuntimeTests
         await hosted.StartAsync(CancellationToken.None);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        Task<bool>? recovery = null;
+        var renewal = new OwnerLeaseRenewalProbe(locations);
         try
         {
             await servicesProvider
@@ -312,7 +312,6 @@ public sealed partial class LocationRuntimeTests
             Assert.False(await locations.RenewOwnerLeaseOnceAsync());
             var episode = locations.GetHealthSnapshot().StoreOutage!;
             await episode.CaptureCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            time.Advance(options.OwnerLeaseTtl + options.OwnerLeaseFencingMargin);
             flaky.HoldRecoveryCas = true;
             flaky.HoldRecoveryDescriptor = true;
             flaky.Fail = false;
@@ -330,7 +329,8 @@ public sealed partial class LocationRuntimeTests
             var submitDescriptors = locations.SubmitRecoveryDescriptorsAsync!;
             locations.SubmitRecoveryDescriptorsAsync = async ct =>
                 confirmations = await submitDescriptors(ct);
-            recovery = locations.RenewOwnerLeaseOnceAsync().AsTask();
+            renewal.Arm();
+            time.Advance(options.OwnerLeaseTtl + options.OwnerLeaseFencingMargin);
             await flaky.RecoveryCasHeld.Task.WaitAsync(TimeSpan.FromSeconds(5));
             await flaky.RecoveryDescriptorStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
             release.TrySetResult();
@@ -369,11 +369,19 @@ public sealed partial class LocationRuntimeTests
             Assert.Equal(0, calls);
             flaky.ReleaseRecoveryCas.TrySetResult();
             flaky.ReleaseRecoveryDescriptor.TrySetResult();
-            Assert.True(await recovery.WaitAsync(TimeSpan.FromSeconds(5)));
+            await renewal.RenewedAsync();
             await pending.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.Equal(1, calls);
             Assert.Equal(messages, instance.Messages);
-            // Post-recovery public request routing is tracked in https://github.com/zlink-systems/zlink/issues/4737.
+            Assert.Equal(
+                2,
+                (
+                    await client
+                        .RequestToActor(actor.ActorId, "after")
+                        .Timeout(TimeSpan.FromSeconds(1))
+                        .Async<OutageExecutionReply>()
+                ).Count
+            );
             Assert.Same(instance, actor.Actor);
             Assert.Equal(factoryCalls, probe.FactoryCalls);
         }
@@ -382,8 +390,6 @@ public sealed partial class LocationRuntimeTests
             release.TrySetResult();
             flaky.ReleaseRecoveryCas.TrySetResult();
             flaky.ReleaseRecoveryDescriptor.TrySetResult();
-            if (recovery is not null)
-                await recovery;
             flaky.Fail = false;
             await runtime.ForceStopAsync(CancellationToken.None);
             await locations.StopAsync();
@@ -439,7 +445,7 @@ public sealed partial class LocationRuntimeTests
         await hosted.StartAsync(CancellationToken.None);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        Task<bool>? recovery = null;
+        var renewal = new OwnerLeaseRenewalProbe(locations);
         try
         {
             await servicesProvider
@@ -497,7 +503,6 @@ public sealed partial class LocationRuntimeTests
             Assert.False(await locations.RenewOwnerLeaseOnceAsync());
             var episode = locations.GetHealthSnapshot().StoreOutage!;
             await episode.CaptureCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            time.Advance(options.OwnerLeaseTtl + options.OwnerLeaseFencingMargin);
             flaky.HoldRecoveryCas = true;
             flaky.HoldRecoveryDescriptor = true;
             flaky.Fail = false;
@@ -515,7 +520,8 @@ public sealed partial class LocationRuntimeTests
             var submitDescriptors = locations.SubmitRecoveryDescriptorsAsync!;
             locations.SubmitRecoveryDescriptorsAsync = async ct =>
                 confirmations = await submitDescriptors(ct);
-            recovery = locations.RenewOwnerLeaseOnceAsync().AsTask();
+            renewal.Arm();
+            time.Advance(options.OwnerLeaseTtl + options.OwnerLeaseFencingMargin);
             await flaky.RecoveryCasHeld.Task.WaitAsync(TimeSpan.FromSeconds(5));
             await flaky.RecoveryDescriptorStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
             release.TrySetResult();
@@ -553,7 +559,7 @@ public sealed partial class LocationRuntimeTests
             Assert.Equal(0, calls);
             flaky.ReleaseRecoveryCas.TrySetResult();
             flaky.ReleaseRecoveryDescriptor.TrySetResult();
-            Assert.True(await recovery.WaitAsync(TimeSpan.FromSeconds(5)));
+            await renewal.RenewedAsync();
             await pending.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.Equal(1, calls);
             Assert.Equal(0, rejectedCalls);
@@ -575,8 +581,6 @@ public sealed partial class LocationRuntimeTests
             release.TrySetResult();
             flaky.ReleaseRecoveryCas.TrySetResult();
             flaky.ReleaseRecoveryDescriptor.TrySetResult();
-            if (recovery is not null)
-                await recovery;
             flaky.Fail = false;
             await runtime.ForceStopAsync(CancellationToken.None);
             await locations.StopAsync();
@@ -635,7 +639,7 @@ public sealed partial class LocationRuntimeTests
                 ? new TaskCompletionSource()
                 : new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        Task? recovery = null;
+        var renewal = new OwnerLeaseRenewalProbe(locations);
         try
         {
             await servicesProvider
@@ -681,11 +685,11 @@ public sealed partial class LocationRuntimeTests
             var mailbox = actor._dispatchMailbox._queue;
             void BeginRecovery()
             {
-                time.Advance(options.OwnerLeaseTtl + options.OwnerLeaseFencingMargin);
                 flaky.HoldRecoveryCas = true;
                 flaky.HoldRecoveryDescriptor = true;
                 flaky.Fail = false;
-                recovery = locations.RenewOwnerLeaseOnceAsync().AsTask();
+                renewal.Arm();
+                time.Advance(options.OwnerLeaseTtl + options.OwnerLeaseFencingMargin);
             }
             if (boundary == 1)
                 mailbox.ConsumerSelected = () =>
@@ -752,9 +756,14 @@ public sealed partial class LocationRuntimeTests
                         .RunLifecycleAsync(_ => ValueTask.CompletedTask, CancellationToken.None)
                         .AsTask();
             if (discard)
+            {
                 time.AdvanceMonotonic(
                     episode.Lifetime - time.GetElapsedTime(episode.LeaseOperationStartedAt)
                 );
+                // The operation held at the Store ends in the discard; the renewal that follows is
+                // the heartbeat claiming a new lease.
+                renewal.Arm();
+            }
             flaky.ReleaseRecoveryCas.TrySetResult();
             if (!discard)
             {
@@ -764,7 +773,9 @@ public sealed partial class LocationRuntimeTests
                 Assert.Equal(0, calls);
             }
             flaky.ReleaseRecoveryDescriptor.TrySetResult();
-            await recovery.WaitAsync(TimeSpan.FromSeconds(5));
+            if (discard)
+                OwnerLeaseRenewalProbe.MakeHeartbeatDue(time, options);
+            await renewal.RenewedAsync();
             if (discard)
             {
                 var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
@@ -791,8 +802,6 @@ public sealed partial class LocationRuntimeTests
             release.TrySetResult();
             flaky.ReleaseRecoveryCas.TrySetResult();
             flaky.ReleaseRecoveryDescriptor.TrySetResult();
-            if (recovery is not null)
-                await recovery;
             flaky.Fail = false;
             await runtime.ForceStopAsync(CancellationToken.None);
             await locations.StopAsync();
@@ -1199,6 +1208,8 @@ public sealed partial class LocationRuntimeTests
             builder.UseTestTimeProvider(time);
             options = builder.ConfigureLocations();
             options.StoreOutageRetention = true;
+            // A heartbeat due before the recovery instant lets it submit the recovery there.
+            options.OwnerLeaseRenewInterval = TimeSpan.FromSeconds(1);
             var server = builder
                 .AddRouteMesh("outage-execution")
                 .Listen("tcp://127.0.0.1:0")
@@ -1230,7 +1241,7 @@ public sealed partial class LocationRuntimeTests
         await hosted.StartAsync(CancellationToken.None);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        Task<bool>? recovery = null;
+        var renewal = new OwnerLeaseRenewalProbe(locations);
         try
         {
             await servicesProvider
@@ -1312,12 +1323,12 @@ public sealed partial class LocationRuntimeTests
                 locations.GetHealthSnapshot().StoreOutage!.LeaseOperationStartedAt
             );
             Assert.Equal(episode.Lifetime, locations.GetHealthSnapshot().StoreOutage!.Lifetime);
+            flaky.HoldRecoveryCas = true;
+            flaky.HoldRecoveryDescriptor = true;
+            renewal.Arm();
             time.Advance(
                 TimeSpan.FromSeconds(35) - time.GetElapsedTime(episode.LeaseOperationStartedAt)
             );
-            flaky.HoldRecoveryCas = true;
-            flaky.HoldRecoveryDescriptor = true;
-            recovery = locations.RenewOwnerLeaseOnceAsync().AsTask();
             await flaky.RecoveryCasHeld.Task.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.Equal(ZLinkObjectExecutionStatus.Paused, actor.ExecutionStatus);
             Assert.Equal(ZLinkObjectExecutionStatus.Paused, spot.ExecutionStatus);
@@ -1352,7 +1363,7 @@ public sealed partial class LocationRuntimeTests
             Assert.Equal(ZLinkObjectExecutionStatus.Paused, actor.ExecutionStatus);
             Assert.Equal(ZLinkObjectExecutionStatus.Paused, spot.ExecutionStatus);
             flaky.ReleaseRecoveryDescriptor.TrySetResult();
-            Assert.True(await recovery.WaitAsync(TimeSpan.FromSeconds(5)));
+            await renewal.RenewedAsync();
             await pending.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.Equal(1, calls);
             Assert.True(locations.IsOwnerAdmissionOpen);
@@ -1388,8 +1399,6 @@ public sealed partial class LocationRuntimeTests
             release.TrySetResult();
             flaky.ReleaseRecoveryCas.TrySetResult();
             flaky.ReleaseRecoveryDescriptor.TrySetResult();
-            if (recovery is not null)
-                await recovery;
             flaky.Fail = false;
             await runtime.ForceStopAsync(CancellationToken.None);
             await locations.StopAsync();
@@ -1469,6 +1478,7 @@ public sealed partial class LocationRuntimeTests
             var originalOwner = locations.OwnerToken;
             var discarded = 0;
             locations.ExecutionsDiscarded += _ => discarded++;
+            var renewal = new OwnerLeaseRenewalProbe(locations);
             var running = actor
                 .ExecuteDispatchAsync(
                     async _ =>
@@ -1563,6 +1573,7 @@ public sealed partial class LocationRuntimeTests
             Assert.False(pending.IsCompleted);
             time.Advance(TimeSpan.FromTicks(1));
             Assert.True(locations.GetHealthSnapshot().StoreOutage!.Discarded);
+            renewal.Arm();
             Assert.Equal(ZLinkObjectExecutionStatus.OwnershipLost, actor.ExecutionStatus);
             Assert.Equal(ZLinkObjectExecutionStatus.OwnershipLost, spot.ExecutionStatus);
             var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
@@ -1572,7 +1583,8 @@ public sealed partial class LocationRuntimeTests
             flaky.ReleaseRecoveryCas.TrySetResult();
             flaky.ReleaseRecoveryDescriptor.TrySetResult();
             await recovery.WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.True(await locations.RenewOwnerLeaseOnceAsync());
+            OwnerLeaseRenewalProbe.MakeHeartbeatDue(time, options);
+            await renewal.RenewedAsync();
             Assert.Equal(0, calls);
             Assert.Equal(ZLinkObjectExecutionStatus.OwnershipLost, actor.ExecutionStatus);
             Assert.Equal(ZLinkObjectExecutionStatus.OwnershipLost, spot.ExecutionStatus);
@@ -1912,6 +1924,7 @@ public sealed partial class LocationRuntimeTests
             .GetServices<IHostedService>()
             .Single(service => service is ZLinkFrameworkHostedService);
         await hosted.StartAsync(CancellationToken.None);
+        var renewal = new OwnerLeaseRenewalProbe(locations);
         Task? running = null;
         Task<ZLinkActorCreateResult>? pendingCreation = null;
         Task? closing = null;
@@ -2016,7 +2029,15 @@ public sealed partial class LocationRuntimeTests
             );
             Assert.Equal(1, messages);
             Assert.Equal(2, (await PingActor()).Count);
-            Assert.Equal(2, (await PingSpot()).Count);
+            // Routing §2: a positive route cache entry is usable only until the owner's
+            // admission deadline, and Location runtime §5.1 excludes new route lookups
+            // after it. With retention the deadline has passed here, so a public Spot
+            // request that resolves its route by ID is refused; without retention the
+            // clock is still inside the admission window.
+            if (retention)
+                await Assert.ThrowsAsync<InvalidOperationException>(async () => await PingSpot());
+            else
+                Assert.Equal(2, (await PingSpot()).Count);
             var timer = Assert.IsType<ZLinkTimer>(spot.Timer);
             await spot.FirstTick.Task;
             Assert.Equal(1, spot.Ticks);
@@ -2044,7 +2065,10 @@ public sealed partial class LocationRuntimeTests
                         .AsTask()
                 );
                 Assert.Equal(calls, probe.FactoryCalls);
-                Assert.NotNull(await rows.ResolveSpotRowAsync(new ZLinkSpotLocationKey("steady")));
+                // Routing §2: the cached route ended at the admission deadline.
+                await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                    rows.ResolveSpotRowAsync(new ZLinkSpotLocationKey("steady")).AsTask()
+                );
                 await Assert.ThrowsAsync<InvalidOperationException>(() =>
                     rows.ResolveSpotRowAsync(new ZLinkSpotLocationKey("uncached")).AsTask()
                 );
@@ -2123,8 +2147,10 @@ public sealed partial class LocationRuntimeTests
             Assert.True(timer.IsDisposed);
             Assert.Equal(1, messages);
             Assert.Equal(1, spot.Ticks);
+            renewal.Arm();
             flaky.Fail = false;
-            Assert.True(await locations.RenewOwnerLeaseOnceAsync());
+            OwnerLeaseRenewalProbe.MakeHeartbeatDue(time, options);
+            await renewal.RenewedAsync();
             Assert.True(locations.IsOwnerAdmissionOpen);
             Assert.False(actor.IsLocationExecutionAllowed);
             Assert.False(activation.IsLocationExecutionAllowed);
@@ -2377,6 +2403,7 @@ public sealed partial class LocationRuntimeTests
         var hosted = servicesProvider
             .GetServices<IHostedService>()
             .Single(service => service is ZLinkFrameworkHostedService);
+        var renewal = new OwnerLeaseRenewalProbe(locations);
         await hosted.StartAsync(CancellationToken.None);
         var reply = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var errors = new ZLinkRuntimeErrorSink();
@@ -2484,12 +2511,16 @@ public sealed partial class LocationRuntimeTests
                 if (scenario == 2)
                 {
                     flaky.RejectRecoveryDescriptor = true;
+                    flaky.Fail = false;
+                    renewal.Arm();
                     time.Advance(
                         TimeSpan.FromSeconds(31)
                             - time.GetElapsedTime(episode.LeaseOperationStartedAt)
                     );
-                    flaky.Fail = false;
-                    Assert.False(await locations.RenewOwnerLeaseOnceAsync());
+                    // The heartbeat operation this advance started ends without a renewal; later
+                    // steps do not overlap it.
+                    await renewal.SettledAsync();
+                    Assert.False(renewal.Renewed);
                     Assert.False(locations.GetHealthSnapshot().StoreOutage!.Discarded);
                     Assert.Equal(0, continued);
                     Assert.All(pending, item => Assert.False(item.IsCompleted));
@@ -2893,6 +2924,7 @@ public sealed partial class LocationRuntimeTests
     {
         public ValueTask<OutageExecutionReply> HandleAsync(
             OutageExecutionSpot spot,
+            IZLinkMessageContext context,
             string request,
             CancellationToken ct
         ) => ValueTask.FromResult(new OutageExecutionReply(++spot.Messages));
@@ -3002,6 +3034,65 @@ public sealed partial class LocationRuntimeTests
                 period
             );
         }
+    }
+
+    /// <summary>
+    /// Observes the owner lease renewals that the runtime's own heartbeat submits. Tests use it
+    /// instead of calling <c>RenewOwnerLeaseOnceAsync</c> a second time: a second submitter races
+    /// the heartbeat operation in flight for the same Store version (Location Store section 4),
+    /// while the heartbeat is the only submitter after the initial claim (Location runtime
+    /// section 5).
+    /// </summary>
+    internal sealed class OwnerLeaseRenewalProbe
+    {
+        private volatile TaskCompletionSource _renewed = NewSignal();
+        private volatile bool _armed;
+
+        private volatile TaskCompletionSource _settled = NewSignal();
+
+        internal OwnerLeaseRenewalProbe(ZLinkLocationRuntime locations)
+        {
+            locations.OwnerLeaseRenewed += _ =>
+            {
+                if (_armed)
+                {
+                    _renewed.TrySetResult();
+                    _settled.TrySetResult();
+                }
+            };
+            locations.OwnerLeaseRenewalFailed += () =>
+            {
+                if (_armed)
+                    _settled.TrySetResult();
+            };
+        }
+
+        /// <summary>Counts only renewals that complete after this call.</summary>
+        internal void Arm()
+        {
+            _renewed = NewSignal();
+            _settled = NewSignal();
+            _armed = true;
+        }
+
+        /// <summary>
+        /// Makes the heartbeat loop due. A loop operation in flight finishes first, then the loop
+        /// submits the next operation without waiting for a timer because its schedule has passed.
+        /// </summary>
+        internal static void MakeHeartbeatDue(
+            ControllableTimeProvider time,
+            ZLinkLocationOptions options
+        ) => time.AdvanceMonotonic(options.OwnerLeaseRenewInterval);
+
+        internal bool Renewed => _renewed.Task.IsCompleted;
+
+        internal Task RenewedAsync() => _renewed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        /// <summary>Waits until a heartbeat operation ends in a renewal or a reported failure.</summary>
+        internal Task SettledAsync() => _settled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        private static TaskCompletionSource NewSignal() =>
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
     internal sealed class OutageLeaseStore(IZLinkLocationRepository inner)

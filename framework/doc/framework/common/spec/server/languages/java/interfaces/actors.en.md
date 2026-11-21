@@ -227,6 +227,7 @@ public interface systems.zlink.framework.actors.ZLinkActor {
  public abstract systems.zlink.framework.actors.ZLinkActorContext context();
  public default void configure();
  public default java.util.concurrent.CompletionStage<java.util.Optional<java.lang.String>> onDuplicateBind(systems.zlink.framework.actors.ZLinkSessionBindingIdentity, systems.zlink.framework.actors.ZLinkSessionBindingIdentity, systems.zlink.framework.actors.ZLinkActorCallbackCancellation);
+ public default java.util.concurrent.CompletionStage<java.lang.Void> onSessionBound(systems.zlink.framework.actors.ZLinkSessionBindingIdentity, systems.zlink.framework.actors.ZLinkActorCallbackCancellation);
  public default java.util.concurrent.CompletionStage<java.lang.Void> onJoinCompleted(systems.zlink.framework.actors.ZLinkActorJoinCompletion);
 }
 public interface systems.zlink.framework.actors.ZLinkActorClient {

@@ -95,8 +95,7 @@ final class SpotPreReadyMulticastTest {
                             .get(WAIT_SECONDS, TimeUnit.SECONDS);
                     retained = observedTopic.get(WAIT_SECONDS, TimeUnit.SECONDS).parts();
                 }
-                applicationQueued =
-                        ZLinkSpotRuntimeTesting.hasNoPendingSubscriptions(HeldSpot.context);
+                applicationQueued = awaitRetainedInSpotQueue();
                 assertEquals(0, HeldSpot.calls.get());
                 assertFalse(creating.isDone());
             } finally {
@@ -185,6 +184,9 @@ final class SpotPreReadyMulticastTest {
                             .get(WAIT_SECONDS, TimeUnit.SECONDS);
                     retained = observedTopic.get(WAIT_SECONDS, TimeUnit.SECONDS).parts();
                 }
+                assertTrue(
+                        awaitRetainedInSpotQueue(),
+                        "pre-Ready payload must be held in the Spot application queue");
                 assertEquals(0, HeldSpot.calls.get(), "initialization alone is not Ready");
                 assertFalse(creating.isDone());
                 store.release.complete(discard);
@@ -273,6 +275,14 @@ final class SpotPreReadyMulticastTest {
 
     private static ZLinkSerialExecutionQueue spotQueue() {
         return ZLinkSpotRuntimeTesting.spotQueue(HeldSpot.context);
+    }
+
+    // The local child reaches the Spot queue in an infrastructure turn after the topic is
+    // accepted. Once that turn has finished, every release happens in a Spot queue turn.
+    private static boolean awaitRetainedInSpotQueue() throws Exception {
+        return ZLinkSpotRuntimeTesting.retainsApplicationAfterPublication(HeldSpot.context)
+                .toCompletableFuture()
+                .get(WAIT_SECONDS, TimeUnit.SECONDS);
     }
 
     private static void awaitReleased(List<Message> parts) throws Exception {

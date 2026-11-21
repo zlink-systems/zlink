@@ -214,13 +214,13 @@ final class ZLinkChannelRuntimeTest {
         registry.registerClientServer("orders", Map.of(), Map.of());
         CompletableFuture<Void> entered = new CompletableFuture<>();
         CompletableFuture<Void> release = new CompletableFuture<>();
-        registry.clientServerQueue("orders")
-                .enqueue(
-                        () -> {
-                            entered.complete(null);
-                            return release;
-                        },
-                        null);
+        registry.enqueueChannel(
+                registry.clientServerQueue("orders"),
+                () -> {
+                    entered.complete(null);
+                    return release;
+                },
+                null);
         entered.get(2, TimeUnit.SECONDS);
 
         try {
@@ -236,10 +236,7 @@ final class ZLinkChannelRuntimeTest {
         } finally {
             release.complete(null);
         }
-        registry.clientServerQueue("orders")
-                .awaitQuiescence()
-                .toCompletableFuture()
-                .get(2, TimeUnit.SECONDS);
+        registry.awaitQuiescence().toCompletableFuture().get(2, TimeUnit.SECONDS);
     }
 
     @Test
@@ -876,6 +873,8 @@ final class ZLinkChannelRuntimeTest {
                                     "play.route",
                                     RoutingId.from("play-node"),
                                     "room-spot",
+                                    0L,
+                                    0L,
                                     List.of(payload))
                             .toCompletableFuture();
 
@@ -1667,6 +1666,7 @@ final class ZLinkChannelRuntimeTest {
                                                         route.targetNodeRid(),
                                                         route.spotId(),
                                                         route.spotGeneration(),
+                                                        route.targetNodeGeneration(),
                                                         payload);
                                             });
                         }
@@ -3523,7 +3523,11 @@ final class ZLinkChannelRuntimeTest {
 
         @Override
         public CompletionStage<Void> sendToSpot(
-                RoutingId targetNodeRid, String spotId, long spotGeneration, List<Message> parts) {
+                RoutingId targetNodeRid,
+                String spotId,
+                long spotGeneration,
+                long targetNodeGeneration,
+                List<Message> parts) {
             lastSpotGeneration = spotGeneration;
             sendAttempts++;
             lastSendFlags = SendFlags.NONE;

@@ -147,6 +147,10 @@ class spot_node_builder_state_t
     std::shared_ptr<activation_admission_t> activation_admission =
       std::make_shared<activation_admission_t> ();
     std::weak_ptr<service::mesh_node_t> native_node;
+    // This node's own RID. The builder fixes the snapshot routing id before start and
+    // nothing writes it afterwards, so attach_native_node publishes it once and every
+    // later reader (message-flow markers) reads the immutable value without a lane turn.
+    node_rid_t node_rid;
     std::function<task_t<spot_create_result_t> (bool,
                                                 std::optional<spot_id_t>,
                                                 std::string,
@@ -326,6 +330,7 @@ class spot_node_builder_state_t
         std::function<task_t<std::vector<std::byte>> (void *, std::stop_token)> capture;
         std::function<task_t<void> (void *, std::vector<std::byte>, std::stop_token)> restore;
         bool duplicate_bind_is_default = false;
+        bool session_bound_is_default = false;
     };
     std::function<task_t<result_t<void>> (actor_ref_t)> destroy_actor_registry;
     std::function<result_t<void> (const actor_ref_t &)> update_actor_registry_ref;
@@ -2422,9 +2427,11 @@ class spot_node_runtime_t
     // Emits an internal transfer lifecycle boundary through the configured
     // public message-flow observer. The transfer id is both the correlation
     // key and lifecycle flow key so role-server evidence can join source and
-    // target events without parsing runtime logs. Hot-path callers that build
-    // marker/transfer-id strings must gate on actor_transfer_marker_enabled()
-    // so an off/errors mode pays no allocation (spec 26 §4).
+    // target events without parsing runtime logs. The source RID is the
+    // node's own immutable RID, so the marker hands one event to the observer
+    // and never waits for a lane turn (spec 26 §4). Hot-path callers
+    // that build marker/transfer-id strings must gate on
+    // actor_transfer_marker_enabled() so an off/errors mode pays no allocation.
     bool actor_transfer_marker_enabled (
       message_flow_result_t result = message_flow_result_t::succeeded) const noexcept;
     void emit_actor_transfer_marker (std::string marker,
@@ -2532,13 +2539,6 @@ class spot_node_runtime_t
 
     task_t<std::size_t> settle_abandoned_actor_leave_reservations_async (
       std::function<void ()> after_coordinator_snapshot = {});
-    task_t<void>
-    emit_actor_transfer_marker_async (std::string marker,
-                                      const actor_ref_t &actor_ref,
-                                      std::string transfer_id,
-                                      std::optional<spot_id_t> spot_id = std::nullopt,
-                                      std::optional<node_rid_t> target_node_rid = std::nullopt,
-                                      std::exception_ptr exception = nullptr) const;
 
     static std::string actor_key (const actor_ref_t &actor_ref)
     {

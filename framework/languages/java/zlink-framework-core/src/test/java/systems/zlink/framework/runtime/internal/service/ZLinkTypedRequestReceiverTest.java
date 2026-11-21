@@ -18,6 +18,7 @@ import java.util.ArrayList;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ForkJoinTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -90,6 +91,27 @@ final class ZLinkTypedRequestReceiverTest {
         void failure(Throwable failure) {
             physical.get().accept(null, failure);
         }
+    }
+
+    /**
+     * Blocks a continuation the way a CompletableFuture wait does: the common pool is told the
+     * worker is blocked, so it adds a worker instead of leaving the pool's width to the CPU count.
+     */
+    private static boolean awaitCompensated(CountDownLatch latch) throws InterruptedException {
+        ForkJoinPool.managedBlock(
+                new ForkJoinPool.ManagedBlocker() {
+                    @Override
+                    public boolean block() throws InterruptedException {
+                        latch.await(5, TimeUnit.SECONDS);
+                        return true;
+                    }
+
+                    @Override
+                    public boolean isReleasable() {
+                        return latch.getCount() == 0;
+                    }
+                });
+        return latch.getCount() == 0;
     }
 
     private static ZLinkServiceOperationRegistry registry() {
@@ -281,7 +303,7 @@ final class ZLinkTypedRequestReceiverTest {
                                         "reply released before caller continuation");
                                 entered.countDown();
                                 try {
-                                    assertTrue(release.await(5, TimeUnit.SECONDS));
+                                    assertTrue(awaitCompensated(release));
                                 } catch (InterruptedException error) {
                                     throw new AssertionError(error);
                                 }

@@ -252,6 +252,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         private final CompletableFuture<Void> submission;
         // Written once in the descriptor lane, retained until the exchange ends.
         private byte[] hello;
+        private CompletableFuture<Void> admitSubmission;
 
         HelloExchange(
                 RoutingId target,
@@ -2224,7 +2225,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                             + " failureCode="
                             + terminal.failureCode(),
                     terminal.failureCode(),
-                    java.util.Map.of());
+                    ZLinkFrameworkErrorOrigin.frameworkMetadata());
         }
         final ZLinkCanonicalActorJoinReplyCodec.ActorJoinReply reply;
         try {
@@ -2653,10 +2654,9 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             RoutingId targetNodeRid,
             String targetSpotId,
             long targetSpotGeneration,
+            long targetNodeGeneration,
             byte[] metadata,
             List<Message> parts) {
-        Optional<ZLinkServiceTopologyRegistry.Peer> peer =
-                topology == null ? Optional.empty() : topology.peerFromOwner(targetNodeRid);
         ZLinkJavaRawSpotNode spots = (ZLinkJavaRawSpotNode) spotNode();
         long authorityOwnerGeneration =
                 spots.spotAuthorityOwnerGeneration(
@@ -2669,7 +2669,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 || ownerLeaseGeneration <= 0) {
             return CompletableFuture.failedFuture(new ZlinkSubmitException(SubmitResult.NOT_FOUND));
         }
-        if (peer.isEmpty() || !isReadyPeer(peer.orElseThrow())) {
+        if (!readyTargetPeer(targetNodeRid, targetNodeGeneration)) {
             return CompletableFuture.failedFuture(
                     new ZlinkSubmitException(SubmitResult.NOT_CONNECTED));
         }
@@ -2689,7 +2689,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                 targetSpotId,
                                 targetSpotGeneration,
                                 targetNodeRid,
-                                peer.orElseThrow().descriptor().lifecycleGeneration(),
+                                targetNodeGeneration,
                                 authorityOwnerGeneration,
                                 ownerLeaseGeneration));
         return port.sendMessages(
@@ -2877,10 +2877,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     CompletionStage<Void> sendActor(
             ZLinkServiceM6BWireCodec.ActorRouteFence target, List<Message> parts) {
         ZLinkBackendActorRef actor = target.actor();
-        Optional<ZLinkServiceTopologyRegistry.Peer> peer =
-                topology == null ? Optional.empty() : topology.peerFromOwner(actor.nodeRid());
-        if (peer.isEmpty() || !isReadyPeer(peer.orElseThrow())) {
-
+        if (!readyTargetPeer(actor.nodeRid(), target.targetNodeGeneration())) {
             return CompletableFuture.failedFuture(
                     new ZlinkSubmitException(SubmitResult.NOT_CONNECTED));
         }
@@ -2912,7 +2909,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         Objects.requireNonNull(parts, "parts");
         Consumer<Throwable> onFailure = failure == null ? ignored -> {} : failure;
         if (stale.messageFollowHopCount() >= ZLinkServiceMessageFollowWireCodec.MAX_HOP_COUNT
-                || !readyRelocationPeer(target.targetNodeRid(), target.targetNodeGeneration())) {
+                || !readyTargetPeer(target.targetNodeRid(), target.targetNodeGeneration())) {
             return false;
         }
         List<byte[]> frames = new ArrayList<>();
@@ -2972,7 +2969,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                             systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE,
                             "Message Follow hop limit exceeded"));
         }
-        if (!readyRelocationPeer(target.actor().nodeRid(), target.targetNodeGeneration())) {
+        if (!readyTargetPeer(target.actor().nodeRid(), target.targetNodeGeneration())) {
             parts.forEach(Message::close);
             return CompletableFuture.failedFuture(
                     new systems.zlink.framework.errors.ZLinkFrameworkException(
@@ -3041,7 +3038,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         return replyFrames.size() < 2 ? List.of() : decodeApplicationMessages(replyFrames.get(1));
     }
 
-    private boolean readyRelocationPeer(RoutingId targetNodeRid, long targetNodeGeneration) {
+    private boolean readyTargetPeer(RoutingId targetNodeRid, long targetNodeGeneration) {
         Optional<ZLinkServiceTopologyRegistry.Peer> peer =
                 topology == null ? Optional.empty() : topology.peerFromOwner(targetNodeRid);
         return peer.isPresent()
@@ -3152,15 +3149,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             long sourceBindingGeneration,
             long sourceSessionSequence,
             List<Message> parts) {
-        Optional<ZLinkServiceTopologyRegistry.Peer> peer =
-                topology == null ? Optional.empty() : topology.peerFromOwner(actor.nodeRid());
         ZLinkJavaRawSpotNode spots = (ZLinkJavaRawSpotNode) spotNode();
         long authorityOwnerGeneration = spots.actorAuthorityOwnerGeneration(actor);
         long ownerLeaseGeneration = spots.actorAuthorityOwnerLeaseGeneration(actor);
         if (actor.generation() <= 0 || authorityOwnerGeneration <= 0 || ownerLeaseGeneration <= 0) {
             return CompletableFuture.failedFuture(new ZlinkSubmitException(SubmitResult.NOT_FOUND));
         }
-        if (peer.isEmpty() || !isReadyPeer(peer.orElseThrow())) {
+        long targetNodeGeneration = spots.actorAuthorityNodeGeneration(actor);
+        if (!readyTargetPeer(actor.nodeRid(), targetNodeGeneration)) {
             return CompletableFuture.failedFuture(
                     new ZlinkSubmitException(SubmitResult.NOT_CONNECTED));
         }
@@ -3179,7 +3175,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                 null,
                                 new ZLinkServiceM6BWireCodec.ActorRouteFence(
                                         actor,
-                                        peer.orElseThrow().descriptor().lifecycleGeneration(),
+                                        targetNodeGeneration,
                                         authorityOwnerGeneration,
                                         ownerLeaseGeneration),
                                 new ZLinkServiceM6BWireCodec.BoundSessionTail(
@@ -8326,10 +8322,13 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             } catch (IllegalArgumentException invalid) {
                 return () -> {};
             }
-            boolean newlyRejected = rejectedPeers.add(sourceRid);
+            rejectedPeers.remove(sourceRid);
+            boolean disconnected =
+                    disconnectAdmitted(sourceRid, routeConnectionId(inbound.routeGeneration()));
+            refreshAdmissionPending(nanoTime.getAsLong());
             return () -> {
                 finishSelectedRouteObservation(routeChanges);
-                if (newlyRejected) signalStateChanged(sourceRid);
+                if (disconnected) signalStateChanged(sourceRid);
             };
         }
         if (command == ServiceWireConstants.COMMAND_HELLO && peerAdmissionSealed.getAsBoolean()) {
@@ -8483,32 +8482,73 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
 
     /**
      * Orders admission responses with descriptor publication. A crossing HELLO receives the
-     * outstanding exchange's snapshot; its terminal ADMIT retires that exchange and publishes the
-     * current descriptor as UPDATE. The descriptor lane orders both with publication (wire-protocol
-     * §4).
+     * outstanding exchange's snapshot. A newer descriptor can follow only after the binding admits
+     * the local handshake records (wire protocol §4).
      */
     private void publishAdmissionResponse(
             RoutingId target, int receivedCommand, HelloExchange completedExchange) {
         inDescriptorStateLane(
                 () -> {
-                    var descriptor = localDescriptor;
-                    int responseCommand;
                     if (receivedCommand == ServiceWireConstants.COMMAND_HELLO) {
-                        responseCommand = ServiceWireConstants.COMMAND_ADMIT;
-                        descriptor =
+                        long generation = selectedRoutes.getOrDefault(target, 0L);
+                        var descriptor =
                                 wire.decodeAdmission(
-                                        admissionHello(
-                                                target, selectedRoutes.getOrDefault(target, 0L)),
+                                        admissionHello(target, generation),
                                         ServiceWireConstants.COMMAND_HELLO,
                                         localDescriptor.nodeRoutingId());
-                    } else {
-                        responseCommand = ServiceWireConstants.COMMAND_UPDATE;
-                        if (completedExchange != null)
-                            helloExchanges.remove(target, completedExchange);
+                        var submitted =
+                                trySendAdmissionControl(
+                                                target,
+                                                List.of(
+                                                        wire.encodeAdmission(
+                                                                ServiceWireConstants.COMMAND_ADMIT,
+                                                                descriptor)))
+                                        .toCompletableFuture();
+                        if (!submitted.isDone()) {
+                            helloExchanges.computeIfPresent(
+                                    target,
+                                    (ignored, exchange) -> {
+                                        if (exchange.routeGeneration() == generation) {
+                                            var pending = exchange.admitSubmission;
+                                            exchange.admitSubmission =
+                                                    pending == null || pending.isDone()
+                                                            ? submitted
+                                                            : CompletableFuture.allOf(
+                                                                    pending, submitted);
+                                        }
+                                        return exchange;
+                                    });
+                        }
+                    } else if (completedExchange != null) {
+                        finishAdmissionExchange(target, completedExchange);
                     }
-                    return trySendAdmissionControl(
-                            target, List.of(wire.encodeAdmission(responseCommand, descriptor)));
+                    return null;
                 });
+    }
+
+    private void finishAdmissionExchange(RoutingId target, HelloExchange exchange) {
+        if (helloExchanges.get(target) != exchange || !isRouteReady(target)) return;
+        var pending = exchange.submission;
+        if (pending == null || pending.isDone()) pending = exchange.admitSubmission;
+        if (pending != null && !pending.isDone()) {
+            pending.whenComplete(
+                    (ignored, failure) ->
+                            descriptorStateLane.runAsync(
+                                    () -> finishAdmissionExchange(target, exchange)));
+            return;
+        }
+        if (!helloExchanges.remove(target, exchange) || exchange.hello == null) return;
+        var descriptor = localDescriptor;
+        var advertised =
+                wire.decodeAdmission(
+                        exchange.hello,
+                        ServiceWireConstants.COMMAND_HELLO,
+                        descriptor.nodeRoutingId());
+        if (advertised.descriptorRevision() < descriptor.descriptorRevision()) {
+            trySendAdmissionControl(
+                    target,
+                    List.of(wire.encodeAdmission(ServiceWireConstants.COMMAND_UPDATE, descriptor)));
+        }
     }
 
     // The descriptor lane selects the snapshot once; the map commit also orders HELLO retries.
@@ -8777,6 +8817,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                         generation,
                                         new CompletableFuture<>(),
                                         sameRoute ? current.hello : null);
+                        if (sameRoute) exchange.admitSubmission = current.admitSubmission;
                         submissions.add(exchange);
                         return exchange;
                     });

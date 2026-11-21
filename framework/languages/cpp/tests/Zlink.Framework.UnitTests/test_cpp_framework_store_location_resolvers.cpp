@@ -18,6 +18,8 @@
 #include "runtime/client_server/client_server_location_runtime.hpp"
 #include "runtime/mesh/user_spot_terminal_mapping.hpp"
 #include "runtime/streams/stream_runtime.hpp"
+#include "runtime/streams/stream_host_service.hpp"
+#include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/dispatch/coroutine_executor.hpp"
 #include "../support/owner_lease_time_store.hpp"
 
@@ -262,6 +264,7 @@ class test_location_repository_t : public zlink::framework::location_repository_
     }
 
     bool fail_authority_queries = false;
+    std::function<void ()> before_owner_read;
 
     void set_authority (std::string key, zlink::framework::authority_snapshot_t snapshot)
     {
@@ -346,6 +349,8 @@ class test_location_repository_t : public zlink::framework::location_repository_
     read_owner_lease (std::string owner_id) override
     {
         ++owner_read_count;
+        if (auto hook = std::exchange (before_owner_read, {}))
+            hook ();
         return _inner.read_owner_lease (std::move (owner_id));
     }
 
@@ -2388,6 +2393,42 @@ TEST (ZLinkFrameworkStoreLocationResolvers, DirectReadyRouteUsesPositiveCacheOnl
     EXPECT_FALSE (resolvers.resolve_spot_address ({}, "missing").result ().value ());
     EXPECT_FALSE (resolvers.resolve_spot_address ({}, "missing").result ().value ());
     EXPECT_EQ (0u, store.resolve_spot_count.load ());
+}
+
+TEST (ZLinkFrameworkStoreLocationResolvers, InvalidatedInFlightReadyReadCannotRepopulateCache)
+{
+    test_location_repository_t store;
+    (void) claim_test_owner (store, "owner-cache");
+    const auto owner = live_owner_token (store, "owner-cache");
+    auto authority = zlink::framework::authority_snapshot_t{
+      .store_version = "10",
+      .payload = user_spot_authority_payload ("spot-cache", 1),
+      .object_generation = 1,
+      .authority_owner_generation = 1,
+      .owner = owner,
+      .allocation = zlink::framework::placement_allocation_t{
+        .state = zlink::framework::placement_allocation_state_t::active,
+        .object_kind = zlink::framework::placement_object_kind_t::user_spot,
+        .stable_type = "play",
+        .target = zlink::framework::object_creation_target_t{
+          .mesh_name = "mesh-cache",
+          .node_rid = zlink::framework::node_rid_t::from_string ("node-cache"),
+          .node_lifecycle_generation = 1,
+          .owner = owner}}};
+    store.set_authority ("zla1:s:10:spot-cache", authority);
+    location_options_t options;
+    options.route_cache_max_age = std::chrono::seconds (1);
+    store_location_resolvers_t resolvers (store, options);
+
+    store.before_owner_read = [&] {
+        store.set_authority ("zla1:s:10:spot-cache", std::nullopt);
+        resolvers.invalidate_spot_address ("spot-cache");
+    };
+    const auto first = resolvers.resolve_spot_address ({}, "spot-cache").result ().value ();
+    ASSERT_TRUE (first);
+    const auto reads = store.authority_read_count.load ();
+    EXPECT_FALSE (resolvers.resolve_spot_address ({}, "spot-cache").result ().value ());
+    EXPECT_GT (store.authority_read_count.load (), reads);
 }
 
 TEST (ZLinkFrameworkStoreLocationResolvers, ClosingRoutePreservesOwnerFencesWithoutPositiveCache)
@@ -5314,6 +5355,82 @@ TEST (ZLinkFrameworkStoreLocationResolvers, AppStreamHostStartsAndStopsTcpListen
     ASSERT_NE (nullptr, client_ptr);
     EXPECT_TRUE (client_ptr->observed) << client_ptr->last_error_message ();
 }
+
+#ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
+TEST (ZLinkFrameworkStoreLocationResolvers, ForcedStreamCloseCannotOutliveReader)
+{
+    namespace fw = zlink::framework;
+    fw::detail::configure_stream_dispatch_executor ();
+    struct executor_guard_t
+    {
+        ~executor_guard_t () { fw::detail::shutdown_stream_dispatch_executor (); }
+    } executor_guard;
+    fw::service_collection_t services;
+    fw::handler_registry_t handlers;
+    fw::serializer_registry_t serializers;
+    auto builder = fw::test::runtime_failure_builder ();
+    services.add_singleton<fw::detail::actor_gateway_runtime_t> ();
+    services.add_factory<fw::session_actor_manager_t> (
+      [] (fw::service_provider_t &scope) {
+          return std::make_unique<fw::session_actor_manager_t> (
+            scope.get_required<fw::detail::actor_gateway_runtime_t> ().manager ());
+      },
+      fw::service_lifetime_t::scoped);
+    services.add_singleton<echo_stream_session_t> ();
+    fw::zlink_framework_options_t options (services, handlers, serializers, builder);
+    options.add_stream_node ("shutdown-race")
+      .bind ("tcp://127.0.0.1:0")
+      .register_session ("shutdown-session");
+    options.apply ();
+    auto provider = services.build_provider ();
+    auto runtime = fw::detail::stream_runtime_t::from (builder);
+    auto statuses = std::make_shared<fw::runtime::listener_status_registry_t> ();
+    fw::runtime::stream_host_service_t host (
+      std::make_shared<fw::runtime::runtime_failure_collector_t> (), runtime, runtime.snapshots (),
+      {{"shutdown-session",
+        [] (fw::service_provider_t &scope) -> fw::packet_stream_session_t & {
+            return scope.get_required<echo_stream_session_t> ();
+        }}},
+      std::chrono::seconds (30), nullptr, {}, statuses);
+    host.start (provider);
+
+    std::promise<std::pair<std::weak_ptr<void>, std::weak_ptr<void>>> registered;
+    auto observed = registered.get_future ();
+    std::promise<bool> paused;
+    auto reached_pause = paused.get_future ();
+    std::promise<void> resume;
+    auto resumed = resume.get_future ().share ();
+    auto force_close = fw::runtime::stream_host_service_test_access_t::observe_shutdown (
+      host,
+      {[&] (auto listener, auto connection) { registered.set_value ({listener, connection}); },
+       [&] (bool in_lane) {
+           paused.set_value (in_lane);
+           resumed.wait ();
+       }});
+    boost::asio::io_context io;
+    boost::asio::ip::tcp::socket client (io);
+    const auto endpoint = statuses->find (fw::listener_kind_t::stream, "shutdown-race")->endpoint;
+    const auto port =
+      static_cast<unsigned short> (std::stoi (endpoint.substr (endpoint.rfind (':') + 1)));
+    client.connect ({boost::asio::ip::make_address ("127.0.0.1"), port});
+    ASSERT_EQ (std::future_status::ready, observed.wait_for (std::chrono::seconds (5)));
+    auto [listener, connection] = observed.get ();
+    auto forced = std::async (std::launch::async, std::move (force_close));
+    ASSERT_EQ (std::future_status::ready, reached_pause.wait_for (std::chrono::seconds (5)));
+    const bool in_lane = reached_pause.get ();
+    client.close ();
+    // Outside the registry lane the reader can finish before the forced post.
+    // Inside it, unregister must wait for the submission to finish.
+    if (!in_lane)
+        host.stop ();
+    resume.set_value ();
+    forced.get ();
+    host.stop ();
+    EXPECT_TRUE (connection.expired ());
+    EXPECT_TRUE (listener.expired ());
+    provider.close ();
+}
+#endif
 
 /* The descriptor owner order checks above rely on this observation: only the
  * observed flow's reads count, and a wrong order or a read from another flow

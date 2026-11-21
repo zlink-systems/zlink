@@ -1,11 +1,17 @@
 import 'reflect-metadata';
 import '../.zlink-framework-json-schemas.cjs';
 import assert from 'node:assert/strict';
-import { createServer } from 'node:net';
+import { mkdirSync } from 'node:fs';
 import { Injectable } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { zlinkFramework, zlinkModule, ZLinkModule } from '@zlink-systems/nestjs';
+import {
+  zlinkFramework,
+  zlinkModule,
+  ZLinkModule,
+  ZLINK_FRAMEWORK_RUNTIME
+} from '@zlink-systems/nestjs';
 import type {
+  ZLinkFrameworkRuntime,
   ZLinkSession,
   ZLinkSessionContext,
   ZLinkSessionFactory
@@ -19,6 +25,7 @@ import {
   MoveRequest,
   PlayerView,
   RoomView,
+  RoomViewRequest,
   SessionInfoRequest,
   ShotResult
 } from '../server/shared/messages';
@@ -28,7 +35,12 @@ class WireSessionFactory implements ZLinkSessionFactory {
   async create(context: ZLinkSessionContext): Promise<ZLinkSession> {
     return {
       context,
-      async onDispatch(): Promise<void> {
+      async onDispatch(dispatch): Promise<void> {
+        if (dispatch.packetName === RoomViewRequest.name) {
+          await context.client.send(new RoomView('before-shot')).submit();
+          if (dispatch.canReply) await context.client.reply(new RoomView('after-shot')).submit();
+          return;
+        }
         await context.client.send(new MoveRequest(new Vec3(1, 0, -2), 7n)).submit();
         await context.client.send(new ShotResult('hit', null, MaxSequence)).submit();
         await context.client
@@ -52,16 +64,8 @@ export async function runWireChecks(): Promise<void> {
   const { zlinkStreamConnectorFactory, ZlinkStreamDispatchMode } = await import(
     '@zlink-systems/stream-connector'
   );
-  const reservation = createServer();
-  await new Promise<void>((resolve) => reservation.listen(0, '127.0.0.1', resolve));
-  const address = reservation.address();
-  assert(address && typeof address === 'object');
-  const endpoint = `ws://127.0.0.1:${address.port}`;
-  await new Promise<void>((resolve, reject) =>
-    reservation.close((error) => (error ? reject(error) : resolve()))
-  );
   const builder = zlinkFramework();
-  builder.addStreamNode('wire-check').bind(endpoint).registerSession(WireSessionFactory);
+  builder.addStreamNode('wire-check').bind('ws://127.0.0.1:0').registerSession(WireSessionFactory);
   class WireHost {}
   zlinkModule({
     providerDiscovery: [],
@@ -72,6 +76,9 @@ export async function runWireChecks(): Promise<void> {
     logger: ['error'],
     abortOnError: false
   });
+  const endpoint = app
+    .get<ZLinkFrameworkRuntime>(ZLINK_FRAMEWORK_RUNTIME)
+    .getListenerStatus('stream', 'wire-check').endpoint;
   const client = zlinkStreamConnectorFactory.create({
     endpoint,
     dispatchMode: ZlinkStreamDispatchMode.Immediate,
@@ -127,8 +134,28 @@ export async function runWireChecks(): Promise<void> {
       })
     ]);
     console.log('Wire golden: 1/1 passed (4 samples)');
+    const { PlayerClient } = await import('./client.mjs');
+    mkdirSync('.logs', { recursive: true });
+    const player = new PlayerClient(endpoint, '.logs/view-checks.jsonl', 'view-check');
+    try {
+      await player.connect();
+      const view = await player.view();
+      assert.equal(view.roomId, 'after-shot', 'Room query selected an unsolicited broadcast.');
+      assert(
+        player.messages.some(
+          (message) =>
+            message.name === RoomView.name && (message.payload as RoomView).roomId === 'before-shot'
+        ),
+        'Room query must still receive unsolicited broadcasts.'
+      );
+      console.log('Room view correlation: 1/1 passed (broadcast before reply)');
+    } finally {
+      await player.close();
+    }
   } finally {
     await client.close();
     await app.close();
   }
 }
+
+void runWireChecks();

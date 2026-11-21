@@ -370,7 +370,13 @@ class BeginUserSpotJoinHandler {
       .joinSpot(request.targetSpotId, new UserSpotJoinReq(request.marker))
       .timeout(30_000)
       .defer();
-    return { accepted: true, actorId: actor.actorId, targetSpotId: request.targetSpotId };
+    return {
+      accepted: true,
+      actorId: actor.actorId,
+      spotId: request.targetSpotId,
+      nodeRid: require_('node-rid'),
+      marker: request.marker
+    };
   }
 }
 Injectable()(BeginUserSpotJoinHandler);
@@ -483,7 +489,9 @@ async function userSpotJoinSource() {
     }
     await new Promise(resolve => setTimeout(resolve, 100));
   }
-  appendEvent('user-spot-source-peer-ready|ready=true');
+  const endpoint = app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME, { strict: false })
+    .getListenerStatus('routeMesh', meshName).endpoint;
+  appendEvent(`user-spot-source-peer-ready|ready=true|endpoint=${endpoint}`);
   const startFile = require_('start-file');
   const startDeadline = Date.now() + 60_000;
   while (!fs.existsSync(startFile)) {
@@ -513,7 +521,7 @@ async function userSpotJoinSource() {
     .submit();
   appendEvent(
     `user-spot-join-request-reply|accepted=${reply.accepted === true}`
-    + `|actor=${reply.actorId}|spot=${reply.targetSpotId}`
+    + `|actor=${reply.actorId}|spot=${reply.spotId}`
   );
 
   if (process.env.ZLINK_NODE_JAVA_STATEFUL_PROBE === '1') {

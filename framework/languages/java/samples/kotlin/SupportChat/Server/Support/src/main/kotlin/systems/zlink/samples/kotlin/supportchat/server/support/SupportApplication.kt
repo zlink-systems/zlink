@@ -45,46 +45,49 @@ import systems.zlink.samples.kotlin.supportchat.server.support.infrastructure.zl
 )
 class SupportApplication {
     @Bean
-    fun supportFramework(topology: SampleTopology): ZLinkFrameworkConfigurer =
-        ZLinkFrameworkConfigurer { options ->
-            val support = topology.support()
-            val channelEndpoint = URI.create(support.channelEndpoint)
-            options.addHandlersFromPackageOf<SupportApplication>()
-            options.useCoroutineHandlers(Dispatchers.Default)
-            options.configureLocations()
-            options.addRelocationStore(
-                ZLinkRedisRelocationStore(
-                    ZLinkRedisRelocationOptions()
-                        .setConnectionString(topology.location().redisEndpoint)
-                        .setKeyPrefix(topology.location().redisKeyPrefix + "relocation:")
-                )
+    fun supportFramework(
+        topology: SampleTopology,
+        locations: ZLinkRedisLocationStore,
+    ): ZLinkFrameworkConfigurer = ZLinkFrameworkConfigurer { options ->
+        options.addLocationStore(locations)
+        val support = topology.support()
+        val channelEndpoint = URI.create(support.channelEndpoint)
+        options.addHandlersFromPackageOf<SupportApplication>()
+        options.useCoroutineHandlers(Dispatchers.Default)
+        options.configureLocations()
+        options.addRelocationStore(
+            ZLinkRedisRelocationStore(
+                ZLinkRedisRelocationOptions()
+                    .setConnectionString(topology.location().redisEndpoint)
+                    .setKeyPrefix(topology.location().redisKeyPrefix + "relocation:")
             )
-            options.configureDispatch { messageFlow(ZLinkMessageFlowLogMode.NORMAL) }
-            options
-                .addClientServerChannel(SampleNames.SupportChannel)
-                .server()
-                .setBindHost(channelEndpoint.host)
-                .setAdvertiseHost(channelEndpoint.host)
-                .listen(channelEndpoint.port)
-                .addHandlerGroup(SampleNames.SupportChannel)
-            options.addClientServerChannel(SampleNames.ApiChannel).client()
-            // --8<-- [start:doc-sc-support-register]
-            val node = options.addRouteMesh(SampleNames.SupportSpotDiscovery)
-            node.listen(support.routerEndpoint).setRoutingIdPrefix("support-owner")
-            node
-                .objects()
-                .server()
-                .addEntrySpot<SupportEntrySpot>()
-                .addActorFactory<SupportUserActor, SupportUserActorFactory>(
-                    SampleNames.SupportActorType
-                ) {
-                    preserveStateWith<SupportUserActor, SupportUserActorRelocationAdapter>()
-                }
-                .addSpotFactory<ConversationSpot>(SampleNames.ConversationSpotType) {
-                    disableRelocation()
-                }
-            // --8<-- [end:doc-sc-support-register]
-        }
+        )
+        options.configureDispatch { messageFlow(ZLinkMessageFlowLogMode.NORMAL) }
+        options
+            .addClientServerChannel(SampleNames.SupportChannel)
+            .server()
+            .setBindHost(channelEndpoint.host)
+            .setAdvertiseHost(channelEndpoint.host)
+            .listen(channelEndpoint.port)
+            .addHandlerGroup(SampleNames.SupportChannel)
+        options.addClientServerChannel(SampleNames.ApiChannel).client()
+        // --8<-- [start:doc-sc-support-register]
+        val node = options.addRouteMesh(SampleNames.SupportSpotDiscovery)
+        node.listen(support.routerEndpoint).setRoutingIdPrefix("support-owner")
+        node
+            .objects()
+            .server()
+            .addEntrySpot<SupportEntrySpot>()
+            .addActorFactory<SupportUserActor, SupportUserActorFactory>(
+                SampleNames.SupportActorType
+            ) {
+                preserveStateWith<SupportUserActor, SupportUserActorRelocationAdapter>()
+            }
+            .addSpotFactory<ConversationSpot>(SampleNames.ConversationSpotType) {
+                disableRelocation()
+            }
+        // --8<-- [end:doc-sc-support-register]
+    }
 
     @Bean
     fun supportPublicReadiness(): ApplicationRunner = ApplicationRunner {

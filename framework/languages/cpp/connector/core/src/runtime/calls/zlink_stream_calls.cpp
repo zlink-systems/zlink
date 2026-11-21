@@ -551,29 +551,32 @@ take_matching_queued_packet (connector_state_t &state,
     }
 
     const auto observed_generation = state.dispatch_queue_generation;
-    std::deque<dispatch_envelope_t> candidates;
-    candidates.swap (state.dispatch_queue);
-
-    /* The queue reads empty to anyone who looks while the predicate runs, the
-   * same way it does while dispatch() delivers a batch. */
     std::optional<packet_t> matched;
     std::deque<dispatch_envelope_t> untaken;
-    lock.unlock ();
-    for (auto &candidate : candidates) {
-        if (!matched && name_matches (candidate) && predicate (candidate.packet)) {
-            matched = std::move (candidate.packet);
-            continue;
+    /* The queue reads empty to anyone who looks while the predicate runs, the
+   * same way it does while dispatch() delivers a batch. A packet the read pump
+   * queues in that window is evaluated in the next round, so the caller
+   * registers its wait only when no queued packet is left unevaluated. */
+    do {
+        std::deque<dispatch_envelope_t> candidates;
+        candidates.swap (state.dispatch_queue);
+        lock.unlock ();
+        for (auto &candidate : candidates) {
+            if (!matched && name_matches (candidate) && predicate (candidate.packet)) {
+                matched = std::move (candidate.packet);
+                continue;
+            }
+            untaken.push_back (std::move (candidate));
         }
-        untaken.push_back (std::move (candidate));
-    }
-    lock.lock ();
+        lock.lock ();
 
-    if (state.dispatch_queue_generation != observed_generation) {
-        /* A new connection or a close dropped the queue while the predicate
-     * ran. These packets belong to the connection that ended, so they are
-     * dropped too (stream-connector §10). */
-        return std::nullopt;
-    }
+        if (state.dispatch_queue_generation != observed_generation) {
+            /* A new connection or a close dropped the queue while the predicate
+         * ran. These packets belong to the connection that ended, so they are
+         * dropped too (stream-connector §10). */
+            return std::nullopt;
+        }
+    } while (!matched && !state.dispatch_queue.empty ());
     while (!untaken.empty ()) {
         state.dispatch_queue.push_front (std::move (untaken.back ()));
         untaken.pop_back ();
@@ -1374,6 +1377,11 @@ bool connection_ended (const std::shared_ptr<connector_state_t> &state,
 {
     connection_operations_t operations;
     std::shared_ptr<boost::asio::steady_timer> heartbeat_timer;
+    /* The ending is recorded under transport_mutex. The handlers it schedules
+     * are user code that can call back into the connector surface, so Immediate
+     * runs them after the lock is released, on a connector that is already
+     * disconnected (stream-connector §7, §9). */
+    deferred_delivery_scope_t deliveries (*state);
     {
         std::lock_guard<std::mutex> lock (state->transport_mutex);
         if (state->connection != observed_connection) {
@@ -1387,6 +1395,7 @@ bool connection_ended (const std::shared_ptr<connector_state_t> &state,
         heartbeat_timer = std::move (state->heartbeat_timer);
         operations = take_connection_operations_locked (*state);
     }
+    deliveries.deliver ();
     cancel_timer (heartbeat_timer);
     fail_connection_operations (state, std::move (operations), error.message);
     observed_connection->shutdown_and_close_async ([state] (boost::system::error_code close_error) {

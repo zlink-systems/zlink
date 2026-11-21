@@ -90,6 +90,10 @@ class held_lease_repository_t final : public runtime::in_memory_location_reposit
     std::atomic_bool reject_fanout{false};
     std::atomic_int fanout_claims{0};
     std::atomic_int fail_mesh_writes{0};
+    std::atomic_int waiting_mesh_writes{0};
+    std::atomic_bool hold_renew_write{false};
+    task_completion_source_t<void> release_renew_write;
+    std::promise<void> renew_write_requested;
     std::atomic_int fail_client_writes{0};
     std::atomic_int fail_fanout_writes{0};
     std::atomic_int client_attempts{0};
@@ -145,6 +149,8 @@ class held_lease_repository_t final : public runtime::in_memory_location_reposit
             co_return result_t<location_write_result_t>::failure (
               framework_error_kind_t::internal_failure, "injected unknown descriptor write");
         }
+        if (waiting_mesh_writes.load () > 0)
+            co_return location_write_result_t{location_write_status_t::waiting, 0, {}};
         if (mesh_status != location_write_status_t::stored)
             co_return location_write_result_t{mesh_status, 0, {}};
         const auto first = intent == location_write_intent_t::new_claim
@@ -152,6 +158,10 @@ class held_lease_repository_t final : public runtime::in_memory_location_reposit
         if (first) {
             std::call_once (_requested, [&] { descriptor_requested.set_value (); });
             co_await release_descriptor.task ();
+        }
+        if (intent == location_write_intent_t::renew && hold_renew_write.exchange (false)) {
+            renew_write_requested.set_value ();
+            co_await release_renew_write.task ();
         }
         auto result = co_await in_memory_location_repository_t::update_mesh_node (
           std::move (descriptor), intent);
@@ -210,6 +220,7 @@ class held_lease_repository_t final : public runtime::in_memory_location_reposit
         release_claim.complete (result_t<void>::success ());
         release_renew.complete (result_t<void>::success ());
         release_descriptor.complete (result_t<void>::success ());
+        release_renew_write.complete (result_t<void>::success ());
         release_fanout.complete (result_t<void>::success ());
         release_client.complete (result_t<void>::success ());
     }
@@ -495,6 +506,95 @@ TEST (ZLinkFrameworkStartupLease, UnknownDescriptorPublicationRetriesAfterRenewa
         ready.wait ();
         EXPECT_TRUE (app.is_ready ());
     }
+}
+
+// MeshNode §3.3: a fixed-RID first start inside the release wait submits no claim. A runtime
+// placement weight change in that window is recorded; the renew schedule publishes it.
+TEST (ZLinkFrameworkStartupLease, PlacementWeightChangeInsideReleaseWaitIsPublishedByRenewSchedule)
+{
+    startup_signal_t startup;
+    auto started = startup.started.get_future ();
+    auto store = std::make_shared<held_lease_repository_t> (held_lease_repository_t::mode_t::held);
+    store->release_claim.complete (result_t<void>::success ());
+    store->release_descriptor.complete (result_t<void>::success ());
+    store->waiting_mesh_writes.store (1'000'000);
+    auto app = app_t::create ();
+    configure (app, store);
+    auto probe = std::make_unique<runtime_probe_t> ();
+    auto runtime_future = probe->framework_runtime.get_future ();
+    app.add_hosted_service (std::move (probe));
+    running_host_t host (app, store, startup);
+    started.wait ();
+    ASSERT_EQ (-1, host.exit_code.load ());
+    EXPECT_EQ (framework_runtime_state_t::preparing, app.runtime_state ());
+    EXPECT_TRUE (store->list_mesh_nodes ("startup-lease").result ().value ().items.empty ());
+    auto services = app.advanced ().services ().build_provider ();
+    auto &options = services.get_required<route_mesh_runtime_options_t> ();
+
+    EXPECT_NO_THROW (options.mesh ("startup-lease").placement_weight (77));
+
+    EXPECT_EQ (framework_runtime_state_t::preparing, app.runtime_state ());
+    EXPECT_TRUE (store->list_mesh_nodes ("startup-lease").result ().value ().items.empty ());
+    std::promise<void> serving;
+    auto ready = serving.get_future ();
+    std::once_flag observed;
+    auto observation = runtime_future.get ()->observe (16, [&] (const auto &status) {
+        if (status.status.state == framework_runtime_state_t::serving)
+            std::call_once (observed, [&] { serving.set_value (); });
+    });
+    store->waiting_mesh_writes.store (0);
+    ready.wait ();
+    EXPECT_TRUE (app.is_ready ());
+    const auto published = store->list_mesh_nodes ("startup-lease").result ().value ();
+    ASSERT_EQ (1u, published.items.size ());
+    EXPECT_EQ (77, published.items.front ().placement_weight);
+
+    // A change on a confirmed row reaches the Store through the same schedule.
+    EXPECT_NO_THROW (options.mesh ("startup-lease").placement_weight (55));
+    int stored_weight = 0;
+    for (int attempt = 0; attempt < 500 && stored_weight != 55; ++attempt) {
+        const auto rows = store->list_mesh_nodes ("startup-lease").result ().value ();
+        stored_weight = rows.items.empty () ? 0 : rows.items.front ().placement_weight;
+        if (stored_weight != 55)
+            std::this_thread::sleep_for (std::chrono::milliseconds (10));
+    }
+    EXPECT_EQ (55, stored_weight);
+}
+
+// A weight change that arrives while the schedule's publication of an earlier change is in flight
+// is not lost: the completion of the older write leaves the newer change recorded.
+TEST (ZLinkFrameworkStartupLease, PlacementWeightChangeDuringInFlightPublicationIsNotLost)
+{
+    startup_signal_t startup;
+    auto started = startup.started.get_future ();
+    auto store = std::make_shared<held_lease_repository_t> (held_lease_repository_t::mode_t::held);
+    store->release_claim.complete (result_t<void>::success ());
+    store->release_descriptor.complete (result_t<void>::success ());
+    auto in_flight = store->renew_write_requested.get_future ();
+    auto app = app_t::create ();
+    configure (app, store);
+    running_host_t host (app, store, startup);
+    started.wait ();
+    for (int attempt = 0; attempt < 500 && !app.is_ready (); ++attempt)
+        std::this_thread::sleep_for (std::chrono::milliseconds (10));
+    ASSERT_TRUE (app.is_ready ());
+    auto services = app.advanced ().services ().build_provider ();
+    auto &options = services.get_required<route_mesh_runtime_options_t> ();
+
+    store->hold_renew_write.store (true);
+    options.mesh ("startup-lease").placement_weight (55);
+    in_flight.wait ();
+    options.mesh ("startup-lease").placement_weight (66);
+    store->release_renew_write.complete (result_t<void>::success ());
+
+    int stored_weight = 0;
+    for (int attempt = 0; attempt < 500 && stored_weight != 66; ++attempt) {
+        const auto rows = store->list_mesh_nodes ("startup-lease").result ().value ();
+        stored_weight = rows.items.empty () ? 0 : rows.items.front ().placement_weight;
+        if (stored_weight != 66)
+            std::this_thread::sleep_for (std::chrono::milliseconds (10));
+    }
+    EXPECT_EQ (66, stored_weight);
 }
 
 TEST (ZLinkFrameworkStartupLease, ConfirmedDescriptorConflictFailsStartup)

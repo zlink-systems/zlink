@@ -30,9 +30,17 @@ import { parseFrameworkJsonV1, stringifyFrameworkJsonV1 } from '../messaging/fra
 import { currentOrCreateFlow } from '../diagnostics/flow-context';
 import { SERVICE_WIRE_METADATA_BYTES } from '../foundation/service-wire-constants.generated';
 import { zlink as ChannelHeaderProto } from './generated/channel-header-v1';
+import { formatDeadlineText } from './channel-deadline-text';
+import { ChannelHeaderPrefixes } from './channel-header-prefix';
 import { codecsForFrameworkPacket } from './channel-framework-packets';
 import { readZLinkPacketJsonContract } from '../../contracts/Handlers/Attributes';
 import type { ZLinkJsonSchema } from '../../contracts/Handlers/JsonContract';
+
+interface ChannelHeaderWriter {
+  finish(): Uint8Array;
+  reset(): void;
+  raw(value: Uint8Array): unknown;
+}
 
 const CHANNEL_HEADER_CODEC = (
   ChannelHeaderProto as unknown as {
@@ -43,8 +51,8 @@ const CHANNEL_HEADER_CODEC = (
             create(): Record<string, unknown>;
             encode(
               value: unknown,
-              writer?: { finish(): Uint8Array; reset(): void }
-            ): { finish(): Uint8Array; reset(): void; len: number };
+              writer?: ChannelHeaderWriter
+            ): ChannelHeaderWriter & { len: number };
             decode(
               value: unknown,
               length?: number,
@@ -62,6 +70,14 @@ const CHANNEL_HEADER_CODEC = (
 const CHANNEL_HEADER_WRITER = CHANNEL_HEADER_CODEC.encode({});
 const CHANNEL_HEADER_READER = protobuf.Reader.create(Buffer.alloc(0));
 const CHANNEL_HEADER_TARGET = CHANNEL_HEADER_CODEC.create();
+// The four leading header fields repeat across messages; their bytes still come
+// from the generated encoder, see channel-header-prefix.ts.
+const CHANNEL_HEADER_PREFIXES = new ChannelHeaderPrefixes(
+  (kind, channelName, messageName, contentType) =>
+    Buffer.from(
+      CHANNEL_HEADER_CODEC.encode({ kind, channelName, messageName, contentType }).finish()
+    )
+);
 const EMPTY_PROTOBUF_METADATA: readonly Readonly<{ key: string; value: string }>[] = Object.freeze(
   []
 );
@@ -521,7 +537,7 @@ function encodePayload(
       request === undefined
         ? correlationIdForOutboundKind(kind, correlationId)
         : request.correlationId,
-      deadlineUnixMs === undefined ? null : new Date(deadlineUnixMs).toISOString(),
+      deadlineUnixMs === undefined ? null : formatDeadlineText(deadlineUnixMs),
       topic ?? null,
       contractPart === 'reply' ? undefined : null,
       contractPart === 'reply' ? undefined : null,
@@ -580,11 +596,10 @@ function encodeChannelHeader(
       : Object.keys(metadata)
           .sort((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)))
           .map((key) => ({ key, value: metadata[key]! }));
+  const prefix = CHANNEL_HEADER_PREFIXES.forFields(kind, channelName, messageName, contentType);
+  // OUTBOUND_CHANNEL_HEADER keeps kind, channelName, messageName and contentType at their
+  // proto3 defaults, so the encoder skips them; the prefix bytes stand in for them.
   const header = OUTBOUND_CHANNEL_HEADER;
-  header.kind = kind;
-  header.channelName = channelName;
-  header.messageName = messageName;
-  header.contentType = contentType;
   header.correlationId = correlationId;
   header.deadline = deadline;
   header.errorCode = errorCode ?? null;
@@ -604,6 +619,7 @@ function encodeChannelHeader(
   }
   CHANNEL_HEADER_WRITER.reset();
   try {
+    CHANNEL_HEADER_WRITER.raw(prefix.bytes);
     const encoded = CHANNEL_HEADER_CODEC.encode(header, CHANNEL_HEADER_WRITER).finish();
     return Buffer.isBuffer(encoded) ? encoded : Buffer.from(encoded);
   } finally {
@@ -677,10 +693,12 @@ export function decodeChannelHeaderRecord(payload: Buffer): Record<string, unkno
 function decodeChannelHeaderRecordIntoScratch(payload: Buffer): Record<string, unknown> {
   try {
     const target = CHANNEL_HEADER_TARGET;
-    target.kind = 0;
-    target.channelName = '';
-    target.messageName = '';
-    target.contentType = '';
+    // A header that starts with a known prefix already has its first four fields decoded.
+    const known = CHANNEL_HEADER_PREFIXES.matching(payload);
+    target.kind = known === undefined ? 0 : known.kind;
+    target.channelName = known === undefined ? '' : known.channelName;
+    target.messageName = known === undefined ? '' : known.messageName;
+    target.contentType = known === undefined ? '' : known.contentType;
     target.correlationId = null;
     target.deadline = null;
     target.errorCode = null;
@@ -693,15 +711,25 @@ function decodeChannelHeaderRecordIntoScratch(payload: Buffer): Record<string, u
     const metadata = target.metadata;
     if (Array.isArray(metadata)) metadata.length = 0;
     CHANNEL_HEADER_READER.buf = payload;
-    CHANNEL_HEADER_READER.pos = 0;
+    CHANNEL_HEADER_READER.pos = known === undefined ? 0 : known.bytes.length;
     CHANNEL_HEADER_READER.len = payload.length;
-    return CHANNEL_HEADER_CODEC.decode(
+    const decoded = CHANNEL_HEADER_CODEC.decode(
       CHANNEL_HEADER_READER,
       undefined,
       undefined,
       undefined,
       target
     ) as Record<string, unknown>;
+    if (known === undefined) {
+      CHANNEL_HEADER_PREFIXES.learn(
+        payload,
+        decoded.kind,
+        decoded.channelName,
+        decoded.messageName,
+        decoded.contentType
+      );
+    }
+    return decoded;
   } catch (error) {
     throw new ZLinkFrameworkException(
       ZLinkFrameworkErrorKind.ProtocolError,

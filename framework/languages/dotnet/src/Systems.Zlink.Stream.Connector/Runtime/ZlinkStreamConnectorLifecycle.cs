@@ -246,9 +246,10 @@ internal sealed class ZlinkStreamConnectorLifecycle(
     }
 
     /// <summary>
-    ///     Publishes <paramref name="error" /> and ends the current connection with
-    ///     <paramref name="closeReason" />, which the caller decides where it detected the
-    ///     failure (stream-connector spec §6.2, §9).
+    ///     Ends the current connection with <paramref name="closeReason" />, which the caller
+    ///     decides where it detected the failure, and then publishes <paramref name="error" />
+    ///     (stream-connector spec §6.2, §9). Nothing is published when the connection had
+    ///     already ended.
     /// </summary>
     public async ValueTask HandleTransportErrorAsync(
         ZlinkStreamError error,
@@ -256,8 +257,8 @@ internal sealed class ZlinkStreamConnectorLifecycle(
         CancellationToken cancellationToken = default
     )
     {
-        await callbacks.PublishErrorAsync(error, cancellationToken).ConfigureAwait(false);
-        await HandleDisconnectAsync(error, closeReason, cancellationToken).ConfigureAwait(false);
+        await HandleDisconnectAsync(error, closeReason, cancellationToken, publishError: true)
+            .ConfigureAwait(false);
     }
 
     /// <summary>

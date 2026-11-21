@@ -70,9 +70,9 @@ option(ZLINK_FRAMEWORK_CPP_USE_SYSTEM_BOOST
   "Use packaged Boost instead of the repository's vendored Boost" ${_zlink_use_system_boost})
 set(ZLINK_FRAMEWORK_CPP_LOCAL_PACKAGE_ROOT "$ENV{ZLINK_LOCAL_PACKAGE_ROOT}" CACHE PATH
   "Root directory containing local package outputs")
-set(ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION "1.25.1" CACHE STRING
+set(ZLINK_FRAMEWORK_CPP_ZLINK_CPP_VERSION "1.26.0" CACHE STRING
   "Exact local zlink_cpp package version consumed by the C++ framework")
-set(ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION "1.25.0" CACHE STRING
+set(ZLINK_FRAMEWORK_CPP_ZLINK_CORE_VERSION "1.26.0" CACHE STRING
   "Exact local zlink Core package version embedded by zlink_cpp")
 # The binding and Core package prefixes have three sources, in this order: the
 # two ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_*_PREFIX options, the repository's local
@@ -319,6 +319,7 @@ target_link_libraries(zlink_framework_m6c_runtime PUBLIC
   Threads::Threads)
 
 add_library(zlink_framework ${ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE}
+  framework/src/runtime/codecs/json_profile_engine.cpp
   $<TARGET_OBJECTS:zlink_framework_m6a_objects>
   $<TARGET_OBJECTS:zlink_framework_channel_header_proto>
   $<TARGET_OBJECTS:zlink_framework_m6b_objects>
@@ -407,6 +408,10 @@ target_include_directories(zlink_framework PRIVATE
   ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
   ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
 target_link_libraries(zlink_framework PUBLIC zlink::cpp zlink::framework_provider_abstractions)
+target_link_libraries(zlink_framework PRIVATE yyjson::yyjson)
+target_compile_definitions(zlink_framework
+  PRIVATE ZLINK_JSON_PROFILE_ENGINE_NS=framework_engine
+  INTERFACE ZLINK_JSON_PROFILE_ENGINE_FRAMEWORK)
 target_link_libraries(zlink_framework PRIVATE protobuf::libprotobuf)
 # Applications own the SDK, reader and exporter for the supplied Metrics API provider.
 target_link_libraries(zlink_framework PUBLIC opentelemetry-cpp::api)
@@ -602,8 +607,12 @@ add_library(zlink_framework_channel_header_proto OBJECT
 target_link_libraries(zlink_framework_channel_header_proto PRIVATE protobuf::libprotobuf)
 target_include_directories(zlink_framework_channel_header_proto PRIVATE
   ${CMAKE_CURRENT_BINARY_DIR})
+# The schema lives outside this project; APPEND_PATH names the output after the
+# import directory, not CMAKE_CURRENT_SOURCE_DIR, under both FindProtobuf's and
+# protobuf's own protobuf_generate.
 protobuf_generate(
   TARGET zlink_framework_channel_header_proto
+  APPEND_PATH
   IMPORT_DIRS ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol
   PROTOC_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR})
 target_link_libraries(zlink_framework_codec_protobuf INTERFACE protobuf::libprotobuf)
@@ -897,6 +906,7 @@ set(ZLINK_FRAMEWORK_CONFIG_IMPLEMENTATION_DEPENDENCIES "")
 if(NOT ZLINK_FRAMEWORK_CPP_SHARED)
   string(CONCAT ZLINK_FRAMEWORK_CPP_CONFIG_IMPLEMENTATION_DEPENDENCIES
     "${ZLINK_FRAMEWORK_CPP_CONFIG_IMPLEMENTATION_DEPENDENCIES}"
+    "find_dependency(yyjson CONFIG)\n"
     "find_package(protobuf CONFIG QUIET)\n"
     "if(NOT protobuf_FOUND)\n"
     "  find_dependency(Protobuf MODULE)\n"
@@ -1403,6 +1413,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
     ${ZLINK_FRAMEWORK_CPP_DIR}/tests/support)
   target_link_libraries(bench_cpp_framework_registry_requests PRIVATE
+    nlohmann_json::nlohmann_json
     zlink::framework_provider_abstractions zlink::cpp opentelemetry-cpp::metrics Threads::Threads)
 
   add_executable(bench_cpp_framework_dealer_requests
@@ -2160,6 +2171,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_client_server_runtime.cpp
     "framework-unit;framework-regression;framework-client-server;framework-monitoring")
   zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_client_server_manual_without_store
+    COMMAND test_cpp_framework_client_server_runtime --manual-client-without-store
+    LABELS "framework-unit;framework-client-server"
+    TIMEOUT 60)
+  zlink_framework_cpp_add_test(
     NAME test_cpp_framework_same_owner_channel
     COMMAND test_cpp_framework_client_server_runtime --same-owner-regression
     LABELS "framework-contract;execution"
@@ -2182,6 +2198,18 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_actor_gateway
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway.cpp
     "framework-unit;framework-regression;framework-actor;stream")
+  add_zlink_framework_test(
+    test_cpp_framework_bound_session_egress
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_bound_session_egress.cpp
+    "framework-unit;framework-regression;framework-actor;stream")
+  target_include_directories(test_cpp_framework_bound_session_egress PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
+    test_cpp_framework_bound_session_close_order
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_bound_session_close_order.cpp
+    "framework-unit;framework-regression;framework-actor;stream")
+  target_include_directories(test_cpp_framework_bound_session_close_order PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_link_libraries(test_cpp_framework_actor_gateway PRIVATE
     zlink::framework_codec_protobuf opentelemetry-cpp::metrics)
   zlink_framework_cpp_add_test(
@@ -2193,6 +2221,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_duplicate_bind_policy
     COMMAND test_cpp_framework_actor_gateway --duplicate-bind-policy
+    LABELS "framework-unit;framework-contract;framework-actor;stream"
+    TIER contract
+    TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_session_bound_policy
+    COMMAND test_cpp_framework_actor_gateway --session-bound-policy
     LABELS "framework-unit;framework-contract;framework-actor;stream"
     TIER contract
     TIMEOUT 30)
@@ -2408,11 +2442,13 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_use_zlink_gtest_main(test_cpp_framework_receive_role_handoff)
   target_include_directories(test_cpp_framework_receive_role_handoff PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  target_sources(test_cpp_framework_receive_role_handoff PRIVATE
+    tests/support/allocation_counter.cpp)
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     target_compile_definitions(test_cpp_framework_receive_role_handoff PRIVATE
-      ZLINK_TEST_HANDOFF_ALLOC_FAIL)
+      ZLINK_TEST_HANDOFF_TRYLOCK_WRAP)
     target_link_options(test_cpp_framework_receive_role_handoff PRIVATE
-      "LINKER:--wrap=_Znwm" "LINKER:--wrap=pthread_mutex_trylock")
+      "LINKER:--wrap=pthread_mutex_trylock")
   endif()
 
   add_zlink_framework_test(
@@ -2980,10 +3016,32 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     LABELS "framework-integration;framework-contract;stream;stream-session"
     TIER contract
     TIMEOUT 30)
+  foreach(bound_failure_case IN ITEMS standard nonstandard)
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_framework_same_node_duplicate_bind_bound_${bound_failure_case}_error
+      COMMAND test_cpp_framework_same_node_duplicate_bind bound-${bound_failure_case}-error
+      LABELS "framework-integration;framework-contract;stream;stream-session"
+      TIER contract
+      TIMEOUT 30)
+  endforeach()
   add_zlink_framework_test(
     test_cpp_framework_stream_framework
     tests/Zlink.Framework.UnitTests/test_cpp_framework_stream_framework.cpp
     "framework-integration;framework-regression;framework-zlink;framework-zlink-stream;stream")
+  if(ZLINK_FRAMEWORK_CPP_TEST_PROBES)
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_framework_core_session_lifecycle_boundaries
+      COMMAND test_cpp_framework_stream_framework --core-session-lifecycle-boundaries
+      LABELS "framework-unit;framework-contract;stream;stream-session"
+      TIER contract
+      TIMEOUT 30)
+  endif()
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_stream_disconnect_reason
+    COMMAND test_cpp_framework_stream_framework --disconnect-reason
+    LABELS "framework-unit;framework-contract;stream;stream-session"
+    TIER contract
+    TIMEOUT 30)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_binding_submission_order
     COMMAND test_cpp_framework_stream_framework --binding-submission-order

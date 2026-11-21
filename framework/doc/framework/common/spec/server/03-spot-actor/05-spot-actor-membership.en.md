@@ -263,7 +263,12 @@ doesn't secretly move or destroy an Actor.
 
 `JoinSpot` takes the global Spot ID of the User Spot to move to.
 `JoinEntrySpot` doesn't take a target node RID. The framework finds the
-target Spot and owner node to use. If the Actor's and target Spot's owner
+target Spot and owner node to use. The target node of `JoinEntrySpot` is chosen by applying conditions 1-5 of
+[MeshNode §5.2](03-mesh-node.en.md) to the Actor's Mesh and stable type. Candidates are nodes that register an
+Entry Spot type accepting that Actor stable type (descriptor `entryAccepted` is `true`); the Actor's current node
+is a candidate under the same conditions. The framework does not prefer the current node and applies the
+node-wide placement weight to the remaining candidates. If the selected node is the Actor's current node, the
+Join is handled as a same-node Join; if there is no candidate, it ends with `Unavailable`. If the Actor's and target Spot's owner
 node differ, Actor relocation is also performed within the same Join
 operation. The framework handles same-node Actor Join directly through a
 single local Join path and submits neither a Mesh `actorJoin` request nor a
@@ -554,7 +559,10 @@ the following order after the handler ends normally.
    recomputation. If `Accepted`, it continues; if `Rejected`, the target
    removes the temporary queue it registered and the prepared factory
    resources within the same processing, and it ends while keeping source
-   membership. If the target is an Entry Spot, `OnActorJoin` isn't called. The node
+   membership. If the target is an Entry Spot, the target processes the same approval
+   request but doesn't call `OnActorJoin` — temporary queue registration, factory
+   execution preparation, and the chunk limit in the approval reply are the same as
+   for a User Spot. The node
    receiving the Join request accepts it only through an active local target Spot. A
    target in the `Closing` state follows the `Closing` row of
    [Spot address messaging §9](06-spot-address-messaging.en.md#9-failure-and-observability).
@@ -573,14 +581,12 @@ the following order after the handler ends normally.
    rules are defined by
    [Complete Actor And Spot Relocation Flow](../05-location-relocation/04-relocation-flow.en.md).
    The target dispatcher uses the relocation temporary queue registered
-   during approval processing; on an Entry Spot join, which has no
-   approval round trip, it registers the temporary queue before
-   dispatching the next packet. Afterward, a message arriving for the same
+   during approval processing. Afterward, a message arriving for the same
    Actor goes into the temporary queue without looking up the application
    instance. After verifying the assembled payload's checksum, the target
    creates the Actor and restores application state and the existing
    queue, but doesn't run application work yet.
-5. Source ingress hold and pre-boundary relay follow the order in [common relocation §4.4](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). Target uses the temporary queue registered during Join approval or the Restore request.
+5. Source ingress hold and pre-boundary relay follow the order in [common relocation §4.4](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). Target uses the temporary queue registered during Join approval.
 6. After cutover verification, the target's owner, membership, capacity, and generation CAS follows [common relocation §4.4–§4.5](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). This CAS includes the Join membership change.
 7. Queue merge and regular-route transition after CAS follow [common relocation §4.6](../05-location-relocation/04-relocation-flow.en.md#46-target-opens-the-queue-progressively-starting-with-existing-work). Target calls the target Spot's `OnJoinedActor`, sends the source Spot `OnLeaveActor` one-way, finishes the Actor's Join completion callback, then opens dispatch.
 8. For a bound Actor, after CAS and queue opening the target runtime submits a
@@ -604,12 +610,6 @@ preparation is cleaned up, the target first aborts and cleans up the
 existing preparation state, then builds the preparation for the new
 identity — the later attempt wins, and late chunks and Restores of the
 previous identity are discarded without being linked to assembly.
-
-`JoinEntrySpot` doesn't call `OnActorJoin` on the target, so there's no
-approval round trip to carry this preparation. An Entry Spot join performs
-preparation on the Restore request, and since there's no negotiated chunk
-limit, it transfers with a conservative chunk size of 32 KiB (the encoded
-size of one chunk) guaranteed in any deployment.
 
 After relay-ready, target staging cleanup and source resumption follow authority
 settlement in [common relocation §4.4](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). This is
@@ -678,10 +678,9 @@ sequenceDiagram
 This diagram shows only the path that ends normally. If `OnActorJoin`
 returns `Rejected` or explicitly fails before relay-ready is accepted,
 source membership is kept (see the rule above). `OnLeaveActor` is only sent
-after owner commit, so it isn't called on this source-restoration path. A
-User Spot target uses the relocation temporary queue registered during
-approval processing; on an Entry Spot join, the target that received the
-Restore request registers the temporary queue first. Messages and requests
+after owner commit, so it isn't called on this source-restoration path. The
+target uses the relocation temporary queue registered during approval
+processing. Messages and requests
 arriving in that time wait in the temporary queue and aren't run before
 moving to the real Actor queue. If it fails after target commit, it isn't
 rolled back to the source. Only while the same target process is running
@@ -1088,9 +1087,8 @@ The Session route contract is defined by
   queue behind the barrier; only a post-seal message is held in the
   [relocation ingress hold](../00-foundation/02-glossary.en.md#relocation-ingress-hold).
 - A cross-node Join's target registers the relocation temporary queue
-  before the Actor instance — on a User Spot join, during `OnActorJoin`
-  approval processing; on an Entry Spot join, while processing the
-  Restore request. A message in this queue during Restore doesn't run an
+  during Join approval processing, before the Actor instance — the same
+  for a User Spot join and an Entry Spot join. A message in this queue during Restore doesn't run an
   application handler.
 - If Join approval is `Rejected`, no temporary queue or prepared factory
   resources remain on the target.
@@ -1101,9 +1099,8 @@ The Session route contract is defined by
 - If an approval or Restore with a different identity arrives while
   an existing preparation remains, the existing preparation is cleaned up
   first and the later attempt wins.
-- The approval reply carries the target's effective receive chunk limit,
-  and `JoinEntrySpot`, which has no approval round trip, uses the
-  conservative 32 KiB chunk size.
+- The approval reply carries the target's effective receive chunk limit.
+  The approval reply of `JoinEntrySpot` does the same.
 - A `Restore` retry's payload origin is a resend from source memory, not
   a store.
 - Queue merge and source recovery follow [common relocation §4.4–§4.6](../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover).

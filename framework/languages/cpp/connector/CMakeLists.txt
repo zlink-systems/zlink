@@ -40,6 +40,7 @@ endif()
 add_library(zlink_stream_connector ${ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE}
   core/src/runtime/calls/zlink_stream_calls.cpp
   core/src/runtime/connector_runtime.cpp
+  ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src/runtime/codecs/json_profile_engine.cpp
   core/src/runtime/protocol/compression/lz4_compression_codec.cpp
   core/src/runtime/protocol/framing/frame_codec.cpp
   core/src/runtime/protocol/framing.cpp
@@ -64,7 +65,10 @@ zlink_framework_cpp_add_boost_headers(zlink_stream_connector)
 zlink_framework_cpp_add_asio_system_libraries(zlink_stream_connector)
 target_link_libraries(zlink_stream_connector
   PUBLIC nlohmann_json::nlohmann_json
-  PRIVATE Threads::Threads)
+  PRIVATE Threads::Threads yyjson::yyjson)
+target_compile_definitions(zlink_stream_connector
+  PRIVATE ZLINK_JSON_PROFILE_ENGINE_NS=connector_engine
+  INTERFACE ZLINK_JSON_PROFILE_ENGINE_CONNECTOR)
 if(ZLINK_STREAM_CONNECTOR_WITH_TLS AND OpenSSL_FOUND)
   target_compile_definitions(zlink_stream_connector PRIVATE
     ZLINK_STREAM_CONNECTOR_WITH_OPENSSL)
@@ -215,6 +219,7 @@ install(EXPORT zlink_stream_connector_cppTargets
 set(ZLINK_STREAM_CONNECTOR_CONFIG_IMPLEMENTATION_DEPENDENCIES "")
 if(NOT ZLINK_FRAMEWORK_CPP_SHARED)
   string(CONCAT ZLINK_STREAM_CONNECTOR_CONFIG_IMPLEMENTATION_DEPENDENCIES
+    "find_dependency(yyjson CONFIG)\n"
     "${ZLINK_STREAM_CONNECTOR_EXPORT_OPENSSL_DEPENDENCY}\n"
     "set(_zlink_saved_module_path \"\${CMAKE_MODULE_PATH}\")\n"
     "list(APPEND CMAKE_MODULE_PATH \"\${CMAKE_CURRENT_LIST_DIR}\")\n"
@@ -245,7 +250,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_compile_features(test_connector_lifecycle PRIVATE cxx_std_20)
   target_link_libraries(test_connector_lifecycle PRIVATE zlink::stream_connector Threads::Threads)
   zlink_framework_cpp_add_boost_headers(test_connector_lifecycle)
-  set(_lifecycle_test_modes closed close_connect immediate_close_connect refused timeout)
+  set(_lifecycle_test_modes closed close_connect immediate_close_connect immediate_error_send refused timeout)
   if(ZLINK_HTTP_CLIENT_TEST_WITH_OPENSSL)
     target_compile_definitions(test_connector_lifecycle PRIVATE
       ZLINK_CONNECTOR_LIFECYCLE_TLS
@@ -305,7 +310,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
 endif()
 
 if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
-  foreach(_test dispatch unreal_fifo wait_isolation)
+  foreach(_test dispatch unreal_fifo wait_isolation wait_queue_race)
     add_executable(test_connector_${_test} tests/test_connector_${_test}.cpp)
     target_compile_features(test_connector_${_test} PRIVATE cxx_std_20)
     target_include_directories(test_connector_${_test} PRIVATE
@@ -325,6 +330,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     add_test(NAME test_connector_wait_isolation_${_mode}
       COMMAND test_connector_wait_isolation ${_mode})
     set_tests_properties(test_connector_wait_isolation_${_mode} PROPERTIES
+      LABELS "contract;connector-contract;framework-contract" TIMEOUT 15)
+  endforeach()
+  foreach(_mode manual immediate)
+    add_test(NAME test_connector_wait_queue_race_${_mode}
+      COMMAND test_connector_wait_queue_race ${_mode})
+    set_tests_properties(test_connector_wait_queue_race_${_mode} PROPERTIES
       LABELS "contract;connector-contract;framework-contract" TIMEOUT 15)
   endforeach()
   add_test(NAME test_connector_unreal_fifo COMMAND test_connector_unreal_fifo)

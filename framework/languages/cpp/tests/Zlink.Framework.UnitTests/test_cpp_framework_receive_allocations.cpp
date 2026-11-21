@@ -427,7 +427,9 @@ TEST (ReceiveAllocations, AutomaticClientServerSendRecordHasFixedAllocationCount
             // dto_traits removed one ready state from the former budget of 24 (#2751).
             // The per-dispatch handler is one make_shared instead of a transient
             // unique_ptr plus its shared_ptr control block (#4145).
-            EXPECT_EQ (actual.count, 22u);
+            // Structural tokens no longer grow the nlohmann lexer token buffer (#4354).
+            // Claim slot metadata lives in one slot array instead of three parallel arrays.
+            EXPECT_EQ (actual.count, 18u);
 #endif
             EXPECT_EQ (receive_handler_t::calls, ++expected_calls);
             EXPECT_EQ (

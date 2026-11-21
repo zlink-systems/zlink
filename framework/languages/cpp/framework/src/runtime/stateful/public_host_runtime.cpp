@@ -3221,11 +3221,12 @@ task_t<zlink::submit_result_t> public_host_runtime_t::send_to_actor (
   std::span<const std::uint8_t> metadata,
   std::uint64_t authority_owner_generation,
   std::uint64_t owner_lease_generation,
-  std::optional<protocol::actor_message_header_t::bound_session_source_t> bound_session_source)
+  std::optional<protocol::actor_message_header_t::bound_session_source_t> bound_session_source,
+  std::uint64_t node_generation)
 {
-    const auto target_routing_id =
-      zlink::routing_id_t::from (std::string (target.node_rid ().value ()));
-    if (target_routing_id.to_bytes () == status ().routing_id ().to_bytes ()) {
+    const auto target_node_routing_id =
+      zlink::routing_id_t::from (std::string (target.node_rid ().value ())).to_bytes ();
+    if (target_node_routing_id == status ().routing_id ().to_bytes ()) {
         co_return co_await enqueue_local_actor_message (
           target, record_kind_t::actor_send, parts, nullptr, std::move (bound_session_source), {},
           authority_owner_generation, owner_lease_generation);
@@ -3239,20 +3240,17 @@ task_t<zlink::submit_result_t> public_host_runtime_t::send_to_actor (
     const auto route_fence = co_await read_route_owner_fence (
       _user_spot_store, '1', std::string (target.actor_id ().value ()), target.object_generation (),
       authority_generation, owner_lease_generation, _options.owner_lease_fencing_margin);
-    if (!route_fence || route_fence->fence.authority_owner_generation != authority_generation)
+    if (!route_fence || route_fence->fence.authority_owner_generation != authority_generation
+        || node_generation == 0)
         co_return zlink::submit_result_t::not_found;
-    const auto peer = _transport->topology ().peer (target_routing_id.to_bytes ());
-    if (!peer) {
-        co_return zlink::submit_result_t::not_connected;
-    }
-    const auto node_generation = peer->descriptor.lifecycle_generation;
+    // G is the authority's owner lifecycle generation. The send admission
+    // accepts only a ready peer of G; any other peer is NotConnected.
     co_return co_await _transport->send_to_actor_result (
-      zlink::routing_id_t::from (std::string (target.node_rid ().value ())).to_bytes (),
-      std::nullopt,
-      protocol::actor_route_fence_t{
-        std::string (target.actor_id ().value ()), target.object_generation (),
-        zlink::routing_id_t::from (std::string (target.node_rid ().value ())).to_bytes (),
-        node_generation, authority_generation, route_fence->fence.owner_lease_generation},
+      target_node_routing_id, std::nullopt,
+      protocol::actor_route_fence_t{std::string (target.actor_id ().value ()),
+                                    target.object_generation (), target_node_routing_id,
+                                    node_generation, authority_generation,
+                                    route_fence->fence.owner_lease_generation},
       encode_application (parts, metadata), std::move (bound_session_source));
 }
 
@@ -7499,25 +7497,26 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations (
     co_return count;
 }
 
-bool public_host_runtime_t::dispatch_bound_session_send (
+task_t<bool> public_host_runtime_t::dispatch_bound_session_send (
   const mesh::service_mailbox_record_t &mailbox_record)
 {
     if (mailbox_record.parts ().size () != 2)
-        return false;
+        co_return false;
     const auto record = protocol::decode_bound_session_send (
       protocol::message_bytes (mailbox_record.parts ().front ()));
     if (mailbox_record.source_routing_id != record.actor.target_node_routing_id
         || mailbox_record.source_node_generation == 0
         || mailbox_record.source_node_generation != record.actor.target_node_generation)
-        return false;
+        co_return false;
     bound_session_operations_t operations;
     _lifecycle_configuration_lane.run_sync ([&] { operations = _bound_session_operations; });
     if (!operations.capture_send && !operations.send)
-        return false;
+        co_return false;
     const auto application = protocol::decode_application_payload (
       protocol::message_bytes (mailbox_record.parts ().back ()), capture_flow ());
     auto parts = protocol::decode_application_parts (application);
-    std::function<stateful::stateful_error_t (std::vector<zlink::message_t>)> delivery;
+    bound_session_operations_t::delivery_capability_t delivery;
+    std::optional<task_t<stateful::stateful_error_t>> submitted;
     const auto admitted = _sessions.capture_outbound (
       record.actor.actor_id, record.actor.object_generation, record.expected_binding_generation,
       [&] {
@@ -7528,13 +7527,17 @@ bool public_host_runtime_t::dispatch_bound_session_send (
               delivery = std::move (*capability);
           } else {
               delivery = [operations, record] (std::vector<zlink::message_t> payload) {
-                  return operations.send (record, std::move (payload));
+                  return task_t<stateful::stateful_error_t> (
+                    result_t<stateful::stateful_error_t>::success (
+                      operations.send (record, std::move (payload))));
               };
           }
+          submitted.emplace (delivery (std::move (parts)));
           return true;
       });
-    return admitted == stateful::stateful_error_t::none
-           && delivery (std::move (parts)) == stateful::stateful_error_t::none;
+    if (admitted != stateful::stateful_error_t::none)
+        co_return false;
+    co_return (co_await *submitted) == stateful::stateful_error_t::none;
 }
 
 task_t<std::size_t>
@@ -8082,7 +8085,7 @@ task_t<bool> public_host_runtime_t::dispatch_native_spot (
         }
         record.spot_route = header.target;
         record.before_application_handler = std::move (before);
-        record.transferred_owner_byte_cost = slot.claim->record_bytes[slot.index];
+        record.transferred_owner_byte_cost = slot.claim->records[slot.index].byte_cost;
         auto accepted = std::make_shared<runtime::serial_application_record_t> ();
         accepted->target = std::move (target);
         accepted->admission.jobs = _options.mesh.application_jobs;
@@ -8362,7 +8365,7 @@ public_host_runtime_t::dispatch_application_claim (
                   mailbox_record.before_application_handler;
                 application.record.release_mailbox_reservation = release_mailbox_reservation;
                 application.record.retain_mailbox_reservation = retain_mailbox_reservation;
-                application.record.transferred_owner_byte_cost = claim->record_bytes[index];
+                application.record.transferred_owner_byte_cost = claim->records[index].byte_cost;
                 batch->handoff (
                   application.owner, application.record, std::move (application.parts),
                   mailbox_record.application_permit ? std::move (*mailbox_record.application_permit)
@@ -8413,11 +8416,27 @@ public_host_runtime_t::dispatch_application_claim (
                 // The outbound stream delivery is a transport handoff, not an application handler.
                 mailbox_record.before_application_handler = {};
                 mailbox_record.application_permit.reset ();
-                (void) dispatch_bound_session_send (mailbox_record);
-                ++batch->count;
-                if (!entry.retained.load (std::memory_order_acquire))
-                    release_mailbox_reservation ();
-                continue;
+                const auto deliver =
+                  [] (std::shared_ptr<public_host_runtime_t> self,
+                      std::shared_ptr<application_claim_batch_t> batch, task_t<bool> delivery,
+                      mesh::service_mailbox_settlement_t release) -> task_t<std::size_t> {
+                    std::exception_ptr failure;
+                    try {
+                        (void) co_await delivery;
+                        ++batch->count;
+                        if (!batch->entries[batch->index].retained.load (std::memory_order_acquire))
+                            release ();
+                        ++batch->index;
+                    }
+                    catch (...) {
+                        failure = std::current_exception ();
+                    }
+                    co_return co_await self->continue_application_claim (batch,
+                                                                         std::move (failure));
+                };
+                return deliver (shared_from_this (), batch,
+                                dispatch_bound_session_send (mailbox_record),
+                                std::move (release_mailbox_reservation));
             }
             const auto wire_kind = mailbox_record.application_kind ();
             if (!wire_kind)
@@ -8500,7 +8519,7 @@ public_host_runtime_t::dispatch_application_claim (
                 + " parts=" + std::to_string (mailbox_record.parts ().size ()));
             record.release_mailbox_reservation = release_mailbox_reservation;
             record.retain_mailbox_reservation = retain_mailbox_reservation;
-            record.transferred_owner_byte_cost = claim->record_bytes[index];
+            record.transferred_owner_byte_cost = claim->records[index].byte_cost;
             batch->handoff (owner, record, std::move (parts),
                             mailbox_record.application_permit
                               ? std::move (*mailbox_record.application_permit)

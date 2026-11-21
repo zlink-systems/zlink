@@ -294,6 +294,7 @@ interface RelocationTargetRequirement {
 interface LocalHidden extends ServiceRelocationHiddenObject {
   readonly participant: ServiceRelocationParticipant;
   readonly actor?: ZLinkActor;
+  readonly cancelIngress?: (reason?: unknown) => void;
   readonly activation?: ZLinkSpotActivation;
   initialized: boolean;
   replayStart?: Promise<void>;
@@ -3576,6 +3577,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         throw error;
       }
       stage.phase = 'failed';
+      for (const hidden of stage.staging.hidden.values()) hidden.cancelIngress?.(error);
       if (authority !== undefined) {
         throw new ServiceRelocationPostCommitError(authority, stage.staging, error);
       }
@@ -3639,6 +3641,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
   ): Promise<void> {
     const manager = this.options.spotManager();
     if (manager === undefined) return;
+    const joinAdmissionId = actorJoinAdmissionIdentity(stage.staging.envelope);
     for (const hidden of stage.staging.hidden.values()) {
       if (hidden.actor === undefined) continue;
       const state = this.options.actorManager()?.getState(hidden.actor.context.actorId);
@@ -3650,7 +3653,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       }
       await manager.finalizeActorJoinRelocation(
         meshName,
-        actorJoinAdmissionIdentity(stage.staging.envelope),
+        joinAdmissionId,
         hidden.actor,
         toFrameworkActorRef(nativeRef, meshName),
         (sourceNodeRid) =>
@@ -5031,23 +5034,7 @@ function actorRootTargetMembership(
     ];
   }
   const admissionId = recovery.request.handoffId;
-  const admission = (
-    manager as unknown as
-      | {
-          readonly formalRemoteActorAdmissions?: {
-            get(id: string):
-              | {
-                  readonly admission: {
-                    readonly spotId: RoutingId;
-                    readonly targetSpotGeneration: bigint;
-                    readonly expectedMembershipEpoch: bigint;
-                  };
-                }
-              | undefined;
-          };
-        }
-      | undefined
-  )?.formalRemoteActorAdmissions?.get(admissionId);
+  const admission = manager?.formalRemoteActorAdmissions.get(admissionId);
   if (admission === undefined || actor === undefined) {
     throw new Error(`Actor relocation '${relocationId}' has no accepted target membership.`);
   }
@@ -5062,11 +5049,15 @@ function actorRootTargetMembership(
 }
 
 class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> {
+  private readonly joinAdmissionId: string;
+
   constructor(
     private readonly options: ZLinkHostRelocationOptions,
     private readonly meshName: string,
     private readonly envelope: ServiceRelocationEnvelope
-  ) {}
+  ) {
+    this.joinAdmissionId = actorJoinAdmissionIdentity(envelope);
+  }
 
   async createHidden(
     participant: ServiceRelocationParticipant,
@@ -5089,6 +5080,11 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
       if (targetMembership.actorSpotKind === ZLinkSpotKind.Entry) {
         await this.options.ensureEntryActivation?.(this.meshName);
       }
+      // Accepted Actor Join already owns the temporary queue for its attempt.
+      const joinAdmission = this.options
+        .spotManager()
+        ?.formalRemoteActorAdmissions.get(this.joinAdmissionId);
+      let cancelIngress: LocalHidden['cancelIngress'];
       const actor = await this.requireActorManager().prepareRelocationActor(
         identity,
         participant.stableType,
@@ -5099,12 +5095,23 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
           : (targetMembership.actorSpotId as RoutingId),
         targetMembership.actorSpotGeneration,
         membership.membershipEpoch,
-        signal
+        signal,
+        undefined,
+        joinAdmission?.admission.actorId !== identity
+          ? () => {
+              cancelIngress = this.options.actorTransfer.beginRelocationTargetIngress(
+                identity,
+                participant.objectGeneration
+              );
+              return cancelIngress;
+            }
+          : undefined
       );
       return {
         authorityKey: participant.key,
         participant,
         actor,
+        cancelIngress,
         initialized: false,
         replayPackets: []
       };
@@ -5329,7 +5336,7 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
       this.requireActorManager().publishRelocationActor(hidden.actor.context.actorId);
       this.requireSpotManager().openActorJoinRelocation(
         this.meshName,
-        actorJoinAdmissionIdentity(this.envelope),
+        this.joinAdmissionId,
         hidden.actor
       );
     }
@@ -5352,6 +5359,7 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
 
   async abort(hidden: LocalHidden): Promise<void> {
     if (hidden.actor !== undefined) {
+      hidden.cancelIngress?.();
       await this.requireActorManager().abortRelocationActor(hidden.actor.context.actorId);
     } else if (hidden.activation !== undefined) {
       await this.requireSpotManager().abortRelocationSpot(hidden.activation);

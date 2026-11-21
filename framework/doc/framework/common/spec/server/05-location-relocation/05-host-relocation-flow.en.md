@@ -378,6 +378,7 @@ because the descriptor changed.
 |---|---|
 | Concurrent `Relocate` with the same mode and effective target version | Shares the deadline of the first operation. A later call doesn't change the deadline. |
 | Concurrent `Relocate` with a different mode or effective target version | `Blocked/OperationInProgress` without waiting. |
+| `Relocate` of an object whose previous relocation still has completion results to deliver (`pendingDeliveries` > 0) | `Blocked/OperationInProgress` without waiting. Recording the reason follows [Location runtime §9.3](01-location-runtime.en.md#93-handling-a-request-that-finished-after-the-source-changed). |
 | `Relocate` again after `Blocked` | `Blocked` isn't stored, so host conditions are re-checked from the start. |
 | `Relocate` again in `Relocated` | Returns the first `Relocated/None`'s mode and effective target version. |
 | Concurrent `Shutdown` | Shares the same operation and stores the terminal result. |

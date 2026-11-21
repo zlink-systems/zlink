@@ -594,6 +594,7 @@ class location_repository_t
     {
         std::function<bool ()> admit;
         std::function<void (authority_key_t, authority_snapshot_t)> observe;
+        std::function<void (authority_key_t, std::optional<std::string>)> observe_route;
     };
     void configure_access (std::shared_ptr<const access_t> access)
     {
@@ -659,9 +660,12 @@ class location_repository_t
         require_admission ();
         auto result = co_await read_authority_core (key, cancellation);
         const auto access = std::atomic_load (&_access);
-        if (access && access->observe)
-            if (const auto *snapshot = std::get_if<authority_snapshot_t> (&result))
-                access->observe (std::move (key), *snapshot);
+        const auto *snapshot = std::get_if<authority_snapshot_t> (&result);
+        if (access && access->observe_route)
+            access->observe_route (key, snapshot ? std::make_optional (snapshot->store_version)
+                                                 : std::nullopt);
+        if (access && access->observe && snapshot)
+            access->observe (std::move (key), *snapshot);
         co_return result;
     }
     virtual task_t<authority_read_result_t>
@@ -674,8 +678,21 @@ class location_repository_t
     {
         if (!std::holds_alternative<authority_delete_t> (mutation))
             require_admission ();
-        co_return co_await compare_exchange_authority_core (
-          std::move (key), std::move (expected_store_version), std::move (mutation), cancellation);
+        auto result = co_await compare_exchange_authority_core (
+          key, std::move (expected_store_version), std::move (mutation), cancellation);
+        const auto access = std::atomic_load (&_access);
+        if (access && access->observe_route) {
+            if (const auto *stored = std::get_if<authority_stored_t> (&result))
+                access->observe_route (key, stored->snapshot.store_version);
+            else if (std::holds_alternative<authority_deleted_t> (result))
+                access->observe_route (key, std::nullopt);
+            else if (const auto *conflict = std::get_if<authority_conflict_t> (&result)) {
+                const auto *current = std::get_if<authority_snapshot_t> (&conflict->current);
+                access->observe_route (key, current ? std::make_optional (current->store_version)
+                                                    : std::nullopt);
+            }
+        }
+        co_return result;
     }
     virtual task_t<authority_compare_exchange_result_t>
     compare_exchange_authority_core (authority_key_t key,
@@ -717,10 +734,12 @@ class location_repository_t
             const auto spot = runtime::decode_direct_user_spot_authority_payload (current->payload);
             if (!spot)
                 co_return false;
+            // Membership lives in Actor authority records, so the snapshot reads the Actor kind
+            // prefix only (location runtime §3.4).
             std::optional<authority_scan_cursor_t> cursor;
             do {
-                const auto scanned =
-                  co_await list_authorities ("", cursor, location_page_item_limit, cancellation);
+                const auto scanned = co_await list_authorities (
+                  "zla1:a:", cursor, location_page_item_limit, cancellation);
                 const auto *page = std::get_if<authority_page_t> (&scanned);
                 if (!page)
                     co_return false;

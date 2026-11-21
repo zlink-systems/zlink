@@ -16,10 +16,6 @@ import java.util.concurrent.CompletionStage;
 public final class ZLinkJavaRawSpotTestAccess {
     private ZLinkJavaRawSpotTestAccess() {}
 
-    public static boolean hasNoPendingSubscriptions(ZLinkBackendSpot spot) {
-        return ((ZLinkJavaRawSpot) spot).subscriptions.isEmpty();
-    }
-
     public static AutoCloseable observeNextTopic(
             ZLinkBackendSpot spot, CompletableFuture<ZLinkBackendTopicMessage> observed) {
         var raw = (ZLinkJavaRawSpot) spot;

@@ -104,10 +104,10 @@ jobs:
         node-version:
           - 20
           - 22
-        # PR-stage queue checks (queue_checks_only) run linux-x64 only. main queue
-        # batches add linux-arm64. Hosted macOS arm64 capacity runs out often enough
+        # PR-stage queue checks and main queue batches run linux-x64 only: batches share
+        # 20 hosted-runner slots and arm64 left 10+ batch jobs waiting (2026-11-21). Hosted macOS arm64 capacity runs out often enough
         # to fail whole batches, so macOS runs in schedule, manual and release runs.
-        target: ${{ fromJSON(inputs.single_worker && '[{"name":"linux-x64","runner":"ubuntu-24.04","core_platform":"linux-x64"}]' || inputs.queue_checks_only && '[{"name":"linux-x64","runner":"ubuntu-24.04","core_platform":"linux-x64"}]' || startsWith(github.ref_name, 'mergify/merge-queue/') && '[{"name":"linux-x64","runner":"ubuntu-24.04","core_platform":"linux-x64"},{"name":"linux-arm64","runner":"ubuntu-24.04-arm","core_platform":"linux-arm64"}]' || '[{"name":"linux-x64","runner":"ubuntu-24.04","core_platform":"linux-x64"},{"name":"linux-arm64","runner":"ubuntu-24.04-arm","core_platform":"linux-arm64"},{"name":"darwin-arm64","runner":"macos-15","core_platform":"macos-arm64"}]') }}
+        target: ${{ fromJSON(inputs.single_worker && '[{"name":"linux-x64","runner":"ubuntu-24.04","core_platform":"linux-x64"}]' || inputs.queue_checks_only && '[{"name":"linux-x64","runner":"ubuntu-24.04","core_platform":"linux-x64"}]' || startsWith(github.ref_name, 'mergify/merge-queue/') && '[{"name":"linux-x64","runner":"ubuntu-24.04","core_platform":"linux-x64"}]' || '[{"name":"linux-x64","runner":"ubuntu-24.04","core_platform":"linux-x64"},{"name":"linux-arm64","runner":"ubuntu-24.04-arm","core_platform":"linux-arm64"},{"name":"darwin-arm64","runner":"macos-15","core_platform":"macos-arm64"}]') }}
         # Windows runs on schedule, manual and release runs; queue batches and queue checks omit Windows.
         include: ${{ fromJSON((inputs.single_worker || inputs.queue_checks_only || startsWith(github.ref_name, 'mergify/merge-queue/')) && '[]' || '[{"node-version":20,"target":{"name":"win-x64","runner":"windows-latest","msvc_arch":"x64","core_platform":"windows-x64"}},{"node-version":22,"target":{"name":"win-x64","runner":"windows-latest","msvc_arch":"x64","core_platform":"windows-x64"}}]') }}
 
@@ -289,10 +289,22 @@ jobs:
         working-directory: framework/languages/node
         run: npm run verify:ci
 
+      - name: Run Node M6B runtime gate
+        if: matrix.node-version == 22 && matrix.target.name == 'linux-x64'
+        working-directory: framework/languages/node
+        run: npm run verify:m6b-runtime
+
       - name: Run Node M6C runtime gate
         if: matrix.node-version == 22 && matrix.target.name == 'linux-x64'
         working-directory: framework/languages/node
         run: npm run verify:m6c-runtime
+
+      # Packs every published workspace package and installs the tarballs into
+      # empty consumer projects (no workspace, no NODE_PATH, no checkout proto).
+      - name: Verify packed Node packages in clean consumers
+        if: matrix.node-version == 22 && matrix.target.name == 'linux-x64'
+        working-directory: framework/languages/node
+        run: bash scripts/verify_packaged_contract.sh
 
       # The browser build rewrites the committed WebGL bundle, so the bundle
       # check inside the gate always sees a fresh file. A diff here means the
@@ -305,9 +317,11 @@ jobs:
         working-directory: framework/languages/node
         run: npm run test:browser
 
-      - name: Stop Redis for Redis-backed tests
+      - name: Collect diagnostics and stop Redis
         if: always() && env.ZLINK_TEST_REDIS_CONTAINER != ''
-        run: docker rm -f "${ZLINK_TEST_REDIS_CONTAINER}"
+        uses: ./.github/actions/test-redis-cleanup
+        with:
+          job-status: ${{ job.status }}
 
   framework-node-cross-language:
     if: ${{ !inputs.skip_tests }}

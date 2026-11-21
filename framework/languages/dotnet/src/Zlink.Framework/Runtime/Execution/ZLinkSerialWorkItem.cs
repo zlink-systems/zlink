@@ -78,7 +78,7 @@ internal sealed class ZLinkSerialWorkItem
     internal ZLinkSerialExecutionQueue? Mailbox { get; }
     internal ZLinkSerialExecutionQueue? TerminalExecutionOwner { get; set; }
     internal Action? PreparePublication { get; set; }
-    internal Action? RejectPublication { get; set; }
+    internal Func<ValueTask<ZLinkSerialWorkItemResult>>? Resume { get; init; }
     internal IZLinkSerialTerminalRelease? TerminalRelease { get; set; }
     internal ZLinkSerialWorkItem? LifecycleOwner { get; set; }
     internal ZLinkSerialWorkItem? ReadyContinuation { get; set; }
@@ -99,9 +99,10 @@ internal sealed class ZLinkSerialWorkItem
     }
     public bool IsAccepted => AcceptedSequence != 0;
     public bool PreviousOwnerMessageFollow { get; }
-    public ZLinkSerialWorkLane Lane { get; }
+    public ZLinkSerialWorkLane Lane { get; internal set; }
 
     internal bool ReservationHeld { get; }
+    internal bool IsTerminalReleased => Volatile.Read(ref _terminalReleased) != 0;
     internal Func<bool>? Ready { get; }
     internal Func<ZLinkObjectExecutionStatus>? ExecutionAllowed { get; set; }
     internal bool IsExecutionAllowed => ExecutionStatus == ZLinkObjectExecutionStatus.Allowed;
@@ -190,7 +191,7 @@ internal sealed class ZLinkSerialWorkItem
         ZLinkSerialTurn turn
     )
     {
-        var executionStatus = ExecutionStatus;
+        var executionStatus = Resume is null ? ExecutionStatus : ZLinkObjectExecutionStatus.Allowed;
         if (
             executionStatus == ZLinkObjectExecutionStatus.Paused
             && !cancellationToken.IsCancellationRequested
@@ -227,6 +228,16 @@ internal sealed class ZLinkSerialWorkItem
         try
         {
             using var ambient = new AmbientScope(turn, _operation);
+            if (Resume is { } resume)
+            {
+                var result = await resume().ConfigureAwait(false);
+                if (result == ZLinkSerialWorkItemResult.Completed)
+                {
+                    ReleaseTerminal();
+                    _completion!.TrySetResult();
+                }
+                return result;
+            }
             Preparation?.Complete();
             var operation = _callback(cancellationToken);
             if (operation.IsCompletedSuccessfully)

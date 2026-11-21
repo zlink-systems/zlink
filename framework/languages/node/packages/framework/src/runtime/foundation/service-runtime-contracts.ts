@@ -312,6 +312,7 @@ export interface ReceiveRecord {
 export interface ClaimReceiveResult {
   readonly ok: boolean;
   readonly required?: ReceiveRequirements;
+  /** Owned by the receive batch: valid until that batch is reset, received into again, or closed. */
   readonly records: ReceiveRecord[];
 }
 
@@ -381,6 +382,9 @@ export interface StreamSessionActorAuthorityFence {
 }
 
 export interface StreamSessionService {
+  captureSubmission(
+    binding: ServiceStreamSessionBinding
+  ): (<T>(submit: () => Promise<T>) => Promise<T>) | undefined;
   start(): void;
   shutdown(timeoutMs: number): RequestResult;
   close(): void;

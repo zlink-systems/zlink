@@ -12,7 +12,8 @@ const logs = process.env.ZLINK_NODE_WIRE_LOG_DIR ?? os.tmpdir();
 const runDir = fs.mkdtempSync(path.join(logs, 'node-java-stateful-'));
 const children = [];
 
-async function port() {
+// Redis disables TCP for port 0, unlike the Framework listeners below.
+async function redisServerPort() {
   const server = net.createServer();
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const value = server.address().port;
@@ -29,7 +30,6 @@ function start(command, args, name, env = process.env) {
 }
 
 async function line(file, marker, timeoutMs = 90_000) {
-  if (fs.readFileSync(file, 'utf8').includes(marker)) return;
   await new Promise((resolve, reject) => {
     const changed = () => {
       if (fs.readFileSync(file, 'utf8').includes('user-spot-join-failed|')) {
@@ -48,13 +48,12 @@ async function line(file, marker, timeoutMs = 90_000) {
       fs.unwatchFile(file, changed);
       reject(new Error(`${file} did not report ${marker}`));
     }, timeoutMs);
+    changed();
   });
 }
 
 async function main() {
-  const ports = new Set();
-  while (ports.size < 3) ports.add(await port());
-  const [redisPort, javaPort, nodePort] = [...ports];
+  const redisPort = await redisServerPort();
   const sourceEvents = path.join(runDir, 'node.events');
   const targetEvents = path.join(runDir, 'java-user-spot-target.events');
   const redisLog = path.join(runDir, 'redis.log');
@@ -96,7 +95,7 @@ async function main() {
       '--peer-rid',
       'node-user-spot-join-source',
       '--bind-endpoint',
-      `tcp://127.0.0.1:${javaPort}`,
+      'tcp://127.0.0.1:0',
       '--redis-endpoint',
       `127.0.0.1:${redisPort}`,
       '--redis-key-prefix',
@@ -115,6 +114,10 @@ async function main() {
     'java'
   );
   await line(targetEvents, 'user-spot-created|spot=cross-lang-user-spot');
+  const javaEndpoint = fs
+    .readFileSync(targetEvents, 'utf8')
+    .match(/user-spot-created\|[^\n]*\|endpoint=(tcp:\/\/127\.0\.0\.1:[1-9]\d*)$/m)?.[1];
+  assert.ok(javaEndpoint, 'Java host must report its actual bound endpoint.');
 
   start(
     process.execPath,
@@ -126,7 +129,7 @@ async function main() {
       '--node-rid',
       'node-user-spot-join-source',
       '--bind-endpoint',
-      `tcp://127.0.0.1:${nodePort}`,
+      'tcp://127.0.0.1:0',
       '--redis-endpoint',
       `127.0.0.1:${redisPort}`,
       '--redis-key-prefix',
@@ -149,6 +152,13 @@ async function main() {
     line(sourceEvents, 'user-spot-source-peer-ready|ready=true'),
     line(targetEvents, 'user-spot-source-peer-ready|ready=true')
   ]);
+  const nodeEndpoint = fs
+    .readFileSync(sourceEvents, 'utf8')
+    .match(
+      /user-spot-source-peer-ready\|ready=true\|endpoint=(tcp:\/\/127\.0\.0\.1:[1-9]\d*)$/m
+    )?.[1];
+  assert.ok(nodeEndpoint, 'Node host must report its actual bound endpoint.');
+  assert.notEqual(nodeEndpoint, javaEndpoint);
   fs.writeFileSync(startFile, 'start\n');
   await line(sourceEvents, 'stateful-22-wire|target=java-user-spot-join-target|bytes=');
   await line(sourceEvents, 'stateful-22|kind=InternalFailure|target=java-user-spot-join-target');
@@ -158,7 +168,9 @@ async function main() {
     fs.readFileSync(targetEvents, 'utf8'),
     /user-spot-probe\|nodeRid=java-user-spot-join-target/
   );
-  process.stdout.write(`Node↔Java 22/25 passed; runDir=${runDir}\n`);
+  process.stdout.write(
+    `Node↔Java 22/25 passed; javaEndpoint=${javaEndpoint}; nodeEndpoint=${nodeEndpoint}; runDir=${runDir}\n`
+  );
 }
 
 main()
@@ -166,6 +178,13 @@ main()
     process.stderr.write(`${error.stack ?? error}\nrunDir=${runDir}\n`);
     process.exitCode = 1;
   })
-  .finally(() => {
-    for (const child of children) child.kill('SIGTERM');
+  .finally(async () => {
+    // Keep Redis available until both hosts finish their shutdown.
+    for (const child of children.slice(1).reverse()) {
+      if (child.exitCode !== null || child.signalCode !== null) continue;
+      const exited = new Promise((resolve) => child.once('exit', resolve));
+      child.kill('SIGTERM');
+      await exited;
+    }
+    children[0]?.kill('SIGTERM');
   });

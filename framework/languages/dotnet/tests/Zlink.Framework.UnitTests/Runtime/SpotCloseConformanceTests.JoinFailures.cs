@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Diagnostics;
@@ -9,6 +10,96 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed partial class SpotCloseConformanceTests
 {
+    public static IEnumerable<object[]> RouteCacheRepetitions() =>
+        Enumerable.Range(0, 40).Select(index => new object[] { index });
+
+    [Theory]
+    [MemberData(nameof(RouteCacheRepetitions))]
+    public async Task RemoteJoin_Unavailable_InvalidatesWarmRoute(int iteration)
+    {
+        using var flow = ClosingFlow(
+            nameof(RemoteJoin_Unavailable_InvalidatesWarmRoute),
+            true,
+            iteration
+        );
+        var snapshot = new JoinSnapshotStore();
+        await using var source = await SpotCloseHost.StartAsync(
+            new SpotCloseFaultStore(snapshot),
+            registerUserSpotFactory: false
+        );
+        var actorId = await source.CreateActorAsync();
+        await using var owner = await StartPeerAsync(source);
+        var spot = await owner.CreateSpotAsync();
+        snapshot.SpotId = spot.SpotId;
+        var rows = source.Runtime.Services.GetRequiredService<ZLinkStoreLocationResolvers>();
+        var key = new ZLinkSpotLocationKey(spot.SpotId);
+        Assert.NotNull(await rows.ResolveSpotRowAsync(key));
+        Assert.True(await owner.Manager.CloseAsync(spot));
+        var reads = snapshot.SpotReads;
+        await source.JoinActorAsync(spot.SpotId, actorId);
+        var first = Assert.IsType<ZLinkActorJoinCompletion.Failed>(
+            await source.State.JoinCompletion.Task.WaitAsync(Wait)
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, first.Kind);
+        Assert.Equal(reads, snapshot.SpotReads);
+        source.State.JoinCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        await source.JoinActorAsync(spot.SpotId, actorId);
+        var second = Assert.IsType<ZLinkActorJoinCompletion.Failed>(
+            await source.State.JoinCompletion.Task.WaitAsync(Wait)
+        );
+        output.WriteLine(
+            $"iteration={iteration} first={first.Kind} next={second.Kind} reads={reads}->{snapshot.SpotReads}"
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.NotFound, second.Kind);
+        Assert.True(snapshot.SpotReads > reads);
+    }
+
+    [Theory]
+    [MemberData(nameof(RouteCacheRepetitions))]
+    public async Task ReadyResolve_OverlappingClosingObservation_DoesNotRepopulateCache(
+        int iteration
+    )
+    {
+        using var flow = ClosingFlow(
+            nameof(ReadyResolve_OverlappingClosingObservation_DoesNotRepopulateCache),
+            false,
+            iteration
+        );
+        var snapshot = new JoinSnapshotStore();
+        await using var host = await SpotCloseHost.StartAsync(new SpotCloseFaultStore(snapshot));
+        var spot = await host.CreateSpotAsync();
+        snapshot.SpotId = spot.SpotId;
+        var rows = host.Runtime.Services.GetRequiredService<ZLinkStoreLocationResolvers>();
+        var key = new ZLinkSpotLocationKey(spot.SpotId);
+        await rows.InvalidateSpotRouteAsync(key);
+        snapshot.HoldReadyRead = true;
+        var resolve = rows.ResolveSpotRowAsync(key).AsTask();
+        host.State.HoldOnClosing = true;
+        Task<bool>? close = null;
+        try
+        {
+            await snapshot.ReadHeld.Task.WaitAsync(Wait);
+            close = host.Manager.CloseAsync(spot).AsTask();
+            await host.State.OnClosingEntered.Task.WaitAsync(Wait);
+            snapshot.ReleaseRead.TrySetResult();
+            await resolve.WaitAsync(Wait);
+            var reads = snapshot.SpotReads;
+            var next = await rows.ResolveSpotRowWithStatusAsync(key);
+            Assert.Equal(ZLinkLocationResolutionKind.Closing, next.Kind);
+            Assert.True(snapshot.SpotReads > reads);
+            output.WriteLine(
+                $"iteration={iteration} stale Ready was not cached; next={next.Kind} reads={reads}->{snapshot.SpotReads}"
+            );
+        }
+        finally
+        {
+            snapshot.ReleaseRead.TrySetResult();
+            host.State.ReleaseOnClosing.TrySetResult();
+            if (close is not null)
+                Assert.True(await close.WaitAsync(Wait));
+        }
+    }
+
     [Fact]
     public async Task SameNodeActorJoin_EntrySpotIdIsNotAUserSpot()
     {
@@ -155,6 +246,9 @@ public sealed partial class SpotCloseConformanceTests
         public bool Capture { get; set; } = true;
         public bool Replay { get; set; }
         public bool HoldClosingRead { get; set; }
+        public bool HoldReadyRead { get; set; }
+        private int _spotReads;
+        public int SpotReads => Volatile.Read(ref _spotReads);
         public TaskCompletionSource ReadHeld { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource ReleaseRead { get; } =
@@ -168,6 +262,16 @@ public sealed partial class SpotCloseConformanceTests
             if (Replay && _ready.TryGetValue(key, out var saved))
                 return saved;
             var result = await _inner.ReadAsync(key, cancellationToken);
+            if (SpotId is not null && key.Value.EndsWith("\0" + SpotId, StringComparison.Ordinal))
+            {
+                Interlocked.Increment(ref _spotReads);
+                if (HoldReadyRead)
+                {
+                    HoldReadyRead = false;
+                    ReadHeld.TrySetResult();
+                    await ReleaseRead.Task.WaitAsync(cancellationToken);
+                }
+            }
             if (
                 HoldClosingRead
                 && key.Value.StartsWith("authority\0", StringComparison.Ordinal)

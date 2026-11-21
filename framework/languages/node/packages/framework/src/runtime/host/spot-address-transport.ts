@@ -11,7 +11,7 @@ import {
   ZLinkDispatchMessageKind,
   ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
-import { awaitWithAbort } from '../abort';
+import { awaitWithAbort, NORMAL_COMPLETION } from '../abort';
 import type { ZLinkBackendMeshNode } from '../backend/contracts';
 import {
   closeMeshCompletion,
@@ -415,7 +415,17 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
     }
     const selected = this.selectMissingTarget(spotId, call, current);
     if (selected.kind === 'capacity') {
-      throw missingInstancePlacementCapacity(spotId, call.instanceSpotType);
+      const error = missingInstancePlacementCapacity(spotId, call.instanceSpotType);
+      this.reportInstanceRequestError(
+        spotId,
+        request,
+        error,
+        call.initialMeshName,
+        undefined,
+        call.instanceSpotType,
+        ZLinkDispatchErrorReason.Backpressure
+      );
+      throw error;
     }
     if (selected.kind === 'unsupported') {
       const error = createInternalFrameworkException(
@@ -927,7 +937,7 @@ function createSpotAddressDeadline(
       return Math.max(1, Math.ceil(remainingMs));
     },
     close() {
-      controller.abort();
+      controller.abort(NORMAL_COMPLETION);
       parent?.removeEventListener('abort', abort);
     }
   };

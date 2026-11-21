@@ -811,6 +811,30 @@ test('actor client preserves ActorRouteNotFound for a missing actor route', asyn
   );
 });
 
+test('public Find reads the current authority and leaves the request route cache untouched', async () => {
+  const { inspectRuntime } = require('../../packages/framework/dist/runtime/internal-observation');
+  const snapshot = (rid, version) => ({
+    kind: 'snapshot', allocation: {
+      objectKind: 'actor', state: 'active', stableType: 'Player',
+      descriptor: { meshName: 'play-mesh', rid }, descriptorLifecycleGeneration: 7n
+    }, payload: Buffer.alloc(0), objectGeneration: 1n, ownerId: 'owner-a',
+    ownerLeaseGeneration: 3n, authorityOwnerGeneration: 4n, storeVersion: { value: version }
+  });
+  let authority = snapshot('node-a', 'v1');
+  const resolver = createStoreResolver(() => authority, 10000);
+
+  assert.equal(String((await resolver.resolveActorRef('actor-1')).nodeRid), 'node-a');
+  assert.deepEqual(resolver[inspectRuntime]().directActorRouteKeys, [], 'Find must not store a route');
+
+  authority = snapshot('node-b', 'v2');
+  assert.equal(String((await resolver.resolveDirectActorRoute('actor-1')).route.actorRef.nodeRid), 'node-b',
+    'a request after the owner change must resolve the new owner');
+
+  authority = snapshot('node-c', 'v3');
+  assert.equal(String((await resolver.resolveActorRef('actor-1')).nodeRid), 'node-c',
+    'Find must read the Store, not the cached request route');
+});
+
 test('direct actor resolver maps an active authority with an expired owner lease to Unavailable', async () => {
   const resolver = createStoreResolver({
     kind: 'snapshot',

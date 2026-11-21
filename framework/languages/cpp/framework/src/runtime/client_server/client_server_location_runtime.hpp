@@ -56,9 +56,9 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     client_server_location_runtime_t (
       message_bus_t bus,
       std::vector<channel_snapshot_t> channels,
-      location_runtime_t &locations,
-      location_repository_t &store,
-      location_repository_t &leases,
+      location_runtime_t *locations,
+      location_repository_t *store,
+      location_repository_t *leases,
       service_provider_t &services,
       serializer_registry_t &serializers,
       const handler_registry_t &handlers,
@@ -173,6 +173,8 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     complete_query_task (client_server_channel_snapshot_t projection) const;
     task_t<client_server_channel_snapshot_t> build_snapshot_task (snapshot_source_t source) const;
     client_server_channel_snapshot_t build_snapshot (snapshot_source_t source) const;
+    bool serves (const channel_snapshot_t &channel) const noexcept;
+    static bool connects (const channel_snapshot_t &channel) noexcept;
     static bool snapshot_equivalent (const client_server_channel_snapshot_t &left,
                                      const client_server_channel_snapshot_t &right) noexcept;
 
