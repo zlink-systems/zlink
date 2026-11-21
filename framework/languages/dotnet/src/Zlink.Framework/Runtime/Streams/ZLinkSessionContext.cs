@@ -157,27 +157,16 @@ internal sealed class ZLinkSessionContext : IZLinkSessionContext
     internal ValueTask SendActorUnboundAsync(ushort slot) =>
         ZLinkStreamControlFrames.SendActorUnboundAsync(_stream, slot, CancellationToken.None);
 
-    internal async ValueTask<bool> SubmitOutboundAsync(Message payload)
-    {
-        // External streams expose boolean admission; native streams can retain a pending submission.
-        if (_stream is not ZLinkManagedStream)
-            return Write(payload);
-        await SubmitAsync(payload, header: null).ConfigureAwait(false);
-        return true;
-    }
-
     internal async ValueTask<ZLinkOneWaySubmitResult> SubmitAsync(
         Message payload,
-        ZlinkStreamHeader? header
+        ZlinkStreamHeader header
     )
     {
         try
         {
-            await (
-                header is null
-                    ? Transport.SubmitAsync(payload, CancellationToken.None)
-                    : Transport.SubmitReplyAsync(header, payload, CancellationToken.None)
-            ).ConfigureAwait(false);
+            await Transport
+                .SubmitReplyAsync(header, payload, CancellationToken.None)
+                .ConfigureAwait(false);
             return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Submitted);
         }
         catch (ZlinkSubmitException error)
