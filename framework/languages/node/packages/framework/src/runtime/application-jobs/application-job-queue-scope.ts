@@ -1,8 +1,8 @@
-import { AsyncLocalStorage } from 'node:async_hooks';
+import { FrameworkContextField } from '../framework-context';
 
 import type { ApplicationJobOrigin, ApplicationJobPermitPort } from './contracts';
 
-const applicationJobPermitScope = new AsyncLocalStorage<ApplicationJobPermitPort | undefined>();
+const applicationJobPermitScope = new FrameworkContextField<ApplicationJobPermitPort | undefined>();
 
 function releasePermitTurn(): void {
   releaseApplicationJobPermitTurn(applicationJobPermitScope.getStore());
