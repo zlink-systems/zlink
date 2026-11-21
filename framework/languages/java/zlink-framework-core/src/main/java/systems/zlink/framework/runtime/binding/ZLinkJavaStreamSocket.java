@@ -735,6 +735,18 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
                         binding.authorityOwnerGeneration());
     }
 
+    private CompletionStage<Void> publishBoundActorAsync(RoutingId sessionRid, String actorId) {
+        SessionBinding binding = requireBinding(sessionRid, actorId);
+        return rawSpotNode()
+                .publishStreamSessionAsync(
+                        sessionRid,
+                        binding.actor(),
+                        binding.generation(),
+                        binding.actorSlot(),
+                        this,
+                        binding.authorityOwnerGeneration());
+    }
+
     @Override
     public CompletionStage<Void> relocateBoundActor(
             RoutingId sessionRid,
@@ -765,13 +777,13 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
         // may already have retired; only the target route needs preparation.
         return bindExactSessionRoute(
                         sessionRid, targetActor, bindingGeneration, source.actorSlot(), timeout)
-                .thenAccept(
+                .thenCompose(
                         accepted -> {
                             if (!bindings.replace(key, source, accepted)) {
                                 throw new IllegalStateException(
                                         "bound Session route changed during relocation");
                             }
-                            publishBoundActor(sessionRid, actorId);
+                            return publishBoundActorAsync(sessionRid, actorId);
                         });
     }
 
