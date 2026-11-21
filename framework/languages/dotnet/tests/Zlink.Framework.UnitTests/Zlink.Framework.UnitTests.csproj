@@ -131,6 +131,7 @@
         <Compile Include="Runtime/ActorHandlerActivationTests.cs"/>
         <Compile Include="Runtime/ActorClientTests.cs"/>
         <Compile Include="Runtime/ActorLookupDeadlineTests.cs"/>
+        <Compile Include="Runtime/CreationReservationDeadlineTests.cs"/>
         <Compile Include="Runtime/StateLaneTests.cs"/>
         <Compile Include="Runtime/ProtobufNativePayloadTests.cs"/>
         <Compile Include="Runtime/MeshMailboxReadinessTests.cs"/>
