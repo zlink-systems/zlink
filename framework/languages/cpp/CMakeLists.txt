@@ -607,8 +607,12 @@ add_library(zlink_framework_channel_header_proto OBJECT
 target_link_libraries(zlink_framework_channel_header_proto PRIVATE protobuf::libprotobuf)
 target_include_directories(zlink_framework_channel_header_proto PRIVATE
   ${CMAKE_CURRENT_BINARY_DIR})
+# The schema lives outside this project; APPEND_PATH names the output after the
+# import directory, not CMAKE_CURRENT_SOURCE_DIR, under both FindProtobuf's and
+# protobuf's own protobuf_generate.
 protobuf_generate(
   TARGET zlink_framework_channel_header_proto
+  APPEND_PATH
   IMPORT_DIRS ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol
   PROTOC_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR})
 target_link_libraries(zlink_framework_codec_protobuf INTERFACE protobuf::libprotobuf)
