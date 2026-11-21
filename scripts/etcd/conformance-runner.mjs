@@ -8,7 +8,6 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   checkCoverage,
   checkExecutors,
-  hostClockIds,
 } from "./check-conformance-coverage.mjs";
 import { args, main } from "./common.mjs";
 const require = createRequire(import.meta.url);
@@ -77,7 +76,7 @@ export async function runConformance({
         );
     }
     const { Harness, logRoot } = require("./conformance-harness.cjs");
-    const { cases, Unverified, inventory } = require("./conformance-cases.cjs");
+    const { cases, inventory } = require("./conformance-cases.cjs");
     require("./conformance-oracle.cjs").verifyGolden();
     const languages = Object.keys(adapters);
     const mutationLanguages = languages;
@@ -114,8 +113,6 @@ export async function runConformance({
       const errorsBefore = h.adapterErrors.length;
       let outcome;
       try {
-        if (hostClockIds.has(id))
-          throw new Unverified("isolated host clock VM is unavailable");
         const f = await h.namespace(
           `${id.replaceAll(".", "-")}-${language}${reader ? `-${reader}` : ""}`,
         );
@@ -124,13 +121,11 @@ export async function runConformance({
       } catch (error) {
         outcome = {
           id,
-          status: error instanceof Unverified ? "unverified" : "failed",
+          status: "failed",
           reason: error.message,
         };
-        if (!(error instanceof Unverified)) {
-          outcome.error = error;
-          firstFailure ??= error;
-        }
+        outcome.error = error;
+        firstFailure ??= error;
       } finally {
         try {
           await h.endCase();
