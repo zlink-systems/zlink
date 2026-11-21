@@ -248,56 +248,65 @@ TEST (EtcdProvider, PublicContractAndStoreClockConditions)
 
 TEST (EtcdProvider, MaximumSendLimitUsesStoreFailureBeforeServerDispatch)
 {
-    {
-        SCOPED_TRACE ("15 MiB authentication request is within the send limit");
+    constexpr std::size_t limit = 16 * 1024 * 1024;
+    for (const auto size : {limit - 1, limit, limit + 1}) {
+        SCOPED_TRACE ("serialized authentication request bytes=" + std::to_string (size));
+        AuthenticateRequest request;
+        request.set_name ("user");
+        request.set_password (std::string (size, 'p'));
+        request.mutable_password ()->resize (size - (request.ByteSizeLong () - size));
+        ASSERT_EQ (request.ByteSizeLong (), size);
         fake_etcd_t backend;
         auto options = backend.options ();
-        options.credentials = etcd_credentials_t{"user", std::string (15 * 1024 * 1024, 'p')};
+        options.credentials = etcd_credentials_t{request.name (), request.password ()};
         etcd_location_store_t store (std::move (options));
-        const auto result = await (store.read ({"k"}));
-        EXPECT_TRUE (std::holds_alternative<store_missing_t> (result));
-        EXPECT_EQ (backend.auth_calls, 1);
-        EXPECT_EQ (backend.txn_calls, 1);
+        const auto result = store.read ({"k"}).result_for (10s);
+        ASSERT_TRUE (result) << "Authentication RPC did not complete";
+        if (size <= limit) {
+            ASSERT_TRUE (result->has_value ());
+            EXPECT_TRUE (std::holds_alternative<store_missing_t> (result->value ()));
+            EXPECT_EQ (backend.auth_calls, 1);
+            EXPECT_EQ (backend.txn_calls, 1);
+        } else {
+            ASSERT_FALSE (result->has_value ());
+            EXPECT_THROW (result->value (), framework_exception_t);
+            EXPECT_EQ (result->error_kind (), framework_error_kind_t::internal_failure);
+            EXPECT_EQ (backend.auth_calls, 0);
+            EXPECT_EQ (backend.txn_calls, 0);
+        }
     }
-    fake_etcd_t backend;
-    auto options = backend.options ();
-    options.credentials = etcd_credentials_t{"user", std::string (17 * 1024 * 1024, 'p')};
-    etcd_location_store_t store (std::move (options));
-    const auto result = store.read ({"k"}).result_for (10s);
-    ASSERT_TRUE (result) << "Oversized authentication RPC did not complete";
-    EXPECT_EQ (backend.auth_calls, 0);
-    EXPECT_EQ (backend.txn_calls, 0);
-    ASSERT_FALSE (result->has_value ()) << "The provider's native send limit must reject the RPC";
-    EXPECT_THROW (result->value (), framework_exception_t);
-    ASSERT_NE (result->error (), nullptr);
-    EXPECT_EQ (result->error_kind (), framework_error_kind_t::internal_failure);
 }
 
-TEST (EtcdProvider, ReceiveLimitAcceptsFiveMiBAndRejectsNineMiBAuthenticationResponses)
+TEST (EtcdProvider, ExactSerializedReceiveLimitUsesStoreFailure)
 {
-    for (const std::size_t padding_mib : {5U, 9U}) {
-        SCOPED_TRACE ("authentication response padding MiB=" + std::to_string (padding_mib));
+    constexpr std::size_t limit = 8 * 1024 * 1024;
+    for (const auto size : {limit - 1, limit, limit + 1}) {
+        SCOPED_TRACE ("serialized authentication response bytes=" + std::to_string (size));
+        AuthenticateResponse expected;
+        expected.set_token ("token-1");
+        auto *unknown = expected.GetReflection ()->MutableUnknownFields (&expected);
+        unknown->AddLengthDelimited (1000, std::string (size, 'p'));
+        unknown->mutable_field (0)->set_length_delimited (
+          std::string (size - (expected.ByteSizeLong () - size), 'p'));
+        ASSERT_EQ (expected.ByteSizeLong (), size);
         fake_etcd_t backend;
-        backend.auth_fault = [padding_mib] (auto *, AuthenticateResponse *response) {
-            auto *unknown = response->GetReflection ()->MutableUnknownFields (response);
-            const std::string padding (padding_mib * 1024 * 1024, 'p');
-            unknown->AddLengthDelimited (1000, padding);
+        backend.auth_fault = [&expected] (auto *, AuthenticateResponse *response) {
+            *response = expected;
             return grpc::Status::OK;
         };
         auto options = backend.options ();
         options.credentials = etcd_credentials_t{"u", "p"};
         etcd_location_store_t store (std::move (options));
         const auto result = store.read ({"k"}).result_for (10s);
-        ASSERT_TRUE (result) << "Padded authentication RPC did not complete";
+        ASSERT_TRUE (result) << "Authentication RPC did not complete";
         EXPECT_EQ (backend.auth_calls, 1);
-        if (padding_mib == 5) {
-            ASSERT_TRUE (result->has_value ()) << "The 8 MiB receive limit must accept 5 MiB";
+        if (size <= limit) {
+            ASSERT_TRUE (result->has_value ());
             EXPECT_TRUE (std::holds_alternative<store_missing_t> (result->value ()));
             EXPECT_EQ (backend.txn_calls, 1);
         } else {
-            ASSERT_FALSE (result->has_value ()) << "The 8 MiB receive limit must reject 9 MiB";
+            ASSERT_FALSE (result->has_value ());
             EXPECT_THROW (result->value (), framework_exception_t);
-            ASSERT_NE (result->error (), nullptr);
             EXPECT_EQ (result->error_kind (), framework_error_kind_t::internal_failure);
             EXPECT_EQ (backend.txn_calls, 0);
         }
@@ -370,15 +379,21 @@ TEST (EtcdProvider, NoResponseDeadlineMovesNextOperation)
     options.endpoints.push_back (second.endpoint ());
     options.operation_timeout = 250ms;
     etcd_location_store_t store (options);
-    first.txn_fault = [] (grpc::ServerContext *context, const auto &, auto *) {
-        while (!context->IsCancelled ())
+    std::promise<bool> cancelled;
+    auto observed = cancelled.get_future ();
+    first.txn_fault = [&] (grpc::ServerContext *context, const auto &, auto *) {
+        const auto end = std::chrono::steady_clock::now () + 2s;
+        while (!context->IsCancelled () && std::chrono::steady_clock::now () < end)
             std::this_thread::sleep_for (1ms);
+        cancelled.set_value (context->IsCancelled ());
         return grpc::Status (grpc::StatusCode::CANCELLED, "deadline passed");
     };
     EXPECT_THROW (await (store.read ({"k"})), framework_exception_t);
     EXPECT_TRUE (std::holds_alternative<store_missing_t> (await (store.read ({"k"}))));
     EXPECT_EQ (first.txn_calls, 1);
     EXPECT_EQ (second.txn_calls, 1);
+    ASSERT_EQ (observed.wait_for (2s), std::future_status::ready);
+    EXPECT_TRUE (observed.get ()) << "Operation deadline must cancel the physical RPC";
 }
 
 TEST (EtcdProvider, AuthenticationAndAllWriteCallsShareAbsoluteDeadline)
@@ -811,9 +826,10 @@ TEST (EtcdProvider, ConsumerWaitCancellationDoesNotCancelOrRetirePhysicalOperati
     auto store = std::make_unique<etcd_location_store_t> (backend.options ());
     std::stop_source owner;
     std::binary_semaphore entered (0), release (0);
-    backend.txn_fault = [&] (auto *, const auto &request, auto *response) {
+    backend.txn_fault = [&] (grpc::ServerContext *context, const auto &request, auto *response) {
         entered.release ();
         release.acquire ();
+        EXPECT_FALSE (context->IsCancelled ());
         return backend.transact (request, response);
     };
     std::future<void> closing;
@@ -1012,6 +1028,102 @@ TEST (EtcdTls, MutualTlsCustomCaAndIdentityHostNameAndTrustValidation)
         EXPECT_THROW (await (store.read ({"k"})), framework_exception_t);
     }
     EXPECT_EQ (backend.txn_calls, calls);
+}
+
+TEST (EtcdLive, KeysOnlyRevisionAndAuthenticatedMutualTls)
+{
+    const auto *endpoint = std::getenv ("ZLINK_ETCD_SECURE_ENDPOINT");
+    const auto *password = std::getenv ("ZLINK_ETCD_ROOT_PASSWORD");
+    if (!endpoint || !password)
+        GTEST_SKIP () << "Set ZLINK_ETCD_SECURE_ENDPOINT and ZLINK_ETCD_ROOT_PASSWORD";
+    etcd_location_options_t options;
+    options.endpoints = {endpoint};
+    options.key_namespace = "cpp-capability";
+    options.credentials = etcd_credentials_t{"root", password};
+    options.tls = etcd_tls_options_t{
+      pem ("ca.pem"), etcd_client_identity_t{pem ("client.pem"), pem ("client.key")}};
+    grpc::SslCredentialsOptions tls;
+    tls.pem_root_certs = options.tls->trusted_ca_pem;
+    tls.pem_cert_chain = pem ("client.pem");
+    tls.pem_private_key = pem ("client.key");
+    const std::string address = std::string (endpoint).substr (8);
+    auto channel = grpc::CreateChannel (address, grpc::SslCredentials (tls));
+    auto auth = Auth::NewStub (channel);
+    AuthenticateRequest login;
+    login.set_name ("root");
+    login.set_password (password);
+    AuthenticateResponse authenticated;
+    grpc::ClientContext login_context;
+    login_context.set_deadline (std::chrono::system_clock::now () + 5s);
+    ASSERT_TRUE (auth->Authenticate (&login_context, login, &authenticated).ok ());
+    auto kv = KV::NewStub (channel);
+    const auto context = [&] {
+        auto result = std::make_unique<grpc::ClientContext> ();
+        result->set_deadline (std::chrono::system_clock::now () + 5s);
+        result->AddMetadata ("token", authenticated.token ());
+        return result;
+    };
+    const auto clock_key = key (options.key_namespace, 'c');
+    const auto data_key = key (options.key_namespace, 'p', "keys-only");
+    struct cleanup_t
+    {
+        KV::Stub &kv;
+        decltype (context) &make_context;
+        std::vector<std::string> keys;
+        ~cleanup_t ()
+        {
+            for (const auto &name : keys) {
+                DeleteRangeRequest request;
+                request.set_key (name);
+                DeleteRangeResponse response;
+                EXPECT_TRUE (kv.DeleteRange (make_context ().get (), request, &response).ok ());
+            }
+        }
+    } cleanup{*kv, context, {clock_key, data_key}};
+    PutRequest write;
+    PutResponse written;
+    write.set_key (clock_key);
+    write.set_value (clock_bytes (1000));
+    ASSERT_TRUE (kv->Put (context ().get (), write, &written).ok ());
+    write.set_key (data_key);
+    write.set_value ("nonempty-payload");
+    ASSERT_TRUE (kv->Put (context ().get (), write, &written).ok ());
+    const auto revision = written.header ().revision ();
+    write.set_value ("new-payload");
+    ASSERT_TRUE (kv->Put (context ().get (), write, &written).ok ());
+    for (const bool keys_only : {false, true}) {
+        RangeRequest request;
+        request.set_key (data_key);
+        request.set_revision (revision);
+        request.set_keys_only (keys_only);
+        RangeResponse response;
+        ASSERT_TRUE (kv->Range (context ().get (), request, &response).ok ());
+        ASSERT_EQ (response.kvs_size (), 1);
+        EXPECT_EQ (response.kvs (0).key (), data_key);
+        EXPECT_EQ (response.kvs (0).mod_revision (), revision);
+        EXPECT_EQ (response.kvs (0).create_revision (), revision);
+        EXPECT_EQ (response.kvs (0).version (), 1);
+        EXPECT_EQ (response.kvs (0).value (), keys_only ? "" : "nonempty-payload");
+    }
+    {
+        etcd_location_store_t store (options);
+        EXPECT_TRUE (std::holds_alternative<store_missing_t> (await (store.read ({"missing"}))));
+    }
+    options.operation_timeout = 500ms;
+    for (const int fault : {0, 1, 2, 3}) {
+        SCOPED_TRACE ("security fault=" + std::to_string (fault));
+        auto invalid = options;
+        if (fault == 0)
+            invalid.credentials->password += "-invalid";
+        else if (fault == 1)
+            invalid.tls->trusted_ca_pem.clear ();
+        else if (fault == 2)
+            invalid.endpoints = {"https://127.0.0.1:" + address.substr (address.rfind (':') + 1)};
+        else
+            invalid.tls->client_identity.reset ();
+        etcd_location_store_t store (invalid);
+        EXPECT_THROW (await (store.read ({"missing"})), framework_exception_t);
+    }
 }
 
 TEST (EtcdLive, ConditionsExpirationMaximumBatchAndSnapshot)
