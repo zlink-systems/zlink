@@ -494,21 +494,10 @@ test('Entry Spot request waits on the target descriptor generation before peer a
         .entrySpot()
         .requestToSpot(
           'target',
-          'target-entry-uuid',
+          'target',
           7n,
           Buffer.from('ask'),
-          {
-            entrySpot: true,
-            timeoutMs: 1000,
-            routeFence: {
-              spot: { spotId: 'target-entry-uuid', generation: 7n },
-              targetNodeRid: 'target',
-              targetNodeGeneration: 7n,
-              authorityOwnerGeneration: 7n,
-              ownerLeaseGeneration: 37n,
-              storeVersion: 'entry:7'
-            }
-          },
+          { entrySpot: true, timeoutMs: 1000 },
           (terminal) => resolve(terminal.terminalResult)
         );
     });
