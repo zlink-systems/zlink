@@ -95,7 +95,7 @@ export function parseFrameworkJsonV1(
   if (text.charCodeAt(0) === 0xfeff) {
     throw new SyntaxError('framework-json-v1 does not allow a UTF-8 BOM.');
   }
-  new JsonPropertyScanner(text, options).scan();
+  new JsonPropertyScanner(text, options).scan(schema);
   const parsed = JSON.parse(text, reviver);
   return schema === undefined
     ? parsed
@@ -187,14 +187,19 @@ function validateFrameworkJsonV1Value(
     case 'object': {
       if (!isJsonObject(value)) schemaFailure(path, 'an object');
       const input = value as Record<string, unknown>;
-      for (const name of schema.required) {
+      const { properties, required } = schema;
+      for (let index = 0; index < required.length; index++) {
+        const name = required[index]!;
         if (!Object.prototype.hasOwnProperty.call(input, name)) {
           throw new TypeError(`framework-json-v1 required property '${path}.${name}' is missing.`);
         }
       }
       const result: Record<string, unknown> = {};
-      for (const [name, item] of Object.entries(input)) {
-        const propertySchema: unknown = schema.properties[name];
+      const entries = Object.entries(input);
+      for (let index = 0; index < entries.length; index++) {
+        const entry = entries[index]!;
+        const name = entry[0];
+        const propertySchema: unknown = properties[name];
         if (propertySchema === undefined) {
           if (schema.additionalProperties === false) {
             throw new TypeError(`framework-json-v1 property '${path}.${name}' is not allowed.`);
@@ -202,7 +207,7 @@ function validateFrameworkJsonV1Value(
           continue;
         }
         result[name] = validateFrameworkJsonV1Value(
-          item,
+          entry[1],
           propertySchema as ZLinkJsonSchema,
           `${path}.${name}`,
           decode,
@@ -242,6 +247,28 @@ function schemaFailure(path: string, expected: string): never {
   throw new TypeError(`framework-json-v1 value '${path}' must be ${expected}.`);
 }
 
+interface KnownProperty {
+  readonly schema: ZLinkJsonSchema;
+  readonly mask: number;
+}
+
+const propertyPlans = new WeakMap<object, ReadonlyMap<string, KnownProperty>>();
+
+function knownProperties(
+  properties: Readonly<Record<string, ZLinkJsonSchema>>
+): ReadonlyMap<string, KnownProperty> {
+  const cached = propertyPlans.get(properties);
+  if (cached !== undefined) return cached;
+  const plan = new Map<string, KnownProperty>();
+  let index = 0;
+  for (const [name, schema] of Object.entries(properties)) {
+    plan.set(name, { schema, mask: index >= 32 ? 0 : 1 << index });
+    index++;
+  }
+  if (Object.isFrozen(properties)) propertyPlans.set(properties, plan);
+  return plan;
+}
+
 class JsonPropertyScanner {
   private index = 0;
   private readonly firstEscape: number;
@@ -254,20 +281,23 @@ class JsonPropertyScanner {
     this.firstEscape = escape === -1 ? text.length : escape;
   }
 
-  scan(): void {
-    this.skipWhitespace();
-    this.scanValue([]);
+  scan(schema?: ZLinkJsonSchema): void {
+    this.scanValue(this.options.onDuplicateProperty === undefined ? undefined : [], schema);
     this.skipWhitespace();
     if (this.index !== this.text.length) this.fail('trailing data');
   }
 
-  private scanValue(path: readonly string[]): void {
+  private scanValue(path: readonly string[] | undefined, schema?: ZLinkJsonSchema): void {
     this.skipWhitespace();
     const token = this.text[this.index];
-    if (token === '{') return this.scanObject(path);
-    if (token === '[') return this.scanArray(path);
+    if (token === '{' || token === '[') {
+      while (schema?.type === 'nullable') schema = schema.value;
+      return token === '{'
+        ? this.scanObject(path, schema)
+        : this.scanArray(path, schema?.type === 'array' ? schema.items : undefined);
+    }
     if (token === '"') {
-      this.scanString();
+      this.scanString(false);
       return;
     }
     if (token === 't') return this.scanLiteral('true');
@@ -276,41 +306,57 @@ class JsonPropertyScanner {
     this.scanNumber();
   }
 
-  private scanObject(path: readonly string[]): void {
+  private scanObject(path: readonly string[] | undefined, schema?: ZLinkJsonSchema): void {
     this.index++;
     this.skipWhitespace();
     if (this.text[this.index] === '}') {
       this.index++;
       return;
     }
-    const properties = new Set<string>();
+    const plan = schema?.type === 'object' ? knownProperties(schema.properties) : undefined;
+    const recordValue = schema?.type === 'record' ? schema.values : undefined;
+    let seen = 0;
+    let other: Set<string> | undefined;
     for (;;) {
-      this.skipWhitespace();
       if (this.text[this.index] !== '"') this.fail('object property name');
-      const property = this.scanString();
-      if (properties.has(property)) {
+      const property = this.scanString(true)!;
+      const known = plan?.get(property);
+      const mask = known?.mask ?? 0;
+      let duplicate: boolean;
+      if (mask === 0) {
+        other ??= new Set();
+        duplicate = other.has(property);
+        other.add(property);
+      } else {
+        duplicate = (seen & mask) !== 0;
+        seen |= mask;
+      }
+      if (duplicate) {
         if (this.options.onDuplicateProperty !== undefined) {
-          this.options.onDuplicateProperty(property, path);
+          this.options.onDuplicateProperty(property, path ?? []);
         } else {
           throw new SyntaxError(`framework-json-v1 duplicate property '${property}'.`);
         }
       }
-      properties.add(property);
       if (this.options.rejectPropertyName?.(property) === true) {
         throw new SyntaxError(`framework-json-v1 property '${property}' is not allowed.`);
       }
       this.skipWhitespace();
       if (this.text[this.index] !== ':') this.fail("':' after object property");
       this.index++;
-      this.scanValue(this.options.onDuplicateProperty === undefined ? path : [...path, property]);
+      this.scanValue(
+        path === undefined ? undefined : [...path, property],
+        known?.schema ?? recordValue
+      );
       this.skipWhitespace();
       const delimiter = this.text[this.index++];
       if (delimiter === '}') return;
       if (delimiter !== ',') this.fail("',' or '}' after object property");
+      this.skipWhitespace();
     }
   }
 
-  private scanArray(path: readonly string[]): void {
+  private scanArray(path: readonly string[] | undefined, itemSchema?: ZLinkJsonSchema): void {
     this.index++;
     this.skipWhitespace();
     if (this.text[this.index] === ']') {
@@ -318,7 +364,7 @@ class JsonPropertyScanner {
       return;
     }
     for (;;) {
-      this.scanValue(this.options.onDuplicateProperty === undefined ? path : [...path, '[]']);
+      this.scanValue(path === undefined ? undefined : [...path, '[]'], itemSchema);
       this.skipWhitespace();
       const delimiter = this.text[this.index++];
       if (delimiter === ']') return;
@@ -326,7 +372,7 @@ class JsonPropertyScanner {
     }
   }
 
-  private scanString(): string {
+  private scanString(readProperty: boolean): string | undefined {
     const text = this.text;
     const start = this.index;
     let index = start + 1;
@@ -335,7 +381,7 @@ class JsonPropertyScanner {
     const end = text.indexOf('"', index);
     if (end !== -1 && end < this.firstEscape) {
       this.index = end + 1;
-      return text.slice(index, end);
+      return readProperty ? text.slice(index, end) : undefined;
     }
     let sawEscape = false;
     for (;;) {
@@ -346,11 +392,8 @@ class JsonPropertyScanner {
       const character = text[index++];
       if (character === '"') {
         this.index = index;
-        //  Without escapes the token content is verbatim; the outer
-        //  JSON.parse pass still rejects any raw control characters.
-        return sawEscape
-          ? (JSON.parse(text.slice(start, index)) as string)
-          : text.slice(start + 1, index - 1);
+        if (sawEscape) return JSON.parse(text.slice(start, index)) as string;
+        return readProperty ? text.slice(start + 1, index - 1) : undefined;
       }
       if (character === '\\') {
         sawEscape = true;

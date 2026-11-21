@@ -4073,8 +4073,8 @@ async function cachedFollowRoutes(spotRow, actorRow, route) {
       async isOwnerTokenLive() {
         return true;
       },
-      async remainingOwnerTokenLeaseMs() {
-        return 60_000;
+      async ownerTokenLeaseDeadlineMs() {
+        return performance.now() + 60_000;
       }
     },
     spotMeshNames: ['play']

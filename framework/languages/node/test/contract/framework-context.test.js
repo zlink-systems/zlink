@@ -235,3 +235,23 @@ test('disabled flow tracing never enters the carrier', () => {
     AsyncLocalStorage.prototype.run = originalRun;
   }
 });
+
+test('leaving a job permit restores the existing carrier without allocating a clear value', (t) => {
+  const sibling = new FrameworkContextField();
+  const reservation = {};
+  const originalFreeze = Object.freeze;
+  let copies = 0;
+  t.mock.method(Object, 'freeze', (value) => {
+    if (Object.getOwnPropertySymbols(value).length !== 0) copies++;
+    return originalFreeze(value);
+  });
+  sibling.run('parent', () => {
+    const previous = permit.enterApplicationJobPermitScope(reservation);
+    assert.equal(permit.currentApplicationJobPermit(), reservation);
+    const copiesAtEntry = copies;
+    permit.leaveApplicationJobPermitScope(previous);
+    assert.equal(copies, copiesAtEntry);
+    assert.equal(permit.currentApplicationJobPermit(), undefined);
+    assert.equal(sibling.getStore(), 'parent');
+  });
+});
