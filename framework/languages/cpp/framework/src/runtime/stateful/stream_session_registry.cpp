@@ -18,6 +18,15 @@ namespace zlink::framework::runtime::stateful
 namespace
 {
 
+bool admit_ingress_unlocked (stream_ingress_drain_t &drain,
+                             std::uint64_t binding_generation,
+                             std::uint64_t sequence)
+{
+    if (!drain.accepts_ingress)
+        return false;
+    return drain.active.try_emplace (std::make_pair (binding_generation, sequence)).second;
+}
+
 std::exception_ptr
 invoke_route_terminal (const stream_session_registry_t::route_terminal_commit_t &hook,
                        const stream_route_admission_t &admission)
@@ -61,29 +70,67 @@ task_t<void>
 stream_session_registry_t::close_current (protocol::bound_session_close_t request,
                                           protocol::retired_bound_session_route_fence_t owner)
 {
-    auto close =
-      co_await _lane.run_task ([this, request = std::move (request),
-                                owner = std::move (owner)] () -> std::shared_ptr<task_t<void>> {
-          const auto &session = request.session;
-          const auto found = _connections.find (
-            connection_key (zlink::routing_id_t::from (session.session_routing_id)));
-          const auto indexed = _actor_bindings.find (request.actor_id);
-          if (!protocol::same_session_owner_identity (session, owner)
-              || found == _connections.end () || indexed == _actor_bindings.end ()
-              || indexed->second.connection != found->second.connection
-              || indexed->second.binding_generation != session.retired_binding_generation
-              || !found->second.physical_close)
-              throw framework_exception_t (framework_error_kind_t::unavailable,
-                                           "Session binding is no longer current");
-          const auto aggregate = found->second.bindings.find (request.actor_id);
-          if (aggregate == found->second.bindings.end ()
-              || aggregate->second.binding.actor.object_generation != request.object_generation)
-              throw framework_exception_t (framework_error_kind_t::unavailable,
-                                           "Session binding is no longer current");
-          return std::make_shared<task_t<void>> (found->second.physical_close ());
-      });
-    co_await *close;
-    co_return;
+    struct close_step_t
+    {
+        std::shared_ptr<task_t<void>> active;
+        std::shared_ptr<task_t<void>> close;
+        std::shared_ptr<stream_ingress_drain_t> drain;
+    };
+    const auto session_rid =
+      connection_key (zlink::routing_id_t::from (request.session.session_routing_id));
+    for (;;) {
+        auto step = co_await _lane.run_task ([this, request, owner, session_rid] () mutable {
+            const auto &session = request.session;
+            const auto found = _connections.find (session_rid);
+            const auto indexed = _actor_bindings.find (request.actor_id);
+            if (!protocol::same_session_owner_identity (session, owner)
+                || found == _connections.end () || indexed == _actor_bindings.end ()
+                || indexed->second.connection != found->second.connection
+                || indexed->second.binding_generation != session.retired_binding_generation
+                || !found->second.physical_close)
+                throw framework_exception_t (framework_error_kind_t::unavailable,
+                                             "Session binding is no longer current");
+            const auto aggregate = found->second.bindings.find (request.actor_id);
+            if (aggregate == found->second.bindings.end ()
+                || aggregate->second.binding.actor.object_generation != request.object_generation
+                || !aggregate->second.ingress_drain->accepts_ingress)
+                throw framework_exception_t (framework_error_kind_t::unavailable,
+                                             "Session binding is no longer current");
+            if (!aggregate->second.ingress_drain->active.empty ()) {
+                close_step_t step;
+                step.active = std::make_shared<task_t<void>> (
+                  aggregate->second.ingress_drain->active.begin ()->second.task ());
+                return step;
+            }
+            close_step_t step;
+            step.close = std::make_shared<task_t<void>> (found->second.physical_close ());
+            step.drain = aggregate->second.ingress_drain;
+            aggregate->second.ingress_drain->accepts_ingress = false;
+            return step;
+        });
+        if (step.active) {
+            co_await *step.active;
+            continue;
+        }
+        if (step.close) {
+            auto close_task = std::move (*step.close);
+            const auto closed = co_await runtime::await_result (std::move (close_task));
+            if (!closed) {
+                _lane.run_sync ([this, request, session_rid, drain = step.drain] {
+                    const auto found = _connections.find (session_rid);
+                    if (found == _connections.end ())
+                        return;
+                    const auto aggregate = found->second.bindings.find (request.actor_id);
+                    if (aggregate != found->second.bindings.end ()
+                        && aggregate->second.ingress_drain == drain
+                        && aggregate->second.ingress_drain->active.empty ())
+                        aggregate->second.ingress_drain->accepts_ingress = true;
+                });
+                closed.value ();
+            }
+            co_return;
+        }
+    }
 }
 
 stream_connection_t
@@ -107,6 +154,7 @@ stream_session_registry_t::open (std::string connection_id,
           const auto previous = _connections.find (connection.connection_id);
           if (previous != _connections.end ()) {
               for (auto &[actor_id, aggregate] : previous->second.bindings) {
+                  aggregate.ingress_drain->accepts_ingress = false;
                   aggregate.ingress_drain->accepts_completion = false;
                   const auto indexed = _actor_bindings.find (actor_id);
                   if (indexed != _actor_bindings.end ()
@@ -139,6 +187,7 @@ stream_close_result_t stream_session_registry_t::close (const stream_connection_
         for (const auto &[_, aggregate] : current->second.bindings)
             result.bindings.push_back (aggregate.binding);
         for (auto &[actor_id, aggregate] : current->second.bindings) {
+            aggregate.ingress_drain->accepts_ingress = false;
             aggregate.ingress_drain->accepts_completion = false;
             const auto indexed = _actor_bindings.find (actor_id);
             if (indexed != _actor_bindings.end ()
@@ -318,6 +367,7 @@ stream_session_registry_t::bind_verified (const stream_connection_t &connection,
                                          std::move (displaced));
               }
           }
+          state.bindings.at (actor_id).ingress_drain->accepts_ingress = true;
           notify_changed ();
           return std::make_pair (std::pair{stateful_error_t::none, std::move (binding)},
                                  std::move (displaced));
@@ -344,6 +394,7 @@ stream_session_registry_t::unbind (const stream_binding_t &binding)
         }
         auto &aggregate = current->second.bindings.at (binding.actor.key);
         auto removed = aggregate.binding;
+        aggregate.ingress_drain->accepts_ingress = false;
         aggregate.ingress_drain->accepts_completion = false;
         for (auto &settle : take_held_relays_unlocked (aggregate))
             discarded.push_back (std::move (settle));
@@ -416,8 +467,11 @@ stream_session_registry_t::admit_inbound (const stream_binding_t &binding)
           if (aggregate.next_inbound_sequence == std::numeric_limits<std::uint64_t>::max ()) {
               return {stateful_error_t::conflict, std::nullopt};
           }
-          const auto sequence = aggregate.next_inbound_sequence++;
-          aggregate.ingress_drain->active.emplace (binding.binding_generation, sequence);
+          const auto sequence = aggregate.next_inbound_sequence;
+          if (!admit_ingress_unlocked (*aggregate.ingress_drain, binding.binding_generation,
+                                       sequence))
+              return {stateful_error_t::conflict, std::nullopt};
+          ++aggregate.next_inbound_sequence;
           return {stateful_error_t::none,
                   stream_dispatch_t{binding, sequence, aggregate.ingress_drain}};
       });
@@ -464,12 +518,17 @@ stream_session_registry_t::admit_inbound (const std::string &connection_id,
                            == std::numeric_limits<std::uint64_t>::max ()) {
                       result.emplace (stateful_error_t::conflict, std::nullopt);
                   } else if (aggregate->next_inbound_sequence == expected_sequence) {
-                      const auto sequence = aggregate->next_inbound_sequence++;
-                      aggregate->ingress_drain->active.emplace (binding_generation, sequence);
-                      notify_changed ();
-                      result.emplace (
-                        stateful_error_t::none,
-                        stream_dispatch_t{aggregate->binding, sequence, aggregate->ingress_drain});
+                      const auto sequence = aggregate->next_inbound_sequence;
+                      if (!admit_ingress_unlocked (*aggregate->ingress_drain, binding_generation,
+                                                   sequence)) {
+                          result.emplace (stateful_error_t::conflict, std::nullopt);
+                      } else {
+                          ++aggregate->next_inbound_sequence;
+                          notify_changed ();
+                          result.emplace (stateful_error_t::none,
+                                          stream_dispatch_t{aggregate->binding, sequence,
+                                                            aggregate->ingress_drain});
+                      }
                   }
               }
               return std::make_pair (std::move (result),
@@ -499,17 +558,24 @@ stream_session_registry_t::admit_inbound (const std::string &connection_id,
 
 stateful_error_t stream_session_registry_t::complete_inbound (const stream_dispatch_t &dispatch)
 {
-    return _lane.run_sync ([this, &dispatch] {
+    auto [result, completion] = _lane.run_sync ([this, &dispatch] {
         if (!dispatch.drain || !dispatch.drain->accepts_completion)
-            return stateful_error_t::conflict;
+            return std::make_pair (stateful_error_t::conflict,
+                                   std::optional<task_completion_source_t<void>>{});
         const auto active = dispatch.drain->active.find (
           {dispatch.binding.binding_generation, dispatch.inbound_sequence});
         if (active == dispatch.drain->active.end ())
-            return stateful_error_t::not_found;
+            return std::make_pair (stateful_error_t::not_found,
+                                   std::optional<task_completion_source_t<void>>{});
+        std::optional<task_completion_source_t<void>> completion;
+        completion.emplace (std::move (active->second));
         dispatch.drain->active.erase (active);
         notify_changed ();
-        return stateful_error_t::none;
+        return std::make_pair (stateful_error_t::none, std::move (completion));
     });
+    if (completion)
+        completion->complete (result_t<void>::success ());
+    return result;
 }
 
 std::pair<stateful_error_t, stream_barrier_t>
@@ -651,6 +717,7 @@ bool stream_session_registry_t::close_remote_route_seal (const stream_barrier_t 
           auto close_connection = std::move (connection_found->second.close_connection);
           std::vector<stream_held_relay_t> discarded;
           for (auto &[actor_id, binding] : connection_found->second.bindings) {
+              binding.ingress_drain->accepts_ingress = false;
               binding.ingress_drain->accepts_completion = false;
               _actor_bindings.erase (actor_id);
               for (auto &settle : take_held_relays_unlocked (binding))
@@ -769,8 +836,8 @@ task_t<void> stream_session_registry_t::drain_held_relays (std::string actor_id,
               auto next = std::move (aggregate->held_relays.front ());
               aggregate->held_relays.pop_front ();
               next.dispatch.binding = aggregate->binding;
-              aggregate->ingress_drain->active.emplace (aggregate->binding.binding_generation,
-                                                        next.dispatch.inbound_sequence);
+              aggregate->ingress_drain->active.try_emplace (std::make_pair (
+                aggregate->binding.binding_generation, next.dispatch.inbound_sequence));
               return next;
           });
         if (!next)
@@ -925,8 +992,10 @@ void stream_session_registry_t::force_close_all () noexcept
         _barriers.clear ();
         _actor_bindings.clear ();
         for (auto &[_, connection] : _connections) {
-            for (auto &[__, aggregate] : connection.bindings)
+            for (auto &[__, aggregate] : connection.bindings) {
+                aggregate.ingress_drain->accepts_ingress = false;
                 aggregate.ingress_drain->accepts_completion = false;
+            }
         }
         closed.swap (_connections);
         notify_changed ();
