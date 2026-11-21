@@ -174,15 +174,129 @@ final class ZLinkSpotTimerRegistryTest {
         }
     }
 
+    private static ZLinkSpotTimerRegistry laneProbeRegistry(
+            ScheduledExecutorService executor,
+            ZLinkStateLane lane,
+            AtomicReference<Thread> pausedOn,
+            List<ZLinkTimerTick> calls,
+            CountDownLatch tickDelivered) {
+        return new ZLinkSpotTimerRegistry(
+                "spot",
+                executor,
+                new ZLinkHandlerInstanceOwner(
+                        ignored -> new PreservedTickHandler(calls, tickDelivered)),
+                List.of(),
+                "test",
+                new ZLinkSpotTimerRegistry.Dispatch() {
+                    public boolean paused() {
+                        pausedOn.set(Thread.currentThread());
+                        return false;
+                    }
+
+                    public CompletionStage<Void> enqueue(
+                            String name, Supplier<CompletionStage<Void>> operation) {
+                        return operation.get();
+                    }
+                },
+                lane);
+    }
+
+    @Test
+    void idleStateLaneTurnRunsOnTheFiringThreadWithoutAHop() throws Exception {
+        var executor = new ZLinkRelocatedTimerRebindTest.ManualScheduler();
+        var pausedOn = new AtomicReference<Thread>();
+        var calls = new ArrayList<ZLinkTimerTick>();
+        var registry =
+                laneProbeRegistry(
+                        executor, new ZLinkStateLane(), pausedOn, calls, new CountDownLatch(1));
+        try {
+            registry.setSpot(new TestSpot());
+            registry.add(
+                            "timer",
+                            Duration.ofMillis(1),
+                            PreservedTickHandler.class,
+                            new ZLinkTimerOptions(ZLinkTimerOverrunPolicy.values()[0], 1, false))
+                    .toCompletableFuture()
+                    .join();
+            var due = executor.due.poll(2, TimeUnit.SECONDS);
+            assertNotNull(due);
+            due.run();
+            assertSame(
+                    Thread.currentThread(),
+                    pausedOn.get(),
+                    "an idle state lane runs the turn on the calling thread");
+        } finally {
+            registry.close();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void busyStateLaneDoesNotBlockTheTimerThread() throws Exception {
+        var executor = new ZLinkRelocatedTimerRebindTest.ManualScheduler();
+        var lane = new ZLinkStateLane();
+        var pausedOn = new AtomicReference<Thread>();
+        var calls = new ArrayList<ZLinkTimerTick>();
+        var tickDelivered = new CountDownLatch(1);
+        var registry = laneProbeRegistry(executor, lane, pausedOn, calls, tickDelivered);
+        var release = new CountDownLatch(1);
+        var held = new CountDownLatch(1);
+        try {
+            registry.setSpot(new TestSpot());
+            registry.add(
+                            "timer",
+                            Duration.ofMillis(1),
+                            PreservedTickHandler.class,
+                            new ZLinkTimerOptions(ZLinkTimerOverrunPolicy.values()[0], 1, false))
+                    .toCompletableFuture()
+                    .join();
+            var due = executor.due.poll(2, TimeUnit.SECONDS);
+            assertNotNull(due);
+            lane.runAsync(
+                    () -> {
+                        held.countDown();
+                        try {
+                            release.await();
+                        } catch (InterruptedException interrupted) {
+                            Thread.currentThread().interrupt();
+                        }
+                        return null;
+                    });
+            assertTrue(held.await(2, TimeUnit.SECONDS));
+            var timerThread = new Thread(due::run, "test-timer-thread");
+            timerThread.start();
+            timerThread.join(2_000);
+            boolean blocked = timerThread.isAlive();
+            release.countDown();
+            timerThread.join(2_000);
+            assertFalse(blocked, "the timer thread must not wait for a busy state lane");
+            assertTrue(
+                    tickDelivered.await(2, TimeUnit.SECONDS),
+                    "the queued turn must deliver the tick after the lane finishes");
+            assertEquals(1, calls.size(), "the tick is delivered after the lane turn finishes");
+        } finally {
+            release.countDown();
+            registry.close();
+            executor.shutdownNow();
+        }
+    }
+
     public static final class PreservedTickHandler {
         private final java.util.List<ZLinkTimerTick> calls;
+        private final CountDownLatch tickDelivered;
 
         PreservedTickHandler(java.util.List<ZLinkTimerTick> calls) {
+            this(calls, new CountDownLatch(0));
+        }
+
+        PreservedTickHandler(java.util.List<ZLinkTimerTick> calls, CountDownLatch tickDelivered) {
             this.calls = calls;
+            this.tickDelivered = tickDelivered;
         }
 
         public void handle(ZLinkSpot<?> spot, ZLinkTimerTick tick) {
             calls.add(tick);
+            tickDelivered.countDown();
         }
     }
 
