@@ -561,14 +561,6 @@ export class DefaultZLinkSpotManager {
     return this.options.entrySpotIdProvider?.(meshName);
   }
 
-  private entrySpotIdentity(meshName: string): string | undefined {
-    if (this.options.entrySpotIdProvider !== undefined) {
-      return this.entrySpotIdForMesh(meshName);
-    }
-    const legacyIdentity = this.options.entryNodeRidProvider?.() ?? this.options.entryNodeRid;
-    return legacyIdentity === undefined ? undefined : String(legacyIdentity);
-  }
-
   relocationActivations(meshName: string): readonly ZLinkSpotActivation[] {
     return this.activations
       .activeActivations()
@@ -2227,7 +2219,7 @@ export class DefaultZLinkSpotManager {
     admit?: ZLinkMeshDispatchAdmission
   ): Promise<void> {
     const spotId = owner.spotId as unknown as RoutingId | null;
-    const entrySpotId = this.entrySpotIdentity(meshName);
+    const entrySpotId = entrySpotIdentity(this.options, meshName);
     const targetsEntrySpot =
       spotId === null || (entrySpotId !== undefined && routingIdsEqual(spotId, entrySpotId));
     const actor = owner.actor;
@@ -2358,29 +2350,35 @@ export class DefaultZLinkSpotManager {
     const activation = spotId === null ? undefined : this.activations.resolve(meshName, spotId);
     const replyState = { targetCommitPublished: false };
     try {
+      const entrySpotId = entrySpotIdentity(this.options, meshName);
+      const targetsEntrySpot =
+        spotId !== null && entrySpotId !== undefined && routingIdsEqual(spotId, entrySpotId);
       if (
         record.kindData?.kind === 'actorControl' &&
-        record.kindData.canonicalActorJoin !== undefined
+        record.kindData.canonicalActorJoin !== undefined &&
+        (targetsEntrySpot
+          ? this.options.dispatchEntryActorJoin === undefined
+          : activation === undefined)
       ) {
-        const entrySpotId = this.entrySpotIdentity(meshName);
-        if (
-          spotId !== null && entrySpotId !== undefined && routingIdsEqual(spotId, entrySpotId)
-            ? this.options.dispatchEntryActorJoin === undefined
-            : activation === undefined
-        ) {
-          throw createInternalFrameworkException(
-            ZLinkFrameworkInternalErrorKind.RouteNotConnected,
-            `Spot '${String(spotId)}' is not active on this node.`
-          );
-        }
-      }
-      if (activation?.domain.kind === 'user') {
-        await activation.serial.executeLifecycleOperation(() =>
-          this.dispatchMeshActorJoinCore(meshName, owner, record, replyState)
+        throw createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.RouteNotConnected,
+          `Spot '${String(spotId)}' is not active on this node.`
         );
+      }
+      const dispatch = () =>
+        this.dispatchMeshActorJoinCore(
+          meshName,
+          spotId,
+          record,
+          replyState,
+          activation,
+          targetsEntrySpot
+        );
+      if (activation?.domain.kind === 'user') {
+        await activation.serial.executeLifecycleOperation(dispatch);
         return;
       }
-      await this.dispatchMeshActorJoinCore(meshName, owner, record, replyState);
+      await dispatch();
     } catch (error) {
       if (replyState.targetCommitPublished || record.replyFailure === undefined) throw error;
       const failure =
@@ -2398,11 +2396,12 @@ export class DefaultZLinkSpotManager {
 
   async dispatchMeshActorJoinCore(
     meshName: string,
-    owner: ReadyRecord,
+    spotId: RoutingId | null,
     record: ReceiveRecord,
-    replyState: { targetCommitPublished: boolean }
+    replyState: { targetCommitPublished: boolean },
+    activation: ZLinkSpotActivation | undefined,
+    targetsEntrySpot: boolean
   ): Promise<void> {
-    const spotId = owner.spotId as unknown as RoutingId | null;
     const control = record.kindData;
     if (control?.kind !== 'actorControl') {
       throw new ZLinkConfigurationException(
@@ -2415,10 +2414,7 @@ export class DefaultZLinkSpotManager {
         'MeshNode Actor join record is missing its Spot or Actor owner.'
       );
     }
-    const entrySpotId = this.entrySpotIdentity(meshName);
     let requestContentType = record.contentType ?? 'application/json';
-    const targetsEntrySpot = entrySpotId !== undefined && routingIdsEqual(spotId, entrySpotId);
-    const activation = this.activations.resolve(meshName, spotId);
     const transferRequest =
       record.parts.length === 0 ? undefined : decodeFormalRemoteTransferRequest(record.parts[0]!);
     const remoteJoinPhase = transferRequest?.phase;
@@ -3119,7 +3115,7 @@ export class DefaultZLinkSpotManager {
           sourceJoinedActor ??
           this.options.actorLifecycleResolver?.(actorId) ??
           this.options.actorResolver?.(actorId));
-    const entrySpotId = this.entrySpotIdentity(meshName);
+    const entrySpotId = entrySpotIdentity(this.options, meshName);
     if (actor === undefined) {
       return;
     }
@@ -3341,7 +3337,7 @@ export class DefaultZLinkSpotManager {
     if (!outcome.accepted || (admission.state !== 'admitted' && admission.state !== 'restoring')) {
       throw new Error(`Actor Join relocation '${relocationId}' has no accepted admission.`);
     }
-    const entrySpotId = this.entrySpotIdentity(meshName);
+    const entrySpotId = entrySpotIdentity(this.options, meshName);
     const targetsEntry =
       entrySpotId !== undefined && routingIdsEqual(admission.admission.spotId, entrySpotId);
     const activation = targetsEntry
@@ -3652,6 +3648,16 @@ export class DefaultZLinkSpotManager {
       messageFollowOrigin
     );
   }
+}
+
+function entrySpotIdentity(
+  options: ZLinkSpotManagerOptions,
+  meshName: string
+): RoutingId | undefined {
+  if (options.entrySpotIdProvider !== undefined) {
+    return options.entrySpotIdProvider(meshName);
+  }
+  return options.entryNodeRidProvider?.() ?? options.entryNodeRid;
 }
 
 function spotActorFailureKind(error: unknown): ZLinkFrameworkErrorKind {
