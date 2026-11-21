@@ -1149,9 +1149,13 @@ operation that creates a new incarnation of the same ID is an Actor `Create` or 
 Spot `GetOrCreate`, or a new message with [Instance intent](../00-foundation/02-glossary.en.md#instance-intent). When such an operation reads a
 steady `Ready` record whose owner lease is missing, has a different `LeaseGeneration`, or has
 expired, and the relocation policy registered for that type on the node that `Reserve`s the new
-incarnation is `Disabled`, the Location repository releases that record. `Closing` and an incomplete
-initial activation aren't eligible merely because their allocation is `Active`; they follow their
-own lifecycle or recovery procedures. The node that `Reserve`s is the node that requested
+incarnation is `Disabled`, the Location repository releases that record. A User Spot's `Closing` and
+an incomplete initial activation aren't eligible merely because their allocation is `Active`; they
+follow their own lifecycle or recovery procedures. An Actor's `Closing` is a state in which the destroy
+has already closed admission, so if its owner lease is missing, has a different `LeaseGeneration`, or
+has expired, it's released by the same conditional batch. In that case the relocation policy condition
+doesn't apply, and both a creating operation and a call that destroys the same generation start this
+release. The node that `Reserve`s is the node that requested
 creation for an Actor or User Spot, and the target that received the activation envelope for an
 Instance Spot. If the type isn't registered on that node, the policy isn't treated as `Disabled`. A
 User Spot is released only when every Actor membership remaining for that SpotId and
@@ -1183,7 +1187,7 @@ the release decision (a different type keeps the existing `TypeMismatch`). If th
 valid, the existing result for the type and operation is returned. If the owner lease is invalid
 and the release conditions aren't met, `Unavailable` is returned. Ordinary messages and `Find`
 don't start this release. This release is a conditional repository batch, distinct from `Delete`,
-which requires a valid owner lease. Besides create operations, only the post-discard cleanup of
+which requires a valid owner lease. Besides create operations and a call that destroys an Actor in `Closing`, only the post-discard cleanup of
 §5.1 starts this release, when the owner's own same-incarnation record points at its own old
 invalid token. The conditions are the same, but no new incarnation is created, so the type's
 relocation policy condition does not apply.
@@ -2116,7 +2120,7 @@ store record golden fixture. Each item maps to one test.
   ended-owner members, a new Instance intent for a steady `Ready` Instance Spot) verify a new `ObjectGeneration`,
   return of the old allocation's capacity, and one factory execution. Inputs that break one release
   condition each (a valid lease, a type that isn't `Disabled` or isn't registered, a User Spot with a
-  member whose owner lease is valid or that is moving, members exceeding the provider's single-batch bound, a recovery pointer, `Closing`, aggregate or relocation progress, an ordinary
+  member whose owner lease is valid or that is moving, members exceeding the provider's single-batch bound, a recovery pointer, a User Spot's `Closing`, an Actor `Closing` with a valid owner lease, aggregate or relocation progress, an ordinary
   message or `Find`) verify that authority, membership, capacity, and factory execution count don't
   change. Inputs whose registered policies differ between the requesting node and the factory
   target (for an Instance, the source and the receiving target) verify the policy source. Releasing a User
