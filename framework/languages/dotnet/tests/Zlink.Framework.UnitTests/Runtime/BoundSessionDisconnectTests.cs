@@ -237,6 +237,7 @@ public sealed class DEntry(IZLinkEntrySpotContext context) : IZLinkEntrySpot<DAc
     public void Configure()
     {
         Context.Handlers.AddActorPacket<DMoveHandler, DActor>();
+        Context.Handlers.AddActorPacket<DOrderedHandler, DActor>();
         Context.Handlers.AddActorPacket<DEntryWhereHandler, DActor>();
         Context.Handlers.AddActorPacket<DEntryDropHandler, DActor>();
     }
