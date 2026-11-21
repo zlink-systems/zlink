@@ -36,6 +36,20 @@ on:
       - 'scripts/local-package/core/**'
       - 'VERSION'
       - '.github/actions/msvc-env/**'
+      - '.github/actions/main-cache/**'
+      - '.github/workflows/framework-cpp-prebuilt-check.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'framework/languages/cpp/CMakeLists.txt'
+      - 'framework/languages/cpp/cmake/**'
+      - 'framework/languages/cpp/packaging/**'
+      - 'framework/languages/cpp/scripts/package-prebuilt.sh'
+      - 'framework/languages/cpp/scripts/verify-apple-exports.py'
+      - 'scripts/local-package/core/**'
+      - 'VERSION'
+      - '.github/actions/msvc-env/**'
+      - '.github/actions/main-cache/**'
       - '.github/workflows/framework-cpp-prebuilt-check.yml'
 
 # A new commit on the same PR cancels the older run.
@@ -81,6 +95,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install Conan
+        id: conan
         shell: bash
         # ConanCenter recipes fetch upstream sources (m4 from ftp.gnu.org); fall back to
         # ConanCenter's backup of the same sha256 when the upstream mirror is unreachable.
@@ -89,6 +104,18 @@ jobs:
           conan_home="$(conan config home)"
           mkdir -p "${conan_home}"
           echo 'core.sources:download_urls=["origin", "https://c3i.jfrog.io/artifactory/conan-center-backup-sources/"]' >> "${conan_home}/global.conf"
+          echo 'core.net.http:max_retries=5' >> "${conan_home}/global.conf"
+          echo 'core.net.http:timeout=120' >> "${conan_home}/global.conf"
+          echo "conan_home=${conan_home}" >> "${GITHUB_OUTPUT}"
+
+      # Conan's p directory contains both the cache database and package data.
+      - name: Cache Conan packages
+        if: ${{ !inputs.update_lock && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        uses: ./.github/actions/main-cache
+        with:
+          path: ${{ steps.conan.outputs.conan_home }}/p
+          key: framework-cpp-conan-${{ runner.os }}-${{ runner.arch }}-${{ matrix.platform }}-2.32.0-${{ hashFiles(format('framework/languages/cpp/packaging/conan/conan.{0}.lock', matrix.platform)) }}-${{ hashFiles('framework/languages/cpp/scripts/package-prebuilt.sh', 'framework/languages/cpp/packaging/prebuilt-platforms.json') }}-${{ matrix.c_compiler }}-${{ matrix.cxx_compiler }}-${{ matrix.compiler_version }}
+          restore-keys: framework-cpp-conan-${{ runner.os }}-${{ runner.arch }}-${{ matrix.platform }}-2.32.0-
 
       - name: Set up MSVC
         if: matrix.platform == 'windows-x64'

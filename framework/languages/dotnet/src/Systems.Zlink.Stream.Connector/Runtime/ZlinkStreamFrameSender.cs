@@ -13,6 +13,13 @@ internal sealed class ZlinkStreamFrameSender(
     private const int CorrelationIdCharacterCount = sizeof(long) * 2;
     private const string CorrelationIdFormat = "x";
 
+    private static readonly ReadOnlyMemory<byte> HeartbeatPing = EncodeHeartbeat(
+        ZlinkStreamConnector.HeartbeatPingName
+    );
+    private static readonly ReadOnlyMemory<byte> HeartbeatPong = EncodeHeartbeat(
+        ZlinkStreamConnector.HeartbeatPongName
+    );
+
     public ZlinkStreamOutboundFrame BuildOutboundFrame(
         ZlinkStreamMessageKind kind,
         string name,
@@ -63,24 +70,41 @@ internal sealed class ZlinkStreamFrameSender(
         );
     }
 
-    public async ValueTask SendControlAsync(string name, CancellationToken cancellationToken)
+    private static byte[] EncodeHeartbeat(string name)
     {
-        var frame = BuildOutboundFrame(
+        var header = new ZlinkStreamHeader(
             ZlinkStreamMessageKind.Control,
+            ZlinkStreamCodec.Raw,
+            ZlinkStreamHeaderFlags.None,
+            null,
             name,
-            new ZlinkStreamEncodedPayload(ZlinkStreamCodec.Raw, ReadOnlyMemory<byte>.Empty),
             ZlinkStreamMetadata.Empty,
-            false,
+            null,
+            null,
+            null,
             null
         );
-        ValidateSendReady(frame.HeaderBytes, frame.PayloadBytes);
+        return ZlinkStreamFrameCodec.Encode(
+            new ZlinkStreamHeaderCodec().Encode(header).Span,
+            ReadOnlySpan<byte>.Empty
+        );
+    }
+
+    public async ValueTask SendHeartbeatAsync(bool pong, CancellationToken cancellationToken)
+    {
         var connection =
             connectionProvider()
             ?? throw ZlinkStreamConnector.Error(
                 ZlinkStreamErrorCode.Disconnected,
                 "Connector is not connected."
             );
-        await SendPacketAsync(connection, frame.HeaderBytes, frame.PayloadBytes, cancellationToken)
+        await SendPacketAsync(
+                connection,
+                default,
+                default,
+                cancellationToken,
+                pong ? HeartbeatPong : HeartbeatPing
+            )
             .ConfigureAwait(false);
     }
 
@@ -93,7 +117,8 @@ internal sealed class ZlinkStreamFrameSender(
         IZlinkStreamConnection connection,
         ReadOnlyMemory<byte> header,
         ReadOnlyMemory<byte> payload,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ReadOnlyMemory<byte> encodedFrame = default
     )
     {
         try
@@ -101,6 +126,14 @@ internal sealed class ZlinkStreamFrameSender(
             await sendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
+                if (!encodedFrame.IsEmpty)
+                {
+                    await connection
+                        .WriteAsync(encodedFrame, cancellationToken)
+                        .ConfigureAwait(false);
+                    return;
+                }
+
                 // One write per frame, as the Java, C++ and Node connectors do. A frame split
                 // across writes leaves its tail behind Nagle until the peer's delayed ACK (#1382).
                 var frameSize = ZlinkStreamFrameCodec.GetFrameSize(header.Length, payload.Length);

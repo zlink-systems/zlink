@@ -94,6 +94,19 @@ public sealed class TypedJsonPayloadContractTests
         }
     }
 
+    [Theory]
+    [InlineData("""{"wireValue":"a","wire\u0056alue":"b"}""")]
+    [InlineData("""{"wireValue":"a","extra":0,"extr\u0061":1}""")]
+    [InlineData("""{"wireValue":"a","extra":{"a":0,"a":1}}""")]
+    public void Typed_duplicate_checks_cover_escaped_known_and_unknown_names(string json)
+    {
+        var bytes = Encoding.UTF8.GetBytes(json);
+        var error = Assert.Throws<JsonException>(() =>
+            ZLinkFrameworkJsonPayloadCodec.Deserialize<StringPayload>(bytes)
+        );
+        Assert.Contains("Duplicate JSON property", error.InnerException!.Message);
+    }
+
     public sealed record StringPayload([property: JsonPropertyName("wireValue")] string Value);
 
     public sealed record Child(string Text);

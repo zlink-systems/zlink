@@ -17,6 +17,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityGenerati
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPage;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPut;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityReadResult;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityRelocation;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityScanCursor;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityScanExpired;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
@@ -325,10 +326,10 @@ final class ZLinkCanonicalRelocationStateMachine
         }
         return sourcePrepare(request, deadline)
                 .thenCompose(
-                        prepare -> {
+                        created -> {
+                            var prepare = created.prepare();
                             Fence fence =
                                     new Fence(prepare.id(), prepare.targetAttemptGeneration());
-                            SourceAttempt created = new SourceAttempt(request, prepare);
                             SourceAttempt current =
                                     inStateLane(
                                             () -> {
@@ -340,6 +341,8 @@ final class ZLinkCanonicalRelocationStateMachine
                                             });
                             SourceAttempt attempt = current == null ? created : current;
                             if (!attempt.request().equals(request)
+                                    || !attempt.sourceStoreVersion()
+                                            .equals(created.sourceStoreVersion())
                                     || !java.util.Arrays.equals(
                                             ZLinkCanonicalRelocationProtocol.encodePrepare(
                                                     attempt.prepare()),
@@ -482,7 +485,7 @@ final class ZLinkCanonicalRelocationStateMachine
             CompletableFuture<AuthoritySettlement> result) {
         var prepare = attempt.prepare();
         String key = primary(attempt.request().participants()).authorityKey();
-        String expected = prepare.coordinator().expectedAuthorityStoreVersion();
+        String expected = attempt.sourceStoreVersion();
         boolean fence = !Instant.now().isBefore(preserveAt);
         CompletionStage<Optional<AuthoritySettlement>> step =
                 locations
@@ -1276,10 +1279,11 @@ final class ZLinkCanonicalRelocationStateMachine
             return;
         }
         ZLinkSpotRetireControl.StageRequest request = completedValue(attempt.request());
-        if (request == null) {
+        var prepared = completedValue(attempt.prepared());
+        if (request == null || prepared == null) {
             return;
         }
-        observeTarget(attempt.prepare(), request)
+        observeTarget(prepared, request)
                 .whenComplete(
                         (observed, failure) -> {
                             if (failure == null
@@ -1507,8 +1511,7 @@ final class ZLinkCanonicalRelocationStateMachine
                                 return;
                             }
                             attempt.request()
-                                    .thenCompose(
-                                            request -> observeTarget(attempt.prepare(), request))
+                                    .thenCompose(request -> observeTarget(prepared, request))
                                     .whenComplete(
                                             (authority, readFailure) -> {
                                                 if (readFailure == null
@@ -1534,18 +1537,21 @@ final class ZLinkCanonicalRelocationStateMachine
      * fence, then the target owner lease.
      */
     private CompletionStage<TargetAuthority> observeTarget(
-            ZLinkCanonicalRelocationProtocol.Prepare prepare,
+            ZLinkAggregateRelocationCoordinator.Prepared prepared,
             ZLinkSpotRetireControl.StageRequest request) {
         String key = primary(request.participants()).authorityKey();
+        String expected =
+                prepared.request().participants().stream()
+                        .filter(participant -> participant.authorityKey().equals(key))
+                        .findFirst()
+                        .orElseThrow()
+                        .expectedStoreVersion();
         return locations
                 .read(key, OPEN)
                 .thenCompose(
                         read -> {
                             Optional<AuthoritySettlement> settled =
-                                    settlementOf(
-                                            read,
-                                            request,
-                                            prepare.coordinator().expectedAuthorityStoreVersion());
+                                    settlementOf(read, request, expected);
                             if (settled.isPresent()) {
                                 return CompletableFuture.completedFuture(
                                         settled.get().outcome() == Settlement.TARGET_COMMITTED
@@ -1581,7 +1587,7 @@ final class ZLinkCanonicalRelocationStateMachine
         TARGET_LEASE_LOST
     }
 
-    private CompletionStage<ZLinkCanonicalRelocationProtocol.Prepare> sourcePrepare(
+    private CompletionStage<SourceAttempt> sourcePrepare(
             ZLinkSpotRetireControl.StageRequest request, Instant deadline) {
         ZLinkSpotRetireControl.ParticipantFence primary = primary(request.participants());
         CompletionStage<ZLinkAuthorityReadResult> authority =
@@ -1629,35 +1635,39 @@ final class ZLinkCanonicalRelocationStateMachine
                             }
                             byte[] payload = request.relocationPayload();
                             var envelope = ZLinkServiceRelocationEnvelopeCodec.decode(payload);
-                            return new ZLinkCanonicalRelocationProtocol.Prepare(
-                                    request.fence().aggregateId(),
-                                    request.fence().aggregateGeneration(),
-                                    new ZLinkCanonicalRelocationProtocol.Coordinator(
-                                            request.sourceOwnerId(),
-                                            request.sourceOwnerLeaseGeneration(),
+                            var prepare =
+                                    new ZLinkCanonicalRelocationProtocol.Prepare(
+                                            request.fence().aggregateId(),
+                                            request.fence().aggregateGeneration(),
+                                            new ZLinkCanonicalRelocationProtocol.Coordinator(
+                                                    request.sourceOwnerId(),
+                                                    request.sourceOwnerLeaseGeneration(),
+                                                    request.sourceNodeRid(),
+                                                    request.sourceNodeGeneration(),
+                                                    snapshot.relocation()
+                                                            .coordinatorExpectedStoreVersion()),
+                                            new ZLinkCanonicalRelocationProtocol.Target(
+                                                    request.targetNodeRid(),
+                                                    request.targetNodeGeneration(),
+                                                    request.targetOwnerId(),
+                                                    request.targetOwnerLeaseGeneration()),
+                                            ZLinkCanonicalRelocationProtocol.SOURCE,
+                                            new ZLinkCanonicalRelocationProtocol.ObjectFence(
+                                                    primary.objectKind(),
+                                                    primary.objectId(),
+                                                    "",
+                                                    primary.objectGeneration(),
+                                                    primary.sourceAuthorityOwnerGeneration()),
                                             request.sourceNodeRid(),
                                             request.sourceNodeGeneration(),
-                                            snapshot.storeVersion()),
-                                    new ZLinkCanonicalRelocationProtocol.Target(
-                                            request.targetNodeRid(),
-                                            request.targetNodeGeneration(),
-                                            request.targetOwnerId(),
-                                            request.targetOwnerLeaseGeneration()),
-                                    ZLinkCanonicalRelocationProtocol.SOURCE,
-                                    new ZLinkCanonicalRelocationProtocol.ObjectFence(
-                                            primary.objectKind(),
-                                            primary.objectId(),
-                                            "",
-                                            primary.objectGeneration(),
-                                            primary.sourceAuthorityOwnerGeneration()),
-                                    request.sourceNodeRid(),
-                                    request.sourceNodeGeneration(),
-                                    ZLinkRelocationPayloadTransfer.manifest(
-                                            payload,
-                                            budget.effectiveChunkBytes(
-                                                    request.advertisedReceiveChunkLimitBytes())),
-                                    envelope.applicationVersion(),
-                                    deadline.toEpochMilli());
+                                            ZLinkRelocationPayloadTransfer.manifest(
+                                                    payload,
+                                                    budget.effectiveChunkBytes(
+                                                            request
+                                                                    .advertisedReceiveChunkLimitBytes())),
+                                            envelope.applicationVersion(),
+                                            deadline.toEpochMilli());
+                            return new SourceAttempt(request, prepare, snapshot.storeVersion());
                         });
     }
 
@@ -1911,7 +1921,42 @@ final class ZLinkCanonicalRelocationStateMachine
             }
         }
         validateResolvedPrimary(prepare, participants);
-        if (primarySnapshot == null) {
+        var canonical =
+                primarySnapshot == null
+                        ? null
+                        : ZLinkAuthorityRelocation.publication(primarySnapshot, 0);
+        var coordinatorFence = prepare.coordinator();
+        // Current owner and lease are checked per participant. A captured record carries the
+        // original coordinator baseline even after its phase CAS changes the snapshot version.
+        boolean coordinatorFenceMatches =
+                primarySnapshot != null
+                        && coordinatorFence
+                                .nodeRid()
+                                .equals(primarySnapshot.allocation().descriptor().rid())
+                        && coordinatorFence.nodeGeneration()
+                                == primarySnapshot.allocation().descriptorLifecycleGeneration()
+                        && (canonical == null
+                                ? primarySnapshot
+                                        .storeVersion()
+                                        .equals(coordinatorFence.expectedAuthorityStoreVersion())
+                                : canonical.aggregateId().equals(prepare.id())
+                                        && canonical.phase() == 2
+                                        && canonical
+                                                .coordinatorOwnerId()
+                                                .equals(coordinatorFence.ownerId())
+                                        && canonical.coordinatorLeaseGeneration()
+                                                == coordinatorFence.ownerLeaseGeneration()
+                                        && canonical
+                                                .coordinatorNodeRid()
+                                                .equals(coordinatorFence.nodeRid())
+                                        && canonical.coordinatorNodeGeneration()
+                                                == coordinatorFence.nodeGeneration()
+                                        && coordinatorFence
+                                                .expectedAuthorityStoreVersion()
+                                                .equals(
+                                                        canonical
+                                                                .coordinatorExpectedStoreVersion()));
+        if (!coordinatorFenceMatches) {
             throw new IllegalStateException("relocation coordinator authority version differs");
         }
         return new ZLinkSpotRetireControl.StageRequest(
@@ -2271,6 +2316,7 @@ final class ZLinkCanonicalRelocationStateMachine
     private record SourceAttempt(
             ZLinkSpotRetireControl.StageRequest request,
             ZLinkCanonicalRelocationProtocol.Prepare prepare,
+            String sourceStoreVersion,
             CompletableFuture<Void> ready,
             AtomicInteger activeWaiters,
             RelayBatch batch,
@@ -2278,10 +2324,12 @@ final class ZLinkCanonicalRelocationStateMachine
             CompletableFuture<Long> cutoverTerminalNanos) {
         SourceAttempt(
                 ZLinkSpotRetireControl.StageRequest request,
-                ZLinkCanonicalRelocationProtocol.Prepare prepare) {
+                ZLinkCanonicalRelocationProtocol.Prepare prepare,
+                String sourceStoreVersion) {
             this(
                     request,
                     prepare,
+                    sourceStoreVersion,
                     new CompletableFuture<>(),
                     new AtomicInteger(),
                     new RelayBatch(),
