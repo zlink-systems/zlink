@@ -38,7 +38,11 @@ const target = {
   routerChannelId: 'mesh',
   targetNodeRid: 'peer',
   spotId: 'entry',
-  spotKind: framework.ZLinkSpotKind.Entry
+  spotKind: framework.ZLinkSpotKind.Entry,
+  targetSpotGeneration: 7n,
+  targetNodeGeneration: 11n,
+  authorityOwnerGeneration: 13n,
+  ownerLeaseGeneration: 17n
 };
 
 function reply(transport, signal, raw = false) {

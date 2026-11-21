@@ -13,9 +13,14 @@ import systems.zlink.framework.spots.ZLinkEntrySpotContext;
  * roundtrip, so this is the only join shape usable cross-language today. */
 public final class RelocationEntrySpot implements ZLinkEntrySpot<RelocationActor> {
     private final ZLinkEntrySpotContext context;
+    private final EventSink sink;
+    private final UserSpotJoinObserver observer;
 
-    public RelocationEntrySpot(ZLinkEntrySpotContext context) {
+    public RelocationEntrySpot(
+        ZLinkEntrySpotContext context, EventSink sink, UserSpotJoinObserver observer) {
         this.context = context;
+        this.sink = sink;
+        this.observer = observer;
     }
 
     @Override
@@ -50,6 +55,11 @@ public final class RelocationEntrySpot implements ZLinkEntrySpot<RelocationActor
 
     @Override
     public CompletionStage<Void> onJoinedActor(RelocationActor actor) {
+        // An existing Actor's application join to this Entry Spot commits its
+        // membership here (spec 03-spot-actor/01-spot-model 224-226).
+        sink.append("entry-spot-joined|actor=" + actor.actorId()
+            + "|nodeRid=" + context.nodeRid());
+        observer.complete();
         return CompletableFuture.completedFuture(null);
     }
 

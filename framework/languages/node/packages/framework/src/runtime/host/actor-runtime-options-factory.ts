@@ -28,6 +28,7 @@ import type { ZLinkRuntimeAdmissionGate } from '../admission';
 import type { ZLinkRemoteActorPacketTarget, ZLinkRemoteBoundSessionTarget } from '../actors';
 import type { ServiceSessionBinding } from '../foundation/service-stateful-registry';
 import type { ZLinkActorJoinRelocation } from '../actors/actor-join-relocation';
+import type { ZLinkActorNativeJoinCoordinatorOptions } from '../actors/actor-remote-joiner';
 
 export interface ZLinkActorRuntimeOptionsFactoryOptions {
   readonly requests?: RequestRuntime;
@@ -68,6 +69,9 @@ export interface ZLinkActorRuntimeOptionsFactoryOptions {
   readonly locationLifecycle: () => ZLinkLocationLifecycle | undefined;
   readonly primaryMeshName: () => string | undefined;
   readonly actorMeshName: (actorType: string) => string | undefined;
+  readonly entrySpotTargetSelector: NonNullable<
+    ZLinkActorNativeJoinCoordinatorOptions['entrySpotTargetSelector']
+  >;
   readonly createLocationSpotRouteResolver: () => ZLinkSpotRouteResolver | undefined;
   readonly createActorLocationResolver: () => ZLinkStoreLocationResolvers | undefined;
   readonly forgetDestroyedActorRef: (actorId: string) => void;
@@ -170,12 +174,7 @@ export class ZLinkActorRuntimeOptionsFactory {
         postCommitErrorReporter: this.options.reportPostCommitError,
         sourceTransfer: this.options.actorTransferRuntime,
         actorJoinRelocation: this.options.actorJoinRelocation,
-        entrySpotIdProvider: (meshName) => {
-          const resolvedMeshName = meshName ?? this.options.primaryMeshName();
-          return resolvedMeshName === undefined
-            ? undefined
-            : this.options.spotManager()?.entrySpotIdForMesh(resolvedMeshName);
-        },
+        entrySpotTargetSelector: this.options.entrySpotTargetSelector,
         remoteActorBinder: (actorRef, signal) =>
           this.options.streamBindingRuntime.commitActorRoute(actorRef, signal),
         messageSerializers: this.options.registration.messageSerializers,

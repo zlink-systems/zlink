@@ -204,6 +204,7 @@ for (const [changedVersion, departed] of [
       createLocationSpotRouteResolver: () => undefined,
       boundSessionRelay: {},
       spotNodeRuntime: () => ({
+        entrySpotIdForMesh: () => undefined,
         meshNode: () => ({ status: () => ({ routingId: 'target', lifecycleGeneration: 1n }) })
       }),
       dispatchErrorReporter: () => undefined
