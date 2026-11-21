@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using System.Security.Authentication;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Systems.Zlink.Stream.Connector.Runtime;
+using Systems.Zlink.Stream.Connector.Runtime.Protocol.Framing;
 using Systems.Zlink.Stream.Connector.Runtime.Transport;
 using Xunit;
 
@@ -265,6 +266,70 @@ public sealed partial class StreamConnectorTests
 
         await connector.Connect.Async();
         await server.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task Heartbeat_writes_one_stable_frame_per_direction()
+    {
+        var connection = new HeartbeatRecordingConnection();
+        using var gate = new SemaphoreSlim(1);
+        var sender = new ZlinkStreamFrameSender(
+            new() { Endpoint = new Uri("tcp://localhost:1") },
+            new(),
+            null,
+            gate,
+            () => connection
+        );
+        await sender.SendHeartbeatAsync(pong: false, CancellationToken.None);
+        await sender.SendHeartbeatAsync(pong: true, CancellationToken.None);
+        await sender.SendHeartbeatAsync(pong: false, CancellationToken.None);
+
+        Assert.Equal(3, connection.Writes.Count);
+        Assert.True(connection.Writes[0].Buffer.Equals(connection.Writes[2].Buffer));
+        Assert.False(connection.Writes[0].Buffer.Equals(connection.Writes[1].Buffer));
+        var codec = new ZlinkStreamHeaderCodec();
+        foreach (
+            var (name, index) in new[]
+            {
+                ("$zlink.heartbeat.ping", 0),
+                ("$zlink.heartbeat.pong", 1),
+            }
+        )
+        {
+            var header = codec.Encode(
+                new ZlinkStreamHeader(
+                    ZlinkStreamMessageKind.Control,
+                    ZlinkStreamCodec.Raw,
+                    ZlinkStreamHeaderFlags.None,
+                    null,
+                    name,
+                    ZlinkStreamMetadata.Empty
+                )
+            );
+            Assert.Equal(
+                ZlinkStreamFrameCodec.Encode(header.Span, ReadOnlySpan<byte>.Empty),
+                connection.Writes[index].Snapshot
+            );
+        }
+    }
+
+    private sealed class HeartbeatRecordingConnection : IZlinkStreamConnection
+    {
+        internal List<(ReadOnlyMemory<byte> Buffer, byte[] Snapshot)> Writes { get; } = [];
+
+        public ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public ValueTask WriteAsync(
+            ReadOnlyMemory<byte> buffer,
+            CancellationToken cancellationToken
+        )
+        {
+            Writes.Add((buffer, buffer.ToArray()));
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask CloseAsync(CancellationToken cancellationToken) => ValueTask.CompletedTask;
     }
 
     [Fact]

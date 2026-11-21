@@ -78,3 +78,39 @@ Proto와 import의 원본 license는 [THIRD_PARTY_NOTICES.md:40](../../../../../
 | MIT | `@js-sdsl/ordered-map` 4.4.2, `@types/node` 22.19.19, `ansi-regex` 5.0.1, `ansi-styles` 4.3.0, `color-convert` 2.0.1, `color-name` 1.1.4, `emoji-regex` 8.0.0, `escalade` 3.2.0, `is-fullwidth-code-point` 3.0.0, `lodash.camelcase` 4.3.0, `require-directory` 2.1.1, `string-width` 4.2.3, `strip-ansi` 6.0.1, `undici-types` 6.21.0, `wrap-ansi` 7.0.0, `yargs` 17.7.3 |
 
 [Client capability 결과](../../../../../scripts/etcd/README.ko.md#client-capability-결과)에서 시험 이름·명령·CI 원본과 미검증 범위를 확인한다.
+
+## Client capability 검증
+
+Node workspace에서 다음 시험을 실행한다. 크기는 payload 길이가 아니라 proto tag와 varint를 포함한
+직렬화된 메시지 길이다. 송신 16 MiB와 수신 8 MiB 각각에 대해 한도 −1 byte·한도·한도 +1 byte를
+검사한다. 앞의 두 메시지는 성공하고 초과 메시지는 `RESOURCE_EXHAUSTED`의 Store failure로 끝난다.
+송신 초과 메시지는 서버가 받지 않으며, 수신 초과 응답을 받은 RPC도 다시 보내지 않는다.
+
+```sh
+npm run build
+node --test test/contract/location-etcd-client.test.js
+```
+
+`location-etcd-security.test.js`는 실제 etcd v3.6.16에서 mTLS와 사용자 인증을 함께 검증한다.
+전용 빈 namespace와 root 권한의 시험 계정을 사용한다. Fixture는 `--client-cert-auth`를 켜고
+`--trusted-ca-file`, `--cert-file`, `--key-file`을 지정하며, `etcdctl user add`, `user grant-role`,
+`auth enable`로 사용자 인증을 켠다. 서버 인증서는 `DNS:localhost`만 포함하고 client 인증서 CN은
+etcd 사용자와 다른 이름을 사용한다. 인증서 CN으로 사용자 인증을 대체하지 않기 위해서다.
+
+`ZLINK_ETCD_SECURITY_CONFIG`는 위 공개 option 형식의 JSON 파일 경로다. `endpoints`는
+`https://localhost:<port>`이며 `tls.trustedCaPem`, `tls.clientIdentity`, `credentials`에 시험용
+PEM 내용과 계정을 지정한다. `ZLINK_ETCD_WRONG_CA`는 별도로 생성한 신뢰하지 않는 CA PEM 파일이다.
+시험은 namespace의 Store 시각 key와 시험 key를 기록하므로 운영 cluster에 연결하지 않는다.
+
+```sh
+ZLINK_ETCD_SECURITY_CONFIG=/path/to/test-options.json \
+ZLINK_ETCD_WRONG_CA=/path/to/untrusted-ca.pem \
+node --test test/contract/location-etcd-security.test.js
+```
+
+설정 파일을 지정하면 보안 시험 6개를 실행한다. 지정하지 않으면 이 시험들은 skip으로 보고한다.
+성공 시험은 public provider의 read와 internal client의 revision-pinned Range를 확인한다.
+`keys_only=false`는 갱신 전 binary payload를 반환하고, `true`는 같은 key·revision·version에서 빈 value를
+반환한다. 최신 revision을 읽는 대조군은 갱신된 payload를 반환한다. 실패 시험은 잘못된 비밀번호,
+누락된 계정, 잘못된 CA, 다른 hostname과 누락된 client identity를 각각 거부하는지 확인한다.
+의존성·license의 기준은 위 client 표와 workspace lockfile이다.

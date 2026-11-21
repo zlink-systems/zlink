@@ -199,23 +199,18 @@ internal sealed class ZLinkActorDispatchRouter(
         var replayAdmission = relocationReplay ? ZLinkSpotRelocationReplayScope.Current : null;
         return await state
             .ExecuteDispatchAsync(
-                async ct =>
-                {
-                    var reply = await SubmitByCurrentLocationForReplyAsync(
-                            actor,
-                            state,
-                            header,
-                            payload,
-                            relocationReplay,
-                            replayAdmission,
-                            ct,
-                            sourceSessionRid
-                        )
-                        .ConfigureAwait(false);
-                    // Register egress before releasing the Actor turn; admission is observed outside it.
-                    registerReply?.Invoke(reply);
-                    return reply;
-                },
+                ct =>
+                    SubmitByCurrentLocationForReplyAsync(
+                        actor,
+                        state,
+                        header,
+                        payload,
+                        relocationReplay,
+                        replayAdmission,
+                        ct,
+                        sourceSessionRid,
+                        registerReply
+                    ),
                 countAsPendingRequest: true,
                 allowRelocationReplay: relocationReplay,
                 replayReservation: replayAdmission?.QueueReservation,
@@ -310,7 +305,8 @@ internal sealed class ZLinkActorDispatchRouter(
         bool relocationReplay,
         ZLinkSpotRelocationReplayAdmission? replayAdmission,
         CancellationToken cancellationToken,
-        RoutingId? sourceSessionRid
+        RoutingId? sourceSessionRid,
+        Action<ZLinkActorReply>? registerReply
     )
     {
         var placement = await state
@@ -320,6 +316,7 @@ internal sealed class ZLinkActorDispatchRouter(
             $"actor_dispatch_placement actor={actor.Context.ActorId} correlation_id={header.CorrelationId} activation={placement.Activation?.SpotId ?? ZLinkFrameworkDebugLog.EntryPlaceholder} node={placement.Activation?.NodeRid.ToString() ?? ZLinkFrameworkDebugLog.EntryPlaceholder}"
         );
 
+        ZLinkActorReply reply;
         if (placement.Activation is not null)
         {
             if (
@@ -330,7 +327,7 @@ internal sealed class ZLinkActorDispatchRouter(
                 throw new InvalidOperationException(
                     "SPOT Actor relocation replay has no target admission."
                 );
-            var reply = await placement
+            var spotReply = await placement
                 .Activation.SubmitActorForReplyAsync(
                     actor,
                     state,
@@ -342,44 +339,50 @@ internal sealed class ZLinkActorDispatchRouter(
                 )
                 .ConfigureAwait(false);
             ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"actor_dispatch_placement_completed actor={actor.Context.ActorId} correlation_id={header.CorrelationId} reply={reply is not null}"
+                $"actor_dispatch_placement_completed actor={actor.Context.ActorId} correlation_id={header.CorrelationId} reply={spotReply is not null}"
             );
-            return reply
+            reply =
+                spotReply
                 ?? throw new InvalidOperationException(
                     $"Actor request handler for '{header.Name}' returned no reply."
                 );
         }
-
-        var entryResult = await runtime
-            .TrySubmitEntrySpotActorForReplyAsync(
-                actor,
-                state,
-                header,
-                payload,
-                callerOwnsDispatchTurn: true,
-                relocationReplay: false,
-                cancellationToken,
-                sourceSessionRid
-            )
-            .ConfigureAwait(false);
-        if (entryResult.Handled)
+        else
         {
-            if (entryResult.Reply is { } reply)
-                return reply;
-
-            var replyPathError = new InvalidOperationException(
-                $"Entry Spot actor request handler for '{header.Name}' returned no reply."
-            );
-            ReportReplyPathMissing(actor, header, replyPathError, sourceSessionRid);
-            return ZLinkActorReply.FromError(replyPathError);
+            var entryResult = await runtime
+                .TrySubmitEntrySpotActorForReplyAsync(
+                    actor,
+                    state,
+                    header,
+                    payload,
+                    callerOwnsDispatchTurn: true,
+                    relocationReplay: false,
+                    cancellationToken,
+                    sourceSessionRid
+                )
+                .ConfigureAwait(false);
+            if (!entryResult.Handled)
+                reply = ZLinkSpotActorPacketDispatcher.MissingHandlerReply(
+                    _dispatchErrors,
+                    actor,
+                    header,
+                    sourceSessionRid
+                );
+            else if (entryResult.Reply is { } entryReply)
+                reply = entryReply;
+            else
+            {
+                var replyPathError = new InvalidOperationException(
+                    $"Entry Spot actor request handler for '{header.Name}' returned no reply."
+                );
+                ReportReplyPathMissing(actor, header, replyPathError, sourceSessionRid);
+                reply = ZLinkActorReply.FromError(replyPathError);
+            }
         }
 
-        return ZLinkSpotActorPacketDispatcher.MissingHandlerReply(
-            _dispatchErrors,
-            actor,
-            header,
-            sourceSessionRid
-        );
+        // Register egress before releasing the Actor turn; observe admission outside it.
+        registerReply?.Invoke(reply);
+        return reply;
     }
 
     private async ValueTask NotifyDisconnectedByCurrentLocationAsync(

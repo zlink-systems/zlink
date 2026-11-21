@@ -137,3 +137,24 @@ test('registration after idle preserves the last actual visit anchor', async () 
     await next.promise.catch(() => {});
   }
 });
+
+test('a deadline visit uses its budget on due entries ahead of distant requests', async () => {
+  let now = 0;
+  let clockReads = 0;
+  const registry = new OperationRegistry({ now: () => now + clockReads++ });
+  const distant = Array.from({ length: 1000 }, () => registry.register(10 * ROTATION));
+  const distantTerminals = distant.map((entry) => entry.promise.catch(() => {}));
+  const due = registry.register(1, 'registry', undefined, 1);
+  const terminal = due.promise.catch((error) => error);
+  try {
+    now = 1;
+    clockReads = 0;
+    assert.equal(registry.expire(now, now + 2), 1);
+    assert.equal((await terminal).name, 'OperationTimeoutError');
+    assert.equal(registry.size, distant.length);
+    assert.equal(registry.nextDeadlineMs(), now + ROTATION);
+  } finally {
+    registry.close();
+    await Promise.all([...distantTerminals, terminal]);
+  }
+});

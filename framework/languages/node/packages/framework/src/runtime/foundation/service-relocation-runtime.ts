@@ -1,4 +1,3 @@
-import { UINT64_MAX } from '@zlink-systems/stream-wire';
 import { createHash } from 'node:crypto';
 import { AUTHORITY_ENVELOPE_MAX_BYTES } from '../../contracts/Configuration/InternalDefaults';
 import { decodeAuthorityKey } from '../locations/authority-key-codec';
@@ -17,8 +16,6 @@ import { SHA256_DIGEST_BYTES } from './actor-join-recovery-codec';
 const MAX_RELOCATION_GENERATION = 0x7fff_ffff_ffff_ffffn;
 
 const RELOCATION_PREPARING_PHASE = enumWireRelocationPhase('preparing');
-const RELOCATION_ACTIVATING_PHASE = enumWireRelocationPhase('activating');
-const RELOCATION_COMPLETED_PHASE = enumWireRelocationPhase('completed');
 const RELOCATION_LAST_PHASE = enumWireRelocationPhase('aborted');
 
 export interface ServiceRelocationParticipant {
@@ -96,7 +93,7 @@ export interface ServiceRelocationPublication {
   readonly inventoryDigest: string;
   readonly targetOwnerId: string;
   readonly targetOwnerLeaseGeneration: bigint;
-  /** Canonical authority-slot fields retained when a publication is replaced. */
+  /** Fields decoded from the legacy ZLAU relocation slot. */
   readonly targetAttemptGeneration?: bigint;
   readonly sourceNodeRid?: string;
   readonly sourceNodeGeneration?: bigint;
@@ -116,12 +113,6 @@ export interface ServiceRelocationPublication {
   readonly applicationVersion?: bigint;
 }
 
-export interface ServiceRelocationAuthorityCodec {
-  publish(currentPayload: Uint8Array, publication: ServiceRelocationPublication): Uint8Array;
-  read(payload: Uint8Array): ServiceRelocationPublication | undefined;
-  clear(currentPayload: Uint8Array, expectedReference: string): Uint8Array;
-}
-
 interface ServiceRelocationAuthorityEnvelope {
   readonly base: Buffer;
   readonly publication: ServiceRelocationPublication;
@@ -133,10 +124,6 @@ interface CanonicalAuthorityLayout {
   readonly slotStart: number;
   readonly slotEnd: number;
   readonly slot: Buffer;
-  readonly ownerId: string;
-  readonly ownerLeaseGeneration: bigint;
-  readonly nodeRid: string;
-  readonly nodeGeneration: bigint;
 }
 
 export interface CanonicalRelocationSlot {
@@ -164,21 +151,7 @@ export interface CanonicalRelocationSlot {
 }
 
 /** Deterministic Location authority wrapper for one immutable relocation root. */
-export class ServiceRelocationAuthorityPayloadCodec implements ServiceRelocationAuthorityCodec {
-  publish(currentPayload: Uint8Array, publication: ServiceRelocationPublication): Uint8Array {
-    if (this.read(currentPayload) !== undefined) {
-      throw new TypeError('Location authority already contains a relocation publication.');
-    }
-    const canonical = decodeCanonicalAuthorityLayout(currentPayload);
-    if (canonical !== undefined) {
-      return replaceCanonicalRelocationSlot(
-        canonical,
-        encodeCanonicalRelocationPublicationSlot(canonical, publication)
-      );
-    }
-    return encodeAuthorityEnvelope(Buffer.from(currentPayload), publication);
-  }
-
+export class ServiceRelocationAuthorityPayloadCodec {
   read(payload: Uint8Array): ServiceRelocationPublication | undefined {
     const canonical = decodeCanonicalAuthorityLayout(payload);
     return canonical === undefined
@@ -196,7 +169,7 @@ export class ServiceRelocationAuthorityPayloadCodec implements ServiceRelocation
       ) {
         throw new TypeError('Location authority relocation reference changed.');
       }
-      return replaceCanonicalRelocationSlot(canonical, Buffer.alloc(0));
+      return clearCanonicalRelocationSlot(canonical);
     }
     const current = decodeAuthorityEnvelope(currentPayload);
     if (
@@ -217,7 +190,7 @@ export function serviceRelocationAuthorityApplicationPayload(payload: Uint8Array
     if (decodeCanonicalRelocationSlot(canonical.slot) === undefined) {
       throw new TypeError('Canonical authority relocation slot is invalid.');
     }
-    return replaceCanonicalRelocationSlot(canonical, Buffer.alloc(0));
+    return clearCanonicalRelocationSlot(canonical);
   }
   return Buffer.from(decodeAuthorityEnvelope(payload)?.base ?? payload);
 }
@@ -240,63 +213,6 @@ export function serviceRelocationAuthoritySlotIdentity(
         aggregateGeneration: slot.aggregateGeneration,
         applicationVersion: slot.applicationVersion
       };
-}
-
-/** Replaces the application payload without changing relocation metadata. */
-export function replaceServiceRelocationAuthorityApplicationPayload(
-  payload: Uint8Array,
-  applicationPayload: Uint8Array
-): Buffer {
-  const canonical = decodeCanonicalAuthorityLayout(payload);
-  if (canonical !== undefined && canonical.slot.byteLength !== 0) {
-    const replacement = decodeCanonicalAuthorityLayout(applicationPayload);
-    if (replacement === undefined || replacement.slot.byteLength !== 0) {
-      throw new TypeError('Canonical authority application replacement is not steady ZLAU.');
-    }
-    return replaceCanonicalRelocationSlot(replacement, canonical.slot);
-  }
-  const current = decodeAuthorityEnvelope(payload);
-  return current === undefined
-    ? Buffer.from(applicationPayload)
-    : encodeAuthorityEnvelope(Buffer.from(applicationPayload), current.publication);
-}
-
-/** Projects an embedded canonical relocation slot to the exact target-ready fence. */
-export function projectServiceRelocationAuthorityTargetReady(
-  payload: Uint8Array,
-  target: {
-    readonly targetAttemptGeneration: bigint;
-    readonly nodeRid: string;
-    readonly nodeGeneration: bigint;
-    readonly ownerId: string;
-    readonly ownerLeaseGeneration: bigint;
-    readonly coordinatorExpectedStoreVersion: string;
-  }
-): Buffer {
-  const layout = decodeCanonicalAuthorityLayout(payload);
-  if (layout === undefined || layout.slot.byteLength === 0) {
-    throw new TypeError('Canonical authority relocation slot is missing.');
-  }
-  const current = decodeCanonicalRelocationSlot(layout.slot);
-  if (current === undefined) {
-    throw new TypeError('Canonical authority relocation slot is invalid.');
-  }
-  const slot = encodeCanonicalRelocationSlot({
-    ...current,
-    targetAttemptGeneration: target.targetAttemptGeneration,
-    targetNodeRid: target.nodeRid,
-    targetNodeGeneration: target.nodeGeneration,
-    targetOwnerId: target.ownerId,
-    targetOwnerLeaseGeneration: target.ownerLeaseGeneration,
-    coordinatorOwnerId: target.ownerId,
-    coordinatorLeaseGeneration: target.ownerLeaseGeneration,
-    coordinatorNodeRid: target.nodeRid,
-    coordinatorNodeGeneration: target.nodeGeneration,
-    coordinatorExpectedStoreVersion: target.coordinatorExpectedStoreVersion,
-    phase: RELOCATION_ACTIVATING_PHASE,
-    sourceCleanupState: 0
-  });
-  return replaceCanonicalRelocationSlot(layout, slot);
 }
 
 function decodeCanonicalAuthorityPublication(
@@ -349,11 +265,11 @@ function decodeCanonicalAuthorityLayout(payload: Uint8Array): CanonicalAuthority
     bodyReader.u8();
     bodyReader.u8();
     bodyReader.take(bodyReader.u16());
-    const ownerId = bodyReader.text8(false);
-    const ownerLeaseGeneration = bodyReader.u64();
     bodyReader.text8(false);
-    const nodeRid = bodyReader.text8(false);
-    const nodeGeneration = bodyReader.u64();
+    bodyReader.u64();
+    bodyReader.text8(false);
+    bodyReader.text8(false);
+    bodyReader.u64();
     const slotStart = bodyReader.offset;
     const presence = bodyReader.u8();
     if (presence > 1) return undefined;
@@ -365,11 +281,7 @@ function decodeCanonicalAuthorityLayout(payload: Uint8Array): CanonicalAuthority
       body: Buffer.from(body),
       slotStart,
       slotEnd,
-      slot: Buffer.from(slot),
-      ownerId,
-      ownerLeaseGeneration,
-      nodeRid,
-      nodeGeneration
+      slot: Buffer.from(slot)
     };
   } catch {
     return undefined;
@@ -454,137 +366,10 @@ export function decodeCanonicalRelocationSlot(
   }
 }
 
-export function encodeCanonicalRelocationSlot(value: CanonicalRelocationSlot): Buffer {
-  const id = relocationId(canonicalUuid(value.aggregateId, 'aggregate id'));
-  const aggregateGeneration = nonNegativeBigInt(value.aggregateGeneration, 'aggregate generation');
-  const targetAttemptGeneration = nonNegativeBigInt(
-    value.targetAttemptGeneration,
-    'target attempt generation'
-  );
-  if (aggregateGeneration > 0x7fff_ffff_ffff_fffen) {
-    throw new TypeError('Aggregate generation exceeds the issued range.');
-  }
-  if (aggregateGeneration === 0n && value.phase !== RELOCATION_PREPARING_PHASE) {
-    throw new TypeError('Zero aggregate generation is only valid while preparing.');
-  }
-  if (targetAttemptGeneration > MAX_RELOCATION_GENERATION) {
-    throw new TypeError('Target attempt generation exceeds the ordinal range.');
-  }
-  const sourceNodeGeneration = canonicalNonZeroOrdinal(
-    value.sourceNodeGeneration,
-    'source node generation'
-  );
-  const sourceOwnerLeaseGeneration = canonicalNonZeroOrdinal(
-    value.sourceOwnerLeaseGeneration,
-    'source owner lease generation'
-  );
-  const targetNodeGeneration = canonicalOrdinal(
-    value.targetNodeGeneration,
-    'target node generation'
-  );
-  const targetOwnerLeaseGeneration = canonicalOrdinal(
-    value.targetOwnerLeaseGeneration,
-    'target owner lease generation'
-  );
-  const coordinatorLeaseGeneration = canonicalNonZeroOrdinal(
-    value.coordinatorLeaseGeneration,
-    'coordinator lease generation'
-  );
-  const coordinatorNodeGeneration = canonicalNonZeroOrdinal(
-    value.coordinatorNodeGeneration,
-    'coordinator node generation'
-  );
-  if (
-    !Number.isInteger(value.phase) ||
-    value.phase < RELOCATION_PREPARING_PHASE ||
-    value.phase > RELOCATION_LAST_PHASE
-  ) {
-    throw new TypeError('Canonical relocation phase is invalid.');
-  }
-  if (
-    !Number.isInteger(value.sourceCleanupState) ||
-    value.sourceCleanupState < 0 ||
-    value.sourceCleanupState > 2
-  ) {
-    throw new TypeError('Canonical source cleanup state is invalid.');
-  }
-  return Buffer.concat([
-    canonicalU64(id.high),
-    canonicalU64(id.low),
-    canonicalU64(aggregateGeneration),
-    canonicalU64(targetAttemptGeneration),
-    canonicalText16(value.reference),
-    canonicalU32(value.checksumCrc32c),
-    canonicalText8(value.sourceNodeRid),
-    canonicalU64(sourceNodeGeneration),
-    canonicalText8(value.sourceOwnerId),
-    canonicalU64(sourceOwnerLeaseGeneration),
-    canonicalOptionalText8(value.targetNodeRid),
-    canonicalU64(targetNodeGeneration),
-    canonicalOptionalText8(value.targetOwnerId),
-    canonicalU64(targetOwnerLeaseGeneration),
-    canonicalText8(value.coordinatorOwnerId),
-    canonicalU64(coordinatorLeaseGeneration),
-    canonicalText8(value.coordinatorNodeRid),
-    canonicalU64(coordinatorNodeGeneration),
-    canonicalOptionalText8(value.coordinatorExpectedStoreVersion),
-    Buffer.of(value.phase),
-    canonicalI64(value.applicationVersion),
-    Buffer.of(value.sourceCleanupState)
-  ]);
-}
-
-function encodeCanonicalRelocationPublicationSlot(
-  layout: CanonicalAuthorityLayout,
-  publication: ServiceRelocationPublication
-): Buffer {
-  validatePublication(publication);
-  if (layout.slot.byteLength !== 0) {
-    throw new TypeError('Canonical authority relocation slot is already published.');
-  }
-  const nodeRid = requireText(layout.nodeRid, 'canonical authority node rid');
-  const ownerId = requireText(layout.ownerId, 'canonical authority owner id');
-  const applicationVersion = nonNegativeBigInt(
-    publication.applicationVersion ?? 0n,
-    'application version'
-  );
-  return encodeCanonicalRelocationSlot({
-    aggregateId: publication.aggregateId,
-    aggregateGeneration: publication.aggregateGeneration,
-    targetAttemptGeneration: publication.targetAttemptGeneration ?? 0n,
-    reference: publication.reference,
-    checksumCrc32c: publication.checksumCrc32c,
-    sourceNodeRid: publication.sourceNodeRid ?? nodeRid,
-    sourceNodeGeneration: publication.sourceNodeGeneration ?? layout.nodeGeneration,
-    sourceOwnerId: publication.sourceOwnerId ?? ownerId,
-    sourceOwnerLeaseGeneration:
-      publication.sourceOwnerLeaseGeneration ?? layout.ownerLeaseGeneration,
-    targetNodeRid: publication.targetNodeRid ?? nodeRid,
-    targetNodeGeneration: publication.targetNodeGeneration ?? layout.nodeGeneration,
-    targetOwnerId: publication.targetOwnerId,
-    targetOwnerLeaseGeneration: publication.targetOwnerLeaseGeneration,
-    coordinatorOwnerId: publication.coordinatorOwnerId ?? ownerId,
-    coordinatorLeaseGeneration:
-      publication.coordinatorLeaseGeneration ?? layout.ownerLeaseGeneration,
-    coordinatorNodeRid: publication.coordinatorNodeRid ?? nodeRid,
-    coordinatorNodeGeneration: publication.coordinatorNodeGeneration ?? layout.nodeGeneration,
-    coordinatorExpectedStoreVersion: publication.coordinatorExpectedStoreVersion ?? '',
-    phase: publication.canonicalPhase ?? RELOCATION_COMPLETED_PHASE,
-    applicationVersion,
-    sourceCleanupState: publication.canonicalSourceCleanupState ?? 0
-  });
-}
-
-function replaceCanonicalRelocationSlot(
-  layout: CanonicalAuthorityLayout,
-  slot: Uint8Array
-): Buffer {
-  const encodedSlot = Buffer.from(slot);
+function clearCanonicalRelocationSlot(layout: CanonicalAuthorityLayout): Buffer {
   const body = Buffer.concat([
     layout.body.subarray(0, layout.slotStart),
-    Buffer.of(encodedSlot.byteLength === 0 ? 0 : 1),
-    canonicalU32(encodedSlot.byteLength),
-    encodedSlot,
+    Buffer.alloc(5),
     layout.body.subarray(layout.slotEnd)
   ]);
   const envelope = Buffer.concat([
@@ -601,18 +386,6 @@ function replaceCanonicalRelocationSlot(
     );
   }
   return result;
-}
-
-function validatePublication(publication: ServiceRelocationPublication): void {
-  requireText(publication.reference, 'relocation reference');
-  canonicalUuid(publication.aggregateId, 'aggregate id');
-  const checksum = safeInteger(publication.checksumCrc32c, 'relocation checksum');
-  if (checksum < 0 || checksum > 0xffff_ffff) {
-    throw new TypeError('Relocation checksum must be an unsigned 32-bit integer.');
-  }
-  positiveBigInt(publication.aggregateGeneration, 'aggregate generation');
-  requireText(publication.targetOwnerId, 'target owner id');
-  positiveBigInt(publication.targetOwnerLeaseGeneration, 'target owner lease generation');
 }
 
 export function encodeServiceRelocationEnvelope(
@@ -1007,7 +780,10 @@ function objectKind(value: unknown): ZLinkPlacementObjectKind {
 }
 
 export function inventoryDigest(
-  participants: readonly ServiceRelocationParticipant[],
+  participants: readonly Pick<
+    ServiceRelocationParticipant,
+    'key' | 'objectKind' | 'stableType' | 'objectGeneration' | 'authorityOwnerGeneration'
+  >[],
   memberships: readonly ServiceRelocationMembership[] = []
 ): string {
   const identities = participants
@@ -1038,52 +814,6 @@ export function inventoryDigest(
       'utf8'
     )
     .digest('hex');
-}
-
-function encodeAuthorityEnvelope(
-  base: Uint8Array,
-  publication: ServiceRelocationPublication
-): Buffer {
-  const checksum = safeInteger(publication.checksumCrc32c, 'relocation checksum');
-  if (checksum < 0 || checksum > 0xffff_ffff) {
-    throw new TypeError('Relocation checksum must be an unsigned 32-bit integer.');
-  }
-  if (!/^[a-f0-9]{64}$/u.test(publication.inventoryDigest)) {
-    throw new TypeError('Relocation inventory digest must be lowercase SHA-256.');
-  }
-  const aggregateGeneration = positiveBigInt(
-    publication.aggregateGeneration,
-    'aggregate generation'
-  );
-  const targetOwnerLeaseGeneration = positiveBigInt(
-    publication.targetOwnerLeaseGeneration,
-    'target owner lease generation'
-  );
-  if (
-    aggregateGeneration > MAX_RELOCATION_GENERATION ||
-    targetOwnerLeaseGeneration > MAX_RELOCATION_GENERATION
-  ) {
-    throw new TypeError('Relocation publication generations must fit signed 64-bit storage.');
-  }
-  const payload = Buffer.concat([
-    // BinaryWriter.Write(0x5a4c4152u) is little-endian in the .NET reference codec.
-    Buffer.from([0x52, 0x41, 0x4c, 0x5a]),
-    u16le(1),
-    text16le(requireText(publication.reference, 'relocation reference')),
-    u32le(checksum),
-    dotnetGuidBytes(canonicalUuid(publication.aggregateId, 'aggregate id')),
-    u64le(aggregateGeneration),
-    bytes32le(Buffer.from(publication.inventoryDigest, 'hex')),
-    text16le(requireText(publication.targetOwnerId, 'target owner id')),
-    i64le(targetOwnerLeaseGeneration),
-    bytes32le(base)
-  ]);
-  if (payload.byteLength > AUTHORITY_ENVELOPE_MAX_BYTES) {
-    throw new TypeError(
-      `Location authority relocation payload exceeds ${AUTHORITY_ENVELOPE_MAX_BYTES / (1024 * 1024)} MiB.`
-    );
-  }
-  return payload;
 }
 
 function decodeAuthorityEnvelope(
@@ -1132,7 +862,10 @@ function decodeAuthorityEnvelope(
 
 function encodeMemberships(
   memberships: readonly ServiceRelocationMembership[],
-  participants: readonly ServiceRelocationParticipant[]
+  participants: readonly Pick<
+    ServiceRelocationParticipant,
+    'key' | 'objectKind' | 'objectGeneration'
+  >[]
 ) {
   validateMemberships(memberships, participants);
   return memberships
@@ -1150,7 +883,10 @@ function encodeMemberships(
 
 function validateMemberships(
   memberships: readonly ServiceRelocationMembership[],
-  participants: readonly ServiceRelocationParticipant[]
+  participants: readonly Pick<
+    ServiceRelocationParticipant,
+    'key' | 'objectKind' | 'objectGeneration'
+  >[]
 ): void {
   const byKey = new Map(participants.map((participant) => [participant.key, participant]));
   const actorKeys = new Set<string>();
@@ -1209,65 +945,6 @@ function canonicalUuid(value: unknown, label: string): string {
     throw new TypeError(`${label} must be a lowercase non-zero 128-bit identity.`);
   }
   return text;
-}
-
-function text16le(value: string): Buffer {
-  const bytes = Buffer.from(value, 'utf8');
-  if (bytes.byteLength < 1 || bytes.byteLength > 0xffff) {
-    throw new TypeError('Relocation text must contain 1..65535 UTF-8 bytes.');
-  }
-  return Buffer.concat([u16le(bytes.byteLength), bytes]);
-}
-
-function bytes32le(value: Uint8Array): Buffer {
-  const bytes = Buffer.from(value);
-  if (bytes.byteLength > AUTHORITY_ENVELOPE_MAX_BYTES) {
-    throw new TypeError(
-      `Relocation byte field exceeds ${AUTHORITY_ENVELOPE_MAX_BYTES / (1024 * 1024)} MiB.`
-    );
-  }
-  const length = Buffer.alloc(4);
-  length.writeInt32LE(bytes.byteLength);
-  return Buffer.concat([length, bytes]);
-}
-
-function u16le(value: number): Buffer {
-  const result = Buffer.alloc(2);
-  result.writeUInt16LE(value);
-  return result;
-}
-
-function u32le(value: number): Buffer {
-  const result = Buffer.alloc(4);
-  result.writeUInt32LE(value);
-  return result;
-}
-
-function u64le(value: bigint): Buffer {
-  const result = Buffer.alloc(8);
-  result.writeBigUInt64LE(value);
-  return result;
-}
-
-function i64le(value: bigint): Buffer {
-  const result = Buffer.alloc(8);
-  result.writeBigInt64LE(value);
-  return result;
-}
-
-function dotnetGuidBytes(value: string): Buffer {
-  const canonical = Buffer.from(value.replaceAll('-', ''), 'hex');
-  return Buffer.from([
-    canonical[3]!,
-    canonical[2]!,
-    canonical[1]!,
-    canonical[0]!,
-    canonical[5]!,
-    canonical[4]!,
-    canonical[7]!,
-    canonical[6]!,
-    ...canonical.subarray(8)
-  ]);
 }
 
 function canonicalUuidFromDotnetBytes(value: Uint8Array): string {
@@ -1359,23 +1036,6 @@ function canonicalText(value: Uint8Array): string {
   return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
 }
 
-function canonicalText8(value: string): Buffer {
-  const bytes = Buffer.from(requireText(value, 'canonical authority text'), 'utf8');
-  if (bytes.byteLength > 0xff) throw new TypeError('Canonical authority text8 is too long.');
-  return Buffer.concat([Buffer.of(bytes.byteLength), bytes]);
-}
-
-function canonicalOptionalText8(value: string): Buffer {
-  if (value.length === 0) return Buffer.of(0);
-  return canonicalText8(value);
-}
-
-function canonicalText16(value: string): Buffer {
-  const bytes = Buffer.from(requireText(value, 'canonical authority text'), 'utf8');
-  if (bytes.byteLength > 4096) throw new TypeError('Canonical authority text16 is too long.');
-  return Buffer.concat([canonicalU16(bytes.byteLength), bytes]);
-}
-
 function canonicalU16(value: number): Buffer {
   const result = Buffer.alloc(2);
   result.writeUInt16BE(value);
@@ -1388,38 +1048,6 @@ function canonicalU32(value: number): Buffer {
   }
   const result = Buffer.alloc(4);
   result.writeUInt32BE(value);
-  return result;
-}
-
-function canonicalU64(value: bigint): Buffer {
-  if (value < 0n || value > UINT64_MAX) {
-    throw new TypeError('Canonical authority u64 is invalid.');
-  }
-  const result = Buffer.alloc(8);
-  result.writeBigUInt64BE(value);
-  return result;
-}
-
-function canonicalOrdinal(value: bigint, name: string): bigint {
-  const ordinal = nonNegativeBigInt(value, name);
-  if (ordinal > MAX_RELOCATION_GENERATION) {
-    throw new TypeError(`${name} exceeds the ordinal range.`);
-  }
-  return ordinal;
-}
-
-function canonicalNonZeroOrdinal(value: bigint, name: string): bigint {
-  const ordinal = canonicalOrdinal(value, name);
-  if (ordinal === 0n) throw new TypeError(`${name} must be positive.`);
-  return ordinal;
-}
-
-function canonicalI64(value: bigint): Buffer {
-  if (value < 0n || value > MAX_RELOCATION_GENERATION) {
-    throw new TypeError('Canonical authority i64 is invalid.');
-  }
-  const result = Buffer.alloc(8);
-  result.writeBigInt64BE(value);
   return result;
 }
 
