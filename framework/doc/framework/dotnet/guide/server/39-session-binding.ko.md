@@ -146,7 +146,7 @@ public ValueTask<string?> OnDuplicateBindAsync(
 ```
 
 Callback이 거부하거나 제한 시간 안에 끝나지 않으면 Framework는 current binding을 유지하고
-incoming bind만 오류로 완료한다. Incoming 연결은 유지하고 command 51을 보내지 않는다.
+incoming bind만 오류로 완료한다. Incoming 연결은 유지되고, current Session에는 교체 통지가 가지 않는다.
 Callback이 수락하면 Framework는 새 Session을 current로 등록하고 이전 연결에 교체 절차를
 적용한다. Callback 제한 시간은 [Session–Actor binding §6](../../../common/spec/server/04-session/02-session-actor-binding.ko.md#6-rebind와-이전-연결-교체)을 따른다.
 

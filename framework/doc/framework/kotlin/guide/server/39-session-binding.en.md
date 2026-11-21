@@ -154,7 +154,7 @@ override fun onDuplicateBind(
 
 If the callback rejects the bind or fails to complete within its timeout, the framework keeps
 the current binding and ends the incoming bind with an error. The incoming connection stays open
-and the framework sends no command 51. On acceptance, the framework registers the new Session
+and the current Session receives no replacement notice. On acceptance, the framework registers the new Session
 as current and applies the replacement procedure to the previous connection. See
 [Session–Actor binding §6](../../../common/spec/server/04-session/02-session-actor-binding.en.md#6-rebind-and-replacing-the-previous-connection)
 for the callback timeout.
