@@ -1,3 +1,4 @@
+import { LegacyRelocationAuthorityFixture } from './legacy-relocation-authority-fixture';
 import { ZLinkStatefulAuthorityRouteRuntime } from '../../packages/framework/src/runtime/host/stateful-authority-route-runtime';
 import { encodeServiceInstanceAuthorityPayload } from '../../packages/framework/src/runtime/foundation/service-authority-payload-codec';
 import assert from 'node:assert/strict';
@@ -43,7 +44,6 @@ import { randomOperationId } from '../../packages/framework/src/runtime/location
 import { createFrameworkOptions } from '../../packages/framework/src/contracts/Configuration/RegistrationBuilders';
 import type { ZLinkActorContext } from '../../packages/framework/src/contracts/Actors/ZLinkActorContext';
 import type { ZLinkSpotNodeOptions } from '../../packages/framework/src/contracts/Configuration/RegistrationTypes';
-import { ServiceRelocationAuthorityPayloadCodec } from '../../packages/framework/src/runtime/foundation/service-relocation-runtime';
 import {
   decodeCreationOperationTerminalV1,
   encodeCreationOperationTerminalV1
@@ -270,7 +270,7 @@ for (const backend of ['provider', 'memory'] as const) {
             {
               kind: 'put',
               generationTransition: 'preserve',
-              payload: new ServiceRelocationAuthorityPayloadCodec().publish(payload, {
+              payload: new LegacyRelocationAuthorityFixture().publish(payload, {
                 reference: 'old-relocation',
                 checksumCrc32c: 0,
                 aggregateId: '00000000-0000-0000-0000-000000000001',
@@ -737,7 +737,7 @@ for (const backend of ['provider', 'memory'] as const) {
         members.push(
           await addMember('member-moving', old, {
             wrap: (payload) =>
-              new ServiceRelocationAuthorityPayloadCodec().publish(payload, {
+              new LegacyRelocationAuthorityFixture().publish(payload, {
                 reference: 'member-relocation',
                 checksumCrc32c: 0,
                 aggregateId: '00000000-0000-0000-0000-000000000002',
@@ -1100,7 +1100,7 @@ for (const backend of ['provider', 'memory'] as const) {
       if (first.kind !== 'reserved') throw new Error('reservation missing');
       const readyPayload =
         scenario === 'relocation' || scenario === 'relocationRecreate'
-          ? new ServiceRelocationAuthorityPayloadCodec().publish(
+          ? new LegacyRelocationAuthorityFixture().publish(
               Buffer.from('old-state-and-membership'),
               {
                 reference: 'reclaim-relocation',
@@ -3885,16 +3885,18 @@ test('exact User Spot manager call is single-use and returns the committed SpotR
 
   published = false;
   const spotWideSerial = new ZLinkSpotSerialTurnExecutor(true, 'owner');
-  let initialTurn = 0;
-  let resumedTurn = 0;
+  let initialSegment: object | undefined;
+  let resumedSegment: object | undefined;
   const yielded = await spotWideSerial.execute(async () => {
-    initialTurn = spotWideSerial.activeTurnId;
+    initialSegment = spotWideSerial.currentSegment;
+    assert.ok(initialSegment);
     const created = await manager.getOrCreate('room-yield', 'room').inMesh('mesh').yield();
-    resumedTurn = spotWideSerial.activeTurnId;
+    resumedSegment = spotWideSerial.currentSegment;
+    assert.ok(resumedSegment);
     return created;
   });
   assert.equal(yielded.state, ZLinkSpotCreateState.Created);
-  assert.notEqual(resumedTurn, initialTurn);
+  assert.notStrictEqual(resumedSegment, initialSegment);
 });
 
 test('User Spot create reports its first generated SpotId collision without another UUID or reservation', async () => {
@@ -4755,3 +4757,92 @@ test('capacity Store observations follow reserve commit external polling and fai
   assert.equal(await store.removeMeshNode(key, placement.owner), ZLinkLocationWriteStatus.Stored);
   assert.equal(store.confirmedCapacity(key, limits), undefined);
 });
+
+for (const outcome of ['abort', 'commit'] as const) {
+  test(`provider aggregate marker ${outcome} retains canonical relocation and terminal cleanup omits aggregate`, async () => {
+    const provider = new ZLinkInMemoryProviderLocationStore(() => new Date(100));
+    const store = new ZLinkLocationStoreRepository(provider, () => new Date(100));
+    const source = await writeTargetDescriptor(store, 'owner-a', 'node-a', 60000);
+    const destination = await writeTargetDescriptor(store, 'owner-b', 'node-b', 60000);
+    const key = authorityKey('canonical-relocation');
+    const active = await createActive(store, 'canonical-relocation', {
+      meshName: 'mesh',
+      nodeRid: source.rid,
+      nodeLifecycleGeneration: source.lifecycleGeneration,
+      owner: owner(source.ownerId, source.leaseGeneration)
+    });
+    const fence = {
+      nodeRid: String(source.rid),
+      nodeGeneration: source.lifecycleGeneration,
+      ownerId: source.ownerId,
+      ownerLeaseGeneration: source.leaseGeneration
+    };
+    const relocation = {
+      relocationId: '11111111-1111-4111-8111-111111111111',
+      phase: 'captured' as const,
+      source: fence,
+      target: null,
+      coordinator: { ...fence, expectedStoreVersion: active.storeVersion.value },
+      sourceInventorySha256: 'a'.repeat(64),
+      applicationVersion: 9007199254740993n
+    };
+    const updated = await store.compareExchangeAuthority(key, active.storeVersion, {
+      kind: 'put',
+      generationTransition: 'preserve',
+      payload: active.payload,
+      relocation
+    });
+    assert.equal(updated.kind, 'stored');
+    if (updated.kind !== 'stored') throw new Error('phase CAS failed');
+    const prepared = await store.prepareAggregate({
+      aggregateId: { value: relocation.relocationId } as ZLinkAggregateId,
+      aggregateGeneration: 1n,
+      participants: [
+        {
+          authorityKey: key,
+          expectedStoreVersion: updated.storeVersion,
+          ownerTransition: 'newOwner',
+          authorityPayload: Buffer.from('target-ready'),
+          membershipMutation: Buffer.from('membership')
+        }
+      ],
+      inventoryDigest: Buffer.alloc(32, 9),
+      targetDescriptor: { meshName: 'mesh', rid: destination.rid },
+      targetDescriptorLifecycleGeneration: destination.lifecycleGeneration,
+      capacity: userSpotCapacity('room'),
+      targetOwner: owner(destination.ownerId, destination.leaseGeneration)
+    });
+    assert.equal(prepared.kind, 'prepared');
+    if (prepared.kind !== 'prepared') throw new Error('aggregate prepare failed');
+    const rowKey = storeKey(opaqueRecordPreimage('authority', 'spot', 'canonical-relocation'));
+    const raw = await provider.read(rowKey);
+    if (raw.kind !== 'found') throw new Error('authority is missing');
+    const json = JSON.parse(Buffer.from(raw.value.bytes).toString());
+    assert.equal(json.aggregate.aggregateId, relocation.relocationId);
+    assert.equal(json.aggregate.relocation.phase, 'captured');
+    assert.equal(
+      json.aggregate.relocation.coordinator.expectedStoreVersion,
+      active.storeVersion.value
+    );
+    const projected = await store.readAuthority(key);
+    assert.equal(projected.kind, 'snapshot');
+    if (projected.kind !== 'snapshot') throw new Error('authority is missing');
+    assert.deepEqual(projected.relocation, relocation);
+    if (outcome === 'abort')
+      assert.equal((await store.abortAggregate(prepared.fence)).kind, 'aborted');
+    else assert.equal((await store.commitAggregate(prepared.fence)).kind, 'committed');
+    const afterAbort = await store.readAuthority(key);
+    if (afterAbort.kind !== 'snapshot') throw new Error('authority is missing');
+    assert.deepEqual(afterAbort.relocation, relocation);
+    const cleanup = await store.compareExchangeAuthority(key, afterAbort.storeVersion, {
+      kind: 'put',
+      generationTransition: 'preserve',
+      payload: afterAbort.payload,
+      relocation: null
+    });
+    assert.equal(cleanup.kind, 'stored');
+    const final = await provider.read(rowKey);
+    if (final.kind !== 'found') throw new Error('authority is missing');
+    assert.equal(JSON.parse(Buffer.from(final.value.bytes).toString()).aggregate, undefined);
+  });
+}

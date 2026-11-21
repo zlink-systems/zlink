@@ -124,7 +124,8 @@ internal static class ServiceWireCodec
     internal enum ActorAuthorityState : byte
     {
         Creating = 0,
-        Ready = 1
+        Ready = 1,
+        Closing = 2
     }
 
     internal enum RelocationPolicyKind : byte
@@ -1471,7 +1472,7 @@ internal static class ServiceWireCodec
     private static ActorAuthorityState ReadActorAuthorityState(ref Reader reader, DecodeContext context)
     {
         var raw = reader.U8();
-        return raw switch { 0 => ActorAuthorityState.Creating, 1 => ActorAuthorityState.Ready, _ => throw Error("actor-authority-state: unknown enum") };
+        return raw switch { 0 => ActorAuthorityState.Creating, 1 => ActorAuthorityState.Ready, 2 => ActorAuthorityState.Closing, _ => throw Error("actor-authority-state: unknown enum") };
     }
     private static void WriteActorAuthorityState(ref Writer writer, ActorAuthorityState value, DecodeContext context)
     {

@@ -24,7 +24,7 @@ virtual task_t<void> on_session_bound(
 runtime task 예외로 한 번 보고됩니다. `set_session_replacement_callback_timeout(...)`(기본 `30,000 ms`)이
 지나면 취소를 전달하고 같은 방식으로 한 번 보고합니다. Actor·runtime 종료 취소는 보고하지 않습니다.
 
-사용 예시는 [Session binding](../guide/server/39-session-binding.ko.md#7-actor의-bind-확정-통지)을 참조합니다.
+사용 예시는 [Session binding](../guide/server/39-session-binding.ko.md#6-actor의-bind-확정-통지)을 참조합니다.
 
 ---
 

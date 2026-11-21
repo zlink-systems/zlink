@@ -92,6 +92,7 @@ public sealed class PrepareRoomHandler : IZLinkSpotRequestHandler<RoomSpot, Prep
 {
     public ValueTask<RoomPrepared> HandleAsync(
         RoomSpot spot,
+        IZLinkMessageContext context,
         PrepareRoom request,
         CancellationToken ct
     )

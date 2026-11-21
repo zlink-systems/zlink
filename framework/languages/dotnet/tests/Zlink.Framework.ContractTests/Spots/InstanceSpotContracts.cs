@@ -209,6 +209,7 @@ public sealed class InstanceSpotContracts
     {
         public ValueTask HandleAsync(
             LeaderboardSpot spot,
+            IZLinkMessageContext context,
             ScorePosted message,
             CancellationToken cancellationToken
         )
