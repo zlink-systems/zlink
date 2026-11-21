@@ -1,5 +1,6 @@
 import type { ZLinkExecutionPolicy } from '../admission';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { FrameworkContextField } from '../framework-context';
 import { startOutsideStateLane } from './state-lane';
 import { isAbortError } from '../abort';
 import { RuntimeDisposal } from '../disposal';
@@ -26,11 +27,11 @@ interface ZLinkSpotSerialTurnExecutorLike {
   post<T>(operation: () => Promise<T> | T): Promise<T>;
 }
 
-const spotSerialTurnStorage = new AsyncLocalStorage<ZLinkSpotSerialTurnContext>();
+const spotSerialTurnStorage = new FrameworkContextField<ZLinkSpotSerialTurnContext>();
 
 export type ZLinkExecutionArea = 'application' | 'infrastructure';
 
-const executionAreaStorage = new AsyncLocalStorage<ZLinkExecutionArea>();
+const executionAreaStorage = new FrameworkContextField<ZLinkExecutionArea>();
 
 // Capture once through the execution owners, independently of module load scope.
 export const detachedMeshDispatchScope = startOutsideStateLane(() =>
