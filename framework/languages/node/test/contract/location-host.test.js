@@ -546,18 +546,38 @@ for (let iteration = 1; iteration <= 40; iteration++) {
       removeOwnerLeaseRenewedHandler() {},
       closeOwnerLeaseAdmission(error) { throw error; }
     };
+    const discoveryRuntime = host.locationOwner.ensureRuntime('play');
+    const discovery = createSpotNodeLocationAutoConnectContext(
+      discoveryRuntime, host.locationOwner.currentStores, {}
+    );
+    meshRuntime.locationAutoConnect = discovery;
+    const refresh = () => discovery.resolver.listLivePeers({ meshName: 'play' });
     host.locationOwner.runtime = runtime;
     host.runtimeState = framework.ZLinkFrameworkRuntimeState.Serving;
     host.createPublicSpotManager({});
     meshRuntime.meshNode = () => ({ status: () => ({ routingId: rid('node-a'), lifecycleGeneration: 1n }) });
-    const select = () => host.actorPlacement.options.target('play', 'SessionActor');
+    const select = async () => {
+      // Check the published snapshot without supplying a later discovery update.
+      const controller = new AbortController();
+      try {
+        return await Promise.race([
+          host.actorPlacement.options.target('play', 'SessionActor', controller.signal),
+          new Promise(resolve => setImmediate(resolve))
+        ]);
+      } finally {
+        controller.abort();
+      }
+    };
     assert.equal((await store.updateMeshNode({
       ...descriptor, descriptorRevision: 2n, state: framework.ZLinkFrameworkRuntimeState.Preparing
     }, framework.ZLinkLocationWriteIntent.Renew)).status, framework.ZLinkLocationWriteStatus.Stored);
+    await refresh();
     assert.equal(await select(), undefined, 'Preparing descriptor remains excluded');
     assert.equal((await store.updateMeshNode({
       ...descriptor, descriptorRevision: 3n
     }, framework.ZLinkLocationWriteIntent.Renew)).status, framework.ZLinkLocationWriteStatus.Stored);
+    await refresh();
+    assert.ok(await select(), 'Serving host starts as an eligible candidate');
     const applied = deferredRegressionStep();
     const release = deferredRegressionStep();
     const states = [];
@@ -582,9 +602,9 @@ for (let iteration = 1; iteration <= 40; iteration++) {
     });
     const recovery = waitForNextHostOwnerRecovery(host);
     try {
-      assert.ok(await select(), 'Serving host starts as an eligible candidate');
       handler(undefined, true);
       await Promise.race([applied.promise, recovery.then(() => { throw new Error('recovery ended before publication'); })]);
+      await refresh();
       assert.equal((await store.readOwnerLease(lease.token.ownerId)).kind, 'found');
       assert.ok(await select(), 'cleanup publication must preserve the Serving candidate');
     } finally {
@@ -594,6 +614,7 @@ for (let iteration = 1; iteration <= 40; iteration++) {
     }
     assert.deepEqual(states, [framework.ZLinkFrameworkRuntimeState.Serving]);
     assert.equal(cleanupCalls, 1, 'owner row cleanup still runs');
+    await refresh();
     assert.ok(await select(), 'candidate remains eligible after cleanup');
   });
 }
