@@ -48,7 +48,6 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.CompletionException;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -137,18 +136,7 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
     }
 
     private <T> T inRoutingIdStateLane(Supplier<T> work) {
-        try {
-            return routingIdStateLane.runAsync(work).toCompletableFuture().join();
-        } catch (CompletionException failure) {
-            Throwable cause = failure.getCause();
-            if (cause instanceof RuntimeException runtimeFailure) {
-                throw runtimeFailure;
-            }
-            if (cause instanceof Error error) {
-                throw error;
-            }
-            throw failure;
-        }
+        return routingIdStateLane.awaitResult(work);
     }
 
     public int placementWeight() {
