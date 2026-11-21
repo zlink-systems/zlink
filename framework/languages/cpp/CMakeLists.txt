@@ -2625,6 +2625,13 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     "framework-unit;framework-contract;framework-regression;execution" contract)
   target_use_zlink_gtest_main(test_cpp_framework_yield_terminal)
   add_zlink_framework_test(
+    test_cpp_framework_yield_resume_admission
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_yield_resume_admission.cpp
+    "framework-unit;framework-contract;framework-regression;execution" contract)
+  target_use_zlink_gtest_main(test_cpp_framework_yield_resume_admission)
+  target_include_directories(test_cpp_framework_yield_resume_admission PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
     test_cpp_framework_serializer_registry
     tests/Zlink.Framework.UnitTests/test_cpp_framework_serializer_registry.cpp
     "framework-unit;serializer")

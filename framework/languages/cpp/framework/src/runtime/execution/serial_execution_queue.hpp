@@ -364,40 +364,42 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
         bool cancel_requested = false;
     };
     active_turn_t *current_turn_locked () noexcept;
-    bool schedule_drain_locked (const std::function<void ()> &on_wake_rejected = {});
+    bool schedule_drain_locked (const std::function<void ()> &on_wake_rejected);
     bool publish_locked (std::unique_ptr<publication_node_t> node,
-                         std::function<void ()> *continuation = nullptr,
-                         work_item_t *rejected = nullptr,
-                         const std::function<void ()> &on_wake_rejected = {});
+                         std::function<void ()> *continuation,
+                         work_item_t *rejected,
+                         const std::function<void ()> &on_wake_rejected);
     void import_publications ();
     void import_publications_until (publication_node_t *cut);
     void run_shared_gate ();
     void release_shared_gate ();
     bool submit_control (std::function<void ()> control,
-                         std::function<void ()> *continuation = nullptr,
-                         const std::function<void ()> &on_wake_rejected = {});
+                         std::function<void ()> *continuation,
+                         const std::function<void ()> &on_wake_rejected);
     template <typename T, typename TControl> task_t<T> control_async (TControl control)
     {
         auto completion = std::make_shared<task_completion_source_t<T>> ();
         auto task = completion->task ();
-        if (!submit_control ([retained = weak_from_this ().lock (), completion,
-                              control = std::move (control)] () mutable {
-                try {
-                    if constexpr (std::is_void_v<T>) {
-                        control ();
-                        completion->complete (result_t<void>::success ());
-                    } else {
-                        completion->complete (result_t<T>::success (control ()));
-                    }
-                }
-                catch (const framework_exception_t &error) {
-                    completion->complete (detail::result_access_t::failure<T> (error));
-                }
-                catch (const std::exception &error) {
-                    completion->complete (result_t<T>::failure (
-                      framework_error_kind_t::internal_failure, error.what ()));
-                }
-            }))
+        if (!submit_control (
+              [retained = weak_from_this ().lock (), completion,
+               control = std::move (control)] () mutable {
+                  try {
+                      if constexpr (std::is_void_v<T>) {
+                          control ();
+                          completion->complete (result_t<void>::success ());
+                      } else {
+                          completion->complete (result_t<T>::success (control ()));
+                      }
+                  }
+                  catch (const framework_exception_t &error) {
+                      completion->complete (detail::result_access_t::failure<T> (error));
+                  }
+                  catch (const std::exception &error) {
+                      completion->complete (result_t<T>::failure (
+                        framework_error_kind_t::internal_failure, error.what ()));
+                  }
+              },
+              nullptr, {}))
             completion->complete (result_t<T>::failure (framework_error_kind_t::shutting_down,
                                                         "shared Spot gate executor is stopping"));
         return task;
