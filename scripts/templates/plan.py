@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 
 # Changes here re-run every template.
-PLAN_INPUTS = (".github/workflows/framework-templates.yml", "scripts/templates/")
+PLAN_INPUTS = (".github/workflows/framework-templates.yml", "scripts/templates/", "scripts/ci/gradle/")
 # C++ runs in its own job (own runner and parallelism); everything else shares one job.
 CPP = "cpp"
 
@@ -53,7 +53,7 @@ def select(entries, key, requested):
 
 
 def changed_only(entries, changed):
-    if any(p == PLAN_INPUTS[0] or p.startswith(PLAN_INPUTS[1]) for p in changed):
+    if any(p == PLAN_INPUTS[0] or p.startswith(PLAN_INPUTS[1:]) for p in changed):
         return entries
     # A template owns its whole directory (the parent of my-game).
     return [e for e in entries if any(p.startswith(e["path"].rsplit("/", 1)[0] + "/") for p in changed)]
