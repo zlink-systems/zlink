@@ -1732,8 +1732,13 @@ void app_t::_apply_zlink_framework ()
             const auto location_options = options.location_options ();
             _state->services.add_factory<runtime::location_runtime_t> (
               [location_options, monitoring = _state->monitoring] (service_provider_t &provider) {
+                  const auto resolver = detail::service_scope_access_t::get_required_shared<
+                    runtime::store_location_resolvers_t> (provider);
                   auto runtime = std::make_unique<runtime::location_runtime_t> (
-                    provider.get_required<location_repository_t> (), location_options);
+                    provider.get_required<location_repository_t> (), location_options,
+                    [resolver] (authority_key_t key, std::optional<std::string> version) {
+                        resolver->observe_authority_version (key, std::move (version));
+                    });
                   runtime->bind_monitoring (monitoring);
                   return runtime;
               },
