@@ -1909,7 +1909,7 @@ route depends on the reread owner.
   received by the current owner holding that value.
 - **If the owner is neither the first target nor the source** (a further move followed from the first
   target), the reread authority no longer holds the first target's commit value, and the Store issues
-  generations from a global counter, so the source cannot know it. The source installs no §7.3 route.
+  a new generation from that ID's counter on each later move, so the source cannot know it. The source installs no §7.3 route.
   Under this **chained-move exception**, a message that later reaches the source ends with §7.3's
   no-route result (`Unavailable`). The source neither creates a route straight to the reread current
   owner nor guesses the first target's generation. Bound Session routes are moved by each target's command 44

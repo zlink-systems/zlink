@@ -166,6 +166,31 @@ commit's intermediate state. If even one condition is false, it returns
 `Conflict`, and mutation and version increments are zero. `Conflict` doesn't
 return the failed condition or the current value.
 
+### 4.1 Capacity counters
+
+Aggregates that many callers add to and subtract from at once, such as capacity, are not gated with a
+`Version` condition, because a `Version` condition makes creates of different objects conflict with
+each other. Such values are stored as **bare decimal counter keys** (the §8 counter format: `0..2^63-1`
+without sign or leading zero) and use only these two operations.
+
+- `SumAtMost(keys, delta, limit)` condition: true only when the sum of the listed keys' current values
+  (absent counts as `0`) plus `delta` is at most `limit`.
+- `Add(key, delta)` mutation: adds `delta` (may be negative) to the key's value and puts it. If a result
+  is below `0`, the whole batch ends as `Corrupt` with zero mutations. `Corrupt` differs from `Conflict`
+  and means Store data corruption (the negative-release rule of
+  [Location runtime §6.1](01-location-runtime.en.md)).
+
+The provider interprets only the keys these two operations name as numbers; every other key stays
+opaque. `SumAtMost` and `Add` in one batch are evaluated and applied in one commit. A batch with `Add`
+and no condition does not conflict with other callers' `Add`.
+
+The Framework keeps MeshNode capacity as one counter key per Mesh name, RID, dimension (Actor total,
+Spot total, per Spot kind and type) and state (`active`, `pending`). A reservation puts, per dimension,
+`SumAtMost([active, pending], n, limit)` and `Add(pending, n)`; a commit puts `Add(pending, -n)` and
+`Add(active, n)`; a release puts `Add(..., -n)` — each in the same batch as its authority change.
+**Only the reservation checks the limit.** A commit or a relocation move transfers space already
+reserved, so it does not fail if the limit was lowered in between.
+
 The following bounds apply to a batch.
 
 - The total unique keys appearing across conditions and mutations is at most
@@ -280,8 +305,25 @@ the same object incarnation.
 | Logical key | Issued value |
 |---|---|
 | `zlink:v11:owner-counter` | `OwnerLeaseGeneration` (unchanged) |
-| `zlink:v11:object-counter` | `ObjectGeneration` |
-| `zlink:v11:authority-owner-counter` | `AuthorityOwnerGeneration` |
+| `zlink:v12:object-counter\0<kind>\0<id>` | `ObjectGeneration` of that Actor or Spot ID |
+| `zlink:v12:authority-owner-counter\0<kind>\0<id>` | `AuthorityOwnerGeneration` of that Actor or Spot ID |
+
+`<kind>` is `actor` or `spot`, and `<id>` is the UTF-8 bytes of the public ActorId or SpotId.
+**There is one `ObjectGeneration` counter and one `AuthorityOwnerGeneration` counter per ID.** The two
+values only order incarnations and owners within one ID; no rule compares values of different IDs to
+decide execution. Creates and commits of different objects therefore do not conflict on a counter
+condition.
+
+- **Retention:** a per-ID counter row is not removed on object deletion, authority cleanup, or retention
+  expiry. A caller's ActorRef or SpotRef has no lifetime bound ([Location runtime §7.1](01-location-runtime.en.md)),
+  so if the row disappeared and the same ID received a lower value again, an old ref's control could
+  reach the new incarnation. Storage grows with the number of IDs issued.
+- **Transition floor:** when the row is absent, the next value is not `1` but the value of
+  `zlink:v12:generation-floor` (a bare decimal). When moving from v11, write once per Store the larger of
+  the v11 `object-counter` and `authority-owner-counter` to this key; a new Store writes `1`. The key is
+  never changed afterwards. No value issued before the transition is issued again for the same ID.
+- **Relocation:** an aggregate relocation issues one value per participant from that ID's
+  `authority-owner-counter`. It does not hand out a global contiguous range.
 
 Each value is bare UTF-8 canonical decimal: no sign, leading zero, JSON
 envelope, or `recordVersion`. A missing row means the next value is `1`;
@@ -291,6 +333,7 @@ issued. A row storing `2^63-1` is exhausted and returns the typed
 `GenerationExhausted` result without changing either record or counter.
 Therefore, the maximum issued value is `2^63-2`.
 
+Per-ID counters follow the same rule: they are issued in the same batch as that ID's record.
 **The counter mutation must be in the same conditional write batch as the
 record it gates (one `EVAL`).** The provider mapping
 `{prefix}:{zlink-location-v3}:opaque:{sha256hex(logicalKey)}` gives every

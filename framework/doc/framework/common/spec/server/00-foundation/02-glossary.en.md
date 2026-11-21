@@ -363,7 +363,7 @@ still the same logical incarnation continuing.
 | Shape | An increasing generation value |
 | .NET notation | `ulong` |
 | Public composition | A single integer in the range `1..long.MaxValue`. Represented as a decimal string in JSON. |
-| Creation/management | Issued by the Location Store provider's transaction-domain global counter. |
+| Creation/management | Issued by the Location Store provider from that Actor or Spot ID's counter ([Location Store §8](../05-location-relocation/02-location-store-redis.en.md)). Values of different IDs are not compared. |
 | Lifetime | Kept for the duration of the same logical incarnation. Unchanged across same-node Join, cross-node relocation, and `RecreateOnRelocation`. A new value is issued when a new object is created after ending the logical incarnation. Doesn't wrap past the maximum value — fails with `GenerationExhausted` instead. |
 
 <a id="owner"></a>

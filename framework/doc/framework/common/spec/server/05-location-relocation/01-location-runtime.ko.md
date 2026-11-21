@@ -1704,7 +1704,7 @@ owner에 따라 다르다.
   generation을 유지한다), 다른 node를 거쳐 첫 target으로 돌아왔다면 첫 target이 지금 보유한 authority의
   값이다. 어느 경우든 route가 전달하는 message는 그 값을 가진 현재 owner가 받는다.
 - **Owner가 첫 target도 source도 아니면**(첫 target에서 다음 이동이 이어졌다) 다시 읽은 authority에는
-  첫 target의 commit 값이 남지 않고, Store는 generation을 전역 counter로 발급하므로 source는 그 값을
+  첫 target의 commit 값이 남지 않고, Store는 그 뒤 이동마다 그 ID의 counter에서 새 generation을 발급하므로 source는 그 값을
   알 수 없다. Source는 §7.3의 route를 설치하지 않는다. 이 **연속 이동 예외**에서 이후 source로 도착한
   message는 §7.3의 route 없음 결과(`Unavailable`)로 끝난다. Source는 다시 읽은 현재 owner로 직접 가는
   route를 만들거나 첫 target의 generation을 추측하지 않는다. Bound Session의 route는 각 target의 command 44와 이후

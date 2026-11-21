@@ -142,6 +142,28 @@ Write request는 condition 집합과 mutation 집합으로 구성한다.
 `Conflict`를 반환하고 mutation과 version 증가는 0이다. `Conflict`는 실패한 condition이나
 current value를 반환하지 않는다.
 
+### 4.1 수용 공간 counter
+
+수용 공간처럼 여러 caller가 동시에 같은 값을 더하고 빼는 집계는 `Version` 조건으로 gate하지 않는다.
+`Version` 조건은 서로 다른 object의 생성끼리도 충돌시키기 때문이다. 이런 값은 **bare decimal counter
+key**(§8의 counter와 같은 형식: sign·leading zero 없는 `0..2^63-1`)로 저장하고 다음 두 연산만 쓴다.
+
+- `SumAtMost(keys, delta, limit)` condition: 나열한 key들의 현재 값(없으면 `0`) 합에 `delta`를 더한
+  값이 `limit` 이하일 때만 참이다.
+- `Add(key, delta)` mutation: key 값에 `delta`(음수 가능)를 더해 Put한다. 결과가 `0`보다 작으면 batch
+  전체가 `Corrupt`로 끝나고 mutation은 0이다. `Corrupt`는 `Conflict`와 다른 결과이며 Store 데이터 손상을
+  뜻한다([Location runtime §6.1](01-location-runtime.ko.md)의 반납 음수 판정).
+
+Provider는 이 두 연산이 가리키는 key만 숫자로 해석한다. 다른 key는 여전히 opaque다. 같은 batch의
+`SumAtMost`와 `Add`는 하나의 commit에서 평가·적용된다. `Add`만 있고 조건이 없는 batch는 다른
+caller의 `Add`와 충돌하지 않는다.
+
+Framework는 MeshNode 수용 공간을 Mesh 이름·RID·차원(Actor 총수, Spot 총수, Spot 종류·type별 수)·상태
+(`active`, `pending`)마다 counter key 하나로 둔다. 예약은 차원마다 `SumAtMost([active, pending], n,
+limit)`와 `Add(pending, n)`을, commit은 `Add(pending, -n)`과 `Add(active, n)`을, 반납은 `Add(..., -n)`을
+그 authority 변경과 같은 batch에 넣는다. **상한은 예약에서만 검사한다** — commit과 relocation 이동은
+이미 예약한 공간을 옮기므로 그 사이 limit이 낮아져도 실패하지 않는다.
+
 Batch에는 다음 bound를 적용한다.
 
 - Condition과 mutation에 나타난 unique key 합계는 최대 2,048개다.
@@ -230,8 +252,24 @@ incarnation 안에서 authority owner가 바뀐 순서를 나타내는
 | Logical key | 발급 값 |
 |---|---|
 | `zlink:v11:owner-counter` | `OwnerLeaseGeneration`(변경 없음) |
-| `zlink:v11:object-counter` | `ObjectGeneration` |
-| `zlink:v11:authority-owner-counter` | `AuthorityOwnerGeneration` |
+| `zlink:v12:object-counter\0<kind>\0<id>` | 그 Actor·Spot ID의 `ObjectGeneration` |
+| `zlink:v12:authority-owner-counter\0<kind>\0<id>` | 그 Actor·Spot ID의 `AuthorityOwnerGeneration` |
+
+`<kind>`는 `actor` 또는 `spot`이고 `<id>`는 공개 ActorId·SpotId의 UTF-8 bytes다.
+**`ObjectGeneration`과 `AuthorityOwnerGeneration` counter는 ID마다 하나다.** 두 값은 같은 ID 안의
+incarnation과 owner 순서만 구분하고, 서로 다른 ID의 값을 비교해 실행 여부를 정하는 규칙은 없다.
+따라서 서로 다른 object의 생성·commit은 counter 조건으로 충돌하지 않는다.
+
+- **보존:** ID별 counter 행은 object 삭제, authority 정리, retention 만료로 지우지 않는다. caller의
+  ActorRef·SpotRef에는 수명 상한이 없으므로([Location runtime §7.1](01-location-runtime.ko.md)), 행이
+  사라진 뒤 같은 ID가 낮은 값을 다시 받으면 옛 ref의 제어가 새 incarnation에 닿을 수 있다. 저장 공간은
+  발급한 ID 수에 비례한다.
+- **전환 기준값:** 행이 없을 때 다음 값은 `1`이 아니라 `zlink:v12:generation-floor`(bare decimal)의 값이다.
+  v11에서 전환할 때 Store마다 한 번, v11 `object-counter`와 `authority-owner-counter` 중 큰 값을 이 key에
+  쓴다. 새로 만드는 Store는 `1`을 쓴다. 이 key는 그 뒤 바꾸지 않는다. 전환 전에 발급된 어떤 값도 전환 뒤
+  같은 ID에 다시 발급되지 않는다.
+- **Relocation:** aggregate relocation은 participant마다 그 ID의 `authority-owner-counter`에서 하나씩
+  발급한다. 전역 연속 범위를 나눠 주지 않는다.
 
 각 value는 sign, leading zero, JSON envelope, `recordVersion`이 없는 bare UTF-8 canonical
 decimal이다. 행이 없으면 다음 값은 `1`이고, `v`를 발급하면 CAS로 `v + 1`을 Put한다. `n`개
@@ -241,7 +279,7 @@ decimal이다. 행이 없으면 다음 값은 `1`이고, `v`를 발급하면 CAS
 발급할 수 있는 값은 `2^63-2`다.
 
 **Counter mutation은 그 값이 gate하는 record와 같은 conditional write batch(하나의
-`EVAL`)에 반드시 들어가야 한다.** Provider mapping
+`EVAL`)에 반드시 들어가야 한다.** ID별 counter도 같다 — 그 ID의 record와 같은 batch에서 발급한다. Provider mapping
 `{prefix}:{zlink-location-v3}:opaque:{sha256hex(logicalKey)}`은 모든 logical counter를
 자동으로 같은 `{zlink-location-v3}` hash slot에 둔다. Counter logical key는 `authority\0`
 및 descriptor scan-preimage prefix 밖에 둔다.
