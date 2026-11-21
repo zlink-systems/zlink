@@ -161,10 +161,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # PR-stage queue checks (queue_checks_only) run linux-x64 only. main queue
-        # batches add linux-arm64. Hosted macOS arm64 capacity runs out often enough
+        # PR-stage queue checks and main queue batches run linux-x64 only: batches share
+        # 20 hosted-runner slots and arm64 left 10+ batch jobs waiting (2026-11-21). Hosted macOS arm64 capacity runs out often enough
         # to fail whole batches, so macOS runs in schedule, manual and release runs.
-        target: ${{ fromJSON(inputs.single_worker && '[{"name":"linux-x64","runner":"ubuntu-24.04","rid":"linux-x64","core_platform":"linux-x64"}]' || inputs.queue_checks_only && '[{"name":"linux-x64","runner":"ubuntu-24.04","rid":"linux-x64","core_platform":"linux-x64"}]' || startsWith(github.ref_name, 'mergify/merge-queue/') && '[{"name":"linux-x64","runner":"ubuntu-24.04","rid":"linux-x64","core_platform":"linux-x64"},{"name":"linux-arm64","runner":"ubuntu-24.04-arm","rid":"linux-arm64","core_platform":"linux-arm64"}]' || '[{"name":"linux-x64","runner":"ubuntu-24.04","rid":"linux-x64","core_platform":"linux-x64"},{"name":"linux-arm64","runner":"ubuntu-24.04-arm","rid":"linux-arm64","core_platform":"linux-arm64"},{"name":"osx-arm64","runner":"macos-15","rid":"osx-arm64","core_platform":"macos-arm64"}]') }}
+        target: ${{ fromJSON(inputs.single_worker && '[{"name":"linux-x64","runner":"ubuntu-24.04","rid":"linux-x64","core_platform":"linux-x64"}]' || inputs.queue_checks_only && '[{"name":"linux-x64","runner":"ubuntu-24.04","rid":"linux-x64","core_platform":"linux-x64"}]' || startsWith(github.ref_name, 'mergify/merge-queue/') && '[{"name":"linux-x64","runner":"ubuntu-24.04","rid":"linux-x64","core_platform":"linux-x64"}]' || '[{"name":"linux-x64","runner":"ubuntu-24.04","rid":"linux-x64","core_platform":"linux-x64"},{"name":"linux-arm64","runner":"ubuntu-24.04-arm","rid":"linux-arm64","core_platform":"linux-arm64"},{"name":"osx-arm64","runner":"macos-15","rid":"osx-arm64","core_platform":"macos-arm64"}]') }}
         # Windows runs on schedule, manual and release runs; queue batches and queue checks omit Windows.
         include: ${{ fromJSON((inputs.single_worker || inputs.queue_checks_only || startsWith(github.ref_name, 'mergify/merge-queue/')) && '[]' || '[{"target":{"name":"win-x64","runner":"windows-latest","rid":"win-x64","core_platform":"windows-x64"}}]') }}
     env:

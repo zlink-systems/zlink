@@ -2224,7 +2224,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                             + " failureCode="
                             + terminal.failureCode(),
                     terminal.failureCode(),
-                    java.util.Map.of());
+                    ZLinkFrameworkErrorOrigin.frameworkMetadata());
         }
         final ZLinkCanonicalActorJoinReplyCodec.ActorJoinReply reply;
         try {
