@@ -1,6 +1,7 @@
 const { inspectRuntime } = require('../../packages/framework/dist/runtime/internal-observation');
 const { createMeshHost } = require('./fixtures/mesh-host');
 const { createRelayHost } = require('./fixtures/relay-host');
+const { createSpotNodeLocationAutoConnectContext } = require('../../packages/framework/dist/runtime/spots/spot-node-autoconnect');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { performance } = require('node:perf_hooks');
@@ -26,7 +27,7 @@ const detachedTaskRunner = new ZLinkRuntimeTaskRunner(
 const nestjs = require('../../packages/nestjs/dist');
 
 for (const emptyFirstPage of [true, false]) {
-  test(`Actor placement consumes continuation after ${emptyFirstPage ? 'empty page' : 'candidate and preserves Store failure'}`, async () => {
+  test(`Actor discovery consumes continuation after ${emptyFirstPage ? 'empty page' : 'candidate and preserves Store failure'}`, async () => {
     const provider = new framework.ZLinkInMemoryProviderLocationStore();
     const { host, meshRuntime: hostMesh } = createMeshHost({
       registration: framework.createFrameworkRegistration({
@@ -39,6 +40,7 @@ for (const emptyFirstPage of [true, false]) {
       state: framework.ZLinkFrameworkRuntimeState.Serving, objectRole: 'server',
       placementWeight: 100, entrySpotId: 'entry', ownerId: 'owner', leaseGeneration: 1n,
       objectCapabilities: [{ objectKind: 'actor', stableType: 'SessionActor', entryAccepted: true }],
+      descriptorRevision: 1n, endpoint: 'tcp://peer', channelWeights: {}, securityIdentity: '',
       populationCapacity: { actors: { active: 0, reserved: 0, limit: 1000 } }
     };
     const calls = [];
@@ -61,11 +63,16 @@ for (const emptyFirstPage of [true, false]) {
     host.createPublicSpotManager({});
     Object.assign(hostMesh, { meshNode: () => ({ status: () => ({ routingId: 'node-a', lifecycleGeneration: 1n }) }) });
     const signal = new AbortController().signal;
+    const runtime = host.locationOwner.ensureRuntime('play');
+    const discovery = createSpotNodeLocationAutoConnectContext(runtime, host.locationOwner.currentStores, {});
+    hostMesh.locationAutoConnect = discovery;
+    const refresh = () => discovery.resolver.listLivePeers({ meshName: 'play' }, signal);
     const select = () => host.actorPlacement.options.target('play', 'SessionActor', signal);
     if (emptyFirstPage) {
+      await refresh();
       assert.equal((await select()).nodeRid, 'node-a');
     } else {
-      await assert.rejects(select, error => error === failure);
+      await assert.rejects(refresh, error => error === failure);
     }
     assert.equal(calls.length, 2);
     assert.equal(calls[1].page.continuationToken, 'next');
@@ -539,18 +546,38 @@ for (let iteration = 1; iteration <= 40; iteration++) {
       removeOwnerLeaseRenewedHandler() {},
       closeOwnerLeaseAdmission(error) { throw error; }
     };
+    const discoveryRuntime = host.locationOwner.ensureRuntime('play');
+    const discovery = createSpotNodeLocationAutoConnectContext(
+      discoveryRuntime, host.locationOwner.currentStores, {}
+    );
+    meshRuntime.locationAutoConnect = discovery;
+    const refresh = () => discovery.resolver.listLivePeers({ meshName: 'play' });
     host.locationOwner.runtime = runtime;
     host.runtimeState = framework.ZLinkFrameworkRuntimeState.Serving;
     host.createPublicSpotManager({});
     meshRuntime.meshNode = () => ({ status: () => ({ routingId: rid('node-a'), lifecycleGeneration: 1n }) });
-    const select = () => host.actorPlacement.options.target('play', 'SessionActor');
+    const select = async () => {
+      // Check the published snapshot without supplying a later discovery update.
+      const controller = new AbortController();
+      try {
+        return await Promise.race([
+          host.actorPlacement.options.target('play', 'SessionActor', controller.signal),
+          new Promise(resolve => setImmediate(resolve))
+        ]);
+      } finally {
+        controller.abort();
+      }
+    };
     assert.equal((await store.updateMeshNode({
       ...descriptor, descriptorRevision: 2n, state: framework.ZLinkFrameworkRuntimeState.Preparing
     }, framework.ZLinkLocationWriteIntent.Renew)).status, framework.ZLinkLocationWriteStatus.Stored);
+    await refresh();
     assert.equal(await select(), undefined, 'Preparing descriptor remains excluded');
     assert.equal((await store.updateMeshNode({
       ...descriptor, descriptorRevision: 3n
     }, framework.ZLinkLocationWriteIntent.Renew)).status, framework.ZLinkLocationWriteStatus.Stored);
+    await refresh();
+    assert.ok(await select(), 'Serving host starts as an eligible candidate');
     const applied = deferredRegressionStep();
     const release = deferredRegressionStep();
     const states = [];
@@ -575,9 +602,9 @@ for (let iteration = 1; iteration <= 40; iteration++) {
     });
     const recovery = waitForNextHostOwnerRecovery(host);
     try {
-      assert.ok(await select(), 'Serving host starts as an eligible candidate');
       handler(undefined, true);
       await Promise.race([applied.promise, recovery.then(() => { throw new Error('recovery ended before publication'); })]);
+      await refresh();
       assert.equal((await store.readOwnerLease(lease.token.ownerId)).kind, 'found');
       assert.ok(await select(), 'cleanup publication must preserve the Serving candidate');
     } finally {
@@ -587,6 +614,7 @@ for (let iteration = 1; iteration <= 40; iteration++) {
     }
     assert.deepEqual(states, [framework.ZLinkFrameworkRuntimeState.Serving]);
     assert.equal(cleanupCalls, 1, 'owner row cleanup still runs');
+    await refresh();
     assert.ok(await select(), 'candidate remains eligible after cleanup');
   });
 }
