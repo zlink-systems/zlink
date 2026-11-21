@@ -27,6 +27,10 @@ for (const expire of [true, false]) {
         sourceNodeGeneration: 1n
       }),
       store: {
+        // No current Actor authority: creation proceeds to the reservation.
+        async readAuthority() {
+          return { kind: 'missing', storeNow: new Date() };
+        },
         async reserve(_request, signal) {
           reservationAttempts += 1;
           if (!expire) caller.abort(callerCancellation);
