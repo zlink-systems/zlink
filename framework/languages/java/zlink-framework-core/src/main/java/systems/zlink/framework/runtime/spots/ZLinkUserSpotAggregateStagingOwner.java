@@ -773,18 +773,7 @@ final class ZLinkUserSpotAggregateStagingOwner {
     }
 
     private static <T> T inStateLane(Staged staged, Supplier<T> work) {
-        try {
-            return staged.stateLane.runAsync(work).toCompletableFuture().join();
-        } catch (CompletionException failure) {
-            Throwable cause = failure.getCause();
-            if (cause instanceof RuntimeException runtimeFailure) {
-                throw runtimeFailure;
-            }
-            if (cause instanceof Error error) {
-                throw error;
-            }
-            throw failure;
-        }
+        return staged.stateLane.awaitResult(work);
     }
 
     private static void validateJournal(
