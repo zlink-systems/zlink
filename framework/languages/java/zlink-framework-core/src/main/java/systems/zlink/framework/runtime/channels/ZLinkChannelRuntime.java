@@ -636,7 +636,11 @@ public final class ZLinkChannelRuntime
         this.handlerExecutor =
                 ZLinkFlowContext.propagating(
                         Objects.requireNonNull(registration.handlerExecutor(), "handlerExecutor"));
-        this.dispatchRegistry = new ZLinkChannelDispatchRegistry(registration.serialExecutor());
+        this.dispatchRegistry =
+                new ZLinkChannelDispatchRegistry(
+                        registration.serialExecutor(),
+                        registration.handlerExecutor(),
+                        registration.workers().maxThreads());
         this.filterTypes = List.copyOf(registration.filters());
         this.channelHandlerInvoker =
                 new ZLinkChannelHandlerInvoker(
@@ -1380,15 +1384,6 @@ public final class ZLinkChannelRuntime
             result.rejectSubmission(failure);
         }
         return ZLinkSerialExecutionQueue.manageCurrent(result);
-    }
-
-    public CompletionStage<Void> sendToSpotViaRouterChannel(
-            String routerChannelId,
-            RoutingId targetNodeRid,
-            String targetSpotId,
-            List<Message> spotParts) {
-        return sendToSpotViaRouterChannel(
-                routerChannelId, targetNodeRid, targetSpotId, 0L, 0L, spotParts);
     }
 
     public CompletionStage<Void> sendToSpotViaRouterChannel(

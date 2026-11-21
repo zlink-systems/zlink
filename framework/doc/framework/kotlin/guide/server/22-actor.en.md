@@ -134,6 +134,15 @@ The call that creates the Actor in that mesh follows.
 The result tells the two apart: `created` when it was made for the first time, `existing` when
 one was found.
 
+#### 3.1.1 When creation exceeds its deadline {#creation-deadline}
+
+`getOrCreate` ends with `DeadlineExceeded` if it fails to complete within its deadline.
+Caller cancellation is reported through the language's cancellation mechanism.
+If the deadline expires while waiting for another call's creation attempt, that attempt can still succeed.
+
+At the deadline, `await()` fails with a `ZLinkFrameworkException` whose `kind()` is `ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED`.
+Caller cancellation is observable as cancellation of the coroutine await.
+
 ### 3.2 Calling
 
 Give only the actor id. The Framework finds which Spot that Actor is in now.
@@ -150,9 +159,8 @@ When you need an answer, send a request.
 
 ### 3.3 Generation in a Reference
 
-The **generation** in an `ActorRef` or `SpotRef` counts which instance of the same id this is. The
-Location Store issues it when the object is created; it does not change on join, relocation, or
-`RecreateOnRelocation`. Destroying and creating the same id again receives a new generation.
+The [generation](34-activation-lifetime.en.md#object-generation) in an `ActorRef` or `SpotRef`
+distinguishes instances that use the same ID.
 
 Ordinary messages do not look at generation: they go to the object that exists now. Lifecycle calls
 such as close, delete, and move through a reference take effect only while that reference's

@@ -29,6 +29,8 @@ public final class ZLinkObjectServerDescriptorPublisher {
     private final ZLinkLocationRuntime runtime;
     private final ZLinkFrameworkRegistration registration;
     private final Map<String, ZLinkInternalMeshNode> nodes;
+    private final java.util.function.Function<ZLinkMeshNodeDescriptor, CompletionStage<Void>>
+            observePublication;
     private final AtomicLong revision = new AtomicLong(1);
     private final Map<String, Claim> claims = new ConcurrentHashMap<>();
     // Option changes recorded and option changes a publication has confirmed. A publication reads
@@ -42,11 +44,14 @@ public final class ZLinkObjectServerDescriptorPublisher {
             ZLinkLocationRepository store,
             ZLinkLocationRuntime runtime,
             ZLinkFrameworkRegistration registration,
-            Map<String, ZLinkInternalMeshNode> nodes) {
+            Map<String, ZLinkInternalMeshNode> nodes,
+            java.util.function.Function<ZLinkMeshNodeDescriptor, CompletionStage<Void>>
+                    observePublication) {
         this.store = store;
         this.runtime = runtime;
         this.registration = registration;
         this.nodes = Map.copyOf(nodes);
+        this.observePublication = java.util.Objects.requireNonNull(observePublication);
     }
 
     /** Records that a runtime option changed a value every descriptor reads. */
@@ -116,7 +121,7 @@ public final class ZLinkObjectServerDescriptorPublisher {
                                                             descriptor.rid()),
                                                     () ->
                                                             store.updateMeshNode(descriptor, intent)
-                                                                    .thenAccept(
+                                                                    .thenCompose(
                                                                             result -> {
                                                                                 if (result.status()
                                                                                         != ZLinkLocationWriteStatus
@@ -124,7 +129,10 @@ public final class ZLinkObjectServerDescriptorPublisher {
                                                                                     throw new ZLinkLocationStoreFailureException(
                                                                                             ZLinkFrameworkErrorKind
                                                                                                     .NOT_CONFIGURED,
-                                                                                            "MeshNode descriptor publication failed"
+                                                                                            "MeshNode"
+                                                                                                    + " descriptor"
+                                                                                                    + " publication"
+                                                                                                    + " failed"
                                                                                                     + " [mesh="
                                                                                                     + descriptor
                                                                                                             .meshName()
@@ -148,13 +156,20 @@ public final class ZLinkObjectServerDescriptorPublisher {
                                                                                                                 .ownerId(),
                                                                                                         descriptor
                                                                                                                 .leaseGeneration()));
-                                                                                claims.replace(
+                                                                                if (claims.replace(
                                                                                         meshName,
                                                                                         attempt,
                                                                                         new Claim(
                                                                                                 leaseGeneration,
                                                                                                 null,
-                                                                                                true));
+                                                                                                true))) {
+                                                                                    return observePublication
+                                                                                            .apply(
+                                                                                                    descriptor);
+                                                                                }
+                                                                                return CompletableFuture
+                                                                                        .completedFuture(
+                                                                                                null);
                                                                             }))));
         }
         return requirePublicationResults(writes);
@@ -230,9 +245,7 @@ public final class ZLinkObjectServerDescriptorPublisher {
         long descriptorRevision = revision.getAndIncrement();
         ZLinkMeshNodeMonitoringProjection placement =
                 ZLinkMeshNodeMonitoringProjection.fromRegistration(
-                        configured,
-                        descriptorRevision,
-                        state == ZLinkFrameworkRuntimeState.SERVING ? node.placementWeight() : 0);
+                        configured, descriptorRevision, node.placementWeight());
         return new ZLinkMeshNodeDescriptor(
                 configured.meshName(),
                 node.status().routingId(),
@@ -299,16 +312,20 @@ public final class ZLinkObjectServerDescriptorPublisher {
                                 if (failure == null) {
                                     continue;
                                 }
-                                if (failure instanceof UnconfirmedPublicationException
+                                if (!(failure instanceof UnconfirmedPublicationException
                                         || failure instanceof TimeoutException
                                         || failure
                                                         instanceof
                                                         ZLinkFrameworkException frameworkFailure
                                                 && frameworkFailure.kind()
-                                                        == ZLinkFrameworkErrorKind.UNAVAILABLE) {
-                                    unavailable = failure;
-                                } else {
+                                                        == ZLinkFrameworkErrorKind.UNAVAILABLE)) {
                                     return CompletableFuture.failedFuture(failure);
+                                }
+                                // A Store failure gives the caller the cause of an unconfirmed
+                                // write.
+                                if (unavailable == null
+                                        || unavailable instanceof TimeoutException) {
+                                    unavailable = failure;
                                 }
                             }
                             return unavailable == null
@@ -337,7 +354,8 @@ public final class ZLinkObjectServerDescriptorPublisher {
      * and publishes again at the next owner lease renewal. A definite Store result is reported as a
      * {@link systems.zlink.framework.errors.ZLinkConfigurationException} instead.
      */
-    public static final class UnconfirmedPublicationException extends IllegalStateException {
+    public static final class UnconfirmedPublicationException extends IllegalStateException
+            implements ZLinkLocationStoreFailure {
         UnconfirmedPublicationException(Throwable cause) {
             super("MeshNode descriptor publication is not confirmed: " + cause.getMessage(), cause);
         }

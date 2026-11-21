@@ -11,7 +11,7 @@ import {
   ZLinkDispatchMessageKind,
   ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
-import { awaitWithAbort } from '../abort';
+import { awaitWithAbort, NORMAL_COMPLETION } from '../abort';
 import type { ZLinkBackendMeshNode } from '../backend/contracts';
 import {
   closeMeshCompletion,
@@ -937,7 +937,7 @@ function createSpotAddressDeadline(
       return Math.max(1, Math.ceil(remainingMs));
     },
     close() {
-      controller.abort();
+      controller.abort(NORMAL_COMPLETION);
       parent?.removeEventListener('abort', abort);
     }
   };

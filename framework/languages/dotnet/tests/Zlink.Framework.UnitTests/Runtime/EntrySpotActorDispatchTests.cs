@@ -33,6 +33,11 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed partial class EntrySpotActorDispatchTests
 {
+    private readonly Xunit.Abstractions.ITestOutputHelper _output;
+
+    public EntrySpotActorDispatchTests(Xunit.Abstractions.ITestOutputHelper output) =>
+        _output = output;
+
     [Theory]
     [InlineData(false, ZLinkDiagnosticsLevel.Off, false, false)]
     [InlineData(false, ZLinkDiagnosticsLevel.Off, false, true)]
@@ -3177,10 +3182,12 @@ public sealed partial class EntrySpotActorDispatchTests
         RoutingId SessionNode
     )> CreateDuplicateBindFixtureAsync(
         TimeSpan? callbackTimeout = null,
-        ZLinkUserSpotExecutionMode? userSpotMode = null
+        ZLinkUserSpotExecutionMode? userSpotMode = null,
+        TimeProvider? callbackTime = null,
+        CapturingSpotNode? nodeOverride = null
     )
     {
-        var node = new CapturingSpotNode();
+        var node = nodeOverride ?? new CapturingSpotNode();
         var (runtime, actorRef) = await CreateStartedRuntimeAsync(
             node,
             meshResolverWrapper: resolver => new AdmittedPeerDescriptors(
@@ -3190,6 +3197,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 71
             ),
             sessionReplacementCallbackTimeout: callbackTimeout,
+            joinTimeProvider: callbackTime,
             userSpotType: userSpotMode is null ? null : typeof(JoinTargetSpot),
             userSpotExecutionMode: userSpotMode ?? ZLinkUserSpotExecutionMode.SpotWide
         );
@@ -11614,86 +11622,147 @@ public sealed partial class EntrySpotActorDispatchTests
         }
     }
 
-    [Fact]
-    public async Task ActorJoinPrewarmIngress_ParksArrivalBetweenAcceptedAndPrepare_ThenMigratesOnPrepare()
-    {
-        var node = new CapturingSpotNode();
-        var (runtime, _) = await CreateStartedRuntimeAsync(node);
-        try
-        {
-            const string actorId = "prewarm-actor";
-            const string handoffId = "prewarm-handoff-1";
-            const ulong actorGeneration = 4;
-            var sourceNodeRid = RoutingId.From("prewarm-source");
-            var repliedWithError = false;
-            Func<IReadOnlyList<Message>, SubmitResult> directReply = messages =>
-            {
-                repliedWithError = true;
-                foreach (var message in messages)
-                    message.Dispose();
-                return SubmitResult.Ok;
-            };
-
-            //  Step 1 (spec 15 §4.2 step 2): OnActorJoin admits and
-            //  registers the relocation temporary queue before Accepted
-            //  returns to the source — the exact call the production
-            //  admission path makes
-            //  (ZLinkFrameworkRuntimeActors.AdmitRoutedActorJoinAsync).
-            await runtime.RegisterActorJoinPrewarmAsync(
-                handoffId,
-                actorId,
-                actorGeneration,
-                DateTimeOffset.UtcNow.AddSeconds(30),
-                CancellationToken.None
+    public static IEnumerable<object[]> EntryJoinAdmissionAttempts() =>
+        Enumerable
+            .Range(0, 1)
+            .SelectMany(attempt =>
+                Enumerable.Range(0, 4).Select(mode => new object[] { attempt, mode })
             );
 
-            //  Step 2: an arrival for this exact Actor lands on
-            //  production ingress before PREPARE (Restore) has installed
-            //  the real import. Without the prewarm registry this is
-            //  dropped or replied NotFound.
-            //  ZLinkActorInboundPipeline.DispatchAsync is the same
-            //  production ingress entry point real inbound traffic uses.
-            var actorRef = new ZLinkBackendActorRef(
-                RoutingId.From("prewarm-target"),
-                actorId,
-                actorGeneration
+    [Theory]
+    [MemberData(nameof(EntryJoinAdmissionAttempts))]
+    public async Task EntryJoinAdmission_ParksArrivalBeforeRestore_ThenMigratesOrCleansUp(
+        int attempt,
+        int mode
+    )
+    {
+        var node = new CapturingSpotNode();
+        IZLinkLocationRepository store = null!;
+        using var observer = new CapturingMessageFlowObserver();
+        var (runtime, _) = await CreateStartedRuntimeAsync(
+            node,
+            observer,
+            locationStoreCapture: value => store = value
+        );
+        try
+        {
+            var actorId = $"prewarm-actor-{attempt}";
+            var handoffId = $"prewarm-handoff-{attempt}";
+            var sourceNodeRid = RoutingId.From("prewarm-source");
+            var authority = Assert.IsType<ZLinkAuthoritySnapshot>(
+                await AuthorityLocationTestFixture.PublishActorAsync(
+                    store,
+                    InMemoryLocationStoreTests.Actor("entry-spot-dispatch-owner", actorId) with
+                    {
+                        MeshName = "entry",
+                        ActorType = "probe",
+                        ActorRef = new ActorRef(actorId, 1, "entry", sourceNodeRid),
+                        OwnerNodeRid = sourceNodeRid,
+                        OwnerNodeGeneration = 1,
+                    }
+                )
+            );
+            var actorGeneration = authority.ObjectGeneration;
+            var entry = runtime.GetSpotNodeRuntime("entry").EntrySpotActivation!;
+            if (mode == 3)
+                runtime.DrainAdmission.ClaimShutdown();
+            var admission = await runtime.AdmitRoutedActorJoinAsync(
+                entry.SpotId,
+                new ZLinkRemoteActorAdmissionRequest(
+                    actorId,
+                    "probe",
+                    "source-spot",
+                    sourceNodeRid.ToBytes().ToArray(),
+                    "application/json",
+                    [],
+                    handoffId,
+                    DateTimeOffset.UtcNow.AddSeconds(mode == 2 ? 1 : 30).ToUnixTimeMilliseconds(),
+                    actorGeneration,
+                    authority.AuthorityOwnerGeneration,
+                    1,
+                    entry.ObjectGeneration,
+                    node.MeshStatus().LifecycleGeneration
+                )
+            );
+            var actorRef = new ZLinkBackendActorRef(node.RoutingId, actorId, actorGeneration);
+            if (mode == 3)
+            {
+                Assert.False(admission.Accepted);
+                using var rejectedFrame = CreateRelocationRequestFrame(
+                    actorRef,
+                    sourceNodeRid,
+                    requestId: 501,
+                    directReply: _ => SubmitResult.Ok
+                );
+                Assert.False(runtime.TryParkActorJoinPrewarmIngress(rejectedFrame));
+                return;
+            }
+            Assert.True(admission.Accepted);
+            Assert.True(admission.ReceiveChunkLimitBytes > 0);
+            var reply = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
             );
             var earlyFrame = CreateRelocationRequestFrame(
                 actorRef,
                 sourceNodeRid,
                 requestId: 501,
-                directReply
+                directReply: messages =>
+                {
+                    reply.TrySetResult();
+                    ZLinkMessageParts.DisposeAll(messages);
+                    return SubmitResult.Ok;
+                }
             );
-            var pipeline = new ZLinkActorInboundPipeline(
+            await new ZLinkActorInboundPipeline(
                 runtime,
                 new ZLinkEntrySpotActorInboundEndpoint(runtime),
                 "entry"
-            );
-            await pipeline.DispatchAsync(
-                new ZLinkSpotActorFrameBatch([earlyFrame]),
-                CancellationToken.None
-            );
+            ).DispatchAsync(new ZLinkSpotActorFrameBatch([earlyFrame]), CancellationToken.None);
 
-            Assert.False(
-                repliedWithError,
-                "production ingress must park an arrival between Accepted and PREPARE instead of replying NotFound"
-            );
-
-            //  Step 3 (spec 15 §4.2 step 4): PREPARE (Restore) installs
-            //  the real import and must atomically migrate the parked
-            //  arrival into it — the same calls
-            //  ZLinkFrameworkRuntimeActors.PrepareCanonicalRoutedActorJoinTargetAsync
-            //  makes.
             var actorState = runtime.GetOrCreateActorState(actorId);
-            var request = PrewarmJoinRequest(handoffId, actorId, actorGeneration);
+            Assert.Null(actorState.Actor);
+            Assert.False(
+                reply.Task.IsCompleted,
+                "Entry Join admission must park an arrival before Restore instead of replying NotFound"
+            );
+            Assert.DoesNotContain(observer.Events, flow => flow.Outcome == "failed");
+            if (mode != 0)
+            {
+                if (mode == 1)
+                    await runtime.AbortRoutedActorJoinAdmissionAsync(
+                        entry.SpotId,
+                        new ZLinkRemoteActorAdmissionAbortRequest(
+                            actorId,
+                            handoffId,
+                            admission.ReservationToken
+                        ),
+                        CancellationToken.None
+                    );
+                await reply.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                using var laterFrame = CreateRelocationRequestFrame(
+                    actorRef,
+                    sourceNodeRid,
+                    requestId: 502,
+                    directReply: _ => SubmitResult.Ok
+                );
+                Assert.False(runtime.TryParkActorJoinPrewarmIngress(laterFrame));
+                Assert.Null(actorState.Actor);
+                return;
+            }
+            var request = PrewarmJoinRequest(handoffId, actorId, actorGeneration) with
+            {
+                ActorType = "probe",
+                SourceNodeRid = sourceNodeRid.ToBytes().ToArray(),
+                ActorAuthorityOwnerGeneration = authority.AuthorityOwnerGeneration,
+            };
             Assert.True(actorState.Handoff.Import(request, out _));
-            runtime.CompleteActorJoinPrewarmMigration(handoffId, actorState);
-
+            Assert.True(runtime.CompleteActorJoinPrewarmMigration(handoffId, actorState));
             var replay = actorState.Handoff.PrepareImportedReplay([]);
-            Assert.Contains(replay, frame => Encoding.UTF8.GetString(frame.Body) == "request");
+            Assert.Equal("request", Encoding.UTF8.GetString(Assert.Single(replay).Body));
         }
         finally
         {
+            _output.WriteLine(JsonSerializer.Serialize(observer.Events));
             await runtime.StopAsync(CancellationToken.None);
         }
     }
@@ -14343,8 +14412,7 @@ public sealed partial class EntrySpotActorDispatchTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
-    internal sealed class ProbeActor(string actorId, IZLinkActorContext? context = null)
-        : IZLinkActor
+    internal class ProbeActor(string actorId, IZLinkActorContext? context = null) : IZLinkActor
     {
         internal int OwnedDisconnectCalls { get; set; }
 
@@ -15111,6 +15179,7 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         public async ValueTask HandleAsync(
             BlockingDisposeEntrySpot spot,
+            IZLinkMessageContext context,
             ProbeRouteMessage message,
             CancellationToken cancellationToken
         )
@@ -15350,6 +15419,7 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         public async ValueTask HandleAsync(
             TimerProbeEntrySpot spot,
+            IZLinkMessageContext context,
             ProbeRouteMessage message,
             CancellationToken cancellationToken
         )
@@ -15391,6 +15461,7 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         public ValueTask HandleAsync(
             ProbeEntrySpot spot,
+            IZLinkMessageContext context,
             ProbeRouteMessage message,
             CancellationToken cancellationToken
         )

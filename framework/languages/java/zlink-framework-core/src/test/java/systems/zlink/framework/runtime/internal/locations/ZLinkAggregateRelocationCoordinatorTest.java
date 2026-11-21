@@ -34,13 +34,15 @@ final class ZLinkAggregateRelocationCoordinatorTest {
 
         var prepared = coordinator.prepare(request, NEVER).toCompletableFuture().join();
         assertEquals(1, authority.prepareCount);
-        var publication =
-                ZLinkCanonicalRelocationAuthorityStateCodec.decode(
-                        authority.prepared.participants().getFirst().authorityPayload());
-        assertNotNull(publication);
+        var participant = authority.prepared.participants().getFirst();
+        assertEquals(
+                null,
+                ZLinkCanonicalRelocationAuthorityStateCodec.decode(participant.authorityPayload()));
+        assertNotNull(participant.relocation());
+        assertEquals("prepared", participant.relocation().phase());
         var stagedOwner =
                 new ZLinkServiceAuthorityPayloadCodec()
-                        .decode(publication.applicationPayload())
+                        .decode(participant.authorityPayload())
                         .orElseThrow();
         assertEquals("owner-b", stagedOwner.ownerId());
         assertEquals(12, stagedOwner.ownerLeaseGeneration());
@@ -154,6 +156,29 @@ final class ZLinkAggregateRelocationCoordinatorTest {
         private final Map<String, ZLinkAuthoritySnapshot> rows =
                 new java.util.concurrent.ConcurrentHashMap<>();
 
+        FakeAuthorityStore() {
+            var request = request();
+            var participant = request.participants().getFirst();
+            rows.put(
+                    participant.authorityKey(),
+                    new ZLinkAuthoritySnapshot(
+                            participant.expectedStoreVersion(),
+                            participant.applicationAuthorityPayload(),
+                            participant.objectGeneration(),
+                            participant.authorityOwnerGeneration(),
+                            "owner-a",
+                            6,
+                            new ZLinkPlacementAllocation(
+                                    ZLinkPlacementAllocationState.ACTIVE,
+                                    ZLinkPlacementObjectKind.USER_SPOT,
+                                    "RoomSpot",
+                                    new ZLinkMeshNodeDescriptorKey(
+                                            "game", RoutingId.from("node-a")),
+                                    3,
+                                    request.capacityBundle()),
+                            Instant.now()));
+        }
+
         @Override
         public CompletionStage<ZLinkAggregatePrepareResult> prepareAggregate(
                 ZLinkAggregatePrepareRequest request, ZLinkStoreCancellation cancellation) {
@@ -186,7 +211,10 @@ final class ZLinkAggregateRelocationCoordinatorTest {
                                         prepared.targetDescriptor(),
                                         prepared.targetDescriptorLifecycleGeneration(),
                                         prepared.capacityBundle()),
-                                Instant.now()));
+                                Optional.empty(),
+                                Instant.now(),
+                                participant.relocation().phase("committed"),
+                                prepared.aggregateGeneration()));
             }
             progress =
                     Optional.of(
@@ -241,14 +269,17 @@ final class ZLinkAggregateRelocationCoordinatorTest {
             }
             var stored =
                     new ZLinkAuthoritySnapshot(
-                            "normalized-" + key,
+                            "normalized-" + key + "-" + current.storeVersion(),
                             put.payload(),
                             current.objectGeneration(),
                             current.authorityOwnerGeneration(),
                             current.ownerId(),
                             current.ownerLeaseGeneration(),
                             current.allocation(),
-                            Instant.now());
+                            Optional.empty(),
+                            Instant.now(),
+                            put.replaceRelocation() ? put.relocation() : current.relocation(),
+                            current.aggregateGeneration());
             rows.put(key, stored);
             return CompletableFuture.completedFuture(
                     new ZLinkAuthorityStored(

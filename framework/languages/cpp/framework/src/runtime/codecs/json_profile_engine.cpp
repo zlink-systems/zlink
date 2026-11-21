@@ -100,6 +100,16 @@ namespace ZLINK_JSON_PROFILE_ENGINE_NS
 #if defined(__GNUC__) || defined(__clang__)
 __attribute__ ((visibility ("default")))
 #endif
+token_buffer &
+reusable_tokens ()
+{
+    static thread_local token_buffer buffer;
+    return buffer;
+}
+
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__ ((visibility ("default")))
+#endif
 bool parse_tokens (std::string_view input, token_buffer &output)
 {
     output.tokens.clear ();

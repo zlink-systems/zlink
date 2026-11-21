@@ -113,6 +113,7 @@ wire `33`에서 public `32`로, `SpotMoving`은 wire `34`에서 public `33`으�
 함께 검증한다.
 
 ```bash
+npm ci --prefix framework/runtime/protocol --ignore-scripts
 node framework/runtime/protocol/validate-service-wire-schema.mjs \
   --self-test framework/runtime/protocol/service-wire-v1.schema.json
 node framework/runtime/protocol/generate-service-wire-codecs.mjs --write
@@ -128,3 +129,31 @@ encode한 body도 원래 bytes와 일치하는지 확인한다.
 현재 목표 의미와 validation 순서는
 [`51-internal-service-wire-protocol.ko.md`](../../doc/framework/common/spec/server/02-channel-transport/06-wire-protocol.ko.md)가 설명한다. 언어별 상수
 파일은 검증한 schema에서 생성하며 직접 편집하지 않는다.
+
+## Aggregate JSON 저장 fixture
+
+`service-wire-v1.schema.json`의 `jsonStorageFormats`는 Location runtime §8.3의 JSON 저장 형식을
+표현합니다. Binary `durableFormats`와 분리하며, `records.$defs`는 JSON Schema 2020-12입니다.
+`aggregate`, `root`, `page`, `reference`, `entry`를 각 언어에서 같은 field·타입으로 읽습니다.
+
+`golden/aggregate-storage-v1.json`은 항목 0개, 3개와 1,025개의 목록을 담습니다. 각 case의
+`aggregate`, `root`, `pages`에는 key, decoded object, JCS UTF-8 문자열(`jcsUtf8`), 저장 bytes의
+hex(`jcsHex`), 저장 bytes 전체의 SHA-256이 있습니다. Root의 `digestSha256`은 root 전체의
+`sha256`과 다릅니다. `rootDigestInputJcsHex`를 hash하고, `digestSha256` field는 입력에서 뺍니다.
+각 언어의 test는 `jcsHex`를 decode하고, re-encode한 bytes와 page reference·root digest를 대조합니다.
+
+생성기는 RFC 8785 구현 `canonicalize@2.1.0`을 사용합니다. `participantHashInputs`는 항목에 기록한
+확인값의 raw bytes 입력을 hex로 담습니다. Authority payload는 application 정의 opaque bytes이며,
+membership 변경은 `aggregate-participant-mutation-bytes` 본문 bytes입니다. 두 record에는 JSON
+canonicalization을 적용하지 않습니다. Fixture의 bytes는 hash 입력 예시입니다.
+Page는 §8.3에 따라 연속된 항목 또는 reference를 1,024개씩 묶고, page가 둘 이상일 때만
+상위 level을 만듭니다. 빈 목록은 page 없이 root의 `totalCount`와 `topLevel`이 0이고 `topPages`가
+빈 배열입니다.
+
+```bash
+node framework/runtime/protocol/generate-aggregate-storage-fixtures.mjs --write
+node framework/runtime/protocol/generate-aggregate-storage-fixtures.mjs --check
+node --test framework/runtime/protocol/location-contract.test.mjs
+```
+
+Fixture 생성·검사는 `generate-service-wire-codecs.mjs --write|--check`에도 포함됩니다.

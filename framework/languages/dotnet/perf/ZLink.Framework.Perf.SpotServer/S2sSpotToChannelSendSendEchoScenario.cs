@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Zlink.Framework.Contracts.Channels;
 using Zlink.Framework.Contracts.Configuration;
+using Zlink.Framework.Contracts.Handlers;
 using Zlink.Framework.Contracts.Spots;
 
 namespace ZLink.Framework.Perf;
@@ -227,6 +228,7 @@ public sealed class S2sSendDriveHandler(
 {
     public async ValueTask<PerfDriveReply> HandleAsync(
         S2sSendSendSpot spot,
+        IZLinkMessageContext context,
         PerfDriveRequest drive,
         CancellationToken cancellationToken
     )
@@ -289,6 +291,7 @@ public sealed class S2sSendReturnHandler(
 {
     public ValueTask HandleAsync(
         S2sSendSendSpot spot,
+        IZLinkMessageContext context,
         PerfEchoReply message,
         CancellationToken cancellationToken
     )

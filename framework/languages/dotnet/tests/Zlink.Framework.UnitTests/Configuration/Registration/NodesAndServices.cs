@@ -1468,6 +1468,7 @@ public sealed class NodesAndServicesTests : RegistrationValidationSupport
     {
         public ValueTask HandleAsync(
             DuplicatePacketSpot spot,
+            IZLinkMessageContext context,
             DuplicatePacketMessage message,
             CancellationToken cancellationToken
         ) => ValueTask.CompletedTask;
@@ -1478,6 +1479,7 @@ public sealed class NodesAndServicesTests : RegistrationValidationSupport
     {
         public ValueTask HandleAsync(
             DuplicatePacketSpot spot,
+            IZLinkMessageContext context,
             DuplicatePacketMessage message,
             CancellationToken cancellationToken
         ) => ValueTask.CompletedTask;

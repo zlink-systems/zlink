@@ -7,6 +7,44 @@ namespace Zlink.Framework.ContractTests.Actors;
 public sealed class ActorContracts
 {
     [Fact]
+    public async Task Session_bound_notification_has_the_spec_signature_and_a_no_op_default()
+    {
+        var method = typeof(IZLinkActor).GetMethod("OnSessionBoundAsync");
+        Assert.NotNull(method);
+        Assert.False(method.IsAbstract);
+        Assert.Equal(typeof(ValueTask), method.ReturnType);
+        Assert.Equal(
+            new[]
+            {
+                typeof(Zlink.Framework.Contracts.Actors.ZLinkSessionBindingIdentity),
+                typeof(CancellationToken),
+            },
+            method.GetParameters().Select(parameter => parameter.ParameterType)
+        );
+        await (ValueTask)
+            method.Invoke(
+                new DefaultBindingActor(),
+                new object[]
+                {
+                    new Zlink.Framework.Contracts.Actors.ZLinkSessionBindingIdentity(
+                        Systems.Zlink.RoutingId.From("session-owner"),
+                        1,
+                        1
+                    ),
+                    CancellationToken.None,
+                }
+            )!;
+    }
+
+    private sealed class DefaultBindingActor : IZLinkActor
+    {
+        public IZLinkActorContext Context =>
+            throw new InvalidOperationException(
+                "The default notification does not access Context."
+            );
+    }
+
+    [Fact]
     public void Actor_join_completion_failed_shape_matches_exact_interface()
     {
         var failed = typeof(ZLinkActorJoinCompletion.Failed);

@@ -57,6 +57,38 @@ final class ZLinkJavaSocketMonitorTest {
                 new Throwable[] {pollerFailure}, actual.getSuppressed());
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(longs = {0, 3, 4, 5})
+    void preservesMonitorValueAcrossBackendAdapter(long reason) throws Exception {
+        var rid = systems.zlink.contracts.core.RoutingId.from("peer");
+        var event =
+                new systems.zlink.contracts.eventing.MonitorEvent(
+                        MonitorEventType.DISCONNECTED,
+                        reason,
+                        java.util.Optional.of(rid),
+                        "local",
+                        "remote");
+        var source =
+                (SocketMonitor)
+                        java.lang.reflect.Proxy.newProxyInstance(
+                                SocketMonitor.class.getClassLoader(),
+                                new Class<?>[] {SocketMonitor.class},
+                                (proxy, method, args) ->
+                                        method.getName().equals("recv") ? event : null);
+        var poller =
+                (Poller)
+                        java.lang.reflect.Proxy.newProxyInstance(
+                                Poller.class.getClassLoader(),
+                                new Class<?>[] {Poller.class},
+                                (proxy, method, args) -> null);
+        try (var monitor = new ZLinkJavaSocketMonitor(source, poller)) {
+            var observed = monitor.recvDontWait();
+            org.junit.jupiter.api.Assertions.assertEquals(reason, observed.value());
+            org.junit.jupiter.api.Assertions.assertEquals(
+                    java.util.Optional.of(rid), observed.routingId());
+        }
+    }
+
     private static void verifyCloseWakesWait(boolean interruptCloser) throws Exception {
         try (var context = Zlink.createContext();
                 var socket = context.createStreamSocket();

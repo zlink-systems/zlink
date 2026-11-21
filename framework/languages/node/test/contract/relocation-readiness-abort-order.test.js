@@ -116,9 +116,14 @@ test('precommit abort completes Continued before releasing held application work
     .relocateSpotAggregate('mesh', activation, 'user_spot', [], target)
     .catch((error) => error);
   await registered;
-  await serial.execute(() => {
+  await serial.execute(async () => {
+    await serial.yieldPromise(Promise.resolve());
     events.push('turn');
     activation.relocationReadyCall().defer();
+    assert.throws(
+      () => activation.relocationReadyCall().defer(),
+      /was already called for this boundary/
+    );
   });
   await entered;
   const sealedDuringCallback = activation.executionBarrier.isSealed;

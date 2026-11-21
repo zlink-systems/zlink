@@ -52,6 +52,7 @@ for (const scenario of [
           fs.rmSync(flowDirectory, { recursive: true, force: true });
       });
       const base = {
+        signal: t.signal,
         meshName,
         keyPrefix,
         targetRoutingId,
