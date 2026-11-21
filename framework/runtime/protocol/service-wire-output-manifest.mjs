@@ -30,6 +30,11 @@ export const serviceWireOutputManifest = Object.freeze({
   ]),
   generators: Object.freeze([
     Object.freeze({
+      id: "aggregate-storage",
+      tool: "generate-aggregate-storage-fixtures.mjs",
+      outputs: Object.freeze(["golden/aggregate-storage-v1.json"]),
+    }),
+    Object.freeze({
       id: "fixtures",
       tool: "generate-service-wire-fixtures.mjs",
       outputs: Object.freeze(["generated/fixtures/index.json"]),

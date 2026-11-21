@@ -53,6 +53,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepositor
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteIntent;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocationState;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
+import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkActorJoinRelocationPort;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceMessageFollowWireCodec;
@@ -83,6 +84,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
@@ -91,6 +93,7 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
@@ -2488,7 +2491,13 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                     || !route.actorRef().nodeRid().equals(actor.nodeRid())
                                     || route.actorRef().objectGeneration() != actor.generation()
                                     || route.authorityOwnerGeneration() <= 0) {
-                                throw new IllegalStateException(
+                                throw new ZLinkFrameworkException(
+                                        route != null
+                                                        && route.actorRef() != null
+                                                        && route.actorRef().objectGeneration()
+                                                                != actor.generation()
+                                                ? ZLinkFrameworkErrorKind.INVALID_OPERATION
+                                                : ZLinkFrameworkErrorKind.UNAVAILABLE,
                                         "Actor authority changed before Session binding");
                             }
                             spotNode.observeActorAuthority(
@@ -2924,7 +2933,8 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         return remoteSessionBindingTransition(
                 node,
                 actorRef,
-                (started, cancellation) -> CompletableFuture.completedFuture(Optional.empty()));
+                (started, cancellation) -> CompletableFuture.completedFuture(Optional.empty()),
+                (incoming, timeout) -> CompletableFuture.completedFuture(null));
     }
 
     private ZLinkInternalSpotNode.RemoteSessionBindingTransition remoteSessionBindingTransition(
@@ -2934,10 +2944,13 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                             Runnable,
                             ZLinkActorCallbackCancellation,
                             CompletionStage<Optional<String>>>
-                    callback) {
+                    callback,
+            java.util.function.BiFunction<
+                            ZLinkSessionBindingIdentity, Duration, CompletionStage<Void>>
+                    boundCallback) {
         return new ZLinkInternalSpotNode.RemoteSessionBindingTransition() {
             @Override
-            public CompletionStage<Boolean> commit(Supplier<CompletionStage<Boolean>> transition) {
+            public <T> CompletionStage<T> commit(Supplier<CompletionStage<T>> transition) {
                 return inOwnerTurn(transition)
                         .thenCompose(
                                 stage -> Objects.requireNonNull(stage, "binding commit stage"));
@@ -2978,67 +2991,97 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                             new ZLinkConfigurationException(
                                     "Actor is not registered: " + actorRef.actorId()));
                 }
+                final boolean hasBoundCallback;
+                final boolean hasDuplicateCallback;
                 try {
-                    Method callback =
-                            actor.getClass()
-                                    .getMethod(
-                                            "onDuplicateBind",
-                                            ZLinkSessionBindingIdentity.class,
-                                            ZLinkSessionBindingIdentity.class,
-                                            ZLinkActorCallbackCancellation.class);
-                    Class<?> callbackOwner = callback.getDeclaringClass();
-                    boolean callbackAbsent = callbackOwner == ZLinkActor.class;
-                    if (!callbackAbsent) {
-                        // Kotlin's final Java bridge masks whether the suspend method is
-                        // overridden.
-                        for (Method method : actor.getClass().getMethods()) {
-                            Class<?>[] parameterTypes = method.getParameterTypes();
-                            if (method.getName().equals("onDuplicateBindSuspending")
-                                    && parameterTypes.length == 4
-                                    && parameterTypes[0] == ZLinkSessionBindingIdentity.class
-                                    && parameterTypes[1] == ZLinkSessionBindingIdentity.class
-                                    && parameterTypes[2] == ZLinkActorCallbackCancellation.class
-                                    && parameterTypes[3]
-                                            .getName()
-                                            .equals("kotlin.coroutines.Continuation")) {
-                                callbackAbsent = method.getDeclaringClass() == callbackOwner;
-                                break;
-                            }
-                        }
-                    }
-                    if (callbackAbsent) {
-                        return transition.apply(this);
-                    }
+                    hasBoundCallback =
+                            hasBindingCallback(
+                                    actor,
+                                    "onSessionBound",
+                                    ZLinkSessionBindingIdentity.class,
+                                    ZLinkActorCallbackCancellation.class);
+                    hasDuplicateCallback =
+                            hasBindingCallback(
+                                    actor,
+                                    "onDuplicateBind",
+                                    ZLinkSessionBindingIdentity.class,
+                                    ZLinkSessionBindingIdentity.class,
+                                    ZLinkActorCallbackCancellation.class);
                 } catch (NoSuchMethodException failure) {
                     return CompletableFuture.failedFuture(failure);
                 }
-                Optional<ZLinkInternalSpotNode.BoundSessionRoute> currentRoute =
-                        node.boundSessionRoute(actorRef);
-                if (currentRoute.isEmpty()) {
-                    return transition.apply(this);
+                if (!hasBoundCallback) {
+                    var current = node.boundSessionRoute(actorRef);
+                    if (!hasDuplicateCallback
+                            || current.isEmpty()
+                            || current.orElseThrow()
+                                    .isSamePhysicalSession(incoming, incomingSessionRid)) {
+                        return transition.apply(this);
+                    }
                 }
-                ZLinkInternalSpotNode.BoundSessionRoute current = currentRoute.orElseThrow();
-                if (current.isSamePhysicalSession(incoming, incomingSessionRid)) {
-                    return transition.apply(this);
-                }
-                return enqueueActorLifecycleTurn(
-                        actorRef.actorId(),
-                        () ->
-                                transition.apply(
-                                        remoteSessionBindingTransition(
-                                                node,
-                                                actorRef,
-                                                (started, cancellation) -> {
-                                                    started.run();
-                                                    return invokeActorLifecycle(
-                                                            actor,
-                                                            () ->
-                                                                    actor.onDuplicateBind(
-                                                                            current
-                                                                                    .sessionBindingIdentity(),
-                                                                            incoming,
-                                                                            cancellation));
-                                                })));
+                // Bind completion progresses independently of the notification's Actor turn.
+                var binding = new CompletableFuture<Boolean>();
+                var turn =
+                        enqueueActorLifecycleTurn(
+                                actorRef.actorId(),
+                                () -> {
+                                    DefaultActorContext context = actorRegistry.context(actor);
+                                    if (context == null || !context.state.active()) {
+                                        return CompletableFuture.failedFuture(
+                                                new ZLinkFrameworkException(
+                                                        ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                                        "Actor is terminating: "
+                                                                + actorRef.actorId()));
+                                    }
+                                    return transition.apply(
+                                            remoteSessionBindingTransition(
+                                                    node,
+                                                    actorRef,
+                                                    (started, cancellation) -> {
+                                                        var current =
+                                                                node.boundSessionRoute(actorRef);
+                                                        if (!hasDuplicateCallback
+                                                                || current.isEmpty()
+                                                                || current.orElseThrow()
+                                                                        .isSamePhysicalSession(
+                                                                                incoming,
+                                                                                incomingSessionRid)) {
+                                                            return CompletableFuture
+                                                                    .completedFuture(
+                                                                            Optional.empty());
+                                                        }
+                                                        started.run();
+                                                        return invokeActorLifecycle(
+                                                                actor,
+                                                                () ->
+                                                                        actor.onDuplicateBind(
+                                                                                current.orElseThrow()
+                                                                                        .sessionBindingIdentity(),
+                                                                                incoming,
+                                                                                cancellation));
+                                                    },
+                                                    (identity, timeout) -> {
+                                                        binding.complete(true);
+                                                        return hasBoundCallback
+                                                                ? notifySessionBound(
+                                                                        actor, context, identity,
+                                                                        timeout)
+                                                                : CompletableFuture.completedFuture(
+                                                                        null);
+                                                    }));
+                                });
+                turn.whenComplete(
+                        (accepted, failure) -> {
+                            if (failure == null) binding.complete(accepted);
+                            else binding.completeExceptionally(failure);
+                        });
+                return binding;
+            }
+
+            @Override
+            public CompletionStage<Void> sessionBound(
+                    ZLinkSessionBindingIdentity incoming, Duration timeout) {
+                return boundCallback.apply(incoming, timeout);
             }
 
             @Override
@@ -3050,6 +3093,58 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 return callback.apply(callbackStarted, cancellation);
             }
         };
+    }
+
+    private static boolean hasBindingCallback(
+            ZLinkActor actor, String name, Class<?>... parameterTypes)
+            throws NoSuchMethodException {
+        Class<?> owner = actor.getClass().getMethod(name, parameterTypes).getDeclaringClass();
+        if (owner == ZLinkActor.class) return false;
+        // A Kotlin Java bridge is present even when its suspend callback is inherited unchanged.
+        String suspendingName = name + "Suspending";
+        for (Method method : actor.getClass().getMethods()) {
+            if (!method.getName().equals(suspendingName)) continue;
+            Class<?>[] types = method.getParameterTypes();
+            if (types.length == parameterTypes.length + 1
+                    && java.util.Arrays.equals(
+                            parameterTypes, java.util.Arrays.copyOf(types, parameterTypes.length))
+                    && types[types.length - 1].getName().equals("kotlin.coroutines.Continuation")) {
+                return method.getDeclaringClass() != owner;
+            }
+        }
+        return true;
+    }
+
+    private CompletionStage<Void> notifySessionBound(
+            ZLinkActor actor,
+            DefaultActorContext context,
+            ZLinkSessionBindingIdentity incoming,
+            Duration timeout) {
+        // A callback failure is an outcome value; exceptional completion marks the deadline.
+        var outcome = new CompletableFuture<Throwable>();
+        ZLinkActorCallbackCancellation cancellation =
+                () -> outcome.isCompletedExceptionally() || draining || !context.state.active();
+        // Reuse the JDK completion deadline; callback continuations retain the Actor turn.
+        outcome.orTimeout(timeout.toNanos(), TimeUnit.NANOSECONDS)
+                .whenComplete(
+                        (callbackFailure, deadlineFailure) -> {
+                            Throwable failure =
+                                    deadlineFailure == null ? callbackFailure : deadlineFailure;
+                            if (failure != null) {
+                                while (failure instanceof CompletionException
+                                        && failure.getCause() != null) failure = failure.getCause();
+                                boolean stopping = draining || !context.state.active();
+                                if (stopping
+                                        && (failure instanceof CancellationException
+                                                || failure instanceof TimeoutException)) return;
+                                new ZLinkRuntimeEventDispatcher()
+                                        .publishRuntimeTaskFailure("actor.onSessionBound", failure);
+                            }
+                        });
+        CompletionStage<Void> callback =
+                invokeActorLifecycle(actor, () -> actor.onSessionBound(incoming, cancellation));
+        callback.whenComplete((ignored, failure) -> outcome.complete(failure));
+        return callback.handle((ignored, failure) -> null);
     }
 
     public CompletionStage<Message> handleEntrySpotRouteJoin(
@@ -4222,7 +4317,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                 .ZLinkSuspendInvocationContext.enterActorDispatch(
                                 actor.context().actorId())) {
             return Objects.requireNonNull(operation.get(), "Actor lifecycle callback result");
-        } catch (RuntimeException error) {
+        } catch (RuntimeException | Error error) {
             return CompletableFuture.failedFuture(error);
         }
     }

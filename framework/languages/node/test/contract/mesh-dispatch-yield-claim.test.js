@@ -3,31 +3,47 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { ZLinkMeshDispatchPump } = require('../../packages/framework/dist/runtime/backend');
-const { ReadyDomain } = require('../../packages/framework/dist/runtime/foundation/service-runtime-contracts');
-const { ServiceMailbox } = require('../../packages/framework/dist/runtime/foundation/service-mailbox');
-const { ApplicationJobQueue, resolveApplicationJobQueueConfiguration } =
-  require('../../packages/framework/dist/runtime/host/application-job-queue');
+const {
+  ReadyDomain
+} = require('../../packages/framework/dist/runtime/foundation/service-runtime-contracts');
+const {
+  ServiceMailbox
+} = require('../../packages/framework/dist/runtime/foundation/service-mailbox');
+const {
+  ApplicationJobQueue,
+  resolveApplicationJobQueueConfiguration
+} = require('../../packages/framework/dist/runtime/host/application-job-queue');
 
-test('empty ready claims yield at the count boundary after releasing the claim', async (t) => {
+test('empty ready claims yield at their worker time boundary after releasing the claim', async (t) => {
   let ready;
   let received = 0;
   let claimsHeld = 0;
   const timers = [];
   const node = {
-    setReadyHandler(handler) { ready = handler; },
+    setReadyHandler(handler) {
+      ready = handler;
+    },
     createReadyBatch() {
       return {
-        reset() {}, close() {},
+        reset() {},
+        close() {},
         takeClaim() {
           claimsHeld += 1;
           return {
-            recvBatch() { received += 1; return { ok: false, records: [] }; },
-            release() { claimsHeld -= 1; }
+            recvBatch() {
+              received += 1;
+              return { ok: false, records: [] };
+            },
+            release() {
+              claimsHeld -= 1;
+            }
           };
         }
       };
     },
-    createReceiveBatch() { return { reset() {}, close() {} }; },
+    createReceiveBatch() {
+      return { reset() {}, close() {} };
+    },
     drainReady(domain) {
       if (domain !== ReadyDomain.Application) return { ok: false, hasResidue: false, records: [] };
       return { ok: true, hasResidue: false, records: [{ ordinaryIngressPreAdmitted: true }] };
@@ -40,15 +56,19 @@ test('empty ready claims yield at the count boundary after releasing the claim',
   });
   const pump = new ZLinkMeshDispatchPump(node, {
     applicationJobQueue: new ApplicationJobQueue(resolveApplicationJobQueueConfiguration({})),
-    monotonicNowMs: () => 0,
-    dispatch() { assert.fail('empty claims must not dispatch'); }
+    monotonicNowMs: () => received * 2,
+    dispatch() {
+      assert.fail('empty claims must not dispatch');
+    }
   });
   try {
     pump.start();
     ready(ReadyDomain.Application);
-    await new Promise(( resolve ) => setImmediate(resolve));
-    assert.deepEqual(timers.map(({ received, claimsHeld }) => ({ received, claimsHeld })),
-      [{ received: 16, claimsHeld: 0 }]);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(
+      timers.map(({ received, claimsHeld }) => ({ received, claimsHeld })),
+      [{ received: 5, claimsHeld: 0 }]
+    );
   } finally {
     const stopping = pump.dispose();
     for (const timer of timers) timer.callback();
@@ -56,13 +76,14 @@ test('empty ready claims yield at the count boundary after releasing the claim',
   }
 });
 
-for (const trigger of ['elapsed', 'records']) {
-  test(`dispatch ${trigger} yield releases the claim and admits the next handler before its timer`, async (t) => {
-    const queue = new ApplicationJobQueue(resolveApplicationJobQueueConfiguration({
-      maxQueuedApplicationJobs: 64n
-    }));
+for (const count of [1, 16]) {
+  test(`dispatch ${count}-record elapsed yield releases the claim and admits the next handler before its timer`, async (t) => {
+    const queue = new ApplicationJobQueue(
+      resolveApplicationJobQueueConfiguration({
+        maxQueuedApplicationJobs: 64n
+      })
+    );
     const permits = [];
-    const count = trigger === 'records' ? 16 : 1;
     for (let i = 0; i <= count; i++) {
       const permit = await queue.acquire(undefined, 'remote');
       permit.markApplicationQueued();
@@ -75,15 +96,24 @@ for (const trigger of ['elapsed', 'records']) {
     const errors = [];
     const dispatched = [];
     const mailbox = new ServiceMailbox(() => ready(ReadyDomain.Application));
-    const enqueue = (sequence) => assert.equal(mailbox.tryEnqueue({
-      owner: 'spot:one', domain: 'application', parts: [Buffer.from([sequence])],
-      stateful: { sequence, parts: [], applicationJobPermit: permits[sequence] }
-    }), true);
+    const enqueue = (sequence) =>
+      assert.equal(
+        mailbox.tryEnqueue({
+          owner: 'spot:one',
+          domain: 'application',
+          parts: [Buffer.from([sequence])],
+          stateful: { sequence, parts: [], applicationJobPermit: permits[sequence] }
+        }),
+        true
+      );
     const node = {
-      setReadyHandler(handler) { ready = handler; },
+      setReadyHandler(handler) {
+        ready = handler;
+      },
       createReadyBatch() {
         return {
-          reset() {}, close() {},
+          reset() {},
+          close() {},
           takeClaim() {
             const claim = claims.values().next().value;
             let received = false;
@@ -91,14 +121,19 @@ for (const trigger of ['elapsed', 'records']) {
               recvBatch() {
                 if (received) return { ok: false, records: [] };
                 received = true;
-                return { ok: true, records: claim.records.map(( record ) => record.stateful) };
+                return { ok: true, records: claim.records.map((record) => record.stateful) };
               },
-              release() { mailbox.release(claim); claims.delete(claim); }
+              release() {
+                mailbox.release(claim);
+                claims.delete(claim);
+              }
             };
           }
         };
       },
-      createReceiveBatch() { return { reset() {}, close() {} }; },
+      createReceiveBatch() {
+        return { reset() {}, close() {} };
+      },
       drainReady(domain) {
         assert.equal(domain, ReadyDomain.Application);
         const claim = mailbox.tryClaim('application', 64, 1024);
@@ -119,20 +154,26 @@ for (const trigger of ['elapsed', 'records']) {
       monotonicNowMs: () => now,
       dispatch(_owner, record) {
         dispatched.push(record.sequence);
-        if (trigger === 'elapsed') now = 2;
+        now += 10 / count;
       },
-      reportError(error) { errors.push(error); }
+      reportError(error) {
+        errors.push(error);
+      }
     });
     try {
       pump.start();
       for (let i = 0; i < count; i++) enqueue(i);
-      await new Promise(( resolve ) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
       assert.ok(timers.length > 0, 'the unchanged fairness condition must cause a timer yield');
-      assert.deepEqual({ claimsHeld: timers[0].claimsHeld, dispatched }, {
-        claimsHeld: 0,
-        dispatched: Array.from({ length: count + 1 }, (_, i) => i)
-      }, 'release the claim and enter the next handler before completing the yield timer');
-      assert.ok(timers.every(( timer ) => timer.claimsHeld === 0));
+      assert.deepEqual(
+        { claimsHeld: timers[0].claimsHeld, dispatched },
+        {
+          claimsHeld: 0,
+          dispatched: Array.from({ length: count + 1 }, (_, i) => i)
+        },
+        'release the claim and enter the next handler before completing the yield timer'
+      );
+      assert.ok(timers.every((timer) => timer.claimsHeld === 0));
       assert.deepEqual(errors, []);
       assert.equal(queue.snapshot().permitsInUse, 0n);
     } finally {
@@ -147,13 +188,15 @@ for (const trigger of ['elapsed', 'records']) {
   });
 }
 
-// Spec 08 §6: the pump yields to a macrotask when its batch budget is used.
+// Handler turn §9: each worker yields when its continuous time budget is used.
 // Idle time between records is not batch work, so a lone record that arrives
 // after the pump went idle runs and finishes without a timer yield.
 test('a record after an idle period does not spend a timer yield', async (t) => {
-  const queue = new ApplicationJobQueue(resolveApplicationJobQueueConfiguration({
-    maxQueuedApplicationJobs: 64n
-  }));
+  const queue = new ApplicationJobQueue(
+    resolveApplicationJobQueueConfiguration({
+      maxQueuedApplicationJobs: 64n
+    })
+  );
   let ready;
   let now = 0;
   const claims = new Set();
@@ -161,10 +204,13 @@ test('a record after an idle period does not spend a timer yield', async (t) => 
   const dispatched = [];
   const mailbox = new ServiceMailbox(() => ready(ReadyDomain.Application));
   const node = {
-    setReadyHandler(handler) { ready = handler; },
+    setReadyHandler(handler) {
+      ready = handler;
+    },
     createReadyBatch() {
       return {
-        reset() {}, close() {},
+        reset() {},
+        close() {},
         takeClaim() {
           const claim = claims.values().next().value;
           let received = false;
@@ -174,12 +220,17 @@ test('a record after an idle period does not spend a timer yield', async (t) => 
               received = true;
               return { ok: true, records: claim.records.map((record) => record.stateful) };
             },
-            release() { mailbox.release(claim); claims.delete(claim); }
+            release() {
+              mailbox.release(claim);
+              claims.delete(claim);
+            }
           };
         }
       };
     },
-    createReceiveBatch() { return { reset() {}, close() {} }; },
+    createReceiveBatch() {
+      return { reset() {}, close() {} };
+    },
     drainReady() {
       const claim = mailbox.tryClaim('application', 64, 1024);
       if (!claim) return { ok: false, hasResidue: false, records: [] };
@@ -194,7 +245,9 @@ test('a record after an idle period does not spend a timer yield', async (t) => 
   const pump = new ZLinkMeshDispatchPump(node, {
     applicationJobQueue: queue,
     monotonicNowMs: () => now,
-    dispatch(_owner, record) { dispatched.push(record.sequence); }
+    dispatch(_owner, record) {
+      dispatched.push(record.sequence);
+    }
   });
   const permits = [];
   try {
@@ -205,10 +258,15 @@ test('a record after an idle period does not spend a timer yield', async (t) => 
       const permit = await queue.acquire(undefined, 'remote');
       permit.markApplicationQueued();
       permits.push(permit);
-      assert.equal(mailbox.tryEnqueue({
-        owner: 'spot:one', domain: 'application', parts: [Buffer.from([sequence])],
-        stateful: { sequence, parts: [], applicationJobPermit: permit }
-      }), true);
+      assert.equal(
+        mailbox.tryEnqueue({
+          owner: 'spot:one',
+          domain: 'application',
+          parts: [Buffer.from([sequence])],
+          stateful: { sequence, parts: [], applicationJobPermit: permit }
+        }),
+        true
+      );
       await new Promise((resolve) => setImmediate(resolve));
     }
     assert.deepEqual(dispatched, [0, 1, 2, 3]);

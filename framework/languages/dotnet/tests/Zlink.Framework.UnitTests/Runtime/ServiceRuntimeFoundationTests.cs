@@ -2883,7 +2883,7 @@ public sealed class ServiceRuntimeFoundationTests
     }
 
     [Fact]
-    public async Task Managed_mesh_pump_claims_a_preadmitted_batch_within_shared_capacity()
+    public async Task Managed_mesh_pump_claims_preadmitted_records_within_shared_capacity()
     {
         const int capacity = 8;
         await using var context = Systems.Zlink.Zlink.CreateContext();
@@ -2911,15 +2911,11 @@ public sealed class ServiceRuntimeFoundationTests
             TaskCreationOptions.RunContinuationsAsynchronously
         );
         var receivedCount = 0;
-        var maximumBatch = 0;
         pump.SetNodeRouteHandler(
             (records, _) =>
             {
-                maximumBatch = Math.Max(maximumBatch, records.Count);
-                receivedCount += records.Count;
-                foreach (var record in records)
-                    record.Dispose();
-                if (receivedCount == capacity)
+                Assert.Single(records).Dispose();
+                if (Interlocked.Increment(ref receivedCount) == capacity)
                     completed.TrySetResult();
                 return ValueTask.CompletedTask;
             }
@@ -2999,7 +2995,7 @@ public sealed class ServiceRuntimeFoundationTests
         pump.EnsureStarted();
 
         await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.InRange(maximumBatch, 2, capacity);
+        Assert.Equal(capacity, Volatile.Read(ref receivedCount));
         await WaitUntilAsync(() => applicationJobQueue.GetStatus().PermitsInUse == 0);
         Assert.InRange(
             applicationJobQueue.GetStatus().PeakPermitsInUse,

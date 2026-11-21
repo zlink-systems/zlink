@@ -184,3 +184,12 @@ per call afterward.
 See the
 [Actor and session binding exact interface](../../common/spec/server/languages/node/interfaces/05-actors.en.md)
 (Korean-only) for the full rationale.
+
+## `ZLinkActor.onSessionBound`
+
+```typescript
+onSessionBound?(incoming: ZLinkSessionBindingIdentity, signal: AbortSignal): void | Promise<void>;
+```
+
+Optional callback receiving the committed binding identity. The default behavior is a no-op.
+See [Bind notification](../guide/server/24-actor-session.en.md#34-bind-notification) for ordering, failures, and cancellation.

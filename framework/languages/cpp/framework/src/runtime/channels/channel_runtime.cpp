@@ -969,21 +969,6 @@ namespace zlink::framework
 namespace
 {
 
-void invalidate_stale_spot_route (runtime::spot_address_resolver_t &resolver,
-                                  std::string_view target,
-                                  const framework_exception_t *error)
-{
-    // Routing §2.2: only a stale route result invalidates the next call's cache.
-    if (error
-        && (error->kind () == framework_error_kind_t::not_found
-            || error->kind () == framework_error_kind_t::unavailable
-            || detail::failure_code (*error)
-                 == static_cast<std::uint32_t> (
-                   runtime::protocol::framework_error_code::spotGenerationStale))
-        && detail::error_origin (*error) != detail::error_origin_t::application)
-        resolver.invalidate_spot_address (target);
-}
-
 channel_capability_snapshot_t &capability_snapshot (detail::capability_builder_state_t &state)
 {
     return state.target == nullptr ? state.snapshot : *state.target;
@@ -2384,7 +2369,7 @@ task_t<void> route_client_t::submit_spot_id_send_erased (
               address->spot_generation, packet_name, message_type, std::move (encode_payload),
               metadata);
         }
-        invalidate_stale_spot_route (*resolver, target, submitted.error ());
+        runtime::invalidate_stale_spot_route (*resolver, target, submitted.error ());
         // The resolved transport already classified its failure; publish it unchanged.
         submitted.value ();
     }
@@ -2430,7 +2415,7 @@ task_t<void> route_client_t::submit_spot_id_request_reply_message_erased (
         receiver = receiver.project<encoded_payload_t> (
           [resolver, target] (const result_t<encoded_payload_t> &terminal) {
               if (!terminal) {
-                  invalidate_stale_spot_route (*resolver, target, terminal.error ());
+                  runtime::invalidate_stale_spot_route (*resolver, target, terminal.error ());
                   return detail::result_access_t::failure<encoded_payload_t> (
                     terminal.exception ());
               }
