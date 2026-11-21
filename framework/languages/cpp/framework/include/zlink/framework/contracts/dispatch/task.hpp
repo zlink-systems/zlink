@@ -599,7 +599,8 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
 #else
     task_shared_state_t () = default;
 #endif
-    explicit task_shared_state_t (result_t<T> result) : _result (std::move (result))
+    explicit task_shared_state_t (result_t<T> result) :
+        _owned_result (std::move (result)), _result (std::addressof (*_owned_result))
     {
 #if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
         test_creation_probe::shared_states.fetch_add (1, std::memory_order_relaxed);
@@ -619,7 +620,24 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
         return std::enable_shared_from_this<task_shared_state_t>::weak_from_this ();
     }
 
-    bool complete (result_t<T> result)
+    bool complete (result_t<T> result) { return complete_owned (std::move (result)); }
+
+  protected:
+    bool complete_owned (result_t<T> &&result)
+    {
+        return complete_with (
+          [&] { return std::addressof (_owned_result.emplace (std::move (result))); });
+    }
+
+    // Embedded request stages may share a terminal result when their common owner
+    // outlives every handle to either stage.
+    bool complete_borrowed (const result_t<T> &result)
+    {
+        return complete_with ([&] { return std::addressof (result); });
+    }
+
+  private:
+    template <typename Store> bool complete_with (Store store)
     {
         std::shared_ptr<task_wait_registration_t> continuations;
         std::unique_ptr<callback_t> terminal_callbacks;
@@ -630,7 +648,7 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
             if (_result) {
                 return false;
             }
-            _result.emplace (std::move (result));
+            _result = store ();
             continuations = std::move (_continuations_head);
             _continuations_tail = nullptr;
             if (continuations)
@@ -659,10 +677,11 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
         return true;
     }
 
+  public:
     bool is_ready () const
     {
         std::lock_guard lock (_mutex);
-        return _result.has_value ();
+        return _result != nullptr;
     }
 
     void set_continuation (const std::shared_ptr<task_wait_registration_t> &registration)
@@ -691,9 +710,9 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
     {
         std::unique_lock lock (_mutex);
 #ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
-        check_infrastructure_wait (_result.has_value (), "task/result");
+        check_infrastructure_wait (_result != nullptr, "task/result");
 #endif
-        _ready.wait (lock, [&] { return _result.has_value (); });
+        _ready.wait (lock, [&] { return _result != nullptr; });
         return *_result;
     }
 
@@ -707,11 +726,11 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
         std::unique_lock lock (_mutex);
 #ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
         if (timeout > std::chrono::milliseconds::zero ())
-            check_infrastructure_wait (_result.has_value () || cancellation.stop_requested (),
+            check_infrastructure_wait (_result != nullptr || cancellation.stop_requested (),
                                        "task/result_for");
 #endif
-        if (!_ready.wait_for (
-              lock, timeout, [&] { return _result.has_value () || cancellation.stop_requested (); })
+        if (!_ready.wait_for (lock, timeout,
+                              [&] { return _result != nullptr || cancellation.stop_requested (); })
             || !_result)
             return std::nullopt;
         return *_result;
@@ -871,7 +890,8 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
   private:
     mutable std::mutex _mutex;
     std::condition_variable _ready;
-    std::optional<result_t<T>> _result;
+    std::optional<result_t<T>> _owned_result;
+    const result_t<T> *_result = nullptr;
     std::shared_ptr<task_wait_registration_t> _continuations_head;
     task_wait_registration_t *_continuations_tail = nullptr;
     std::unique_ptr<callback_t> _terminal_callbacks;
