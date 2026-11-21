@@ -6,14 +6,17 @@
 
 #include <zlink.h>
 
+#include <atomic>
 #include <cerrno>
+#include <mutex>
 
 namespace zlink
 {
 
 struct timer_t::impl
 {
-    void *handle = nullptr;
+    std::atomic<void *> handle{nullptr};
+    std::mutex close_mutex;
 };
 
 namespace detail
@@ -21,12 +24,12 @@ namespace detail
 
 void *timer_access_t::native_handle (timer_t &timer_) noexcept
 {
-    return timer_._impl ? timer_._impl->handle : nullptr;
+    return timer_._impl ? timer_._impl->handle.load () : nullptr;
 }
 
 const void *timer_access_t::native_handle (const timer_t &timer_) noexcept
 {
-    return timer_._impl ? timer_._impl->handle : nullptr;
+    return timer_._impl ? timer_._impl->handle.load () : nullptr;
 }
 
 } // namespace detail
@@ -92,13 +95,16 @@ std::optional<uint64_t> timer_t::recv ()
 
 void timer_t::close ()
 {
-    if (!_impl || !_impl->handle)
+    if (!_impl)
         return;
 
-    void *timer = _impl->handle;
-    _impl->handle = nullptr;
-    detail::throw_if_failed<close_error_t> (
-      static_cast<close_result_t> (zlink_timer_destroy (&timer)));
+    std::lock_guard<std::mutex> lock (_impl->close_mutex);
+    void *timer = _impl->handle.load (std::memory_order_acquire);
+    if (!timer)
+        return;
+    const close_result_t result = static_cast<close_result_t> (zlink_timer_destroy (&timer));
+    detail::throw_if_failed<close_error_t> (result);
+    _impl->handle.store (timer, std::memory_order_release);
 }
 
 } // namespace zlink

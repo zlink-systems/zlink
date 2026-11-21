@@ -876,6 +876,8 @@ final class ZLinkChannelRuntimeTest {
                                     "play.route",
                                     RoutingId.from("play-node"),
                                     "room-spot",
+                                    0L,
+                                    0L,
                                     List.of(payload))
                             .toCompletableFuture();
 

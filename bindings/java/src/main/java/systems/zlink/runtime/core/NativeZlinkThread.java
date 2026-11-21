@@ -34,7 +34,10 @@ final class NativeZlinkThread implements ZlinkThread {
 
     private final Runnable task;
     private final long token;
-    private MemorySegment handle;
+    private volatile MemorySegment handle;
+    // Core releases a handle once; one owner at a time runs the native close
+    // and later callers observe its outcome.
+    private final Object closeLock = new Object();
     private volatile Throwable failure;
 
     NativeZlinkThread(Runnable task) {
@@ -49,10 +52,12 @@ final class NativeZlinkThread implements ZlinkThread {
     }
 
     public void join() {
-        ensureOpen();
-        Native.threadJoin(handle);
-        THREADS.remove(token, this);
-        handle = MemorySegment.NULL;
+        synchronized (closeLock) {
+            ensureOpen();
+            Native.threadJoin(handle);
+            THREADS.remove(token, this);
+            handle = MemorySegment.NULL;
+        }
         if (failure != null) {
             if (failure instanceof RuntimeException re) {
                 throw re;

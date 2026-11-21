@@ -1018,3 +1018,94 @@ test('a pending non-HELLO control with a current route waits for completion read
     h.runtime.close();
   }
 });
+
+// MeshNode §7.1: REJECT ends logical admission, retaining the selected route and intent.
+for (const phase of ['unadmitted', 'hello', 'admit']) {
+  test(`REJECT resumes the existing HELLO cadence after ${phase}`, async (t) => {
+    let now = 1000;
+    t.mock.method(performance, 'now', () => now);
+    const routes = new Map([['peer', 11n]]);
+    const h = selectedRouteRuntime(routes, undefined, { probeIntervalMs: 100 });
+    const helloCount = () => h.sent.filter(([, command]) => command === wire.M6aServiceWireCommand.hello).length;
+    const receive = (command) => h.processReceived({
+      sourceRid: 'peer', routeGeneration: 11n,
+      parts: [command === wire.M6aServiceWireCommand.reject
+        ? wire.encodeReject(1)
+        : wire.encodeRouteMeshAdmission(command, descriptor('peer'))]
+    });
+    let intentRemoved = 0;
+    const stop = h.runtime.observePeerConnectionIntentRemoved(() => intentRemoved++);
+    try {
+      h.runtime.connectPeer(descriptor('peer').advertisedEndpoint, descriptor('peer'));
+      await h.runtime.observeSelectedRoutes();
+      if (phase !== 'unadmitted') {
+        await receive(wire.M6aServiceWireCommand[phase]);
+        assert.ok(h.runtime.topology.admittedPeer('peer'));
+        assert.ok(h.runtime.liveness.peers.has('peer'));
+      }
+      h.runtime.tickLiveness(now);
+      assert.equal(helloCount(), 1);
+      now = 1020;
+      assert.equal(await receive(wire.M6aServiceWireCommand.reject), 'infrastructure');
+      assert.equal(h.runtime.topology.admittedPeer('peer'), undefined, 'REJECT removes admission');
+      assert.equal(h.runtime.liveness.peers.has('peer'), false, 'REJECT removes liveness admission');
+      assert.equal(h.runtime.isPeerRouteReady('peer'), false);
+      assert.equal(h.runtime.expectedPeers.size, 1, 'connection intent remains');
+      assert.deepEqual([...routes], [['peer', 11n]], 'Core selected route remains');
+      assert.deepEqual(h.disconnected, []);
+      assert.equal(intentRemoved, 0);
+      assert.equal(helloCount(), 1, 'REJECT does not send an immediate retry');
+      // An already pending HELLO keeps its period; a completed admission starts at REJECT.
+      const due = phase === 'admit' ? 1120 : 1100;
+      const deadline = h.runtime.nextMaintenanceDeadlineMs(now);
+      assert.ok(deadline > now && deadline <= due);
+      now += 10;
+      await receive(wire.M6aServiceWireCommand.reject);
+      assert.equal(h.runtime.nextMaintenanceDeadlineMs(now), deadline, 'repeated REJECT does not restart a timer');
+      now = due - 1;
+      assert.deepEqual(h.runtime.tickLiveness(now), { probes: [], timedOutNodes: [] });
+      assert.equal(helloCount(), 1);
+      assert.equal(h.runtime.nextMaintenanceDeadlineMs(now), due);
+      now = due;
+      assert.deepEqual(h.runtime.tickLiveness(now), { probes: [], timedOutNodes: [] });
+      assert.equal(helloCount(), 2, 'the normal management period resends HELLO');
+      now += 100;
+      h.runtime.tickLiveness(now);
+      assert.equal(helloCount(), 3);
+      await receive(wire.M6aServiceWireCommand.admit);
+      assert.equal(h.runtime.isPeerRouteReady('peer'), true);
+      now += 100;
+      h.runtime.tickLiveness(now);
+      assert.equal(helloCount(), 3, 'ADMIT stops retransmission');
+      assert.deepEqual(h.admissionsEnded, phase === 'unadmitted' ? [] : ['peer']);
+    } finally {
+      stop();
+      h.runtime.close();
+    }
+  });
+}
+
+for (const invalid of ['ended-route', 'malformed']) {
+  test(`REJECT from ${invalid} preserves current admission`, async (t) => {
+    t.mock.method(performance, 'now', () => 1000);
+    const h = selectedRouteRuntime(new Map([['peer', 11n]]));
+    try {
+      await h.runtime.observeSelectedRoutes();
+      await h.processReceived({
+        sourceRid: 'peer', routeGeneration: 11n,
+        parts: [wire.encodeRouteMeshAdmission(wire.M6aServiceWireCommand.admit, descriptor('peer'))]
+      });
+      const frame = wire.encodeReject(1);
+      const result = await h.processReceived({
+        sourceRid: 'peer', routeGeneration: invalid === 'ended-route' ? 10n : 11n,
+        parts: [invalid === 'malformed' ? frame.subarray(0, frame.length - 1) : frame]
+      });
+      assert.equal(result, invalid === 'malformed' ? 'protocolError' : 'dropped');
+      assert.equal(h.runtime.isPeerRouteReady('peer'), true);
+      assert.ok(h.runtime.liveness.peers.has('peer'));
+      assert.deepEqual(h.admissionsEnded, []);
+    } finally {
+      h.runtime.close();
+    }
+  });
+}

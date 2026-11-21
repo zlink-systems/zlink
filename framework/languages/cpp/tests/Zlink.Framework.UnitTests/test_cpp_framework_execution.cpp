@@ -547,8 +547,16 @@ bool verify_close_waits_for_timer_callback_barrier ()
     services.add_scoped<timer_activation_dependency_t> ();
     auto root = services.build_provider ();
     auto state = std::make_shared<zlink::framework::detail::spot_context_state_t> ();
-    state->node = zlink::framework::test::runtime_failure_fixture<
+    auto node_released = std::make_shared<std::promise<void>> ();
+    auto node_release = node_released->get_future ();
+    auto node = zlink::framework::test::runtime_failure_fixture<
       zlink::framework::detail::spot_node_builder_state_t> ("timer-close-race");
+    auto *node_pointer = node.get ();
+    state->node = std::shared_ptr<zlink::framework::detail::spot_node_builder_state_t> (
+      node_pointer, [node = std::move (node), node_released] (auto *) mutable {
+          node.reset ();
+          node_released->set_value ();
+      });
     const auto node_lifetime = std::weak_ptr (state->node);
     auto executor = std::make_shared<zlink::framework::runtime::offload_executor_t> (1);
     state->serial_executor = executor;
@@ -587,13 +595,35 @@ bool verify_close_waits_for_timer_callback_barrier ()
     };
     state->timers.push_back (pending_timer);
     auto timer = zlink::framework::detail::timer_test_access_t::create (pending_timer);
+    std::atomic_int closing_calls{0};
+    bool tick_queued = false;
+    const auto fail = [&] (const char *condition, bool node_expired) {
+        std::cerr << "timer-close-barrier condition=" << condition
+                  << " calls=" << timer_activation_handler_t::calls.load () - timer_calls_before
+                  << " handlers="
+                  << timer_activation_handler_t::created.load () - handlers_created_before << "/"
+                  << timer_activation_handler_t::destroyed.load () - handlers_destroyed_before
+                  << " dependencies="
+                  << timer_activation_dependency_t::created.load () - dependencies_created_before
+                  << "/"
+                  << timer_activation_dependency_t::destroyed.load ()
+                       - dependencies_destroyed_before
+                  << " closed=" << state->closed.has_value ()
+                  << " closing_calls=" << closing_calls.load ()
+                  << " pending=" << state->serial_queue->pending_count () << " application_pending="
+                  << state->serial_queue->pending_count (
+                       zlink::framework::runtime::serial_work_lane_t::application)
+                  << " tick_queued=" << tick_queued << " node_expired=" << node_expired
+                  << " disposed=" << timer.is_disposed () << " stop=" << cleanup->stop_calls.load ()
+                  << " close=" << cleanup->close_calls.load () << '\n';
+        return false;
+    };
     // 동일한 admission 경로의 정상 tick이 실제 handler를 호출하는지 먼저 확인한다.
     zlink::framework::detail::timer_runtime_t::post_fire_count (state, pending_timer,
                                                                 state->serial_queue, 1);
     state->drain_serial ();
     if (timer_activation_handler_t::calls.load () != timer_calls_before + 1 || timer.is_disposed ())
-        return false;
-    std::atomic_int closing_calls{0};
+        return fail ("normal-tick", node_lifetime.expired ());
     state->lifecycle.on_closing = [&] (void *, const zlink::framework::spot_closing_context_t &,
                                        std::stop_token) {
         ++closing_calls;
@@ -608,13 +638,13 @@ bool verify_close_waits_for_timer_callback_barrier ()
                                                   admitted = state->admit (true);
                                                   entered.set_value (std::move (complete));
                                               })) {
-        return false;
+        return fail ("submit-active-turn", node_lifetime.expired ());
     }
     auto complete = terminal.get ();
     if (!admitted) {
         complete ([] {});
         state->drain_serial ();
-        return false;
+        return fail ("admit-active-turn", node_lifetime.expired ());
     }
 
     context.close ();
@@ -623,15 +653,16 @@ bool verify_close_waits_for_timer_callback_barrier ()
       zlink::framework::runtime::serial_work_lane_t::application);
     zlink::framework::detail::timer_runtime_t::post_fire_count (state, pending_timer,
                                                                 state->serial_queue, 1);
-    const bool tick_queued = state->serial_queue->pending_count (
-                               zlink::framework::runtime::serial_work_lane_t::application)
-                             == pending_before + 1;
+    tick_queued = state->serial_queue->pending_count (
+                    zlink::framework::runtime::serial_work_lane_t::application)
+                  == pending_before + 1;
     if (state->closed || closing_calls != 0
         || timer_activation_handler_t::destroyed.load () != handlers_destroyed_before
         || timer_activation_dependency_t::destroyed.load () != dependencies_destroyed_before) {
+        const bool failed = fail ("close-before-turn-terminal", node_lifetime.expired ());
         complete ([state] { state->leave_callback (); });
         state->drain_serial ();
-        return false;
+        return failed;
     }
 
     complete ([state] { state->leave_callback (); });
@@ -642,15 +673,21 @@ bool verify_close_waits_for_timer_callback_barrier ()
         || timer_activation_handler_t::destroyed.load () != handlers_destroyed_before + 1
         || timer_activation_dependency_t::created.load () != dependencies_created_before + 1
         || timer_activation_dependency_t::destroyed.load () != dependencies_destroyed_before + 1) {
-        return false;
+        return fail ("close-after-drain", node_lifetime.expired ());
     }
 
-    return node_lifetime.expired () && tick_queued && timer.is_disposed ()
-           && cleanup->stop_calls == 1 && cleanup->close_calls == 1
-           && state->serial_queue->pending_count () == 0
-           && timer_activation_handler_t::calls.load () == timer_calls_before + 1
-           && timer_activation_handler_t::destroyed.load () == handlers_destroyed_before + 1
-           && timer_activation_dependency_t::destroyed.load () == dependencies_destroyed_before + 1;
+    // Queue drain observes turn retirement, not destruction of completion captures.
+    // Wait for the final node release before checking its weak pointer.
+    if (node_release.wait_for (std::chrono::seconds (30)) != std::future_status::ready)
+        return fail ("node-not-released", node_lifetime.expired ());
+    const bool node_expired = node_lifetime.expired ();
+    const bool released =
+      node_expired && tick_queued && timer.is_disposed () && cleanup->stop_calls == 1
+      && cleanup->close_calls == 1 && state->serial_queue->pending_count () == 0
+      && timer_activation_handler_t::calls.load () == timer_calls_before + 1
+      && timer_activation_handler_t::destroyed.load () == handlers_destroyed_before + 1
+      && timer_activation_dependency_t::destroyed.load () == dependencies_destroyed_before + 1;
+    return released || fail ("released-resources", node_expired);
 }
 
 bool verify_spot_close_waits_for_earlier_lifecycle_join ()
@@ -11783,6 +11820,13 @@ int main (int argc, char **argv)
             || !verify_fanout_snapshot_state_owner ()))
         return 1;
     zlink::framework::completion_owner_t completion_owner;
+    if (argc == 2 && std::string_view (argv[1]) == "--timer-close-barrier") {
+        zlink::framework::runtime::configure_handler_coroutine_executor (
+          handler_coroutine_worker_count);
+        scope_exit_t shutdown (
+          [] { zlink::framework::runtime::shutdown_handler_coroutine_executor (); });
+        return verify_close_waits_for_timer_callback_barrier () ? EXIT_SUCCESS : 41;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--bulk-deferred-actor-joins")
         return verify_bulk_deferred_actor_joins () ? EXIT_SUCCESS : EXIT_FAILURE;
     if (argc == 2 && std::string_view (argv[1]) == "--telemetry-completion")

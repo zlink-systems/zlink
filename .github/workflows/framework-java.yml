@@ -207,7 +207,7 @@ jobs:
           fi
           dump_dir="${RUNNER_TEMP}/framework-java-thread-dumps/${{ matrix.target.name }}"
           mkdir -p "${dump_dir}"
-          bash scripts/ci/gradle-test-watchdog.sh 3600 600 "${dump_dir}" &
+          bash "${GITHUB_WORKSPACE}/scripts/ci/gradle-test-watchdog.sh" 3600 600 "${dump_dir}" &
           watchdog_pid=$!
           stop_watchdog() {
             kill "${watchdog_pid}" 2>/dev/null || true
@@ -265,13 +265,17 @@ jobs:
           path: |
             .artifacts/framework-java-results/${{ matrix.target.name }}/**
             framework/languages/java/*/build/test-results/**/*.xml
+            framework/languages/java/*/build/test-events/**/*.log
+            framework/languages/java/*/build/jvm-crashes/**/hs_err_pid*.log
           retention-days: 14
-          if-no-files-found: error
+          if-no-files-found: ignore
           overwrite: true
 
-      - name: Stop Redis for Redis-backed tests
+      - name: Collect diagnostics and stop Redis
         if: always() && env.ZLINK_TEST_REDIS_CONTAINER != ''
-        run: docker rm -f "${ZLINK_TEST_REDIS_CONTAINER}"
+        uses: ./.github/actions/test-redis-cleanup
+        with:
+          job-status: ${{ job.status }}
 
   framework-java-compare:
     name: Compare Linux and Windows Java results

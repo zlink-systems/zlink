@@ -49,7 +49,7 @@ source_roots() { # <lang>
             "$root/cross-language" "$root/testapps"
             "$Z/framework/languages/engines/Server"
         ) ;;
-        java) SOURCE_ROOTS=("$root/quickstart" "$root/tutorial" "$root/samples" "$root"/zlink-*) ;;
+        java) SOURCE_ROOTS=("$root/quickstart" "$root/tutorial" "$root/samples" "$root/gradle/test-events" "$root"/zlink-*) ;;
         node) SOURCE_ROOTS=(
             "$root/quickstart" "$root/tutorial" "$root/samples"
             "$root/packages" "$root/test" "$root/cross-language"

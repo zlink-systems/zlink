@@ -261,7 +261,11 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         var time = new ManualTimeProvider();
         var node = new CapturingSpotNode();
-        var (runtime, actorRef) = await CreateStartedRuntimeAsync(node, locationTimeProvider: time);
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            locationTimeProvider: time,
+            entrySpotType: typeof(AcceptingProbeEntrySpot)
+        );
         try
         {
             var store = RequireLocationStore(runtime);
@@ -297,7 +301,11 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         var time = new ManualTimeProvider();
         var node = new CapturingSpotNode();
-        var (runtime, actorRef) = await CreateStartedRuntimeAsync(node, locationTimeProvider: time);
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            locationTimeProvider: time,
+            entrySpotType: typeof(AcceptingProbeEntrySpot)
+        );
         try
         {
             var actor = RegisterProbeActor(runtime, actorRef);

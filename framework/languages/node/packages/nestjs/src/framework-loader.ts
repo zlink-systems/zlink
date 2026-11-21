@@ -144,6 +144,10 @@ interface FrameworkIntegrationModule {
     actorType: string,
     factoryType: Type
   ): void;
+  registerLocationStore(
+    options: { storeInstance?: import('@zlink-systems/framework').ZLinkLocationStore },
+    store: import('@zlink-systems/framework').ZLinkLocationStore
+  ): void;
   registerRelocationStore(
     options: { relocationStoreInstance?: import('@zlink-systems/framework').ZLinkRelocationStore },
     store: import('@zlink-systems/framework').ZLinkRelocationStore
