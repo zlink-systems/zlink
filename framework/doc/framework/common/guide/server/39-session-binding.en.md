@@ -148,14 +148,12 @@ through the manager's lookup call —
 [Location](25-location.en.md#5-the-scope-of-a-lookup-result--a-node-name-is-not-a-call-address)
 covers that boundary.
 
-## 5. Related Documents
+## 5. The Actor Decides Whether to Replace a Session {#duplicate-session-bind}
 
-- The steps up to binding — [Session and Actor](24-actor-session.en.md)
-- Where the connection is accepted — [STREAM](23-stream.en.md) · [How STREAM Works](38-stream-boundary.en.md)
-- What gets bound — [Actor](22-actor.en.md)
-- What happens during a move — [Relocation](37-relocation.en.md)
-
-## 6. The Actor Decides Whether to Replace a Session
+Without a callback, the framework accepts a valid bind from a different Session by default.
+To block duplicate logins, reject the new connection in the Actor's duplicate-bind callback.
+To allow a replacement, accept it in the same callback. Use a client-claimed ID only after
+authenticating the client and verifying that the ID belongs to the authenticated account.
 
 === "C++"
 
@@ -174,16 +172,16 @@ covers that boundary.
 === "Java"
 
     When a new session binds an Actor whose current binding belongs to another session, the framework
-    calls `onDuplicateBind(current, incoming, signal)` in the Actor's order. The two arguments are
+    calls `onDuplicateBind(current, incoming, cancellation)` in the Actor's order. The two arguments are
     read-only values identified by session-owner node, its lifecycle generation, and binding generation. The callback accepts by
-    returning `undefined` or an empty string, and rejects with a non-empty returned string as its message.
+    returning `Optional.empty()` or an empty string, and rejects with a non-empty returned string as its message.
 
 === "Kotlin"
 
     When a new session binds an Actor whose current binding belongs to another session, the framework
-    calls `onDuplicateBind(current, incoming, signal)` in the Actor's order. The two arguments are
+    calls `onDuplicateBind(current, incoming, cancellation)` in the Actor's order. The two arguments are
     read-only values identified by session-owner node, its lifecycle generation, and binding generation. The callback accepts by
-    returning `undefined` or an empty string, and rejects with a non-empty returned string as its message.
+    returning `Optional.empty()` or an empty string, and rejects with a non-empty returned string as its message.
 
 === "Node/TypeScript"
 
@@ -335,17 +333,18 @@ A User Spot game Actor can allow replacement based on application state.
     }
     ```
 
-Without a callback, the framework accepts the new session as before. Rejection or a callback that
-doesn't finish within its timeout keeps the current binding and ends only the incoming bind with an
-error. The framework doesn't close the incoming connection or send command 51. Acceptance registers
-the new session as current and applies the existing replacement procedure to the previous
-connection. [Session–Actor binding §6](../../../common/spec/server/04-session/02-session-actor-binding.en.md#6-rebind-and-replacing-the-previous-connection) owns the callback timeout setting.
+If the callback rejects the bind or fails to complete within its timeout, the framework keeps
+the current binding and ends the incoming bind with an error. The incoming connection stays open
+and the current Session receives no replacement notice. On acceptance, the framework registers the new Session
+as current and applies the replacement procedure to the previous connection. See
+[Session–Actor binding §6](../../../common/spec/server/04-session/02-session-actor-binding.en.md#6-rebind-and-replacing-the-previous-connection)
+for the callback timeout.
 
 <!-- language-specific notification -->
 
 === "C++"
 
-    ## 7. Observing a Committed Actor Binding
+    ## 6. Observing a Committed Actor Binding
 
     `on_session_bound` runs after a session bind is committed, in the same Actor handler order.
     It applies to the first bind, an idempotent bind of the same session, and replacement by another
@@ -369,7 +368,7 @@ connection. [Session–Actor binding §6](../../../common/spec/server/04-session
 
 === "C#/.NET"
 
-    ## 7. Notification after binding commits
+    ## 6. Notification after binding commits
 
     Implement this callback when an Actor needs to update application state after a bind commits.
 
@@ -396,22 +395,29 @@ connection. [Session–Actor binding §6](../../../common/spec/server/04-session
 
 === "Java"
 
-    ## 7. Actor bind notification
+    ## 6. Actor bind notification
 
     The Java `onSessionBound` is described in [the Actor and session chapter, §3.1](24-actor-session.en.md).
 
 === "Kotlin"
 
-    ## 7. Actor bind notification
+    ## 6. Actor bind notification
 
     The Kotlin `onSessionBoundSuspending` is described in [the Actor and session chapter, §3.1](24-actor-session.en.md).
 
 === "Node/TypeScript"
 
-    ## 7. Actor bind notification
+    ## 6. Actor bind notification
 
     The Node `onSessionBound` is described in [the Actor and session chapter, §3.4](24-actor-session.en.md).
 
 <script>
 (function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>
+
+## 7. Related Documents
+
+- The steps up to binding — [Session and Actor](24-actor-session.en.md)
+- Where the connection is accepted — [STREAM](23-stream.en.md) · [How STREAM Works](38-stream-boundary.en.md)
+- What gets bound — [Actor](22-actor.en.md)
+- What happens during a move — [Relocation](37-relocation.en.md)

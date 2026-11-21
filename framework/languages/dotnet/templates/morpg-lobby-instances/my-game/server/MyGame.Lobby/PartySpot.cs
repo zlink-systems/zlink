@@ -144,33 +144,67 @@ public sealed class PartyRelocation : IZLinkSpotRelocationAdapter<PartySpot>
 [ZLinkSpotPacketHandler(nameof(RunStarted))]
 public sealed class Started : IZLinkSpotPacketHandler<PartySpot, RunStarted>
 {
-    public ValueTask HandleAsync(PartySpot spot, RunStarted request, CancellationToken ct)
-    { spot.Started(request); return ValueTask.CompletedTask; }
+    public ValueTask HandleAsync(
+        PartySpot spot,
+        IZLinkMessageContext context,
+        RunStarted request,
+        CancellationToken ct
+    )
+    {
+        spot.Started(request);
+        return ValueTask.CompletedTask;
+    }
 }
 
 [ZLinkSpotPacketHandler(nameof(RunCompleted))]
 public sealed class Completed : IZLinkSpotPacketHandler<PartySpot, RunCompleted>
 {
-    public ValueTask HandleAsync(PartySpot spot, RunCompleted request, CancellationToken ct)
-    { spot.Completed(request); return ValueTask.CompletedTask; }
+    public ValueTask HandleAsync(
+        PartySpot spot,
+        IZLinkMessageContext context,
+        RunCompleted request,
+        CancellationToken ct
+    )
+    {
+        spot.Completed(request);
+        return ValueTask.CompletedTask;
+    }
 }
 
 [ZLinkSpotPacketHandler(nameof(EnterPartyRun))]
 public sealed class EnterRun : IZLinkSpotPacketHandler<PartySpot, EnterPartyRun>
 {
-    public ValueTask HandleAsync(PartySpot spot, EnterPartyRun request, CancellationToken ct) => spot.EnterAsync(request.PlayerId, ct);
+    public ValueTask HandleAsync(
+        PartySpot spot,
+        IZLinkMessageContext context,
+        EnterPartyRun request,
+        CancellationToken ct
+    ) => spot.EnterAsync(request.PlayerId, ct);
 }
 
 [ZLinkSpotPacketHandler(nameof(DungeonMemberEntered))]
 public sealed class Arrived : IZLinkSpotPacketHandler<PartySpot, DungeonMemberEntered>
 {
-    public ValueTask HandleAsync(PartySpot spot, DungeonMemberEntered request, CancellationToken ct)
-    { spot.Arrived(request); return ValueTask.CompletedTask; }
+    public ValueTask HandleAsync(
+        PartySpot spot,
+        IZLinkMessageContext context,
+        DungeonMemberEntered request,
+        CancellationToken ct
+    )
+    {
+        spot.Arrived(request);
+        return ValueTask.CompletedTask;
+    }
 }
 
 [ZLinkSpotActorSendHandler(nameof(DungeonView))]
 public sealed class PartySpotDungeonViewNotification : IZLinkSpotActorSendHandler<PartySpot, PlayerActor, DungeonView>
 {
-    public ValueTask HandleAsync(PartySpot spot, PlayerActor actor, IZLinkMessageContext context,
-        DungeonView message, CancellationToken ct) => actor.DeliverAsync(message);
+    public ValueTask HandleAsync(
+        PartySpot spot,
+        PlayerActor actor,
+        IZLinkMessageContext context,
+        DungeonView message,
+        CancellationToken ct
+    ) => actor.DeliverAsync(message);
 }

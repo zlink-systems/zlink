@@ -495,6 +495,7 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         public async ValueTask<ProbeReply> HandleAsync(
             AdmissionInstanceSpot spot,
+            IZLinkMessageContext context,
             ProbeRouteMessage request,
             CancellationToken cancellationToken
         )
@@ -829,6 +830,7 @@ public sealed partial class EntrySpotActorDispatchTests
 
         public ValueTask<ProbeReply> HandleAsync(
             RecoveryColdSpot spot,
+            IZLinkMessageContext context,
             ProbeRouteMessage request,
             CancellationToken cancellationToken
         )
@@ -1330,6 +1332,7 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         public async ValueTask HandleAsync(
             ColdSendInstanceSpot spot,
+            IZLinkMessageContext context,
             ProbeRouteMessage message,
             CancellationToken cancellationToken
         )

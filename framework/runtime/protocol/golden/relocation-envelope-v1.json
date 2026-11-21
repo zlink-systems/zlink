@@ -1,7 +1,6 @@
 {
   "format": "relocation-envelope-v1",
   "consumers": ["cpp", "dotnet", "jvm", "node"],
-  "durabilityBoundary": "complete-root-linked-by-captured-cas",
   "participantAuthorityKeyInventory": [
     {
       "authorityKeyUtf8Fixture": "actor:z",
