@@ -1,4 +1,5 @@
 using ShoppingMall.Shared.Contracts;
+using Zlink.Framework.Contracts.Handlers;
 using Zlink.Framework.Contracts.Spots;
 
 namespace ShoppingMall.Server.OrderWorkflow.Infrastructure.ZLink.Spots.OrderWorkflowSpot.Handlers;
@@ -12,6 +13,7 @@ internal sealed class PrepareInventoryReservedCheckpointHandler
 {
     public ValueTask<StartOrderWorkflowRes> HandleAsync(
         OrderWorkflowSpot spot,
+        IZLinkMessageContext context,
         PrepareInventoryReservedCheckpointReq request,
         CancellationToken cancellationToken
     )

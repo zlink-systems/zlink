@@ -1,9 +1,7 @@
 const { MessageChannel } = require('node:worker_threads');
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const {
-  ZLinkHostServiceRelocationRuntime
-} = require('../../packages/framework/dist/internal');
+const { ZLinkHostServiceRelocationRuntime } = require('../../packages/framework/dist/internal');
 const {
   ZLinkActorTransferRuntime
 } = require('../../packages/framework/dist/runtime/host/actor-transfer-runtime');
@@ -68,10 +66,7 @@ test('source actor relocation terminal records its captured flow once', () => {
     flowOrigin: 'Application',
     errorMessage: undefined
   });
-  assert.equal(
-    samples.filter((sample) => sample.name === 'zlink.relocation.completed').length,
-    1
-  );
+  assert.equal(samples.filter((sample) => sample.name === 'zlink.relocation.completed').length, 1);
 });
 
 for (const path of ['coordinator', 'shell', 'wide']) {
@@ -156,6 +151,7 @@ for (const path of ['coordinator', 'shell', 'wide']) {
         leaseGeneration: 2n,
         applicationVersion: 1n
       };
+      let storedAuthority = primary;
       const runtime = new ZLinkHostServiceRelocationRuntime({
         metrics,
         sourceQuiescenceChanged: () => {
@@ -168,9 +164,16 @@ for (const path of ['coordinator', 'shell', 'wide']) {
           });
           throw windowCleanupFailure;
         },
-        registration: { spotNodes: new Map([['mesh', {
-          spotFactoryRegistrations: { player: { relocation: { kind: 'recreate' } } }
-        }]]) },
+        registration: {
+          spotNodes: new Map([
+            [
+              'mesh',
+              {
+                spotFactoryRegistrations: { player: { relocation: { kind: 'recreate' } } }
+              }
+            ]
+          ])
+        },
         meshNode: () => ({
           status: () => ({ routingId: 'source', lifecycleGeneration: 1n }),
           sealSpotMessageFollowIngress: () => ({}),
@@ -186,7 +189,22 @@ for (const path of ['coordinator', 'shell', 'wide']) {
           pendingSpotCloseDecision: () => undefined,
           completeRelocationSource: async () => {}
         }),
-        locationStore: () => ({ readAuthority: async () => primary })
+        locationStore: () => ({
+          readAuthority: async () => storedAuthority,
+          async compareExchangeAuthority(_key, expected, mutation) {
+            assert.equal(expected.value, storedAuthority.storeVersion.value);
+            storedAuthority = {
+              ...storedAuthority,
+              payload: mutation.payload,
+              relocation:
+                mutation.relocation === undefined
+                  ? storedAuthority.relocation
+                  : (mutation.relocation ?? undefined),
+              storeVersion: { value: `${storedAuthority.storeVersion.value}:cas` }
+            };
+            return { ...storedAuthority, kind: 'stored' };
+          }
+        })
       });
       runtime.sendControl = async (
         _mesh,
@@ -274,7 +292,6 @@ for (const path of ['coordinator', 'shell', 'wide']) {
             target,
             primary,
             captured,
-            new Map([[key, primary]]),
             signal.signal,
             [],
             undefined,

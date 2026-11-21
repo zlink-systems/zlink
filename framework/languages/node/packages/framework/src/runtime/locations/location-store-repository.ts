@@ -1,3 +1,9 @@
+import { initialRelocationCompletion } from './authority-relocation-record';
+import {
+  type AuthorityAggregateMarker as AggregateParticipantFenceRecord,
+  encodeAuthorityAggregate,
+  decodeAuthorityAggregate
+} from './authority-relocation-record';
 import { cleanupDiscardedAuthority } from './discarded-authority-cleanup';
 import { sameAuthorityIncarnation, type ZLinkDiscardedAuthorityFence } from './lifecycle-runtime';
 import { validateAuthorityMutation } from './in-memory-authority-store';
@@ -165,17 +171,6 @@ interface CapacityUsage {
   readonly actors: number;
   readonly spots: number;
   readonly spotTypes: Readonly<Record<string, number>>;
-}
-
-interface AggregateParticipantFenceRecord {
-  readonly aggregateId: string;
-  readonly aggregateGeneration: bigint;
-  readonly index: number;
-  readonly expectedStoreVersion: string;
-  readonly ownerTransition: 'preserve' | 'newOwner';
-  readonly targetAuthorityOwnerGeneration: bigint;
-  readonly authorityPayloadSha256: string;
-  readonly membershipMutationSha256: string;
 }
 
 interface AggregateRecord {
@@ -426,7 +421,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       }
       if (
         record.snapshot.allocation.state !== 'active' ||
-        (record.visibleStoreVersion ?? current.value.version.value) !== expectedStoreVersion.value
+        current.value.version.value !== expectedStoreVersion.value
       ) {
         return { kind: 'conflict', current: snapshot };
       }
@@ -462,7 +457,10 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           snapshot: {
             ...record.snapshot,
             ownerLeaseGeneration: mutation.targetOwner.leaseGeneration,
-            payload: Buffer.from(mutation.payload)
+            payload: Buffer.from(mutation.payload),
+            ...(mutation.relocation === undefined
+              ? {}
+              : { relocation: mutation.relocation ?? undefined })
           }
         };
         const result = await this.provider.write(
@@ -535,7 +533,10 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
                       objectGeneration: counterNextValue(generations[0]),
                       authorityOwnerGeneration: counterNextValue(generations[1])
                     }),
-                payload: Buffer.from(mutation.payload)
+                payload: Buffer.from(mutation.payload),
+                ...(mutation.relocation === undefined
+                  ? {}
+                  : { relocation: mutation.relocation ?? undefined })
               }
             };
       const actor =
@@ -877,8 +878,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         if (
           record.aggregate !== undefined ||
           record.snapshot.allocation.state !== 'active' ||
-          (record.visibleStoreVersion ?? current.value.version.value) !==
-            participant.expectedStoreVersion.value
+          current.value.version.value !== participant.expectedStoreVersion.value
         ) {
           await this.clearAggregateMarkers(fence, installed, signal);
           await this.abortAggregateStaging(fence, signal);
@@ -927,7 +927,11 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
                 bytes: encodeAuthorityRecord({
                   ...record,
                   aggregate: marker,
-                  visibleStoreVersion: record.visibleStoreVersion ?? current.value.version.value
+                  snapshot: {
+                    ...record.snapshot,
+                    relocation: participant.relocation ?? record.snapshot.relocation
+                  },
+                  visibleStoreVersion: current.value.version.value
                 } satisfies AuthorityRecord)
               },
               ...(reservingOwnerGenerationBlock
@@ -1269,6 +1273,11 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
             versionCondition(targetDescriptorKey, descriptorRead),
             leaseValueCondition(targetLeaseKey, aggregate.targetOwner),
             ...membershipConditions,
+            ...authorityRows.map((row) => ({
+              kind: 'version' as const,
+              key: row.key,
+              expected: row.current.value.version
+            })),
             ...[...capacityReads.entries()].map(([value, read]) => ({
               kind: 'version' as const,
               key: capacityKeys.get(value)!,
@@ -1281,6 +1290,28 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
               key: rowKey,
               bytes: encodeJson({ ...aggregate, state: 'committed' } satisfies AggregateRecord)
             },
+            ...authorityRows
+              .filter(
+                (row) =>
+                  row.record.snapshot.relocation !== undefined &&
+                  fence.acceptedRequests?.has(row.entry.authorityKey) === true
+              )
+              .map((row) => ({
+                kind: 'put' as const,
+                key: row.key,
+                bytes: encodeAuthorityRecord({
+                  ...row.record,
+                  snapshot: {
+                    ...row.record.snapshot,
+                    relocation: {
+                      ...row.record.snapshot.relocation!,
+                      completion: initialRelocationCompletion(
+                        fence.acceptedRequests!.get(row.entry.authorityKey)!
+                      )
+                    }
+                  }
+                })
+              })),
             ...capacityMutations
           ]
         },
@@ -1481,6 +1512,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         snapshot.allocation.state === 'active' &&
         requiredOwner === undefined &&
         record.aggregate === undefined &&
+        snapshot.relocation === undefined &&
         !hasRelocationAuthority(snapshot.payload) &&
         (discarded !== undefined ||
           (creation?.actorRelocationPolicy === 'disabled' &&
@@ -1597,7 +1629,9 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       if (snapshot.allocation.state === 'active') {
         if (ownerLive) return 'notReclaimable';
         let unavailable =
-          record.aggregate !== undefined || hasRelocationAuthority(snapshot.payload);
+          record.aggregate !== undefined ||
+          snapshot.relocation !== undefined ||
+          hasRelocationAuthority(snapshot.payload);
         if (discarded === undefined && snapshot.allocation.objectKind !== 'actor') {
           const spot = readySpot;
           unavailable ||=
@@ -1637,7 +1671,9 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       }
       if (
         snapshot.allocation.state !== 'active' &&
-        (record.aggregate !== undefined || hasRelocationAuthority(snapshot.payload))
+        (record.aggregate !== undefined ||
+          snapshot.relocation !== undefined ||
+          hasRelocationAuthority(snapshot.payload))
       )
         return 'notReclaimable';
       // Location runtime §6.1: the authority and every ended-owner member are released in
@@ -1813,6 +1849,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           if (
             authority.allocation.state !== 'active' ||
             record.aggregate !== undefined ||
+            authority.relocation !== undefined ||
             hasRelocationAuthority(authority.payload) ||
             decodeActorAuthorityPayload(authority.payload)?.state !== 'ready'
           ) {
@@ -3674,13 +3711,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   ): Promise<ZLinkAuthoritySnapshot> {
     const marker = record.aggregate;
     if (marker === undefined) {
-      return authoritySnapshot(
-        record.snapshot,
-        record.visibleStoreVersion === undefined
-          ? version
-          : ({ value: record.visibleStoreVersion } as ZLinkStoreVersion),
-        storeNow
-      );
+      return authoritySnapshot(record.snapshot, version, storeNow);
     }
     const aggregateRead = await this.provider.read(
       aggregateKey(aggregateFence(aggregateId(marker.aggregateId), marker.aggregateGeneration)),
@@ -3709,6 +3740,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     const projected: StoredAuthoritySnapshot =
       marker.ownerTransition === 'newOwner'
         ? {
+            relocation: record.snapshot.relocation,
             payload: Buffer.from(payload),
             objectGeneration: record.snapshot.objectGeneration,
             authorityOwnerGeneration: marker.targetAuthorityOwnerGeneration,
@@ -3794,7 +3826,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
               };
         const normalized: AuthorityRecord = {
           ...record,
-          snapshot,
+          snapshot: { ...snapshot, relocation: record.snapshot.relocation },
           aggregate: undefined,
           visibleStoreVersion: undefined
         };
@@ -3951,7 +3983,8 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
               key,
               bytes: encodeAuthorityRecord({
                 ...record,
-                aggregate: undefined
+                aggregate: undefined,
+                visibleStoreVersion: undefined
               } satisfies AuthorityRecord)
             }
           ]
@@ -3985,6 +4018,8 @@ function validateProviderAggregateRequest(request: ZLinkAggregatePrepareRequest)
     throw new TypeError('Aggregate participants must be unique and canonically sorted.');
   }
   for (const participant of request.participants) {
+    if (participant.relocation !== undefined)
+      encodeAuthorityAggregate(undefined, participant.relocation);
     requireText(participant.authorityKey.value, 'aggregate authority key');
     requireText(participant.expectedStoreVersion.value, 'aggregate expected Store version');
     if (
@@ -4395,45 +4430,6 @@ function requireRecordVersion(value: unknown, kind: string): void {
   }
 }
 
-function canonicalize(value: unknown): unknown {
-  if (typeof value === 'bigint') return value.toString();
-  if (value instanceof Uint8Array) return Buffer.from(value).toString('base64');
-  if (value instanceof Date) return value.toISOString();
-  if (Array.isArray(value)) return value.map(canonicalize);
-  if (value !== null && typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [key, canonicalize(item)])
-    );
-  }
-  return value;
-}
-
-const GENERATION_KEYS = new Set([
-  'generation',
-  'leaseGeneration',
-  'ownerLeaseGeneration',
-  'objectGeneration',
-  'authorityOwnerGeneration',
-  'targetAuthorityOwnerGeneration',
-  'aggregateGeneration',
-  'lifecycleGeneration',
-  'descriptorRevision',
-  'nodeGeneration',
-  'applicationVersion',
-  'requestEncodedSize'
-]);
-
-function reviveCanonical(value: unknown, key = ''): unknown {
-  if (typeof value === 'string' && GENERATION_KEYS.has(key)) return BigInt(value);
-  if (Array.isArray(value)) return value.map((item) => reviveCanonical(item));
-  if (value !== null && typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value).map(([name, item]) => [name, reviveCanonical(item, name)])
-    );
-  }
-  return value;
-}
-
 function requireOwnerLeaseExpiry(value: ZLinkStoreValue): Date {
   if (value.expiresAt === undefined)
     throw new Error('Location Store owner lease record is invalid.');
@@ -4649,11 +4645,11 @@ function encodeAuthorityRecord(record: AuthorityRecord): Uint8Array {
             requestEncodedSize: Number(snapshot.pendingCreation.requestEncodedSize)
           }
   };
-  // These fields gate Node-only creation/aggregate recovery.  They are absent
-  // from normal authority values (including the golden vector), while the
-  // interoperable envelope above remains byte-canonical.
+  // Aggregate progress shares the authority envelope across languages
+  // (Location runtime §3.4). Normal authority records omit both progress fields.
   if (record.terminal !== undefined) envelope.terminal = record.terminal;
-  if (record.aggregate !== undefined) envelope.aggregate = canonicalize(record.aggregate);
+  const aggregate = encodeAuthorityAggregate(record.aggregate, snapshot.relocation);
+  if (aggregate !== undefined) envelope.aggregate = aggregate;
   if (record.visibleStoreVersion !== undefined)
     envelope.visibleStoreVersion = record.visibleStoreVersion;
   return Buffer.from(JSON.stringify(envelope), 'utf8');
@@ -4662,6 +4658,8 @@ function encodeAuthorityRecord(record: AuthorityRecord): Uint8Array {
 function decodeAuthorityRecord(bytes: Uint8Array): AuthorityRecord {
   const value = JSON.parse(decodeText(bytes)) as Record<string, unknown>;
   requireRecordVersion(value, 'authority');
+  const aggregate =
+    value.aggregate === undefined ? undefined : decodeAuthorityAggregate(value.aggregate);
   const allocation = value.allocation as Record<string, unknown>;
   const descriptor = allocation.descriptor as Record<string, unknown>;
   const capacity = allocation.capacity as Record<string, unknown>;
@@ -4669,13 +4667,11 @@ function decodeAuthorityRecord(bytes: Uint8Array): AuthorityRecord {
   const objectKind = runtimePlacementObjectKind(String(allocation.objectKind));
   return {
     terminal: value.terminal as AuthorityRecord['terminal'],
-    aggregate:
-      value.aggregate === undefined
-        ? undefined
-        : (reviveCanonical(value.aggregate) as AggregateParticipantFenceRecord),
+    aggregate: aggregate?.marker,
     visibleStoreVersion:
       typeof value.visibleStoreVersion === 'string' ? value.visibleStoreVersion : undefined,
     snapshot: {
+      ...(aggregate?.relocation === undefined ? {} : { relocation: aggregate.relocation }),
       payload: Buffer.from(String(value.payload), 'base64'),
       objectGeneration: BigInt(String(value.objectGeneration)),
       authorityOwnerGeneration: BigInt(String(value.authorityOwnerGeneration)),

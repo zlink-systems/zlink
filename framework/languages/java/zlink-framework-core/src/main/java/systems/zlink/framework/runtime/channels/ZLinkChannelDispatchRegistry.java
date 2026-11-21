@@ -17,6 +17,7 @@ import java.util.stream.Stream;
 
 final class ZLinkChannelDispatchRegistry {
     private final Executor executor;
+    private final ZLinkApplicationExecutionScheduler scheduler;
     private final ZLinkMeshDrainCoordinator handlerDrains =
             new ZLinkMeshDrainCoordinator(List.of("channels"));
     private final Map<String, Map<String, ChannelRequestHandlerRegistration>> requestHandlers =
@@ -31,11 +32,23 @@ final class ZLinkChannelDispatchRegistry {
             new HashMap<>();
     private final Map<String, ZLinkChannelRuntime.RouteInternalRequestHandler> internalRequests =
             new HashMap<>();
-    private final Map<String, ZLinkSerialExecutionQueue> clientServerQueues = new HashMap<>();
+    private final Map<String, ZLinkApplicationExecutionScheduler.Owner> clientServerQueues =
+            new HashMap<>();
     private final Map<String, ZLinkSerialExecutionQueue> publishQueues = new HashMap<>();
-    private final Map<String, ZLinkSerialExecutionQueue> routeQueues = new HashMap<>();
+    private final Map<String, ZLinkApplicationExecutionScheduler.Owner> routeQueues =
+            new HashMap<>();
+
+    private final Map<String, ZLinkSerialExecutionQueue> internalQueues = new HashMap<>();
 
     ZLinkChannelDispatchRegistry(Executor executor) {
+        this(
+                executor,
+                executor,
+                systems.zlink.framework.execution.ZLinkWorkerPool.defaultMaxThreads());
+    }
+
+    ZLinkChannelDispatchRegistry(Executor executor, Executor applicationExecutor, int workers) {
+        scheduler = ZLinkApplicationExecutionScheduler.shared(applicationExecutor, workers);
         this.executor = Objects.requireNonNull(executor, "executor");
     }
 
@@ -45,9 +58,7 @@ final class ZLinkChannelDispatchRegistry {
             Map<String, ChannelRequestHandlerRegistration> requests) {
         sendHandlers.put(channelName, sends);
         requestHandlers.put(channelName, requests);
-        clientServerQueues.put(
-                channelName,
-                new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.generic()));
+        clientServerQueues.put(channelName, scheduler.register());
     }
 
     void registerFanout(
@@ -64,7 +75,8 @@ final class ZLinkChannelDispatchRegistry {
             Map<String, ChannelRouteRequestHandlerRegistration> requests) {
         routeSendHandlers.put(channelName, sends);
         routeRequestHandlers.put(channelName, requests);
-        routeQueues.put(
+        routeQueues.put(channelName, scheduler.register());
+        internalQueues.put(
                 channelName,
                 new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.generic()));
     }
@@ -102,7 +114,7 @@ final class ZLinkChannelDispatchRegistry {
         return internalRequests.get(packetName);
     }
 
-    ZLinkSerialExecutionQueue clientServerQueue(String channelName) {
+    ZLinkApplicationExecutionScheduler.Owner clientServerQueue(String channelName) {
         return clientServerQueues.get(channelName);
     }
 
@@ -110,8 +122,38 @@ final class ZLinkChannelDispatchRegistry {
         return publishQueues.get(channelName);
     }
 
-    ZLinkSerialExecutionQueue routeQueue(String channelName) {
+    ZLinkApplicationExecutionScheduler.Owner routeQueue(String channelName) {
         return routeQueues.get(channelName);
+    }
+
+    ZLinkSerialExecutionQueue internalQueue(String channelName) {
+        return internalQueues.get(channelName);
+    }
+
+    CompletionStage<Void> enqueueChannel(
+            ZLinkApplicationExecutionScheduler.Owner owner,
+            Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission) {
+        return enqueueChannel(owner, operation, admission, null);
+    }
+
+    CompletionStage<Void> enqueueChannel(
+            ZLinkApplicationExecutionScheduler.Owner owner,
+            Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission,
+            java.util.function.Consumer<Throwable> completion) {
+        var claim = handlerDrains.tryClaim("channels");
+        if (claim == null) {
+            var failure =
+                    new java.util.concurrent.RejectedExecutionException("channels are sealed");
+            if (admission != null) admission.completeExceptionally(failure);
+            return CompletableFuture.<Void>failedFuture(failure)
+                    .whenComplete(
+                            (ignored, error) -> {
+                                if (completion != null) completion.accept(error);
+                            });
+        }
+        return ZLinkHandlerDispatch.enqueue(owner, operation, admission, claim, completion);
     }
 
     CompletionStage<Void> enqueueChannel(
@@ -139,11 +181,12 @@ final class ZLinkChannelDispatchRegistry {
 
     void sealClosingAdmission() {
         queues().forEach(ZLinkSerialExecutionQueue::sealClosingAdmission);
+        Stream.concat(clientServerQueues.values().stream(), routeQueues.values().stream())
+                .forEach(ZLinkApplicationExecutionScheduler.Owner::sealClosingAdmission);
         handlerDrains.sealAll();
     }
 
     private Stream<ZLinkSerialExecutionQueue> queues() {
-        return Stream.of(clientServerQueues, publishQueues, routeQueues)
-                .flatMap(map -> map.values().stream());
+        return Stream.of(publishQueues, internalQueues).flatMap(map -> map.values().stream());
     }
 }

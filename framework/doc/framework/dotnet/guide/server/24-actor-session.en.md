@@ -99,6 +99,10 @@ An Actor knows the connection bound to it. This is not a reply but **a notificat
     language's asynchronous completion mechanism. The code above has already completed the rename
     before pushing, so it discards **only that failure**.
 
+### 3.4 Bind notification
+
+The .NET bind notification `OnSessionBoundAsync` is described in [the Session binding chapter, §6](39-session-binding.en.md).
+
 ## 4. The Attaching Side — a Client Outside the Mesh
 
 !!! info "The attaching process"

@@ -158,6 +158,18 @@ abstract class ZLinkSuspendingActor : ZLinkActor {
 
     abstract suspend fun onJoinCompletedSuspending(completion: ZLinkActorJoinCompletion)
 
+    final override fun onSessionBound(
+        incoming: ZLinkSessionBindingIdentity,
+        cancellation: ZLinkActorCallbackCancellation,
+    ): CompletionStage<Void> = coroutineVoidStage {
+        onSessionBoundSuspending(incoming, cancellation)
+    }
+
+    open suspend fun onSessionBoundSuspending(
+        incoming: ZLinkSessionBindingIdentity,
+        cancellation: ZLinkActorCallbackCancellation,
+    ) {}
+
     final override fun onDuplicateBind(
         current: ZLinkSessionBindingIdentity,
         incoming: ZLinkSessionBindingIdentity,

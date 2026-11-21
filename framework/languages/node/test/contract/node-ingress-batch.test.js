@@ -2,7 +2,7 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { AsyncLocalStorage } = require('node:async_hooks');
+const execution = require('../../packages/framework/dist/runtime/execution');
 const backend = require('../../packages/framework/dist/runtime/backend');
 const { ApplicationJobQueue, resolveApplicationJobQueueConfiguration } =
   require('../../packages/framework/dist/runtime/host/application-job-queue');
@@ -50,10 +50,10 @@ test('mesh owner drains 64 pre-admitted records in one receive batch without los
     let areaEntries = 0;
     let ioTurn = false;
     let firstHandlerAfterIo;
-    const run = AsyncLocalStorage.prototype.run;
-    t.mock.method(AsyncLocalStorage.prototype, 'run', function (store, ...args) {
-      if (store === 'application') areaEntries++;
-      return run.call(this, store, ...args);
+    const run = execution.runZLinkExecutionArea;
+    t.mock.method(execution, 'runZLinkExecutionArea', function (area, ...args) {
+      if (area === 'application') areaEntries++;
+      return run.call(this, area, ...args);
     });
     pump = new backend.ZLinkMeshDispatchPump(node, {
       applicationJobQueue: queue,
@@ -125,10 +125,10 @@ test('idle application worker registration is reused across sparse ready edges',
     }
   };
   let areaEntries = 0;
-  const run = AsyncLocalStorage.prototype.run;
-  t.mock.method(AsyncLocalStorage.prototype, 'run', function (store, ...args) {
-    if (store === 'application') areaEntries++;
-    return run.call(this, store, ...args);
+  const run = execution.runZLinkExecutionArea;
+  t.mock.method(execution, 'runZLinkExecutionArea', function (area, ...args) {
+    if (area === 'application') areaEntries++;
+    return run.call(this, area, ...args);
   });
   let dispatched;
   const pump = new backend.ZLinkMeshDispatchPump(node, {

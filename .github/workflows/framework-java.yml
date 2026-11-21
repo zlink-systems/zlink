@@ -92,6 +92,7 @@ jobs:
         include: ${{ fromJSON((inputs.single_worker || inputs.queue_checks_only || startsWith(github.ref_name, 'mergify/merge-queue/')) && '[]' || '[{"target":{"name":"win-x64","runner":"windows-latest","core_platform":"windows-x64","local_package_root":".artifacts/windows"}}]') }}
     env:
       ZLINK_SINGLE_WORKER: ${{ inputs.single_worker }}
+      GRADLE_OPTS: -Dorg.gradle.internal.repository.max.retries=5 -Dorg.gradle.internal.repository.initial.backoff=1000
 
     steps:
       - name: Confirm unchanged language
@@ -111,14 +112,29 @@ jobs:
           distribution: temurin
           java-version: '25'
 
-      - name: Cache Gradle dependencies and wrapper
+      - name: Select CI Gradle home
         if: ${{ !inputs.skip_tests }}
+        shell: bash
+        env:
+          CI_GRADLE_HOME: ${{ runner.temp }}/framework-java-gradle
+        run: echo "GRADLE_USER_HOME=${CI_GRADLE_HOME}" >> "${GITHUB_ENV}"
+
+      - name: Cache Gradle dependencies and wrapper
+        if: ${{ !inputs.skip_tests && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
         uses: ./.github/actions/main-cache
         with:
           path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
+            ${{ env.GRADLE_USER_HOME }}/caches
+            ${{ env.GRADLE_USER_HOME }}/wrapper
           key: framework-java-gradle-${{ runner.os }}-${{ runner.arch }}-jdk25-${{ hashFiles('**/*.gradle*', '**/gradle/libs.versions.toml', '**/gradle/wrapper/gradle-wrapper.properties') }}-v1
+          restore-keys: framework-java-gradle-${{ runner.os }}-${{ runner.arch }}-jdk25-
+
+      - name: Install CI Gradle repository policy
+        if: ${{ !inputs.skip_tests }}
+        shell: bash
+        run: |
+          mkdir -p "${GRADLE_USER_HOME}/init.d"
+          cp scripts/ci/gradle/ci-mirror.gradle "${GRADLE_USER_HOME}/init.d/ci-mirror.gradle"
 
       - name: Setup Python
         if: ${{ !inputs.skip_tests }}
@@ -221,6 +237,8 @@ jobs:
             :zlink-framework-spring-boot-starter:test \
             :zlink-framework-spring-boot-starter:integrationTest \
             :zlink-framework-locations-redis:test \
+            :zlink-framework-locations-etcd:test \
+            :zlink-framework-locations-etcd:contractTest \
             :zlink-framework-testkit:test \
             -Pzlink.includeSamples=false
 
@@ -252,7 +270,7 @@ jobs:
         run: |
           .\scripts\ci\framework-java-test-results.ps1 `
             -Mode summarize `
-            -InputPath "framework/languages/java/zlink-framework-core/build/test-results", "framework/languages/java/zlink-framework-spring-boot-starter/build/test-results", "framework/languages/java/zlink-framework-locations-redis/build/test-results" `
+            -InputPath "framework/languages/java/zlink-framework-core/build/test-results", "framework/languages/java/zlink-framework-spring-boot-starter/build/test-results", "framework/languages/java/zlink-framework-locations-redis/build/test-results", "framework/languages/java/zlink-framework-locations-etcd/build/test-results" `
             -OutputPath ".artifacts/framework-java-results/${{ matrix.target.name }}" `
             -Platform "${{ matrix.target.name }}" `
             -MinimumTests $env:FRAMEWORK_JAVA_MIN_TESTS

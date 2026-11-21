@@ -189,6 +189,45 @@ test('SpotWide Yield keeps the Actor claim while another Actor and a timer progr
   await executor.close();
 });
 
+test('a rejected SpotWide resume preserves the active turn and its Yield eligibility', async (t) => {
+  const spot = new ZLinkSpotSerialTurnExecutor();
+  const pending = deferred();
+  const started = deferred();
+  const resumeOwnerCheck = deferred();
+  const terminal = [];
+  const first = spot.execute(async () => {
+    try {
+      await spot.yieldPromise(pending.promise);
+    } catch (error) {
+      terminal.push('catch');
+      throw error;
+    } finally {
+      terminal.push('finally');
+    }
+  });
+  const rejected = assert.rejects(first, /serial execution queue is closed/);
+  const second = spot.execute(async () => {
+    const turn = spot.currentTurn;
+    started.resolve();
+    await resumeOwnerCheck.promise;
+    assert.equal(spot.isCurrentTurn, true, 'B must retain the gate after A fails to resume');
+    assert.strictEqual(spot.currentTurn, turn);
+    // Check eligibility separately from continuation admission, which is closed.
+    assert.doesNotThrow(() => turn.admitYield());
+  });
+  await started.promise;
+  try {
+    spot.closeAdmission();
+    pending.resolve();
+    await new Promise(setImmediate);
+    t.diagnostic(`A terminal handlers before B released the gate: ${terminal.join(', ') || 'none'}`);
+  } finally {
+    resumeOwnerCheck.resolve();
+    await Promise.all([rejected, second]);
+  }
+  assert.deepEqual(terminal, ['catch', 'finally']);
+});
+
 test('passive Actor lanes retain fairness and synchronous acceptance sequence', async () => {
   const spot = new ZLinkSpotSerialTurnExecutor();
   const executor = new ZLinkSpotSerialExecutor(spot, ZLinkUserSpotExecutionMode.SpotWide, 'spot', {

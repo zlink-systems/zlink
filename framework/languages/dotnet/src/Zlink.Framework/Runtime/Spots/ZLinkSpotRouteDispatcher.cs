@@ -141,7 +141,13 @@ internal sealed class ZLinkSpotRouteDispatcher(
                 try
                 {
                     await handlerInvoker()
-                        .InvokePacketAsync(descriptor, message, cancellationToken)
+                        .InvokeMessageAsync(
+                            descriptor,
+                            message,
+                            header,
+                            received,
+                            cancellationToken
+                        )
                         .ConfigureAwait(false);
 
                     scope.Trace(dispatchErrors, ZLinkMessageFlowOutcome.Dispatched);
@@ -158,7 +164,7 @@ internal sealed class ZLinkSpotRouteDispatcher(
             try
             {
                 var reply = await handlerInvoker()
-                    .InvokeRequestAsync(descriptor, message, cancellationToken)
+                    .InvokeMessageAsync(descriptor, message, header, received, cancellationToken)
                     .ConfigureAwait(false);
                 replyParts = ZLinkSpotReplyEnvelope.EncodeResponseParts(
                     channelName,

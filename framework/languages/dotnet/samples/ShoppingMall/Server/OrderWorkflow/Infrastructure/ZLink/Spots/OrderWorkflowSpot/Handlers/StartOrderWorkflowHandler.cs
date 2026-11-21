@@ -1,4 +1,5 @@
 using ShoppingMall.Shared.Contracts;
+using Zlink.Framework.Contracts.Handlers;
 using Zlink.Framework.Contracts.Spots;
 
 namespace ShoppingMall.Server.OrderWorkflow.Infrastructure.ZLink.Spots.OrderWorkflowSpot.Handlers;
@@ -9,6 +10,7 @@ internal sealed class StartOrderWorkflowHandler
 {
     public ValueTask<StartOrderWorkflowRes> HandleAsync(
         OrderWorkflowSpot spot,
+        IZLinkMessageContext context,
         StartOrderWorkflowReq request,
         CancellationToken cancellationToken
     )

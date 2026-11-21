@@ -1,4 +1,4 @@
-import { createAbortError } from '../abort';
+import { createAbortError, NORMAL_COMPLETION } from '../abort';
 export interface OperationClock {
   now(): number;
 }
@@ -107,7 +107,7 @@ class RegistryOperation<T, Context> implements OperationHandle<T>, OperationObse
     this.fail((event.target as AbortSignal).reason ?? createAbortError());
   }
   endAdmission(): void {
-    this.stop?.abort();
+    this.stop?.abort(NORMAL_COMPLETION);
   }
   mapCaller(onValue: (value: unknown) => unknown, onFailure: (error: unknown) => unknown): boolean {
     if (this.resolve === undefined || this.reject === undefined) return false;

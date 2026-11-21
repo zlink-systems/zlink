@@ -13,7 +13,6 @@ using detail::stream_header_flags_t;
 using detail::stream_header_t;
 using detail::stream_message_kind_t;
 using detail::stream_relay_dispatch_scope_t;
-using detail::submit_once_t;
 // Raw baseline from main 3841c24541. The fixture preserves its three owning
 // dispatch objects and native relay result while sharing current transport APIs.
 class stream_allocation_test_access_t
@@ -615,7 +614,7 @@ class stream_allocation_test_access_t
             auto current_flow = runtime::flow_context_t::current ();
             auto dispatch_stream = stream;
             dispatch_stream._reply_header = header;
-            dispatch_stream._reply_submission = std::make_shared<submit_once_t> ();
+            dispatch_stream._reply_submission = std::make_shared<stream_reply_submission_t> ();
             auto dispatch_header = std::make_shared<stream_header_t> (header);
             auto dispatch_context = std::make_shared<session_message_context_t> ();
             dispatch_context->packet_name = std::string (header.packet_name ());

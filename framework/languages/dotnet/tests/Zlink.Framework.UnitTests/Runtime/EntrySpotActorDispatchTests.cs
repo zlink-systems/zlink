@@ -3182,10 +3182,12 @@ public sealed partial class EntrySpotActorDispatchTests
         RoutingId SessionNode
     )> CreateDuplicateBindFixtureAsync(
         TimeSpan? callbackTimeout = null,
-        ZLinkUserSpotExecutionMode? userSpotMode = null
+        ZLinkUserSpotExecutionMode? userSpotMode = null,
+        TimeProvider? callbackTime = null,
+        CapturingSpotNode? nodeOverride = null
     )
     {
-        var node = new CapturingSpotNode();
+        var node = nodeOverride ?? new CapturingSpotNode();
         var (runtime, actorRef) = await CreateStartedRuntimeAsync(
             node,
             meshResolverWrapper: resolver => new AdmittedPeerDescriptors(
@@ -3195,6 +3197,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 71
             ),
             sessionReplacementCallbackTimeout: callbackTimeout,
+            joinTimeProvider: callbackTime,
             userSpotType: userSpotMode is null ? null : typeof(JoinTargetSpot),
             userSpotExecutionMode: userSpotMode ?? ZLinkUserSpotExecutionMode.SpotWide
         );
@@ -14409,8 +14412,7 @@ public sealed partial class EntrySpotActorDispatchTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
-    internal sealed class ProbeActor(string actorId, IZLinkActorContext? context = null)
-        : IZLinkActor
+    internal class ProbeActor(string actorId, IZLinkActorContext? context = null) : IZLinkActor
     {
         internal int OwnedDisconnectCalls { get; set; }
 
@@ -15177,6 +15179,7 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         public async ValueTask HandleAsync(
             BlockingDisposeEntrySpot spot,
+            IZLinkMessageContext context,
             ProbeRouteMessage message,
             CancellationToken cancellationToken
         )
@@ -15416,6 +15419,7 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         public async ValueTask HandleAsync(
             TimerProbeEntrySpot spot,
+            IZLinkMessageContext context,
             ProbeRouteMessage message,
             CancellationToken cancellationToken
         )
@@ -15457,6 +15461,7 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         public ValueTask HandleAsync(
             ProbeEntrySpot spot,
+            IZLinkMessageContext context,
             ProbeRouteMessage message,
             CancellationToken cancellationToken
         )

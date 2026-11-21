@@ -1,8 +1,7 @@
+const { relocationAuthorityStore } = require('./fixtures/relocation-authority-store');
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const {
-  ZLinkHostServiceRelocationRuntime
-} = require('../../packages/framework/dist/internal');
+const { ZLinkHostServiceRelocationRuntime } = require('../../packages/framework/dist/internal');
 const { ZLinkFrameworkErrorKind } = require('../../packages/framework/dist/contracts');
 const {
   ZLinkSpotSerialTurnExecutor
@@ -52,19 +51,17 @@ for (const { casCommits, path } of [
           ]
         ])
       },
-      locationStore: () => ({
-        readAuthority: async () => ({
-          kind: 'snapshot',
-          storeVersion: { value: 'ready-v1' },
-          payload: Buffer.alloc(0),
-          objectGeneration: 1n,
-          authorityOwnerGeneration: 1n,
-          ownerId: 'owner',
-          ownerLeaseGeneration: 1n,
-          allocation: { state: 'active', objectKind: 'user_spot', stableType: 'Spot' },
-          storeNow: new Date()
-        })
-      }),
+      locationStore: relocationAuthorityStore(async () => ({
+        kind: 'snapshot',
+        storeVersion: { value: 'ready-v1' },
+        payload: Buffer.alloc(0),
+        objectGeneration: 1n,
+        authorityOwnerGeneration: 1n,
+        ownerId: 'owner',
+        ownerLeaseGeneration: 1n,
+        allocation: { state: 'active', objectKind: 'user_spot', stableType: 'Spot' },
+        storeNow: new Date()
+      })),
       spotManager: () => ({
         pendingSpotCloseDecision() {
           enteredDecision();
@@ -93,13 +90,18 @@ for (const { casCommits, path } of [
 
     const relocation =
       path === 'shell'
-        ? runtime.relocatePerActorSpotShell('mesh', activation, { rid: 'target' }, undefined)
+        ? runtime.relocatePerActorSpotShell(
+            'mesh',
+            activation,
+            { rid: 'target', applicationVersion: 1n },
+            undefined
+          )
         : runtime.relocateSpotAggregate(
             'mesh',
             activation,
             'instance_spot',
             [],
-            { rid: 'target' },
+            { rid: 'target', applicationVersion: 1n },
             undefined
           );
     await Promise.race([decisionEntered, sealEntered]);
