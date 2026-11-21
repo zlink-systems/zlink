@@ -352,16 +352,21 @@ for (const scenario of cases) {
   });
 }
 
-for (const scenario of ['none', 'first', 'same', 'different']) {
-  test(`Actor binding gate admission: ${scenario}`, async () => {
+for (const scenario of ['none', 'first', 'same', 'different', 'overlapping']) {
+  const overlapping = scenario === 'overlapping';
+  const name = overlapping
+    ? 'Queued duplicate bind uses the current binding in its Actor turn'
+    : `Actor binding gate admission: ${scenario}`;
+  test(name, async () => {
     const {
       ZLinkSerialExecutionQueue
     } = require('../../packages/framework/dist/runtime/execution/serial-execution-queue');
     const {
-      SubmitResult
+      RequestResult, SubmitResult
     } = require('../../packages/framework/dist/runtime/backend/runtime-values');
     const queue = new ZLinkSerialExecutionQueue(async (record) => {
       record.resolve(await record.operation());
+      record.release();
     });
     let release;
     let entered;
@@ -371,13 +376,15 @@ for (const scenario of ['none', 'first', 'same', 'different']) {
     const held = new Promise((resolve) => {
       release = resolve;
     });
-    const handler = queue.submit(() => {
-      entered();
-      return held;
-    });
-    await started;
-    let callbacks = 0;
-    let replies = 0;
+    const handler = overlapping
+      ? undefined
+      : queue.submit(() => {
+          entered();
+          return held;
+        });
+    if (handler !== undefined) await started;
+    const callbackInputs = [];
+    const replies = [];
     const actor = { actorId: 'actor-a', nodeRid: 'node-a', generation: 1n };
     const incoming = {
       sessionNodeRid: 'session-owner',
@@ -387,12 +394,16 @@ for (const scenario of ['none', 'first', 'same', 'different']) {
       sessionOwnerLeaseGeneration: 1n,
       bindingGeneration: 5n
     };
+    const next = { ...incoming, sessionRid: 'session-b', bindingGeneration: 6n };
+    const rejectionMessage = 'The first replacement is current.';
+    const firstReply = { session: incoming.sessionRid, result: RequestResult.Ok };
     const current =
       scenario === 'first'
         ? undefined
         : {
             ...incoming,
-            sessionRid: scenario === 'same' ? 'session-a' : 'session-old'
+            sessionRid: scenario === 'same' ? 'session-a' : 'session-old',
+            bindingGeneration: 3n
           };
     const state = {
       nativeActorRef: actor,
@@ -406,8 +417,18 @@ for (const scenario of ['none', 'first', 'same', 'different']) {
         ...(scenario === 'none'
           ? {}
           : {
-              async onDuplicateBind() {
-                callbacks++;
+              async onDuplicateBind(bound, candidate) {
+                callbackInputs.push(bound.bindingGeneration);
+                if (overlapping && candidate.bindingGeneration === incoming.bindingGeneration) {
+                  entered();
+                  await held;
+                }
+                if (
+                  candidate.bindingGeneration === next.bindingGeneration &&
+                  bound.bindingGeneration === incoming.bindingGeneration
+                ) {
+                  return rejectionMessage;
+                }
               }
             })
       },
@@ -427,44 +448,75 @@ for (const scenario of ['none', 'first', 'same', 'different']) {
       },
       options: { registration: { sessionReplacementCallbackTimeoutMs: 30000 } }
     };
-    const binding = framework.ZLinkFrameworkRuntimeHost.prototype.dispatchMeshActorBinding.call(
-      host,
-      'mesh-a',
-      {
-        kindData: {
-          kind: 'actorBinding',
-          transition: 'active',
-          actor,
-          actorNodeGeneration: 2n,
-          authorityOwnerGeneration: 3n,
-          ...incoming
-        },
-        reply() {
-          replies++;
-          return SubmitResult.Ok;
-        },
-        replyFailure() {
-          assert.fail('valid binding was rejected');
+    const bind = (session) =>
+      framework.ZLinkFrameworkRuntimeHost.prototype.dispatchMeshActorBinding.call(
+        host,
+        'mesh-a',
+        {
+          kindData: {
+            kind: 'actorBinding',
+            transition: 'active',
+            actor,
+            actorNodeGeneration: 2n,
+            authorityOwnerGeneration: 3n,
+            ...session
+          },
+          reply() {
+            replies.push({ session: session.sessionRid, result: RequestResult.Ok });
+            return SubmitResult.Ok;
+          },
+          replyFailure(result, _failureCode, tail) {
+            replies.push({ session: session.sessionRid, result, tail });
+            return SubmitResult.Ok;
+          }
         }
-      }
-    );
+      );
+    const binding = bind(incoming);
+    let secondBinding;
     try {
-      await new Promise((resolve) => setImmediate(resolve));
-      assert.equal(callbacks, 0);
-      if (scenario === 'different') {
-        assert.equal(replies, 0);
+      if (overlapping) {
+        await Promise.race([
+          started,
+          binding.then(() => {
+            assert.fail('Binding completed without invoking its callback.');
+          })
+        ]);
+        assert.deepEqual(callbackInputs, [current.bindingGeneration]);
+        secondBinding = bind(next);
+        assert.equal(queue.lifecycle.records.length, 1);
+        assert.deepEqual(callbackInputs, [current.bindingGeneration]);
+        assert.deepEqual(replies, []);
         assert.equal(state.boundSession, current);
       } else {
-        assert.equal(replies, 1);
-        assert.equal(state.boundSession.sessionRid, incoming.sessionRid);
+        await new Promise((resolve) => setImmediate(resolve));
+        assert.deepEqual(callbackInputs, []);
+        if (scenario === 'different') {
+          assert.deepEqual(replies, []);
+          assert.equal(state.boundSession, current);
+        } else {
+          assert.deepEqual(replies, [firstReply]);
+          assert.deepEqual(state.boundSession, incoming);
+        }
       }
     } finally {
       release();
       await handler;
-      await binding;
+      await Promise.all([binding, secondBinding]);
     }
-    assert.equal(callbacks, scenario === 'different' ? 1 : 0);
-    assert.equal(replies, 1);
-    assert.equal(state.boundSession.sessionRid, incoming.sessionRid);
+    const expectedReplies = [firstReply];
+    const expectedCallbackInputs =
+      overlapping || scenario === 'different' ? [current.bindingGeneration] : [];
+    if (overlapping) {
+      expectedCallbackInputs.push(incoming.bindingGeneration);
+      expectedReplies.push({
+        session: next.sessionRid,
+        result: RequestResult.Rejected,
+        tail: { kind: 'streamBindRejected', rejectionMessage }
+      });
+    }
+    assert.deepEqual(
+      { callbackInputs, replies, current: state.boundSession },
+      { callbackInputs: expectedCallbackInputs, replies: expectedReplies, current: incoming }
+    );
   });
 }
