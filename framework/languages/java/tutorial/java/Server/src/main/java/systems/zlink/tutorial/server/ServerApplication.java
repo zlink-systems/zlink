@@ -3,6 +3,8 @@ package systems.zlink.tutorial.server;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -16,6 +18,7 @@ import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationOptions;
 import systems.zlink.framework.locations.redis.ZLinkRedisRelocationStore;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.spring.EnableZLinkFramework;
 import systems.zlink.framework.spring.ZLinkFrameworkConfigurer;
 import systems.zlink.tutorial.server.actors.Player;
@@ -209,4 +212,22 @@ class ChannelWeightController {
 
     record WeightChanged(String channel, int weight) {}
 }
+
 // --8<-- [end:weight-runtime]
+
+@RestController
+class HostReadinessController {
+
+    private final ZLinkFrameworkRuntime runtime;
+
+    HostReadinessController(ZLinkFrameworkRuntime runtime) {
+        this.runtime = runtime;
+    }
+
+    @GetMapping("/ops/ready")
+    ResponseEntity<Void> readiness() {
+        return runtime.status().isReady()
+                ? ResponseEntity.ok().build()
+                : ResponseEntity.status(503).build();
+    }
+}
