@@ -8,7 +8,6 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 
-import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.*;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
@@ -61,8 +60,8 @@ public class ZLinkEndedActorOwnerIntegrationTest {
                 renewInterval = options.configureLocations().ownerLeaseRenewInterval();
                 options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
                 var node = options.addRouteMesh("probe");
-                node.listen("tcp://127.0.0.1:0")
-                        .setRoutingId(RoutingId.from(System.getProperty("probe.node")));
+                // Each process uses a fresh MeshNode identity for the Actor recovery scenario.
+                node.listen("tcp://127.0.0.1:0");
                 node.objects().server().addEntrySpot(Entry.class);
                 node.objects()
                         .server()
@@ -155,7 +154,6 @@ public class ZLinkEndedActorOwnerIntegrationTest {
                                     "--enable-native-access=ALL-UNNAMED",
                                     "-Dprobe.redis=" + redis,
                                     "-Dprobe.prefix=" + prefix,
-                                    "-Dprobe.node=restarted-node",
                                     "-Dprobe.reclaim=" + reclaim,
                                     "-cp",
                                     System.getProperty("zlink.test.classpath"),

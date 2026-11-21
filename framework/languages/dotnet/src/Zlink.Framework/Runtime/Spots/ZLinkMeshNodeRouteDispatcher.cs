@@ -812,7 +812,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
             cancellationToken
         );
 
-    private ValueTask SubmitEnvelopeAsync(
+    private async ValueTask SubmitEnvelopeAsync(
         ZLinkBackendRouteReceived received,
         ZLinkEnvelopeHeader header,
         object? body,
@@ -820,11 +820,8 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         CancellationToken cancellationToken
     )
     {
-        if (!received.CanReply)
-            return ValueTask.CompletedTask;
-
-        var replyParts = ZLinkEnvelopeCodec.EncodeParts(header, body, bodyType, _codecs);
-        return ZLinkSpotReplySubmitter.SubmitDirectAsync(received, replyParts, cancellationToken);
+        SubmitEnvelopeUnreserved(received, header, body, bodyType);
+        await ValueTask.CompletedTask;
     }
 
     private void SubmitEnvelopeUnreserved(
@@ -836,6 +833,12 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
     {
         if (!received.CanReply)
             return;
+        if (received.NativeApplicationReply is { } nativeReply)
+        {
+            using var frame = ZLinkEnvelopeCodec.EncodeMultipart(header, body, bodyType, _codecs);
+            ZLinkSpotReplySubmitter.EnsureSubmitted(nativeReply.SubmitFrame(frame));
+            return;
+        }
         var replyParts = ZLinkEnvelopeCodec.EncodeParts(header, body, bodyType, _codecs);
         ZLinkSpotReplySubmitter.SubmitAndDispose(received, replyParts);
     }

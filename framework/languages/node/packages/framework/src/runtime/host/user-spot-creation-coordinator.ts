@@ -1,3 +1,4 @@
+import { createObjectCreationDeadline } from './object-creation-deadline';
 import { encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
 import { createHash } from 'node:crypto';
 import {
@@ -131,10 +132,10 @@ export class ZLinkUserSpotCreationCoordinator {
   ): Promise<ZLinkUserSpotCreationResult> {
     const deadlineUnixMs = Date.now() + request.timeoutMs;
     const remainingMs = Math.max(0, deadlineUnixMs - Date.now());
-    const deadline = createDeadline(remainingMs, request.signal);
+    request.signal?.throwIfAborted();
+    const deadline = createObjectCreationDeadline(remainingMs, 'User Spot', request.signal);
     const deadlineMs = performance.now() + remainingMs;
     const signal = deadline.signal;
-    signal.throwIfAborted();
     const sha256 = createHash('sha256').update(request.requestPayload).digest();
     const contentReference = encodeLocationCreationContent(request.requestPayload);
     const excludedHostRuns = new Map<string, bigint>();
@@ -564,8 +565,9 @@ export class ZLinkUserSpotCreationCoordinator {
       const publicationCleanup = await Promise.allSettled([
         Promise.resolve().then(() => local?.publication?.abort())
       ]);
-      const cleanupDeadline = createDeadline(
-        this.options.cleanupTimeoutMs ?? DEFAULT_USER_SPOT_CLEANUP_TIMEOUT_MS
+      const cleanupDeadline = createObjectCreationDeadline(
+        this.options.cleanupTimeoutMs ?? DEFAULT_USER_SPOT_CLEANUP_TIMEOUT_MS,
+        'User Spot'
       );
       const cleanupSignal = cleanupDeadline.signal;
       const cleanup = await Promise.allSettled([
@@ -1106,36 +1108,6 @@ function remoteUserSpotFailure(
     failureCode,
     `${message} terminalResult=${terminalResult}, failureCode=${failureCode}.`
   );
-}
-
-function createDeadline(
-  timeoutMs: number,
-  parent?: AbortSignal
-): {
-  readonly signal: AbortSignal;
-  close(): void;
-} {
-  const controller = new AbortController();
-  const timeout = setTimeout(
-    () =>
-      controller.abort(
-        createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
-          'User Spot creation exceeded its end-to-end deadline.',
-          true
-        )
-      ),
-    timeoutMs
-  );
-  const abort = () => controller.abort(parent?.reason);
-  parent?.addEventListener('abort', abort, { once: true });
-  return {
-    signal: controller.signal,
-    close: () => {
-      clearTimeout(timeout);
-      parent?.removeEventListener('abort', abort);
-    }
-  };
 }
 
 function wait(delayMs: number, signal?: AbortSignal): Promise<void> {

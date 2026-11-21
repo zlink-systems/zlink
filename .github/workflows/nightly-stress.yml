@@ -44,11 +44,22 @@ jobs:
     runs-on: ${{ vars.ZLINK_CPP_LINUX_RUNNER && fromJSON(vars.ZLINK_CPP_LINUX_RUNNER) || 'ubuntu-24.04' }}
     timeout-minutes: 300
     env:
-      BUILD_PARALLEL: ${{ vars.ZLINK_CPP_BUILD_PARALLEL || '2' }}
+      BUILD_PARALLEL_SELF_HOSTED: ${{ vars.ZLINK_CPP_BUILD_PARALLEL || '2' }}
       APT_CACHE_DIR: ${{ github.workspace }}/.cache/framework-cpp/apt
       VCPKG_INSTALLED_DIR: ${{ github.workspace }}/.cache/framework-cpp/vcpkg-installed
       ZLINK_LOCAL_PACKAGE_ROOT: ${{ github.workspace }}/.artifacts/nightly-stress
     steps:
+      # GitHub-hosted runners have 4 cores and 16 GB; the self-hosted value
+      # overruns their memory on large C++ translation units (#5177).
+      - name: Choose build parallelism for this runner
+        shell: bash
+        run: |
+          if [[ "${RUNNER_ENVIRONMENT}" == github-hosted ]]; then
+            echo "BUILD_PARALLEL=2" >> "${GITHUB_ENV}"
+          else
+            echo "BUILD_PARALLEL=${BUILD_PARALLEL_SELF_HOSTED}" >> "${GITHUB_ENV}"
+          fi
+
       - uses: actions/checkout@v5
 
       - name: Report initial sanitizer disk usage
@@ -173,9 +184,9 @@ jobs:
           CFLAGS: -fsanitize=address,undefined -fno-sanitize=null -fno-omit-frame-pointer
           CXXFLAGS: -fsanitize=address,undefined -fno-sanitize=null -fno-omit-frame-pointer
           LDFLAGS: -fsanitize=address,undefined -fno-sanitize=null
-          ZLINK_BINDING_BUILD_JOBS: ${{ vars.ZLINK_CPP_BUILD_PARALLEL || '2' }}
         run: |
           set -euo pipefail
+          export ZLINK_BINDING_BUILD_JOBS="${BUILD_PARALLEL}"
           core_version="$(sed -n 's/^LIBZLINK_VERSION=//p' VERSION)"
           mkdir -p "${ZLINK_LOCAL_PACKAGE_ROOT}/build"
           CONFIGURATION=Debug bash scripts/local-package/cpp/build-wsl.sh \

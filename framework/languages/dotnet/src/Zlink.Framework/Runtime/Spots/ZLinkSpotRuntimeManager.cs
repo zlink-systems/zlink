@@ -190,7 +190,6 @@ internal sealed class ZLinkSpotRuntimeManager(
             cancellationToken
         );
         deadlineToken.CancelAfter(timeout);
-        var completionExpected = false;
         try
         {
             var meshName = source.Registration.SpotNodeName;
@@ -227,7 +226,6 @@ internal sealed class ZLinkSpotRuntimeManager(
                             ZLinkFrameworkErrorKind.AlreadyExists,
                             $"User Spot '{requestedSpotId}' already exists."
                         );
-                    completionExpected = true;
                     var joined = await JoinExistingAsync(
                             requestedSpotId,
                             stableType,
@@ -368,7 +366,6 @@ internal sealed class ZLinkSpotRuntimeManager(
             {
                 if (target.Rid == source.Node.RoutingId)
                 {
-                    completionExpected = true;
                     result = await source
                         .CreateUserSpotLocalAsync(
                             requestedSpotId,
@@ -383,10 +380,7 @@ internal sealed class ZLinkSpotRuntimeManager(
                 {
                     var remaining = deadlineAt - Stopwatch.GetElapsedTime(0);
                     if (remaining <= TimeSpan.Zero)
-                        throw new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.Unavailable,
-                            "User Spot creation was not admitted before its deadline."
-                        );
+                        throw CreateUserSpotCreationDeadlineException(requestedSpotId);
                     result = await source
                         .Node.CreateUserSpotAsync(
                             target.Rid,
@@ -448,18 +442,20 @@ internal sealed class ZLinkSpotRuntimeManager(
                 && deadlineToken.IsCancellationRequested
             )
         {
-            throw new ZLinkFrameworkException(
-                completionExpected
-                    ? ZLinkFrameworkErrorKind.DeadlineExceeded
-                    : ZLinkFrameworkErrorKind.Unavailable,
-                completionExpected
-                    ? "User Spot creation did not complete before its deadline."
-                    : "User Spot creation was not admitted before its deadline.",
-                ZLinkRetryAdvice.RetryAfterBackoff,
-                error
-            );
+            throw CreateUserSpotCreationDeadlineException(requestedSpotId, error);
         }
     }
+
+    private static ZLinkFrameworkException CreateUserSpotCreationDeadlineException(
+        string spotId,
+        Exception? innerException = null
+    ) =>
+        new(
+            ZLinkFrameworkErrorKind.DeadlineExceeded,
+            $"User Spot '{spotId}' creation deadline elapsed.",
+            ZLinkRetryAdvice.RetryAfterBackoff,
+            innerException
+        );
 
     //  A compatible/live target: serving, a server, placeable, and advertising
     //  the User Spot type. Capacity is a separate axis so an absent compatible
