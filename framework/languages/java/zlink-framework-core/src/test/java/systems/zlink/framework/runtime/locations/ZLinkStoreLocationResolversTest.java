@@ -41,6 +41,66 @@ final class ZLinkStoreLocationResolversTest {
     private static final Instant NOW = Instant.parse("2026-07-27T00:00:00Z");
     private static final RoutingId NODE = RoutingId.from("node-a");
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(
+            strings = {"newer", "missing", "invalidate", "same"})
+    void authorityObservationGuardsLateReadyRead(String observation) {
+        for (int iteration = 0; iteration < 40; iteration++) {
+            var delayed = new CompletableFuture<Object>();
+            var reads = new AtomicInteger();
+            var old = readySpotSnapshot(5, 13, 7, 11, "opaque-z");
+            var current = readySpotSnapshot(9, 17, 7, 11, "opaque-a");
+            var store =
+                    repository(
+                            (method, arguments) ->
+                                    switch (method) {
+                                        case "read" ->
+                                                reads.incrementAndGet() == 1
+                                                        ? delayed
+                                                        : CompletableFuture.completedFuture(
+                                                                current);
+                                        case "readOwnerLease" ->
+                                                CompletableFuture.completedFuture(
+                                                        new ZLinkOwnerLeaseFound(
+                                                                new ZLinkLocationOwnerToken(
+                                                                        "owner-a", 7),
+                                                                NOW.plusSeconds(30),
+                                                                NOW));
+                                        default -> throw new UnsupportedOperationException(method);
+                                    });
+            try (var resolver =
+                    new ZLinkStoreLocationResolvers(
+                            ZLinkRegisteredLocationStores.fromUnified(store),
+                            new ZLinkLocationOptions())) {
+                var first = resolver.resolveSpot("room-a").toCompletableFuture();
+                switch (observation) {
+                    case "newer" ->
+                            resolver.resolveReadySpot("room-a", current)
+                                    .toCompletableFuture()
+                                    .join();
+                    case "same" ->
+                            resolver.resolveReadySpot("room-a", old).toCompletableFuture().join();
+                    case "missing" ->
+                            resolver.resolveReadySpot("room-a", new ZLinkAuthorityMissing(NOW))
+                                    .toCompletableFuture()
+                                    .join();
+                    case "invalidate" -> resolver.invalidateSpotRoute("room-a");
+                    default -> throw new AssertionError(observation);
+                }
+                delayed.complete(old);
+                assertEquals(5, first.join().spotGeneration());
+                var next = resolver.resolveSpot("room-a").toCompletableFuture().join();
+                assertEquals(
+                        observation.equals("same") ? 5 : 9,
+                        next.spotGeneration(),
+                        observation + " iteration=" + iteration);
+                assertEquals(
+                        observation.equals("newer") || observation.equals("same") ? 1 : 2,
+                        reads.get());
+            }
+        }
+    }
+
     @Test
     void serviceSummaryCountsExactLiveOwnersAndKeepsErrorCountZero() {
         var live = meshNodeDescriptor("mesh", RoutingId.from("live"), "live-owner");
