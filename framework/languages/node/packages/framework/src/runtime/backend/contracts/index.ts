@@ -74,6 +74,13 @@ export type ZLinkBackendRequestSourceAcceptance = (
   | Promise<import('../../locations/request-source-resolver').ZLinkRequestSourceFence | undefined>;
 
 export interface ZLinkBackendMeshNode {
+  /**
+   * True when this node's channel send/request encoders accept the channel
+   * envelope already packed into one service multipart frame
+   * (`encodeChannelMultipartApplicationPayload`). Other nodes receive the
+   * header and payload as separate parts.
+   */
+  readonly acceptsPackedChannelFrames?: true;
   setRequestRuntime?(requests: RequestRuntime): void;
   acceptRelocatedActorTerminal?(
     operation: { readonly high: bigint; readonly low: bigint },

@@ -13,7 +13,6 @@ import {
   type ZLinkMeshCompletionTable
 } from '../backend/mesh-completion-table';
 import { ZLinkBufferMessage } from '../backend/runtime-message';
-import { ZLinkNodeRawMeshBackend } from '../backend/node/node-raw-mesh-backend';
 import {
   RequestResult,
   ZLINK_BACKEND_SEND_DONT_WAIT,
@@ -403,7 +402,7 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
       undefined,
       metadata,
       undefined,
-      !local && node instanceof ZLinkNodeRawMeshBackend
+      !local && node.acceptsPackedChannelFrames === true
     );
     if (local) {
       return this.submitLocalNode(meshName, String(sourceNodeRid), parts);
@@ -553,7 +552,7 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
             timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
             metadata,
             correlationId,
-            node instanceof ZLinkNodeRawMeshBackend
+            node.acceptsPackedChannelFrames === true
           );
         } catch (error) {
           requestOperation.fail(error);
@@ -649,7 +648,7 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
       undefined,
       metadata,
       undefined,
-      node instanceof ZLinkNodeRawMeshBackend
+      node.acceptsPackedChannelFrames === true
     );
     const operation = `MeshNode '${meshName}' send to channel '${channelName}'`;
     try {
@@ -762,7 +761,7 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
             timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
             metadata,
             undefined,
-            node instanceof ZLinkNodeRawMeshBackend
+            node.acceptsPackedChannelFrames === true
           );
         } catch (error) {
           requestOperation.fail(error);
