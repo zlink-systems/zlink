@@ -520,21 +520,41 @@ export class ZLinkActorHandoffCoordinator {
     queue: ZLinkActorHandoffPrefixQueue,
     preparation: ZLinkActorHandoffReplayPreparation | undefined,
     start: Promise<void>,
-    onResult: (packet: ZLinkActorHandoffPacket, result: ZLinkActorHandoffResult) => void
+    onResult: (
+      packet: ZLinkActorHandoffPacket,
+      result: ZLinkActorHandoffResult
+    ) => Promise<void> | void
   ): ZLinkActorHandoffPrefixAdmission {
     this.beginProvisional(actorId, objectGeneration);
     const handoff = this.requireActive(actorId);
+    const reportResult = (
+      packet: ZLinkActorHandoffPacket,
+      result: ZLinkActorHandoffResult
+    ): void => {
+      const release = handoff.prefixRelease;
+      const delivery = onResult(packet, result);
+      if (release === undefined || delivery === undefined) return;
+      // Result delivery belongs to the existing prefix terminal, outside the FIFO turn.
+      release.inFlight += 1;
+      void Promise.resolve(delivery).then(
+        () => this.completePrefixBatch(actorId, handoff, release),
+        (error: unknown) => {
+          release.errors.push(error);
+          this.completePrefixBatch(actorId, handoff, release);
+        }
+      );
+    };
     for (const packet of packets) {
       handoff.pending.push({
         packet,
         origin: 'remote',
         resolve: (response) => {
           if (response !== RELOCATED_REQUEST_OWNED_BY_REQUESTER) {
-            onResult(packet, { index: packet.index, ok: true, response });
+            reportResult(packet, { index: packet.index, ok: true, response });
           }
         },
         reject: (error) =>
-          onResult(packet, {
+          reportResult(packet, {
             index: packet.index,
             ok: false,
             error: error instanceof Error ? error.message : String(error),
