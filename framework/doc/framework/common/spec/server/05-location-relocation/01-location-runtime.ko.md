@@ -1018,8 +1018,11 @@ Target owner lease가 유효하고 descriptor가 같은 lifecycle이면 해제�
 만드는 operation은 Actor `Create`·`GetOrCreate`, User Spot `GetOrCreate`, [Instance intent](../00-foundation/02-glossary.ko.md#instance-intent)가 있는 새
 message다. 이 operation이 steady `Ready` record를 읽었고, 그 record의 owner lease가 없거나 다른
 `LeaseGeneration`이거나 만료됐으며, 새 incarnation을 `Reserve`하는 node에 등록된 그 type의 relocation
-정책이 `Disabled`이면 Location repository가 그 record를 해제한다. `Closing`이나 미완료 최초 activation은
-allocation이 `Active`라는 이유로 이 대상이 되지 않으며 각자의 lifecycle·recovery 절차를 따른다. `Reserve`하는 node는 Actor와 User Spot에서는 생성을 요청한
+정책이 `Disabled`이면 Location repository가 그 record를 해제한다. User Spot의 `Closing`이나 미완료 최초
+activation은 allocation이 `Active`라는 이유로 이 대상이 되지 않으며 각자의 lifecycle·recovery 절차를 따른다.
+Actor의 `Closing`은 destroy가 admission을 이미 닫은 상태이므로, owner lease가 없거나 다른
+`LeaseGeneration`이거나 만료됐으면 같은 조건부 batch로 해제한다. 이 경우 relocation 정책 조건은 적용하지
+않으며, 생성 operation과 같은 generation을 destroy하려는 호출이 이 해제를 시작한다. `Reserve`하는 node는 Actor와 User Spot에서는 생성을 요청한
 node이고, Instance Spot에서는 activation envelope를 받은 target이다. 그 node에 type이 등록되어 있지
 않으면 `Disabled`로 보지 않는다. User Spot은 그 SpotId와 `ObjectGeneration`에 남은 Actor membership이
 모두 **owner가 끝난 member**일 때만 해제한다. Membership이 없으면 이 조건을 만족한다. Owner가 끝난
@@ -1046,7 +1049,7 @@ incarnation으로 시작한다. 이 batch가 provider의 한 batch 상한을 넘
 kind와 stable type이 같은지 확인한다(다르면 기존 `TypeMismatch`). Owner lease가 유효하면 type과
 operation에 따른 기존 결과를 반환한다. Owner lease가 무효이고 해제 조건을 만족하지 않으면
 `Unavailable`을 반환한다. 일반 message와 `Find`는 이 해제를 시작하지 않는다. 이 해제는 유효한 owner
-lease를 요구하는 `Delete`와 다른, repository의 조건부 batch다. 생성 operation 외에는 §5.1의 폐기 후
+lease를 요구하는 `Delete`와 다른, repository의 조건부 batch다. 생성 operation과 Actor `Closing`을 destroy하려는 호출 외에는 §5.1의 폐기 후
 정리만 이 해제를 시작한다. Owner 자신의 같은 incarnation record가 자기 옛 무효 token을 가리킬 때다.
 조건은 같지만 새 incarnation을 만들지 않으므로 type의 relocation 정책 조건은 적용하지 않는다.
 
@@ -1877,7 +1880,7 @@ provider conformance test가 store record golden fixture로 관찰하는 key·va
   적용한다. 해제되는 입력(Disabled Actor, member가 없거나 owner가 끝난 member만 남은 User Spot, steady `Ready` Instance Spot의 새 Instance
   intent)은 새 `ObjectGeneration`, 이전 allocation의 공간 반환과 factory 실행 한 번을 확인한다. 해제 조건을
   하나씩 어긴 입력(유효한 lease, `Disabled`가 아니거나 등록되지 않은 type, owner lease가 유효하거나 이동 중인 member가 남은 User Spot, provider 한 batch 상한을 넘는 member, recovery
-  pointer, `Closing`, aggregate·relocation 진행, 일반 message·`Find`)은 authority·membership·수용 공간과
+  pointer, User Spot의 `Closing`, owner lease가 유효한 Actor `Closing`, aggregate·relocation 진행, 일반 message·`Find`)은 authority·membership·수용 공간과
   factory 실행 수가 바뀌지 않음을 확인한다. 생성을 요청한 node와 factory target(Instance는 source와 수신
   target)의 등록 정책이 다른 입력으로 정책의 출처를 확인한다. Owner가 끝난 member가 남은 User Spot의 해제는 그 member
   Actor authority와 수용 공간도 같은 batch에서 해제되고, 이후 같은 ActorId 생성이 새 incarnation으로 시작함을 확인한다.
