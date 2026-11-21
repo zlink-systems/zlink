@@ -4087,8 +4087,7 @@ bool public_host_runtime_t::submit_relocation_target_authority (
             const auto prepared = _aggregate_relocation_authority->prepare (
               attempt.sources, attempt.targets.front ().node_id, target_owner,
               attempt.restore_identity.reference, attempt.restore_identity.checksum_crc32c,
-              attempt.restore_identity.inventory_digest,
-              attempt.prepare.coordinator.expected_authority_store_version);
+              attempt.restore_identity.inventory_digest, relocation_target_fence (attempt));
             if (prepared.status != stateful::aggregate_publish_status_t::prepared)
                 return false;
             attempt.authority_fence = prepared.fence;

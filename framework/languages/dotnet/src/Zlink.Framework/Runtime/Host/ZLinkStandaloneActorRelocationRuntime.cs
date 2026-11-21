@@ -2252,6 +2252,24 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 throw;
             }
         }
+        var authorityStore =
+            registration.Locations.ResolveStore()
+            ?? throw new ZLinkConfigurationException("Location Store is not registered.");
+        var authority = await authorityStore
+            .ReadAuthorityAsync(participant.AuthorityKey, cancellationToken)
+            .ConfigureAwait(false);
+        if (
+            authority is not ZLinkAuthorityReadResult.Found current
+            || !ZLinkStandaloneActorRelocationPrecommitCoordinator.HoldsTargetCommitFence(
+                current.Snapshot,
+                envelope,
+                prepare
+            )
+        )
+            throw new ZLinkRelocationTargetSettledException(
+                "Standalone Actor PREPARE no longer holds its expected source fence."
+            );
+
         var effectiveTargetAuthorityOwnerGeneration =
             remoteJoinRecovery?.TargetAuthorityOwnerGeneration
             ?? participant.AuthorityOwnerGeneration;
