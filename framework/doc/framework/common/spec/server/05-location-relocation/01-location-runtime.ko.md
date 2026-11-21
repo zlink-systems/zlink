@@ -511,7 +511,7 @@ field는 다른 record의 generation field와 마찬가지로 JSON number가 아
 취소도 이 record와 §7의 최종 결과 record만으로 판정한다. 예약 상태를 위 표의 field 밖에
 두지 않는다 — 한 언어만 읽는 field에 예약 정보를 담으면 다른 언어가 그 record를 갱신할 때
 그 정보가 남지 않는다. Aggregate·relocation 진행도 별도 lock record가 아니라 이 record의 상태다. 진행 여부와 commit 전 값은
-`aggregate`·`visibleStoreVersion` 두 field만으로 판정한다. Aggregate 기록의 key는 `{prefix}aggregate:{aggregateId}:{aggregateGeneration}`이다.
+`aggregate`·`visibleStoreVersion` 두 field만으로 판정한다. Aggregate 기록, 이동 대상 목록과 participant 변경 bytes의 key와 본문 형식은 [§8.3](#83-aggregate-기록과-이동-대상-목록의-저장-형식)이 정한다.
 
 `aggregate` field는 aggregate marker field와 선택적인 `relocation` field를 담는다. Aggregate marker가 아직 materialize되지 않은 relocation에서는 `aggregate`에 `relocation`만 기록할 수 있으며, 이 형태는 aggregate transaction marker가 준비되었음을 뜻하지 않는다. `aggregate`가 있으면 marker field는 전부 있거나 전부 없어야 하고, 빈 object는 유효하지 않다. Aggregate marker를 materialize하거나 갱신하는 authority 변경은 기존 `aggregate.relocation`을 보존하며, 그동안 `visibleStoreVersion`은 aggregate 준비 전 공개 StoreVersion을 유지한다. Relocation 진행 정보는 기존 terminal cleanup의 조건부 authority 변경에서 제거하고, 제거 뒤 marker도 없으면 `aggregate` field를 쓰지 않는다.
 
@@ -1491,6 +1491,110 @@ state를 저장하기 전에 User Spot 전체 이동을 거부한다.
 Target factory와 `Restore`는 `Prepared`를 기록하기 전에 끝낸다. Queue 병합, regular route
 전환, callback과 dispatch 개방의 정확한 순서는
 [04 「4. 정상 처리 순서」](04-relocation-flow.ko.md)가 정의한다.
+
+### 8.3 Aggregate 기록과 이동 대상 목록의 저장 형식
+
+이 절은 aggregate 변경(§8.1의 `SpotWide` User Spot 전체 이동 등)이 Location Store에 남기는
+aggregate 기록, 이동 대상 목록(inventory)과 participant 변경 bytes의 key와 본문 형식을 정한다.
+네 runtime은 같은 key에 같은 bytes를 쓰고 서로가 쓴 record를 읽는다. Location Store
+provider는 이 record를 opaque bytes로만 다루며 의미를 해석하지 않는다
+([02 §4](02-location-store-redis.ko.md#4-conditional-atomic-batch)).
+
+**key.** `{prefix}`는 authority record와 같은 provider storage namespace prefix다. `aggregateId`는
+lowercase canonical UUID(8-4-4-4-12)이고 `aggregateGeneration`과 `index`·`level`은 앞에 0을
+붙이지 않은 10진 정수다.
+
+| Record | Key |
+|---|---|
+| Aggregate 기록 | `{prefix}aggregate:{aggregateId}:{aggregateGeneration}` |
+| 목록 root | `{prefix}aggregate-inventory:{aggregateId}:{aggregateGeneration}:root` |
+| 목록 page | `{prefix}aggregate-inventory:{aggregateId}:{aggregateGeneration}:page:{level}:{index}` |
+| Participant의 새 authority payload | `{prefix}aggregate-inventory:{aggregateId}:{aggregateGeneration}:participant:{index}:authorityPayload` |
+| Participant의 membership 변경 | `{prefix}aggregate-inventory:{aggregateId}:{aggregateGeneration}:participant:{index}:membershipMutation` |
+
+**Participant 변경 bytes.** Participant의 새 authority payload record와 membership 변경 record는
+JSON이 아니라 bytes를 그대로 저장한다. 새 authority payload record는 commit 때 그 participant의
+authority `payload`가 될 application 정의 opaque bytes이고, membership 변경 record는 규범 schema의
+`aggregate-participant-mutation-bytes` 본문 bytes다. 아래 본문 공통 규칙은 이 두 record에 적용하지 않는다.
+
+**본문 공통 규칙.** Aggregate 기록, 목록 root와 page의 본문은 UTF-8 JSON object이며
+[RFC 8785](https://www.rfc-editor.org/rfc/rfc8785)(JSON Canonicalization Scheme, JCS)로
+직렬화한 bytes를 그대로 저장한다. 64-bit 정수(generation)는 10진 문자열, 개수·위치(32-bit 범위)는
+JSON number, SHA-256은 lowercase hex 64자다. 아래 표에 없는 field가 있거나 표의 field가 빠진
+record는 손상된 record로 취급한다. 형식 version field는 두지 않는다 — 이 형식을 쓰는 runtime은
+네 언어를 동시에 올리고, 올리기 전에 진행 중인 aggregate를 끝낸다.
+
+**Aggregate 기록.** 같은 aggregate 변경의 준비 요청 내용과 진행 상태를 담는다. 같은 요청인지는
+`state`를 뺀 나머지 field가 모두 같은지로 판정한다(§8.1의 `AlreadyPrepared`·`Conflict`).
+
+| Field | 형식 | 의미 |
+|---|---|---|
+| `aggregateId`, `aggregateGeneration` | UUID 문자열, 10진 문자열 | Key의 값과 같아야 한다. |
+| `state` | `preparing \| prepared \| committed \| aborted` | 진행 상태다. `preparing`에서 `prepared` 또는 `aborted`로, `prepared`에서 `committed` 또는 `aborted`로만 바뀐다. Relocation phase(`aggregate.relocation.phase`)와 다른 값이다. |
+| `participantCount` | number | 목록 전체 항목 수다. |
+| `inventoryDigestSha256` | hex 64자 | 목록 root의 `digestSha256`과 같은 값이다. |
+| `targetDescriptor` | `{meshName, routingIdHex}` | 준비 요청이 고정한 target MeshNode다. 모양은 authority의 `allocation.descriptor`와 같다(§3.3). |
+| `targetDescriptorLifecycleGeneration` | 10진 문자열 | 준비 요청이 고정한 target 실행 세대다. |
+| `targetOwner` | `{ownerId, ownerLeaseGeneration}` | 준비 요청이 고정한 target owner다. `ownerLeaseGeneration`은 10진 문자열이다. |
+| `capacity` | `{actors, spots, spotType}` | 합산 확보 공간이다. 모양은 authority의 `allocation.capacity`와 같다(§3.3). |
+
+**목록 root와 page.** 목록은 participant를 canonical authority key의 UTF-8 bytes 오름차순으로 정렬해
+0부터 번호(`index`)를 붙인 것이다. Saved-work의 participant ID는 `index + 1`이다(규범 schema의
+`saved-work-vector`). Level 0 page(leaf)는 항목을 담고, level 1 이상 page는 바로 아래 level의
+page reference를 담는다. Page 하나에는 항목이나 reference를 최대 1,024개, encoded 크기 최대 1 MiB까지
+담는다([02 §4](02-location-store-redis.ko.md#4-conditional-atomic-batch)).
+
+Page 분할은 저장 bytes만으로 정해서, 같은 목록은 어느 언어가 써도 같은 page와 확인값이 된다. 항목
+하나의 크기는 authority key(최대 776 bytes)와 `expectedStoreVersion`(최대 4,096 bytes)에 따라 다르므로
+개수만으로는 1 MiB 상한을 지킬 수 없다.
+
+1. Level 0 page는 `index` 순서로 항목을 채운다. 다음 항목을 더하면 그 page의 저장 bytes가 1 MiB를 넘거나
+   항목이 1,025개가 되면 그 항목부터 다음 page를 시작한다. Page `index`는 0부터 1씩 늘어난다.
+2. 한 level의 page가 둘 이상이면 그 위 level을 만든다. Level `L + 1`의 page는 level `L`의 page reference를
+   page `index` 순서로 같은 방법(1 MiB와 1,024개)으로 채운다.
+3. Page가 하나뿐인 level이 가장 위 level이다. Root의 `topLevel`은 그 level이고 `topPages`는 그 page
+   하나의 reference다.
+4. 항목이 0개이면 page를 만들지 않는다. Root는 `totalCount` 0, `topLevel` 0, 빈 `topPages`다.
+
+항목 하나의 저장 bytes는 1 MiB보다 훨씬 작으므로 모든 page는 항목이나 reference를 하나 이상 담는다.
+
+| Record·field | 형식 | 의미 |
+|---|---|---|
+| root `totalCount` | number | 목록 전체 항목 수다. Aggregate 기록의 `participantCount`와 같다. |
+| root `topLevel` | number | 가장 위 page의 level이다. |
+| root `topPages` | reference 배열 | 가장 위 level의 page reference다. |
+| root `digestSha256` | hex 64자 | 목록 전체의 확인값이다(아래 확인값 규칙). |
+| page `level`, `index` | number | Key의 값과 같아야 한다. |
+| page `startIndex`, `entryCount` | number | 이 page 아래에 있는 항목의 첫 `index`와 개수다. |
+| page `entries` | 항목 배열 | Level 0에서만 항목을 담고 level 1 이상에서는 빈 배열이다. |
+| page `children` | reference 배열 | Level 1 이상에서만 reference를 담고 level 0에서는 빈 배열이다. |
+| reference `level`, `index`, `startIndex`, `entryCount` | number | 가리키는 page의 같은 field와 같다. |
+| reference `sha256` | hex 64자 | 가리키는 page의 저장 bytes(JCS bytes) 전체의 SHA-256이다. |
+| 항목 `index` | number | 목록 안의 위치다. |
+| 항목 `authorityKey` | 문자열 | Participant의 canonical authority key다. |
+| 항목 `expectedStoreVersion` | 문자열 | 준비 때 읽은 participant authority의 `StoreVersion`이다. Opaque 값이며 같은지만 비교한다. |
+| 항목 `ownerTransition` | `preserve \| newOwner` | Participant authority의 `aggregate.ownerTransition`과 같다. |
+| 항목 `authorityPayloadSha256`, `membershipMutationSha256` | hex 64자 | 같은 `index`의 participant 변경 bytes record(위 key 표) 저장 bytes의 SHA-256이다. Participant authority의 `aggregate`에 있는 같은 이름의 값과 같다. |
+
+**확인값 규칙.** 확인값은 모두 저장 bytes의 SHA-256이다. 저장 bytes가 JCS bytes이므로 같은 내용은
+어느 언어가 써도 같은 확인값이 된다.
+
+- Page reference의 `sha256`은 가리키는 page record 하나의 저장 bytes 전체(그 page의 모든 field 포함)를
+  입력으로 한다. 항목 하나나 `entries` 배열만 따로 hash하지 않는다.
+- Root의 `digestSha256`은 root object에서 `digestSha256` field만 뺀 object(`totalCount`, `topLevel`,
+  `topPages`)의 JCS bytes를 입력으로 한다. Reference에 아래 page의 확인값이 들어 있으므로 이 값이
+  목록 전체를 고정한다.
+- Aggregate 기록의 `inventoryDigestSha256`은 root의 `digestSha256`과 같은 값이다. 확인값을 따로
+  계산해 두 번 기록하지 않는다.
+- Authority의 `aggregate.relocation.sourceInventorySha256`도 seal 때 고정한 이동 대상 목록 root의
+  `digestSha256`과 같은 값이다. 항목의 `expectedStoreVersion`은 준비 때 읽은 값이므로 이 값은 `preparing`
+  뒤에 바뀌지 않는다. Aggregate 기록이 없는 Actor 하나의 이동은 그 Actor 하나를 항목으로 가진 목록의
+  root `digestSha256`을 쓴다.
+
+목록 root, page와 participant 변경 bytes record는 한 번 쓰면 바꾸지 않는다. 같은
+`(aggregateId, aggregateGeneration)`의 record를 다른 내용으로 다시 쓰지 않으며, 다른 내용이 필요하면
+새 `aggregateGeneration`을 쓴다. Commit 또는 abort 뒤 이 record들의 정리는 §8.1의 진행 정보
+제거 변경이 맡는다.
 
 ## 9. Restore·완료 기록과 Store의 관계
 
