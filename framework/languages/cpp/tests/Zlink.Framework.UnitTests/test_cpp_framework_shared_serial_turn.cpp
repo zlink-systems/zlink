@@ -10,7 +10,10 @@
 
 #include "runtime_context_hooks_environment.hpp"
 
+#include <atomic>
 #include <chrono>
+#include <mutex>
+#include <thread>
 
 namespace
 {
@@ -827,10 +830,6 @@ TEST (SpotPreparationDeathTest, CancelledCreationReleasesBlockingWorkerWhileDisc
       ::testing::ExitedWithCode (0), "cancelled=1");
 }
 #endif
-
-#include <atomic>
-#include <mutex>
-#include <thread>
 
 namespace zlink::framework::runtime
 {
