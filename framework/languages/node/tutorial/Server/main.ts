@@ -3,11 +3,12 @@ import * as http from 'node:http';
 import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import {
+  ZLINK_FRAMEWORK_RUNTIME,
   ZLINK_ROUTE_MESH_RUNTIME_OPTIONS,
   ZLinkModule,
   zlinkFramework
 } from '@zlink-systems/nestjs';
-import type { ZLinkRouteMeshRuntimeOptions } from '@zlink-systems/framework';
+import type { ZLinkFrameworkRuntime, ZLinkRouteMeshRuntimeOptions } from '@zlink-systems/framework';
 import {
   ZLinkRedisLocationStore,
   ZLinkRedisRelocationStore
@@ -215,9 +216,16 @@ function setChannelWeight(
 // the client uses, carrying the one route above. The new weight arrives in the
 // query string because the route has no body: POST
 // /admin/channels/{channel}/weight?value=N
-function startAdminHttpServer(mesh: ZLinkRouteMeshRuntimeOptions): http.Server {
+function startAdminHttpServer(
+  mesh: ZLinkRouteMeshRuntimeOptions,
+  runtime: ZLinkFrameworkRuntime
+): http.Server {
   const server = http.createServer((request, response) => {
     const url = new URL(request.url ?? '/', 'http://127.0.0.1');
+    if (request.method === 'GET' && url.pathname === '/ops/ready') {
+      response.writeHead(runtime.status.isReady ? 200 : 503).end();
+      return;
+    }
     const matched = weightRoute.exec(url.pathname);
     if (request.method !== 'POST' || matched === null) {
       response.writeHead(404).end();
@@ -257,7 +265,8 @@ async function main(): Promise<void> {
     logger: ['error', 'warn', 'log']
   });
   startAdminHttpServer(
-    app.get<ZLinkRouteMeshRuntimeOptions>(ZLINK_ROUTE_MESH_RUNTIME_OPTIONS, { strict: false })
+    app.get<ZLinkRouteMeshRuntimeOptions>(ZLINK_ROUTE_MESH_RUNTIME_OPTIONS, { strict: false }),
+    app.get<ZLinkFrameworkRuntime>(ZLINK_FRAMEWORK_RUNTIME, { strict: false })
   );
   console.log(
     `server listening on tcp://127.0.0.1:7701 (mesh "${TutorialNames.mesh}",` +
