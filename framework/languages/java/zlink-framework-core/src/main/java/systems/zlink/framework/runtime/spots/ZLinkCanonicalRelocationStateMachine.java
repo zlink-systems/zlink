@@ -21,6 +21,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityScanCurs
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityScanExpired;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityStored;
+import systems.zlink.framework.runtime.internal.locations.ZLinkCanonicalRelocationAuthorityStateCodec;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey;
@@ -1840,7 +1841,42 @@ final class ZLinkCanonicalRelocationStateMachine
             }
         }
         validateResolvedPrimary(prepare, participants);
-        if (primarySnapshot == null) {
+        var canonical =
+                primarySnapshot == null
+                        ? null
+                        : ZLinkCanonicalRelocationAuthorityStateCodec.decode(
+                                primarySnapshot.payload());
+        var coordinatorFence = prepare.coordinator();
+        // Owner and lease are checked per participant above; the fence also names the node.
+        boolean coordinatorFenceMatches =
+                primarySnapshot != null
+                        && coordinatorFence
+                                .nodeRid()
+                                .equals(primarySnapshot.allocation().descriptor().rid())
+                        && coordinatorFence.nodeGeneration()
+                                == primarySnapshot.allocation().descriptorLifecycleGeneration()
+                        && (canonical == null
+                                ? primarySnapshot
+                                        .storeVersion()
+                                        .equals(coordinatorFence.expectedAuthorityStoreVersion())
+                                : canonical.aggregateId().equals(prepare.id())
+                                        && canonical.phase() == 2
+                                        && canonical
+                                                .coordinatorOwnerId()
+                                                .equals(coordinatorFence.ownerId())
+                                        && canonical.coordinatorLeaseGeneration()
+                                                == coordinatorFence.ownerLeaseGeneration()
+                                        && canonical
+                                                .coordinatorNodeRid()
+                                                .equals(coordinatorFence.nodeRid())
+                                        && canonical.coordinatorNodeGeneration()
+                                                == coordinatorFence.nodeGeneration()
+                                        && canonical
+                                                .coordinatorExpectedStoreVersion()
+                                                .equals(
+                                                        coordinatorFence
+                                                                .expectedAuthorityStoreVersion()));
+        if (!coordinatorFenceMatches) {
             throw new IllegalStateException("relocation coordinator authority version differs");
         }
         return new ZLinkSpotRetireControl.StageRequest(

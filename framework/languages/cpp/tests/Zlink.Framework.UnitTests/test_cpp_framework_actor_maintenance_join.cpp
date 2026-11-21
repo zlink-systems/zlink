@@ -5945,6 +5945,97 @@ TEST (ActorMaintenanceJoin, ReadyAuthorityAcceptsLocalSendBeforeStoreWriteReturn
       lock, wait_budget, [&] { return evidence.recorded == std::vector<int>{1}; }));
 }
 
+TEST (ActorMaintenanceJoin, TargetRejectsChangedCoordinatorFence)
+{
+    namespace stateful = fw::runtime::stateful;
+    // A join commit has no relocation: only the source StoreVersion fences it.
+    for (const auto changed : {"none", "owner", "lease", "baseline", "empty-baseline", "join",
+                               "join-baseline"}) {
+        SCOPED_TRACE (changed);
+        auto evidence = std::make_shared<observations_t> ();
+        auto store = std::make_shared<observed_location_store_t> ();
+        auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
+        host_t source, target;
+        configure (source, evidence, first_rid, store, relocations, source_follow_duration);
+        source.start ();
+        ASSERT_TRUE (ready (source));
+        auto services = source.app.advanced ().services ().build_provider ();
+        ASSERT_TRUE (services.get_required<fw::actor_manager_t> ()
+                       .get_or_create (fw::actor_id_t (actor_id), actor_type)
+                       .timeout (wait_budget)
+                       .async ()
+                       .result ());
+        configure (target, evidence, second_rid, store, relocations, source_follow_duration);
+        target.start ();
+        ASSERT_TRUE (ready (target));
+        auto &repository = services.get_required<fw::location_repository_t> ();
+        const auto key = fw::runtime::actor_authority_key (actor_id);
+        const auto original =
+          std::get<fw::authority_snapshot_t> (repository.read_authority (key).result ().value ());
+        const auto nodes =
+          repository.list_mesh_nodes (original.allocation.target.mesh_name).result ().value ();
+        const auto destination =
+          std::find_if (nodes.items.begin (), nodes.items.end (),
+                        [] (const auto &node) { return node.rid.to_string () == second_rid; });
+        ASSERT_NE (destination, nodes.items.end ());
+        const fw::location_owner_token_t target_owner{destination->owner_id,
+                                                      destination->lease_generation};
+        const fw::object_creation_target_t placement{
+          destination->mesh_name, fw::node_rid_t::from_string (second_rid),
+          destination->lifecycle_generation, target_owner};
+        const stateful::object_ref_t source_ref{
+          stateful::object_kind_t::actor,       actor_id,
+          original.object_generation,           original.authority_owner_generation,
+          original.allocation.target.mesh_name, first_rid};
+        auto target_ref = source_ref;
+        target_ref.node_id = second_rid;
+        auto payload = fw::runtime::decode_direct_actor_authority_payload (original.payload);
+        ASSERT_TRUE (payload);
+        payload->node_rid = placement.node_rid;
+        payload->node_generation = placement.node_lifecycle_generation;
+        payload->owner_id = target_owner.owner_id;
+        payload->owner_lease_generation = target_owner.lease_generation;
+        auto coordinator = original.owner;
+        auto baseline = original.store_version;
+        if (std::string_view (changed) == "owner")
+            coordinator.owner_id += "-other";
+        if (std::string_view (changed) == "lease")
+            ++coordinator.lease_generation;
+        const bool join = std::string_view (changed).starts_with ("join");
+        if (std::string_view (changed) == "baseline"
+            || std::string_view (changed) == "join-baseline")
+            baseline += "-other";
+        if (std::string_view (changed) == "empty-baseline")
+            baseline.clear ();
+        stateful::public_authority_store_adapter_t adapter (repository);
+        const stateful::relocation_authority_fence_t fence{
+          source_ref.kind, source_ref.key, baseline, coordinator, target_owner, {4718, 2}};
+        const bool accepted =
+          std::string_view (changed) == "none" || std::string_view (changed) == "join";
+        if (!join)
+            EXPECT_EQ (adapter.observe_relocation (fence),
+                       accepted ? stateful::relocation_authority_t::unsettled
+                                : stateful::relocation_authority_t::source_preserved);
+        const auto published =
+          adapter.publish (source_ref, target_ref, target_owner, placement, "target-fence", 1, {},
+                           fw::runtime::encode_actor_authority_payload (*payload), baseline,
+                           join ? decltype (fence.relocation){} : fence.relocation,
+                           join ? fw::location_owner_token_t{} : coordinator);
+        EXPECT_EQ (published.status, accepted ? stateful::authority_publish_status_t::published
+                                              : stateful::authority_publish_status_t::conflict);
+        const auto after =
+          std::get<fw::authority_snapshot_t> (repository.read_authority (key).result ().value ());
+        if (!accepted) {
+            EXPECT_EQ (after.store_version, original.store_version);
+            EXPECT_EQ (after.owner.owner_id, original.owner.owner_id);
+            EXPECT_EQ (after.owner.lease_generation, original.owner.lease_generation);
+            EXPECT_EQ (after.authority_owner_generation, original.authority_owner_generation);
+        }
+        std::lock_guard lock (evidence->mutex);
+        EXPECT_TRUE (evidence->recorded.empty ());
+    }
+}
+
 TEST (ActorMaintenanceJoin, SourcePreserveDiscardsRawIdentityPreparedBeforeTargetCas)
 {
     auto evidence_owner = std::make_shared<observations_t> ();

@@ -175,7 +175,7 @@ public sealed class StandaloneActorRelocationPrecommitTests
         Assert.Equal(0UL, capturedState.TargetAttemptGeneration);
 
         var prepare = ZLinkStandaloneActorRelocationRuntime.CreatePrepare(
-            captured,
+            abandoned,
             sourceAuthority,
             target,
             envelope,
@@ -183,6 +183,12 @@ public sealed class StandaloneActorRelocationPrecommitTests
             applicationVersion: 1,
             DateTimeOffset.UtcNow.AddMinutes(1)
         );
+
+        Assert.Equal(
+            capturedState.State.CoordinatorExpectedAuthorityStoreVersion,
+            prepare.Coordinator.ExpectedAuthorityStoreVersion
+        );
+        Assert.NotEqual(captured.StoreVersion, prepare.Coordinator.ExpectedAuthorityStoreVersion);
 
         var targetAuthority = Authority(actorId, target, targetOwner);
         lossyStore.ReturnAuxiliaryConflictNext();
@@ -451,6 +457,62 @@ public sealed class StandaloneActorRelocationPrecommitTests
         Assert.Same(validation, observed);
         Assert.Equal(1, store.CompareExchangeCount);
         Assert.Equal(0, store.ReadCount);
+    }
+
+    [Theory]
+    [InlineData("owner")]
+    [InlineData("lease")]
+    [InlineData("baseline")]
+    public async Task Canonical_target_rejects_changed_coordinator_fence(string changed)
+    {
+        var inner = new ZLinkInMemoryLocationStore();
+        var source = await PrepareCapturedSourceAsync(inner);
+        var store = new LostStoredResponseAuthorityStore(inner);
+        var coordinator = source.Prepare.Coordinator;
+        var prepare = source.Prepare with
+        {
+            Coordinator = changed switch
+            {
+                "owner" => coordinator with { OwnerId = "another-source" },
+                "lease" => coordinator with { LeaseGeneration = coordinator.LeaseGeneration + 1 },
+                _ => coordinator with { ExpectedAuthorityStoreVersion = "another-baseline" },
+            },
+        };
+
+        Assert.False(
+            ZLinkStandaloneActorRelocationPrecommitCoordinator.HoldsTargetCommitFence(
+                source.Captured,
+                source.Envelope,
+                prepare
+            )
+        );
+        await Assert.ThrowsAsync<ZLinkRelocationTargetSettledException>(async () =>
+            await new ZLinkStandaloneActorRelocationPrecommitCoordinator(store).CommitTargetAsync(
+                source.Captured,
+                source.Envelope,
+                prepare,
+                source.TargetAuthority,
+                CancellationToken.None
+            )
+        );
+        var registration = new ZLinkFrameworkRegistration();
+        registration.Locations._repository = store;
+        var runtime = new ZLinkStandaloneActorRelocationRuntime(null!, null!, registration);
+        await Assert.ThrowsAsync<ZLinkRelocationTargetSettledException>(async () =>
+            await runtime.StageTargetAsync(
+                prepare,
+                source.Envelope,
+                prepare.SourceNodeRid,
+                CancellationToken.None
+            )
+        );
+        Assert.Empty(runtime.SnapshotPendingAttemptNames());
+        Assert.Equal(0, store.CompareExchangeCount);
+        var current = Assert.IsType<ZLinkAuthorityReadResult.Found>(
+            await inner.ReadAuthorityAsync(source.Key)
+        );
+        Assert.Equal(source.Captured.StoreVersion, current.Snapshot.StoreVersion);
+        Assert.Equal(source.Captured.OwnerId, current.Snapshot.OwnerId);
     }
 
     [Fact]

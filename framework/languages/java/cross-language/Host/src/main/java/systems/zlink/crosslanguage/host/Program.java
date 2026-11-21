@@ -673,7 +673,7 @@ public final class Program {
                 runEntryRelocationSource(args, sink, actorsProvider.getObject(), lifecycle);
             } else if ("entry-spot-target".equals(mode)) {
                 runEntryRelocationTarget(
-                    args, sink, actorClientProvider.getObject(), runtimeOptionsProvider.getObject());
+                    args, sink, actorClientProvider.getObject(), runtimeOptionsProvider.getObject(), lifecycle);
             }
         };
     }
@@ -683,6 +683,7 @@ public final class Program {
         String actorId = args.option("actor-id", "cross-lang-relocation-actor");
         int payloadBytes = Integer.parseInt(args.option("payload-bytes", "100000"));
         try {
+            awaitServing(lifecycle.runtimeBean());
             ZLinkActorCreateResult created = actors
                 .getOrCreate(actorId, ENTRY_RELOCATION_ACTOR_TYPE)
                 .request(new CrossLangActorCreateReq(1, payloadBytes))
@@ -737,11 +738,12 @@ public final class Program {
         HostArgs args,
         EventSink sink,
         ZLinkActorClient actorClient,
-        ZLinkRouteMeshRuntimeOptions runtimeOptions) {
+        ZLinkRouteMeshRuntimeOptions runtimeOptions,
+        ZLinkFrameworkLifecycle lifecycle) throws ExecutionException, InterruptedException {
         // ApplicationRunners execute inside SpringApplication.run(), BEFORE
-        // main() writes the ready file -- but this runner polls for up to 60s
-        // for a probe that the harness only triggers AFTER seeing the ready
-        // file. Write it up front so the source side can start.
+        // main() writes the ready file. Wait until the Framework runtime is
+        // Serving before the harness starts the source side.
+        awaitServing(lifecycle.runtimeBean());
         writeReadyFile(args);
         String actorId = args.option("actor-id", "cross-lang-relocation-actor");
         String nodeRid = args.require("node-rid");

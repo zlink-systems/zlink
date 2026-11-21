@@ -29,7 +29,11 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkRequestFailureMappi
 import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeState;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeStatus;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateRelocationCoordinator;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityExpectFound;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityPut;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityStored;
+import systems.zlink.framework.runtime.internal.locations.ZLinkCanonicalRelocationAuthorityStateCodecTestAccess;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteIntent;
@@ -980,6 +984,171 @@ final class ZLinkCanonicalRelocationStateMachineTest {
     }
 
     @Test
+    void targetRejectsChangedCoordinatorOwner() throws Exception {
+        assertTargetCoordinatorFence("owner");
+    }
+
+    @Test
+    void targetRejectsChangedCoordinatorLease() throws Exception {
+        assertTargetCoordinatorFence("lease");
+    }
+
+    @Test
+    void targetRejectsChangedCoordinatorBaseline() throws Exception {
+        assertTargetCoordinatorFence("baseline");
+    }
+
+    @Test
+    void targetAcceptsMatchingCoordinatorFence() throws Exception {
+        assertTargetCoordinatorFence("matching");
+    }
+
+    @Test
+    void targetRejectsChangedCoordinatorNodeRid() throws Exception {
+        assertTargetCoordinatorFence("nodeRid");
+    }
+
+    @Test
+    void targetRejectsChangedCoordinatorNodeGeneration() throws Exception {
+        assertTargetCoordinatorFence("nodeGeneration");
+    }
+
+    @Test
+    void targetAcceptsMatchingCapturedCoordinatorRecord() throws Exception {
+        assertCapturedCoordinatorRecord("matching");
+    }
+
+    @Test
+    void targetRejectsCapturedRecordWithChangedCoordinatorBaseline() throws Exception {
+        assertCapturedCoordinatorRecord("baseline");
+    }
+
+    @Test
+    void targetRejectsCapturedRecordThatIsNotCaptured() throws Exception {
+        assertCapturedCoordinatorRecord("phase");
+    }
+
+    @Test
+    void targetRejectsCapturedRecordOfAnotherRelocation() throws Exception {
+        assertCapturedCoordinatorRecord("aggregate");
+    }
+
+    private void assertTargetCoordinatorFence(String changed) throws Exception {
+        Fixture f = fixture();
+        var request = f.request(new byte[] {1});
+        var original = prepare(f, request);
+        var coordinator = original.coordinator();
+        var submitted =
+                new ZLinkCanonicalRelocationProtocol.Prepare(
+                        original.id(),
+                        original.targetAttemptGeneration(),
+                        new ZLinkCanonicalRelocationProtocol.Coordinator(
+                                coordinator.ownerId() + (changed.equals("owner") ? "-changed" : ""),
+                                coordinator.ownerLeaseGeneration()
+                                        + (changed.equals("lease") ? 1 : 0),
+                                changed.equals("nodeRid")
+                                        ? RoutingId.from("changed-node")
+                                        : coordinator.nodeRid(),
+                                coordinator.nodeGeneration()
+                                        + (changed.equals("nodeGeneration") ? 1 : 0),
+                                coordinator.expectedAuthorityStoreVersion()
+                                        + (changed.equals("baseline") ? "-changed" : "")),
+                        original.target(),
+                        original.initiatorRole(),
+                        original.object(),
+                        original.sourceNodeRid(),
+                        original.sourceNodeGeneration(),
+                        original.manifest(),
+                        original.applicationVersion(),
+                        original.deadlineUnixMs());
+        assertPrepareOutcome(f, request, submitted, changed.equals("matching"), changed);
+    }
+
+    private void assertCapturedCoordinatorRecord(String variant) throws Exception {
+        Fixture f = fixture();
+        var request = f.request(new byte[] {1});
+        var submitted = prepare(f, request);
+        var coordinator = submitted.coordinator();
+        String recordedVersion =
+                coordinator.expectedAuthorityStoreVersion()
+                        + (variant.equals("baseline") ? "-changed" : "");
+        byte[] captured =
+                ZLinkCanonicalRelocationAuthorityStateCodecTestAccess.withCapturedRecord(
+                        f.sourceSnapshot.payload(),
+                        variant.equals("aggregate") ? UUID.randomUUID() : submitted.id(),
+                        variant.equals("phase") ? 1 : 2,
+                        coordinator.ownerId(),
+                        coordinator.ownerLeaseGeneration(),
+                        coordinator.nodeRid(),
+                        coordinator.nodeGeneration(),
+                        recordedVersion);
+        var stored =
+                assertInstanceOf(
+                        ZLinkAuthorityStored.class,
+                        f.locations
+                                .compareExchange(
+                                        f.authorityKey,
+                                        new ZLinkAuthorityExpectFound(
+                                                f.sourceSnapshot.storeVersion()),
+                                        new ZLinkAuthorityPut(captured),
+                                        OPEN)
+                                .toCompletableFuture()
+                                .join());
+        assertFalse(
+                stored.storeVersion().equals(coordinator.expectedAuthorityStoreVersion()),
+                "the Captured record is judged by its recorded version, not the snapshot version");
+        assertPrepareOutcome(f, request, submitted, variant.equals("matching"), variant);
+    }
+
+    private static void assertPrepareOutcome(
+            Fixture f,
+            ZLinkSpotRetireControl.StageRequest request,
+            ZLinkCanonicalRelocationProtocol.Prepare submitted,
+            boolean accepted,
+            String changed)
+            throws Exception {
+        var reply =
+                f.target
+                        .apply(
+                                f.sourceRid,
+                                1L,
+                                ServiceWireConstants.COMMAND_RELOCATION_PREPARE,
+                                ZLinkCanonicalRelocationProtocol.encodePrepare(submitted))
+                        .toCompletableFuture();
+        f.target
+                .apply(
+                        f.sourceRid,
+                        ServiceWireConstants.COMMAND_RELOCATION_STATE,
+                        ZLinkCanonicalRelocationProtocol.encodeState(
+                                new ZLinkCanonicalRelocationProtocol.State(
+                                        submitted.id(),
+                                        submitted.targetAttemptGeneration(),
+                                        submitted.coordinator(),
+                                        ZLinkCanonicalRelocationProtocol.SOURCE,
+                                        submitted.object(),
+                                        0,
+                                        request.relocationPayload())))
+                .toCompletableFuture()
+                .join();
+        byte[] encodedReply = reply.get(5, java.util.concurrent.TimeUnit.SECONDS);
+        if (accepted) {
+            assertEquals(
+                    submitted.id(),
+                    ZLinkCanonicalRelocationProtocol.decodeReady(encodedReply).id());
+            assertEquals(1, f.endpoint.staged.get());
+            assertEquals(1, f.prepareInvocations.get());
+        } else {
+            assertEquals(
+                    ServiceWireConstants.COMMAND_RELOCATION_FAILED,
+                    Byte.toUnsignedInt(encodedReply[3]),
+                    changed);
+            assertEquals(0, f.endpoint.staged.get(), changed + " must not stage dispatch");
+            assertEquals(0, f.prepareInvocations.get(), changed + " must not prepare aggregate");
+        }
+        assertEquals(0, f.endpoint.published.get(), "PREPARE must not publish NewOwner");
+    }
+
+    @Test
     void conflictingPrepareRepliesFailedWithoutReplacingTheOriginalStage() {
         Fixture fixture = fixture();
         var request = fixture.request(new byte[] {1});
@@ -1393,7 +1562,8 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                 targetState,
                 routeWaitStarted,
                 securedRoutes,
-                prepareInvocations);
+                prepareInvocations,
+                locations);
     }
 
     private record Fixture(
@@ -1413,7 +1583,8 @@ final class ZLinkCanonicalRelocationStateMachineTest {
             AtomicReference<MeshNodeState> targetState,
             CompletableFuture<Void> routeWaitStarted,
             List<Map.Entry<RoutingId, Long>> securedRoutes,
-            AtomicInteger prepareInvocations) {
+            AtomicInteger prepareInvocations,
+            ZLinkInMemoryLocationStore locations) {
         ZLinkSpotRetireControl.StageRequest boundRequest() {
             return boundRequest(13);
         }
