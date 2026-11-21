@@ -162,16 +162,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          core_version="$(sed -n 's/^LIBZLINK_VERSION=//p' VERSION)"
-          core_prefix="$(bash scripts/local-package/core/fetch-release.sh \
-            --version "${core_version}" \
-            --platform "${{ matrix.target.core_platform }}" \
-            --cache-dir "${RUNNER_TEMP}/zlink-core-release")"
-          ZLINK_LOCAL_PACKAGE_ROOT="${GITHUB_WORKSPACE}/${{ matrix.target.local_package_root }}" \
-            bash scripts/local-package/java/build-wsl.sh \
-              --core-prefix "${core_prefix}"
+        run: bash scripts/ci/framework-java-build-binding.sh "${{ matrix.target.core_platform }}" "${{ matrix.target.local_package_root }}"
 
       - name: Verify the packaged Java public contract and API snapshot
         if: ${{ !inputs.skip_tests && matrix.target.name == 'linux-x64' }}
@@ -216,31 +207,7 @@ jobs:
         env:
           ZLINK_LOCAL_PACKAGE_ROOT: ${{ github.workspace }}/${{ matrix.target.local_package_root }}
           ZLINK_CI_TEST_PROGRESS: "true"
-        run: |
-          worker_count=2
-          if [[ "${ZLINK_SINGLE_WORKER}" == "true" ]]; then
-            worker_count=1
-          fi
-          dump_dir="${RUNNER_TEMP}/framework-java-thread-dumps/${{ matrix.target.name }}"
-          mkdir -p "${dump_dir}"
-          bash "${GITHUB_WORKSPACE}/scripts/ci/gradle-test-watchdog.sh" 3600 600 "${dump_dir}" &
-          watchdog_pid=$!
-          stop_watchdog() {
-            kill "${watchdog_pid}" 2>/dev/null || true
-            wait "${watchdog_pid}" 2>/dev/null || true
-          }
-          trap stop_watchdog EXIT
-          ./gradlew --no-daemon --max-workers="${worker_count}" \
-            :zlink-framework-core:test \
-            :zlink-framework-core:integrationTest \
-            :zlink-framework-kotlin:test \
-            :zlink-framework-spring-boot-starter:test \
-            :zlink-framework-spring-boot-starter:integrationTest \
-            :zlink-framework-locations-redis:test \
-            :zlink-framework-locations-etcd:test \
-            :zlink-framework-locations-etcd:contractTest \
-            :zlink-framework-testkit:test \
-            -Pzlink.includeSamples=false
+        run: bash ../../../scripts/ci/framework-java-test.sh "${{ matrix.target.name }}"
 
       - name: Upload Java test thread dumps
         if: ${{ !inputs.skip_tests && always() }}
@@ -261,8 +228,7 @@ jobs:
         shell: bash
         env:
           ZLINK_LOCAL_PACKAGE_ROOT: ${{ github.workspace }}/${{ matrix.target.local_package_root }}
-        run: |
-          ./gradlew --no-daemon --max-workers=2 -p samples classes
+        run: bash ../../../scripts/ci/framework-java-samples.sh
 
       - name: Verify and summarize executed tests
         if: ${{ !inputs.skip_tests && (always()) }}
