@@ -1,8 +1,7 @@
+const { relocationAuthorityStore } = require('./fixtures/relocation-authority-store');
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const {
-  ZLinkHostServiceRelocationRuntime
-} = require('../../packages/framework/dist/internal');
+const { ZLinkHostServiceRelocationRuntime } = require('../../packages/framework/dist/internal');
 const {
   ZLinkSpotActivation
 } = require('../../packages/framework/dist/runtime/spots/spot-activation-state');
@@ -91,7 +90,7 @@ test('precommit abort completes Continued before releasing held application work
       isSpotClosing: () => false,
       pendingSpotCloseDecision: () => undefined
     }),
-    locationStore: () => ({ readAuthority: async () => authority })
+    locationStore: relocationAuthorityStore(async () => authority)
   });
   runtime.waitForRelocationBudgetHeadroom = async () => {};
   let boundaryRegistered;
@@ -129,3 +128,103 @@ test('precommit abort completes Continued before releasing held application work
   assert.equal(sealedDuringCallback, true);
   assert.deepEqual(events, ['turn', 'continued', 'continued-completed', 'held']);
 });
+
+for (const failedPhase of ['preparing', 'captured']) {
+  test(`capture failure records Aborted with null target after ${failedPhase} before cleanup`, async () => {
+    const {
+      encodeAuthorityAggregate
+    } = require('../../packages/framework/dist/runtime/locations/authority-relocation-record');
+    const {
+      encodeAuthorityKey
+    } = require('../../packages/framework/dist/runtime/locations/authority-key-codec');
+    const key = encodeAuthorityKey('instance_spot', 'abort-capture');
+    const failure = new Error(`injected ${failedPhase} failure`);
+    const events = [];
+    let current = {
+      kind: 'snapshot',
+      storeVersion: { value: 'original' },
+      objectGeneration: 1n,
+      authorityOwnerGeneration: 1n,
+      ownerId: 'source-owner',
+      ownerLeaseGeneration: 1n,
+      payload: Buffer.from('opaque'),
+      allocation: {
+        state: 'active',
+        objectKind: 'instance_spot',
+        stableType: 'spot',
+        descriptor: { meshName: 'mesh', rid: 'source' },
+        descriptorLifecycleGeneration: 1n
+      }
+    };
+    const activation = new ZLinkSpotActivation({
+      meshName: 'mesh',
+      spotId: 'abort-capture',
+      domain: { kind: 'instance', objectGeneration: 1n },
+      spotType: class {},
+      spot: {},
+      serial: new ZLinkSpotSerialTurnExecutor(true),
+      timers: { captureRelocation: () => [], abortRelocation: () => events.push('rollback') },
+      actorHandlers: {},
+      handlers: {}
+    });
+    const runtime = new ZLinkHostServiceRelocationRuntime({
+      registration: {
+        spotNodes: new Map([
+          [
+            'mesh',
+            {
+              instanceSpotFactoryRegistrations: { spot: { relocation: { kind: 'recreate' } } }
+            }
+          ]
+        ])
+      },
+      spotManager: () => ({
+        isSpotClosing: () => false,
+        pendingSpotCloseDecision: () => undefined
+      }),
+      meshNode: () => ({ status: () => ({ routingId: 'source', lifecycleGeneration: 1n }) }),
+      locationStore: () => ({
+        async readAuthority() {
+          return current;
+        },
+        async compareExchangeAuthority(actual, expected, mutation) {
+          assert.deepEqual(actual, key);
+          assert.equal(expected.value, current.storeVersion.value);
+          current = {
+            ...current,
+            relocation: mutation.relocation ?? undefined,
+            storeVersion: { value: `${expected.value}:cas` }
+          };
+          events.push(
+            encodeAuthorityAggregate(undefined, current.relocation)?.relocation?.phase ?? 'clear'
+          );
+          if (current.relocation?.phase === 'aborted') {
+            assert.equal(current.relocation.target, null);
+            assert.equal(current.relocation.coordinator.expectedStoreVersion, 'original');
+          }
+          if (current.relocation?.phase === 'captured') throw failure;
+          return { ...current, kind: 'stored' };
+        }
+      })
+    });
+    runtime.waitForRelocationBudgetHeadroom = async () => {};
+    runtime.captureApplication = async () => {
+      if (failedPhase === 'preparing') throw failure;
+      return Buffer.alloc(0);
+    };
+    await assert.rejects(
+      runtime.relocateSpotAggregate('mesh', activation, 'instance_spot', [], {
+        rid: 'target',
+        applicationVersion: 1n
+      }),
+      (error) => error === failure
+    );
+    assert.deepEqual(
+      events,
+      failedPhase === 'preparing'
+        ? ['preparing', 'aborted', 'clear', 'rollback']
+        : ['preparing', 'captured', 'aborted', 'clear', 'rollback']
+    );
+    assert.equal(current.relocation, undefined);
+  });
+}
