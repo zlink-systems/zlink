@@ -219,10 +219,7 @@ final class ZLinkStreamConnectionLifecycle {
                                 if (cause instanceof ZLinkStreamException coded
                                         && coded.errorCode() == ZLinkStreamErrorCode.SEND_FAILED) {
                                     handleReceiveFailure(
-                                            current,
-                                            coded,
-                                            ZLinkStreamCloseReason.TRANSPORT_ERROR,
-                                            null);
+                                            current, coded, ZLinkStreamCloseReason.TRANSPORT_ERROR);
                                 }
                             });
         }
@@ -383,14 +380,15 @@ final class ZLinkStreamConnectionLifecycle {
                         (frame, ex) -> {
                             if (ex != null) {
                                 ZLinkStreamException violation = protocolViolation(ex);
+                                ZLinkStreamException failure =
+                                        violation != null
+                                                ? violation
+                                                : ZLinkStreamException.of(
+                                                        ZLinkStreamErrorCode.DISCONNECTED,
+                                                        "Transport read failed.",
+                                                        ex);
                                 handleReceiveFailure(
-                                        transport,
-                                        ex,
-                                        closeReasonFor(
-                                                violation == null
-                                                        ? ZLinkStreamErrorCode.DISCONNECTED
-                                                        : violation.errorCode()),
-                                        violation == null ? null : violation.error());
+                                        transport, failure, closeReasonFor(failure.errorCode()));
                                 return;
                             }
                             try {
@@ -406,15 +404,15 @@ final class ZLinkStreamConnectionLifecycle {
                                 //  control - or decompressed over the receive limit, so it
                                 //  is a protocol violation (spec 32 9).
                                 ZLinkStreamException violation = protocolViolation(dispatchEx);
-                                ZLinkStreamError error =
+                                ZLinkStreamException error =
                                         violation != null
-                                                ? violation.error()
-                                                : new ZLinkStreamError(
+                                                ? violation
+                                                : ZLinkStreamException.of(
                                                         ZLinkStreamErrorCode.FRAME_DECODE_FAILED,
                                                         "Receive frame dispatch failed.",
                                                         dispatchEx);
                                 handleReceiveFailure(
-                                        transport, dispatchEx, closeReasonFor(error.code()), error);
+                                        transport, error, closeReasonFor(error.errorCode()));
                             }
                         });
     }
@@ -446,17 +444,15 @@ final class ZLinkStreamConnectionLifecycle {
     }
 
     /**
-     * Ends {@code failed} because of {@code ex} when it is still the current connection, and does
-     * nothing otherwise. {@code violation} is the protocol violation the receive path detected, or
-     * null. It is published only after the connection is claimed, so an {@code Immediate} error
-     * handler runs on a connector that is no longer connected, and a send or request it makes fails
-     * with {@code Disconnected} (spec 32 9).
+     * Ends {@code failed} because of {@code failure} when it is still the current connection, and
+     * does nothing otherwise. The cause is published only after the connection is claimed, so an
+     * {@code Immediate} error handler runs on a connector that is no longer connected, and a send
+     * or request it makes fails with {@code Disconnected} (spec 32 9).
      */
     private void handleReceiveFailure(
             ZLinkStreamTransportConnection failed,
-            Throwable ex,
-            ZLinkStreamCloseReason reason,
-            ZLinkStreamError violation) {
+            ZLinkStreamException failure,
+            ZLinkStreamCloseReason reason) {
         synchronized (connectionAttemptLock) {
             if (connection != failed || state != ZLinkStreamConnectionState.CONNECTED) {
                 return;
@@ -469,10 +465,8 @@ final class ZLinkStreamConnectionLifecycle {
             //  event and happens elsewhere.
             connection = null;
         }
-        if (violation != null) {
-            errorPublisher.accept(violation);
-        }
-        Throwable closeFailure = endConnection(failed, ex);
+        errorPublisher.accept(failure.error());
+        Throwable closeFailure = endConnection(failed, failure);
         reconnectOrDisconnect(reason);
         publishCloseFailure(closeFailure);
     }
@@ -717,8 +711,7 @@ final class ZLinkStreamConnectionLifecycle {
                             ZLinkStreamErrorCode.DISCONNECTED,
                             "Heartbeat timed out",
                             new TimeoutException("Heartbeat timed out")),
-                    ZLinkStreamCloseReason.HEARTBEAT_TIMEOUT,
-                    null);
+                    ZLinkStreamCloseReason.HEARTBEAT_TIMEOUT);
             return false;
         }
         controlSender.apply(ZLinkStreamReceiveDispatcher.HEARTBEAT_PING_NAME);
