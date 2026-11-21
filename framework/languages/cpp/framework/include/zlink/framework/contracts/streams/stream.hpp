@@ -21,6 +21,11 @@
 #include <string_view>
 #include <utility>
 
+namespace zlink::framework::runtime
+{
+class stream_host_service_t;
+}
+
 namespace zlink::framework::detail
 {
 class stream_allocation_test_access_t;
@@ -90,6 +95,14 @@ enum class stream_session_error_t
     transport_error = 1
 };
 
+enum class disconnect_reason_t : std::uint32_t
+{
+    unknown = 0,
+    handshake_failed = 3,
+    transport_error = 4,
+    context_terminated = 5
+};
+
 /* Closed set of session close reasons (graceful-drain-handoff §7.1). The
  * server sends a versioned `session-closing` control with this reason before
  * intentionally closing a STREAM connection. */
@@ -122,8 +135,11 @@ class stream_error_t
 
     stream_session_error_t error () const noexcept;
     std::string_view message () const noexcept;
+    std::optional<disconnect_reason_t> disconnect_reason () const noexcept;
 
   private:
+    friend class runtime::stream_host_service_t;
+    std::optional<disconnect_reason_t> _disconnect_reason;
     stream_session_error_t _error = stream_session_error_t::internal;
     std::string _message;
 };
