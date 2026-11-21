@@ -4458,6 +4458,49 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         return dispatchLocalSessionActor(actorRef, acceptedRecord, header, payload, Instant.now());
     }
 
+    public CompletionStage<Void> dispatchLocalSessionActor(
+            ZLinkBackendActorRef actorRef,
+            RoutingId sourceNodeRid,
+            RoutingId sourceSessionRid,
+            long bindingGeneration,
+            long acceptedSessionSequence,
+            ZLinkStreamHeader header,
+            Message payload,
+            java.util.function.Consumer<LocalActorReply> submitReply) {
+        byte[] acceptedRecord =
+                actorSessions
+                        .runtime()
+                        .encodeLocalSessionActorAccepted(
+                                actorRef,
+                                sourceNodeRid,
+                                sourceSessionRid,
+                                bindingGeneration,
+                                acceptedSessionSequence,
+                                header,
+                                payload);
+        Instant receivedAt = Instant.now();
+        return actorSessions
+                .dispatchLocalSession(
+                        actorRef,
+                        acceptedRecord,
+                        header,
+                        payload,
+                        spotId -> spotSurfaceFor(spotId) != null,
+                        local ->
+                                dispatchLocalSessionActor(
+                                                actorRef, header, payload, local, receivedAt)
+                                        .thenApply(
+                                                reply -> {
+                                                    // Register the reply before the Actor turn
+                                                    // releases its gate.
+                                                    // The relay observes transport completion
+                                                    // outside this turn.
+                                                    reply.ifPresent(submitReply);
+                                                    return Optional.empty();
+                                                }))
+                .thenAccept(reply -> reply.ifPresent(submitReply));
+    }
+
     private CompletionStage<Optional<LocalActorReply>> dispatchLocalSessionActor(
             ZLinkBackendActorRef actorRef,
             byte[] acceptedRecord,
