@@ -310,7 +310,6 @@ service_mailbox_t::claim_owner_locked (domain_t &source,
         const auto limit =
           queue.independent () ? 1 : std::min (message_budget, queue.records.size ());
         claim->records.reserve (limit);
-        claim->record_bytes.reserve (limit);
         // Claims append to the claimed prefix; list iterators survive enqueue and other claims.
         auto unclaimed = queue.unclaimed;
         for (; unclaimed != queue.records.end (); ++unclaimed) {
@@ -327,12 +326,10 @@ service_mailbox_t::claim_owner_locked (domain_t &source,
                 break;
             }
             claim->claimed_bytes += next_bytes;
-            claim->record_bytes.push_back (next_bytes);
-            claim->records.push_back (unclaimed);
+            claim->records.emplace_back (unclaimed, next_bytes);
         }
         claim->claimed_messages = claim->records.size ();
         claim->_mailbox = _state;
-        claim->_settled = std::make_unique<std::atomic_bool[]> (claim->claimed_messages);
         claim->_remaining.store (claim->claimed_messages, std::memory_order_relaxed);
         // Each slot holds its own credit; whichever take moves the original out holds it.
         for (std::size_t index = 0; index != claim->claimed_messages; ++index)
@@ -509,7 +506,7 @@ bool service_mailbox_t::release (service_mailbox_claim_t &claim)
 bool service_mailbox_t::settle_once (service_mailbox_claim_t &claim, std::size_t index) noexcept
 {
     // The single settlement decision: each slot credit settles once.
-    return !claim._settled[index].exchange (true, std::memory_order_acq_rel);
+    return !claim.records[index]._settled.exchange (true, std::memory_order_acq_rel);
 }
 
 bool service_mailbox_t::settles_last (service_mailbox_claim_t &claim, std::size_t count) noexcept
@@ -545,8 +542,8 @@ bool service_mailbox_t::finish_locked (state_t &state, const service_mailbox_cla
         return false;
     auto &queue = found->second;
     // A younger claim may settle first. Only this claim's own slots leave the FIFO.
-    for (const auto slot : claim.records)
-        queue.records.erase (slot);
+    for (const auto &slot : claim.records)
+        queue.records.erase (slot._position);
     refresh_ready_locked (state, target, claim.owner);
     return &target == &state.application && !state.application_receive_turn;
 }

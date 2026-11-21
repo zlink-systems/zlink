@@ -11,7 +11,10 @@ import java.lang.foreign.MemorySegment;
 import java.time.Duration;
 
 final class NativeStopwatch implements ZlinkStopwatch {
-    private MemorySegment handle;
+    private volatile MemorySegment handle;
+    // Core releases a handle once; one owner at a time runs the native close
+    // and later callers observe its outcome.
+    private final Object closeLock = new Object();
     private boolean stopped;
 
     NativeStopwatch() {
@@ -27,22 +30,26 @@ final class NativeStopwatch implements ZlinkStopwatch {
     }
 
     public Duration stop() {
-        ensureOpen();
-        long elapsed = Native.stopwatchStop(handle);
-        handle = MemorySegment.NULL;
-        stopped = true;
-        return Duration.ofNanos(elapsed);
+        synchronized (closeLock) {
+            ensureOpen();
+            long elapsed = Native.stopwatchStop(handle);
+            handle = MemorySegment.NULL;
+            stopped = true;
+            return Duration.ofNanos(elapsed);
+        }
     }
 
     @Override
     public void close() {
-        if (handle == null || handle.address() == 0) {
-            return;
-        }
-        if (!stopped) {
-            stop();
-        } else {
-            handle = MemorySegment.NULL;
+        synchronized (closeLock) {
+            if (handle == null || handle.address() == 0) {
+                return;
+            }
+            if (!stopped) {
+                stop();
+            } else {
+                handle = MemorySegment.NULL;
+            }
         }
     }
 

@@ -334,11 +334,11 @@ export class ZLinkSpotSerialTurnExecutor {
 
   private async enqueueContinuationTurn<T>(
     operation: () => Promise<T> | T,
-    claim?: ZLinkExecutionBarrierClaim
+    context?: ZLinkExecutionBarrierClaim | ZLinkSpotSerialTurn
   ): Promise<T> {
     this.lastActivityAtMs = performance.now();
     await Promise.resolve();
-    return await this.scheduler.submitContinuation(operation, claim);
+    return await this.scheduler.submitContinuation(operation, context);
   }
 
   private submitQueuedTurn<T>(
@@ -371,8 +371,14 @@ export class ZLinkSpotSerialTurnExecutor {
   }
 
   private runQueuedRecord(record: ZLinkSerialWorkRecord<unknown>): Promise<void> {
-    const context = record.context as ZLinkSpotApplicationTurnContext | undefined;
-    if (context?.replay !== undefined && record.operation === context.replay) {
+    const context = record.context as
+      ZLinkSpotApplicationTurnContext | ZLinkSpotSerialTurn | undefined;
+    if (
+      context !== undefined &&
+      'replay' in context &&
+      context.replay !== undefined &&
+      record.operation === context.replay
+    ) {
       context.release();
       const executor = this;
       const work = record;
@@ -384,7 +390,9 @@ export class ZLinkSpotSerialTurnExecutor {
       record.operation,
       record.resolve,
       record.reject,
-      record.context as ZLinkExecutionBarrierClaim | undefined,
+      context instanceof ZLinkSpotSerialTurn
+        ? undefined
+        : (context as ZLinkExecutionBarrierClaim | undefined),
       record.release,
       record
     );
@@ -452,7 +460,7 @@ export class ZLinkSpotSerialTurnExecutor {
         resume();
         return turn.resumeOwnerUntilNextYield();
       });
-    }, turn.boundExecutionClaim).catch((error) => {
+    }, turn).catch((error) => {
       try {
         turn.executionAllowed();
         reject(error);

@@ -1,6 +1,5 @@
 package systems.zlink.framework.spring;
 
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.config.AutowireCapableBeanFactory;
 import org.springframework.beans.factory.config.BeanFactoryPostProcessor;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
@@ -14,7 +13,6 @@ import systems.zlink.framework.channels.ZLinkClient;
 import systems.zlink.framework.channels.ZLinkFanoutClient;
 import systems.zlink.framework.channels.ZLinkRouteClient;
 import systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions;
-import systems.zlink.framework.locationprovider.ZLinkLocationStore;
 import systems.zlink.framework.monitoring.ZLinkClientServerRuntime;
 import systems.zlink.framework.monitoring.ZLinkFanoutRuntime;
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
@@ -67,18 +65,6 @@ public class ZLinkFrameworkAutoConfiguration {
     @ConditionalOnMissingBean
     public ZLinkBackendAdapterProvider zlinkBackendAdapterFactory() {
         return new ZLinkJavaBackendAdapterFactory();
-    }
-
-    @Bean
-    @ConditionalOnBean(ZLinkFrameworkEnabled.class)
-    public ZLinkFrameworkConfigurer zlinkLocationStoreConfigurer(
-            ObjectProvider<ZLinkLocationStore> locationStore) {
-        return options -> {
-            ZLinkLocationStore unified = locationStore.getIfUnique();
-            if (unified != null) {
-                options.addLocationStore(unified);
-            }
-        };
     }
 
     @Bean

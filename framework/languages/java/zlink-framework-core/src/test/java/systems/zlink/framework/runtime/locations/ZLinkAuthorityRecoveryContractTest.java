@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.locations;
 import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.RepeatedTest;
+import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.locationprovider.*;
@@ -44,6 +45,8 @@ final class ZLinkAuthorityRecoveryContractTest {
     private static final class ProbeStore implements ZLinkLocationStore {
         final ZLinkLocationStore inner;
         final List<ZLinkStoreWriteRequest> writes = new ArrayList<>();
+        final List<String> scanPrefixes = new ArrayList<>();
+        int scannedItems;
         boolean failScan;
         boolean expireContinuation;
         Runnable onExpire;
@@ -80,8 +83,16 @@ final class ZLinkAuthorityRecoveryContractTest {
                 if (onExpire != null) onExpire.run();
                 return CompletableFuture.completedFuture(new ZLinkStoreScanExpired());
             }
+            scanPrefixes.add(request.prefix());
             return inner.scan(
-                    new ZLinkStoreScanRequest(request.prefix(), request.cursor(), 1), cancellation);
+                            new ZLinkStoreScanRequest(request.prefix(), request.cursor(), 1),
+                            cancellation)
+                    .thenApply(
+                            result -> {
+                                if (result instanceof ZLinkStoreScanPageResult page)
+                                    scannedItems += page.value().items().size();
+                                return result;
+                            });
         }
     }
 
@@ -510,12 +521,28 @@ final class ZLinkAuthorityRecoveryContractTest {
         }
     }
 
+    @Test
+    void spotMembershipSnapshotReadsOnlyActorAuthorities() {
+        var f = new Fixture(true);
+        String key = ZLinkAuthorityKeyCodec.spot("room");
+        var before = f.spot("room");
+        var unrelated = f.spot("unrelated-spot");
+        f.actor("unrelated-actor", "unrelated-spot", unrelated.objectGeneration());
+        f.probe.scanPrefixes.clear();
+        f.probe.scannedItems = 0;
+        assertTrue(f.cleanup(key, before));
+        assertFalse(f.probe.scanPrefixes.isEmpty());
+        for (String prefix : f.probe.scanPrefixes) assertEquals("authority\0actor\0", prefix);
+        assertEquals(1, f.probe.scannedItems);
+    }
+
     @RepeatedTest(value = 100, name = "{displayName} [{currentRepetition}/{totalRepetitions}]")
     void expiredOrFailedMembershipScanIsNeverZeroRows() {
         var f = new Fixture(true);
         String key = ZLinkAuthorityKeyCodec.spot("room");
         var before = f.spot("room");
-        f.spot("unrelated");
+        f.actor("unrelated-a", "other-room", 1);
+        f.actor("unrelated-b", "other-room", 1);
         f.probe.failScan = true;
         assertThrows(CompletionException.class, () -> f.cleanup(key, before));
         assertEquals(before.storeVersion(), f.read(key).storeVersion());

@@ -4,6 +4,7 @@ import systems.zlink.framework.ZLinkHandlerFilter;
 import systems.zlink.framework.ZLinkHandlerFilterContext;
 import systems.zlink.framework.ZLinkHandlerFilterNext;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext.ApplicationTurn;
 
 import java.util.List;
 import java.util.Objects;
@@ -57,12 +58,17 @@ final class ZLinkFilterPipeline {
 
     private static <T> ZLinkHandlerFilterNext<T> invokeAtMostOnce(ZLinkHandlerFilterNext<T> next) {
         AtomicBoolean invoked = new AtomicBoolean();
+        Object turn =
+                systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
+                        .currentSerialExecutionTurn();
         return () -> {
             if (!invoked.compareAndSet(false, true)) {
                 throw new IllegalStateException(
                         "A handler filter cannot invoke next more than once.");
             }
-            return next.invoke();
+            return turn instanceof ApplicationTurn applicationTurn
+                    ? applicationTurn.call(next::invoke)
+                    : next.invoke();
         };
     }
 }

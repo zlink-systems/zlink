@@ -74,6 +74,7 @@ import {
   type ReceiveRecord,
   type ServiceSpot,
   type StreamSessionActorAuthorityFence,
+  type ServiceStreamSessionBinding,
   type StreamSessionService,
   MeshNodeRuntimeState,
   MeshPeerRuntimeState,
@@ -623,6 +624,13 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     this.stateful?.setRequestSourceAcceptance(acceptance);
   }
 
+  forgetPeer(nodeRoutingId: string, lifecycleGeneration: bigint): void {
+    const runtime = this.requireRuntime();
+    const endpoint = runtime.observePeerRoute(nodeRoutingId, lifecycleGeneration).endpoint;
+    if (this.hasPeerConnectionIntent(nodeRoutingId, endpoint)) return;
+    runtime.forgetPeerExpectation(nodeRoutingId, lifecycleGeneration);
+  }
+
   expectPeer(peer: {
     readonly nodeRoutingId: string;
     readonly endpoint: string;
@@ -728,7 +736,12 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
 
   hasPeerRouteOrConnectionIntent(targetRid: unknown, endpoint: string): boolean {
     const rid = String(targetRid);
-    if (this.requireRuntime().hasSelectedPeerRoute(rid)) return true;
+    return (
+      this.requireRuntime().hasSelectedPeerRoute(rid) || this.hasPeerConnectionIntent(rid, endpoint)
+    );
+  }
+
+  private hasPeerConnectionIntent(rid: string, endpoint: string | undefined): boolean {
     for (const intent of this.peerIntents.values()) {
       if (
         intent.nodeRoutingId === rid ||
@@ -2344,6 +2357,10 @@ class RawStreamSessionService implements StreamSessionService {
 
   bindings(sessionRid: RoutingId) {
     return this.stateful.sessionBindings(sessionRid);
+  }
+
+  captureSubmission(binding: ServiceStreamSessionBinding) {
+    return this.stateful.captureSessionSubmission(binding);
   }
 
   async sendToActor(

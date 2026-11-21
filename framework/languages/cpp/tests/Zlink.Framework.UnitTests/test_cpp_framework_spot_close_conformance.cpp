@@ -2353,6 +2353,21 @@ class scenario_client_t final : public zf::hosted_service_t
             if (failed)
                 EXPECT_TRUE (failed->operation_id_high != 0 || failed->operation_id_low != 0);
             store.replay_ready = false;
+            if (given.value ("repeatAfterFailure", false)) {
+                auto next = [&] {
+                    std::lock_guard lock (current ().mutex);
+                    current ().closing_join_completed =
+                      std::promise<zf::actor_join_completion_t> ();
+                    return current ().closing_join_completed.get_future ();
+                }();
+                join_member (services, join_id, "closing-admission-member");
+                if (next.wait_for (3s) != std::future_status::ready)
+                    throw std::runtime_error ("Second Join completion did not arrive");
+                const auto next_completion = next.get ();
+                const auto next_failed = std::get_if<zf::actor_join_failed_t> (&next_completion);
+                actual["nextJoinResult"] =
+                  next_failed ? error_name (next_failed->error_kind) : "notFailed";
+            }
             if (target == "closing" && !remove_after_resolution) {
                 current ().closing_released.complete (zf::result_t<void>::success ());
                 const auto closed = closing.get ();
@@ -3471,6 +3486,32 @@ TEST (ZLinkFrameworkSpotCloseConformance, ClosingResolutionSurvivesActivationRem
                                     {"target", "closing"},
                                     {"warmRoute", false},
                                     {"removeAfterResolution", true}}},
+                                  {"act", "deferredJoinFailureContract"},
+                                  {"expect", {{"joinResult", "NotFound"}}}});
+}
+
+TEST (ZLinkFrameworkSpotCloseConformance, UnavailableJoinInvalidatesRouteForNextJoin)
+{
+    run_and_check (
+      nlohmann::json{{"name", "unavailable-join-invalidates-route"},
+                     {"given",
+                      {{"authority", "Ready"},
+                       {"onClosing", "blocks"},
+                       {"target", "absent"},
+                       {"warmRoute", true},
+                       {"repeatAfterFailure", true}}},
+                     {"act", "deferredJoinFailureContract"},
+                     {"expect", {{"joinResult", "Unavailable"}, {"nextJoinResult", "NotFound"}}}});
+}
+
+TEST (ZLinkFrameworkSpotCloseConformance, LocalCloseInvalidatesWarmJoinRoute)
+{
+    run_and_check (nlohmann::json{{"name", "local-close-invalidates-warm-join-route"},
+                                  {"given",
+                                   {{"authority", "Ready"},
+                                    {"onClosing", "blocks"},
+                                    {"target", "closed"},
+                                    {"warmRoute", true}}},
                                   {"act", "deferredJoinFailureContract"},
                                   {"expect", {{"joinResult", "NotFound"}}}});
 }

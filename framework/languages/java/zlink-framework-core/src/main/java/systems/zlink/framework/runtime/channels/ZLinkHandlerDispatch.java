@@ -14,6 +14,26 @@ final class ZLinkHandlerDispatch {
     private ZLinkHandlerDispatch() {}
 
     static CompletionStage<Void> enqueue(
+            ZLinkApplicationExecutionScheduler.Owner owner,
+            Supplier<CompletionStage<Void>> operation,
+            CompletableFuture<Void> admission,
+            ZLinkMeshDrainCoordinator.Claim claim,
+            Consumer<Throwable> completion) {
+        return observe(owner.enqueue(operation, admission), claim, completion);
+    }
+
+    static boolean tryEnqueue(
+            ZLinkApplicationExecutionScheduler.Owner owner,
+            Supplier<CompletionStage<Void>> operation,
+            ZLinkMeshDrainCoordinator.Claim claim,
+            Consumer<Throwable> completion) {
+        CompletionStage<Void> result = owner.tryEnqueue(operation);
+        if (result == null) return false;
+        observe(result, claim, completion);
+        return true;
+    }
+
+    static CompletionStage<Void> enqueue(
             ZLinkSerialExecutionQueue queue,
             Supplier<CompletionStage<Void>> operation,
             CompletableFuture<Void> admission,
@@ -32,16 +52,6 @@ final class ZLinkHandlerDispatch {
             throw failure;
         }
         return terminal;
-    }
-
-    static boolean tryEnqueue(
-            ZLinkSerialExecutionQueue queue,
-            Supplier<CompletionStage<Void>> operation,
-            ZLinkMeshDrainCoordinator.Claim claim,
-            Consumer<Throwable> completion) {
-        var result = new CompletableFuture<Void>();
-        observe(result, claim, completion);
-        return queue.tryEnqueue(() -> start(operation, result));
     }
 
     private static CompletionStage<Void> start(

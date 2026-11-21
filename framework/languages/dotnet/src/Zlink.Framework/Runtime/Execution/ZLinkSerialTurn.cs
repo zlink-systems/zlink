@@ -4,14 +4,9 @@ internal sealed class ZLinkSerialTurn
 {
     private static readonly AsyncLocal<ZLinkSerialTurn?> CurrentTurn = new();
 
-    private readonly Func<
-        ZLinkSerialTurn,
-        Action<ZLinkSerialPostAdmission>,
-        ZLinkSerialPostAdmission
-    > _postResume;
+    private readonly Func<ZLinkSerialTurn, Task> _postResume;
     private readonly Func<Func<CancellationToken, ValueTask>, bool> _postCallback;
     private readonly Action<Exception> _reportError;
-    private readonly CancellationToken _executionToken;
     internal ZLinkSerialWorkItem Item { get; }
     internal ZLinkSerialExecutionQueue? ExecutionGate { get; }
 
@@ -27,14 +22,9 @@ internal sealed class ZLinkSerialTurn
     private int _yieldUsed;
 
     public ZLinkSerialTurn(
-        Func<
-            ZLinkSerialTurn,
-            Action<ZLinkSerialPostAdmission>,
-            ZLinkSerialPostAdmission
-        > postResume,
+        Func<ZLinkSerialTurn, Task> postResume,
         Func<Func<CancellationToken, ValueTask>, bool> postCallback,
         Action<Exception> reportError,
-        CancellationToken executionToken,
         ZLinkSerialWorkItem item,
         ZLinkSerialExecutionQueue? executionGate = null
     )
@@ -42,7 +32,6 @@ internal sealed class ZLinkSerialTurn
         _postResume = postResume;
         _postCallback = postCallback;
         _reportError = reportError;
-        _executionToken = executionToken;
         Item = item;
         ExecutionGate = executionGate;
     }
@@ -129,13 +118,7 @@ internal sealed class ZLinkSerialTurn
         }
         finally
         {
-            // Execution cancellation terminates this turn. Posting a resume
-            // after the queue has begun completion races the closed writer
-            // and adds a scheduler hop before callback cleanup can run.
-            // The owning work item still joins the callback task, so cleanup
-            // remains part of queue disposal without re-entering a dead turn.
-            if (!_executionToken.IsCancellationRequested)
-                await AwaitResumePermitAsync().ConfigureAwait(false);
+            await _postResume(this).ConfigureAwait(false);
         }
     }
 
@@ -156,8 +139,7 @@ internal sealed class ZLinkSerialTurn
         }
         finally
         {
-            if (!_executionToken.IsCancellationRequested)
-                await AwaitResumePermitAsync().ConfigureAwait(false);
+            await _postResume(this).ConfigureAwait(false);
         }
     }
 
@@ -165,37 +147,6 @@ internal sealed class ZLinkSerialTurn
     {
         if (Interlocked.Exchange(ref _suspendSignaled, 1) == 0)
             Volatile.Read(ref _suspended).TrySetResult();
-    }
-
-    private Task AwaitResumePermitAsync()
-    {
-        var resume = new TaskCompletionSource();
-        void CompleteResume(ZLinkSerialPostAdmission result)
-        {
-            if (result == ZLinkSerialPostAdmission.Accepted)
-                resume.TrySetResult();
-            else
-                resume.TrySetException(
-                    new ZLinkFrameworkException(
-                        result == ZLinkSerialPostAdmission.OwnershipLost
-                            ? ZLinkFrameworkErrorKind.NotFound
-                            : ZLinkFrameworkErrorKind.ShuttingDown,
-                        result switch
-                        {
-                            ZLinkSerialPostAdmission.Sealed =>
-                                "The execution unit is sealed for relocation before a yielded turn can resume.",
-                            ZLinkSerialPostAdmission.OwnershipLost =>
-                                "The object no longer owns execution before a yielded turn can resume.",
-                            _ => "The Spot is closed before a yielded turn can resume.",
-                        }
-                    )
-                );
-        }
-        var admission = _postResume(this, CompleteResume);
-        if (admission != ZLinkSerialPostAdmission.Accepted)
-            CompleteResume(admission);
-
-        return resume.Task;
     }
 
     public readonly struct Scope : IDisposable

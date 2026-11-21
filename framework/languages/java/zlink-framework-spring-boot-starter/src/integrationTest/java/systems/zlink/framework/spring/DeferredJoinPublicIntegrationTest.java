@@ -198,12 +198,12 @@ public class DeferredJoinPublicIntegrationTest {
                                 .setRoutingId(RoutingId.from(role))
                                 .objects()
                                 .server();
-                server.addEntrySpot(Entry.class)
-                        .addActorFactory(
-                                "player",
-                                Player.class,
-                                Factory.class,
-                                f -> f.preserveStateWith(Transfer.class));
+                if (role.equals("source")) server.addEntrySpot(Entry.class);
+                server.addActorFactory(
+                        "player",
+                        Player.class,
+                        Factory.class,
+                        f -> f.preserveStateWith(Transfer.class));
                 if (role.equals("target"))
                     server.addSpotFactory("room", Room.class, f -> f.disableRelocation());
             };
