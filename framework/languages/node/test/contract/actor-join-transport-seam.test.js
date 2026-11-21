@@ -35,7 +35,7 @@ function joinFixture({ canonical, entry }) {
         encodeStatefulReply(record.correlation, RequestResult.Ok, 0, {
           kind: 'actorJoin',
           joinResult: 0,
-          spot: { spotId: entry ? 'target-node' : 'target-spot', generation: entry ? 11n : 3n },
+          spot: { spotId: entry ? 'target-entry-uuid' : 'target-spot', generation: entry ? 11n : 3n },
           membershipEpoch: 2n
         }),
         encodeApplicationPayload({
@@ -52,15 +52,16 @@ function joinFixture({ canonical, entry }) {
     async sendService() { throw new Error('remote Join must not take the fire-and-forget send lane'); }
   }, 'source-node', 7n);
   const actor = runtime.createActor('seam-actor');
-  const spot = { spotId: entry ? 'target-node' : 'target-spot', generation: entry ? 11n : 3n };
-  runtime.rememberSpotRoute({
+  const spot = { spotId: entry ? 'target-entry-uuid' : 'target-spot', generation: entry ? 11n : 3n };
+  const route = {
     spot,
     targetNodeRid: 'target-node',
     targetNodeGeneration: 11n,
     authorityOwnerGeneration: 5n,
     ownerLeaseGeneration: 13n,
     storeVersion: 'spot-version'
-  });
+  };
+  runtime.rememberSpotRoute(route);
   const payload = {
     packetName: canonical ? 'ZLinkFrameworkActorJoinRequest' : 'PrivateJoinRequest',
     contentType: 'application/json',
@@ -72,7 +73,7 @@ function joinFixture({ canonical, entry }) {
     payload,
     join(timeoutMs) {
       const args = entry
-        ? [actor.ref, 'target-node', payload]
+        ? [actor.ref, route, payload]
         : [actor.ref, 'target-node', spot, spot.generation, payload];
       if (canonical) {
         args.push(

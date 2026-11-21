@@ -39,6 +39,8 @@ public final class RelocationUserSpot implements ZLinkSpot<RelocationActor> {
     @Override
     public void configure() {
         context.handlers().addHandler(UserSpotProbeHandler.class);
+        // Remote Entry Spot join scenario: the Actor defers joinEntrySpot().
+        context.handlers().addHandler(BeginEntrySpotJoinHandler.class);
     }
 
     @Override

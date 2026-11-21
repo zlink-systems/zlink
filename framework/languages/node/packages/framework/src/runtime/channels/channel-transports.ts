@@ -33,7 +33,8 @@ import { isRemoteChannelErrorReply, requestTerminalResult } from './channel-outb
 import { ServiceStaleGenerationError } from '../foundation/service-stateful-registry';
 import type {
   ServiceDirectSpotRouteFence,
-  ServiceInstanceRouteFence
+  ServiceInstanceRouteFence,
+  ServiceSpotRouteFence
 } from '../foundation/service-stateful-wire-codec';
 import {
   type ZLinkFrameworkInternalErrorKind as ZLinkFrameworkInternalErrorKindType,
@@ -1211,12 +1212,29 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
 
 function directSpotRouteFence(
   target: ZLinkSpotRouteTarget
-): ServiceDirectSpotRouteFence | undefined {
-  // Entry Spots are addressed by their owning MeshNode. They have no
-  // Location Store authority row, so only User and Instance Spots carry the
-  // exact Ready authority fence required by direct Spot submission.
+): ServiceDirectSpotRouteFence | ServiceSpotRouteFence | undefined {
   if (target.spotKind === ZLinkSpotKind.Entry) {
-    return undefined;
+    if (
+      target.targetSpotGeneration === undefined ||
+      target.targetNodeGeneration === undefined ||
+      target.authorityOwnerGeneration === undefined ||
+      target.ownerLeaseGeneration === undefined
+    ) {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.RouteNotConnected,
+        `Entry Spot '${String(target.spotId)}' has no complete selected route fence.`
+      );
+    }
+    return {
+      spot: {
+        spotId: String(target.spotId),
+        generation: target.targetSpotGeneration
+      },
+      targetNodeRid: String(target.targetNodeRid),
+      targetNodeGeneration: target.targetNodeGeneration,
+      authorityOwnerGeneration: target.authorityOwnerGeneration,
+      ownerLeaseGeneration: target.ownerLeaseGeneration
+    };
   }
   if (
     target.targetSpotGeneration === undefined ||

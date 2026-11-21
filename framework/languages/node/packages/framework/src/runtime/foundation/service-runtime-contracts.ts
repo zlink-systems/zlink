@@ -9,8 +9,8 @@ import type {
 } from '../backend/runtime-values';
 import type { ServiceActorRef } from './service-stateful-registry';
 import type {
-  ServiceDirectSpotRouteFence,
-  ServiceRetiredBoundSessionRouteFence
+  ServiceRetiredBoundSessionRouteFence,
+  ServiceSpotRouteFence
 } from './service-stateful-wire-codec';
 export enum StreamSessionRuntimeState {
   Created = 1,
@@ -459,7 +459,7 @@ export interface ServiceSpot {
     parts: MessageLike | readonly MessageLike[],
     options?: {
       flags?: number;
-      routeFence?: ServiceDirectSpotRouteFence;
+      routeFence?: ServiceSpotRouteFence;
       entrySpot?: boolean;
     }
   ): Promise<SubmitResult>;
@@ -473,7 +473,7 @@ export interface ServiceSpot {
       timeoutMs?: number;
       readonly requestOperation?: PendingOperation<unknown>;
       applicationMetadata?: Buffer;
-      routeFence?: ServiceDirectSpotRouteFence;
+      routeFence?: ServiceSpotRouteFence;
       onAdmitted?: () => void;
       entrySpot?: boolean;
     },

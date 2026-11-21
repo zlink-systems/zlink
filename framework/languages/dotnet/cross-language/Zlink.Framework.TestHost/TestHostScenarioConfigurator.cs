@@ -466,11 +466,11 @@ internal static class TestHostScenarioConfigurator
                 ?? throw new InvalidOperationException("user-spot-target mode requires --spot-id."),
             options.ActorId ?? "cross-lang-user-spot-actor",
             options.MeshName ?? "cross.user-spot-join",
-            options.PeerRid
-                ?? throw new InvalidOperationException(
-                    "user-spot-target mode requires --peer-rid."
-                ),
-            options.PlacementWeight ?? 0
+            // A .NET source has a framework-assigned routing id, so its peer id is unknown.
+            options.PeerRid ?? "",
+            options.PlacementWeight ?? 0,
+            options.EntryJoin,
+            options.RestartFilePath
         ));
     }
 
@@ -552,7 +552,8 @@ internal static class TestHostScenarioConfigurator
             provider.GetRequiredService<IZLinkRouteMeshRuntimeOptions>(),
             options.PlacementWeight ?? 100,
             provider.GetService<OutageLocationStore>(),
-            options.StartFilePath
+            options.StartFilePath,
+            options.EntryJoin
         ));
     }
 

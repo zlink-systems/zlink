@@ -27,6 +27,7 @@ import {
 } from '../framework-errors-internal';
 import type { ZLinkLocationLifecycle } from '../locations';
 import { frameworkPayloadContentType } from '../messaging/payload-codec';
+import type { ServiceSpotRouteFence } from '../foundation/service-stateful-wire-codec';
 import { remainingActorRequestTimeout } from './actor-request-deadline';
 import { routingIdsEqual, toBackendRoutingId } from '../routing-id';
 import type { ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
@@ -325,6 +326,7 @@ export class ZLinkLocalNativeActorJoin {
       state,
       this.options.locationLifecycle?.currentOwnerToken?.leaseGeneration
     );
+    const entryTarget = entrySpot ? entrySpotRouteFence(target) : undefined;
     // Command 28 is usable only when both the source Actor authority fence
     // and the backend's canonical entry point are present.  Until then keep
     // the existing internal admission route (wire protocol §10); fabricating
@@ -358,7 +360,7 @@ export class ZLinkLocalNativeActorJoin {
             ? entrySpot
               ? node.joinActorEntrySpot(
                   actorRef,
-                  toBackendRoutingId(target.targetNodeRid),
+                  entryTarget!,
                   legacyAdmission!,
                   remainingTimeoutMs
                 )
@@ -373,7 +375,7 @@ export class ZLinkLocalNativeActorJoin {
             : entrySpot
               ? node.joinActorEntrySpotCanonical!(
                   actorRef,
-                  toBackendRoutingId(target.targetNodeRid),
+                  entryTarget!,
                   canonicalAdmission.request,
                   canonicalAdmission.actorFence,
                   canonicalAdmission.local,
@@ -659,6 +661,19 @@ async function submitJoinWhenConnected<T>(
       await new Promise<void>((resolve) => setTimeout(resolve, LOCAL_JOIN_POLL_INTERVAL_MS));
     }
   }
+}
+
+function entrySpotRouteFence(target: ZLinkSpotRouteTarget): ServiceSpotRouteFence {
+  return {
+    spot: {
+      spotId: toFrameworkRoutingId(target.spotId),
+      generation: target.targetSpotGeneration!
+    },
+    targetNodeRid: toFrameworkRoutingId(target.targetNodeRid),
+    targetNodeGeneration: target.targetNodeGeneration!,
+    authorityOwnerGeneration: target.authorityOwnerGeneration!,
+    ownerLeaseGeneration: target.ownerLeaseGeneration!
+  };
 }
 
 function requireUserSpotRoute(
