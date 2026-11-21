@@ -85,7 +85,12 @@ public sealed class MatchEndedDelivery : PlayerDelivery<MatchEnded>;
 [ZLinkSpotRequestHandler(nameof(PrepareRoom))]
 public sealed class PrepareRoomHandler : IZLinkSpotRequestHandler<RoomSpot, PrepareRoom, RoomPrepared>
 {
-    public ValueTask<RoomPrepared> HandleAsync(RoomSpot spot, PrepareRoom request, CancellationToken ct)
+    public ValueTask<RoomPrepared> HandleAsync(
+        RoomSpot spot,
+        IZLinkMessageContext context,
+        PrepareRoom request,
+        CancellationToken ct
+    )
     {
         ct.ThrowIfCancellationRequested();
         return ValueTask.FromResult(spot.Prepare(request));

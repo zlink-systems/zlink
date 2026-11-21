@@ -33,6 +33,7 @@ public sealed class DungeonInfo
 {
     public ValueTask<DungeonOpened> HandleAsync(
         DungeonSpot spot,
+        IZLinkMessageContext context,
         DungeonInfoRequest request,
         CancellationToken ct
     )
