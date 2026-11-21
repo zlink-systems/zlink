@@ -36,8 +36,10 @@ class GradleTestWatchdogTests(unittest.TestCase):
             "- name: Run Framework Java core, integration and Spring starter tests", 1
         )[1].split("\n      - name:", 1)[0]
         cwd = re.search(r"working-directory: (.+)", step).group(1).strip()
+        script = re.search(r"run: bash (\S+)", step).group(1)
+        suite = (ROOT / cwd / script).read_text()
         command = re.search(
-            r'^\s*(bash .+gradle-test-watchdog\.sh[^\n]+) &$', step, re.MULTILINE
+            r'^\s*(bash .+gradle-test-watchdog\.sh[^\n]+) &$', suite, re.MULTILINE
         ).group(1)
         # Retain the workflow's executable path and output argument; shorten observation only.
         command = command.replace(" 3600 600 ", " 0 1 ")
