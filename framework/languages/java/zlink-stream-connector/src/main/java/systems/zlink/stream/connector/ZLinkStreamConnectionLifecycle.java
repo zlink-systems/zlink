@@ -22,6 +22,7 @@ import java.util.function.Supplier;
 
 final class ZLinkStreamConnectionLifecycle {
     private final ZLinkStreamConnectorConfiguration configuration;
+    private final Supplier<CompletionStage<? extends ZLinkStreamTransportConnection>> openTransport;
     private final ScheduledExecutorService timeouts;
     private final ZLinkStreamDispatchQueue dispatchQueue;
     private final ZLinkStreamPendingRequests pendingRequests;
@@ -62,6 +63,11 @@ final class ZLinkStreamConnectionLifecycle {
             Function<String, CompletionStage<Void>> controlSender,
             Runnable connectionEndedNotifier) {
         this.configuration = configuration;
+        this.openTransport =
+                switch (configuration.transport().kind()) {
+                    case WEB_SOCKET, WEB_SOCKET_SECURE -> this::connectWebSocketStage;
+                    case TCP, TLS -> ZLinkNettyTransportConnection.opener(configuration);
+                };
         this.timeouts = timeouts;
         this.dispatchQueue = dispatchQueue;
         this.pendingRequests = pendingRequests;
@@ -279,18 +285,7 @@ final class ZLinkStreamConnectionLifecycle {
                         TimeUnit.MILLISECONDS);
         attempt.whenComplete((transport, failure) -> deadline.cancel(false));
         try {
-            CompletionStage<? extends ZLinkStreamTransportConnection> opening =
-                    switch (configuration.transport().kind()) {
-                        case WEB_SOCKET, WEB_SOCKET_SECURE -> connectWebSocketStage();
-                        case TCP, TLS ->
-                                ZLinkNettyTransportConnection.connectStage(
-                                        configuration.endpoint(),
-                                        configuration.transport().kind(),
-                                        configuration.limits().receivePayload(),
-                                        configuration
-                                                .transport()
-                                                .skipServerCertificateValidation());
-                    };
+            var opening = openTransport.get();
             attempt.whenComplete(
                     (transport, failure) -> {
                         if (failure != null) opening.toCompletableFuture().cancel(true);
