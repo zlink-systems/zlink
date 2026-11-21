@@ -299,6 +299,7 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     struct handler_resume_t
     {
         std::shared_ptr<serial_turn_handle_impl_t> handler;
+        std::optional<framework_error_kind_t> failure;
     };
     struct borrowed_callback_t
     {
@@ -363,16 +364,18 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
         bool cancel_requested = false;
     };
     active_turn_t *current_turn_locked () noexcept;
-    bool schedule_drain_locked ();
+    bool schedule_drain_locked (const std::function<void ()> &on_wake_rejected = {});
     bool publish_locked (std::unique_ptr<publication_node_t> node,
                          std::function<void ()> *continuation = nullptr,
-                         work_item_t *rejected = nullptr);
+                         work_item_t *rejected = nullptr,
+                         const std::function<void ()> &on_wake_rejected = {});
     void import_publications ();
     void import_publications_until (publication_node_t *cut);
     void run_shared_gate ();
     void release_shared_gate ();
     bool submit_control (std::function<void ()> control,
-                         std::function<void ()> *continuation = nullptr);
+                         std::function<void ()> *continuation = nullptr,
+                         const std::function<void ()> &on_wake_rejected = {});
     template <typename T, typename TControl> task_t<T> control_async (TControl control)
     {
         auto completion = std::make_shared<task_completion_source_t<T>> ();
@@ -448,7 +451,8 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
                          serial_work_options_t options,
                          serial_submission_id_t submission_id = 0,
                          std::function<void ()> cancel = {},
-                         item_origin_t origin = {});
+                         item_origin_t origin = {},
+                         std::function<void ()> resume = {});
     result_t<serial_submission_id_t> try_post_cancellable_async (std::string name,
                                                                  async_work_t work,
                                                                  std::function<void ()> cancel,
@@ -464,10 +468,10 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
                  serial_work_lane_t lane,
                  item_origin_t origin,
                  bool holds_application_while_waiting = false);
-    bool try_post_resume (std::string name,
-                          async_work_t work,
-                          const std::shared_ptr<serial_turn_handle_impl_t> &handler,
-                          bool holds_application_while_waiting);
+    void post_resume (std::string name,
+                      std::function<void ()> continuation,
+                      const std::shared_ptr<serial_turn_handle_impl_t> &handler,
+                      bool holds_application_while_waiting);
     void activate_turn_locked (work_item_t &item) noexcept;
     std::deque<work_item_t>::iterator next_lifecycle_locked () noexcept;
     bool has_queued_locked () const noexcept;
