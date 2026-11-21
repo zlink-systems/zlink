@@ -87,7 +87,7 @@ export class ZLinkSpotActivation {
     consumed: boolean;
   };
   private relocationBoundaryConsumed = false;
-  private relocationReadyDeferredTurnId?: number;
+  private relocationReadyDeferredSegment?: object;
 
   constructor(options: ZLinkSpotActivationOptions) {
     this.meshName = options.meshName;
@@ -142,20 +142,20 @@ export class ZLinkSpotActivation {
             'relocationReady().defer() requires ApplicationSignaled relocation readiness.'
           );
         }
-        if (!this.serial.isCurrentTurn) {
+        const segment = this.serial.currentSegment;
+        if (segment === undefined) {
           throw createInternalFrameworkException(
             ZLinkFrameworkInternalErrorKind.InvalidOperation,
             'relocationReady().defer() requires the current Spot handler turn.'
           );
         }
-        const turnId = this.serial.activeTurnId;
-        if (this.relocationReadyDeferredTurnId === turnId || this.relocationBoundaryConsumed) {
+        if (this.relocationReadyDeferredSegment === segment || this.relocationBoundaryConsumed) {
           throw createInternalFrameworkException(
             ZLinkFrameworkInternalErrorKind.InvalidOperation,
             'relocationReady().defer() was already called for this boundary.'
           );
         }
-        this.relocationReadyDeferredTurnId = turnId;
+        this.relocationReadyDeferredSegment = segment;
         this.serial.currentTurn?.blockFrameworkOperations();
         const waiter = this.relocationReadyWaiter;
         if (waiter !== undefined && !waiter.consumed) {
@@ -171,7 +171,7 @@ export class ZLinkSpotActivation {
             try {
               await this.notifyRelocationReadyCompleted(ZLinkSpotRelocationReadyOutcome.Continued);
             } finally {
-              this.relocationReadyDeferredTurnId = undefined;
+              this.relocationReadyDeferredSegment = undefined;
               this.executionBarrier.abort(seal);
             }
           })
@@ -230,7 +230,7 @@ export class ZLinkSpotActivation {
   ): Promise<void> {
     if (!this.relocationBoundaryConsumed) return;
     this.relocationBoundaryConsumed = false;
-    this.relocationReadyDeferredTurnId = undefined;
+    this.relocationReadyDeferredSegment = undefined;
     await this.serial.postBarrierTurn(() => this.notifyRelocationReadyCompleted(outcome));
   }
 
