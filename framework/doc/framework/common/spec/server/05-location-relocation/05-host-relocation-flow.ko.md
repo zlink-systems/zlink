@@ -345,6 +345,7 @@ descriptor 변화만으로 즉시 닫지 않는다.
 |---|---|
 | Mode와 effective target version이 같은 concurrent `Relocate` | 최초 operation과 deadline을 공유한다. 뒤의 호출은 deadline을 바꾸지 않는다. |
 | Mode 또는 effective target version이 다른 concurrent `Relocate` | 기다리지 않고 `Blocked/OperationInProgress`다. |
+| 이전 relocation의 완료 결과 전달이 남은 object(`pendingDeliveries` > 0)를 옮기는 `Relocate` | 기다리지 않고 `Blocked/OperationInProgress`다. 사유 기록은 [Location runtime §9.3](01-location-runtime.ko.md#93-source가-바뀐-뒤-끝난-request를-처리한다)을 따른다. |
 | `Blocked` 뒤 다시 `Relocate` | `Blocked`는 저장하지 않으므로 host 조건을 처음부터 다시 검사한다. |
 | `Relocated`에서 다시 `Relocate` | 최초 `Relocated/None`의 mode와 effective target version을 반환한다. |
 | Concurrent `Shutdown` | 같은 operation을 공유하고 terminal result를 저장한다. |

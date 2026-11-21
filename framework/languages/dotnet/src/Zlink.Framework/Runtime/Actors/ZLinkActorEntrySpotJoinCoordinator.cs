@@ -76,7 +76,6 @@ internal sealed class ZLinkActorEntrySpotJoinCoordinator(
                     actorState,
                     actorRef,
                     previousActivation,
-                    request,
                     cancellationToken
                 )
                 .ConfigureAwait(false);
@@ -218,7 +217,6 @@ internal sealed class ZLinkActorEntrySpotJoinCoordinator(
                     actorState,
                     sourceActorRef,
                     previousActivation,
-                    joinRequest,
                     cancellationToken
                 )
                 .ConfigureAwait(false);
@@ -311,18 +309,16 @@ internal sealed class ZLinkActorEntrySpotJoinCoordinator(
         ZLinkActorRuntimeState actorState,
         ZLinkBackendActorRef sourceActorRef,
         ZLinkSpotActivation? previousActivation,
-        ZLinkMessage joinRequest,
         CancellationToken cancellationToken
     )
     {
-        var activation =
+        _ =
             targetNode.EntrySpotActivation
             ?? throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.NotFound,
                 $"Actor entry SPOT join target node '{targetNode.Node.RoutingId}' does not have an Entry Spot activation."
             );
         var localTargetRef = targetNode.Node.ActorLookup(actor.Context.ActorId);
-        var createdHere = localTargetRef is null;
         ZLinkBackendActorRef targetRef;
         if (localTargetRef is { } existing)
         {
@@ -334,51 +330,7 @@ internal sealed class ZLinkActorEntrySpotJoinCoordinator(
             targetRef = targetNode.Node.CreateActor(actor.Context.ActorId, emptyCreateRequest);
         }
 
-        ZLinkSpotActorJoinResult admission;
-        try
-        {
-            // Entry Spot admission does not require an OnActorJoin callback.
-            // The lifecycle callback remains available for user-defined work,
-            // while the standard Entry Spot join contract accepts the actor.
-            admission = ZLinkSpotActorJoinResult.Accept();
-        }
-        catch (Exception admissionFailure)
-        {
-            if (createdHere)
-                try
-                {
-                    await actorSessionManager
-                        .CompensateUncommittedNativeActorAsync(
-                            targetNode.Node,
-                            targetRef,
-                            "local-entry-spot-admission"
-                        )
-                        .ConfigureAwait(false);
-                }
-                catch (Exception cleanupFailure)
-                {
-                    throw new AggregateException(admissionFailure, cleanupFailure);
-                }
-            throw;
-        }
-
-        var reply = CopyReply(admission.Reply);
-        if (!admission.Accepted)
-        {
-            if (createdHere)
-                await actorSessionManager
-                    .CompensateUncommittedNativeActorAsync(
-                        targetNode.Node,
-                        targetRef,
-                        "local-entry-spot-rejection"
-                    )
-                    .ConfigureAwait(false);
-            Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"entry_join_rejected path=local actor={actorState.ActorId} created_here={createdHere}"
-            );
-            return new ZLinkActorJoinResult.Rejected(reply);
-        }
-
+        // Entry Spot Join has no application admission callback.
         actorState.BindNativeActorRef(targetRef);
         await NotifyManagedEntrySpotJoinLifecycleAsync(
                 actor,
@@ -403,7 +355,7 @@ internal sealed class ZLinkActorEntrySpotJoinCoordinator(
 
         return new ZLinkActorJoinResult.Accepted(
             targetRef.ToNative(targetNode.Node.MeshStatus().MeshName),
-            reply
+            ZLinkMessage.Empty
         );
     }
 
@@ -438,11 +390,6 @@ internal sealed class ZLinkActorEntrySpotJoinCoordinator(
         await previousActivation
             .NotifyActorLeftAfterNativeJoinEntrySpotAsync(actor, cancellationToken)
             .ConfigureAwait(false);
-    }
-
-    private static ZLinkMessage CopyReply(ZLinkMessage? reply)
-    {
-        return reply ?? ZLinkMessage.Empty;
     }
 
     private ZLinkMessage DecodeEntrySpotJoinReply(

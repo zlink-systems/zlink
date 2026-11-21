@@ -1386,15 +1386,6 @@ public final class ZLinkChannelRuntime
             String routerChannelId,
             RoutingId targetNodeRid,
             String targetSpotId,
-            List<Message> spotParts) {
-        return sendToSpotViaRouterChannel(
-                routerChannelId, targetNodeRid, targetSpotId, 0L, 0L, spotParts);
-    }
-
-    public CompletionStage<Void> sendToSpotViaRouterChannel(
-            String routerChannelId,
-            RoutingId targetNodeRid,
-            String targetSpotId,
             long targetSpotGeneration,
             long targetNodeGeneration,
             List<Message> spotParts) {

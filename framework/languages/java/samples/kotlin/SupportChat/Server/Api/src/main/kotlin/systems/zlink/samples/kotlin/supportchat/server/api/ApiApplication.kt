@@ -32,26 +32,29 @@ import systems.zlink.samples.kotlin.supportchat.server.configuration.SupportChat
 @SpringBootApplication(proxyBeanMethods = false, scanBasePackageClasses = [ApiApplication::class])
 class ApiApplication {
     @Bean
-    fun apiFramework(topology: SampleTopology): ZLinkFrameworkConfigurer =
-        ZLinkFrameworkConfigurer { options ->
-            val api = topology.api()
-            val channelEndpoint = URI.create(api.channelEndpoint)
-            options.configureLocations()
-            options.addHandlersFromPackageOf<ApiApplication>()
-            options.useCoroutineHandlers(Dispatchers.Default)
-            options.configureDispatch { messageFlow(ZLinkMessageFlowLogMode.NORMAL) }
-            options
-                .addClientServerChannel(SampleNames.ApiChannel)
-                .server()
-                .setBindHost(channelEndpoint.host)
-                .setAdvertiseHost(channelEndpoint.host)
-                .listen(channelEndpoint.port)
-                .addHandlerGroup(SampleNames.ApiChannel)
-            options.addClientServerChannel(SampleNames.SupportChannel).client()
-            val node = options.addRouteMesh(SampleNames.SupportSpotDiscovery)
-            node.listen(api.routerEndpoint).setRoutingIdPrefix("support-api")
-            node.objects().client()
-        }
+    fun apiFramework(
+        topology: SampleTopology,
+        locations: ZLinkRedisLocationStore,
+    ): ZLinkFrameworkConfigurer = ZLinkFrameworkConfigurer { options ->
+        options.addLocationStore(locations)
+        val api = topology.api()
+        val channelEndpoint = URI.create(api.channelEndpoint)
+        options.configureLocations()
+        options.addHandlersFromPackageOf<ApiApplication>()
+        options.useCoroutineHandlers(Dispatchers.Default)
+        options.configureDispatch { messageFlow(ZLinkMessageFlowLogMode.NORMAL) }
+        options
+            .addClientServerChannel(SampleNames.ApiChannel)
+            .server()
+            .setBindHost(channelEndpoint.host)
+            .setAdvertiseHost(channelEndpoint.host)
+            .listen(channelEndpoint.port)
+            .addHandlerGroup(SampleNames.ApiChannel)
+        options.addClientServerChannel(SampleNames.SupportChannel).client()
+        val node = options.addRouteMesh(SampleNames.SupportSpotDiscovery)
+        node.listen(api.routerEndpoint).setRoutingIdPrefix("support-api")
+        node.objects().client()
+    }
 
     @Bean
     fun apiPublicReadiness(): ApplicationRunner = ApplicationRunner {

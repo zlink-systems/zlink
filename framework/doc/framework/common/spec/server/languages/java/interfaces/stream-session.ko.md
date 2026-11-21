@@ -101,11 +101,22 @@ public interface systems.zlink.framework.streams.ZLinkStreamCompressionCodec {
 }
 public final class systems.zlink.framework.streams.ZLinkStreamError extends java.lang.Record {
  public systems.zlink.framework.streams.ZLinkStreamError(systems.zlink.framework.streams.ZLinkStreamSessionError, java.lang.String);
+ public systems.zlink.framework.streams.ZLinkStreamError(systems.zlink.framework.streams.ZLinkStreamSessionError, java.lang.String, java.util.Optional<systems.zlink.framework.streams.ZLinkDisconnectReason>);
  public final java.lang.String toString();
  public final int hashCode();
  public final boolean equals(java.lang.Object);
  public systems.zlink.framework.streams.ZLinkStreamSessionError error();
  public java.lang.String message();
+ public java.util.Optional<systems.zlink.framework.streams.ZLinkDisconnectReason> disconnectReason();
+}
+public final class systems.zlink.framework.streams.ZLinkDisconnectReason extends java.lang.Enum<systems.zlink.framework.streams.ZLinkDisconnectReason> {
+ public static final systems.zlink.framework.streams.ZLinkDisconnectReason UNKNOWN;
+ public static final systems.zlink.framework.streams.ZLinkDisconnectReason HANDSHAKE_FAILED;
+ public static final systems.zlink.framework.streams.ZLinkDisconnectReason TRANSPORT_ERROR;
+ public static final systems.zlink.framework.streams.ZLinkDisconnectReason CONTEXT_TERMINATED;
+ public static systems.zlink.framework.streams.ZLinkDisconnectReason[] values();
+ public static systems.zlink.framework.streams.ZLinkDisconnectReason valueOf(java.lang.String);
+ public int value();
 }
 public final class systems.zlink.framework.streams.ZLinkStreamSessionError extends java.lang.Enum<systems.zlink.framework.streams.ZLinkStreamSessionError> {
  public static final systems.zlink.framework.streams.ZLinkStreamSessionError INTERNAL;
@@ -136,6 +147,8 @@ STREAM correlation을 terminal-once로 완료하고 admission failure면 Framewo
 failure로 완료한다. Caller는 별도 reply·retry를 하지 않는다. One-way dispatch context는 reply
 capability가 없으므로 admission만 반환한다. Handshake failure는 session 생성 전 runtime monitoring에만
 기록되며 `onError(...)`에 전달하지 않는다.
+
+`ZLinkStreamError`의 canonical constructor는 세 번째 component로 `disconnectReason`을 받으며 `null`을 받지 않는다. 두 인자 constructor는 `Optional.empty()`로 위임하는 호환 overload다. `ZLinkDisconnectReason.value()`는 ordinal이 아니라 Core 원값을 반환한다: `UNKNOWN`=0, `HANDSHAKE_FAILED`=3, `TRANSPORT_ERROR`=4, `CONTEXT_TERMINATED`=5 ([Core monitoring §3.2](../../../../../../../../../core/doc/spec/core/06-monitoring.ko.md#32-value와-flags)).
 
 Send·reply call의 대기 종료는 [Submit과 completion §7](../../../01-execution/01-submit-and-completion.ko.md#7-one-way-send의-대기-종료와-classic-fanout-send-timeout)을, 반환한 stage의 `cancel(false)`는
 [Cancellation과 shutdown §1](../../../01-execution/03-cancellation-and-shutdown.ko.md#1-협력적-cancellation)을 따른다.

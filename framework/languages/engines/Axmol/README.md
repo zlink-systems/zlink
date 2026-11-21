@@ -15,7 +15,7 @@ The [engine-lobby sample contract](https://github.com/zlink-systems/zlink/blob/m
 
 - Axmol 2.3.0 source tree (`AX_ROOT`)
 - C++20 compiler and CMake 3.20 or newer
-- ZLink C++ framework package 0.22.0 (`zlink_framework` CMake config)
+- The ZLink C++ framework package from the same release as this connector source (`zlink_framework` CMake config)
 - `nlohmann_json` CMake package
 - Connector source from `framework/languages/cpp/connector/engines/axmol`
 

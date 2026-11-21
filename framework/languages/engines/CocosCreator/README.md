@@ -10,7 +10,7 @@ Label. Packet names and JSON fields follow the [shared engine-lobby contract](ht
 ## Target and transport
 
 The execution target is **Cocos Creator 3.8 web**. The project uses the package root of
-`@zlink-systems/stream-connector` `0.22.0` with `ws://` or `wss://` endpoints. The browser's
+`@zlink-systems/stream-connector` (the version pinned in `package.json`) with `ws://` or `wss://` endpoints. The browser's
 `WebSocket` handles the connection and framing; the connector's built-in `zlinkStreamJsonCodec`
 handles typed payloads. `Manual` dispatch runs callbacks from Cocos `update()`.
 
