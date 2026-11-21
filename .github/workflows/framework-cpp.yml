@@ -94,9 +94,9 @@ env:
   # A compile whose sccache server stops answering mid-build compiles locally
   # instead of failing the gate (#3810: the server can stop after the setup check).
   SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
-  # GitHub-hosted runners have 4 cores; the self-hosted build PC has 20 shared by
-  # up to six concurrent jobs.
-  BUILD_PARALLEL: ${{ vars.ZLINK_CPP_BUILD_PARALLEL || '2' }}
+  # The self-hosted build PC has 20 cores shared by concurrent jobs. Each job's
+  # first step turns this into BUILD_PARALLEL for the runner it got.
+  BUILD_PARALLEL_SELF_HOSTED: ${{ vars.ZLINK_CPP_BUILD_PARALLEL || '2' }}
 
 jobs:
   framework-cpp:
@@ -107,6 +107,18 @@ jobs:
     # manual runs and main cache warming never run untrusted fork code.
     runs-on: ${{ inputs.single_worker && 'ubuntu-24.04' || inputs.skip_tests && (vars.ZLINK_LINUX_RUNNER && fromJSON(vars.ZLINK_LINUX_RUNNER) || 'ubuntu-24.04') || vars.ZLINK_CPP_LINUX_RUNNER && fromJSON(vars.ZLINK_CPP_LINUX_RUNNER) || 'ubuntu-24.04' }}
     steps:
+      # GitHub-hosted runners have 4 cores and 16 GB. The largest Framework test
+      # translation units take up to about 5.6 GB each, so the self-hosted value
+      # runs a hosted runner out of memory and GitHub loses the runner (#5177).
+      - name: Choose build parallelism for this runner
+        shell: bash
+        run: |
+          if [[ "${RUNNER_ENVIRONMENT}" == github-hosted ]]; then
+            echo "BUILD_PARALLEL=2" >> "${GITHUB_ENV}"
+          else
+            echo "BUILD_PARALLEL=${BUILD_PARALLEL_SELF_HOSTED}" >> "${GITHUB_ENV}"
+          fi
+
       - name: Confirm unchanged language
         if: ${{ inputs.skip_tests }}
         run: echo "No changed cpp paths; tests are not required."
@@ -391,6 +403,13 @@ jobs:
       VCPKG_INSTALLED_DIR: ${{ github.workspace }}\.cache\framework-cpp\vcpkg-installed
       ZLINK_LOCAL_PACKAGE_ROOT: ${{ github.workspace }}\.artifacts\windows
     steps:
+      # Same memory limit as the Linux job: hosted runners get 2 parallel builds (#5177).
+      - name: Choose build parallelism for this runner
+        shell: pwsh
+        run: |
+          $value = if ($env:RUNNER_ENVIRONMENT -eq 'github-hosted') { '2' } else { $env:BUILD_PARALLEL_SELF_HOSTED }
+          "BUILD_PARALLEL=$value" >> $env:GITHUB_ENV
+
       - name: Checkout repository
         uses: actions/checkout@v5
 

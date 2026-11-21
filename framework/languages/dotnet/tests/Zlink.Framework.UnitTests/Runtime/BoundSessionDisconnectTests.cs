@@ -66,24 +66,7 @@ public sealed class BoundSessionDisconnectTests
                 .Async();
             if (remote)
             {
-                var peer = app
-                    .Services.GetRequiredService<IZLinkFrameworkRuntime>()
-                    .GetListenerStatus(ZLinkListenerKind.RouteMesh, "disconnect")
-                    .Endpoint;
-                var gatewayBuilder = Host.CreateApplicationBuilder();
-                gatewayBuilder.Services.AddZLinkFramework(o =>
-                {
-                    o.DisableImplicitHandlerAutoRegistration();
-                    o.AddLocationStore(locations);
-                    var mesh = o.AddRouteMesh("disconnect").Listen("tcp://127.0.0.1:0");
-                    mesh.Objects().Client();
-                    mesh.PeerConnections.Connect(peer);
-                    o.AddStreamNode("clients")
-                        .Bind("ws://127.0.0.1:0")
-                        .EnableActorDispatch()
-                        .AddSession<DSession>();
-                });
-                gateway = gatewayBuilder.Build();
+                gateway = BuildGateway(app, locations);
                 await gateway.StartAsync();
             }
             var endpoint = (gateway ?? app)
@@ -137,6 +120,29 @@ public sealed class BoundSessionDisconnectTests
             }
             await app.StopAsync();
         }
+    }
+
+    internal static IHost BuildGateway(IHost owner, ZLinkInMemoryProviderLocationStore locations)
+    {
+        var peer = owner
+            .Services.GetRequiredService<IZLinkFrameworkRuntime>()
+            .GetListenerStatus(ZLinkListenerKind.RouteMesh, "disconnect")
+            .Endpoint;
+        var builder = Host.CreateApplicationBuilder();
+        builder.Services.AddZLinkFramework(o =>
+        {
+            o.DisableImplicitHandlerAutoRegistration();
+            o.ConfigureDispatch().Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+            o.AddLocationStore(locations);
+            var mesh = o.AddRouteMesh("disconnect").Listen("tcp://127.0.0.1:0");
+            mesh.Objects().Client();
+            mesh.PeerConnections.Connect(peer);
+            o.AddStreamNode("clients")
+                .Bind("ws://127.0.0.1:0")
+                .EnableActorDispatch()
+                .AddSession<DSession>();
+        });
+        return builder.Build();
     }
 }
 
@@ -237,6 +243,7 @@ public sealed class DEntry(IZLinkEntrySpotContext context) : IZLinkEntrySpot<DAc
     public void Configure()
     {
         Context.Handlers.AddActorPacket<DMoveHandler, DActor>();
+        Context.Handlers.AddActorPacket<DOrderedHandler, DActor>();
         Context.Handlers.AddActorPacket<DEntryWhereHandler, DActor>();
         Context.Handlers.AddActorPacket<DEntryDropHandler, DActor>();
     }

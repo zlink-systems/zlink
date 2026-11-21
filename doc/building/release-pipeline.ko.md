@@ -136,6 +136,14 @@ curl -sI https://repo1.maven.org/maven2/systems/zlink/zlink/0.17.5/zlink-0.17.5.
 gh release view core/v0.17.5 --json assets -q '.assets[].name'
 ```
 
+Framework 게시 뒤에는 다섯 언어의 템플릿이 게시된 package로 빌드되고 e2e가 통과하는지 확인한다.
+PR과 nightly의 템플릿 검사는 이 커밋에서 만든 package(`source=local`)를 쓰므로, 다음 릴리스 API를
+따르는 main 템플릿과 게시된 package의 일치는 이 단계에서만 확인된다([#5308](https://github.com/zlink-systems/zlink/issues/5308)).
+
+```bash
+gh workflow run framework-templates.yml --ref main -f source=public
+```
+
 ## 7. 지원 플랫폼과 런타임 요구
 
 | 플랫폼 | Core 릴리스 | Framework C++ prebuilt | Node prebuild | .NET runtimes | 비고 |
@@ -175,6 +183,7 @@ TicTacToe·ZoneWorld)도 framework 빌드·CI·배포에 포함하지 않는다.
 | `pr-verify.yml` | Core ctest와 binding smoke, Java framework unit·contract 테스트, Windows x64 정적 계약 | ubuntu-24.04, Windows 정적 계약만 windows-2022 |
 | `build.yml` | Core 빌드·검증(릴리스 겸용) | 4 플랫폼 |
 | `framework-tutorial.yml` | tutorial·quickstart를 **publish된 패키지로, publish 뒤에** 검증한다. `framework-release.yml`·`release-dotnet.yml`이 registry index(npm view / Maven Central pom / nuget flatcontainer / GitHub Release asset, 최대 30분 대기)를 확인한 뒤 `workflow_call(language)`로 호출한다. PR·main push로는 돌지 않는다 — 게시 전 API를 쓰는 변경은 릴리스 전까지 실패할 수밖에 없다(#997). 그 밖에는 수동 실행 | ubuntu-24.04 4언어 |
+| `framework-templates.yml` | 장르 템플릿 빌드와 Docker e2e. PR(바뀐 템플릿)과 nightly(Node)는 이 커밋의 package(`source=local`)로, 수동 실행은 `source=public`(게시 뒤 확인, §6) 또는 `local`로 돈다 | ubuntu-24.04 5언어 |
 | `examples-smoke.yml` | 내보낸 examples tree를 checkout 없는 job에서 README 명령만으로 빌드·실행(quickstart 빌드, tutorial 기동·검증, 샘플 하나 완주). `examples-mirror.yml`이 push 전에 호출하고, 매일 최신 framework 태그로 다시 돈다 | ubuntu-24.04 5언어, windows-2022는 dotnet·java·kotlin |
 | `docs.yml` | 문서 사이트 빌드·배포 | ubuntu |
 
