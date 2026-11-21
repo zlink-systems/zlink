@@ -7,12 +7,11 @@ import { ZLinkProviderRelocationRepository } from '../locations/relocation-blob'
 import type { ApplicationJobOrigin } from '../application-jobs/contracts';
 import { currentApplicationJobOrigin } from '../application-jobs/application-job-queue-scope';
 import { listAllMeshNodeDescriptors } from '../locations/location-store-pages';
-import { ZLinkLiveRowFilter } from '../locations/lease-tracker';
 import { ZLinkDescriptorPublicationUnconfirmedError } from '../locations/descriptor-publication';
 import { ZLinkOwnerLeaseReleaseDelayPendingError } from '../locations/owner-lease-release-delay';
 import { ZLinkMeshNodeDescriptorConflictException } from '../spots/spot-node-runtime-manager';
 import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import {
   type ActorRef,
@@ -244,7 +243,6 @@ import { decodeRemoteActorPacketRelay } from '../spots/spot-remote-route-codec';
 import { decodeStreamHeader } from '../streams/protocol';
 
 const HOST_SHUTDOWN_POLL_INTERVAL_MS = 100;
-const HANDOFF_ACCEPTANCE_POLL_INTERVAL_MS = 10;
 const DEFAULT_HOST_CONTROL_TIMEOUT_MS = 30_000;
 
 export interface ZLinkFrameworkRuntimeLifecycle {
@@ -2445,10 +2443,10 @@ export class ZLinkFrameworkRuntimeHost
     if (locationStore === undefined) {
       throw new ZLinkConfigurationException('User Spot creation requires a Location Store.');
     }
-    const liveRows = new ZLinkLiveRowFilter();
     const leaseTracker = this.locationOwner.currentLeaseTracker!;
     this.actorPlacement ??= new ZLinkActorPlacementCoordinator({
       store: locationStore,
+      leaseTracker,
       actorRelocationPolicy: (meshName, stableType) =>
         this.options.registration.spotNodes.get(meshName)?.actorFactoryRegistrations?.[stableType]
           ?.relocation.kind,
@@ -2498,29 +2496,15 @@ export class ZLinkFrameworkRuntimeHost
           );
         }
         const meshNode = this.spotNodeRuntime?.meshNode(meshName);
-        const descriptors = await liveRows.filter(
-          await listAllMeshNodeDescriptors(locationStore, meshName, signal),
-          (descriptor, signal) => leaseTracker.isOwnerTokenLive(descriptor, signal),
-          signal
-        );
-        const selected = await selectReadyLocationPlacementDescriptor(
-          descriptors,
-          meshNode,
-          signal,
-          (descriptor) => {
-            const capability = descriptor.objectCapabilities.find(
-              (candidate) => candidate.objectKind === 'actor' && candidate.stableType === stableType
-            );
-            return (
-              descriptor.state === ZLinkFrameworkRuntimeState.Serving &&
-              descriptor.objectRole === 'server' &&
-              descriptor.placementWeight > 0 &&
-              descriptor.entrySpotId !== undefined &&
-              excludedNodeRids?.has(encodeRoutingIdStorageHex(descriptor.rid)) !== true &&
-              capability?.entryAccepted === true
-            );
-          }
-        );
+        const selected =
+          await this.spotNodeRuntime?.locationAutoConnect?.requestSources.selectPlacement(
+            meshName,
+            'actor',
+            stableType,
+            meshNode,
+            signal,
+            excludedNodeRids
+          );
         if (selected === undefined) return undefined;
         const localStatus = meshNode?.status();
         if (localStatus === undefined) {
@@ -2623,38 +2607,15 @@ export class ZLinkFrameworkRuntimeHost
       target: async (request, signal, excludedNodeRids) => {
         const meshName = selectUserSpotMesh(request.meshName);
         const meshNode = this.spotNodeRuntime?.meshNode(meshName);
-        const descriptors = await liveRows.filter(
-          await listAllMeshNodeDescriptors(locationStore, meshName, signal),
-          (descriptor, signal) => leaseTracker.isOwnerTokenLive(descriptor, signal),
-          signal
-        );
-        const selected = await selectReadyLocationPlacementDescriptor(
-          descriptors,
-          meshNode,
-          signal,
-          (descriptor) => {
-            const capability = descriptor.objectCapabilities.find(
-              (candidate) =>
-                candidate.objectKind === 'user_spot' && candidate.stableType === request.stableType
-            );
-            const spotTypeCapacity = descriptor.populationCapacity.spotTypes.find(
-              (candidate) =>
-                candidate.objectKind === 'user_spot' && candidate.stableType === request.stableType
-            );
-            const spots = descriptor.populationCapacity.spots;
-            return (
-              descriptor.state === 1 &&
-              descriptor.objectRole === 'server' &&
-              descriptor.placementWeight > 0 &&
-              excludedNodeRids?.has(encodeRoutingIdStorageHex(descriptor.rid)) !== true &&
-              (spots.limit === 0 || spots.active + spots.reserved < spots.limit) &&
-              capability !== undefined &&
-              (spotTypeCapacity === undefined ||
-                spotTypeCapacity.limit === 0 ||
-                spotTypeCapacity.active + spotTypeCapacity.reserved < spotTypeCapacity.limit)
-            );
-          }
-        );
+        const selected =
+          await this.spotNodeRuntime?.locationAutoConnect?.requestSources.selectPlacement(
+            meshName,
+            'user_spot',
+            request.stableType,
+            meshNode,
+            signal,
+            excludedNodeRids
+          );
         if (selected === undefined) return undefined;
         const localStatus = meshNode?.status();
         return {
@@ -4047,92 +4008,6 @@ function isStreamPayloadCodec(codec: unknown): codec is ZLinkStreamPayloadCodec 
     codec !== null &&
     typeof (codec as { encode?: unknown }).encode === 'function'
   );
-}
-
-function selectLocationPlacementDescriptor(
-  descriptors: readonly ZLinkMeshNodeDescriptor[]
-): ZLinkMeshNodeDescriptor | undefined {
-  const total = descriptors.reduce(
-    (sum, descriptor) => sum + BigInt(descriptor.placementWeight),
-    0n
-  );
-  if (total === 0n) return undefined;
-  let point = randomBigIntBelow(total);
-  for (const descriptor of descriptors) {
-    const weight = BigInt(descriptor.placementWeight);
-    if (point < weight) return descriptor;
-    point -= weight;
-  }
-  return descriptors.at(-1);
-}
-
-async function selectReadyLocationPlacementDescriptor(
-  descriptors: readonly ZLinkMeshNodeDescriptor[],
-  node: ZLinkBackendMeshNode | undefined,
-  signal: AbortSignal | undefined,
-  isEligible: (descriptor: ZLinkMeshNodeDescriptor) => boolean
-): Promise<ZLinkMeshNodeDescriptor | undefined> {
-  const eligible = descriptors.filter(isEligible);
-  if (eligible.length === 0) return undefined;
-  for (;;) {
-    const localStatus = node?.status();
-    const selected = selectLocationPlacementDescriptor(
-      eligible.filter((descriptor) => isPlacementTargetReady(node, localStatus, descriptor))
-    );
-    if (selected !== undefined) return selected;
-    try {
-      await waitForPlacementReadiness(signal);
-    } catch {
-      return undefined;
-    }
-  }
-}
-
-function isPlacementTargetReady(
-  node: ZLinkBackendMeshNode | undefined,
-  localStatus: ReturnType<ZLinkBackendMeshNode['status']> | undefined,
-  descriptor: ZLinkMeshNodeDescriptor
-): boolean {
-  if (node === undefined) return true;
-  if (
-    localStatus !== undefined &&
-    routingIdsEqual(localStatus.routingId, descriptor.rid) &&
-    localStatus.lifecycleGeneration === descriptor.lifecycleGeneration
-  ) {
-    return true;
-  }
-  return node.isPeerRouteReady?.(descriptor.rid, descriptor.lifecycleGeneration) ?? true;
-}
-
-function waitForPlacementReadiness(signal?: AbortSignal): Promise<void> {
-  if (signal?.aborted === true) return Promise.reject(signal.reason);
-  return new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      signal?.removeEventListener('abort', abort);
-      resolve();
-    }, HANDOFF_ACCEPTANCE_POLL_INTERVAL_MS);
-    const abort = () => {
-      clearTimeout(timer);
-      signal?.removeEventListener('abort', abort);
-      reject(signal?.reason);
-    };
-    signal?.addEventListener('abort', abort, { once: true });
-  });
-}
-
-function randomBigIntBelow(exclusiveUpperBound: bigint): bigint {
-  if (exclusiveUpperBound <= 0n) {
-    throw new RangeError('Random selection upper bound must be positive.');
-  }
-  const bitLength = exclusiveUpperBound.toString(2).length;
-  const byteLength = Math.ceil(bitLength / 8);
-  const highBitMask = 0xff >> (byteLength * 8 - bitLength);
-  for (;;) {
-    const bytes = randomBytes(byteLength);
-    bytes[0] = bytes[0]! & highBitMask;
-    const value = BigInt(`0x${bytes.toString('hex')}`);
-    if (value < exclusiveUpperBound) return value;
-  }
 }
 
 function relocationReason(reason: string): ZLinkFrameworkRelocationReason {
