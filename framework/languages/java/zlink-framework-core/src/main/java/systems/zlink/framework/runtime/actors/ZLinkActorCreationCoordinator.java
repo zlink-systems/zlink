@@ -10,14 +10,9 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.messaging.ZLinkMessage;
-import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkRequestFailureMapping;
-import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeState;
-import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeStatus;
-import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerEntry;
-import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration.RelocationPolicy;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
@@ -35,10 +30,8 @@ import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashSet;
-import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -46,7 +39,6 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -877,137 +869,19 @@ public final class ZLinkActorCreationCoordinator
         return ZLinkMessage.fromEncoded(ZLinkEncodedPayload.from(payload.payload()), serializer);
     }
 
-    private CompletionStage<ZLinkMeshNodeDescriptor> selectTarget(
+    CompletionStage<ZLinkMeshNodeDescriptor> selectTarget(
             String actorType,
             long deadline,
             Set<ZLinkMeshNodeDescriptorKey> excludedTargets,
             boolean newActor) {
-        Predicate<ZLinkObjectCapability> placesActor =
-                capability ->
-                        capability.objectKind() == ZLinkPlacementObjectKind.ACTOR
-                                && capability.stableType().equals(actorType)
-                                && (!newActor || capability.entryAccepted());
-        return locationResolvers
-                .listLiveMeshNodes(meshName)
-                .toCompletableFuture()
-                .orTimeout(
-                        Math.max(1L, deadline - System.currentTimeMillis()), TimeUnit.MILLISECONDS)
-                .thenCompose(
-                        descriptors -> {
-                            MeshNodeStatus localStatus = node.status();
-                            List<MeshPeerEntry> peerSnapshot = node.peers();
-                            List<ZLinkMeshNodeDescriptor> candidates =
-                                    descriptors.stream()
-                                            .filter(
-                                                    candidate ->
-                                                            candidate.state()
-                                                                            == ZLinkFrameworkRuntimeState
-                                                                                    .SERVING
-                                                                    && candidate.objectRole()
-                                                                            == ZLinkMeshNodeObjectRole
-                                                                                    .SERVER
-                                                                    && candidate.placementWeight()
-                                                                            > 0
-                                                                    && !excludedTargets.contains(
-                                                                            descriptorKey(
-                                                                                    candidate))
-                                                                    && candidate
-                                                                            .objectCapabilities()
-                                                                            .stream()
-                                                                            .anyMatch(placesActor)
-                                                                    && isExactReadyTarget(
-                                                                            candidate,
-                                                                            localStatus,
-                                                                            peerSnapshot))
-                                            .toList();
-                            if (candidates.isEmpty()) {
-                                boolean capacityKnown =
-                                        descriptors.stream()
-                                                .filter(
-                                                        candidate ->
-                                                                candidate.state()
-                                                                                == ZLinkFrameworkRuntimeState
-                                                                                        .SERVING
-                                                                        && candidate.objectRole()
-                                                                                == ZLinkMeshNodeObjectRole
-                                                                                        .SERVER
-                                                                        && candidate
-                                                                                        .placementWeight()
-                                                                                > 0
-                                                                        && isExactReadyTarget(
-                                                                                candidate,
-                                                                                localStatus,
-                                                                                peerSnapshot))
-                                                .flatMap(
-                                                        candidate ->
-                                                                candidate
-                                                                        .objectCapabilities()
-                                                                        .stream())
-                                                .anyMatch(placesActor);
-                                if (capacityKnown) {
-                                    return CompletableFuture.failedFuture(
-                                            frameworkFailure(
-                                                    ZLinkFrameworkErrorKind.UNAVAILABLE,
-                                                    "Actor placement is unavailable"));
-                                }
-                                if (System.currentTimeMillis() >= deadline) {
-                                    return admissionUnavailable("No Ready Actor placement target");
-                                }
-                                return awaitConflict()
-                                        .thenCompose(
-                                                ignored ->
-                                                        selectTarget(
-                                                                actorType,
-                                                                deadline,
-                                                                excludedTargets,
-                                                                newActor));
-                            }
-                            Optional<ZLinkMeshNodeDescriptor> localTarget =
-                                    localCandidate(candidates, node.status().routingId());
-                            if (localTarget.isPresent()) {
-                                return CompletableFuture.completedFuture(localTarget.get());
-                            }
-                            long total =
-                                    candidates.stream()
-                                            .mapToLong(ZLinkMeshNodeDescriptor::placementWeight)
-                                            .sum();
-                            long selected = ThreadLocalRandom.current().nextLong(total);
-                            for (var candidate : candidates) {
-                                selected -= candidate.placementWeight();
-                                if (selected < 0) {
-                                    return CompletableFuture.completedFuture(candidate);
-                                }
-                            }
-                            return CompletableFuture.completedFuture(candidates.getLast());
-                        });
-    }
-
-    static Optional<ZLinkMeshNodeDescriptor> localCandidate(
-            List<ZLinkMeshNodeDescriptor> candidates, RoutingId localRoutingId) {
-        return candidates.stream()
-                .filter(candidate -> candidate.rid().equals(localRoutingId))
-                .findFirst();
-    }
-
-    static boolean isExactReadyTarget(
-            ZLinkMeshNodeDescriptor candidate,
-            MeshNodeStatus localStatus,
-            List<MeshPeerEntry> peers) {
-        Objects.requireNonNull(candidate, "candidate");
-        Objects.requireNonNull(localStatus, "localStatus");
-        Objects.requireNonNull(peers, "peers");
-        if (candidate.rid().equals(localStatus.routingId())) {
-            return candidate.meshName().equals(localStatus.meshName())
-                    && localStatus.state() == MeshNodeState.READY
-                    && candidate.lifecycleGeneration() == localStatus.lifecycleGeneration();
-        }
-        return peers.stream()
-                .anyMatch(
-                        peer ->
-                                peer.routingId().equals(candidate.rid())
-                                        && peer.lifecycleGeneration()
-                                                == candidate.lifecycleGeneration()
-                                        && peer.state() == MeshPeerState.ADMITTED);
+        return locationResolvers.selectPlacement(
+                meshName,
+                ZLinkPlacementObjectKind.ACTOR,
+                actorType,
+                newActor,
+                node,
+                excludedTargets,
+                deadline);
     }
 
     public CompletionStage<ZLinkActorRuntime.EntrySpotTarget> selectEntrySpotTarget(
@@ -1024,7 +898,15 @@ public final class ZLinkActorCreationCoordinator
         } catch (ArithmeticException overflow) {
             deadline = Long.MAX_VALUE;
         }
-        return selectTarget(actorType, deadline, Set.of(), false)
+        long selectionDeadline = deadline;
+        // Entry Spot join resolves a route for an existing Actor; it is not logical creation.
+        return locationResolvers
+                .listPeers(ZLinkAutoConnectType.ROUTE_MESH, meshName, null)
+                .toCompletableFuture()
+                .orTimeout(
+                        Math.max(1L, selectionDeadline - System.currentTimeMillis()),
+                        TimeUnit.MILLISECONDS)
+                .thenCompose(ignored -> selectTarget(actorType, selectionDeadline, Set.of(), false))
                 .thenCompose(
                         target ->
                                 target.entrySpotId()
