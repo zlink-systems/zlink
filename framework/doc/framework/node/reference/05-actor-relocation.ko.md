@@ -173,3 +173,12 @@ factory 등록 시점에 한 번만 정하고 나중에 호출별로 바꿀 수 
 전체 근거는
 [Actor와 session binding exact interface](../../common/spec/server/languages/node/interfaces/05-actors.ko.md)를
 참고한다.
+
+## `ZLinkActor.onSessionBound`
+
+```typescript
+onSessionBound?(incoming: ZLinkSessionBindingIdentity, signal: AbortSignal): void | Promise<void>;
+```
+
+확정된 binding identity를 받는 optional callback이다. 기본 동작은 no-op이다.
+실행 순서와 실패·취소 처리는 [Bind 통지](../guide/server/24-actor-session.ko.md#34-bind-통지)를 따른다.
