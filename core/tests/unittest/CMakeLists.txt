@@ -76,6 +76,7 @@ set(unittests
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   # Count the existing epoch observation without instrumenting production Core.
   list(APPEND unittests unittest_request_writable_registration)
+  list(APPEND unittests unittest_connect_io_thread_placement)
 endif()
 
 # This binary contains several independent socket contracts whose aggregate
@@ -164,6 +165,16 @@ foreach(test ${unittests})
   endif()
 
   target_link_libraries(${test} testutil-common test-core)
+  if(test STREQUAL "unittest_connect_io_thread_placement")
+    foreach(symbol
+        _ZN5zlink14session_base_t6createEPNS_11io_thread_tEbPNS_13socket_base_tERKNS_9options_tEPNS_9address_tE
+        _ZN5zlink20asio_tcp_connecter_tC1EPNS_11io_thread_tEPNS_14session_base_tERKNS_9options_tEPNS_9address_tEb
+        _ZN5zlink14session_base_t12engine_readyEv
+        _ZNK5zlink8object_t26choose_io_thread_transportEm)
+      set_property(TARGET ${test} APPEND_STRING PROPERTY LINK_FLAGS
+        " -Wl,--wrap=${symbol}")
+    endforeach()
+  endif()
   if(test STREQUAL "unittest_request_writable_registration")
     set_property(TARGET ${test} APPEND_STRING PROPERTY LINK_FLAGS
       " -Wl,--wrap=_ZNK5zlink6pipe_t33request_correlation_release_epochEv")
