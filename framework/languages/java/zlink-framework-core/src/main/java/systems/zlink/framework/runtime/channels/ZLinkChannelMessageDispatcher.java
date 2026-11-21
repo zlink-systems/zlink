@@ -384,11 +384,10 @@ final class ZLinkChannelMessageDispatcher {
                                                         null,
                                                         0L);
                                             }
-                                        })
-                                .whenComplete((ignored, error) -> payload.close());
+                                        });
                     },
-                    admission);
-            ZLinkChannelDispatchReporter.onAdmissionRejected(admission, payload::close, null);
+                    admission,
+                    ignored -> payload.close());
         } catch (RuntimeException error) {
             payload.close();
             throw error;
