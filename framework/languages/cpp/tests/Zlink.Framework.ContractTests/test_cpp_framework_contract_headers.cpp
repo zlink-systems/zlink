@@ -1037,6 +1037,20 @@ static_assert (has_raw_monitoring<zlink::framework::app_t>);
 static_assert (!has_raw_metrics<zlink::framework::app_t>);
 static_assert (!has_max_message_size_member<zlink::framework::mesh_node_socket_config_t>);
 static_assert (!has_native_code<zlink::framework::stream_error_t>);
+static_assert (
+  std::is_same_v<std::underlying_type_t<zlink::framework::disconnect_reason_t>, std::uint32_t>);
+static_assert (std::is_same_v<decltype (std::declval<const zlink::framework::stream_error_t &> ()
+                                          .disconnect_reason ()),
+                              std::optional<zlink::framework::disconnect_reason_t>>);
+static_assert (
+  noexcept (std::declval<const zlink::framework::stream_error_t &> ().disconnect_reason ()));
+static_assert (static_cast<std::uint32_t> (zlink::framework::disconnect_reason_t::unknown) == 0);
+static_assert (static_cast<std::uint32_t> (zlink::framework::disconnect_reason_t::handshake_failed)
+               == 3);
+static_assert (static_cast<std::uint32_t> (zlink::framework::disconnect_reason_t::transport_error)
+               == 4);
+static_assert (
+  static_cast<std::uint32_t> (zlink::framework::disconnect_reason_t::context_terminated) == 5);
 static_assert (!has_create_scope<zlink::framework::service_provider_t>);
 
 static_assert (std::is_same_v<decltype (std::declval<zlink::framework::stream_t &> ().close ()),

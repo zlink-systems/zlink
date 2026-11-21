@@ -37,8 +37,10 @@ public final class DispatchServerApplication {
     }
 
     @Bean
-    ZLinkFrameworkConfigurer dispatchFramework(SampleTopology topology) {
+    ZLinkFrameworkConfigurer dispatchFramework(
+            SampleTopology topology, ZLinkRedisLocationStore locations) {
         return options -> {
+            options.addLocationStore(locations);
             options.addHandlersFromPackageOf(DispatchServerApplication.class);
             options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             options.addClientServerChannel(SampleNames.CourierChannel).client();

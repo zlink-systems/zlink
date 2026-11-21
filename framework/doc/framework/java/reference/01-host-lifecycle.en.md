@@ -22,8 +22,9 @@ every other entry.
 public class GameFrameworkConfig {
 
     @Bean
-    ZLinkFrameworkConfigurer gameConfigurer() {
+    ZLinkFrameworkConfigurer gameConfigurer(ZLinkLocationStore locationStore) {
         return options -> {
+            options.addLocationStore(locationStore);
             ZLinkMeshNodeBuilder play = options.addRouteMesh("play")
                 .listen(5501)
                 .setRoutingIdPrefix("play")
@@ -32,6 +33,10 @@ public class GameFrameworkConfig {
     }
 }
 ```
+
+Inject the `ZLinkLocationStore` bean into a configurer and register it exactly once with
+`addLocationStore`. The Spring starter does not register a Location Store from its bean alone.
+Keep a single Store registration call even when the application has several configurers.
 
 **Options.** This call carries the following modifiers.
 

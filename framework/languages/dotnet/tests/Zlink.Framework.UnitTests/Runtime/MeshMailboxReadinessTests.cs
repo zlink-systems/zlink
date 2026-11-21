@@ -101,7 +101,7 @@ public sealed class MeshMailboxReadinessTests(Xunit.Abstractions.ITestOutputHelp
                 Assert.True(resume.Wait(TimeSpan.FromSeconds(5)));
             },
             _ => { },
-            onReleased: _ => released++
+            onReadinessChanged: _ => released++
         );
         Task<bool> first;
         using (ExecutionContext.SuppressFlow())
@@ -322,29 +322,217 @@ public sealed class MeshMailboxReadinessTests(Xunit.Abstractions.ITestOutputHelp
     }
 
     [Fact]
-    public async Task OneClaimDrains64RecordsAndLeavesTheNextRecordQueued()
+    public async Task IndependentTake_PublishesItsSuccessorAfterTheMailboxTurn()
+    {
+        ZLinkStateLane? membershipLane = null;
+        var published = 0;
+        var ready = false;
+        var mailbox = new ZLinkMeshNodeOwnedMailbox(
+            _ => { },
+            _ => { },
+            onReadinessChanged: remains =>
+            {
+                membershipLane = ZLinkStateLane.Current;
+                ready = remains;
+            },
+            onReadyChanged: () =>
+            {
+                Assert.Null(ZLinkStateLane.Current);
+                Assert.True(ready);
+                published++;
+            }
+        );
+        try
+        {
+            Assert.True(mailbox.TryEnqueue(NewRecord()));
+            Assert.True(mailbox.TryEnqueue(NewRecord()));
+            using var first = mailbox.CreateClaim(MeshOwnerKind.Node);
+            using var firstBatch = new MeshReceiveBatch();
+            Assert.True(await first.ReceiveAsync(firstBatch));
+            Assert.NotNull(membershipLane);
+            Assert.True(ready);
+            Assert.Equal(1, published);
+            using var second = mailbox.CreateClaim(MeshOwnerKind.Node);
+            using var secondBatch = new MeshReceiveBatch();
+            Assert.True(await second.ReceiveAsync(secondBatch));
+            Assert.False(ready);
+            Assert.Equal(1, published);
+        }
+        finally
+        {
+            mailbox.Dispose();
+        }
+    }
+
+    [Theory]
+    [InlineData((int)MeshOwnerKind.Spot)]
+    [InlineData((int)MeshOwnerKind.Actor)]
+    public async Task GatedClaimFactory_PreservesItsPrefixUntilRelease(int ownerKind)
+    {
+        var mailbox = new ZLinkMeshNodeOwnedMailbox(_ => { }, _ => { });
+        try
+        {
+            Assert.True(mailbox.TryEnqueue(NewRecord()));
+            Assert.True(mailbox.TryEnqueue(NewRecord()));
+            using var claim = mailbox.CreateClaim((MeshOwnerKind)ownerKind);
+            using var batch = new MeshReceiveBatch { MaximumRecords = 1 };
+            Assert.True(await claim.ReceiveAsync(batch));
+            Assert.Equal(1, batch.Count);
+            Assert.True(mailbox.TryEnqueue(NewRecord()));
+            batch.Reset();
+            Assert.True(await claim.ReceiveAsync(batch));
+            Assert.Equal(1, batch.Count);
+            batch.Reset();
+            Assert.False(await claim.ReceiveAsync(batch));
+            Assert.Equal(1, mailbox.Count);
+            claim.Dispose();
+            using var next = mailbox.CreateClaim((MeshOwnerKind)ownerKind);
+            Assert.True(await next.ReceiveAsync(batch));
+            Assert.Equal(1, batch.Count);
+            Assert.Equal(0, mailbox.Count);
+        }
+        finally
+        {
+            mailbox.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task IndependentClaimTakesOneHeadAndCannotRevokeItsSuccessor()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var node = new ZLinkManagedMeshNode(context, "batch");
         var rid = RoutingId.From("batch-owner");
         node.SetRoutingId(rid);
         node.Start();
-        using var payload = Message.From(new byte[] { 48 });
-        for (var index = 0; index < 65; index++)
+        for (byte index = 0; index < 65; index++)
+        {
+            using var payload = Message.From(new[] { index });
             Assert.Equal(SubmitResult.Ok, node.SendToNode(rid, [payload]));
+        }
 
-        using var ready = new MeshReadyBatch();
-        node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
-        Assert.Equal(1, ready.Count);
-        using var claim = ready.TakeClaim(0);
-        using var received = new MeshReceiveBatch();
-        Assert.True(claim.Receive(received, RecvFlags.DontWait));
-        Assert.Equal(64, received.Count);
-        received.Reset();
-        Assert.True(claim.Receive(received, RecvFlags.DontWait));
-        Assert.Equal(1, received.Count);
-        received.Reset();
-        Assert.False(claim.Receive(received, RecvFlags.DontWait));
+        var reservations = new List<MeshReadyBatch>();
+        try
+        {
+            for (byte index = 0; index < 65; index++)
+            {
+                var ready = new MeshReadyBatch();
+                reservations.Add(ready);
+                node.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
+                Assert.Equal(1, ready.Count);
+                // A consumed predecessor cannot cancel the newer reservation.
+                if (index != 0)
+                    reservations[index - 1].Dispose();
+                using var competing = new MeshReadyBatch();
+                node.DrainReady(MeshReadyDomains.Application, competing, RecvFlags.DontWait);
+                Assert.Equal(0, competing.Count);
+                var claim = ready.TakeClaim(0);
+                using var received = new MeshReceiveBatch();
+                Assert.True(claim.Receive(received, RecvFlags.DontWait));
+                Assert.Equal(1, received.Count);
+                var parts = received.RetainMessage(0);
+                try
+                {
+                    Assert.Equal(index, parts[0].ToArray()[0]);
+                }
+                finally
+                {
+                    foreach (var part in parts)
+                        part.Dispose();
+                }
+                Assert.Equal(index < 64 ? 1 : 0, node._readyMailboxes.Count);
+                Assert.All(node._readyMailboxes.Values, Assert.True);
+                received.Reset();
+                Assert.False(claim.Receive(received, RecvFlags.DontWait));
+            }
+            Assert.Equal(0UL, node.Status().PendingApplicationMessages);
+            // Empty -> enqueue must survive disposal of the last consumed claim.
+            using var finalPayload = Message.From(new byte[] { 99 });
+            Assert.Equal(SubmitResult.Ok, node.SendToNode(rid, [finalPayload]));
+            reservations[^1].Dispose();
+            Assert.Equal(1, Drain(node));
+        }
+        finally
+        {
+            foreach (var reservation in reservations)
+                reservation.Dispose();
+        }
+        using var final = Message.From(new byte[] { 100 });
+        // Abandoning a reservation without taking its record must restore readiness.
+        Assert.Equal(SubmitResult.Ok, node.SendToNode(rid, [final]));
+        using (var abandoned = new MeshReadyBatch())
+        {
+            node.DrainReady(MeshReadyDomains.Application, abandoned, RecvFlags.DontWait);
+            Assert.Equal(1, abandoned.Count);
+        }
+        Assert.Equal(1, Drain(node));
+    }
+
+    [Fact]
+    public async Task IndependentConcurrentTakes_ConsumeEveryRecordOnceAcrossEnqueueAndLastTake()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "concurrent-take");
+        var rid = RoutingId.From("concurrent-take");
+        node.SetRoutingId(rid);
+        node.Start();
+        const int count = 256;
+        var seen = new int[count];
+        var taken = 0;
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var workers = Enumerable
+            .Range(0, 4)
+            .Select(_ =>
+                Task.Run(async () =>
+                {
+                    while (Volatile.Read(ref taken) < count)
+                    {
+                        deadline.Token.ThrowIfCancellationRequested();
+                        using var ready = new MeshReadyBatch();
+                        await node.DrainReadyAsync(
+                            MeshReadyDomains.Application,
+                            ready,
+                            RecvFlags.DontWait
+                        );
+                        if (ready.Count == 0)
+                        {
+                            await Task.Yield();
+                            continue;
+                        }
+                        Assert.Equal(1, ready.Count);
+                        using var batch = new MeshReceiveBatch();
+                        var claim = ready.TakeClaim(0);
+                        Assert.True(await claim.ReceiveAsync(batch, RecvFlags.DontWait));
+                        Assert.Equal(1, batch.Count);
+                        var parts = batch.RetainMessage(0);
+                        try
+                        {
+                            var id = BitConverter.ToInt32(parts[0].ToArray());
+                            Assert.Equal(1, Interlocked.Increment(ref seen[id]));
+                        }
+                        finally
+                        {
+                            foreach (var part in parts)
+                                part.Dispose();
+                        }
+                        Interlocked.Increment(ref taken);
+                        batch.Reset();
+                        Assert.False(await claim.ReceiveAsync(batch, RecvFlags.DontWait));
+                    }
+                })
+            )
+            .ToArray();
+        for (var index = 0; index < count; index++)
+        {
+            using var payload = Message.From(BitConverter.GetBytes(index));
+            Assert.Equal(SubmitResult.Ok, node.SendToNode(rid, [payload]));
+            if ((index & 7) == 0)
+                await Task.Yield();
+        }
+        await Task.WhenAll(workers);
+        Assert.All(seen, value => Assert.Equal(1, value));
+        Assert.Equal(0UL, node.Status().PendingApplicationMessages);
+        Assert.Empty(node._readyMailboxes);
     }
 
     [Fact]
