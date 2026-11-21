@@ -3885,16 +3885,18 @@ test('exact User Spot manager call is single-use and returns the committed SpotR
 
   published = false;
   const spotWideSerial = new ZLinkSpotSerialTurnExecutor(true, 'owner');
-  let initialTurn = 0;
-  let resumedTurn = 0;
+  let initialSegment: object | undefined;
+  let resumedSegment: object | undefined;
   const yielded = await spotWideSerial.execute(async () => {
-    initialTurn = spotWideSerial.activeTurnId;
+    initialSegment = spotWideSerial.currentSegment;
+    assert.ok(initialSegment);
     const created = await manager.getOrCreate('room-yield', 'room').inMesh('mesh').yield();
-    resumedTurn = spotWideSerial.activeTurnId;
+    resumedSegment = spotWideSerial.currentSegment;
+    assert.ok(resumedSegment);
     return created;
   });
   assert.equal(yielded.state, ZLinkSpotCreateState.Created);
-  assert.notEqual(resumedTurn, initialTurn);
+  assert.notStrictEqual(resumedSegment, initialSegment);
 });
 
 test('User Spot create reports its first generated SpotId collision without another UUID or reservation', async () => {
