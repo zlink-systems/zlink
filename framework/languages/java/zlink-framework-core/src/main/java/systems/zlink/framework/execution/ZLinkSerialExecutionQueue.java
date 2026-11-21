@@ -112,7 +112,8 @@ public final class ZLinkSerialExecutionQueue {
     private final int lifecycleBurstLimit;
     private final long ownerTimeBudgetNanos;
     final Deque<Entry> applicationPending;
-    private boolean pendingApplicationTailDurable;
+    // Written by the owning gate, read by ingress under the producer monitor.
+    private volatile boolean pendingApplicationTailDurable;
     // A resumed application turn is kept separate so it can pass a relocation
     // boundary without inserting at the front of the application FIFO.
     private final ArrayDeque<Entry> continuationPending = new ArrayDeque<>();
@@ -444,7 +445,8 @@ public final class ZLinkSerialExecutionQueue {
                         && tail.applicationJobOwnership.isDurable();
     }
 
-    private synchronized void appendApplicationPending(Entry entry) {
+    // A standalone queue calls this under its monitor; a shared Actor FIFO belongs to its gate.
+    private void appendApplicationPending(Entry entry) {
         applicationPending.addLast(entry);
         updatePendingApplicationTailDurable();
     }
@@ -458,10 +460,18 @@ public final class ZLinkSerialExecutionQueue {
         return publishedApplication.stream().map(entry -> entry.applicationJobOwnership).toList();
     }
 
-    synchronized void materializePublished() {
+    void materializePublished() {
         if (sharedSpotGate == null) return;
         Entry entry;
-        while ((entry = publishedApplication.poll()) != null) appendApplicationPending(entry);
+        while ((entry = publishedApplication.peekFirst()) != null) {
+            // Ingress reads the published tail, then this projection: the projection already
+            // holds the moving tail's durability before the entry leaves the published tail.
+            pendingApplicationTailDurable =
+                    entry.applicationJobOwnership != null
+                            && entry.applicationJobOwnership.isDurable();
+            publishedApplication.pollFirst();
+            applicationPending.addLast(entry);
+        }
         while ((entry = publishedContinuation.poll()) != null) continuationPending.addLast(entry);
         while ((entry = publishedLifecycle.poll()) != null) lifecyclePending.addLast(entry);
     }
@@ -1979,7 +1989,10 @@ public final class ZLinkSerialExecutionQueue {
                 && !entry.applicationJobOwnership.isRunnable()) return null;
         if (entry.continuation) continuationPending.remove(entry);
         else if (entry.lane == Lane.LIFECYCLE) lifecyclePending.removeFirst();
-        else {
+        else if (sharedSpotGate != null) {
+            applicationPending.removeFirst();
+            updatePendingApplicationTailDurable();
+        } else {
             synchronized (this) {
                 applicationPending.removeFirst();
                 updatePendingApplicationTailDurable();
