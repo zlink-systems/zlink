@@ -337,6 +337,13 @@ internal sealed class ZLinkSessionActorCoordinator(
                     cancellationToken
                 )
                 .ConfigureAwait(false);
+        // Session-Actor binding §12: a row for this ActorId that names another ObjectGeneration is
+        // InvalidOperation; every other mismatch (no row, another node or mesh) is Unavailable.
+        if (route is not null && route.ActorRef.ObjectGeneration != actor.ObjectGeneration)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.InvalidOperation,
+                $"Actor '{actor.ActorId}' binding ObjectGeneration {actor.ObjectGeneration} differs from the current {route.ActorRef.ObjectGeneration}."
+            );
         if (
             route is null
             || !ActorRefsEqual(route.ActorRef, actor)

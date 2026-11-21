@@ -8,7 +8,7 @@ binding result are exposed to the application — transport frame and
 binding implementation aren't exposed.
 
 Session bind submits an `ActorRef` once. If there's no active
-Message Follow route, `NOT_FOUND`; if the generation differs,
+Message Follow route, `UNAVAILABLE`; if the generation differs,
 `INVALID_OPERATION`; if in pre-commit seal, `UNAVAILABLE`. The framework
 doesn't find a new ref in the Store and hidden-retry.
 `enableActorDispatch()` doesn't take a MeshName, and needs an Object
