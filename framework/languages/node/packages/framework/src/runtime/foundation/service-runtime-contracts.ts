@@ -312,6 +312,7 @@ export interface ReceiveRecord {
 export interface ClaimReceiveResult {
   readonly ok: boolean;
   readonly required?: ReceiveRequirements;
+  /** Owned by the receive batch: valid until that batch is reset, received into again, or closed. */
   readonly records: ReceiveRecord[];
 }
 
