@@ -781,17 +781,16 @@ void channel_runtime_t::bind_mesh_node_transport (
       .run_checked ([&] {
           auto transport = std::make_shared<const channel_runtime_state_t::mesh_node_transport_t> (
             channel_runtime_state_t::mesh_node_transport_t{std::move (send), std::move (request)});
+          const channel_runtime_state_t::node_transport_index_t::entry_t entry{
+            mesh_name, std::move (transport),
+            &runtime::messaging::client_call_codec_t::encode_service_payload_parts};
           _state->publish_node_transports ([&] (auto &index) {
               // A publication can retry, so the change copies its inputs.
               const auto found = index.nodes.find (mesh_name);
               if (found == index.nodes.end ()
                   || !std::holds_alternative<std::shared_ptr<route_channel_runtime_t>> (
                     found->second.transport))
-                  index.nodes.insert_or_assign (
-                    mesh_name,
-                    channel_runtime_state_t::node_transport_index_t::entry_t{
-                      transport,
-                      &runtime::messaging::client_call_codec_t::encode_service_payload_parts});
+                  index.nodes.insert_or_assign (mesh_name, entry);
           });
       })
       .get ();
@@ -1905,8 +1904,11 @@ void route_client_t::submit_request_reply_message_erased (
               });
         }
         auto [payload, type_plan] = encode_payload (*state->serializers);
+        auto channel_fields =
+          std::shared_ptr<const std::string> (index, &endpoint->second.request_channel_fields);
         parts = (codec.*endpoint->second.encode_request) (std::move (header), std::move (payload),
-                                                          std::move (type_plan));
+                                                          std::move (type_plan),
+                                                          std::move (channel_fields));
     }
     const auto ambient_guard = detail::enter_ambient_context (ambient_context);
     try {
