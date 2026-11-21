@@ -572,7 +572,11 @@ final class ZLinkCanonicalRelocationStateMachine
                 .compareExchange(
                         key,
                         new ZLinkAuthorityExpectFound(expected),
-                        new ZLinkAuthorityPut(current.payload()),
+                        ZLinkAuthorityPut.relocation(
+                                current.payload(),
+                                current.relocation() == null
+                                        ? null
+                                        : current.relocation().phase("aborted")),
                         OPEN)
                 .thenApply(
                         written -> {
@@ -634,6 +638,24 @@ final class ZLinkCanonicalRelocationStateMachine
         return chain.thenCompose(ignored -> send(targetRid, cutover));
     }
 
+    private CompletionStage<Void> cleanupSource(SourceAttempt attempt) {
+        return coordinator.abortSource(
+                attempt.request().participants().stream()
+                        .map(
+                                participant ->
+                                        new ZLinkAggregateRelocationCoordinator.ExpectedParticipant(
+                                                participant.authorityKey(),
+                                                participant.objectGeneration(),
+                                                participant.sourceAuthorityOwnerGeneration()))
+                        .toList(),
+                new ZLinkAggregateFence(
+                        attempt.request().fence().aggregateId(),
+                        attempt.request().fence().aggregateGeneration()),
+                attempt.request().sourceOwnerId(),
+                attempt.request().sourceOwnerLeaseGeneration(),
+                OPEN);
+    }
+
     @Override
     public CompletionStage<Void> abort(
             RoutingId targetNodeRid, ZLinkSpotRetireControl.Fence fence, Duration timeout) {
@@ -648,8 +670,7 @@ final class ZLinkCanonicalRelocationStateMachine
                     new IllegalArgumentException("canonical relocation abort target differs"));
         }
         inStateLane(() -> sources.remove(key, attempt));
-        return coordinator.abortPreparedFence(
-                new ZLinkAggregateFence(fence.aggregateId(), fence.aggregateGeneration()), OPEN);
+        return cleanupSource(attempt);
     }
 
     public CompletionStage<Void> apply(RoutingId transportSource, int command, byte[] encoded) {
@@ -1350,7 +1371,28 @@ final class ZLinkCanonicalRelocationStateMachine
                             return published;
                         })
                 .thenCompose(ignored -> attempt.request())
-                .thenCompose(target::publish)
+                .thenCompose(
+                        request ->
+                                coordinator
+                                        .advancePublished(
+                                                request.participants().stream()
+                                                        .map(
+                                                                participant ->
+                                                                        new ZLinkAggregateRelocationCoordinator
+                                                                                .ExpectedParticipant(
+                                                                                participant
+                                                                                        .authorityKey(),
+                                                                                participant
+                                                                                        .objectGeneration(),
+                                                                                participant
+                                                                                        .sourceAuthorityOwnerGeneration()))
+                                                        .toList(),
+                                                new ZLinkAggregateFence(
+                                                        request.fence().aggregateId(),
+                                                        request.fence().aggregateGeneration()),
+                                                "activating",
+                                                OPEN)
+                                        .thenCompose(ignored -> target.publish(request)))
                 .thenApply(
                         ignored -> {
                             //  S3 — application dispatch opened on the target.
@@ -1544,50 +1586,79 @@ final class ZLinkCanonicalRelocationStateMachine
         ZLinkSpotRetireControl.ParticipantFence primary = primary(request.participants());
         CompletionStage<ZLinkAuthorityReadResult> authority =
                 locations.read(primary.authorityKey(), OPEN);
-        return authority.thenApply(
-                read -> {
-                    if (!(read instanceof ZLinkAuthoritySnapshot snapshot)
-                            || snapshot.objectGeneration() != primary.objectGeneration()
-                            || snapshot.authorityOwnerGeneration()
-                                    != primary.sourceAuthorityOwnerGeneration()
-                            || !snapshot.ownerId().equals(request.sourceOwnerId())
-                            || snapshot.ownerLeaseGeneration()
-                                    != request.sourceOwnerLeaseGeneration()) {
-                        throw new IllegalStateException(
-                                "source relocation authority fence is stale");
-                    }
-                    byte[] payload = request.relocationPayload();
-                    var envelope = ZLinkServiceRelocationEnvelopeCodec.decode(payload);
-                    return new ZLinkCanonicalRelocationProtocol.Prepare(
-                            request.fence().aggregateId(),
-                            request.fence().aggregateGeneration(),
-                            new ZLinkCanonicalRelocationProtocol.Coordinator(
-                                    request.sourceOwnerId(),
-                                    request.sourceOwnerLeaseGeneration(),
+        return authority
+                .thenCompose(
+                        read -> {
+                            if (!(read instanceof ZLinkAuthoritySnapshot snapshot)
+                                    || !snapshot.ownerId().equals(request.sourceOwnerId())
+                                    || snapshot.ownerLeaseGeneration()
+                                            != request.sourceOwnerLeaseGeneration())
+                                return failed(
+                                        new IllegalStateException(
+                                                "Source relocation owner fence is stale"));
+                            var envelope =
+                                    ZLinkServiceRelocationEnvelopeCodec.decode(
+                                            request.relocationPayload());
+                            return coordinator.captureSource(
+                                    request.participants().stream()
+                                            .map(
+                                                    participant ->
+                                                            new ZLinkAggregateRelocationCoordinator
+                                                                    .ExpectedParticipant(
+                                                                    participant.authorityKey(),
+                                                                    participant.objectGeneration(),
+                                                                    participant
+                                                                            .sourceAuthorityOwnerGeneration()))
+                                            .toList(),
+                                    primary.authorityKey(),
+                                    request.fence().aggregateId(),
+                                    envelope.applicationVersion(),
+                                    OPEN);
+                        })
+                .thenApply(
+                        read -> {
+                            if (!(read instanceof ZLinkAuthoritySnapshot snapshot)
+                                    || snapshot.objectGeneration() != primary.objectGeneration()
+                                    || snapshot.authorityOwnerGeneration()
+                                            != primary.sourceAuthorityOwnerGeneration()
+                                    || !snapshot.ownerId().equals(request.sourceOwnerId())
+                                    || snapshot.ownerLeaseGeneration()
+                                            != request.sourceOwnerLeaseGeneration()) {
+                                throw new IllegalStateException(
+                                        "source relocation authority fence is stale");
+                            }
+                            byte[] payload = request.relocationPayload();
+                            var envelope = ZLinkServiceRelocationEnvelopeCodec.decode(payload);
+                            return new ZLinkCanonicalRelocationProtocol.Prepare(
+                                    request.fence().aggregateId(),
+                                    request.fence().aggregateGeneration(),
+                                    new ZLinkCanonicalRelocationProtocol.Coordinator(
+                                            request.sourceOwnerId(),
+                                            request.sourceOwnerLeaseGeneration(),
+                                            request.sourceNodeRid(),
+                                            request.sourceNodeGeneration(),
+                                            snapshot.storeVersion()),
+                                    new ZLinkCanonicalRelocationProtocol.Target(
+                                            request.targetNodeRid(),
+                                            request.targetNodeGeneration(),
+                                            request.targetOwnerId(),
+                                            request.targetOwnerLeaseGeneration()),
+                                    ZLinkCanonicalRelocationProtocol.SOURCE,
+                                    new ZLinkCanonicalRelocationProtocol.ObjectFence(
+                                            primary.objectKind(),
+                                            primary.objectId(),
+                                            "",
+                                            primary.objectGeneration(),
+                                            primary.sourceAuthorityOwnerGeneration()),
                                     request.sourceNodeRid(),
                                     request.sourceNodeGeneration(),
-                                    snapshot.storeVersion()),
-                            new ZLinkCanonicalRelocationProtocol.Target(
-                                    request.targetNodeRid(),
-                                    request.targetNodeGeneration(),
-                                    request.targetOwnerId(),
-                                    request.targetOwnerLeaseGeneration()),
-                            ZLinkCanonicalRelocationProtocol.SOURCE,
-                            new ZLinkCanonicalRelocationProtocol.ObjectFence(
-                                    primary.objectKind(),
-                                    primary.objectId(),
-                                    "",
-                                    primary.objectGeneration(),
-                                    primary.sourceAuthorityOwnerGeneration()),
-                            request.sourceNodeRid(),
-                            request.sourceNodeGeneration(),
-                            ZLinkRelocationPayloadTransfer.manifest(
-                                    payload,
-                                    budget.effectiveChunkBytes(
-                                            request.advertisedReceiveChunkLimitBytes())),
-                            envelope.applicationVersion(),
-                            deadline.toEpochMilli());
-                });
+                                    ZLinkRelocationPayloadTransfer.manifest(
+                                            payload,
+                                            budget.effectiveChunkBytes(
+                                                    request.advertisedReceiveChunkLimitBytes())),
+                                    envelope.applicationVersion(),
+                                    deadline.toEpochMilli());
+                        });
     }
 
     private CompletionStage<TargetRestore> reconstruct(
