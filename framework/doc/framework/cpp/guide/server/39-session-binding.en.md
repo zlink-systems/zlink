@@ -124,9 +124,9 @@ covers that boundary.
 ## 6. The Actor Decides Whether to Replace a Session
 
 When a new session binds an Actor whose current binding belongs to another session, the framework
-calls `onDuplicateBind(current, incoming, signal)` in the Actor's order. The two arguments are
+calls `on_duplicate_bind(current, incoming, cancellation)` in the Actor's order. `current` and `incoming` are
 read-only values identified by session-owner node, its lifecycle generation, and binding generation. The callback accepts by
-returning `undefined` or an empty string, and rejects with a non-empty returned string as its message.
+returning `std::nullopt` or an empty string, and rejects with a non-empty returned string as its message.
 
 An Entry Spot account Actor can reject a new connection to keep the existing login session.
 
@@ -163,6 +163,30 @@ doesn't finish within its timeout keeps the current binding and ends only the in
 error. The framework doesn't close the incoming connection or send command 51. Acceptance registers
 the new session as current and applies the existing replacement procedure to the previous
 connection. [Session–Actor binding §6](../../../common/spec/server/04-session/02-session-actor-binding.en.md#6-rebind-and-replacing-the-previous-connection) owns the callback timeout setting.
+
+<!-- language-specific notification -->
+
+## 7. Observing a Committed Actor Binding
+
+`on_session_bound` runs after a session bind is committed, in the same Actor handler order.
+It applies to the first bind, an idempotent bind of the same session, and replacement by another
+session. Its argument is the committed binding identity. The default implementation does nothing.
+
+```cpp
+task_t<void> on_session_bound(
+    const actor_session_binding_identity_t& incoming,
+    std::stop_token cancellation) override {
+  // Perform application work using the committed binding.
+  co_return;
+}
+```
+
+Defining this callback makes binding commit and notification use the Actor gate.
+Framework submits the success reply before notification; bind completion does not wait for the callback to finish.
+An exception or timeout does not change the successful bind or its incoming reply.
+Framework reports the failure once as a runtime task exception and continues running the Actor.
+`set_session_replacement_callback_timeout(...)` (default `30,000 ms`) requests cancellation and reports once
+when exceeded. Cancellation caused by Actor or runtime shutdown is not reported.
 
 <script>
 (function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
