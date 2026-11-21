@@ -489,7 +489,9 @@ async function userSpotJoinSource() {
     }
     await new Promise(resolve => setTimeout(resolve, 100));
   }
-  appendEvent('user-spot-source-peer-ready|ready=true');
+  const endpoint = app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME, { strict: false })
+    .getListenerStatus('routeMesh', meshName).endpoint;
+  appendEvent(`user-spot-source-peer-ready|ready=true|endpoint=${endpoint}`);
   const startFile = require_('start-file');
   const startDeadline = Date.now() + 60_000;
   while (!fs.existsSync(startFile)) {
