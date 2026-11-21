@@ -6,7 +6,7 @@ const test = require('node:test');
 
 const shutdownTimeoutMs = 5000;
 
-test('SIGINT runs while heartbeat admission is pending in the real binding', async () => {
+test('SIGINT runs while heartbeat admission is pending in the real binding', async (t) => {
   const child = fork(path.join(__dirname, 'fixtures/stream-heartbeat-shutdown-process.js'), {
     silent: true
   });
@@ -15,34 +15,34 @@ test('SIGINT runs while heartbeat admission is pending in the real binding', asy
     stderr += chunk;
   });
   const exited = once(child, 'close');
+  let watchdog;
   let watchdogError;
-  const watchdog = setTimeout(() => {
-    watchdogError = new Error(`heartbeat shutdown did not complete within ${shutdownTimeoutMs}ms`);
-    child.kill('SIGKILL');
-  }, shutdownTimeoutMs);
+  t.after(async () => {
+    clearTimeout(watchdog);
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    await exited;
+  });
   const messages = [];
   child.on('message', (message) => {
     messages.push(message);
     if (message.type === 'pending') {
       child.send({ type: 'raise-sigint' });
+      watchdog = setTimeout(() => {
+        watchdogError = new Error(
+          `heartbeat shutdown did not complete within ${shutdownTimeoutMs}ms`
+        );
+        child.kill('SIGKILL');
+      }, shutdownTimeoutMs);
     }
   });
-  try {
-    const [code, signal] = await exited;
-    assert.equal(watchdogError, undefined, stderr);
-    assert.equal(signal, null, stderr);
-    assert.equal(code, 0, stderr);
-    assert.deepEqual(
-      messages.map((message) => message.type),
-      ['pending', 'closed'],
-      stderr
-    );
-    assert.equal(messages[1].heartbeatCompleted, true, stderr);
-  } finally {
-    clearTimeout(watchdog);
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill('SIGKILL');
-      await exited;
-    }
-  }
+  const [code, signal] = await exited;
+  assert.equal(watchdogError, undefined, stderr);
+  assert.equal(signal, null, stderr);
+  assert.equal(code, 0, stderr);
+  assert.deepEqual(
+    messages.map((message) => message.type),
+    ['pending', 'closed'],
+    stderr
+  );
+  assert.equal(messages[1].heartbeatCompleted, true, stderr);
 });

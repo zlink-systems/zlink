@@ -2228,6 +2228,18 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_actor_gateway
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway.cpp
     "framework-unit;framework-regression;framework-actor;stream")
+  add_zlink_framework_test(
+    test_cpp_framework_bound_session_egress
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_bound_session_egress.cpp
+    "framework-unit;framework-regression;framework-actor;stream")
+  target_include_directories(test_cpp_framework_bound_session_egress PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
+    test_cpp_framework_bound_session_close_order
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_bound_session_close_order.cpp
+    "framework-unit;framework-regression;framework-actor;stream")
+  target_include_directories(test_cpp_framework_bound_session_close_order PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_link_libraries(test_cpp_framework_actor_gateway PRIVATE
     zlink::framework_codec_protobuf opentelemetry-cpp::metrics)
   zlink_framework_cpp_add_test(
@@ -3061,6 +3073,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_stream_framework
     tests/Zlink.Framework.UnitTests/test_cpp_framework_stream_framework.cpp
     "framework-integration;framework-regression;framework-zlink;framework-zlink-stream;stream")
+  if(ZLINK_FRAMEWORK_CPP_TEST_PROBES)
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_framework_core_session_lifecycle_boundaries
+      COMMAND test_cpp_framework_stream_framework --core-session-lifecycle-boundaries
+      LABELS "framework-unit;framework-contract;stream;stream-session"
+      TIER contract
+      TIMEOUT 30)
+  endif()
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_stream_disconnect_reason
     COMMAND test_cpp_framework_stream_framework --disconnect-reason

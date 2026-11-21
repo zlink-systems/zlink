@@ -126,6 +126,7 @@ public sealed class SpotRouteDispatcherTests
     {
         public ValueTask HandleAsync(
             TestSpot spot,
+            IZLinkMessageContext context,
             TestMessage message,
             CancellationToken cancellationToken
         )

@@ -33,15 +33,19 @@ test(
     let next;
     let relocation;
     t.after(async () => {
-      if (next !== undefined) await next.command('resumePublication');
-      if (relocation !== undefined) await relocation;
-      await Promise.all(children.map(stopChild));
-      await deletePrefix(redis, keyPrefix);
-      if (redis.isOpen) await redis.quit();
-      if (!process.env.ZLINK_NODE_BOOTSTRAP_FLOW_DIR)
-        fs.rmSync(flowDirectory, { recursive: true, force: true });
+      try {
+        if (next !== undefined) await next.command('resumePublication');
+        if (relocation !== undefined) await relocation;
+      } finally {
+        await Promise.all(children.map(stopChild));
+        await deletePrefix(redis, keyPrefix);
+        if (redis.isOpen) await redis.quit();
+        if (!process.env.ZLINK_NODE_BOOTSTRAP_FLOW_DIR)
+          fs.rmSync(flowDirectory, { recursive: true, force: true });
+      }
     });
     const base = {
+      signal: t.signal,
       role: 'target',
       meshName: `publication-${runId}`,
       keyPrefix,

@@ -6,8 +6,24 @@ import systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCod
 import java.util.Objects;
 
 public record ZLinkAuthorityPut(
-        byte[] payload, ZLinkAuthoritySnapshot preserved, ZLinkLocationOwnerToken replacementOwner)
+        byte[] payload,
+        ZLinkAuthoritySnapshot preserved,
+        ZLinkLocationOwnerToken replacementOwner,
+        ZLinkAuthorityRelocation relocation,
+        boolean replaceRelocation)
         implements ZLinkAuthorityMutation {
+    public ZLinkAuthorityPut(
+            byte[] payload,
+            ZLinkAuthoritySnapshot preserved,
+            ZLinkLocationOwnerToken replacementOwner) {
+        this(payload, preserved, replacementOwner, null, false);
+    }
+
+    public static ZLinkAuthorityPut relocation(
+            byte[] payload, ZLinkAuthorityRelocation relocation) {
+        return new ZLinkAuthorityPut(payload, null, null, relocation, true);
+    }
+
     public ZLinkAuthorityPut(byte[] payload) {
         this(payload, null, null);
     }
