@@ -47,6 +47,7 @@ import java.util.logging.Logger;
 final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJavaSocketBacked {
     private static final Logger LOGGER = Logger.getLogger(ZLinkJavaStreamSocket.class.getName());
     private final StreamSocket socket;
+    private final FrameworkStreamOperations.Access streamAdmission;
     private final ZLinkJavaRawMeshNode meshNode;
     private final BoundSessionSink boundSessionSink;
     private final BoundSessionLifecycle boundSessionLifecycle;
@@ -84,13 +85,37 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
         this(socket, meshNode, null, null, stateLane);
     }
 
+    ZLinkJavaStreamSocket(
+            StreamSocket socket,
+            ZLinkStateLane stateLane,
+            FrameworkStreamOperations.Access streamAdmission) {
+        this(socket, null, null, null, stateLane, streamAdmission);
+    }
+
     private ZLinkJavaStreamSocket(
             StreamSocket socket,
             ZLinkJavaRawMeshNode meshNode,
             BoundSessionSink boundSessionSink,
             BoundSessionLifecycle boundSessionLifecycle,
             ZLinkStateLane stateLane) {
+        this(
+                socket,
+                meshNode,
+                boundSessionSink,
+                boundSessionLifecycle,
+                stateLane,
+                FrameworkStreamOperations::send);
+    }
+
+    private ZLinkJavaStreamSocket(
+            StreamSocket socket,
+            ZLinkJavaRawMeshNode meshNode,
+            BoundSessionSink boundSessionSink,
+            BoundSessionLifecycle boundSessionLifecycle,
+            ZLinkStateLane stateLane,
+            FrameworkStreamOperations.Access streamAdmission) {
         this.socket = socket;
+        this.streamAdmission = Objects.requireNonNull(streamAdmission, "streamAdmission");
         this.socket.options().recvMode(StreamRecvMode.PACKET);
         this.meshNode = meshNode;
         this.boundSessionSink = boundSessionSink;
@@ -177,8 +202,13 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
 
     @Override
     public void disconnectPeer(RoutingId routingId) {
-        stateLane.throwIfReentrant();
-        disconnectPeerAsync(routingId).toCompletableFuture().join();
+        inStateLane(
+                () -> {
+                    retireBindingEgressLanes(routingId);
+                    // Route removal completes this peer's pending sends.
+                    socket.disconnectRid(routingId);
+                    return null;
+                });
     }
 
     @Override
@@ -206,46 +236,8 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
                                     });
                         },
                         () -> {});
-        lane.closeAsync().whenComplete((ignored, failure) -> bindingEgressLanes.remove(key, lane));
+        retireBindingEgressLane(key, lane);
         return disconnected;
-    }
-
-    private CompletionStage<Void> disconnectPeerAsync(RoutingId routingId) {
-        var lanes =
-                bindingEgressLanes.entrySet().stream()
-                        .filter(entry -> entry.getKey().sessionRid().equals(routingId))
-                        .toList();
-        if (lanes.isEmpty()) {
-            BindingEgressKey key = new BindingEgressKey(routingId, 0);
-            ZLinkStateLane lane =
-                    bindingEgressLanes.computeIfAbsent(key, ignored -> newBindingEgressLane());
-            lanes = List.of(Map.entry(key, lane));
-        }
-        var selectedLanes = lanes;
-        CompletableFuture<?>[] drained =
-                selectedLanes.stream()
-                        .map(entry -> entry.getValue().closeAsync().toCompletableFuture())
-                        .toArray(CompletableFuture[]::new);
-        return CompletableFuture.allOf(drained)
-                .thenCompose(ignored -> disconnectPeerOnStateLane(routingId))
-                .whenComplete(
-                        (ignored, failure) ->
-                                selectedLanes.forEach(
-                                        entry ->
-                                                bindingEgressLanes.remove(
-                                                        entry.getKey(), entry.getValue())));
-    }
-
-    private CompletionStage<Void> disconnectPeerOnStateLane(RoutingId routingId) {
-        try {
-            return stateLane.runAsync(
-                    () -> {
-                        socket.disconnectRid(routingId);
-                        return null;
-                    });
-        } catch (RuntimeException | Error failure) {
-            return CompletableFuture.failedFuture(failure);
-        }
     }
 
     private ZLinkStateLane newBindingEgressLane() {
@@ -298,12 +290,7 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
                     .ifPresent(
                             routingId -> {
                                 if (eventType == MonitorEventType.DISCONNECTED) {
-                                    bindingEgressLanes.keySet().stream()
-                                            .filter(key -> key.sessionRid().equals(routingId))
-                                            .forEach(
-                                                    key ->
-                                                            retireBindingEgressLane(
-                                                                    routingId, key.actorSlot()));
+                                    retireBindingEgressLanes(routingId);
                                 }
                                 try {
                                     handler.handle(
@@ -447,8 +434,7 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
             return inStateLane(
                     () -> {
                         try {
-                            return FrameworkStreamOperations.send(
-                                    socket, routingId, List.of(frame), null);
+                            return streamAdmission.send(socket, routingId, List.of(frame), null);
                         } finally {
                             frame.close();
                         }
@@ -525,7 +511,7 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
                                 .<CompletionStage<Void>>runAsync(
                                         () -> {
                                             try {
-                                                return FrameworkStreamOperations.send(
+                                                return streamAdmission.send(
                                                         socket, routingId, List.of(frame), null);
                                             } finally {
                                                 frame.close();
@@ -581,12 +567,25 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
         return result;
     }
 
+    private void retireBindingEgressLanes(RoutingId routingId) {
+        bindingEgressLanes.forEach(
+                (key, lane) -> {
+                    if (key.sessionRid().equals(routingId)) {
+                        retireBindingEgressLane(key, lane);
+                    }
+                });
+    }
+
     private void retireBindingEgressLane(RoutingId sessionRid, int actorSlot) {
         BindingEgressKey key = new BindingEgressKey(sessionRid, actorSlot);
         ZLinkStateLane lane = bindingEgressLanes.get(key);
         if (lane == null) {
             return;
         }
+        retireBindingEgressLane(key, lane);
+    }
+
+    private void retireBindingEgressLane(BindingEgressKey key, ZLinkStateLane lane) {
         lane.closeAsync().whenComplete((ignored, failure) -> bindingEgressLanes.remove(key, lane));
     }
 
@@ -826,14 +825,6 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
 
     @Override
     public void close() {
-        stateLane.throwIfReentrant();
-        CompletableFuture.allOf(
-                        bindingEgressLanes.values().stream()
-                                .map(ZLinkStateLane::closeAsync)
-                                .map(CompletionStage::toCompletableFuture)
-                                .toArray(CompletableFuture[]::new))
-                .join();
-        bindingEgressLanes.clear();
         inStateLane(
                 () -> {
                     closeOnLane();
@@ -845,8 +836,11 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
         if (closed.get()) {
             return;
         }
+        // Binding close completes pending sends while their egress lanes are still draining.
         socket.close();
         closed.set(true);
+        bindingEgressLanes.values().forEach(ZLinkStateLane::closeAsync);
+        bindingEgressLanes.clear();
         receivePoller.close();
         closeMonitor();
     }

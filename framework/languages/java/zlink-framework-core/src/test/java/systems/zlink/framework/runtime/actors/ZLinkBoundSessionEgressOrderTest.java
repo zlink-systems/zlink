@@ -9,6 +9,7 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.actors.*;
 import systems.zlink.framework.messaging.ZLinkMessage;
+import systems.zlink.framework.runtime.binding.ZLinkStreamAdmissionTestFixture;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
 import systems.zlink.framework.runtime.internal.backend.*;
@@ -20,7 +21,6 @@ import systems.zlink.framework.streams.*;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
-import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 
@@ -54,23 +54,20 @@ final class ZLinkBoundSessionEgressOrderTest {
         var releaseAdmission = new CompletableFuture<Void>();
         var closeRequested = new CompletableFuture<Void>();
         var observations = new CopyOnWriteArrayList<String>();
-        var closingThread = new java.util.concurrent.atomic.AtomicReference<Thread>();
         var ready = new CompletableFuture<RoutingId>();
         try (var host = ZLinkFrameworkRuntimeTestAccess.start(options);
                 var context = systems.zlink.contracts.core.Zlink.createContext();
                 var physical =
-                        systems.zlink.framework.runtime.binding.ZLinkStreamAdmissionTestScope
-                                .createStreamSocket(context);
-                var admission =
-                        new systems.zlink.framework.runtime.binding.ZLinkStreamAdmissionTestScope(
-                                previous ->
+                        ZLinkStreamAdmissionTestFixture.create(
+                                context,
+                                send ->
                                         (socket, rid, parts, timeout) -> {
                                             var retained =
                                                     parts.stream().map(Message::from).toList();
                                             return releaseAdmission
                                                     .thenCompose(
                                                             ignored ->
-                                                                    previous.send(
+                                                                    send.send(
                                                                             socket, rid, retained,
                                                                             timeout))
                                                     .thenRun(() -> observations.add("admitted"))
@@ -139,12 +136,13 @@ final class ZLinkBoundSessionEgressOrderTest {
                                                     }
                                                     case "closeActorBoundSessionAsync" -> {
                                                         observations.add("close-requested");
-                                                        closingThread.set(Thread.currentThread());
+                                                        var close =
+                                                                physical
+                                                                        .disconnectBoundSessionPeerAsync(
+                                                                                session, 1);
                                                         closeRequested.complete(null);
-                                                        physical.disconnectPeer(session);
-                                                        observations.add("EOF");
-                                                        yield CompletableFuture.completedFuture(
-                                                                null);
+                                                        yield close.thenRun(
+                                                                () -> observations.add("EOF"));
                                                     }
                                                     default -> throw new AssertionError(method);
                                                 });
@@ -251,13 +249,7 @@ final class ZLinkBoundSessionEgressOrderTest {
                     assertFalse(
                             physicalTerminal.isDone(),
                             "the next Actor turn must run before transport completion");
-                    long boundaryDeadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
-                    while (!observations.contains("EOF")
-                            && closingThread.get().getState() != Thread.State.WAITING
-                            && System.nanoTime() < boundaryDeadline) Thread.onSpinWait();
-                    assertTrue(
-                            observations.contains("EOF")
-                                    || closingThread.get().getState() == Thread.State.WAITING);
+                    assertFalse(closed.toCompletableFuture().isDone());
                     releaseAdmission.complete(null);
                     closed.toCompletableFuture().get(5, TimeUnit.SECONDS);
                     physicalTerminal.complete(null);
