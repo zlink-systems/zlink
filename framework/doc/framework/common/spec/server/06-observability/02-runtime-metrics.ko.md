@@ -122,6 +122,8 @@ handler를 순회하지 않는다.
 | `zlink.host.application_job_queue.pressure_transitions` | counter | `{transition}` | `state` | 현재 epoch에서 해당 `running`·`paused` 상태로 전이한 횟수다. |
 | `zlink.host.application_job_queue.pause_duration` | observable | `s` | `state` | `current`·`cumulative` pause 시간이다. |
 | `zlink.host.application_job_queue.flow_state_config_failures` | counter | `{failure}` | 없음 | 현재 epoch에서 Core flow 절대 상태 적용에 실패한 횟수다. |
+| `zlink.host.authentication_admission.in_flight` | observable | `{request}` | 없음 | [인증 입장 제한](../04-session/03-authentication-admission.ko.md)이 수락해 처리 중인 인증 request 수다. |
+| `zlink.host.authentication_admission.rejections` | counter | `{request}` | 없음 | 현재 epoch에서 인증 입장 제한이 거절한 request 수다. |
 
 **Reset은 pressure state와 current pause duration을 포함한 current gauge를 유지하고
 peak를 current로 재기준화하며, transition·cumulative duration·config failure를
