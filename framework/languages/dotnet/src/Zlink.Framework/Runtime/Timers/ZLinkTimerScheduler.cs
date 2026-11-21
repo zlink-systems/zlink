@@ -42,11 +42,13 @@ internal sealed class ZLinkTimerScheduler : IAsyncDisposable
         );
     }
 
-    internal async ValueTask UnregisterAsync(ZLinkTimer timer)
-    {
-        await _lane.RunAsync(() => _timers.Remove(timer)).ConfigureAwait(false);
-        SignalWake();
-    }
+    internal ValueTask UnregisterAsync(ZLinkTimer timer) =>
+        _lane.RunAsync(() =>
+        {
+            _timers.Remove(timer);
+            if (!_closed)
+                SignalWakeOnLane();
+        });
 
     internal void Schedule(ZLinkTimer timer, TimeSpan dueAt, long version)
     {
@@ -59,9 +61,9 @@ internal sealed class ZLinkTimerScheduler : IAsyncDisposable
                     new ScheduledTimer(timer, version),
                     new ZLinkTimerScheduleKey(dueAt.Ticks, ++_nextSequence)
                 );
+                SignalWakeOnLane();
             })
         );
-        SignalWake();
     }
 
     public async ValueTask DisposeAsync()
@@ -87,7 +89,6 @@ internal sealed class ZLinkTimerScheduler : IAsyncDisposable
         try
         {
             _stopSource.Cancel();
-            SignalWake();
             await _pump.ConfigureAwait(false);
         }
         finally
@@ -166,15 +167,10 @@ internal sealed class ZLinkTimerScheduler : IAsyncDisposable
         return (true, _queue.Dequeue(), TimeSpan.Zero);
     }
 
-    private void SignalWake()
+    private void SignalWakeOnLane()
     {
-        try
-        {
-            if (_wake.CurrentCount == 0)
-                _wake.Release();
-        }
-        catch (SemaphoreFullException) { }
-        catch (ObjectDisposedException) { }
+        if (_wake.CurrentCount == 0)
+            _wake.Release();
     }
 
     private readonly record struct ScheduledTimer(ZLinkTimer Timer, long Version);
