@@ -5,6 +5,7 @@
 
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/locations/location_record_fields.hpp"
+#include "runtime/locations/entry_spot_id_claim.hpp"
 #include "runtime/locations/aggregate_inventory.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/locations/relocation_authority_payload.hpp"
@@ -875,6 +876,14 @@ class provider_location_repository_t final : public location_repository_t
             co_return object_reserve_result_t{
               object_reserve_conflict_t{authority_missing_t{store_now}}};
 
+        std::optional<store_condition_t> entry_claim_condition;
+        if (request.key.kind != placement_object_kind_t::actor) {
+            auto entry_claim = co_await observe_entry_spot_id_claim (request.key.global_id);
+            if (entry_claim.live)
+                co_return object_reserve_result_t{
+                  object_reserve_conflict_t{authority_missing_t{store_now}}};
+            entry_claim_condition = std::move (entry_claim.condition);
+        }
         auto target = co_await read_target_descriptor_async (creation_target);
         if (!target) {
             // A node lease renewal or descriptor publication can advance the
@@ -952,6 +961,8 @@ class provider_location_repository_t final : public location_repository_t
            store_put_t{authority_owner_counter_key,
                        to_bytes (std::to_string (owner_generation_value + 1)), std::nullopt},
            store_put_t{capacity.key, encode_capacity_record (capacity.record), std::nullopt}}};
+        if (entry_claim_condition)
+            write_request.conditions.push_back (std::move (*entry_claim_condition));
         auto written = co_await write_async (std::move (write_request));
         const auto *applied = std::get_if<store_write_applied_t> (&written);
         if (!applied) {
@@ -2482,6 +2493,7 @@ class provider_location_repository_t final : public location_repository_t
                 }
             }
         }
+        co_await cleanup_entry_spot_id_claims (owner, deadline);
         co_return removed;
     }
 
@@ -3220,6 +3232,142 @@ class provider_location_repository_t final : public location_repository_t
         return {preimage ({"fanout-publisher", channel_name, rid_hex})};
     }
 
+    static store_key_t key_entry_spot_id_claim (std::string_view spot_id)
+    {
+        return {preimage ({"entry-spot-id", spot_id})};
+    }
+
+    static std::vector<std::byte> encode_entry_spot_id_claim (const entry_spot_id_claim_t &claim)
+    {
+        const nlohmann::ordered_json record{
+          {location_record_fields::descriptorKey, claim.descriptor_key},
+          {location_record_fields::descriptorLifecycleGeneration,
+           generation_string (claim.descriptor_lifecycle_generation)},
+          {location_record_fields::ownerId, claim.owner.owner_id},
+          {location_record_fields::ownerLeaseGeneration,
+           generation_string (claim.owner.lease_generation)}};
+        return to_bytes (record.dump ());
+    }
+
+    static entry_spot_id_claim_t decode_entry_spot_id_claim (const store_value_t &value)
+    {
+        const auto record = json_t::parse (to_string (value.bytes));
+        return {record.at (location_record_fields::descriptorKey).get<std::string> (),
+                parse_u64_field (record.at (location_record_fields::descriptorLifecycleGeneration)),
+                {record.at (location_record_fields::ownerId).get<std::string> (),
+                 parse_i64_field (record.at (location_record_fields::ownerLeaseGeneration))}};
+    }
+
+    static std::optional<std::string> read_entry_spot_id (const json_t &descriptor)
+    {
+        const auto entry = descriptor.find (location_record_fields::entrySpotId);
+        return entry != descriptor.end () && !entry->is_null ()
+                 ? std::make_optional (entry->get<std::string> ())
+                 : std::nullopt;
+    }
+
+    struct entry_spot_id_observation_t
+    {
+        store_condition_t condition;
+        std::optional<entry_spot_id_claim_t> live;
+    };
+
+    task_t<entry_spot_id_observation_t> observe_entry_spot_id_claim (const std::string &spot_id)
+    {
+        const auto key = key_entry_spot_id_claim (spot_id);
+        const auto current = co_await _store.read (key);
+        std::optional<entry_spot_id_claim_t> live;
+        if (const auto *found = std::get_if<store_found_t> (&current)) {
+            auto claim = decode_entry_spot_id_claim (found->value);
+            if (co_await owner_is_live_async (claim.owner))
+                live = std::move (claim);
+        }
+        co_return entry_spot_id_observation_t{condition_for (key, current), std::move (live)};
+    }
+
+    task_t<bool> entry_spot_id_conflicts (const std::string &spot_id,
+                                          const entry_spot_id_observation_t &current,
+                                          const entry_spot_id_claim_t &requested)
+    {
+        if (current.live)
+            co_return !current.live->matches (
+              requested.descriptor_key, requested.descriptor_lifecycle_generation, requested.owner);
+        const auto authority =
+          co_await _store.read (key_authority (spot_authority_key (spot_id).value));
+        co_return std::holds_alternative<store_found_t> (authority);
+    }
+
+    static bool claim_matches_descriptor (const entry_spot_id_claim_t &claim,
+                                          const store_key_t &key,
+                                          const json_t &record)
+    {
+        return claim.matches (key.value, record_lifecycle_generation (record),
+                              {record_owner_id (record), record_lease_generation (record)});
+    }
+
+    task_t<void> append_entry_spot_id_release (store_write_request_t &write,
+                                               const store_key_t &descriptor_key,
+                                               const json_t &descriptor_record)
+    {
+        const auto entry =
+          read_entry_spot_id (descriptor_record.at (location_record_fields::descriptor));
+        if (!entry)
+            co_return;
+        const auto key = key_entry_spot_id_claim (*entry);
+        const auto current = co_await _store.read (key);
+        // A NewClaim replay can add a missing claim without changing the descriptor version.
+        write.conditions.push_back (condition_for (key, current));
+        if (const auto *found = std::get_if<store_found_t> (&current)) {
+            const auto claim = decode_entry_spot_id_claim (found->value);
+            if (claim_matches_descriptor (claim, descriptor_key, descriptor_record))
+                write.mutations.push_back (store_delete_t{key});
+        }
+    }
+
+    task_t<void> cleanup_entry_spot_id_claims (const location_owner_token_t &owner,
+                                               std::chrono::steady_clock::time_point deadline)
+    {
+        if (!co_await owner_is_live_async (owner))
+            co_return;
+        std::optional<store_scan_cursor_t> cursor;
+        do {
+            if (std::chrono::steady_clock::now () >= deadline)
+                throw framework_exception_t (framework_error_kind_t::deadline_exceeded,
+                                             "owner cleanup deadline expired");
+            auto result = co_await _store.scan (
+              {key_entry_spot_id_claim ("").value, cursor, location_page_item_limit});
+            const auto *page = std::get_if<store_scan_page_t> (&result);
+            if (!page)
+                throw framework_exception_t (framework_error_kind_t::internal_failure,
+                                             "Location Store scan cursor expired");
+            for (const auto &row : page->items) {
+                const auto claim = decode_entry_spot_id_claim (row.value);
+                if (!same_owner (claim.owner, owner))
+                    continue;
+                const store_key_t descriptor_key{claim.descriptor_key};
+                const auto current = co_await _store.read (descriptor_key);
+                const auto *found = std::get_if<store_found_t> (&current);
+                if (!found)
+                    continue;
+                const auto record =
+                  parse_canonical_record (found->value.bytes, location_record_fields::descriptor);
+                const auto entry =
+                  read_entry_spot_id (record.at (location_record_fields::descriptor));
+                if (!entry || key_entry_spot_id_claim (*entry).value != row.key.value
+                    || !claim_matches_descriptor (claim, descriptor_key, record))
+                    continue;
+                store_write_request_t write{
+                  {owner_condition (owner),
+                   version_condition (descriptor_key, found->value.version),
+                   version_condition (row.key, row.value.version)},
+                  {store_delete_t{row.key}}};
+                (void) co_await write_async (std::move (write), nullptr, {}, "compare_exchange",
+                                             deadline);
+            }
+            cursor = page->next_cursor;
+        } while (cursor);
+    }
+
     task_t<location_write_result_t>
     update_descriptor (store_key_t row_key,
                        std::string owner_id,
@@ -3233,6 +3381,8 @@ class provider_location_repository_t final : public location_repository_t
         const auto read_sequence = reclaim_read_sequence ();
         const bool mesh = record.at (location_record_fields::descriptor)
                             .contains (location_record_fields::meshName);
+        const auto entry = read_entry_spot_id (record.at (location_record_fields::descriptor));
+        const location_owner_token_t owner{owner_id, lease_generation};
         const auto lease_key = key_owner (owner_id);
         auto lease = co_await _store.read (lease_key);
         const auto *live_lease = std::get_if<store_found_t> (&lease);
@@ -3252,6 +3402,8 @@ class provider_location_repository_t final : public location_repository_t
         std::uint64_t generation = 1;
         store_condition_t row_condition;
         location_owner_token_t observed_owner;
+        std::optional<json_t> replaced;
+        std::optional<location_write_result_t> replay;
         if (const auto *found = std::get_if<store_found_t> (&current)) {
             auto stored =
               parse_canonical_record (found->value.bytes, location_record_fields::descriptor);
@@ -3287,20 +3439,23 @@ class provider_location_repository_t final : public location_repository_t
                   .erase (location_record_fields::updatedAtEpochMs);
                 if (previous == requested) {
                     retain_reclaim_observation (row_key.value, std::nullopt, read_sequence);
-                    co_return location_write_result_t::stored (
+                    replay = location_write_result_t::stored (
                       static_cast<std::int64_t> (provider_generation_known ? provider_generation
                                                                            : 1),
                       found->value.store_now);
+                    if (!entry)
+                        co_return *replay;
                 }
             }
-            if ((intent == location_write_intent_t::new_claim
-                 || intent == location_write_intent_t::fixed_rid_new_claim)
+            if (!replay
+                && (intent == location_write_intent_t::new_claim
+                    || intent == location_write_intent_t::fixed_rid_new_claim)
                 && previous_owner_live) {
                 retain_reclaim_observation (row_key.value, std::nullopt, read_sequence);
                 co_return location_write_result_t{
                   location_write_status_t::rejected_conflict, 0, {}};
             }
-            if (intent == location_write_intent_t::fixed_rid_new_claim
+            if (!replay && intent == location_write_intent_t::fixed_rid_new_claim
                 && !reclaim_wait_elapsed (row_key.value, {stored_owner, stored_lease}, false,
                                           read_sequence)) {
                 const auto observed = co_await _store.read (row_key);
@@ -3311,7 +3466,7 @@ class provider_location_repository_t final : public location_repository_t
             }
             if (intent == location_write_intent_t::takeover && previous_owner_live)
                 co_return location_write_result_t{location_write_status_t::ignored_stale, 0, {}};
-            if (intent == location_write_intent_t::renew) {
+            if (!replay && intent == location_write_intent_t::renew) {
                 if (stored_owner != owner_id
                     || (mesh ? stored_lease > lease_generation : stored_lease != lease_generation)
                     || record_lifecycle_generation (stored) != lifecycle_generation
@@ -3319,13 +3474,15 @@ class provider_location_repository_t final : public location_repository_t
                     || !immutable_fields_equal (stored))
                     co_return location_write_result_t{
                       location_write_status_t::ignored_stale, 0, {}};
-            } else if (provider_generation_known
+            } else if (!replay && provider_generation_known
                        && provider_generation == std::numeric_limits<std::uint64_t>::max ()) {
                 throw framework_exception_t (framework_error_kind_t::internal_failure,
                                              "descriptor generation exhausted");
             }
             generation = provider_generation_known ? provider_generation + 1 : 1;
             row_condition = version_condition (row_key, found->value.version);
+            if (read_entry_spot_id (stored.at (location_record_fields::descriptor)) != entry)
+                replaced = std::move (stored);
         } else {
             if (intent == location_write_intent_t::fixed_rid_new_claim) {
                 if (!reclaim_wait_elapsed (row_key.value, {}, false, read_sequence))
@@ -3336,17 +3493,53 @@ class provider_location_repository_t final : public location_repository_t
                 co_return location_write_result_t{location_write_status_t::ignored_stale, 0, {}};
             row_condition = missing_condition (row_key);
         }
-        auto encoded = to_bytes (record.dump ());
-        store_write_request_t write_request{
-          {owner_condition ({owner_id, lease_generation}), std::move (row_condition)},
-          {store_put_t{row_key, std::move (encoded), std::nullopt}}};
+        const bool update_entry_claim = entry
+                                        && (intent != location_write_intent_t::renew
+                                            || observed_owner.lease_generation != lease_generation);
+        if (replay && !update_entry_claim)
+            co_return *replay;
+        store_write_request_t write_request{{owner_condition (owner), std::move (row_condition)},
+                                            {}};
+        if (!replay)
+            write_request.mutations.push_back (
+              store_put_t{row_key, to_bytes (record.dump ()), std::nullopt});
+        const auto requested_claim =
+          update_entry_claim
+            ? std::optional{entry_spot_id_claim_t{row_key.value, lifecycle_generation, owner}}
+            : std::nullopt;
+        if (requested_claim) {
+            auto claim = co_await observe_entry_spot_id_claim (*entry);
+            if (co_await entry_spot_id_conflicts (*entry, claim, *requested_claim))
+                co_return location_write_result_t{
+                  location_write_status_t::rejected_conflict, 0, {}};
+            if (replay && claim.live)
+                co_return *replay;
+            write_request.conditions.push_back (std::move (claim.condition));
+            if (!claim.live) {
+                write_request.conditions.push_back (
+                  missing_condition (key_authority (spot_authority_key (*entry).value)));
+                write_request.mutations.push_back (
+                  store_put_t{key_entry_spot_id_claim (*entry),
+                              encode_entry_spot_id_claim (*requested_claim), std::nullopt});
+            }
+        }
+        if (replaced)
+            co_await append_entry_spot_id_release (write_request, row_key, *replaced);
         auto result = co_await write_async (std::move (write_request));
         if (const auto *applied = std::get_if<store_write_applied_t> (&result)) {
+            if (replay)
+                co_return *replay;
             if (observed_owner.owner_id != owner_id
                 || observed_owner.lease_generation != lease_generation)
                 remove_reclaim_observation (row_key.value, observed_owner);
             co_return location_write_result_t::stored (static_cast<std::int64_t> (generation),
                                                        applied->store_now);
+        }
+        if (requested_claim) {
+            const auto claim = co_await observe_entry_spot_id_claim (*entry);
+            if (co_await entry_spot_id_conflicts (*entry, claim, *requested_claim))
+                co_return location_write_result_t{
+                  location_write_status_t::rejected_conflict, 0, {}};
         }
         co_return location_write_result_t{location_write_status_t::ignored_stale, 0, {}};
     }
@@ -3371,6 +3564,7 @@ class provider_location_repository_t final : public location_repository_t
             co_return location_write_status_t::ignored_stale;
         store_write_request_t result_request{{version_condition (row_key, found->value.version)},
                                              {store_delete_t{row_key}}};
+        co_await append_entry_spot_id_release (result_request, row_key, record);
         auto result = co_await write_async (std::move (result_request), nullptr, {},
                                             "compare_exchange", deadline);
         if (std::holds_alternative<store_write_applied_t> (result)) {
@@ -4307,10 +4501,7 @@ class provider_location_repository_t final : public location_repository_t
           parse_u64_field (value.at (location_record_fields::descriptorRevision));
         result.endpoint = transport::normalize_endpoint (
           value.at (location_record_fields::endpoint).get<std::string> ());
-        if (value.contains (location_record_fields::entrySpotId)
-            && !value.at (location_record_fields::entrySpotId).is_null ())
-            result.entry_spot_id =
-              value.at (location_record_fields::entrySpotId).get<std::string> ();
+        result.entry_spot_id = read_entry_spot_id (value);
         result.channel_weights =
           value.at (location_record_fields::channelWeights).get<std::map<std::string, int>> ();
         result.application_version = static_cast<std::int64_t> (

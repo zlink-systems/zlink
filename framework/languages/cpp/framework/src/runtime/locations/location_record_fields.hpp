@@ -26,6 +26,7 @@ inline constexpr char childStart[] = "childStart";
 inline constexpr char commitPageCount[] = "commitPageCount";
 inline constexpr char count[] = "count";
 inline constexpr char descriptor[] = "descriptor";
+inline constexpr char descriptorKey[] = "descriptorKey";
 inline constexpr char descriptorLifecycleGeneration[] = "descriptorLifecycleGeneration";
 inline constexpr char descriptorRevision[] = "descriptorRevision";
 inline constexpr char endpoint[] = "endpoint";

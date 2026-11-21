@@ -2728,105 +2728,6 @@ void verify_public_host_send_uses_authority_generation ()
     target->close ();
 }
 
-void verify_entry_spot_identity_claim_is_global_and_fenced ()
-{
-    using namespace zlink::framework;
-    runtime::in_memory_location_repository_t store;
-    store.configure_reclaim_margin (std::chrono::milliseconds::zero ());
-    const auto first_owner = std::get<owner_lease_claimed_t> (
-                               store.claim_owner_lease ("entry-owner-a", 15s).result ().value ())
-                               .token;
-    const auto second_owner = std::get<owner_lease_claimed_t> (
-                                store.claim_owner_lease ("entry-owner-b", 15s).result ().value ())
-                                .token;
-    const auto entry_id = detail::new_entry_spot_id ("entry-node");
-    const auto descriptor = [&] (std::string rid, std::uint64_t lifecycle,
-                                 const location_owner_token_t &owner, std::string id) {
-        return mesh_node_descriptor_t{
-          .mesh_name = "entry-mesh",
-          .rid = zlink::routing_id_t::from (std::move (rid)),
-          .lifecycle_generation = lifecycle,
-          .descriptor_revision = 1,
-          .endpoint = "tcp://127.0.0.1:1",
-          .entry_spot_id = std::move (id),
-          .application_version = 1,
-          .object_capabilities = {{.object_kind = placement_object_kind_t::user_spot,
-                                   .stable_type = "room"}},
-          .object_role = object_role_t::server,
-          .capacity = {.spots = {.limit = 8}},
-          .state = framework_runtime_state_t::serving,
-          .security_identity = "entry-test",
-          .owner_id = owner.owner_id,
-          .lease_generation = owner.lease_generation};
-    };
-    const auto first = descriptor ("entry-node-a", 41, first_owner, entry_id);
-    const auto second = descriptor ("entry-node-b", 42, second_owner, entry_id);
-    assert (
-      store.update_mesh_node (first, location_write_intent_t::new_claim).result ().value ().status
-      == location_write_status_t::stored);
-    runtime::store_location_resolvers_t resolver (store);
-    const auto first_route =
-      resolver.resolve_spot_address (first.mesh_name, entry_id).result ().value ();
-    assert (first_route);
-    assert (first_route->node_rid.to_string () == first.rid.to_string ());
-    assert (
-      store.update_mesh_node (second, location_write_intent_t::new_claim).result ().value ().status
-      == location_write_status_t::rejected_conflict);
-
-    object_reserve_request_t reserved_entry{
-      .key = {placement_object_kind_t::user_spot, entry_id},
-      .intent = {.stable_type = "room"},
-      .target = {.mesh_name = first.mesh_name,
-                 .node_rid = node_rid_t::from_string (first.rid.to_string ()),
-                 .node_lifecycle_generation = first.lifecycle_generation,
-                 .owner = first_owner},
-      .capacity_bundle = {
-        .spot_slots = 1,
-        .spot_type = spot_type_capacity_delta_t{placement_object_kind_t::user_spot, "room", 1}}};
-    assert (std::holds_alternative<object_reserve_conflict_t> (
-      store.reserve (reserved_entry).result ().value ()));
-
-    assert (store.remove_mesh_node ({first.mesh_name, first.rid}, first_owner).result ().value ()
-            == location_write_status_t::stored);
-    assert (
-      store.update_mesh_node (second, location_write_intent_t::new_claim).result ().value ().status
-      == location_write_status_t::stored);
-    resolver.invalidate_spot_address (entry_id);
-    const auto replacement_route =
-      resolver.resolve_spot_address (second.mesh_name, entry_id).result ().value ();
-    assert (replacement_route);
-    assert (replacement_route->node_rid.to_string () == second.rid.to_string ());
-    assert (store.remove_mesh_node ({first.mesh_name, first.rid}, first_owner).result ().value ()
-            == location_write_status_t::ignored_stale);
-
-    const auto occupied_id = detail::new_user_spot_id ();
-    auto occupied_target = descriptor ("occupied-target", 43, first_owner,
-                                       detail::new_entry_spot_id ("occupied-target"));
-    assert (store.update_mesh_node (occupied_target, location_write_intent_t::new_claim)
-              .result ()
-              .value ()
-              .status
-            == location_write_status_t::stored);
-    object_reserve_request_t occupied_request{
-      .key = {placement_object_kind_t::user_spot, occupied_id},
-      .intent = {.stable_type = "room"},
-      .target = {.mesh_name = occupied_target.mesh_name,
-                 .node_rid = node_rid_t::from_string (occupied_target.rid.to_string ()),
-                 .node_lifecycle_generation = occupied_target.lifecycle_generation,
-                 .owner = first_owner},
-      .capacity_bundle = {
-        .spot_slots = 1,
-        .spot_type = spot_type_capacity_delta_t{placement_object_kind_t::user_spot, "room", 1}}};
-    assert (std::holds_alternative<object_reserved_t> (
-      store.reserve (occupied_request).result ().value ()));
-    auto conflicting_descriptor = descriptor ("occupied-entry", 44, second_owner, occupied_id);
-    assert (store.update_mesh_node (conflicting_descriptor, location_write_intent_t::new_claim)
-              .result ()
-              .value ()
-              .status
-            == location_write_status_t::rejected_conflict);
-}
-
 void verify_user_spot_execution_mode_registration ()
 {
     using namespace zlink::framework;
@@ -10136,7 +10037,6 @@ int main (int argc, char **argv)
     verify_public_host_route_fence_reads_store_without_second_cache (false);
     verify_public_host_route_fence_reads_store_without_second_cache (true);
     verify_public_host_send_uses_authority_generation ();
-    verify_entry_spot_identity_claim_is_global_and_fenced ();
     verify_user_spot_execution_mode_registration ();
     verify_self_actor_request_rejected_before_submission ();
     verify_actor_context_survives_coroutine_await ();

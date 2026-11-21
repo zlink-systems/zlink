@@ -284,7 +284,7 @@ internal sealed partial class ZLinkProviderLocationRepository(
                 descriptor,
                 intent,
                 static value => value.LifecycleGeneration,
-                static (_, _) => true,
+                static (current, next) => current.EntrySpotId == next.EntrySpotId,
                 cancellationToken
             )
             .ConfigureAwait(false);
@@ -308,14 +308,21 @@ internal sealed partial class ZLinkProviderLocationRepository(
         {
             return ZLinkLocationWriteStatus.IgnoredStale;
         }
-        var result = await _provider
-            .WriteAsync(
-                new ZLinkStoreWriteRequest(
-                    [new ZLinkStoreCondition.Version(rowKey, found.Value.Version)],
-                    [new ZLinkStoreMutation.Delete(rowKey)]
-                ),
+        List<ZLinkStoreCondition> conditions =
+        [
+            new ZLinkStoreCondition.Version(rowKey, found.Value.Version),
+        ];
+        List<ZLinkStoreMutation> mutations = [new ZLinkStoreMutation.Delete(rowKey)];
+        await AddEntrySpotClaimRemoveAsync(
+                rowKey,
+                descriptor,
+                conditions,
+                mutations,
                 cancellationToken
             )
+            .ConfigureAwait(false);
+        var result = await _provider
+            .WriteAsync(new ZLinkStoreWriteRequest(conditions, mutations), cancellationToken)
             .ConfigureAwait(false);
         if (result is ZLinkStoreWriteResult.Applied)
         {
@@ -489,33 +496,11 @@ internal sealed partial class ZLinkProviderLocationRepository(
             throw new ArgumentOutOfRangeException(nameof(owner));
 
         var removed = 0L;
-        var rows = new List<KeyValuePair<ZLinkStoreKey, ZLinkStoreValue>>();
-        ZLinkStoreScanCursor? cursor = null;
-        do
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var scan = await _provider
-                .ScanAsync(
-                    new ZLinkStoreScanRequest(
-                        AuthorityCanonicalPreimagePrefix,
-                        cursor,
-                        ZLinkPageRequestPolicy.MaximumPageSize
-                    ),
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-            if (scan is ZLinkStoreScanResult.Expired)
-            {
-                rows.Clear();
-                cursor = null;
-                continue;
-            }
-            var page = ((ZLinkStoreScanResult.Page)scan).Value;
-            rows.AddRange(page.Items);
-            cursor = page.NextCursor;
-            if (cursor is null)
-                break;
-        } while (true);
+        var rows = await ReadOwnerCleanupRowsAsync(
+                AuthorityCanonicalPreimagePrefix,
+                cancellationToken
+            )
+            .ConfigureAwait(false);
         foreach (var row in rows)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -571,7 +556,42 @@ internal sealed partial class ZLinkProviderLocationRepository(
                 }
             }
         }
+        await ReleaseOwnerEntrySpotClaimsAsync(owner, cancellationToken).ConfigureAwait(false);
         return removed;
+    }
+
+    private async ValueTask<
+        List<KeyValuePair<ZLinkStoreKey, ZLinkStoreValue>>
+    > ReadOwnerCleanupRowsAsync(string prefix, CancellationToken cancellationToken)
+    {
+        var rows = new List<KeyValuePair<ZLinkStoreKey, ZLinkStoreValue>>();
+        ZLinkStoreScanCursor? cursor = null;
+        do
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var scan = await _provider
+                .ScanAsync(
+                    new ZLinkStoreScanRequest(
+                        prefix,
+                        cursor,
+                        ZLinkPageRequestPolicy.MaximumPageSize
+                    ),
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+            if (scan is ZLinkStoreScanResult.Expired)
+            {
+                rows.Clear();
+                cursor = null;
+                continue;
+            }
+            var page = ((ZLinkStoreScanResult.Page)scan).Value;
+            rows.AddRange(page.Items);
+            cursor = page.NextCursor;
+            if (cursor is null)
+                break;
+        } while (true);
+        return rows;
     }
 
     private async ValueTask<ZLinkLocationWriteResult> UpdateDescriptorAsync<T>(
@@ -602,9 +622,11 @@ internal sealed partial class ZLinkProviderLocationRepository(
         ZLinkStoreCondition? predecessorOwnerCondition = null;
         ZLinkLocationOwnerToken? predecessorOwnerToken = null;
         ZLinkLocationOwnerToken? releaseWaitToken = null;
+        ZLinkMeshNodeDescriptor? previousMeshDescriptor = null;
         if (current is ZLinkStoreReadResult.Found found)
         {
             var record = DecodeDescriptor<T>(found.Value.Bytes);
+            previousMeshDescriptor = record.Descriptor as ZLinkMeshNodeDescriptor;
             var storedOwner = record.OwnerId;
             var storedLeaseGeneration = record.LeaseGeneration;
             var storedOwnerToken = new ZLinkLocationOwnerToken(storedOwner, storedLeaseGeneration);
@@ -636,10 +658,27 @@ internal sealed partial class ZLinkProviderLocationRepository(
                     descriptor
                 )
             )
+            {
+                if (isMeshNodeClaim && previousMeshDescriptor is { EntrySpotId: not null } replay)
+                    return await WriteDescriptorWithReconciliationAsync(
+                            leaseKey,
+                            ownerId,
+                            leaseGeneration,
+                            rowKey,
+                            current,
+                            null,
+                            null,
+                            null,
+                            replay,
+                            null,
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false);
                 return ZLinkLocationWriteResult.Stored(
                     VersionOf(found.Value.Version),
                     found.Value.StoreNow
                 );
+            }
             if (
                 (
                     intent
@@ -712,6 +751,14 @@ internal sealed partial class ZLinkProviderLocationRepository(
             new DescriptorRecord<T>(ownerId, leaseGeneration, descriptorRevision, descriptor),
             ZLinkJsonSerializerOptions.Default
         );
+        var claimEntrySpotDescriptor =
+            descriptor is ZLinkMeshNodeDescriptor meshDescriptor
+            && (
+                intent != ZLinkLocationWriteIntent.Renew
+                || previousMeshDescriptor?.LeaseGeneration != leaseGeneration
+            )
+                ? meshDescriptor
+                : null;
         var result = await WriteDescriptorWithReconciliationAsync(
                 leaseKey,
                 ownerId,
@@ -721,6 +768,8 @@ internal sealed partial class ZLinkProviderLocationRepository(
                 encodedDescriptor,
                 predecessorOwnerCondition,
                 predecessorOwnerToken,
+                claimEntrySpotDescriptor,
+                previousMeshDescriptor,
                 cancellationToken
             )
             .ConfigureAwait(false);
@@ -764,9 +813,11 @@ internal sealed partial class ZLinkProviderLocationRepository(
         long leaseGeneration,
         ZLinkStoreKey rowKey,
         ZLinkStoreReadResult predecessor,
-        ReadOnlyMemory<byte> encodedDescriptor,
+        ReadOnlyMemory<byte>? descriptorUpdate,
         ZLinkStoreCondition? predecessorOwnerCondition,
         ZLinkLocationOwnerToken? predecessorOwnerToken,
+        ZLinkMeshNodeDescriptor? meshDescriptor,
+        ZLinkMeshNodeDescriptor? previousMeshDescriptor,
         CancellationToken cancellationToken
     )
     {
@@ -791,10 +842,32 @@ internal sealed partial class ZLinkProviderLocationRepository(
             };
             if (predecessorOwnerCondition is not null)
                 conditions.Add(predecessorOwnerCondition);
-            var request = new ZLinkStoreWriteRequest(
-                conditions,
-                [new ZLinkStoreMutation.Put(rowKey, encodedDescriptor, null)]
-            );
+            var preserved = descriptorUpdate is null
+                ? ((ZLinkStoreReadResult.Found)currentRow).Value
+                : null;
+            List<ZLinkStoreMutation> mutations = [];
+            if (descriptorUpdate is { } encodedDescriptor)
+                mutations.Add(new ZLinkStoreMutation.Put(rowKey, encodedDescriptor, null));
+            if (
+                meshDescriptor is not null
+                && !await AddEntrySpotClaimWriteAsync(
+                        rowKey,
+                        meshDescriptor,
+                        previousMeshDescriptor,
+                        conditions,
+                        mutations,
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false)
+            )
+                return ZLinkLocationWriteResult.RejectedConflict;
+            if (mutations.Count == 0)
+                return ZLinkLocationWriteResult.Stored(
+                    VersionOf(preserved!.Version),
+                    preserved.StoreNow
+                );
+
+            var request = new ZLinkStoreWriteRequest(conditions, mutations);
 
             ZLinkStoreWriteResult result;
             try
@@ -822,7 +895,24 @@ internal sealed partial class ZLinkProviderLocationRepository(
                         .ConfigureAwait(false);
                     if (
                         read is ZLinkStoreReadResult.Found found
-                        && found.Value.Bytes.Span.SequenceEqual(encodedDescriptor.Span)
+                        && found.Value.Bytes.Span.SequenceEqual(
+                            (descriptorUpdate ?? preserved!.Bytes).Span
+                        )
+                        && (
+                            preserved is null
+                            || (
+                                await ObserveEntrySpotClaimAsync(
+                                        OpaqueRecordKey(
+                                            EntrySpotIdPrefix,
+                                            meshDescriptor!.EntrySpotId!
+                                        ),
+                                        deadline.Token
+                                    )
+                                    .AsTask()
+                                    .WaitAsync(deadline.Token)
+                                    .ConfigureAwait(false)
+                            ).Active?.Matches(rowKey, meshDescriptor) == true
+                        )
                     )
                     {
                         return ZLinkLocationWriteResult.Stored(
@@ -843,7 +933,7 @@ internal sealed partial class ZLinkProviderLocationRepository(
             if (result is ZLinkStoreWriteResult.Applied applied)
             {
                 return ZLinkLocationWriteResult.Stored(
-                    VersionOf(applied.PutVersions[rowKey]),
+                    VersionOf(preserved?.Version ?? applied.PutVersions[rowKey]),
                     applied.StoreNow
                 );
             }

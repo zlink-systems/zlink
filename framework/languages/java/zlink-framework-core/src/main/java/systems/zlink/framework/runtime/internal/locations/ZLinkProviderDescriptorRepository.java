@@ -15,6 +15,7 @@ import systems.zlink.framework.locationprovider.ZLinkStoreCondition;
 import systems.zlink.framework.locationprovider.ZLinkStoreDelete;
 import systems.zlink.framework.locationprovider.ZLinkStoreKey;
 import systems.zlink.framework.locationprovider.ZLinkStoreMissingCondition;
+import systems.zlink.framework.locationprovider.ZLinkStoreMutation;
 import systems.zlink.framework.locationprovider.ZLinkStorePut;
 import systems.zlink.framework.locationprovider.ZLinkStoreReadFound;
 import systems.zlink.framework.locationprovider.ZLinkStoreReadMissing;
@@ -132,6 +133,7 @@ final class ZLinkProviderDescriptorRepository {
     private static final int MAXIMUM_CONTINUATION_CHARACTERS = 5600;
     private final ZLinkLocationStore provider;
     private final ZLinkOwnerLeaseWaitTracker ownerLeaseWait;
+    final ZLinkProviderEntrySpotClaims entrySpots;
 
     ZLinkProviderDescriptorRepository(ZLinkLocationStore provider) {
         this(provider, new ZLinkOwnerLeaseWaitTracker(System::nanoTime, Duration.ZERO));
@@ -140,6 +142,7 @@ final class ZLinkProviderDescriptorRepository {
     ZLinkProviderDescriptorRepository(
             ZLinkLocationStore provider, ZLinkOwnerLeaseWaitTracker ownerLeaseWait) {
         this.provider = Objects.requireNonNull(provider, "provider");
+        this.entrySpots = new ZLinkProviderEntrySpotClaims(provider);
         this.ownerLeaseWait = Objects.requireNonNull(ownerLeaseWait, "ownerLeaseWait");
     }
 
@@ -176,8 +179,7 @@ final class ZLinkProviderDescriptorRepository {
         return remove(
                 meshKey(key.meshName(), key.rid()),
                 owner,
-                bytes -> decodeMesh(bytes).descriptor().ownerId(),
-                bytes -> decodeMesh(bytes).descriptor().leaseGeneration(),
+                ZLinkProviderDescriptorRepository::decodeMesh,
                 cancellation);
     }
 
@@ -233,8 +235,7 @@ final class ZLinkProviderDescriptorRepository {
         return remove(
                 clientServerKey(key.channelName(), key.serverRid()),
                 owner,
-                bytes -> decodeClientServer(bytes).descriptor().ownerId(),
-                bytes -> decodeClientServer(bytes).descriptor().leaseGeneration(),
+                ZLinkProviderDescriptorRepository::decodeClientServer,
                 active());
     }
 
@@ -270,8 +271,7 @@ final class ZLinkProviderDescriptorRepository {
         return remove(
                 fanoutKey(key.channelName(), key.publisherRid()),
                 owner,
-                bytes -> decodeFanout(bytes).descriptor().ownerId(),
-                bytes -> decodeFanout(bytes).descriptor().leaseGeneration(),
+                ZLinkProviderDescriptorRepository::decodeFanout,
                 active());
     }
 
@@ -329,11 +329,13 @@ final class ZLinkProviderDescriptorRepository {
                                                 }
                                                 long generation = 1;
                                                 ZLinkStoreCondition rowCondition;
+                                                T previous = null;
                                                 if (current instanceof ZLinkStoreReadFound found) {
                                                     StoredDescriptor<T> record =
                                                             decode.apply(found.value().bytes());
                                                     generation = record.generation();
                                                     T stored = record.descriptor();
+                                                    previous = stored;
                                                     DescriptorIdentity identity = identity(stored);
                                                     boolean renew =
                                                             intent == ZLinkLocationWriteIntent.RENEW
@@ -372,11 +374,23 @@ final class ZLinkProviderDescriptorRepository {
                                                                             identity.ownerId(),
                                                                             identity
                                                                                     .leaseGeneration()));
-                                                            return completed(
+                                                            var confirmed =
                                                                     ZLinkLocationWriteResult.stored(
                                                                             record.generation(),
                                                                             found.value()
-                                                                                    .storeNow()));
+                                                                                    .storeNow());
+                                                            if (intent.isNewClaim()
+                                                                    && descriptor
+                                                                            instanceof
+                                                                            ZLinkMeshNodeDescriptor
+                                                                                    mesh
+                                                                    && mesh.entrySpotId()
+                                                                            .isPresent()) {
+                                                                return replayEntryClaim(
+                                                                        rowKey, mesh, found,
+                                                                        confirmed);
+                                                            }
+                                                            return completed(confirmed);
                                                         }
                                                         return provider.read(
                                                                         ownerKey(
@@ -453,7 +467,9 @@ final class ZLinkProviderDescriptorRepository {
                                                                                                     .addExact(
                                                                                                             record
                                                                                                                     .generation(),
-                                                                                                            1))
+                                                                                                            1),
+                                                                                            descriptor,
+                                                                                            stored)
                                                                                     .thenApply(
                                                                                             result -> {
                                                                                                 if (result
@@ -494,7 +510,9 @@ final class ZLinkProviderDescriptorRepository {
                                                                 leaseGeneration,
                                                                 rowCondition,
                                                                 encoded,
-                                                                generation)
+                                                                generation,
+                                                                descriptor,
+                                                                previous)
                                                         .thenApply(
                                                                 result -> {
                                                                     if (result.status()
@@ -511,19 +529,104 @@ final class ZLinkProviderDescriptorRepository {
                         });
     }
 
+    private CompletionStage<ZLinkLocationWriteResult> replayEntryClaim(
+            ZLinkStoreKey rowKey,
+            ZLinkMeshNodeDescriptor descriptor,
+            ZLinkStoreReadFound current,
+            ZLinkLocationWriteResult confirmed) {
+        var conditions = new ArrayList<ZLinkStoreCondition>();
+        conditions.add(
+                ZLinkOwnerLeaseRecordCodec.valueCondition(
+                        descriptor.ownerId(), descriptor.leaseGeneration()));
+        conditions.add(new ZLinkStoreVersionCondition(rowKey, current.value().version()));
+        var mutations = new ArrayList<ZLinkStoreMutation>();
+        return entrySpots
+                .claim(rowKey, descriptor, conditions, mutations, active())
+                .thenCompose(
+                        claimed -> {
+                            if (!claimed)
+                                return completed(ZLinkLocationWriteResult.rejectedConflict());
+                            if (mutations.isEmpty()) return completed(confirmed);
+                            return provider.write(
+                                            new ZLinkStoreWriteRequest(conditions, mutations),
+                                            active())
+                                    .thenCompose(
+                                            result ->
+                                                    result instanceof ZLinkStoreWriteApplied
+                                                            ? completed(confirmed)
+                                                            : entryClaimConflict(
+                                                                    rowKey, descriptor));
+                        });
+    }
+
+    private CompletionStage<ZLinkLocationWriteResult> entryClaimConflict(
+            ZLinkStoreKey rowKey, ZLinkMeshNodeDescriptor descriptor) {
+        return entrySpots
+                .conflicts(rowKey, descriptor, active())
+                .thenApply(
+                        conflict ->
+                                conflict
+                                        ? ZLinkLocationWriteResult.rejectedConflict()
+                                        : ZLinkLocationWriteResult.ignoredStale());
+    }
+
     private CompletionStage<ZLinkLocationWriteResult> writeDescriptor(
             ZLinkStoreKey rowKey,
             String ownerId,
             long leaseGeneration,
             ZLinkStoreCondition rowCondition,
             byte[] encoded,
-            long generation) {
-        var request =
-                new ZLinkStoreWriteRequest(
-                        List.of(
-                                ZLinkOwnerLeaseRecordCodec.valueCondition(ownerId, leaseGeneration),
-                                rowCondition),
-                        List.of(new ZLinkStorePut(rowKey, encoded, null)));
+            long generation,
+            Object next,
+            Object previous) {
+        var conditions = new ArrayList<ZLinkStoreCondition>();
+        conditions.add(ZLinkOwnerLeaseRecordCodec.valueCondition(ownerId, leaseGeneration));
+        conditions.add(rowCondition);
+        var mutations = new ArrayList<ZLinkStoreMutation>();
+        mutations.add(new ZLinkStorePut(rowKey, encoded, null));
+        if (!(next instanceof ZLinkMeshNodeDescriptor mesh)) {
+            return writeDescriptor(rowKey, encoded, generation, conditions, mutations, null);
+        }
+        ZLinkMeshNodeDescriptor before = (ZLinkMeshNodeDescriptor) previous;
+        if (mesh.hasSameEntryClaim(before)) {
+            return writeDescriptor(rowKey, encoded, generation, conditions, mutations, null);
+        }
+        var release =
+                before != null && !before.entrySpotId().equals(mesh.entrySpotId())
+                        ? entrySpots.release(rowKey, before, conditions, mutations, active())
+                        : completed((Void) null);
+        return release.thenCompose(
+                ignored -> {
+                    if (mesh.entrySpotId().isEmpty()) {
+                        return writeDescriptor(
+                                rowKey, encoded, generation, conditions, mutations, null);
+                    }
+                    return entrySpots
+                            .claim(rowKey, mesh, conditions, mutations, active())
+                            .thenCompose(
+                                    claimed ->
+                                            claimed
+                                                    ? writeDescriptor(
+                                                            rowKey,
+                                                            encoded,
+                                                            generation,
+                                                            conditions,
+                                                            mutations,
+                                                            mesh)
+                                                    : completed(
+                                                            ZLinkLocationWriteResult
+                                                                    .rejectedConflict()));
+                });
+    }
+
+    private CompletionStage<ZLinkLocationWriteResult> writeDescriptor(
+            ZLinkStoreKey rowKey,
+            byte[] encoded,
+            long generation,
+            List<ZLinkStoreCondition> conditions,
+            List<ZLinkStoreMutation> mutations,
+            ZLinkMeshNodeDescriptor claimedEntry) {
+        var request = new ZLinkStoreWriteRequest(conditions, mutations);
         CompletionStage<systems.zlink.framework.locationprovider.ZLinkStoreWriteResult> write;
         try {
             write = provider.write(request, active());
@@ -540,7 +643,10 @@ final class ZLinkProviderDescriptorRepository {
                                         ZLinkLocationWriteResult.stored(
                                                 generation, applied.storeNow()));
                             }
-                            return completed(ZLinkLocationWriteResult.ignoredStale());
+                            if (claimedEntry == null) {
+                                return completed(ZLinkLocationWriteResult.ignoredStale());
+                            }
+                            return entryClaimConflict(rowKey, claimedEntry);
                         })
                 .thenCompose(stage -> stage);
     }
@@ -565,28 +671,43 @@ final class ZLinkProviderDescriptorRepository {
     private CompletionStage<ZLinkLocationWriteStatus> remove(
             ZLinkStoreKey rowKey,
             ZLinkLocationOwnerToken owner,
-            Function<byte[], String> ownerId,
-            Function<byte[], Long> leaseGeneration,
+            Function<byte[], ? extends StoredDescriptor<?>> decode,
             ZLinkStoreCancellation cancellation) {
         Objects.requireNonNull(owner, "owner");
         String waitKey = ZLinkOwnerLeaseWaitTracker.descriptorRecordKey(rowKey.value());
         return provider.read(rowKey, cancellation)
                 .thenCompose(
                         current -> {
-                            if (!(current instanceof ZLinkStoreReadFound found)
-                                    || !owner.ownerId().equals(ownerId.apply(found.value().bytes()))
-                                    || owner.leaseGeneration()
-                                            != leaseGeneration.apply(found.value().bytes())) {
+                            if (!(current instanceof ZLinkStoreReadFound found)) {
                                 return completed(ZLinkLocationWriteStatus.IGNORED_STALE);
                             }
-                            return provider.write(
-                                            new ZLinkStoreWriteRequest(
-                                                    List.of(
-                                                            new ZLinkStoreVersionCondition(
-                                                                    rowKey,
-                                                                    found.value().version())),
-                                                    List.of(new ZLinkStoreDelete(rowKey))),
-                                            cancellation)
+                            Object descriptor = decode.apply(found.value().bytes()).descriptor();
+                            var identity = identity(descriptor);
+                            if (!owner.ownerId().equals(identity.ownerId())
+                                    || owner.leaseGeneration() != identity.leaseGeneration()) {
+                                return completed(ZLinkLocationWriteStatus.IGNORED_STALE);
+                            }
+                            var conditions = new ArrayList<ZLinkStoreCondition>();
+                            conditions.add(
+                                    new ZLinkStoreVersionCondition(
+                                            rowKey, found.value().version()));
+                            var mutations = new ArrayList<ZLinkStoreMutation>();
+                            mutations.add(new ZLinkStoreDelete(rowKey));
+                            var release =
+                                    descriptor instanceof ZLinkMeshNodeDescriptor mesh
+                                            ? entrySpots.release(
+                                                    rowKey,
+                                                    mesh,
+                                                    conditions,
+                                                    mutations,
+                                                    cancellation)
+                                            : completed((Void) null);
+                            return release.thenCompose(
+                                            ignored ->
+                                                    provider.write(
+                                                            new ZLinkStoreWriteRequest(
+                                                                    conditions, mutations),
+                                                            cancellation))
                                     .thenApply(
                                             result -> {
                                                 if (!(result instanceof ZLinkStoreWriteApplied))

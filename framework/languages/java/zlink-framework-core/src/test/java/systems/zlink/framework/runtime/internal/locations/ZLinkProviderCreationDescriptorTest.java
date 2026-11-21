@@ -11,6 +11,7 @@ import org.junit.jupiter.params.provider.CsvSource;
 
 import systems.zlink.framework.locationprovider.*;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
+import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 
 import java.util.List;
 import java.util.concurrent.CompletionStage;
@@ -39,7 +40,17 @@ final class ZLinkProviderCreationDescriptorTest {
                 (ZLinkStoreReadFound) await(fixture.provider.read(descriptorKey, () -> false));
         apply(fixture, transition);
         var conditions = fixture.provider.writes.getFirst().conditions();
-        assertEquals(transition.equals("Reserve") ? 6 : 4, conditions.size());
+        boolean reservesSpot =
+                transition.equals("Reserve") && objectKind == ZLinkPlacementObjectKind.USER_SPOT;
+        assertEquals(transition.equals("Reserve") ? (reservesSpot ? 7 : 6) : 4, conditions.size());
+        if (reservesSpot) {
+            String spotId = ZLinkAuthorityKeyCodec.decode(fixture.reservation.authorityKey()).id();
+            assertTrue(
+                    conditions.contains(
+                            new ZLinkStoreMissingCondition(
+                                    ZLinkOpaqueRecordKey.of("entry-spot-id", spotId))),
+                    "Entry Spot claim absence");
+        }
         assertTrue(
                 conditions.stream()
                         .anyMatch(

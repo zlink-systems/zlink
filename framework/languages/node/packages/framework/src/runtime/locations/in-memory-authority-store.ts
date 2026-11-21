@@ -49,6 +49,12 @@ import type {
 } from './internal-location-contracts';
 import { encodeAuthorityKey } from './authority-key-codec';
 import {
+  entrySpotIdentityClaim,
+  entrySpotIdentityOwner,
+  matchesEntrySpotIdentityClaim,
+  type EntrySpotIdentityClaim
+} from './entry-spot-identity';
+import {
   ZLinkOwnerLeaseReleaseDelay,
   ownerLeaseReleaseDelayScope
 } from './owner-lease-release-delay';
@@ -59,7 +65,7 @@ import {
 } from '../foundation/service-relocation-runtime';
 import { decodeServiceReadySpotAuthority } from '../foundation/service-authority-payload-codec';
 import { decodeActorAuthorityPayload } from '../actors/actor-authority-payload-codec';
-import { ZLinkSpotKind } from '../../contracts';
+import { ZLinkSpotKind, type ZLinkMeshNodeDescriptor } from '../../contracts';
 
 const MAX_GENERATION = 0x7fff_ffff_ffff_ffffn;
 
@@ -81,7 +87,6 @@ export interface ZLinkInMemoryAuthorityValidation {
     currentReserved: ZLinkCapacityVector,
     currentActive: ZLinkCapacityVector
   ): boolean;
-  identityClaimed?(authorityKey: string): boolean;
 }
 
 interface AuthorityRow {
@@ -113,6 +118,7 @@ interface AggregateRecord {
  */
 export class ZLinkInMemoryAuthorityStore {
   private readonly rows = new Map<string, AuthorityRow>();
+  private readonly entrySpotClaims = new Map<string, EntrySpotIdentityClaim>();
   private readonly creationTerminals = new Map<
     string,
     'committed' | 'rejected' | 'failed' | 'aborted'
@@ -133,6 +139,46 @@ export class ZLinkInMemoryAuthorityStore {
       3 * zlinkRuntimeDefaultLocationOptions.ownerLeaseFencingMarginMs
     )
   ) {}
+
+  replaceEntrySpotIdentity(
+    descriptorKey: string,
+    next: ZLinkMeshNodeDescriptor,
+    previous?: ZLinkMeshNodeDescriptor
+  ): boolean {
+    if (next.entrySpotId !== undefined) {
+      const desired = entrySpotIdentityClaim(descriptorKey, next);
+      const current = this.activeEntrySpotIdentity(next.entrySpotId);
+      if (
+        this.rows.has(encodeAuthorityKey('user_spot', next.entrySpotId).value) ||
+        (current !== undefined && !matchesEntrySpotIdentityClaim(current, desired))
+      ) {
+        return false;
+      }
+      if (current === undefined) this.entrySpotClaims.set(next.entrySpotId, desired);
+    }
+    if (previous !== undefined && previous.entrySpotId !== next.entrySpotId) {
+      this.releaseEntrySpotIdentity(descriptorKey, previous);
+    }
+    return true;
+  }
+
+  releaseEntrySpotIdentity(descriptorKey: string, descriptor: ZLinkMeshNodeDescriptor): void {
+    if (descriptor.entrySpotId === undefined) return;
+    const claim = this.entrySpotClaims.get(descriptor.entrySpotId);
+    if (
+      claim !== undefined &&
+      matchesEntrySpotIdentityClaim(claim, entrySpotIdentityClaim(descriptorKey, descriptor))
+    ) {
+      this.entrySpotClaims.delete(descriptor.entrySpotId);
+    }
+  }
+
+  private activeEntrySpotIdentity(spotId: string): EntrySpotIdentityClaim | undefined {
+    const claim = this.entrySpotClaims.get(spotId);
+    return claim !== undefined && this.validation.isOwnerLive(entrySpotIdentityOwner(claim))
+      ? claim
+      : undefined;
+  }
 
   async readAuthority(
     key: ZLinkAuthorityKey,
@@ -627,7 +673,10 @@ export class ZLinkInMemoryAuthorityStore {
     signal?.throwIfAborted();
     validateReserve(request);
     const key = creationKey(request.key);
-    if (this.validation.identityClaimed?.(key) === true) {
+    if (
+      request.key.kind !== 'actor' &&
+      this.activeEntrySpotIdentity(request.key.globalId) !== undefined
+    ) {
       return { kind: 'conflict', current: { kind: 'missing', storeNow: this.now() } };
     }
     const current = this.rows.get(key);

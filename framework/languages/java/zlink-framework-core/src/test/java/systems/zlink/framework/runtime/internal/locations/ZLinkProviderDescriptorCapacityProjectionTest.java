@@ -309,7 +309,7 @@ final class ZLinkProviderDescriptorCapacityProjectionTest {
                                 false,
                                 4)),
                 ZLinkMeshNodeObjectRole.SERVER,
-                Optional.of("usage-entry"),
+                Optional.of("usage-entry-" + rid),
                 100,
                 new ZLinkPlacementCapacity(
                         new ZLinkCapacityUsage(publishedUsage, publishedUsage, 5),

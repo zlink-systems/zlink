@@ -3213,7 +3213,16 @@ public sealed class ProviderLocationRepositoryAuthorityTests
                 break;
         }
         Assert.Equal(republish ? 2 : 1, writes.Count);
-        Assert.Equal(transition == "Reserve" ? 6 : 4, writes[0].Conditions.Count);
+        Assert.Equal(transition == "Reserve" ? (userSpot ? 7 : 6) : 4, writes[0].Conditions.Count);
+        if (transition == "Reserve" && userSpot)
+            Assert.Contains(
+                new ZLinkStoreCondition.Missing(
+                    new ZLinkStoreKey(
+                        $"entry-spot-id\0{ZLinkAuthorityKeyCodec.DecodeSpot(request.Key)}"
+                    )
+                ),
+                writes[0].Conditions
+            );
         Assert.Contains(
             writes[0].Conditions,
             c =>
@@ -4631,6 +4640,7 @@ public sealed class ProviderLocationRepositoryAuthorityTests
                 MeshName = firstMeshName,
                 Rid = firstRid,
                 ObjectRole = ZLinkMeshNodeObjectRole.Client,
+                EntrySpotId = null,
                 State = ZLinkFrameworkRuntimeState.Serving,
             },
             ZLinkLocationWriteIntent.NewClaim
@@ -4642,6 +4652,7 @@ public sealed class ProviderLocationRepositoryAuthorityTests
                 MeshName = secondMeshName,
                 Rid = secondRid,
                 ObjectRole = ZLinkMeshNodeObjectRole.Client,
+                EntrySpotId = null,
                 State = ZLinkFrameworkRuntimeState.Serving,
             },
             ZLinkLocationWriteIntent.NewClaim
@@ -7988,8 +7999,7 @@ public sealed class ProviderLocationRepositoryAuthorityTests
                 new ZLinkPopulationCapacity(0, 0, 2048),
                 [new ZLinkSpotTypeCapacity(ZLinkPlacementObjectKind.UserSpot, "player", 0, 0, 100)]
             ),
-            EntrySpotId =
-                $"play-entry-00000000-0000-4000-8000-{(node == "source" ? "000000000001" : "000000000002")}",
+            EntrySpotId = $"{node}-entry-00000000-0000-4000-8000-000000000001",
             State = ZLinkFrameworkRuntimeState.Serving,
         };
 

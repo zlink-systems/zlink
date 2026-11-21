@@ -878,6 +878,7 @@ public sealed partial class EntrySpotActorDispatchTests
         var descriptor = local with
         {
             Rid = routingId,
+            EntrySpotId = ZLinkSpotId.CreateEntrySpotId(local.MeshName),
             Endpoint = $"inproc://{routingId}",
             OwnerId = owner.OwnerId,
             LeaseGeneration = owner.LeaseGeneration,

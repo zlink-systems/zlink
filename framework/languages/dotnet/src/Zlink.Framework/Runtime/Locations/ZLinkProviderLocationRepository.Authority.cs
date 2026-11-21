@@ -614,6 +614,25 @@ internal sealed partial class ZLinkProviderLocationRepository
         for (; ; )
         {
             cancellationToken.ThrowIfCancellationRequested();
+            ZLinkStoreCondition? entryClaimCondition = null;
+            if (
+                request.ObjectKind
+                    is ZLinkPlacementObjectKind.UserSpot
+                        or ZLinkPlacementObjectKind.InstanceSpot
+                && ZLinkAuthorityKeyCodec.TryDecodeSpot(request.Key, out var spotId)
+            )
+            {
+                var claim = await ObserveEntrySpotClaimAsync(
+                        OpaqueRecordKey(EntrySpotIdPrefix, spotId),
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
+                if (claim.Active is not null)
+                    return new ZLinkObjectReserveResult.Conflict(
+                        new ZLinkAuthorityReadResult.Missing(claim.StoreNow)
+                    );
+                entryClaimCondition = claim.Condition;
+            }
             var current = await ReadAuthorityRecordAsync(request.Key, cancellationToken)
                 .ConfigureAwait(false);
             if (current is not null)
@@ -719,17 +738,21 @@ internal sealed partial class ZLinkProviderLocationRepository
             var nextCapacity = capacity.Record.Clone();
             ApplyCapacity(nextCapacity, allocation, pendingDelta: 1);
             var metaKey = AuthorityMetaKey(request.Key);
+            ZLinkStoreCondition[] conditions =
+            [
+                new ZLinkStoreCondition.Missing(metaKey),
+                objectCounter.Condition,
+                target.DescriptorCondition,
+                target.OwnerCondition,
+                capacity.Condition,
+                authorityCounter.Condition,
+            ];
+            if (entryClaimCondition is not null)
+                conditions = [.. conditions, entryClaimCondition];
             var result = await _provider
                 .WriteAsync(
                     new ZLinkStoreWriteRequest(
-                        [
-                            new ZLinkStoreCondition.Missing(metaKey),
-                            objectCounter.Condition,
-                            target.DescriptorCondition,
-                            target.OwnerCondition,
-                            capacity.Condition,
-                            authorityCounter.Condition,
-                        ],
+                        conditions,
                         [
                             new ZLinkStoreMutation.Put(metaKey, Encode(meta), null),
                             new ZLinkStoreMutation.Put(capacity.Key, Encode(nextCapacity), null),

@@ -106,6 +106,14 @@ public record ZLinkMeshNodeDescriptor(
         Objects.requireNonNull(updatedAt, "updatedAt");
     }
 
+    public boolean hasSameEntryClaim(ZLinkMeshNodeDescriptor previous) {
+        return previous != null
+                && lifecycleGeneration == previous.lifecycleGeneration
+                && leaseGeneration == previous.leaseGeneration
+                && ownerId.equals(previous.ownerId)
+                && entrySpotId.equals(previous.entrySpotId);
+    }
+
     private static String requireText(String value, String field) {
         if (value == null || value.isBlank() || value.indexOf('\0') >= 0) {
             throw new IllegalArgumentException(field + " must be non-blank text without NUL");

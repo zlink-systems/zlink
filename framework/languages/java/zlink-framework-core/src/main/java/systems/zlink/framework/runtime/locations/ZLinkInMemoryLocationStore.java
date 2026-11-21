@@ -90,7 +90,6 @@ public final class ZLinkInMemoryLocationStore
     private long ownerLeaseGeneration;
     private final RowTable<ZLinkMeshNodeDescriptor> meshNodes = new RowTable<>();
     private final Map<String, Long> meshNodeStamps = new HashMap<>();
-    private final Map<String, EntrySpotClaim> entrySpotClaims = new HashMap<>();
     private final RowTable<ZLinkFanoutPublisherDescriptor> fanoutPublishers = new RowTable<>();
     private final RowTable<ZLinkClientServerServerDescriptor> clientServers = new RowTable<>();
 
@@ -112,7 +111,6 @@ public final class ZLinkInMemoryLocationStore
                         clock,
                         this::isExactOwnerLeaseLive,
                         this::findMeshNodeDescriptor,
-                        this::isSpotIdentityClaimed,
                         ownerLeaseWait);
     }
 
@@ -300,6 +298,9 @@ public final class ZLinkInMemoryLocationStore
                     if (current != null
                             && (newClaim || intent == ZLinkLocationWriteIntent.RENEW)
                             && hasSameDescriptorFields(current, descriptor)) {
+                        if (newClaim && !authority.updateEntrySpotClaim(null, descriptor)) {
+                            return completed(ZLinkLocationWriteResult.rejectedConflict());
+                        }
                         ownerLeaseWait.clear(
                                 waitKey,
                                 new ZLinkLocationOwnerToken(
@@ -307,23 +308,6 @@ public final class ZLinkInMemoryLocationStore
                         return completed(
                                 ZLinkLocationWriteResult.stored(
                                         current.lifecycleGeneration(), current.updatedAt()));
-                    }
-                    String entryAuthorityKey =
-                            descriptor.entrySpotId().map(ZLinkAuthorityKeyCodec::spot).orElse(null);
-                    EntrySpotClaim entryClaim =
-                            entryAuthorityKey == null
-                                    ? null
-                                    : entrySpotClaims.get(entryAuthorityKey);
-                    if (entryClaim != null && !isExactOwnerLeaseLive(entryClaim.owner())) {
-                        entrySpotClaims.remove(entryAuthorityKey);
-                        entryClaim = null;
-                    }
-                    if ((newClaim || intent == ZLinkLocationWriteIntent.TAKEOVER)
-                            && ((entryClaim != null && !entryClaim.matches(key, descriptor))
-                                    || (entryAuthorityKey != null
-                                            && authority.containsAuthorityOnLane(
-                                                    entryAuthorityKey)))) {
-                        return completed(ZLinkLocationWriteResult.rejectedConflict());
                     }
                     if (newClaim && current != null) {
                         var previousOwner =
@@ -364,6 +348,9 @@ public final class ZLinkInMemoryLocationStore
                                             <= current.descriptorRevision())) {
                         return completed(ZLinkLocationWriteResult.ignoredStale());
                     }
+                    if (!authority.updateEntrySpotClaim(current, descriptor)) {
+                        return completed(ZLinkLocationWriteResult.rejectedConflict());
+                    }
                     Instant now = clock.instant();
                     meshNodes.rows.put(key, copyDescriptor(descriptor, now));
                     ownerLeaseWait.clear(
@@ -373,11 +360,6 @@ public final class ZLinkInMemoryLocationStore
                                     : new ZLinkLocationOwnerToken(
                                             current.ownerId(), current.leaseGeneration()));
                     bumpMeshNodeStamp(descriptor.meshName());
-                    if (entryAuthorityKey != null) {
-                        entrySpotClaims.put(
-                                entryAuthorityKey,
-                                new EntrySpotClaim(key, descriptor.lifecycleGeneration(), owner));
-                    }
                     return completed(
                             ZLinkLocationWriteResult.stored(descriptor.lifecycleGeneration(), now));
                 });
@@ -394,16 +376,7 @@ public final class ZLinkInMemoryLocationStore
                             || current.leaseGeneration() != owner.leaseGeneration()) {
                         return completed(ZLinkLocationWriteStatus.IGNORED_STALE);
                     }
-                    current.entrySpotId()
-                            .ifPresent(
-                                    spotId -> {
-                                        String authorityKey = ZLinkAuthorityKeyCodec.spot(spotId);
-                                        EntrySpotClaim claim = entrySpotClaims.get(authorityKey);
-                                        if (claim != null
-                                                && claim.matches(meshNodeKey(key), current)) {
-                                            entrySpotClaims.remove(authorityKey);
-                                        }
-                                    });
+                    authority.releaseEntrySpot(current);
                     meshNodes.rows.remove(meshNodeKey(key));
                     ownerLeaseWait.clear(
                             ZLinkOwnerLeaseWaitTracker.descriptorRecordKey(meshNodeKey(key)),
@@ -984,18 +957,6 @@ public final class ZLinkInMemoryLocationStore
                 && current.leaseGeneration() == candidate.leaseGeneration();
     }
 
-    private boolean isSpotIdentityClaimed(String authorityKey) {
-        EntrySpotClaim claim = entrySpotClaims.get(authorityKey);
-        if (claim == null) {
-            return false;
-        }
-        if (!isExactOwnerLeaseLive(claim.owner())) {
-            entrySpotClaims.remove(authorityKey);
-            return false;
-        }
-        return true;
-    }
-
     private static <T> CompletionStage<T> completed(T value) {
         return CompletableFuture.completedFuture(value);
     }
@@ -1024,14 +985,4 @@ public final class ZLinkInMemoryLocationStore
     }
 
     private record LeaseRow(ZLinkLocationOwnerToken token, Instant expiresAt) {}
-
-    private record EntrySpotClaim(
-            String descriptorKey, long lifecycleGeneration, ZLinkLocationOwnerToken owner) {
-        private boolean matches(String expectedDescriptorKey, ZLinkMeshNodeDescriptor descriptor) {
-            return descriptorKey.equals(expectedDescriptorKey)
-                    && lifecycleGeneration == descriptor.lifecycleGeneration()
-                    && owner.ownerId().equals(descriptor.ownerId())
-                    && owner.leaseGeneration() == descriptor.leaseGeneration();
-        }
-    }
 }

@@ -4067,7 +4067,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                 1,
                 capabilities,
                 ZLinkMeshNodeObjectRole.SERVER,
-                Optional.of("capacity-node-entry-00000000-0000-4000-8000-000000000001"),
+                Optional.of(meshName + "-entry-capacity-" + nodeRid.toHex()),
                 100,
                 new ZLinkPlacementCapacity(
                         new ZLinkCapacityUsage(0, 0, limit),

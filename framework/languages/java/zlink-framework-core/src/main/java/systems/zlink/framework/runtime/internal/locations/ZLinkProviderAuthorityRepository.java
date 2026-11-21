@@ -909,6 +909,34 @@ final class ZLinkProviderAuthorityRepository {
             String reservationVersion,
             String reclaimVersion) {
         Objects.requireNonNull(request, "request");
+        if (request.objectKind() == ZLinkPlacementObjectKind.ACTOR) {
+            return reserve(request, cancellation, reservationVersion, reclaimVersion, null);
+        }
+        String spotId = ZLinkAuthorityKeyCodec.decode(request.authorityKey()).id();
+        return descriptors
+                .entrySpots
+                .observe(spotId, adapt(cancellation))
+                .thenCompose(
+                        claim ->
+                                claim.live()
+                                        ? completed(
+                                                new ZLinkObjectConflict(
+                                                        new ZLinkAuthorityMissing(
+                                                                claim.storeNow())))
+                                        : reserve(
+                                                request,
+                                                cancellation,
+                                                reservationVersion,
+                                                reclaimVersion,
+                                                claim));
+    }
+
+    private CompletionStage<ZLinkObjectReserveResult> reserve(
+            ZLinkObjectReservationRequest request,
+            ZLinkStoreCancellation cancellation,
+            String reservationVersion,
+            String reclaimVersion,
+            ZLinkProviderEntrySpotClaims.Observation claim) {
         var opaqueCancellation = adapt(cancellation);
         ZLinkStoreKey key = authorityKey(request.authorityKey());
         return readAuthorityRow(key, opaqueCancellation)
@@ -1074,6 +1102,12 @@ final class ZLinkProviderAuthorityRepository {
                                                                                                                 encode(
                                                                                                                         record),
                                                                                                                 null));
+                                                                                        if (claim
+                                                                                                != null)
+                                                                                            claim
+                                                                                                    .fenceReserve(
+                                                                                                            conditions,
+                                                                                                            mutations);
                                                                                         return provider.write(
                                                                                                         new ZLinkStoreWriteRequest(
                                                                                                                 conditions,
@@ -3034,7 +3068,13 @@ final class ZLinkProviderAuthorityRepository {
     CompletionStage<Long> removeAllByOwner(
             ZLinkLocationOwnerToken owner,
             systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
-        return removeAllByOwner(owner, null, 0L, 0, cancellation);
+        return removeAllByOwner(owner, null, 0L, 0, cancellation)
+                .thenCompose(
+                        removed ->
+                                descriptors
+                                        .entrySpots
+                                        .removeAllByOwner(owner, cancellation)
+                                        .thenApply(ignored -> removed));
     }
 
     private CompletionStage<Long> removeAllByOwner(

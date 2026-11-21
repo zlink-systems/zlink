@@ -611,62 +611,6 @@ class ZLinkInMemoryLocationStoreTest {
         assertEquals(actorCapacity(0, 0, 8), onlyMeshNode(store).capacity());
     }
 
-    @Test
-    void entrySpotIdentityIsClaimedGloballyAndReleasedByExactOwner() throws Exception {
-        ZLinkInMemoryLocationStore store =
-                new ZLinkInMemoryLocationStore(Clock.fixed(NOW, ZoneOffset.UTC));
-        ZLinkLocationOwnerToken firstOwner =
-                assertInstanceOf(
-                                ZLinkOwnerLeaseClaimed.class,
-                                store.claimOwnerLease("entry-owner-a", Duration.ofSeconds(30))
-                                        .toCompletableFuture()
-                                        .get())
-                        .token();
-        ZLinkLocationOwnerToken secondOwner =
-                assertInstanceOf(
-                                ZLinkOwnerLeaseClaimed.class,
-                                store.claimOwnerLease("entry-owner-b", Duration.ofSeconds(30))
-                                        .toCompletableFuture()
-                                        .get())
-                        .token();
-        String entrySpotId = "mesh-entry-00000000-0000-4000-8000-000000000099";
-        ZLinkMeshNodeDescriptor first =
-                meshNodeDescriptor(firstOwner, NODE_A, 7, 1, "tcp://127.0.0.1:7000", entrySpotId);
-        RoutingId secondRid = RoutingId.from(new byte[] {0x02});
-        ZLinkMeshNodeDescriptor second =
-                meshNodeDescriptor(
-                        secondOwner, secondRid, 8, 1, "tcp://127.0.0.1:7001", entrySpotId);
-
-        assertEquals(
-                ZLinkLocationWriteStatus.STORED,
-                store.updateMeshNode(first, ZLinkLocationWriteIntent.NEW_CLAIM)
-                        .toCompletableFuture()
-                        .get()
-                        .status());
-        assertEquals(
-                ZLinkLocationWriteStatus.REJECTED_CONFLICT,
-                store.updateMeshNode(second, ZLinkLocationWriteIntent.NEW_CLAIM)
-                        .toCompletableFuture()
-                        .get()
-                        .status());
-        assertEquals(
-                ZLinkLocationWriteStatus.STORED,
-                store.removeMeshNode(new ZLinkMeshNodeDescriptorKey("mesh", NODE_A), firstOwner)
-                        .toCompletableFuture()
-                        .get());
-        assertEquals(
-                ZLinkLocationWriteStatus.STORED,
-                store.updateMeshNode(second, ZLinkLocationWriteIntent.NEW_CLAIM)
-                        .toCompletableFuture()
-                        .get()
-                        .status());
-        assertEquals(
-                ZLinkLocationWriteStatus.IGNORED_STALE,
-                store.removeMeshNode(new ZLinkMeshNodeDescriptorKey("mesh", NODE_A), firstOwner)
-                        .toCompletableFuture()
-                        .get());
-    }
-
     void preservePutCanSealAnActiveAuthorityWithoutChangingItsOwnerFence() throws Exception {
         ZLinkInMemoryAuthorityStore store = newAuthorityStore();
         var owner = new ZLinkLocationOwnerToken("source", 1);

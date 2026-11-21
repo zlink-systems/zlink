@@ -12,6 +12,7 @@
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/location_store_limits.hpp"
 #include <runtime/locations/location_repository.hpp>
+#include "runtime/locations/entry_spot_id_claim.hpp"
 #include "runtime/locations/pending_creation_projection.hpp"
 #include "runtime/execution/state_lane.hpp"
 #include <zlink/framework/contracts/locations/stores.hpp>
@@ -68,63 +69,63 @@ class in_memory_location_repository_t : public location_repository_t
                 return completed (
                   location_write_result_t{location_write_status_t::ignored_stale, 0, {}});
 
-            if (found != _mesh_nodes.end ()
-                && ((intent == location_write_intent_t::new_claim
-                     || intent == location_write_intent_t::fixed_rid_new_claim)
-                    || intent == location_write_intent_t::renew)
-                && same_mesh_node_descriptor (found->second, descriptor)) {
-                retain_reclaim_observation ("mesh:" + key);
+            const bool replay = found != _mesh_nodes.end ()
+                                && (intent == location_write_intent_t::new_claim
+                                    || intent == location_write_intent_t::fixed_rid_new_claim
+                                    || intent == location_write_intent_t::renew)
+                                && same_mesh_node_descriptor (found->second, descriptor);
+            if (!replay) {
+                if ((intent == location_write_intent_t::new_claim
+                     || intent == location_write_intent_t::fixed_rid_new_claim)) {
+                    const location_owner_token_t previous =
+                      found == _mesh_nodes.end ()
+                        ? location_owner_token_t{}
+                        : location_owner_token_t{found->second.owner_id,
+                                                 found->second.lease_generation};
+                    const bool live =
+                      found != _mesh_nodes.end () && owner_token_is_live (previous, now);
+                    const bool elapsed = intent != location_write_intent_t::fixed_rid_new_claim
+                                         || reclaim_wait_elapsed ("mesh:" + key, previous, live);
+                    if (live)
+                        return completed (location_write_result_t{
+                          location_write_status_t::rejected_conflict, 0, {}});
+                    if (!elapsed)
+                        return completed (
+                          location_write_result_t{location_write_status_t::waiting, 0, {}});
+                } else if (intent == location_write_intent_t::renew) {
+                    if (found == _mesh_nodes.end () || found->second.owner_id != descriptor.owner_id
+                        || found->second.lease_generation > descriptor.lease_generation
+                        || descriptor.descriptor_revision < found->second.descriptor_revision)
+                        return completed (
+                          location_write_result_t{location_write_status_t::ignored_stale, 0, {}});
+                    if (!same_mesh_node_identity (found->second, descriptor))
+                        return completed (location_write_result_t{
+                          location_write_status_t::rejected_conflict, 0, {}});
+                    if (descriptor.descriptor_revision == found->second.descriptor_revision)
+                        return completed (location_write_result_t{
+                          location_write_status_t::rejected_conflict, 0, {}});
+                } else {
+                    return completed (
+                      location_write_result_t{location_write_status_t::rejected_conflict, 0, {}});
+                }
+            }
+            if ((intent != location_write_intent_t::renew
+                 || found->second.lease_generation != descriptor.lease_generation)
+                && !claim_entry_spot_id (
+                  descriptor, key, found == _mesh_nodes.end () ? nullptr : &found->second, now))
+                return completed (
+                  location_write_result_t{location_write_status_t::rejected_conflict, 0, {}});
+
+            retain_reclaim_observation ("mesh:" + key);
+            if (replay)
                 return completed (location_write_result_t::stored (
                   static_cast<std::int64_t> (found->second.descriptor_revision),
                   found->second.updated_at));
-            }
-
-            if ((intent == location_write_intent_t::new_claim
-                 || intent == location_write_intent_t::fixed_rid_new_claim)) {
-                const location_owner_token_t previous =
-                  found == _mesh_nodes.end ()
-                    ? location_owner_token_t{}
-                    : location_owner_token_t{found->second.owner_id,
-                                             found->second.lease_generation};
-                const bool live =
-                  found != _mesh_nodes.end () && owner_token_is_live (previous, now);
-                const bool elapsed = intent != location_write_intent_t::fixed_rid_new_claim
-                                     || reclaim_wait_elapsed ("mesh:" + key, previous, live);
-                if (live)
-                    return completed (
-                      location_write_result_t{location_write_status_t::rejected_conflict, 0, {}});
-                if (!elapsed)
-                    return completed (
-                      location_write_result_t{location_write_status_t::waiting, 0, {}});
-            } else if (intent == location_write_intent_t::renew) {
-                if (found == _mesh_nodes.end () || found->second.owner_id != descriptor.owner_id
-                    || found->second.lease_generation > descriptor.lease_generation
-                    || descriptor.descriptor_revision < found->second.descriptor_revision)
-                    return completed (
-                      location_write_result_t{location_write_status_t::ignored_stale, 0, {}});
-                if (!same_mesh_node_identity (found->second, descriptor))
-                    return completed (
-                      location_write_result_t{location_write_status_t::rejected_conflict, 0, {}});
-                if (descriptor.descriptor_revision == found->second.descriptor_revision)
-                    return completed (
-                      location_write_result_t{location_write_status_t::rejected_conflict, 0, {}});
-            } else {
-                return completed (
-                  location_write_result_t{location_write_status_t::rejected_conflict, 0, {}});
-            }
-            if (!can_publish_entry_spot_id (descriptor, key, now))
-                return completed (
-                  location_write_result_t{location_write_status_t::rejected_conflict, 0, {}});
-
             descriptor.updated_at = now;
-            const auto previous = found == _mesh_nodes.end ()
-                                    ? std::optional<mesh_node_descriptor_t>{}
-                                    : std::make_optional (found->second);
-            _mesh_nodes[key] = descriptor;
-            retain_reclaim_observation ("mesh:" + key);
-            publish_entry_spot_id (previous, descriptor, key);
-            return completed (location_write_result_t::stored (
-              static_cast<std::int64_t> (descriptor.descriptor_revision), now));
+            const auto revision = descriptor.descriptor_revision;
+            _mesh_nodes.insert_or_assign (key, std::move (descriptor));
+            return completed (
+              location_write_result_t::stored (static_cast<std::int64_t> (revision), now));
         });
     }
 
@@ -890,13 +891,10 @@ class in_memory_location_repository_t : public location_repository_t
                     throw framework_exception_t (framework_error_kind_t::deadline_exceeded,
                                                  "Object creation deadline expired");
                 const auto key = object_key (request.key);
-                if (request.key.kind != placement_object_kind_t::actor) {
-                    const auto claim = _entry_spot_id_claims.find (request.key.global_id);
-                    if (claim != _entry_spot_id_claims.end ()
-                        && owner_token_is_live (claim->second.owner, now))
-                        return completed (object_reserve_result_t{
-                          object_reserve_conflict_t{authority_missing_t{now}}});
-                }
+                if (request.key.kind != placement_object_kind_t::actor
+                    && live_entry_spot_id_claim (request.key.global_id, now))
+                    return completed (
+                      object_reserve_result_t{object_reserve_conflict_t{authority_missing_t{now}}});
                 auto authority = _authorities.find (key);
                 retain_reclaim_observation (key, authority != _authorities.end ()
                                                    ? std::optional{authority->second.owner}
@@ -1307,6 +1305,16 @@ class in_memory_location_repository_t : public location_repository_t
           .run ([&] {
               if (!owner_token_is_live (owner, clock_t::now ()))
                   return completed (std::int64_t{0});
+              std::erase_if (_entry_spot_id_claims, [&] (const auto &row) {
+                  const auto &[spot_id, claim] = row;
+                  if (!same_owner (claim.owner, owner))
+                      return false;
+                  const auto found = _mesh_nodes.find (claim.descriptor_key);
+                  return found != _mesh_nodes.end () && found->second.entry_spot_id == spot_id
+                         && claim.matches (
+                           found->first, found->second.lifecycle_generation,
+                           {found->second.owner_id, found->second.lease_generation});
+              });
               std::int64_t removed = 0;
               for (auto it = _authorities.begin (); it != _authorities.end ();) {
                   const auto &row = it->second;
@@ -1878,58 +1886,49 @@ class in_memory_location_repository_t : public location_repository_t
           .value;
     }
 
-    struct entry_spot_id_claim_t
+    const entry_spot_id_claim_t *live_entry_spot_id_claim (const std::string &spot_id,
+                                                           clock_t::time_point now) const
     {
-        std::string descriptor_key;
-        std::uint64_t descriptor_lifecycle_generation = 0;
-        location_owner_token_t owner;
-    };
-
-    bool can_publish_entry_spot_id (const mesh_node_descriptor_t &descriptor,
-                                    const std::string &descriptor_key,
-                                    clock_t::time_point now) const
-    {
-        if (!descriptor.entry_spot_id)
-            return true;
-        const auto claim = _entry_spot_id_claims.find (*descriptor.entry_spot_id);
-        if (claim != _entry_spot_id_claims.end () && owner_token_is_live (claim->second.owner, now)
-            && (claim->second.descriptor_key != descriptor_key
-                || claim->second.descriptor_lifecycle_generation != descriptor.lifecycle_generation
-                || !same_owner (claim->second.owner,
-                                {descriptor.owner_id, descriptor.lease_generation})))
-            return false;
-        return !_authorities.contains (
-                 object_key ({placement_object_kind_t::user_spot, *descriptor.entry_spot_id}))
-               && !_authorities.contains (
-                 object_key ({placement_object_kind_t::instance_spot, *descriptor.entry_spot_id}));
+        const auto found = _entry_spot_id_claims.find (spot_id);
+        return found != _entry_spot_id_claims.end ()
+                   && owner_token_is_live (found->second.owner, now)
+                 ? &found->second
+                 : nullptr;
     }
 
-    void publish_entry_spot_id (const std::optional<mesh_node_descriptor_t> &previous,
-                                const mesh_node_descriptor_t &descriptor,
-                                const std::string &descriptor_key)
+    bool claim_entry_spot_id (const mesh_node_descriptor_t &descriptor,
+                              const std::string &key,
+                              const mesh_node_descriptor_t *previous,
+                              clock_t::time_point now)
     {
+        if (descriptor.entry_spot_id) {
+            const auto &spot_id = *descriptor.entry_spot_id;
+            const location_owner_token_t owner{descriptor.owner_id, descriptor.lease_generation};
+            const auto *claim = live_entry_spot_id_claim (spot_id, now);
+            if (claim && !claim->matches (key, descriptor.lifecycle_generation, owner))
+                return false;
+            if (!claim) {
+                if (_authorities.contains (spot_authority_key (spot_id).value))
+                    return false;
+                _entry_spot_id_claims.insert_or_assign (
+                  spot_id, entry_spot_id_claim_t{key, descriptor.lifecycle_generation, owner});
+            }
+        }
         if (previous && previous->entry_spot_id != descriptor.entry_spot_id)
-            remove_entry_spot_id_claim (*previous, descriptor_key);
-        if (descriptor.entry_spot_id)
-            _entry_spot_id_claims.insert_or_assign (
-              *descriptor.entry_spot_id,
-              entry_spot_id_claim_t{descriptor_key,
-                                    descriptor.lifecycle_generation,
-                                    {descriptor.owner_id, descriptor.lease_generation}});
+            remove_entry_spot_id_claim (*previous, key);
+        return true;
     }
 
     void remove_entry_spot_id_claim (const mesh_node_descriptor_t &descriptor,
-                                     const std::string &descriptor_key)
+                                     const std::string &key)
     {
         if (!descriptor.entry_spot_id)
             return;
         const auto claim = _entry_spot_id_claims.find (*descriptor.entry_spot_id);
-        if (claim == _entry_spot_id_claims.end () || claim->second.descriptor_key != descriptor_key
-            || claim->second.descriptor_lifecycle_generation != descriptor.lifecycle_generation
-            || !same_owner (claim->second.owner,
-                            {descriptor.owner_id, descriptor.lease_generation}))
-            return;
-        _entry_spot_id_claims.erase (claim);
+        if (claim != _entry_spot_id_claims.end ()
+            && claim->second.matches (key, descriptor.lifecycle_generation,
+                                      {descriptor.owner_id, descriptor.lease_generation}))
+            _entry_spot_id_claims.erase (claim);
     }
 
     static std::string creation_operation_key (const creation_operation_identity_t &identity)

@@ -57,6 +57,13 @@ import { SHA256_DIGEST_BYTES } from '../foundation/actor-join-recovery-codec';
 import { decodeRoutingId, encodeRoutingIdStorageHex } from '../routing-id';
 import { ZLinkAggregateInventoryStore } from './aggregate-inventory-store';
 import { decodeAuthorityKey, encodeAuthorityKey } from './authority-key-codec';
+import {
+  entrySpotIdentityClaim,
+  entrySpotIdentityOwner,
+  isEntrySpotIdentityNewClaim,
+  matchesEntrySpotIdentityClaim,
+  type EntrySpotIdentityClaim
+} from './entry-spot-identity';
 import { ZLinkInMemoryLocationStore } from './in-memory-location-store';
 import { PROVIDER_STORAGE_NAMESPACE_PREFIX, storeKey } from './in-memory-provider-location-store';
 import {
@@ -136,6 +143,7 @@ const MAX_U64 = UINT64_MAX;
 
 const CREATION_TERMINAL_RETENTION_MS = 5 * 60 * 1000;
 const MAX_DESCRIPTOR_WRITE_RETRIES = 3;
+const ENTRY_SPOT_IDENTITY_PREFIX = 'entry-spot-id\0';
 
 type StoredAuthoritySnapshot = Omit<ZLinkAuthoritySnapshot, 'kind' | 'storeVersion' | 'storeNow'>;
 
@@ -1901,10 +1909,22 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       }
       if (reclaimVersion !== undefined)
         return { kind: 'conflict', current: { kind: 'missing', storeNow: current.storeNow } };
-      const [descriptorRead, leaseRead] = await Promise.all([
+      const entryIdentityKey =
+        request.key.kind === 'actor' ? undefined : entrySpotIdentityKey(request.key.globalId);
+      const [descriptorRead, leaseRead, entryIdentity] = await Promise.all([
         this.provider.read(descriptorKey, signal),
-        this.provider.read(leaseKey, signal)
+        this.provider.read(leaseKey, signal),
+        entryIdentityKey === undefined ? undefined : this.provider.read(entryIdentityKey, signal)
       ]);
+      if (
+        entryIdentity?.kind === 'found' &&
+        (await this.isEntrySpotIdentityActive(
+          decodeJson<EntrySpotIdentityClaim>(entryIdentity.value.bytes),
+          signal
+        ))
+      ) {
+        return { kind: 'conflict', current: { kind: 'missing', storeNow: current.storeNow } };
+      }
       const descriptor = liveTargetDescriptor(descriptorRead, leaseRead, request.target);
       if (descriptor === undefined || descriptor.state !== ZLinkFrameworkRuntimeState.Serving) {
         return { kind: 'conflict', current: { kind: 'missing', storeNow: current.storeNow } };
@@ -1960,6 +1980,9 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         {
           conditions: [
             { kind: 'missing', key: rowKey },
+            ...(entryIdentityKey === undefined || entryIdentity === undefined
+              ? []
+              : [conditionFor(entryIdentityKey, entryIdentity)]),
             versionCondition(descriptorKey, descriptorRead),
             leaseValueCondition(leaseKey, request.target.owner),
             conditionFor(capacityRowKey, capacityRead),
@@ -2586,10 +2609,11 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     ) {
       return WriteStatus.IgnoredStale;
     }
+    const entryRelease = await this.entrySpotIdentityRelease(rowKey, descriptor, signal);
     const result = await this.provider.write(
       {
-        conditions: [{ kind: 'version', key: rowKey, expected: current.value.version }],
-        mutations: [{ kind: 'delete', key: rowKey }]
+        conditions: [versionCondition(rowKey, current), ...entryRelease.conditions],
+        mutations: [{ kind: 'delete', key: rowKey }, ...entryRelease.mutations]
       },
       signal
     );
@@ -3118,44 +3142,81 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     const leaseKey = ownerKey(owner.ownerId);
     const lease = await this.provider.read(leaseKey, signal);
     if (liveOwnerLeaseGeneration(lease) !== owner.leaseGeneration) return 0n;
+    await this.removeOwnedEntrySpotIdentities(owner, signal);
     return this.removeOwnedAuthorities(owner, signal);
+  }
+
+  private async removeOwnedEntrySpotIdentities(
+    owner: ZLinkLocationOwnerToken,
+    signal?: AbortSignal
+  ): Promise<void> {
+    const candidates = await this.scanOwnerCleanupCandidates(ENTRY_SPOT_IDENTITY_PREFIX, signal);
+    for (const { key, scanVersion } of candidates) {
+      signal?.throwIfAborted();
+      const current = await this.provider.read(key, signal);
+      if (current.kind === 'missing' || current.value.version.value !== scanVersion.value) continue;
+      const claim = decodeJson<EntrySpotIdentityClaim>(current.value.bytes);
+      if (
+        claim.ownerId !== owner.ownerId ||
+        claim.ownerLeaseGeneration !== owner.leaseGeneration.toString()
+      ) {
+        continue;
+      }
+      const rowKey = storeKey(claim.descriptorKey);
+      const row = await this.provider.read(rowKey, signal);
+      if (row.kind === 'missing') continue;
+      const descriptor = reviveMeshDescriptor(
+        decodeCanonicalDescriptorRecord<ZLinkMeshNodeDescriptor>(row.value.bytes).descriptor
+      );
+      if (
+        descriptor.entrySpotId === undefined ||
+        entrySpotIdentityKey(descriptor.entrySpotId).value !== key.value ||
+        !matchesEntrySpotIdentityClaim(claim, entrySpotIdentityClaim(rowKey.value, descriptor))
+      ) {
+        continue;
+      }
+      await this.provider.write(
+        {
+          conditions: [
+            versionCondition(key, current),
+            versionCondition(rowKey, row),
+            leaseValueCondition(ownerKey(owner.ownerId), owner)
+          ],
+          mutations: [{ kind: 'delete', key }]
+        },
+        signal
+      );
+    }
+  }
+
+  private async scanOwnerCleanupCandidates(
+    prefix: string,
+    signal?: AbortSignal
+  ): Promise<OwnerCleanupCandidate[]> {
+    for (;;) {
+      const candidates: OwnerCleanupCandidate[] = [];
+      let cursor: ZLinkStoreScanCursor | undefined;
+      let expired = false;
+      do {
+        const result = await this.provider.scan({ prefix, cursor, limit: 1_000 }, signal);
+        if (result.kind === 'expired') {
+          expired = true;
+          break;
+        }
+        for (const item of result.value.items) {
+          candidates.push({ key: item.key, scanVersion: item.value.version });
+        }
+        cursor = result.value.nextCursor;
+      } while (cursor !== undefined);
+      if (!expired) return candidates;
+    }
   }
 
   private async removeOwnedAuthorities(
     owner: ZLinkLocationOwnerToken,
     signal?: AbortSignal
   ): Promise<bigint> {
-    const candidates: OwnerCleanupCandidate[] = [];
-    for (;;) {
-      const pageCandidates: OwnerCleanupCandidate[] = [];
-      let cursor: ZLinkStoreScanCursor | undefined;
-      let expired = false;
-      do {
-        const result = await this.provider.scan(
-          {
-            prefix: AUTHORITY_PREIMAGE_PREFIX,
-            cursor,
-            limit: 1_000
-          },
-          signal
-        );
-        if (result.kind === 'expired') {
-          expired = true;
-          break;
-        }
-        for (const item of result.value.items) {
-          pageCandidates.push({ key: item.key, scanVersion: item.value.version });
-        }
-        cursor = result.value.nextCursor;
-      } while (cursor !== undefined);
-      if (expired) {
-        candidates.length = 0;
-        continue;
-      }
-      candidates.push(...pageCandidates);
-      break;
-    }
-
+    const candidates = await this.scanOwnerCleanupCandidates(AUTHORITY_PREIMAGE_PREFIX, signal);
     let removed = 0n;
     for (const candidate of candidates) {
       signal?.throwIfAborted();
@@ -3242,11 +3303,31 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     }
 
     let generation = 1n;
+    let stored: T | undefined;
+    let takeClaim = current.kind === 'missing';
     if (current.kind === 'found') {
       const record = decodeCanonicalDescriptorRecord<T>(current.value.bytes);
-      const stored = revive(record.descriptor);
+      stored = revive(record.descriptor);
       generation = descriptorStoreGeneration(record, current.value.version.value);
       if (same(stored, descriptor)) {
+        if (
+          isEntrySpotIdentityNewClaim(intent) &&
+          'meshName' in descriptor &&
+          descriptor.entrySpotId !== undefined
+        ) {
+          const result = await this.writeDescriptorWithReconciliation(
+            leaseKey,
+            descriptor.ownerId,
+            descriptor.leaseGeneration,
+            rowKey,
+            current,
+            undefined,
+            generation,
+            { next: descriptor },
+            signal
+          );
+          if (result.status !== WriteStatus.Stored) return result;
+        }
         if (releaseDelayScope !== undefined)
           this.ownerLeaseReleaseDelay.clearIfUnchanged(releaseDelayScope, releaseDelayObservation);
         return { status: WriteStatus.Stored, generation, updatedAt: current.value.storeNow };
@@ -3296,6 +3377,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           updatedAt: current.value.storeNow
         };
       }
+      takeClaim = takeover;
       if (takeover) generation += 1n;
     } else if (
       intent === ZLinkLocationWriteIntent.Renew ||
@@ -3321,6 +3403,12 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       current,
       encodeCanonicalDescriptorRecord(generation, descriptor),
       generation,
+      takeClaim && 'meshName' in descriptor
+        ? {
+            next: descriptor,
+            previous: stored !== undefined && 'meshName' in stored ? stored : undefined
+          }
+        : undefined,
       signal
     );
     if (result.status === WriteStatus.Stored && releaseDelayScope !== undefined)
@@ -3334,10 +3422,17 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     leaseGeneration: bigint,
     rowKey: ZLinkStoreKey,
     predecessor: ZLinkStoreReadResult,
-    encodedDescriptor: Uint8Array,
+    encodedDescriptor: Uint8Array | undefined,
     generation: bigint,
+    entryClaim:
+      | { readonly next: ZLinkMeshNodeDescriptor; readonly previous?: ZLinkMeshNodeDescriptor }
+      | undefined,
     signal?: AbortSignal
   ): Promise<ZLinkLocationWriteResult> {
+    const descriptorMutation =
+      encodedDescriptor === undefined
+        ? undefined
+        : { kind: 'put' as const, key: rowKey, bytes: encodedDescriptor };
     let currentRow = predecessor;
 
     for (let attempt = 0; attempt <= MAX_DESCRIPTOR_WRITE_RETRIES; attempt += 1) {
@@ -3345,24 +3440,48 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         currentRow.kind === 'found'
           ? { kind: 'version', key: rowKey, expected: currentRow.value.version }
           : { kind: 'missing', key: rowKey };
+      const entryWrite =
+        entryClaim === undefined
+          ? { conditions: [], mutations: [] }
+          : await this.prepareEntrySpotIdentityWrite(
+              rowKey,
+              entryClaim.next,
+              entryClaim.previous,
+              signal
+            );
+      const storeNow =
+        currentRow.kind === 'found' ? currentRow.value.storeNow : currentRow.storeNow;
+      if (entryWrite === undefined) return rejected(storeNow);
+      const mutations =
+        descriptorMutation === undefined
+          ? entryWrite.mutations
+          : [descriptorMutation, ...entryWrite.mutations];
+      if (mutations.length === 0)
+        return { status: WriteStatus.Stored, generation, updatedAt: storeNow };
       let result: Awaited<ReturnType<ZLinkLocationStore['write']>>;
       try {
         result = await this.provider.write(
           {
-            conditions: [leaseValueCondition(leaseKey, { ownerId, leaseGeneration }), rowCondition],
-            mutations: [{ kind: 'put', key: rowKey, bytes: encodedDescriptor }]
+            conditions: [
+              leaseValueCondition(leaseKey, { ownerId, leaseGeneration }),
+              rowCondition,
+              ...entryWrite.conditions
+            ],
+            mutations
           },
           signal
         );
       } catch (failure) {
-        // Location runtime §10: the Store may have applied a write whose result
-        // was lost. Re-read the same key; the same bytes confirm the write.
-        const confirmed = await this.provider.read(rowKey, signal).catch(() => undefined);
-        if (
-          confirmed?.kind === 'found' &&
-          Buffer.from(confirmed.value.bytes).equals(Buffer.from(encodedDescriptor))
-        ) {
-          return { status: WriteStatus.Stored, generation, updatedAt: confirmed.value.storeNow };
+        // Location runtime §10: re-read the written row when the write result is lost.
+        const expected = mutations.find((mutation) => mutation.kind === 'put');
+        if (expected !== undefined) {
+          const confirmed = await this.provider.read(expected.key, signal).catch(() => undefined);
+          if (
+            confirmed?.kind === 'found' &&
+            Buffer.from(confirmed.value.bytes).equals(Buffer.from(expected.bytes))
+          ) {
+            return { status: WriteStatus.Stored, generation, updatedAt: confirmed.value.storeNow };
+          }
         }
         throw failure;
       }
@@ -3386,6 +3505,81 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       currentRow = refreshedRow;
     }
     throw new Error('Descriptor write retry loop exhausted unexpectedly.');
+  }
+
+  private async prepareEntrySpotIdentityWrite(
+    descriptorKey: ZLinkStoreKey,
+    next: ZLinkMeshNodeDescriptor,
+    previous: ZLinkMeshNodeDescriptor | undefined,
+    signal?: AbortSignal
+  ): Promise<ZLinkStoreWriteRequest | undefined> {
+    const release =
+      previous !== undefined && previous.entrySpotId !== next.entrySpotId
+        ? await this.entrySpotIdentityRelease(descriptorKey, previous, signal)
+        : { conditions: [], mutations: [] };
+    if (next.entrySpotId === undefined) return release;
+
+    const key = entrySpotIdentityKey(next.entrySpotId);
+    const genericKey = authorityKey(encodeAuthorityKey('user_spot', next.entrySpotId).value);
+    const [current, generic] = await Promise.all([
+      this.provider.read(key, signal),
+      this.provider.read(genericKey, signal)
+    ]);
+    if (generic.kind === 'found') return undefined;
+    const desired = entrySpotIdentityClaim(descriptorKey.value, next);
+    const claim =
+      current.kind === 'found'
+        ? decodeJson<EntrySpotIdentityClaim>(current.value.bytes)
+        : undefined;
+    const preserve = claim !== undefined && matchesEntrySpotIdentityClaim(claim, desired);
+    if (claim !== undefined && !preserve && (await this.isEntrySpotIdentityActive(claim, signal))) {
+      return undefined;
+    }
+    return {
+      conditions: [
+        ...release.conditions,
+        conditionFor(key, current),
+        { kind: 'missing', key: genericKey }
+      ],
+      mutations: preserve
+        ? release.mutations
+        : [...release.mutations, { kind: 'put', key, bytes: encodeJson(desired) }]
+    };
+  }
+
+  private async isEntrySpotIdentityActive(
+    claim: EntrySpotIdentityClaim,
+    signal?: AbortSignal
+  ): Promise<boolean> {
+    const owner = entrySpotIdentityOwner(claim);
+    const lease = await this.provider.read(ownerKey(owner.ownerId), signal);
+    return (
+      lease.kind === 'found' && matchesLiveOwnerLease(lease, owner.ownerId, owner.leaseGeneration)
+    );
+  }
+
+  private async entrySpotIdentityRelease(
+    descriptorKey: ZLinkStoreKey,
+    descriptor: ZLinkMeshNodeDescriptor,
+    signal?: AbortSignal
+  ): Promise<ZLinkStoreWriteRequest> {
+    if (descriptor.entrySpotId === undefined) return { conditions: [], mutations: [] };
+    const key = entrySpotIdentityKey(descriptor.entrySpotId);
+    const current = await this.provider.read(key, signal);
+    const conditions = [conditionFor(key, current)];
+    if (
+      current.kind === 'missing' ||
+      !matchesEntrySpotIdentityClaim(
+        decodeJson<EntrySpotIdentityClaim>(current.value.bytes),
+        entrySpotIdentityClaim(descriptorKey.value, descriptor)
+      )
+    ) {
+      return { conditions, mutations: [] };
+    }
+    return {
+      conditions,
+      mutations: [{ kind: 'delete', key }]
+    };
   }
 
   private async removeDescriptor<T extends OwnedDescriptor>(
@@ -4167,6 +4361,10 @@ function authorityScanPrefix(prefix: string): string {
     default:
       throw new TypeError(`unsupported authority scan prefix: ${prefix}`);
   }
+}
+
+function entrySpotIdentityKey(spotId: string): ZLinkStoreKey {
+  return storeKey(`${ENTRY_SPOT_IDENTITY_PREFIX}${requireNoNul(spotId, 'Spot ID')}`);
 }
 
 function authorityKey(value: string) {
@@ -5294,7 +5492,11 @@ function sameFanoutDescriptor(
 }
 
 function canRenewMesh(current: ZLinkMeshNodeDescriptor, next: ZLinkMeshNodeDescriptor): boolean {
-  return sameOwnerGeneration(current, next) && next.descriptorRevision > current.descriptorRevision;
+  return (
+    sameOwnerGeneration(current, next) &&
+    current.entrySpotId === next.entrySpotId &&
+    next.descriptorRevision > current.descriptorRevision
+  );
 }
 
 function canRenewClientServer(

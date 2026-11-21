@@ -4509,7 +4509,17 @@ for (const objectKind of ['actor', 'user_spot']) {
       const descriptor = await fixture.inner.read(fixture.descriptorKey);
       await applyCreationTransition(fixture, transition);
       const conditions = fixture.writes[0].conditions;
-      assert.equal(conditions.length, transition === 'Reserve' ? 6 : 4);
+      const entryClaimKey = `entry-spot-id\0${fixture.request.key.globalId}`;
+      const entryConditions = conditions.filter(
+        (condition) => condition.key.value === entryClaimKey
+      );
+      assert.deepEqual(
+        entryConditions,
+        transition === 'Reserve' && objectKind === 'user_spot'
+          ? [{ kind: 'missing', key: { value: entryClaimKey } }]
+          : []
+      );
+      assert.equal(conditions.length - entryConditions.length, transition === 'Reserve' ? 6 : 4);
       assert.ok(
         conditions.some((c) => c.kind === 'value' && c.key.value === 'owner-lease\0creation-owner')
       );

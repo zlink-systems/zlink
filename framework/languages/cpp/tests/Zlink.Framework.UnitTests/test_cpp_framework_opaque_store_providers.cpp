@@ -2486,7 +2486,15 @@ void CreationTerminalTest::verify_creation_conditions (bool user_spot)
         }
         ASSERT_EQ (provider.creation_writes.size (), 1u);
         const auto &conditions = provider.creation_writes.front ().conditions;
-        EXPECT_EQ (conditions.size (), transition == 0 ? 6u : 4u);
+        const auto entry_key = std::string ("entry-spot-id") + '\0' + reserve_request.key.global_id;
+        const auto expected_entry_fences = user_spot && transition == 0 ? 1u : 0u;
+        const auto entry_fences =
+          std::count_if (conditions.begin (), conditions.end (), [&] (const auto &condition) {
+              const auto *missing = std::get_if<store_missing_condition_t> (&condition);
+              return missing && missing->key.value == entry_key;
+          });
+        EXPECT_EQ (entry_fences, expected_entry_fences);
+        EXPECT_EQ (conditions.size (), (transition == 0 ? 6u : 4u) + expected_entry_fences);
         EXPECT_TRUE (std::any_of (conditions.begin (), conditions.end (), [&] (const auto &c) {
             const auto *v = std::get_if<store_value_condition_t> (&c);
             return v && v->key.value == std::string ("owner-lease") + '\0' + descriptor.owner_id;

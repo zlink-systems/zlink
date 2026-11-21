@@ -3495,6 +3495,19 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     COMMAND test_cpp_framework_redis_blob_bound
     LABELS "framework-unit;framework-regression;framework-location;redis"
     TIMEOUT 30)
+  add_executable(test_cpp_framework_entry_spot_identity
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_entry_spot_identity.cpp)
+  target_compile_features(test_cpp_framework_entry_spot_identity PRIVATE cxx_std_20)
+  target_use_zlink_gtest_main(test_cpp_framework_entry_spot_identity)
+  target_link_libraries(test_cpp_framework_entry_spot_identity PRIVATE zlink::framework)
+  target_include_directories(test_cpp_framework_entry_spot_identity PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_entry_spot_identity
+    COMMAND test_cpp_framework_entry_spot_identity
+    LABELS "framework-unit;framework-location"
+    TIMEOUT 30)
   if(TARGET redis++::redis++ OR TARGET redis++::redis++_static)
     add_executable(test_cpp_framework_locations_redis
       tests/Zlink.Framework.UnitTests/test_cpp_framework_locations_redis.cpp)
@@ -3519,6 +3532,10 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       LABELS "framework-extension;framework-location;redis"
       TIER integration
       TIMEOUT 30)
+    target_compile_definitions(test_cpp_framework_entry_spot_identity PRIVATE
+      ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT=1)
+    target_link_libraries(test_cpp_framework_entry_spot_identity PRIVATE
+      zlink::framework_locations_redis ${_zlink_framework_redis_target})
   endif()
   if(ZLINK_FRAMEWORK_CPP_WITH_ETCD)
     add_executable(test_cpp_framework_locations_etcd
