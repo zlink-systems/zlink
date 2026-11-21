@@ -222,6 +222,14 @@ export class ZLinkActorTransferRuntime {
     this.options.spotManager()?.captureSourceActorPacketPrefix(actor);
   }
 
+  beginRelocationTargetIngress(
+    actorId: string,
+    objectGeneration: bigint
+  ): (reason?: unknown) => void {
+    this.options.actorHandoff.beginProvisional(actorId, objectGeneration);
+    return (reason) => this.options.actorHandoff.cancel(actorId, reason);
+  }
+
   /** Relocation activation owns admission; handler terminals are observed independently. */
   admitRelocationPrefix(
     actor: ZLinkActor,
