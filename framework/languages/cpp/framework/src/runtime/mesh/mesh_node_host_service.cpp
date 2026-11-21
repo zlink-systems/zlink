@@ -5,6 +5,8 @@
 #include "runtime/diagnostics/mesh_trace.hpp"
 
 #include "runtime/mesh/mesh_node_host_service.hpp"
+#include "runtime/mesh/mesh_node_runtime.hpp"
+#include "runtime/spots/spot_runtime.hpp"
 #include "runtime/configuration/service_scope.hpp"
 #include "runtime/dispatch/completion_turn.hpp"
 #include "runtime/stateful/accepted_actor_record.hpp"

@@ -8,6 +8,7 @@
 #include <zlink/framework.hpp>
 #include "../support/runtime_failure_fixture.hpp"
 #include "../support/stateful_ingress_fixture.hpp"
+#include "runtime/channels/channel_runtime.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime/locations/live_location_reader.hpp"

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 #include <gtest/gtest.h>
 #include "native_call_counter.hpp"
+#include "runtime/spots/spot_runtime.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/channels/channel_runtime.hpp"
 #include <zlink/framework.hpp>

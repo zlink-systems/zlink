@@ -71,7 +71,12 @@ int main ()
       read_text_file (root / "framework/src/runtime/spots/spot_runtime.cpp");
     const auto spot_runtime_header =
       read_text_file (root / "framework/src/runtime/spots/spot_runtime.hpp");
-    const auto spot_runtime_surface = spot_runtime + spot_runtime_header;
+    const auto spot_context_state =
+      read_text_file (root / "framework/src/runtime/spots/spot_context_state.cpp");
+    const auto spot_serial_executor =
+      read_text_file (root / "framework/src/runtime/spots/spot_serial_executor.cpp");
+    const auto spot_runtime_surface =
+      spot_runtime + spot_runtime_header + spot_context_state + spot_serial_executor;
     const auto actor_serial_executor =
       read_text_file (root / "framework/src/runtime/actors/actor_serial_executor.hpp");
     const auto spot_route_packets =
@@ -1071,8 +1076,8 @@ int main ()
         && actor_serial_executor.find ("execute_lifecycle (") != std::string::npos
         && actor_serial_executor.find ("state_lane_t _state_lane") != std::string::npos
         && actor_serial_executor.find ("std::map<") == std::string::npos
-        && spot_runtime.find ("actor_mailboxes") == std::string::npos
-        && spot_runtime.find ("actor_mailbox_lock") == std::string::npos,
+        && spot_runtime_surface.find ("actor_mailboxes") == std::string::npos
+        && spot_runtime_surface.find ("actor_mailbox_lock") == std::string::npos,
       "CPP-LAYER-003", "Actor dispatch still holds a redundant per-Actor mailbox mutex");
 
     /* CPP-ROUTE-002 — the direct-store fallback uses the same owner

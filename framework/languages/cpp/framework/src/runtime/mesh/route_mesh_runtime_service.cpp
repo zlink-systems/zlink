@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 
 #include "runtime/mesh/route_mesh_runtime_service.hpp"
+#include "runtime/spots/activation_admission.hpp"
 #include "runtime/diagnostics/topology_projection.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/mesh/route_mesh_connection_policy.hpp"

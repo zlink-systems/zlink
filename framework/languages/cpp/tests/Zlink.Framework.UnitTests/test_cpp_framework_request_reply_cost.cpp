@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 #include "allocation_counter.hpp"
+#include "runtime/spots/spot_runtime.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime_failure_fixture.hpp"

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 #include "../support/allocation_counter.hpp"
 #include "../support/runtime_failure_fixture.hpp"
+#include "runtime/spots/spot_runtime.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/channels/route_channel_runtime.hpp"
 #include <gtest/gtest.h>

@@ -3,6 +3,7 @@
 #include "allocation_counter.hpp"
 #include <array>
 #include <cstdio>
+#include "runtime/spots/spot_runtime.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"

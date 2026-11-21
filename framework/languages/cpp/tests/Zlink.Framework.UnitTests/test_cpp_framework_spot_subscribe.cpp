@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 
+#include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/utils/available_processor_count.hpp"
 #include <zlink/json.hpp>
 #include "../support/stateful_object_sync.hpp"

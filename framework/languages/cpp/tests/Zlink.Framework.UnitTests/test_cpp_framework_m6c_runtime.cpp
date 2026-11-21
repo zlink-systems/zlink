@@ -6,6 +6,8 @@
 #include "../support/stateful_ingress_fixture.hpp"
 #include "../support/request_admission_fixture.hpp"
 #include "metric_test_reader.hpp"
+#include "runtime/channels/channel_runtime.hpp"
+#include "runtime/protocol/actor_join_recovery_codec.hpp"
 #include "runtime/diagnostics/monitoring_runtime.hpp"
 
 #include "runtime/stateful/maintenance_runtime.hpp"

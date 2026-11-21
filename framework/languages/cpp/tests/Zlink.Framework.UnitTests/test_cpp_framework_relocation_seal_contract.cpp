@@ -6,6 +6,7 @@
 #include "../support/runtime_failure_fixture.hpp"
 #include "../support/exception_payload.hpp"
 #include "../support/manual_internal_scheduler.hpp"
+#include "runtime/channels/channel_runtime.hpp"
 #include "runtime/execution/serial_application_record.hpp"
 #include "../support/stateful_ingress_fixture.hpp"
 #include "runtime/backend/raw_binding_adapter.hpp"

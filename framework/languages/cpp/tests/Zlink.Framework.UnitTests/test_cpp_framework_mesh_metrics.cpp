@@ -5,6 +5,7 @@
 #include "metric_test_reader.hpp"
 #include "../support/runtime_metric_contract.hpp"
 
+#include "runtime/spots/spot_runtime.hpp"
 #include "runtime/diagnostics/mesh_request_metrics.hpp"
 #include "runtime/foundation/operation_registry.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"

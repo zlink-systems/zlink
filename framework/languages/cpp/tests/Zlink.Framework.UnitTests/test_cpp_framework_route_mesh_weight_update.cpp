@@ -5,6 +5,7 @@
 #include "../support/runtime_failure_fixture.hpp"
 #include "../support/exception_payload.hpp"
 
+#include "runtime/spots/spot_runtime.hpp"
 #include "runtime/foundation/operation_registry.hpp"
 #include "runtime/channels/route_packet_dispatcher.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"

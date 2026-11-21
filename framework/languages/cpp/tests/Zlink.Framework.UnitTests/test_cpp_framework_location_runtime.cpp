@@ -8,6 +8,7 @@
 #include "../support/allocation_counter.hpp"
 #include "../support/manual_internal_scheduler.hpp"
 
+#include "runtime/locations/location_lifecycle.hpp"
 #include "runtime/diagnostics/monitoring_runtime.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"

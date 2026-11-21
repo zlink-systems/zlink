@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
+#include "runtime/channels/channel_runtime.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"
 #include "../support/telemetry_observation.hpp"
 

@@ -358,7 +358,9 @@ add_library(zlink_framework ${ZLINK_FRAMEWORK_CPP_LIBRARY_TYPE}
   framework/src/runtime/mesh/mesh_node_runtime.cpp
   framework/src/runtime/mesh/route_mesh_runtime_service.cpp
   framework/src/runtime/mesh/route_mesh_runtime_options_service.cpp
+  framework/src/runtime/spots/spot_context_state.cpp
   framework/src/runtime/spots/spot_runtime.cpp
+  framework/src/runtime/spots/spot_serial_executor.cpp
   framework/src/runtime/mesh/mesh_record_dispatcher.cpp
   framework/src/runtime/spots/actor_transfer_coordinator.cpp
   framework/src/runtime/spots/spot_ids.cpp

@@ -4,6 +4,7 @@
 #include <zlink/framework/contracts/actors/actor.hpp>
 
 #include "runtime/actors/actor_ref_access.hpp"
+#include "runtime/actors/bound_session_relay_source.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/diagnostics/message_flow_tracer.hpp"
 #include "runtime/execution/state_lane.hpp"
@@ -68,14 +69,6 @@ inline constexpr std::string_view bound_session_relay_binding_key =
   "__zlink.boundSessionRelayBinding";
 inline constexpr std::string_view bound_session_relay_sequence_key =
   "__zlink.boundSessionRelaySequence";
-
-struct bound_session_relay_source_t
-{
-    zlink::routing_id_t session_rid;
-    std::uint64_t binding_generation = 0;
-    std::uint64_t session_sequence = 0;
-    std::shared_ptr<stream_reply_submission_t> reply_submission;
-};
 
 inline bool is_local_actor_ref (const actor_ref_t &actor_ref)
 {

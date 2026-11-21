@@ -3,6 +3,8 @@
 // app with a Location Store (Spot address messaging §7, §9; gate §7).
 
 #include "../support/committed_authority_fixture.hpp"
+#include "runtime/stateful/public_host_runtime.hpp"
+#include "runtime/channels/channel_runtime.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/diagnostics/flow_context.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"

@@ -7,6 +7,7 @@
 
 #include <zlink/framework.hpp>
 
+#include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/channels/channel_reply_writer.hpp"
 #include "runtime/channels/channel_runtime.hpp"

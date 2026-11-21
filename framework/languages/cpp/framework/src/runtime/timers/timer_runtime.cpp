@@ -6,6 +6,8 @@
 #include "runtime/diagnostics/message_flow_tracer.hpp"
 #include "runtime/diagnostics/monitoring_runtime.hpp"
 #include "runtime/spots/spot_runtime.hpp"
+#include "runtime/channels/channel_runtime.hpp"
+#include "runtime/configuration/service_scope.hpp"
 
 #include <algorithm>
 #include <exception>

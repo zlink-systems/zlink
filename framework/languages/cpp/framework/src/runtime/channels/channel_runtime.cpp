@@ -25,6 +25,7 @@
 #include "runtime/messaging/request_failure_mapper.hpp"
 #include "runtime/messaging/request_deadline.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
+#include "runtime/spots/spot_runtime.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
 
 #include <algorithm>

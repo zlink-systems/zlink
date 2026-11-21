@@ -24,6 +24,8 @@
 
 #include "../support/read_text_file.hpp"
 #include "../support/runtime_failure_fixture.hpp"
+#include "runtime/channels/channel_runtime.hpp"
+#include "runtime/locations/spot_address_resolvers.hpp"
 #include "runtime/spots/spot_runtime.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/messaging/envelope_codec.hpp"

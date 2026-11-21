@@ -3,6 +3,7 @@
 #include "task_allocation_counter.hpp"
 #include "location_runtime_test_access.hpp"
 #include "manual_internal_scheduler.hpp"
+#include "runtime/spots/spot_runtime.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/configuration/service_scope.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"

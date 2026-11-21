@@ -2,6 +2,7 @@
 #include <gtest/gtest.h>
 #include "allocation_counter.hpp"
 #include "creation_counter.hpp"
+#include "runtime/spots/spot_runtime.hpp"
 #include "runtime/channels/channel_runtime.hpp"
 #include "runtime/channels/channel_runtime_manager.hpp"
 #include "runtime/foundation/operation_registry.hpp"

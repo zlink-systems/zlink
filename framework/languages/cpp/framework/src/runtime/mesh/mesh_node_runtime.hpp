@@ -4,16 +4,14 @@
 #include <zlink/framework/contracts/configuration/mesh_node.hpp>
 #include <runtime/locations/location_repository.hpp>
 
-#include "runtime/actors/actor_gateway_runtime.hpp"
+#include "runtime/actors/bound_session_relay_source.hpp"
 #include "runtime/channels/route_handler_registry.hpp"
 #include "runtime/configuration/request_defaults.hpp"
 #include "runtime/execution/state_lane.hpp"
 #include "runtime/locations/spot_address_resolvers.hpp"
-#include "runtime/operations/exactly_once_table.hpp"
-#include "runtime/spots/spot_runtime.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
 
-#include <zlink/Contracts/Sockets/stream_socket.hpp>
+#include <zlink/framework/contracts/spots/spot.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -40,7 +38,9 @@ class zlink_builder_t;
 
 namespace zlink::framework::detail
 {
+class activation_admission_t;
 class delay_owner_t;
+class spot_node_builder_state_t;
 
 std::string canonical_actor_join_handoff_id (const std::vector<std::uint8_t> &source_actor_node_rid,
                                              std::string_view actor_id,
@@ -54,26 +54,10 @@ std::optional<runtime::protocol::application_payload_t> canonical_actor_join_app
 std::vector<std::uint8_t> unwrap_canonical_actor_join_application_reply (
   const runtime::protocol::application_payload_t &payload);
 
-inline result_t<runtime::stateful::object_ref_t>
+result_t<runtime::stateful::object_ref_t>
 make_local_application_actor_session_ref (const runtime::stateful::object_ref_t &materialized,
                                           const actor_ref_t &actor,
-                                          const runtime::spot_address_t &route)
-{
-    if (materialized.kind != runtime::stateful::object_kind_t::actor
-        || materialized.key != actor.actor_id ().value ()
-        || materialized.object_generation != actor.object_generation ()
-        || route.object_generation != actor.object_generation ()
-        || route.authority_owner_generation == 0 || route.mesh_name.empty ()
-        || route.node_generation == 0 || route.owner.lease_generation <= 0) {
-        return result_t<runtime::stateful::object_ref_t>::failure (
-          framework_error_kind_t::unavailable,
-          "Local Actor materialization does not match its Location route");
-    }
-    return result_t<runtime::stateful::object_ref_t>::success (runtime::stateful::object_ref_t{
-      runtime::stateful::object_kind_t::actor, std::string (actor.actor_id ().value ()),
-      actor.object_generation (), route.authority_owner_generation, route.mesh_name,
-      route.node_rid.to_string ()});
-}
+                                          const runtime::spot_address_t &route);
 
 namespace host = zlink::framework::runtime::host;
 

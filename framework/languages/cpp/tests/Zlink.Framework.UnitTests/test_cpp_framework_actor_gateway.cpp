@@ -2,6 +2,7 @@
 #include "../support/telemetry_observation.hpp"
 #include "../support/stateful_object_sync.hpp"
 #include "../support/session_disconnect_probe_spot.hpp"
+#include "runtime/channels/channel_runtime.hpp"
 #include "runtime/mesh/mesh_node_host_service.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 #include "../support/manual_internal_scheduler.hpp"

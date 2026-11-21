@@ -28,6 +28,7 @@ extern "C" zlink_connect_result_t __wrap_zlink_disconnect (void *socket, const c
 #endif
 #include "../support/runtime_failure_fixture.hpp"
 
+#include "runtime/spots/spot_runtime.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/dispatch/completion_turn.hpp"
 #include "runtime/dispatch/coroutine_executor.hpp"

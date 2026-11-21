@@ -1,11 +1,14 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 
 #include "runtime/mesh/mesh_node_runtime.hpp"
+#include "runtime/spots/spot_runtime.hpp"
 #include "runtime/mesh/service_channel_membership.hpp"
 #include "runtime/timers/async_delay.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/locations/live_location_reader.hpp"
+#include "runtime/locations/location_lifecycle.hpp"
+#include "runtime/protocol/actor_join_recovery_codec.hpp"
 #include <zlink/framework/contracts/configuration/detail/framework_options_state.hpp>
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/locations/sha256.hpp"
@@ -48,6 +51,28 @@ namespace mesh_endpoint_notation = zlink::framework::runtime::transport;
 
 namespace zlink::framework::detail
 {
+
+result_t<runtime::stateful::object_ref_t>
+make_local_application_actor_session_ref (const runtime::stateful::object_ref_t &materialized,
+                                          const actor_ref_t &actor,
+                                          const runtime::spot_address_t &route)
+{
+    if (materialized.kind != runtime::stateful::object_kind_t::actor
+        || materialized.key != actor.actor_id ().value ()
+        || materialized.object_generation != actor.object_generation ()
+        || route.object_generation != actor.object_generation ()
+        || route.authority_owner_generation == 0 || route.mesh_name.empty ()
+        || route.node_generation == 0 || route.owner.lease_generation <= 0) {
+        return result_t<runtime::stateful::object_ref_t>::failure (
+          framework_error_kind_t::unavailable,
+          "Local Actor materialization does not match its Location route");
+    }
+    return result_t<runtime::stateful::object_ref_t>::success (runtime::stateful::object_ref_t{
+      runtime::stateful::object_kind_t::actor, std::string (actor.actor_id ().value ()),
+      actor.object_generation (), route.authority_owner_generation, route.mesh_name,
+      route.node_rid.to_string ()});
+}
+
 namespace
 {
 task_t<bool>

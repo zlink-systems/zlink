@@ -1,6 +1,12 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 
 #include "spot_runtime.hpp"
+#include "runtime/stateful/public_host_runtime.hpp"
+#include "runtime/protocol/actor_join_recovery_codec.hpp"
+#include "runtime/mesh/application_dispatch_terminal_owner.hpp"
+#include "runtime/locations/spot_address_resolvers.hpp"
+#include "runtime/locations/location_lifecycle.hpp"
+#include "runtime/configuration/service_scope.hpp"
 
 #include <zlink/framework/contracts/configuration/zlink_builder.hpp>
 
@@ -5512,6 +5518,44 @@ std::optional<spot_route_t> spot_node_builder_t::resolve_spot (spot_id_t spot_id
 namespace zlink::framework::detail
 {
 
+std::shared_ptr<void> spot_node_runtime_t::install_actor_instance (const actor_ref_t &actor_ref,
+                                                                   const std::string &key,
+                                                                   std::shared_ptr<void> instance,
+                                                                   bool refuse_destroyed) const
+{
+    return _state->lane
+      .run ([&] {
+          auto &slot = _state->actor_instances[key];
+          if (!slot) {
+              if (refuse_destroyed && _state->destroyed_actor_keys.contains (key)) {
+                  _state->actor_instances.erase (key);
+                  return std::shared_ptr<void>{};
+              }
+              /* A concurrent creator that won the race keeps its instance; the
+             * loser's copy is released when this frame ends. */
+              slot = std::move (instance);
+          }
+          detail::record_actor_instance_index_unlocked (*_state, actor_ref, slot.get ());
+          return slot;
+      })
+      .get ();
+}
+
+std::optional<spot_context_t>
+spot_node_runtime_t::find_context_core (const spot_id_t &spot_id) const
+{
+    const auto found = _state->spot_contexts_by_id.find (std::string (spot_id));
+    if (found == _state->spot_contexts_by_id.end ())
+        return std::nullopt;
+    return spot_context_t (found->second._state);
+}
+
+std::optional<spot_context_t> spot_node_runtime_t::find_context (const spot_id_t &spot_id) const
+{
+    return _state->lane.run ([&] { return find_context_core (spot_id); }).get ();
+}
+
+
 void report_logical_multicast_failure (const std::shared_ptr<spot_node_builder_state_t> &state,
                                        std::string_view channel_name,
                                        std::string_view mesh_name,
@@ -5540,6 +5584,11 @@ void report_logical_multicast_failure (const std::shared_ptr<spot_node_builder_s
     catch (...) {
         // Diagnostics cannot change the already-completed publish result.
     }
+}
+
+spot_node_builder_state_t::spot_node_builder_state_t (std::string name) :
+    snapshot{.name = std::move (name)}
+{
 }
 
 spot_node_runtime_t::spot_node_runtime_t (std::shared_ptr<spot_node_builder_state_t> state) :

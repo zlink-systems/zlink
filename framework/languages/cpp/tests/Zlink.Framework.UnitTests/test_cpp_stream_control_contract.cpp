@@ -3,6 +3,7 @@
 #include <future>
 #include <thread>
 #include <zlink/framework.hpp>
+#include "runtime/channels/channel_runtime.hpp"
 #include "runtime/streams/stream_host_service.hpp"
 #include "runtime/streams/stream_runtime.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"

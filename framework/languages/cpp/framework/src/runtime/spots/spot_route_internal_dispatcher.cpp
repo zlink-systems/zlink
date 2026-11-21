@@ -7,6 +7,7 @@
 #include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/messaging/submit_result_mapper.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
+#include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/streams/stream_runtime.hpp"
 
 #include <zlink/Contracts/Core/routing_id.hpp>

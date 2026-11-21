@@ -6,6 +6,7 @@
 #include <zlink/framework.hpp>
 #include <zlink/stream_connector.hpp>
 
+#include "runtime/channels/channel_runtime.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/diagnostics/listener_status_registry.hpp"

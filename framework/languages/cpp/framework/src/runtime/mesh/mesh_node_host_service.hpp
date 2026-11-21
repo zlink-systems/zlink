@@ -9,8 +9,9 @@
 #include "runtime/host/hosted_service_lifecycle.hpp"
 #include "runtime/diagnostics/listener_status_registry.hpp"
 #include <runtime/locations/location_repository.hpp>
-#include "runtime/mesh/mesh_node_runtime.hpp"
+#include "runtime/messaging/envelope_codec.hpp"
 
+#include <zlink/Contracts/Sockets/results.hpp>
 #include <zlink/framework/contracts/configuration/module.hpp>
 #include <zlink/framework/contracts/dispatch/execution.hpp>
 #include <zlink/framework/contracts/handlers/handler_registry.hpp>
@@ -26,13 +27,20 @@
 
 namespace zlink::framework::detail
 {
-class route_handler_registry_t;
+class mesh_node_runtime_t;
+struct mesh_node_builder_state_t;
 }
 
 namespace zlink::framework::runtime
 {
 
 class location_runtime_t;
+
+namespace host
+{
+struct receive_record_t;
+struct ready_record_t;
+}
 
 result_t<std::optional<messaging::envelope_header_t>>
 decode_mesh_record_header (const host::receive_record_t &record,
