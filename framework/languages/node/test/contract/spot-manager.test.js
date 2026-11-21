@@ -314,14 +314,13 @@ test('Mesh actor ingress uses the current runtime owner for handoff capture', as
   assert.equal(fallbackActorRef.generation, 3n);
 });
 
-test('Mesh actor ingress routes the descriptor Entry Spot ID to Entry Spot actor dispatch', async () => {
-  const entrySpotId = 'entry-node';
-  const entrySpotRid = zlink.RoutingId.from(entrySpotId);
+test('Mesh actor ingress routes the concrete Entry Spot RID to Entry Spot actor dispatch', async () => {
+  const entryNodeRid = zlink.RoutingId.from('entry-node');
   let dispatched = false;
   const manager = new framework.DefaultZLinkSpotManager({
     detachedTaskRunner: detachedTaskRunner,
     spotFactories: [],
-    entrySpotIdProvider: () => entrySpotId,
+    entryNodeRidProvider: () => entryNodeRid,
     async dispatchEntryActorPacket(_origin, actorId, parts, returnResponse, _boundTarget, fallback) {
       dispatched = true;
       assert.equal(actorId, 'actor-1');
@@ -333,9 +332,9 @@ test('Mesh actor ingress routes the descriptor Entry Spot ID to Entry Spot actor
 
   await manager.dispatchMeshActor('remote', 'test.mesh',
     {
-      spotId: entrySpotRid,
+      spotId: entryNodeRid,
       actor: {
-        nodeRid: entrySpotRid,
+        nodeRid: entryNodeRid,
         actorId: 'actor-1',
         generation: 1n
       }

@@ -41,7 +41,7 @@ function fixture({ entry, lifecycleFailure, completionFailure, sourceLeaveFailur
     serial: { execute: operation => operation() },
     executeActor: (_actorId, operation) => operation()
   };
-  const manager = Object.assign(Object.create(DefaultZLinkSpotManager.prototype), {
+  const manager = {
     formalRemoteActorAdmissions: {
       get: () => ({
         state: 'admitted',
@@ -68,7 +68,7 @@ function fixture({ entry, lifecycleFailure, completionFailure, sourceLeaveFailur
         }
       }
     }
-  });
+  };
   return {
     events,
     completions,
