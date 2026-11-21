@@ -70,6 +70,14 @@ builder.Services.AddZLinkFramework(options =>
 
 var app = builder.Build();
 
+app.MapGet(
+    "/ops/ready",
+    (IZLinkFrameworkRuntime runtime) =>
+        runtime.Status.IsReady
+            ? Results.Ok()
+            : Results.StatusCode(StatusCodes.Status503ServiceUnavailable)
+);
+
 // Maps a failed framework call to the status code that says what happened.
 // Without it every failure below reaches the host's default handler as a 500.
 app.UseZLinkErrorResponse();
