@@ -133,9 +133,14 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
             || target_placement.node_rid.value () != target.node_id
             || !same_owner (target_placement.owner, target_owner))
             return {authority_publish_status_t::failed, std::nullopt};
-        if (!expected_store_version.empty () && snapshot->store_version != expected_store_version
-            && !holds_captured_fence (*snapshot, source.key, relocation, source_owner,
-                                      expected_store_version))
+        // A Spot Actor join commit fences only the source StoreVersion
+        // (05-spot-actor-membership :48); a relocation carries its coordinator fence
+        // (04-relocation-flow §3, §4.5).
+        const bool relocating = relocation.high != 0 || relocation.low != 0;
+        if (relocating ? !holds_source_fence (*snapshot, source.key, relocation, source_owner,
+                                              expected_store_version)
+                       : !expected_store_version.empty ()
+                           && snapshot->store_version != expected_store_version)
             return {authority_publish_status_t::conflict, decode_current (read)};
         const std::string cas_version = snapshot->store_version;
         std::vector<std::byte> application_payload = target_application_payload;
@@ -484,23 +489,28 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
         return left.owner_id == right.owner_id && left.lease_generation == right.lease_generation;
     }
 
-    static bool holds_captured_fence (const authority_snapshot_t &snapshot,
-                                      std::string_view actor_id,
-                                      const protocol::relocation_id_t &relocation,
-                                      const location_owner_token_t &source_owner,
-                                      std::string_view original_version)
+    static bool holds_source_fence (const authority_snapshot_t &snapshot,
+                                    std::string_view actor_id,
+                                    const protocol::relocation_id_t &relocation,
+                                    const location_owner_token_t &source_owner,
+                                    std::optional<std::string_view> original_version)
     {
-        if ((relocation.high == 0 && relocation.low == 0) || source_owner.lease_generation <= 0)
+        if (source_owner.owner_id.empty () || source_owner.lease_generation <= 0
+            || !same_owner (snapshot.owner, source_owner))
             return false;
         runtime::actor_authority_detail::relocation_capture_identity_t identity;
         const auto actor =
           runtime::decode_direct_actor_authority_payload (snapshot.payload, &identity);
-        return actor && actor->actor_id == actor_id && actor->has_relocation_state
+        if (!actor || !actor->has_relocation_state)
+            return !original_version || snapshot.store_version == *original_version;
+        if (relocation.high == 0 && relocation.low == 0)
+            return false;
+        return actor->actor_id == actor_id
                && actor->relocation_phase
                     == runtime::actor_authority_detail::captured_relocation_phase
-               && actor->relocation_expected_store_version == original_version
+               && (!original_version
+                   || actor->relocation_expected_store_version == *original_version)
                && identity.high == relocation.high && identity.low == relocation.low
-               && same_owner (snapshot.owner, source_owner)
                && actor->owner_id == source_owner.owner_id
                && actor->owner_lease_generation
                     == static_cast<std::uint64_t> (source_owner.lease_generation)
@@ -524,9 +534,8 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
             return relocation_authority_t::source_lease_expired;
         if (same_owner (snapshot->owner, fence.target_owner))
             return relocation_authority_t::target_committed;
-        return snapshot->store_version == fence.expected_store_version
-                   || holds_captured_fence (*snapshot, fence.key, fence.relocation,
-                                            fence.source_owner, fence.expected_store_version)
+        return holds_source_fence (*snapshot, fence.key, fence.relocation, fence.source_owner,
+                                   fence.expected_store_version)
                  ? relocation_authority_t::unsettled
                  : relocation_authority_t::source_preserved;
     }
@@ -548,9 +557,8 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
             || current->authority_owner_generation != source.authority_owner_generation
             || !same_owner (current->owner, fence.source_owner))
             return {relocation_authority_t::data_lost, {}};
-        return {current->store_version == fence.expected_store_version
-                    || holds_captured_fence (*current, fence.key, fence.relocation,
-                                             fence.source_owner, fence.expected_store_version)
+        return {holds_source_fence (*current, fence.key, fence.relocation, fence.source_owner,
+                                    fence.expected_store_version)
                   ? relocation_authority_t::unsettled
                   : relocation_authority_t::source_preserved,
                 {}};
@@ -599,10 +607,10 @@ class public_aggregate_authority_adapter_t final : public aggregate_authority_po
                                         std::string relocation_reference,
                                         std::uint32_t,
                                         inventory_digest_t inventory_digest,
-                                        std::string expected_primary_store_version) override
+                                        relocation_authority_fence_t source_fence) override
     {
         if (sources.size () < 2 || target_node_id.empty () || target_owner.owner_id.empty ()
-            || target_owner.lease_generation <= 0 || expected_primary_store_version.empty ())
+            || target_owner.lease_generation <= 0 || source_fence.expected_store_version.empty ())
             return {};
         const auto &primary = relocation_primary (sources);
         std::vector<authority_snapshot_t> snapshots;
@@ -617,8 +625,11 @@ class public_aggregate_authority_adapter_t final : public aggregate_authority_po
             const auto *snapshot = std::get_if<authority_snapshot_t> (&read);
             if (!snapshot || snapshot->object_generation != source.object_generation
                 || snapshot->authority_owner_generation != source.authority_owner_generation
-                || (&source == &primary
-                    && snapshot->store_version != expected_primary_store_version))
+                || !public_authority_store_adapter_t::holds_source_fence (
+                  *snapshot, source.key, source_fence.relocation, source_fence.source_owner,
+                  &source == &primary
+                    ? std::optional<std::string_view>{source_fence.expected_store_version}
+                    : std::nullopt))
                 return {aggregate_publish_status_t::conflict, {}, {}};
             snapshots.push_back (*snapshot);
             capacity.actor_slots += snapshot->allocation.capacity_bundle.actor_slots;
