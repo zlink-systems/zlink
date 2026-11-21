@@ -443,7 +443,8 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                     store,
                                     this.locationRuntime,
                                     this.registration,
-                                    this.meshNodes.nodesByName())
+                                    this.meshNodes.nodesByName(),
+                                    this.storeLocationResolvers::observePublishedMeshNode)
                             : null;
             this.routeMeshRuntimeOptions =
                     new systems.zlink.framework.runtime.channels
