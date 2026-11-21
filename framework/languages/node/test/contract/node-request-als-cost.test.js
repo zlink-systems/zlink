@@ -23,7 +23,8 @@ function observeAls() {
     (prototype) => ({
       prototype,
       run: prototype.run,
-      enterWith: prototype.enterWith
+      enterWith: prototype.enterWith,
+      restore: prototype.restore
     })
   );
   const originalPropagate = AsyncLocalStorage.prototype._propagate;
@@ -46,7 +47,9 @@ function observeAls() {
             flowStores.add(this);
             if (active) active[operation === 'run' ? 'flowRun' : 'flowEnter']++;
           }
-          if (active && owner.includes(PERMIT_MODULE)) active.permitEnter++;
+          if (active && owner.includes(PERMIT_MODULE)) {
+            active[operation === 'restore' ? 'permitRestore' : 'permitEnter']++;
+          }
         } finally {
           inspecting = false;
         }
@@ -66,6 +69,9 @@ function observeAls() {
       'enterWith',
       original.prototype === AsyncLocalStorage.prototype
     );
+    if (original.restore !== undefined) {
+      original.prototype.restore = wrap(original.restore, 'restore', false);
+    }
   }
   AsyncLocalStorage.prototype._propagate = function (resource, trigger, type) {
     if (active && type === 'PROMISE' && frameworkStores.has(this)) {
@@ -94,7 +100,7 @@ function observeAls() {
   return {
     start() {
       promisePropagates.clear();
-      active = { flowRun: 0, flowEnter: 0, permitEnter: 0, flowResources: 0, resources: {} };
+      active = { flowRun: 0, flowEnter: 0, permitEnter: 0, permitRestore: 0, flowResources: 0, resources: {} };
       return active;
     },
     stop() {
@@ -111,6 +117,7 @@ function observeAls() {
       for (const original of originals) {
         original.prototype.run = original.run;
         original.prototype.enterWith = original.enterWith;
+        if (original.restore !== undefined) original.prototype.restore = original.restore;
       }
       AsyncLocalStorage.prototype._propagate = originalPropagate;
     }
@@ -148,7 +155,8 @@ test('public requests skip diagnostics ALS at Off and preserve flow at Normal', 
         observer.stop();
         await observation.observed();
         assert.equal(completed, REQUEST_COUNT);
-        assert.equal(row.permitEnter, 2 * REQUEST_COUNT, 'record permit is entered and restored');
+        assert.equal(row.permitEnter, REQUEST_COUNT, 'record permit is entered once');
+        assert.equal(row.permitRestore, REQUEST_COUNT, 'record permit is restored once');
         assert.ok(row.resources.PROMISE > 0, 'async_hooks observes actual request resources');
         t.diagnostic(JSON.stringify({ mode, completed, ...row }));
         rows.push(row);

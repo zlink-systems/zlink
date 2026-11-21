@@ -129,6 +129,7 @@ import {
   decodeMultipartApplicationPayloadView,
   decodeMultipartApplicationParts,
   decodeMultipartParts,
+  borrowPackedMultipartApplicationFrame,
   encodeMultipartApplicationPayload,
   encodeMultipartPayload,
   ServiceWireProtocolError,
@@ -175,6 +176,7 @@ const ACTOR_JOIN_ADVERTISED_RECEIVE_CHUNK_LIMIT_BYTES = 32 * 1024;
  */
 export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   readonly nativeInstance = this;
+  readonly acceptsPackedChannelFrames = true as const;
 
   private readonly channels = new Map<string, number>();
   private readonly peerIntents = new Map<
@@ -2986,10 +2988,13 @@ function encodeMultipart(parts: MessageLike | readonly MessageLike[]) {
 function encodeMultipartApplicationFrame(parts: MessageLike | readonly MessageLike[]): Buffer {
   const values = Array.isArray(parts) ? parts : [parts];
   if (values.length === 0) throw new TypeError('Multipart payload must contain at least one part.');
-  return encodeMultipartApplicationPayload(
-    values.map(messagePayloadView),
-    MULTIPART_PACKET_NAME,
-    MULTIPART_CONTENT_TYPE
+  return (
+    borrowPackedMultipartApplicationFrame(values) ??
+    encodeMultipartApplicationPayload(
+      values.map(messagePayloadView),
+      MULTIPART_PACKET_NAME,
+      MULTIPART_CONTENT_TYPE
+    )
   );
 }
 

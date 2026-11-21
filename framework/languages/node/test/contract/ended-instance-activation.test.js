@@ -248,7 +248,7 @@ async function fixture(
     });
   }
   const resolver = new internal.ZLinkAuthoritySpotRouteResolver(store, (name) => name, undefined, {
-    remainingOwnerTokenLeaseMs: async () => 0
+    ownerTokenLeaseDeadlineMs: async () => -Infinity
   });
   let routed = 0;
   const selected = [];

@@ -12,7 +12,7 @@ using Zlink.Framework.Runtime.Streams;
 
 namespace Zlink.Framework.UnitTests;
 
-public sealed class SessionActorCoordinatorTests
+public sealed partial class SessionActorCoordinatorTests
 {
     [Theory]
     [InlineData(false, 0)]

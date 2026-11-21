@@ -39,19 +39,18 @@ function registrationOverhead(metrics) {
     metrics.requiredRegistration.objects <= 4 * metrics.control.objects,
     'registration adds containers beyond the required entry, identity and deadline values'
   );
-  // --no-opt boxes one earliest-deadline read and two Infinity resets.
-  // Keep this fixed index cost visible and bounded separately from registration.
-  assert.ok(metrics.registrationIndex.objects >= metrics.count, 'deadline index is observed');
+  // The heap can reuse storage after its initial allocation. Keep any
+  // index allocations visible and bounded separately from registration.
   assert.ok(
     metrics.registrationIndex.objects <= 3 * metrics.control.objects,
-    'deadline index adds containers beyond one read and two empty-index resets'
+    'deadline index adds containers beyond the request budget'
   );
   const registered = metrics.sites
     .filter(
       (site) =>
         !site.registrationControl &&
         site.module === '/runtime/foundation/operation-registry.js' &&
-        ['registerObserved', 'notePending'].includes(site.name)
+        ['registerObserved', 'registerPending', 'scheduleDeadline', 'siftDeadlineUp'].includes(site.name)
     )
     .reduce((sum, site) => sum + site.objects, 0);
   assert.ok(
@@ -69,7 +68,7 @@ test('registry allocation trace includes required registration and rejects an al
   allocating.requiredRegistration.objects += metrics.control.objects;
   assert.throws(() => registrationOverhead(allocating), /beyond the required entry/);
   const indexAllocating = structuredClone(metrics);
-  indexAllocating.registrationIndex.objects += metrics.control.objects;
+  indexAllocating.registrationIndex.objects += 3 * metrics.control.objects + 1;
   assert.throws(() => registrationOverhead(indexAllocating), /deadline index adds containers/);
   const requestAllocating = structuredClone(metrics);
   // Exceed the whole reference even when clock boxes are attributed outside
