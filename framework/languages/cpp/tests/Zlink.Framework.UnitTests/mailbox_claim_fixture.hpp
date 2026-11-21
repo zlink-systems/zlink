@@ -24,7 +24,7 @@ struct mailbox_claim_t
     {
         originals.reserve (value->claimed_messages);
         records.reserve (value->claimed_messages);
-        for (const auto slot : value->records) {
+        for (const auto &slot : value->records) {
             originals.push_back (std::move (*slot));
             slot->application.reset ();
             records.push_back (&originals.back ());
