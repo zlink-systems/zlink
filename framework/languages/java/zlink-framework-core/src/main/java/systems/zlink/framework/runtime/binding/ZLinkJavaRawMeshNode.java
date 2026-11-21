@@ -9400,30 +9400,11 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     }
 
     private <T> T inDescriptorStateLane(Supplier<T> work) {
-        try {
-            return descriptorStateLane.runAsync(work).toCompletableFuture().join();
-        } catch (CompletionException failure) {
-            return rethrowStateFailure(failure);
-        }
+        return descriptorStateLane.awaitResult(work);
     }
 
     private <T> T inUserSpotTerminalStateLane(Supplier<T> work) {
-        try {
-            return userSpotTerminalStateLane.runAsync(work).toCompletableFuture().join();
-        } catch (CompletionException failure) {
-            return rethrowStateFailure(failure);
-        }
-    }
-
-    private static <T> T rethrowStateFailure(CompletionException failure) {
-        Throwable cause = failure.getCause();
-        if (cause instanceof RuntimeException runtimeFailure) {
-            throw runtimeFailure;
-        }
-        if (cause instanceof Error error) {
-            throw error;
-        }
-        throw failure;
+        return userSpotTerminalStateLane.awaitResult(work);
     }
 
     private static byte[] fingerprint(byte[] canonicalCommand) {

@@ -11,7 +11,6 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.UUID;
-import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -94,14 +93,7 @@ final class ZLinkActorJoinPrewarmRegistry {
     private final Map<ObjectKey, UUID> byObject = new HashMap<>();
 
     private <T> T inStateLane(Supplier<T> work) {
-        try {
-            return stateLane.runAsync(work).toCompletableFuture().join();
-        } catch (CompletionException failure) {
-            Throwable cause = failure.getCause();
-            if (cause instanceof RuntimeException runtimeFailure) throw runtimeFailure;
-            if (cause instanceof Error error) throw error;
-            throw failure;
-        }
+        return stateLane.awaitResult(work);
     }
 
     Attempt register(
