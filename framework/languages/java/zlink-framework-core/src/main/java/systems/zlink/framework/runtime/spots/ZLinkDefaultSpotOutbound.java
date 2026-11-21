@@ -13,6 +13,7 @@ import systems.zlink.framework.runtime.channels.ZLinkChannelRuntime;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import systems.zlink.framework.runtime.internal.calls.ZLinkRequestStages;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRequestMetrics;
 import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddress;
@@ -606,6 +607,12 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
 
         @Override
         public <TReply> ZLinkRequestStage<TReply> submit(Class<TReply> replyType) {
+            return submit(replyType, false);
+        }
+
+        private <TReply> ZLinkRequestStage<TReply> submit(
+                Class<TReply> replyType, boolean releaseTurn) {
+            ZLinkSuspendInvocationContext.validateSpotRequest(target, releaseTurn);
             CompletionStage<TReply> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate, this);
             if (duplicate != null)
                 return ZLinkRequestStages.observe(duplicate, new CompletableFuture<>());
@@ -614,9 +621,6 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
         }
 
         private <TReply> CompletionStage<TReply> submitReply(Class<TReply> replyType) {
-
-            systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
-                    .rejectSameSpotWait(target);
             long started =
                     ZLinkRequestMetrics.durationEnabled()
                             ? System.nanoTime()
@@ -758,9 +762,7 @@ final class DefaultSpotOutbound implements ZLinkSpotOutbound {
 
         @Override
         public <TReply> CompletionStage<TReply> yield(Class<TReply> replyType) {
-            systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
-                    .requireYieldAllowed("Spot request");
-            return ZLinkSerialExecutionQueue.yieldCurrent(submit(replyType));
+            return ZLinkSerialExecutionQueue.yieldCurrent(submit(replyType, true));
         }
     }
 
