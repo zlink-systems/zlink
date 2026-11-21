@@ -48,6 +48,11 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
     private static final RoutingId SOURCE_RID = RoutingId.from("actor-source");
     private static final RoutingId TARGET_RID = RoutingId.from("actor-target");
 
+    @org.junit.jupiter.api.AfterEach
+    void clearCaptureCheck() {
+        SnapshotAdapter.captureCheck.set(null);
+    }
+
     @Test
     void capturesEntryActorAndRestoresSourceQueueAfterPrecommitAbort() throws Exception {
         SnapshotAdapter.captured.set(null);
@@ -109,6 +114,14 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
                             runtime,
                             null);
 
+            SnapshotAdapter.captureCheck.set(
+                    () ->
+                            systems.zlink.framework.runtime.internal.locations
+                                    .ZLinkProviderAuthorityRepositoryTestAccess
+                                    .assertRelocationPhase(
+                                            locations,
+                                            ZLinkAuthorityKeyCodec.actor("actor-a"),
+                                            "preparing"));
             var prepared =
                     builder.prepare("actor-a", rollingToVersionOne(), NEVER)
                             .toCompletableFuture()
@@ -215,6 +228,12 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
             assertFalse(sourceOperation.isDone());
 
             prepared.abort().toCompletableFuture().get();
+            systems.zlink.framework.runtime.internal.locations
+                    .ZLinkProviderAuthorityRepositoryTestAccess.assertRelocationPhase(
+                    locations,
+                    systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec.actor(
+                            "actor-a"),
+                    "");
             sourceOperation.get();
             assertEquals(1, sourceExecutions.get());
 
@@ -960,9 +979,13 @@ final class ZLinkStandaloneActorRelocationSourceBuilderTest {
     public static final class SnapshotAdapter implements ZLinkActorRelocationAdapter<TestActor> {
         private static final AtomicReference<TestActor> captured = new AtomicReference<>();
 
+        private static final AtomicReference<Runnable> captureCheck = new AtomicReference<>();
+
         @Override
         public CompletionStage<byte[]> capture(
                 TestActor actor, ZLinkRelocationCancellation cancellation) {
+            Runnable check = captureCheck.getAndSet(null);
+            if (check != null) check.run();
             captured.set(actor);
             return CompletableFuture.completedFuture(new byte[] {7, 2, 6});
         }
