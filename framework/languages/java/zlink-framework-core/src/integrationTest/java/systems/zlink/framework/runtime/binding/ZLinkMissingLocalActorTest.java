@@ -21,6 +21,7 @@ import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOption
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
 import systems.zlink.framework.runtime.internal.backend.*;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceLivenessRegistry;
 import systems.zlink.framework.runtime.internal.streams.ZLinkStreamErrorPayload;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.runtime.streams.*;
@@ -41,6 +42,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.LongSupplier;
 import java.util.logging.FileHandler;
 import java.util.logging.Handler;
 import java.util.logging.LogRecord;
@@ -184,17 +187,22 @@ final class ZLinkMissingLocalActorTest {
 
     @RepeatedTest(40)
     void replyAfterTimeoutAndActorDepartureDoesNotFailDispatch() throws Exception {
-        try (var fixture = new Fixture()) {
+        var requestTimeout = Duration.ofMillis(100);
+        var now = new AtomicLong();
+        try (var fixture = new Fixture(now::get)) {
             fixture.actor.reply = new CompletableFuture<>();
             replies.clear();
             var request =
                     fixture.runtime
                             .actorClient()
                             .requestToActor(ACTOR, new Echo("late"))
-                            .timeout(Duration.ofMillis(100))
+                            .timeout(requestTimeout)
                             .submit(String.class)
                             .toCompletableFuture();
             fixture.actor.entered.get(3, TimeUnit.SECONDS);
+            assertFalse(request.isDone(), "request remains pending before its deadline");
+            // Advance the request clock only after the Actor has entered its handler.
+            now.addAndGet(requestTimeout.toNanos());
             var timeout =
                     assertThrows(ExecutionException.class, () -> request.get(3, TimeUnit.SECONDS));
             assertEquals(
@@ -232,6 +240,10 @@ final class ZLinkMissingLocalActorTest {
         final ActorRef ref;
 
         Fixture() throws Exception {
+            this(System::nanoTime);
+        }
+
+        Fixture(LongSupplier nanoTime) throws Exception {
             var options = new DefaultZLinkFrameworkOptions();
             var store = new ZLinkInMemoryLocationStore();
             options.addLocationStore(
@@ -272,6 +284,19 @@ final class ZLinkMissingLocalActorTest {
             streamOptions.registerSession(Session.class);
             var captured = new CompletableFuture<ZLinkJavaRawSpotNode>();
             var capturedStream = new CompletableFuture<ZLinkBackendStreamSocket>();
+            ZLinkMeshBackendAdapter meshBackend =
+                    (context, name) -> {
+                        var node =
+                                new ZLinkJavaRawMeshNode(
+                                        ((ZLinkJavaContext) context).nativeContext(),
+                                        name,
+                                        System::currentTimeMillis,
+                                        nanoTime,
+                                        ZLinkServiceLivenessRegistry.DEFAULT_PROBE_INTERVAL,
+                                        ZLinkServiceLivenessRegistry.DEFAULT_PEER_TIMEOUT);
+                        captured.complete((ZLinkJavaRawSpotNode) node.spotNode());
+                        return node;
+                    };
             var delegate = new ZLinkJavaBackendAdapterFactory();
             var backend =
                     (ZLinkBackendAdapterProvider)
@@ -281,18 +306,8 @@ final class ZLinkMissingLocalActorTest {
                                     (proxy, method, args) -> {
                                         try {
                                             var result = method.invoke(delegate, args);
-                                            if (result instanceof ZLinkMeshBackendAdapter adapter) {
-                                                return (ZLinkMeshBackendAdapter)
-                                                        (context, name) -> {
-                                                            var node =
-                                                                    adapter.createMeshNode(
-                                                                            context, name);
-                                                            captured.complete(
-                                                                    (ZLinkJavaRawSpotNode)
-                                                                            node.spotNode());
-                                                            return node;
-                                                        };
-                                            }
+                                            if (result instanceof ZLinkMeshBackendAdapter)
+                                                return meshBackend;
                                             if (result
                                                     instanceof ZLinkStreamBackendAdapter adapter) {
                                                 return (ZLinkStreamBackendAdapter)
