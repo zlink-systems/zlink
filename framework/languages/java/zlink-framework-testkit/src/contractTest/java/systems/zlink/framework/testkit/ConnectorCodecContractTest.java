@@ -20,6 +20,7 @@ import java.io.DataOutputStream;
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -33,6 +34,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
 final class ConnectorCodecContractTest {
+    private static final int WAIT_SECONDS = 5;
+
     @Test
     void jsonMsgpackProtobufTypedHelperRoundtrip() {
         assertCodecRoundtrip(
@@ -179,7 +182,7 @@ final class ConnectorCodecContractTest {
     }
 
     private static void awaitPendingDispatch(ZLinkStreamConnector connector) {
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(WAIT_SECONDS);
         while (System.nanoTime() < deadline) {
             if (connector.pendingDispatchCount() > 0) {
                 return;
@@ -192,6 +195,10 @@ final class ConnectorCodecContractTest {
     private record Frame(int kind, int codec, Long requestSeq, String name, byte[] payload) {}
 
     private static final class TcpServer implements AutoCloseable {
+        private static final int CONTROL_KIND = 5;
+        private static final String HEARTBEAT_PING = "$zlink.heartbeat.ping";
+        private static final String HEARTBEAT_PONG = "$zlink.heartbeat.pong";
+
         private final ServerSocket server;
         private final BlockingQueue<Socket> sockets = new LinkedBlockingQueue<>();
         private final Thread acceptThread;
@@ -222,14 +229,36 @@ final class ConnectorCodecContractTest {
         }
 
         Frame readFrame() throws Exception {
-            DataInputStream input = new DataInputStream(socket().getInputStream());
-            int headerLength = input.readUnsignedShort();
-            int payloadLength = input.readInt();
-            byte[] header = input.readNBytes(headerLength);
-            byte[] payload = input.readNBytes(payloadLength);
-            Header decoded = decodeHeader(header);
-            return new Frame(
-                    decoded.kind(), decoded.codec(), decoded.requestSeq(), decoded.name(), payload);
+            Socket connected = socket();
+            DataInputStream input = new DataInputStream(connected.getInputStream());
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(WAIT_SECONDS);
+            while (true) {
+                long remaining = deadline - System.nanoTime();
+                if (remaining <= 0) {
+                    throw new SocketTimeoutException("connector did not send an application frame");
+                }
+                connected.setSoTimeout((int) Math.max(1, TimeUnit.NANOSECONDS.toMillis(remaining)));
+                int headerLength = input.readUnsignedShort();
+                int payloadLength = input.readInt();
+                Header decoded = decodeHeader(input.readNBytes(headerLength));
+                byte[] payload = input.readNBytes(payloadLength);
+                if (decoded.kind() == CONTROL_KIND && HEARTBEAT_PING.equals(decoded.name())) {
+                    sendFrame(
+                            new Frame(
+                                    CONTROL_KIND,
+                                    decoded.codec(),
+                                    null,
+                                    HEARTBEAT_PONG,
+                                    new byte[0]));
+                    continue;
+                }
+                return new Frame(
+                        decoded.kind(),
+                        decoded.codec(),
+                        decoded.requestSeq(),
+                        decoded.name(),
+                        payload);
+            }
         }
 
         void sendFrame(Frame frame) throws Exception {
@@ -258,7 +287,7 @@ final class ConnectorCodecContractTest {
             if (current != null && !current.isClosed()) {
                 return current;
             }
-            current = sockets.poll(5, TimeUnit.SECONDS);
+            current = sockets.poll(WAIT_SECONDS, TimeUnit.SECONDS);
             if (current == null) {
                 throw new AssertionError("client did not connect within 5s");
             }
