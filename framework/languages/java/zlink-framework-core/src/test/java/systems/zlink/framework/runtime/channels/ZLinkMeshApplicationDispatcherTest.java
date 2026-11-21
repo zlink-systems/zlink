@@ -887,6 +887,87 @@ final class ZLinkMeshApplicationDispatcherTest {
         }
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+        "false,false,false", "false,true,true", "false,false,true",
+        "true,false,false", "true,true,true", "true,false,true"
+    })
+    void sameNamespaceOverlapsSynchronousHandlers(
+            boolean channel, boolean firstRequest, boolean secondRequest) throws Exception {
+        var probe = new NamespaceProbe();
+        probe.blockSynchronously = true;
+        namespaceProbe = probe;
+        var options =
+                new systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions();
+        try (var workers = java.util.concurrent.Executors.newFixedThreadPool(2)) {
+            options.useHandlerExecutor(workers);
+            var framework = options.registration();
+            framework.workers().maxThreads(2);
+            var mesh = new MeshNodeRegistration("game");
+            mesh.listen("inproc://namespace-sync-overlap");
+            if (channel) {
+                var server = mesh.channelName("play").server();
+                server.addSendHandler(NamespaceSend.class, String.class);
+                server.addRequestHandler(NamespaceRequest.class, String.class, String.class);
+            } else {
+                mesh.addRouteSendHandler(NamespaceRouteSend.class, String.class);
+                mesh.addRouteRequestHandler(
+                        NamespaceRouteRequest.class, String.class, String.class);
+            }
+            var drains = new ZLinkMeshDrainCoordinator(List.of("game"));
+            var activations = new ZLinkTrackingHandlerActivator();
+            var dispatcher =
+                    new ZLinkMeshApplicationDispatcher(
+                            mesh,
+                            new ZLinkStringMessageSerializer(),
+                            framework,
+                            activations,
+                            (token, parts) -> {
+                                throw new AssertionError("unexpected native reply");
+                            },
+                            drains);
+            var firstReply = new CompletableFuture<String>();
+            var secondReply = new CompletableFuture<String>();
+            var firstReleased = new CompletableFuture<Void>();
+            var secondReleased = new CompletableFuture<Void>();
+            try {
+                submitNamespaceRecord(
+                        dispatcher,
+                        framework,
+                        channel,
+                        firstRequest,
+                        "first",
+                        firstReply,
+                        firstReleased);
+                assertTrue(probe.firstEntered.await(2, TimeUnit.SECONDS));
+                submitNamespaceRecord(
+                        dispatcher,
+                        framework,
+                        channel,
+                        secondRequest,
+                        "second",
+                        secondReply,
+                        secondReleased);
+                assertTrue(
+                        probe.secondEntered.await(2, TimeUnit.SECONDS),
+                        "second synchronous handler must enter before first is released");
+                secondReleased.get(2, TimeUnit.SECONDS);
+                if (secondRequest)
+                    assertEquals("second-reply", secondReply.get(2, TimeUnit.SECONDS));
+                var stopping = drains.sealAndAwaitZero("game").toCompletableFuture();
+                assertFalse(stopping.isDone());
+                probe.release.complete(null);
+                firstReleased.get(2, TimeUnit.SECONDS);
+                if (firstRequest) assertEquals("first-reply", firstReply.get(2, TimeUnit.SECONDS));
+                stopping.get(2, TimeUnit.SECONDS);
+                assertEquals(2, activations.closed.get());
+            } finally {
+                probe.release.complete(null);
+                namespaceProbe = null;
+            }
+        }
+    }
+
     private static ZLinkMeshDispatchRecord submitNamespaceRecord(
             ZLinkMeshApplicationDispatcher dispatcher,
             ZLinkFrameworkRegistration framework,
@@ -943,12 +1024,19 @@ final class ZLinkMeshApplicationDispatcherTest {
     private static volatile NamespaceProbe namespaceProbe;
 
     private static final class NamespaceProbe {
+        boolean blockSynchronously;
+        final CountDownLatch firstEntered = new CountDownLatch(1);
+        final CountDownLatch secondEntered = new CountDownLatch(1);
         final List<String> starts = new CopyOnWriteArrayList<>();
         final List<String> completions = new CopyOnWriteArrayList<>();
         final CompletableFuture<Void> release = new CompletableFuture<>();
 
         CompletionStage<String> invoke(String value) {
             starts.add(value);
+            if (value.equals("first")) {
+                firstEntered.countDown();
+                if (blockSynchronously) release.join();
+            } else secondEntered.countDown();
             return (value.equals("first") ? release : CompletableFuture.<Void>completedFuture(null))
                     .whenComplete((ignored, error) -> completions.add(value))
                     .thenApply(ignored -> value + "-reply");
