@@ -297,9 +297,7 @@ class aggregate_authority_port_t
                                                 std::string relocation_reference,
                                                 std::uint32_t checksum_crc32c,
                                                 inventory_digest_t inventory_digest,
-                                                /* The StoreVersion the unit primary row must
-                                                 * still carry (the source fence, 01 §6.1). */
-                                                std::string expected_primary_store_version) = 0;
+                                                relocation_authority_fence_t source_fence) = 0;
     virtual aggregate_publish_result_t commit (aggregate_relocation_fence_t fence) = 0;
     virtual void abort (aggregate_relocation_fence_t fence) = 0;
 };
