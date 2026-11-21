@@ -6,7 +6,6 @@
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
 #include "runtime/diagnostics/message_flow_tracer.hpp"
 #include "runtime/dispatch/coroutine_executor.hpp"
-#include "runtime/dispatch/owned_task.hpp"
 #include "runtime/execution/task_result.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
@@ -209,113 +208,68 @@ void observe_bound_session_write (
 
 bool drain_bound_session_sends (
   const std::shared_ptr<detail::actor_gateway_state_t> &state,
-  const detail::actor_gateway_state_t::bound_session_send_queue_key_t &queue_key,
-  const std::string &actor_id)
+  const detail::actor_gateway_state_t::bound_session_send_queue_key_t &queue_key)
 {
-    for (;;) {
-        auto pending = state->sync (
-          [&] () -> std::optional<detail::actor_gateway_state_t::pending_bound_session_send_t> {
-              const auto found = state->pending_bound_session_sends.find (queue_key);
-              if (found == state->pending_bound_session_sends.end () || found->second.empty ()) {
-                  state->pending_bound_session_sends.erase (queue_key);
-                  state->active_bound_session_sends.erase (queue_key);
-                  return std::nullopt;
-              }
-              auto pending = std::move (found->second.front ());
-              found->second.pop_front ();
-              return pending;
-          });
-        if (!pending)
-            return true;
-        auto completion = std::move (pending->completion);
-        if (detail::submit_blocking_call ([state, queue_key, actor_id,
-                                           pending = std::move (*pending), completion] () mutable {
-                try {
-                    /* One stage event per program point: the former
-                       * offload_sender_begin/send_bound_session_enter pair
-                       * described the same instant and paid the detailed-gate
-                       * assembly twice. */
-                    if (state
-                        && detail::message_flow_tracer_t (state->dispatch)
-                             .enabled (message_flow_log_mode_t::detailed)) {
-                        detail::trace_detached_bound_session_send_stage (
-                          state, actor_id, "send_bound_session_enter", [] { return "entered"; },
-                          nullptr, queue_key.session_rid ? &*queue_key.session_rid : nullptr);
-                    }
-                    runtime::start_owned_task<result_t<void>> (
-                      std::make_shared<std::function<task_t<result_t<void>> ()>> (
-                        std::move (pending.dispatch)),
-                      [state, queue_key, actor_id,
-                       completion] (const result_t<result_t<void>> &terminal) {
-                          if (state
-                              && detail::message_flow_tracer_t (state->dispatch)
-                                   .enabled (message_flow_log_mode_t::detailed)) {
-                              detail::trace_detached_bound_session_send_stage (
-                                state, actor_id, "detached_delivery_complete",
-                                [&] { return terminal && terminal.value () ? "ok" : "failed"; },
-                                nullptr, queue_key.session_rid ? &*queue_key.session_rid : nullptr);
-                          }
-                          if (!terminal || !terminal.value ()) {
-                              trace_detached_bound_session_send_failure (
-                                state, actor_id, "accepted=true detached=true",
-                                message_flow_reason_t::target_closed, nullptr,
-                                queue_key.session_rid ? &*queue_key.session_rid : nullptr);
-                          }
-                          if (completion) {
-                              if (terminal && terminal.value ()) {
-                                  completion (result_t<void>::success ());
-                              } else if (!terminal) {
-                                  completion (result_t<void>::failure (
-                                    terminal.error_kind (), terminal.error () != nullptr
-                                                              ? terminal.error ()->what ()
-                                                              : "bound Session delivery failed"));
-                              } else {
-                                  completion (
-                                    result_t<void>::failure (terminal.value ().error_kind (),
-                                                             terminal.value ().error () != nullptr
-                                                               ? terminal.value ().error ()->what ()
-                                                               : "bound Session delivery failed"));
-                              }
-                          }
-                          (void) drain_bound_session_sends (state, queue_key, actor_id);
-                      });
-                }
-                catch (...) {
-                    if (completion) {
-                        completion (
-                          result_t<void>::failure (framework_error_kind_t::internal_failure,
-                                                   "bound Session delivery raised an exception"));
-                    }
-                    trace_detached_bound_session_send_failure (
-                      state, actor_id, "accepted=true detached=true exception=true",
-                      message_flow_reason_t::target_closed, nullptr,
-                      queue_key.session_rid ? &*queue_key.session_rid : nullptr);
-                    (void) drain_bound_session_sends (state, queue_key, actor_id);
-                }
-            })) {
-            return true;
+    using pending_t = detail::actor_gateway_state_t::pending_bound_session_send_t;
+    using work_t = std::function<task_t<result_t<void>> ()>;
+    using selection_t = std::pair<std::shared_ptr<pending_t>, std::shared_ptr<work_t>>;
+    auto [pending, work] = state->sync ([&] () -> selection_t {
+        const auto found = state->pending_bound_session_sends.find (queue_key);
+        if (found == state->pending_bound_session_sends.end ())
+            return {};
+        for (const auto &entry : found->second) {
+            if (!entry->dispatch) {
+                // A sink invocation must return before the next invocation starts.
+                if (entry->barrier || !entry->running)
+                    return {};
+                continue;
+            }
+            if (entry->barrier && entry != found->second.front ())
+                return {};
+            return {entry, std::make_shared<work_t> (std::move (entry->dispatch))};
         }
-        trace_detached_bound_session_send_failure (
-          state, actor_id, "accepted=false executor_stopping=true",
-          message_flow_reason_t::target_closed, nullptr,
-          queue_key.session_rid ? &*queue_key.session_rid : nullptr);
-        if (completion) {
-            completion (result_t<void>::failure (framework_error_kind_t::shutting_down,
-                                                 "bound Session delivery executor is stopping"));
+        return {};
+    });
+    if (!pending)
+        return true;
+    auto complete = [state, queue_key, pending] (result_t<void> terminal) {
+        state->sync ([&] {
+            const auto found = state->pending_bound_session_sends.find (queue_key);
+            if (found != state->pending_bound_session_sends.end ()) {
+                std::erase (found->second, pending);
+                if (found->second.empty ())
+                    state->pending_bound_session_sends.erase (found);
+            }
+        });
+        if (pending->completion)
+            pending->completion (std::move (terminal));
+        (void) drain_bound_session_sends (state, queue_key);
+    };
+    auto invoke = [state, queue_key, pending, work, complete] () mutable {
+        try {
+            auto running = std::make_shared<task_t<result_t<void>>> ((*work) ());
+            state->sync ([&] { pending->running = running; });
+            detail::observe_task_terminal (
+              *running, [running, work, complete] (const result_t<result_t<void>> &terminal) {
+                  complete (terminal
+                              ? terminal.value ()
+                              : detail::result_access_t::failure<void> (terminal.exception ()));
+              });
+            (void) drain_bound_session_sends (state, queue_key);
         }
-        // The executor refused this head. Drop it and continue so the Actor's
-        // per-session FIFO cannot remain permanently marked active.
+        catch (...) {
+            complete (detail::current_exception_result<void> ());
+        }
+    };
+    if (!pending->barrier) {
+        invoke ();
+        return true;
     }
-}
-
-bool enqueue_bound_session_send_owned (
-  const std::shared_ptr<detail::actor_gateway_state_t> &state,
-  const detail::actor_gateway_state_t::bound_session_send_queue_key_t &queue_key,
-  detail::actor_gateway_state_t::pending_bound_session_send_t pending)
-{
-    auto &queue = state->pending_bound_session_sends[queue_key];
-    queue.push_back (std::move (pending));
-    return state->active_bound_session_sends.insert (queue_key).second;
+    if (detail::submit_blocking_call (std::move (invoke)))
+        return true;
+    complete (result_t<void>::failure (framework_error_kind_t::shutting_down,
+                                       "bound Session egress executor is stopping"));
+    return false;
 }
 
 result_t<void> enqueue_bound_session_send (
@@ -323,18 +277,25 @@ result_t<void> enqueue_bound_session_send (
   const detail::actor_gateway_state_t::bound_session_send_queue_key_t &queue_key,
   const std::string &actor_id,
   detail::actor_gateway_state_t::pending_bound_session_send_t pending,
-  std::optional<std::uint64_t> stream_binding_token)
+  std::optional<std::uint64_t> stream_binding_token,
+  const std::shared_ptr<detail::bound_session_sink_t> &expected_sink = {})
 {
-    const auto admission = state->sync ([&] () -> result_t<bool> {
-        if (stream_binding_token) {
+    const auto admission = state->sync ([&] () -> result_t<void> {
+        if (stream_binding_token || expected_sink) {
             const auto current = state->actors_by_id.find (actor_id);
+            const auto current_sink = state->bound_session_sinks.find (actor_id);
             if (current == state->actors_by_id.end () || !current->second.bound
-                || current->second.binding_token != *stream_binding_token)
-                return detail::boundary_failure<bool> (detail::boundary_error_t::disconnected,
+                || (stream_binding_token && current->second.binding_token != *stream_binding_token)
+                || (expected_sink
+                    && (current_sink == state->bound_session_sinks.end ()
+                        || current_sink->second != expected_sink)))
+                return detail::boundary_failure<void> (detail::boundary_error_t::disconnected,
                                                        "actor session is disconnected");
         }
-        return result_t<bool>::success (
-          enqueue_bound_session_send_owned (state, queue_key, std::move (pending)));
+        state->pending_bound_session_sends[queue_key].push_back (
+          std::make_shared<detail::actor_gateway_state_t::pending_bound_session_send_t> (
+            std::move (pending)));
+        return result_t<void>::success ();
     });
     if (!admission) {
         auto failure = detail::result_access_t::failure<void> (admission.exception ());
@@ -342,14 +303,7 @@ result_t<void> enqueue_bound_session_send (
             pending.completion (failure);
         return failure;
     }
-    if (state
-        && detail::message_flow_tracer_t (state->dispatch)
-             .enabled (message_flow_log_mode_t::detailed)) {
-        detail::trace_detached_bound_session_send_stage (
-          state, actor_id, "fifo_accepted", [] { return "accepted"; }, nullptr,
-          queue_key.session_rid ? &*queue_key.session_rid : nullptr);
-    }
-    if (!admission.value () || drain_bound_session_sends (state, queue_key, actor_id))
+    if (drain_bound_session_sends (state, queue_key))
         return result_t<void>::success ();
     return detail::boundary_failure<void> (
       detail::boundary_error_t::timed_out,
@@ -641,7 +595,13 @@ namespace
 // Service command correlation owns Actor replies; STREAM requires a nonzero sequence.
 constexpr std::uint64_t actor_wire_request_sequence = 1;
 
-thread_local std::vector<stream_header_t> stream_relay_headers;
+struct stream_relay_dispatch_state_t
+{
+    stream_header_t header;
+    std::shared_ptr<stream_reply_submission_t> reply_submission;
+};
+
+thread_local std::vector<stream_relay_dispatch_state_t> stream_relay_headers;
 
 stream_header_t actor_relay_header (stream_message_kind_t kind, std::string packet_name)
 {
@@ -779,9 +739,11 @@ decode_actor_reply (const runtime::messaging::message_parts_t &parts)
     }
 }
 
-stream_relay_dispatch_scope_t::stream_relay_dispatch_scope_t (stream_header_t header)
+stream_relay_dispatch_scope_t::stream_relay_dispatch_scope_t (
+  stream_header_t header, std::shared_ptr<stream_reply_submission_t> reply_submission)
 {
-    stream_relay_headers.push_back (std::move (header));
+    stream_relay_headers.push_back (
+      stream_relay_dispatch_state_t{std::move (header), std::move (reply_submission)});
 }
 
 stream_relay_dispatch_scope_t::~stream_relay_dispatch_scope_t () noexcept
@@ -794,7 +756,12 @@ stream_relay_dispatch_scope_t::~stream_relay_dispatch_scope_t () noexcept
 std::optional<stream_header_t> current_stream_relay_dispatch ()
 {
     return stream_relay_headers.empty () ? std::nullopt
-                                         : std::make_optional (stream_relay_headers.back ());
+                                         : std::make_optional (stream_relay_headers.back ().header);
+}
+
+std::shared_ptr<stream_reply_submission_t> current_stream_reply_submission ()
+{
+    return stream_relay_headers.empty () ? nullptr : stream_relay_headers.back ().reply_submission;
 }
 
 } // namespace detail
@@ -927,13 +894,17 @@ task_t<void> bound_session_t::disconnect ()
                                                       "bound session does not reference an actor"));
     }
     std::optional<detail::actor_bound_session_route_t> route;
-    std::function<task_t<void> (actor_ref_t, detail::actor_bound_session_route_t)> close;
+    detail::actor_gateway_state_t::bound_session_closer_t close;
+    detail::actor_gateway_state_t::bound_session_send_queue_key_t queue_key;
     _state->sync ([&] {
         const auto found =
           _state->actors_by_id.find (std::string (_actor_ref->actor_id ().value ()));
         if (found != _state->actors_by_id.end () && found->second.bound
-            && found->second.ref.object_generation () == _actor_ref->object_generation ())
+            && found->second.ref.object_generation () == _actor_ref->object_generation ()) {
             route = found->second.bound_session_route;
+            queue_key = bound_session_send_queue_key (
+              std::string (_actor_ref->actor_id ().value ()), found->second);
+        }
         close = _state->bound_session_closer;
     });
     if (!route || !route->session_rid)
@@ -942,7 +913,21 @@ task_t<void> bound_session_t::disconnect ()
     if (!close)
         return task_t<void> (result_t<void>::failure (framework_error_kind_t::unavailable,
                                                       "Session close transport is unavailable"));
-    return close (*_actor_ref, std::move (*route));
+    return close (*_actor_ref, std::move (*route),
+                  [state = _state, queue_key] (std::function<task_t<bool> ()> submit,
+                                               std::function<void (result_t<void>)> complete) {
+                      const auto accepted = enqueue_bound_session_send (
+                        state, queue_key, queue_key.actor_id,
+                        {[submit = std::move (submit)] () mutable -> task_t<result_t<void>> {
+                             if (co_await submit ())
+                                 co_return result_t<void>::success ();
+                             co_return result_t<void>::failure (framework_error_kind_t::unavailable,
+                                                                "Session close was not submitted");
+                         },
+                         std::move (complete)},
+                        std::nullopt);
+                      return static_cast<bool> (accepted);
+                  });
 }
 
 bound_session_send_call_t bound_session_t::send_erased (std::string packet_name,
@@ -1007,8 +992,7 @@ bound_session_send_call_t bound_session_t::send_erased (std::string packet_name,
                 sink = found_sink->second;
             local_submission =
               found->second.bound_session_stream_sink || !found->second.bound_session_route;
-            if (!local_submission)
-                queue_key = bound_session_send_queue_key (actor_id, found->second);
+            queue_key = bound_session_send_queue_key (actor_id, found->second);
             if (found->second.bound_session_stream_sink)
                 stream_binding_token = found->second.binding_token;
         }
@@ -1033,40 +1017,48 @@ bound_session_send_call_t bound_session_t::send_erased (std::string packet_name,
         const std::string &name, const send_call_t::metadata_map_t &) mutable -> task_t<void> {
           if (completion_fence && !completion_fence->try_add ())
               completion_fence.reset ();
-          if (sink && local_submission) {
-              std::optional<task_t<void>> pending;
-              const auto admitted = state->sync ([&] () -> result_t<void> {
-                  const auto current = state->actors_by_id.find (actor_id);
-                  const auto current_sink = state->bound_session_sinks.find (actor_id);
-                  if (current == state->actors_by_id.end () || !current->second.bound
-                      || current_sink == state->bound_session_sinks.end ()
-                      || current_sink->second != sink
-                      || (stream_binding_token
-                          && current->second.binding_token != *stream_binding_token))
-                      return detail::boundary_failure<void> (detail::boundary_error_t::disconnected,
-                                                             "actor session is disconnected");
-                  pending.emplace ((*sink) (name, codec, payload));
-                  return result_t<void>::success ();
-              });
-              if (!admitted) {
-                  if (completion_fence)
-                      completion_fence->complete (admitted);
-                  return task_t<void> (admitted);
-              }
-              observe_bound_session_write (state, actor_id, std::move (*pending),
-                                           std::move (completion_fence));
-              return task_t<void> (result_t<void>::success ());
-          }
-          // Remote native admission can wait; it must remain outside this lane.
           std::function<void (result_t<void>)> complete;
           if (completion_fence)
               complete = [completion_fence] (result_t<void> terminal) {
                   completion_fence->complete (std::move (terminal));
               };
+          if (detail::message_flow_tracer_t (state->dispatch).capture_enabled ()) {
+              complete = [state, actor_id, session_rid = queue_key.session_rid,
+                          after = std::move (complete)] (result_t<void> terminal) {
+                  if (detail::message_flow_tracer_t (state->dispatch)
+                        .enabled (message_flow_log_mode_t::detailed)) {
+                      detail::trace_detached_bound_session_send_stage (
+                        state, actor_id, "detached_delivery_complete",
+                        [&] { return terminal ? "ok" : "failed"; }, nullptr,
+                        session_rid ? &*session_rid : nullptr);
+                  }
+                  if (!terminal)
+                      trace_detached_bound_session_send_failure (
+                        state, actor_id, "delivery_failed", message_flow_reason_t::target_closed,
+                        nullptr, session_rid ? &*session_rid : nullptr);
+                  if (after)
+                      after (std::move (terminal));
+              };
+          }
+          std::function<void ()> before_dispatch;
+          if (detail::message_flow_tracer_t (state->dispatch)
+                .enabled (message_flow_log_mode_t::detailed)) {
+              before_dispatch = [state, actor_id, session_rid = queue_key.session_rid] {
+                  if (detail::message_flow_tracer_t (state->dispatch)
+                        .enabled (message_flow_log_mode_t::detailed)) {
+                      detail::trace_detached_bound_session_send_stage (
+                        state, actor_id, "send_bound_session_enter", [] { return "entered"; },
+                        nullptr, session_rid ? &*session_rid : nullptr);
+                  }
+              };
+          }
           const auto submitted = enqueue_bound_session_send (
             state, queue_key, actor_id,
-            {[sink, remote_sender, actor_ref, expected_binding_generation, header, payload, codec,
+            {[before_dispatch = std::move (before_dispatch), sink, remote_sender, actor_ref,
+              expected_binding_generation, header, payload, codec,
               name] () mutable -> task_t<result_t<void>> {
+                 if (before_dispatch)
+                     before_dispatch ();
                  try {
                      if (sink) {
                          co_await (*sink) (name, codec, payload);
@@ -1083,10 +1075,16 @@ bound_session_send_call_t bound_session_t::send_erased (std::string packet_name,
                                                         error.what ());
                  }
              },
-             std::move (complete)},
-            stream_binding_token);
+             std::move (complete), !local_submission},
+            stream_binding_token, sink);
           if (!submitted)
               return task_t<void> (submitted);
+          if (detail::message_flow_tracer_t (state->dispatch)
+                .enabled (message_flow_log_mode_t::detailed)) {
+              detail::trace_detached_bound_session_send_stage (
+                state, actor_id, "fifo_accepted", [] { return "accepted"; }, nullptr,
+                queue_key.session_rid ? &*queue_key.session_rid : nullptr);
+          }
           return task_t<void> (result_t<void>::success ());
       }));
 }
@@ -1417,9 +1415,11 @@ result_t<std::uint64_t> session_actor_t::reserve_relay_sequence ()
     });
 }
 
-task_t<void> session_actor_t::relay_internal (detail::stream_header_t header,
-                                              std::uint64_t relay_sequence,
-                                              const message_t &message)
+task_t<void> session_actor_t::relay_internal (
+  detail::stream_header_t header,
+  std::uint64_t relay_sequence,
+  std::shared_ptr<detail::stream_reply_submission_t> reply_submission,
+  const message_t &message)
 {
     if (!_state->serializers) {
         return task_t<void> (result_t<void>::failure (
@@ -1479,7 +1479,7 @@ task_t<void> session_actor_t::relay_internal (detail::stream_header_t header,
         if (found->second.source_session_rid && found->second.source_binding_generation != 0) {
             relay_source = detail::bound_session_relay_source_t{
               *found->second.source_session_rid, found->second.source_binding_generation,
-              relay_sequence};
+              relay_sequence, reply_submission};
         }
         auto metadata = header.metadata ().values ();
         metadata.insert_or_assign (std::string (detail::bound_session_relay_binding_key),
@@ -1556,18 +1556,21 @@ task_t<void> session_actor_t::relay (const message_t &payload)
         return task_t<void> (
           detail::propagate_failure<void> (sequence, "actor relay sequence failed"));
     }
-    return relay_internal (*header, sequence.value (), payload);
+    return relay_internal (*header, sequence.value (), detail::current_stream_reply_submission (),
+                           payload);
 }
 
 task_t<void> session_actor_t::relay (std::string packet_name, const message_t &payload)
 {
     auto header = detail::actor_relay_header (stream_message_kind_t::send, std::move (packet_name));
+    auto reply_submission = detail::current_stream_reply_submission ();
     const auto sequence = reserve_relay_sequence ();
     if (!sequence) {
         return task_t<void> (
           detail::propagate_failure<void> (sequence, "actor relay sequence failed"));
     }
-    return relay_internal (std::move (header), sequence.value (), payload);
+    return relay_internal (std::move (header), sequence.value (), std::move (reply_submission),
+                           payload);
 }
 
 relay_request_call_t session_actor_t::relay_request (const message_t &payload)
@@ -1578,9 +1581,10 @@ relay_request_call_t session_actor_t::relay_request (const message_t &payload)
           framework_error_kind_t::protocol_error,
           "actor relay request requires current stream dispatch state"));
     }
+    auto reply_submission = detail::current_stream_reply_submission ();
     return relay_request_call_t (
       std::string (header->packet_name ()),
-      [actor = *this, header = *header, payload] (
+      [actor = *this, header = *header, payload, reply_submission = std::move (reply_submission)] (
         const std::string &, std::chrono::milliseconds timeout,
         const request_call_t<message_t>::metadata_map_t &) mutable -> request_task_t<message_t> {
           const auto relay_sequence = actor.reserve_relay_sequence ();
@@ -1594,16 +1598,17 @@ relay_request_call_t session_actor_t::relay_request (const message_t &payload)
                 "actor relay request requires a serializer registry"));
           }
           return actor.relay_request_internal (
-            header, relay_sequence.value (),
+            header, relay_sequence.value (), reply_submission,
             detail::message_to_raw (payload, *actor._state->serializers), timeout);
       });
 }
 
-request_task_t<message_t>
-session_actor_t::relay_request_internal (detail::stream_header_t header,
-                                         std::uint64_t relay_sequence,
-                                         zlink::message_t payload,
-                                         std::chrono::milliseconds timeout)
+request_task_t<message_t> session_actor_t::relay_request_internal (
+  detail::stream_header_t header,
+  std::uint64_t relay_sequence,
+  std::shared_ptr<detail::stream_reply_submission_t> reply_submission,
+  zlink::message_t payload,
+  std::chrono::milliseconds timeout)
 {
     detail::actor_gateway_state_t::relay_dispatcher_t dispatcher;
     detail::stream_header_t relay_header;
@@ -1654,7 +1659,7 @@ session_actor_t::relay_request_internal (detail::stream_header_t header,
         if (found->second.source_session_rid && found->second.source_binding_generation != 0) {
             relay_source = detail::bound_session_relay_source_t{
               *found->second.source_session_rid, found->second.source_binding_generation,
-              relay_sequence};
+              relay_sequence, reply_submission};
         }
         auto metadata = header.metadata ().values ();
         metadata.insert_or_assign (std::string (detail::bound_session_relay_binding_key),
@@ -1704,8 +1709,10 @@ session_actor_t::relay_request_internal (detail::stream_header_t header,
 relay_request_call_t session_actor_t::relay_request (std::string packet_name,
                                                      const message_t &payload)
 {
+    auto reply_submission = detail::current_stream_reply_submission ();
     const detail::stream_relay_dispatch_scope_t relay_scope (
-      detail::actor_relay_header (stream_message_kind_t::request, std::move (packet_name)));
+      detail::actor_relay_header (stream_message_kind_t::request, std::move (packet_name)),
+      std::move (reply_submission));
     return relay_request (payload);
 }
 
@@ -3746,9 +3753,9 @@ actor_gateway_runtime_t::admit_bound_session_delivery (const actor_ref_t &actor_
                                               sink = std::move (sink),
                                               admitted_session_rid =
                                                 std::move (admitted_session_rid),
-                                              binding_token] (std::string packet_name,
-                                                              stream_codec_t codec,
-                                                              const zlink::message_t &payload) {
+                                              binding_token] (
+                                               std::string packet_name, stream_codec_t codec,
+                                               const zlink::message_t &payload) -> task_t<void> {
         std::optional<task_t<void>> submitted;
         const auto admitted = state->sync ([&] () -> result_t<void> {
             const auto current = state->actors_by_id.find (actor_id);
@@ -3766,30 +3773,42 @@ actor_gateway_runtime_t::admit_bound_session_delivery (const actor_ref_t &actor_
             return result_t<void>::success ();
         });
         if (!admitted)
-            return admitted;
+            return task_t<void> (admitted);
         if (!submitted)
             submitted.emplace ((*sink) (std::move (packet_name), codec, payload));
-        auto terminal = detail::task_result_access_t::read (*submitted);
-        const auto *session_rid = admitted_session_rid ? &*admitted_session_rid : nullptr;
-        if (actor_gateway.trace_bound_session_send_stage_enabled ()) {
-            actor_gateway.trace_bound_session_send_stage (
-              actor_id, "session_node_stream_write_terminal",
-              [&] () -> std::string {
-                  //  The error kind alone does not name a site: `unavailable` is returned from several
-                  //  places in the STREAM host. Carry the message so a trace identifies which one.
-                  if (terminal)
-                      return "ok";
-                  return "failed error_kind="
-                         + std::to_string (static_cast<int> (terminal.error_kind ()))
-                         + " error=" + (terminal.error () ? terminal.error ()->what () : "none");
-              },
-              session_rid);
+        std::function<void (const result_t<void> &)> observe;
+        if (detail::message_flow_tracer_t (state->dispatch).capture_enabled ()) {
+            observe = [actor_gateway, state, actor_id,
+                       admitted_session_rid] (const result_t<void> &terminal) {
+                const auto *session_rid = admitted_session_rid ? &*admitted_session_rid : nullptr;
+                if (actor_gateway.trace_bound_session_send_stage_enabled ()) {
+                    actor_gateway.trace_bound_session_send_stage (
+                      actor_id, "session_node_stream_write_terminal",
+                      [&] () -> std::string {
+                          //  The error kind alone does not name a site: `unavailable` is returned from several
+                          //  places in the STREAM host. Carry the message so a trace identifies which one.
+                          if (terminal)
+                              return "ok";
+                          return "failed error_kind="
+                                 + std::to_string (static_cast<int> (terminal.error_kind ()))
+                                 + " error="
+                                 + (terminal.error () ? terminal.error ()->what () : "none");
+                      },
+                      session_rid);
+                }
+                if (!terminal)
+                    trace_detached_bound_session_send_failure (
+                      state, actor_id, "session_node_stream_write_terminal failed",
+                      message_flow_reason_t::target_closed, session_rid, nullptr);
+            };
         }
-        if (!terminal)
-            trace_detached_bound_session_send_failure (
-              state, actor_id, "session_node_stream_write_terminal failed",
-              message_flow_reason_t::target_closed, session_rid, nullptr);
-        return terminal;
+        // The task owns the invoked callable until its admission terminal.
+        return detail::project_task_terminal<void> (
+          *submitted, [sink, observe = std::move (observe)] (const result_t<void> &terminal) {
+              if (observe)
+                  observe (terminal);
+              return terminal;
+          });
     }};
 }
 
@@ -3894,7 +3913,7 @@ void actor_gateway_runtime_t::on_bound_session (
 }
 
 void actor_gateway_runtime_t::on_bound_session_close (
-  std::function<task_t<void> (actor_ref_t, actor_bound_session_route_t)> close)
+  actor_gateway_state_t::bound_session_closer_t close)
 {
     _state->sync ([this, close = std::move (close)] () mutable {
         _state->bound_session_closer = std::move (close);
