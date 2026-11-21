@@ -1,5 +1,6 @@
 import type { RoutingId } from '../../contracts/Common';
-import type { ZLinkFrameworkRuntimeState, ZLinkSpotKind } from '../../contracts';
+import { ZLinkSpotKind } from '../../contracts';
+import type { ZLinkFrameworkRuntimeState, ZLinkMeshNodeDescriptor } from '../../contracts';
 
 export interface ZLinkSpotRouteResolver {
   resolve(
@@ -33,6 +34,25 @@ export interface ZLinkSpotRouteTarget {
   readonly authorityStoreVersion?: string;
   /** Current state of the owning MeshNode, when the route was resolved from Location Store. */
   readonly targetNodeState?: ZLinkFrameworkRuntimeState;
+}
+
+export function entrySpotRouteTarget(
+  routerChannelId: string,
+  descriptor: ZLinkMeshNodeDescriptor
+): ZLinkSpotRouteTarget | undefined {
+  if (descriptor.entrySpotId === undefined) return undefined;
+  return {
+    routerChannelId,
+    targetNodeRid: descriptor.rid,
+    spotId: descriptor.entrySpotId as RoutingId,
+    spotKind: ZLinkSpotKind.Entry,
+    targetSpotGeneration: descriptor.lifecycleGeneration,
+    targetNodeGeneration: descriptor.lifecycleGeneration,
+    authorityOwnerGeneration: descriptor.lifecycleGeneration,
+    targetOwnerId: descriptor.ownerId,
+    ownerLeaseGeneration: descriptor.leaseGeneration,
+    targetNodeState: descriptor.state
+  };
 }
 
 export interface ZLinkInstanceReactivationRoute extends Pick<

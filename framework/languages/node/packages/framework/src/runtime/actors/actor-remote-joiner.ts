@@ -1,3 +1,8 @@
+import {
+  createInternalFrameworkException,
+  ZLinkFrameworkInternalErrorKind
+} from '../framework-errors-internal';
+import type { ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
 import type { ActorRef, RoutingId, ZLinkActor, ZLinkMessageSerializer } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkBackendMeshNode, ZLinkMeshCompletionTable } from '../backend';
@@ -9,7 +14,7 @@ import type {
   ZLinkActorJoinRuntimeResult
 } from './actor-runtime-contracts';
 import type { ZLinkActorSourceTransfer } from './actor-source-transfer';
-import { ZLinkActorRuntimeState, toFrameworkRoutingId } from './actor-runtime-state';
+import { ZLinkActorRuntimeState } from './actor-runtime-state';
 import { lookupNativeActorRef } from './actor-native-lookup';
 import { ZLinkLocalNativeActorJoin } from './actor-local-native-join';
 import { ZLinkPostCommitActorBinder } from './post-commit-actor-binder';
@@ -36,7 +41,11 @@ export interface ZLinkActorNativeJoinCoordinatorOptions extends Pick<
   readonly messageSerializers?: ReadonlyMap<string, ZLinkMessageSerializer>;
   readonly shutdownSignal?: AbortSignal;
   readonly actorTransferTimeoutMs?: number;
-  readonly entrySpotIdProvider?: (meshName: string | undefined) => string | undefined;
+  readonly entrySpotTargetSelector?: (
+    meshName: string | undefined,
+    stableType: string | undefined,
+    signal?: AbortSignal
+  ) => Promise<ZLinkSpotRouteTarget | undefined>;
 }
 
 /** Selects local native join or remote two-phase transfer for each destination. */
@@ -115,7 +124,7 @@ export class ZLinkActorNativeJoinCoordinator implements ZLinkActorJoinCoordinato
   async joinEntrySpot(
     actor: ZLinkActor,
     state: ZLinkActorRuntimeState,
-    nodeRid: RoutingId | undefined,
+    _nodeRid: RoutingId | undefined,
     request: Message,
     timeoutMs: number | undefined,
     signal: AbortSignal | undefined,
@@ -130,27 +139,20 @@ export class ZLinkActorNativeJoinCoordinator implements ZLinkActorJoinCoordinato
       node.createActor(actor.context.actorId);
     state.setNativeActorRef(actorRef as never);
     const meshName = state.meshName ?? actor.context.meshName;
-    const entrySpotId = this.options.entrySpotIdProvider?.(meshName);
-    let resolvedTarget: Awaited<ReturnType<ZLinkSpotRouteResolver['resolve']>> | undefined;
-    resolvedTarget =
-      entrySpotId === undefined
-        ? undefined
-        : await this.options.spotRouteResolver?.resolve(entrySpotId, signal);
-    // The caller may carry the Entry node from the previous membership.
-    // Entry placement can change while the Actor is in a User Spot, so the
-    // current authority route is the source of truth whenever it is available.
-    const selectedNodeRid =
-      resolvedTarget?.targetNodeRid ??
-      nodeRid ??
-      state.entryNodeRid ??
-      toFrameworkRoutingId(node.status().routingId);
-    const target = resolvedTarget;
+    const target = await this.options.entrySpotTargetSelector?.(meshName, state.actorType, signal);
+    if (target === undefined) {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.PlacementCapacityExhausted,
+        'No eligible Entry Spot target is available.',
+        true
+      );
+    }
     const result = await this.localJoin.joinEntrySpot(
       node,
       actor,
       state,
       actorRef,
-      selectedNodeRid,
+      target.targetNodeRid,
       target,
       request,
       timeoutMs ?? this.options.actorTransferTimeoutMs,

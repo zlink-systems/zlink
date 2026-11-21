@@ -64,14 +64,24 @@ async function captureRawRequestOptions(target) {
   return captured;
 }
 
-test('direct Spot submission requires an authority fence only for authority-backed Spots', async () => {
+test('direct Entry submission carries descriptor identity and lease; User carries its authority fence', async () => {
   const entryOptions = await captureRawRequestOptions({
     routerChannelId: 'mesh',
     targetNodeRid: 'node-a',
-    spotId: 'node-a',
-    spotKind: framework.ZLinkSpotKind.Entry
+    spotId: 'entry-node-a',
+    spotKind: framework.ZLinkSpotKind.Entry,
+    targetSpotGeneration: 7n,
+    targetNodeGeneration: 11n,
+    authorityOwnerGeneration: 13n,
+    ownerLeaseGeneration: 17n
   });
-  assert.equal(entryOptions.routeFence, undefined);
+  assert.deepEqual(entryOptions.routeFence, {
+    spot: { spotId: 'entry-node-a', generation: 7n },
+    targetNodeRid: 'node-a',
+    targetNodeGeneration: 11n,
+    authorityOwnerGeneration: 13n,
+    ownerLeaseGeneration: 17n
+  });
   assert.equal(entryOptions.entrySpot, true);
 
   const userOptions = await captureRawRequestOptions({
