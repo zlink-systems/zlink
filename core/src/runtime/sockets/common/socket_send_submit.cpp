@@ -50,6 +50,38 @@ void consume_caller_parts (zlink_msg_t *parts_, size_t part_count_)
     errno = saved_errno;
 }
 
+bool request_has_deferred_command (zlink::pipe_write_observer_fn observer_, void *userdata_)
+{
+    return observer_
+           && observer_ (NULL, userdata_, zlink::pipe_write_observer_has_deferred_command, NULL);
+}
+
+void dispatch_request_deferred_command (zlink::pipe_write_observer_fn observer_, void *userdata_)
+{
+    if (!request_has_deferred_command (observer_, userdata_))
+        return;
+
+    const bool dispatched =
+      observer_ (NULL, userdata_, zlink::pipe_write_observer_dispatch_deferred_command, NULL);
+    zlink_assert (dispatched);
+}
+
+// The successful request has committed its pipe write and correlation entry.
+// Keep the retained wake command with the observer until the socket turn ends.
+void release_sync_to_dispatch_request_command (zlink::pipe_write_observer_fn observer_,
+                                               void *userdata_,
+                                               zlink::socket_public_send_scope_t &scope_,
+                                               bool reacquire_scope_)
+{
+    if (!request_has_deferred_command (observer_, userdata_))
+        return;
+
+    scope_.unlock_sync ();
+    dispatch_request_deferred_command (observer_, userdata_);
+    if (reacquire_scope_)
+        scope_.relock_sync ();
+}
+
 class blocking_send_wait_guard_t
 {
   public:
@@ -658,6 +690,8 @@ zlink::socket_base_t::try_request_admission_submit_fast (
           NULL, true, admission_observer_, admission_observer_userdata_,
           true, true, NULL, selected);
         if (rc == 0) {
+            release_sync_to_dispatch_request_command (
+              admission_observer_, admission_observer_userdata_, *fast_scope, send_scope_ != NULL);
             // Multipart attempts use shallow retry copies; the single-part
             // attempt already moved its caller-owned input directly.
             if (part_count_ > 1 && consume_multipart_on_success_) {
@@ -717,6 +751,8 @@ zlink::socket_base_t::try_request_admission_submit_fast (
           NULL, true, admission_observer_, admission_observer_userdata_, true,
           true, target_rid_or_null_);
         if (rc == 0) {
+            release_sync_to_dispatch_request_command (
+              admission_observer_, admission_observer_userdata_, *fast_scope, send_scope_ != NULL);
             if (part_count_ > 1 && consume_multipart_on_success_) {
 #ifdef ZLINK_BUILD_TESTS
                 invoke_request_multipart_before_source_consume_test_hook ();
@@ -837,6 +873,7 @@ int zlink::socket_base_t::wait_for_request_submit_admission (
         const int saved_errno = errno;
         physical_scope.unlock_sync ();
         if (rc == 0) {
+            dispatch_request_deferred_command (admission_observer_, admission_observer_userdata_);
             if (part_count_ > 1)
                 consume_caller_parts (parts_, part_count_);
             errno = 0;
