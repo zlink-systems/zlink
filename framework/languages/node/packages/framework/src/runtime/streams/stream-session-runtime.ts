@@ -1,6 +1,10 @@
 import { requireOneWayCompletion } from '../messaging/submission-result';
 import { logs, SeverityNumber } from '@opentelemetry/api-logs';
 import { ZlinkStreamControlPacket } from '@zlink-systems/stream-wire';
+import {
+  type ZLinkDisconnectReason,
+  ZLinkStreamSessionError
+} from '../../contracts/Streams/ZLinkStreamError';
 import type { RoutingId, ZLinkMessageSerializer, ZLinkSession } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
@@ -310,9 +314,13 @@ export class ZLinkStreamSessionRuntime {
     );
   }
 
-  enqueueDisconnected(error?: unknown, closeReason?: string): void {
+  enqueueDisconnected(
+    error?: unknown,
+    closeReason?: string,
+    disconnectReason?: ZLinkDisconnectReason
+  ): void {
     if (closeReason !== undefined) this.closeReason = closeReason;
-    this.queueDisconnect(error);
+    this.queueDisconnect(error, disconnectReason);
   }
 
   /**
@@ -789,7 +797,8 @@ export class ZLinkStreamSessionRuntime {
   private async complete(
     error: unknown,
     notifyDisconnected: boolean,
-    bindingsCleanup?: Promise<void>
+    bindingsCleanup?: Promise<void>,
+    disconnectReason?: ZLinkDisconnectReason
   ): Promise<void> {
     try {
       if (error !== undefined && this.closeReason !== 'server_drain') {
@@ -798,8 +807,9 @@ export class ZLinkStreamSessionRuntime {
       if (error !== undefined) {
         const session = await this.requireSession();
         await session.onError?.(this.context, {
-          error: 'transportError' as never,
-          message: error instanceof Error ? error.message : String(error)
+          error: ZLinkStreamSessionError.TransportError,
+          message: error instanceof Error ? error.message : String(error),
+          ...(disconnectReason === undefined ? {} : { disconnectReason })
         });
       }
       if (notifyDisconnected) {
@@ -825,7 +835,7 @@ export class ZLinkStreamSessionRuntime {
     }
   }
 
-  private queueDisconnect(error: unknown): void {
+  private queueDisconnect(error: unknown, disconnectReason?: ZLinkDisconnectReason): void {
     if (this.disconnected || this.disconnectQueued) return;
     this.disconnectQueued = true;
     this.stopLivenessChecks();
@@ -837,7 +847,7 @@ export class ZLinkStreamSessionRuntime {
         this.disconnectQueued = false;
         if (this.disconnected) return;
         this.disconnected = true;
-        await this.complete(error, true, bindingsCleanup);
+        await this.complete(error, true, bindingsCleanup, disconnectReason);
       })
     ]).catch((failure) => this.options.onError?.(failure));
   }
@@ -978,6 +988,7 @@ export class ZLinkStreamSessionNodeRuntime {
         readonly session: ZLinkStreamSessionRuntime;
         cancelled: boolean;
         readonly error: Error;
+        readonly disconnectReason: ZLinkDisconnectReason;
         readonly activityVersion: number;
       }
     | undefined;
@@ -1393,12 +1404,13 @@ export class ZLinkStreamSessionNodeRuntime {
           this.removePendingConnectionMetadata(endpointKey);
           const session = this.resolveMonitorSession(event);
           const error = new Error(`Stream disconnected: ${event.nativeEvent}/${event.value}`);
+          const disconnectReason = Number(event.value) as ZLinkDisconnectReason;
           if (session !== undefined) {
-            session.enqueueDisconnected(error);
+            session.enqueueDisconnected(error, undefined, disconnectReason);
             return;
           }
           if (event.routingId === undefined && !streamMonitorHasEndpoint(event)) {
-            this.enqueueEndpointlessDisconnect(error);
+            this.enqueueEndpointlessDisconnect(error, disconnectReason);
           }
         }
         return;
@@ -1575,10 +1587,13 @@ export class ZLinkStreamSessionNodeRuntime {
     return undefined;
   }
 
-  private enqueueEndpointlessDisconnect(error: Error): void {
+  private enqueueEndpointlessDisconnect(
+    error: Error,
+    disconnectReason: ZLinkDisconnectReason
+  ): void {
     const sessionId = this.takeUnaddressedMonitorSession();
     if (sessionId !== undefined) {
-      this.getActiveSession(sessionId)?.enqueueDisconnected(error);
+      this.getActiveSession(sessionId)?.enqueueDisconnected(error, undefined, disconnectReason);
       return;
     }
     let session: ZLinkStreamSessionRuntime | undefined;
@@ -1599,6 +1614,7 @@ export class ZLinkStreamSessionNodeRuntime {
       session,
       cancelled: false,
       error,
+      disconnectReason,
       activityVersion: this.activityVersion
     };
     this.pendingEndpointlessDisconnect = pending;
@@ -1616,7 +1632,7 @@ export class ZLinkStreamSessionNodeRuntime {
         return;
       }
       this.pendingEndpointlessDisconnect = undefined;
-      pending.session.enqueueDisconnected(pending.error);
+      pending.session.enqueueDisconnected(pending.error, undefined, pending.disconnectReason);
     });
   }
 
