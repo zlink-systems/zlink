@@ -2343,6 +2343,7 @@ struct mesh_node_runtime_t::remote_actor_join_state_t
     std::optional<zlink::routing_id_t> bound_session_rid;
     std::string application_packet_name;
     std::string application_content_type;
+    std::shared_ptr<runtime::spot_address_resolver_t> route_resolver;
 
     bool has_typed_application_payload () const noexcept
     {
@@ -2591,6 +2592,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::join_application_actor_to_spot (
         auto completed = co_await await_completion (operation);
         auto joined =
           actor_join_reply_from_completion (completed.record, completed.parts, actor, _state);
+        runtime::invalidate_stale_spot_route (*resolver, target_spot, joined.error ());
         const auto delivered = co_await deliver_actor_join (
           actor, completion_source_spot, operation.id.high, operation.id.low, joined);
         if (!delivered)
@@ -2610,6 +2612,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::join_application_actor_to_spot (
       std::move (bound_session_rid), std::move (application_packet_name),
       std::move (application_content_type)});
     state->source_spot = completion_source_spot;
+    state->route_resolver = std::move (resolver);
     // actorJoin(28) fence-gate: wire only when this node has explicitly
     // observed the target Spot's authority fence AND the target peer is
     // admitted at exactly that observed lifecycle generation. A non-empty
@@ -2663,6 +2666,8 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::fail_remote_actor_join (
   const remote_actor_join_state_t &s, const result_t<actor_join_reply_t> &r, std::string m)
 {
     const auto failed = detail::propagate_failure<actor_join_reply_t> (r, std::move (m));
+    if (s.route_resolver)
+        runtime::invalidate_stale_spot_route (*s.route_resolver, s.target.spot_id, failed.error ());
     const auto delivered =
       co_await deliver_actor_join (s.actor, s.source_spot, s.completion_operation_id_high,
                                    s.completion_operation_id_low, failed);
@@ -3018,7 +3023,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
         const auto failure = failure_mapper.reply_header_exception (
           tail.header.terminal_result, tail.header.failure_code, "wire Actor join admission");
         co_return co_await fail_remote_actor_join (
-          *s, result_t<actor_join_reply_t>::failure (failure.kind (), failure.what ()),
+          *s, detail::result_access_t::failure<actor_join_reply_t> (failure),
           "wire Actor join admission failed");
     }
     if (tail.join_result == runtime::protocol::actor_join_result_t::accepted
@@ -3544,7 +3549,7 @@ result_t<actor_join_reply_t> mesh_node_runtime_t::actor_join_reply_from_completi
         const auto failure = failure_mapper.reply_header_exception (
           static_cast<std::uint32_t> (record.terminal_result),
           static_cast<std::uint32_t> (record.failure_errno), "Local Actor join");
-        return result_t<actor_join_reply_t>::failure (failure.kind (), failure.what ());
+        return detail::result_access_t::failure<actor_join_reply_t> (failure);
     }
     if (!record.join_completion) {
         return result_t<actor_join_reply_t>::failure (
