@@ -9,6 +9,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ConfigResult;
@@ -26,6 +28,8 @@ import systems.zlink.framework.actors.ZLinkActorContext;
 import systems.zlink.framework.actors.ZLinkActorFactory;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.locations.ZLinkLocationOptions;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.messaging.ZLinkMessage;
@@ -36,6 +40,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotRouteBridge;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
@@ -346,6 +351,96 @@ final class ZLinkActorClientRuntimeTest {
         } finally {
             bindingReply.completeExceptionally(new IllegalStateException("test cleanup"));
             java.nio.file.Files.deleteIfExists(file);
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "entry-spot, false, actor-b, false, false",
+        "per-actor-spot, false, actor-b, false, false",
+        "per-actor-spot, false, actor-a, false, true",
+        "shared-spot, true, actor-a, false, false",
+        "shared-spot, true, actor-a, true, true",
+        "shared-spot, true, actor-b, true, false"
+    })
+    void requestAdmissionFollowsActorClaimAndTerminal(
+            String spot, boolean shared, String sourceActor, boolean yield, boolean accepted) {
+        var submissions = new java.util.concurrent.atomic.AtomicInteger();
+        var node =
+                new RecordingSpotNode() {
+                    @Override
+                    public CompletionStage<List<Message>> requestToActor(
+                            ZLinkServiceM6BWireCodec.ActorRouteFence target,
+                            List<Message> parts,
+                            SendFlags flags,
+                            Duration timeout,
+                            CompletableFuture<Void> admission) {
+                        submissions.incrementAndGet();
+                        admission.complete(null);
+                        return CompletableFuture.completedFuture(reply("ok"));
+                    }
+                };
+        var client =
+                new ZLinkActorClientRuntime(
+                        () -> node,
+                        new ZLinkStoreLocationResolvers(
+                                ZLinkRegisteredLocationStores.fromUnified(
+                                        storeWithActor("actor-b")),
+                                new ZLinkLocationOptions()),
+                        new ZLinkJsonMessageSerializer(),
+                        Duration.ofSeconds(5));
+        var execution =
+                new ZLinkSuspendInvocationContext.ApplicationExecution(
+                        spot, sourceActor, shared, shared, "actor-b"::equals);
+        try (var worker = java.util.concurrent.Executors.newSingleThreadExecutor()) {
+            var policy =
+                    shared
+                            ? ZLinkExecutionLanePolicy.spot()
+                            : ZLinkExecutionLanePolicy.actorDelivery();
+            var queue = new ZLinkSerialExecutionQueue(worker, policy);
+            try {
+                var turn =
+                        queue.enqueue(
+                                () -> {
+                                    try (var ignored =
+                                            ZLinkSuspendInvocationContext.enterApplicationExecution(
+                                                    execution)) {
+                                        var call =
+                                                client.requestToActor("actor-b", new Ping("hello"));
+                                        if (accepted) {
+                                            var result =
+                                                    yield
+                                                            ? call.yield(Pong.class)
+                                                            : call.submit(Pong.class);
+                                            return result.thenAccept(
+                                                    value -> assertEquals("ok", value.value()));
+                                        }
+                                        var failure =
+                                                assertThrows(
+                                                        ZLinkFrameworkException.class,
+                                                        () -> {
+                                                            if (yield) call.yield(Pong.class);
+                                                            else call.submit(Pong.class);
+                                                        });
+                                        assertEquals(
+                                                ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                                                failure.kind());
+                                        assertEquals(0, submissions.get());
+                                        if (yield) {
+                                            ZLinkSuspendInvocationContext.requireYieldAllowed(
+                                                    "another call");
+                                        }
+                                        return CompletableFuture.completedFuture(null);
+                                    }
+                                },
+                                null);
+                turn.toCompletableFuture()
+                        .orTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+                        .join();
+                assertEquals(accepted ? 1 : 0, submissions.get());
+            } finally {
+                queue.close();
+            }
         }
     }
 

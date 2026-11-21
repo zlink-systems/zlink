@@ -5,11 +5,10 @@
 # PRs to main are squash-merged so a merged fix is one commit that Mergify can
 # backport. A PR labelled `backport-0.30.3` then gets a backport PR to the release
 # branch, which enters the release queue by itself and merges after the same checks.
-# One batch already needs about 20 GitHub-hosted jobs (the hosted concurrency
-# limit), so more parallel batches only wait for runners and get reset by
-# requeues. Fewer, larger batches merge more PRs per hour.
+# Since 2026-11-21 C++ batch jobs run on the home PC self-hosted runners and the other Linux suites on GitHub-hosted runners, so four batches fit at
+# once. Two left the self-hosted runners idle while 60+ PRs waited.
 merge_queue:
-  max_parallel_checks: 2
+  max_parallel_checks: 4
   # Docs-only PRs and queue-unblocking CI fixes merge outside the queue (CI rules 1).
   # Such a push used to cancel every in-flight batch, even one that had passed, and
   # restarted 40-60 min of batch CI each time (2026-11-21: #5062, #5094).
@@ -17,7 +16,9 @@ merge_queue:
 
 queue_rules:
   - name: default
-    batch_size: 16
+    # 8, not 16: on 2026-11-21 one batch in three failed (a PR whose own checks
+    # do not run the language suites), and each failure re-tested 16 PRs.
+    batch_size: 8
     merge_method: squash
     # The C++ check runs on GitHub-hosted runners by default (ops/ci); a batch
     # that rebuilds the C++ runtime takes 55-80 min there. The automatic timeout

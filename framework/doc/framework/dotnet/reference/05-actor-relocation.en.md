@@ -10,6 +10,26 @@ relocation-policy selection. The exact signatures are owned by the
 
 ---
 
+## `IZLinkActor.OnSessionBoundAsync`
+
+An optional notification invoked in Actor handler order after a bind commits.
+
+```csharp
+ValueTask OnSessionBoundAsync(
+    ZLinkSessionBindingIdentity incoming, // SessionOwnerNodeRid, SessionOwnerNodeGeneration, BindingGeneration
+    CancellationToken cancellationToken);
+```
+
+**Default.** The interface implementation is a no-op. Without an implementation, binding does not wait for the Actor gate.
+
+**Completion and errors.** The callback does not change the bind result. Exceptions and expiration of
+`SessionReplacementCallbackTimeout` are each reported once as runtime task exceptions. Cancellation
+caused by Actor or runtime shutdown is not reported. Timeout cancels the callback. See
+[Notification after binding commits](../guide/server/39-session-binding.en.md#7-notification-after-binding-commits)
+for ordering and the relationship to duplicate bind decisions.
+
+---
+
 ## `Create` (Actor)
 
 Always creates a new Actor.

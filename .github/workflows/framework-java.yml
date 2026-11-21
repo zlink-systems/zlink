@@ -221,6 +221,8 @@ jobs:
             :zlink-framework-spring-boot-starter:test \
             :zlink-framework-spring-boot-starter:integrationTest \
             :zlink-framework-locations-redis:test \
+            :zlink-framework-locations-etcd:test \
+            :zlink-framework-locations-etcd:contractTest \
             :zlink-framework-testkit:test \
             -Pzlink.includeSamples=false
 
@@ -252,7 +254,7 @@ jobs:
         run: |
           .\scripts\ci\framework-java-test-results.ps1 `
             -Mode summarize `
-            -InputPath "framework/languages/java/zlink-framework-core/build/test-results", "framework/languages/java/zlink-framework-spring-boot-starter/build/test-results", "framework/languages/java/zlink-framework-locations-redis/build/test-results" `
+            -InputPath "framework/languages/java/zlink-framework-core/build/test-results", "framework/languages/java/zlink-framework-spring-boot-starter/build/test-results", "framework/languages/java/zlink-framework-locations-redis/build/test-results", "framework/languages/java/zlink-framework-locations-etcd/build/test-results" `
             -OutputPath ".artifacts/framework-java-results/${{ matrix.target.name }}" `
             -Platform "${{ matrix.target.name }}" `
             -MinimumTests $env:FRAMEWORK_JAVA_MIN_TESTS
