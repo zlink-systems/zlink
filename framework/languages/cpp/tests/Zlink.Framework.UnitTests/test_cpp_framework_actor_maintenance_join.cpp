@@ -5973,8 +5973,8 @@ TEST (ActorMaintenanceJoin, TargetRejectsChangedCoordinatorFence)
 {
     namespace stateful = fw::runtime::stateful;
     // A join commit has no relocation: only the source StoreVersion fences it.
-    for (const auto changed : {"none", "owner", "lease", "baseline", "empty-baseline", "join",
-                               "join-baseline"}) {
+    for (const auto changed :
+         {"none", "owner", "lease", "baseline", "empty-baseline", "join", "join-baseline"}) {
         SCOPED_TRACE (changed);
         auto evidence = std::make_shared<observations_t> ();
         auto store = std::make_shared<observed_location_store_t> ();

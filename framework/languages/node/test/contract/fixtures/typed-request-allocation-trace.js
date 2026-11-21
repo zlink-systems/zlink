@@ -129,9 +129,9 @@ async function trace({ registryOnly = false } = {}) {
             (owner === '/runtime/foundation/operation-registry.js' ||
               (script === __filename && name === 'calibrationClockNow'))
           ) {
-            // Index reads and empty-index resets belong to the full turn,
+            // Index maintenance belongs to the full turn,
             // not the entry/id/clock/deadline registration reference.
-            const target = ['notePending', 'resetEmptyIndex'].includes(name)
+            const target = ['registerPending', 'scheduleDeadline', 'siftDeadlineUp', 'removeDeadline', 'reserveDeadlineVisit'].includes(name)
               ? registrationIndex
               : requiredRegistration;
             target.objects += objects;

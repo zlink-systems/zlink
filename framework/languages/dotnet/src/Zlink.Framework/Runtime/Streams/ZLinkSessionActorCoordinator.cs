@@ -804,27 +804,15 @@ internal sealed class ZLinkSessionActorCoordinator(
             );
             try
             {
-                Task? replySubmission = null;
-                await runtime
+                var reply = await runtime
                     .SubmitActorForReplyAsync(
                         actorRef.ActorId,
                         header,
                         actorPayload,
-                        cancellationToken,
-                        reply =>
-                            replySubmission = replyRawAsync(header, reply, cancellationToken)
-                                .AsTask()
+                        cancellationToken
                     )
                     .ConfigureAwait(false);
-                Zlink.Framework.Runtime.Execution.ZLinkStateLane.ObserveWork(
-                    "session-actor-reply-completed"
-                );
-                await (
-                    replySubmission
-                    ?? throw new InvalidOperationException(
-                        "Actor reply was not registered before turn completion."
-                    )
-                ).ConfigureAwait(false);
+                await replyRawAsync(header, reply, cancellationToken).ConfigureAwait(false);
             }
             finally
             {

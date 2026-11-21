@@ -8,17 +8,23 @@ const {
   encodeActorAuthorityIdentity
 } = require('../../packages/framework/dist/runtime/actors/actor-authority-publication');
 const {
-  ServiceRelocationAuthorityPayloadCodec,
-  encodeCanonicalRelocationSlot
-} = require('../../packages/framework/dist/runtime/foundation/service-relocation-runtime');
-const {
   decodeCanonicalAuthorityPayload,
   encodeCanonicalAuthorityPayload
 } = require('../../packages/framework/dist/runtime/actors/actor-authority-payload-codec');
 
-for (const recorded of [false, true]) {
-  for (const changed of ['none', 'owner', 'lease', 'baseline']) {
-    test(`target rejects changed coordinator fence (${recorded ? 'captured' : 'steady'}, ${changed})`, async () => {
+for (const phase of ['steady', 'captured', 'legacy captured']) {
+  const changes = ['none', 'owner', 'lease', 'node', 'node generation', 'baseline'];
+  if (phase === 'captured') {
+    changes.push(
+      'recorded owner',
+      'recorded lease',
+      'recorded node',
+      'recorded node generation',
+      'recorded baseline'
+    );
+  }
+  for (const changed of changes) {
+    test(`target PREPARE compares the coordinator fence (${phase}, ${changed})`, async () => {
       const aggregateId = '00000000-0000-0000-0000-000000000001';
       const key = encodeAuthorityKey('actor', 'actor-a').value;
       const coordinator = {
@@ -38,31 +44,12 @@ for (const recorded of [false, true]) {
         spotGeneration: 5n,
         spotKind: 'entry'
       });
-      if (recorded) {
-        const slot = encodeCanonicalRelocationSlot({
-          reference: 'pending',
-          checksumCrc32c: 0,
-          aggregateId,
-          aggregateGeneration: 1n,
-          inventoryDigest: '0'.repeat(64),
-          targetOwnerId: '',
-          targetOwnerLeaseGeneration: 0n,
-          targetNodeRid: '',
-          targetNodeGeneration: 0n,
-          targetAttemptGeneration: 0n,
-          coordinatorOwnerId: coordinator.ownerId,
-          coordinatorLeaseGeneration: coordinator.leaseGeneration,
-          coordinatorNodeRid: coordinator.nodeRid,
-          coordinatorNodeGeneration: coordinator.nodeGeneration,
-          sourceNodeRid: 'source',
-          sourceNodeGeneration: 5n,
-          sourceOwnerId: 'source-owner',
-          sourceOwnerLeaseGeneration: 3n,
-          coordinatorExpectedStoreVersion: 'baseline',
-          phase: 2,
-          applicationVersion: 0n,
-          sourceCleanupState: 0
-        });
+      if (phase === 'legacy captured') {
+        // Legacy .NET Capture writes the routing IDs as raw bytes.
+        const slot = Buffer.from(
+          'AAAAAAAAAAAAAAAAAAAAAQAAAAAAAAABAAAAAAAAAAAAB3BlbmRpbmcAAAAABnNvdXJjZQAAAAAAAAAFDHNvdXJjZS1vd25lcgAAAAAAAAADAAAAAAAAAAAAAAAAAAAAAAAADHNvdXJjZS1vd25lcgAAAAAAAAADBnNvdXJjZQAAAAAAAAAFCGJhc2VsaW5lAgAAAAAAAAAAAA==',
+          'base64'
+        );
         const body = decodeCanonicalAuthorityPayload(payload).body;
         const length = Buffer.alloc(4);
         length.writeUInt32BE(slot.length);
@@ -76,10 +63,34 @@ for (const recorded of [false, true]) {
           ])
         });
       }
+      const source = {
+        ownerId: coordinator.ownerId,
+        ownerLeaseGeneration: coordinator.leaseGeneration,
+        nodeRid: Buffer.from(coordinator.nodeRid).toString('hex'),
+        nodeGeneration: coordinator.nodeGeneration
+      };
+      const recordedCoordinator = { ...source, expectedStoreVersion: 'baseline' };
+      if (changed === 'recorded owner') recordedCoordinator.ownerId = 'other-owner';
+      if (changed === 'recorded lease') recordedCoordinator.ownerLeaseGeneration = 4n;
+      if (changed === 'recorded node') recordedCoordinator.nodeRid = 'ff';
+      if (changed === 'recorded node generation') recordedCoordinator.nodeGeneration = 6n;
+      if (changed === 'recorded baseline')
+        recordedCoordinator.expectedStoreVersion = 'other-version';
       const authority = {
         kind: 'snapshot',
-        storeVersion: { value: recorded ? 'captured-version' : 'baseline' },
+        storeVersion: { value: phase === 'steady' ? 'baseline' : 'captured-version' },
         payload,
+        ...(phase === 'captured' && {
+          relocation: {
+            relocationId: aggregateId,
+            phase: 'captured',
+            source,
+            target: null,
+            coordinator: recordedCoordinator,
+            sourceInventorySha256: '0'.repeat(64),
+            applicationVersion: 0n
+          }
+        }),
         objectGeneration: 7n,
         authorityOwnerGeneration: 11n,
         ownerId: 'source-owner',
@@ -116,9 +127,14 @@ for (const recorded of [false, true]) {
       });
       if (changed === 'owner') coordinator.ownerId = 'other-owner';
       if (changed === 'lease') coordinator.leaseGeneration = 4n;
+      if (changed === 'node') coordinator.nodeRid = 'other-node';
+      if (changed === 'node generation') coordinator.nodeGeneration = 6n;
       if (changed === 'baseline') coordinator.expectedAuthorityStoreVersion = 'other-version';
       const prepare = {
         coordinator,
+        sourceNodeRid: 'source',
+        sourceNodeGeneration: 5n,
+        applicationVersion: 0n,
         target: {
           ownerId: 'target-owner',
           ownerLeaseGeneration: 13n,
@@ -154,10 +170,10 @@ for (const recorded of [false, true]) {
           aggregateRequest.participants[0].expectedStoreVersion.value,
           authority.storeVersion.value
         );
-        const publication = new ServiceRelocationAuthorityPayloadCodec().read(
-          aggregateRequest.participants[0].authorityPayload
-        );
-        assert.equal(publication.coordinatorExpectedStoreVersion, 'baseline');
+        assert.deepEqual(aggregateRequest.participants[0].relocation.coordinator, {
+          ...source,
+          expectedStoreVersion: 'baseline'
+        });
       } else {
         await assert.rejects(
           runtime.reserveTargetForPrepare('mesh', prepare, envelope),

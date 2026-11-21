@@ -11,13 +11,9 @@ import {
   decodeActorAuthorityPayload,
   encodeActorAuthorityPayload,
   relocatingActorAuthorityApplicationPayload,
-  replaceActorRelocationAuthorityApplicationPayload,
   type ZLinkActorAuthorityState
 } from './actor-authority-payload-codec';
-import {
-  replaceServiceRelocationAuthorityApplicationPayload,
-  serviceRelocationAuthorityApplicationPayload
-} from '../foundation/service-relocation-runtime';
+import { serviceRelocationAuthorityApplicationPayload } from '../foundation/service-relocation-runtime';
 import { encodeCreationOperationTerminalV1 } from '../protocol/service_wire_codec.generated';
 
 const CREATION_OPERATION_TIMEOUT_MS = 30_000;
@@ -262,11 +258,7 @@ function rewriteActorAuthorityPayload(
   const value = decodeActorAuthorityPayload(actorApplication);
   if (value === undefined) throw new Error('Actor authority payload identity is invalid.');
   const rewrittenActor = rewrite(value);
-  const rewrittenPhase = replaceActorRelocationAuthorityApplicationPayload(
-    outerApplication,
-    rewrittenActor
-  );
-  return replaceServiceRelocationAuthorityApplicationPayload(payload, rewrittenPhase);
+  return rewrittenActor;
 }
 
 function requireActorAuthority(
