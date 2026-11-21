@@ -155,6 +155,8 @@ struct stream_host_service_test_access_t
                                                     host::public_host_runtime_t &node);
     static void create_core_sessions (stream_host_service_t &service,
                                       const std::vector<zlink::routing_id_t> &rids);
+    static void deliver_core_monitor_event (stream_host_service_t &service,
+                                            const zlink::monitor_event_t &event);
     static void expire_core_sessions (stream_host_service_t &service,
                                       const std::vector<zlink::routing_id_t> &rids);
 };
