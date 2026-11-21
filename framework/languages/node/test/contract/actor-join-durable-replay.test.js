@@ -27,22 +27,17 @@ function joinFixture(request, { canonical = true, entry = false, initiallyReady 
     }
   }, 'source-node', 7n);
   const actor = runtime.createActor('durable-actor');
-  const spot = { spotId: entry ? 'target-entry-uuid' : 'target-spot', generation: entry ? 11n : 3n };
-  const route = {
-    spot,
-    targetNodeRid: 'target-node',
-    targetNodeGeneration: 11n,
-    authorityOwnerGeneration: 5n,
-    ownerLeaseGeneration: 13n,
-    storeVersion: 'spot-version'
-  };
-  runtime.rememberSpotRoute(route);
+  const spot = { spotId: entry ? 'target-node' : 'target-spot', generation: entry ? 11n : 3n };
+  runtime.rememberSpotRoute({
+    spot, targetNodeRid: 'target-node', targetNodeGeneration: 11n,
+    authorityOwnerGeneration: 5n, ownerLeaseGeneration: 13n, storeVersion: 'spot-version'
+  });
   const payload = { packetName: 'JoinInput', contentType: 'application/json', payload: Buffer.from('{"seat":2}') };
   return {
     runtime, attempts, spot,
     ready() { ready = true; for (const observer of routeObservers) observer('target-node'); },
     join(timeoutMs) {
-      const args = entry ? [actor.ref, route, payload] : [actor.ref, 'target-node', spot, spot.generation, payload];
+      const args = entry ? [actor.ref, 'target-node', payload] : [actor.ref, 'target-node', spot, spot.generation, payload];
       if (canonical) args.push({ targetNodeGeneration: 7n, authorityOwnerGeneration: 1n, ownerLeaseGeneration: 7n },
         { phase: 'admission', transferId: 'local-only' });
       args.push(timeoutMs);

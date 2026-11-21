@@ -836,6 +836,7 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                         ZLinkFrameworkRuntimeTestAccess.start(
                                 options, new ZLinkJavaBackendAdapterFactory())) {
             try {
+                awaitServing(runtime);
                 if (!host.equals("Serving")) {
                     String holdId = spotId + "-hold";
                     var hold =
@@ -861,7 +862,6 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                                 ? null
                                 : ZLinkFrameworkRuntimeTestAccess.start(
                                         targetOptions, new ZLinkJavaBackendAdapterFactory())) {
-                    awaitServing(runtime);
                     if (host.equals("Relocating")) {
                         observeUntil(
                                         runtime.routeMeshRuntime().observe(MESH, 8),
