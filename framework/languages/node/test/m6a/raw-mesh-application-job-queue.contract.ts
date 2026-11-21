@@ -204,7 +204,7 @@ test('logical 1:N children acquire sequential permits and share one Framework in
     setImmediate(() => {
       const claim = mailbox.tryClaim('application', 1, Number.MAX_SAFE_INTEGER);
       if (claim === undefined) return;
-      const record = claim.records[0]!;
+      const record = claim.records![0]!;
       record.applicationJob!.releaseBeforeHandler();
       record.applicationJob!.close();
       mailbox.release(claim);
