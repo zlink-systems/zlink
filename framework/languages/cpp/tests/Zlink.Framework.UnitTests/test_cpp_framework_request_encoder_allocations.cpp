@@ -50,15 +50,15 @@ TEST (RequestEncoderAllocations, SynchronousTypedEncoderUsesBorrowedFunctionCont
     auto encode = [payload] (fw::serializer_registry_t &registry) {
         return registry.get<payload_t> ().serialize_with_content_type (*payload);
     };
-    // Match receiver preparation before E1 as well as the envelope prefix.
-    // The admission observer can share the encoder's allocation size; this
-    // reference prepares it identically while keeping the encoder borrowed.
+    (void) serializers.get<payload_t> ();
+    const std::string packet_name = payload_t::packet_name;
+    // Match the receiver and outgoing header preparation before invoking the borrowed encoder.
     auto baseline_submit = [&, payload] (const std::string &name, auto timeout,
                                          const auto &) -> fw::request_task_t<zlink::message_t> {
         fw::route_client_t::payload_encoder_t borrowed (std::ref (encode));
         fw::runtime::messaging::client_call_codec_t codec;
         auto header = codec.create_envelope (fw::runtime::messaging::message_kind_t::request,
-                                             router_channel_id, name, timeout);
+                                             router_channel_id, name, timeout, {}, {}, {});
         (void) header;
         (void) borrowed (serializers);
         return fw::result_t<zlink::message_t>::failure (fw::framework_error_kind_t::unavailable,
@@ -68,8 +68,7 @@ TEST (RequestEncoderAllocations, SynchronousTypedEncoderUsesBorrowedFunctionCont
     auto baseline = [&] {
         return fw::detail::request_task_access_t::receive_public<payload_t, zlink::message_t> (
           [&] (auto) {
-              (void) baseline_submit (payload_t::packet_name, std::chrono::milliseconds (0),
-                                      metadata);
+              (void) baseline_submit (packet_name, std::chrono::milliseconds (0), metadata);
           },
           [registry = &serializers] (const fw::result_t<zlink::message_t> &) {
               (void) registry;
@@ -82,9 +81,9 @@ TEST (RequestEncoderAllocations, SynchronousTypedEncoderUsesBorrowedFunctionCont
     const auto baseline_allocations = before_serializer;
     (void) fw::tests::count_allocations ([&] { (void) actual.async<payload_t> ().result (); });
     EXPECT_EQ (serialized, 2u);
-    EXPECT_EQ (baseline_allocations - before_serializer, 12u);
-    std::printf ("node request allocations before serializer: baseline=%zu typed=%zu reduced=%zu\n",
-                 baseline_allocations, before_serializer, baseline_allocations - before_serializer);
+    EXPECT_EQ (before_serializer, baseline_allocations);
+    std::printf ("node request allocations before serializer: baseline=%zu typed=%zu\n",
+                 baseline_allocations, before_serializer);
 }
 
 TEST (RequestEncoderAllocations,

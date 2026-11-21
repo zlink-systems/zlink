@@ -116,31 +116,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          binding_version=$(sed -n 's/^ZLINK_BINDING_VERSION=//p' bindings/dotnet/VERSION)
-          core_version=$(sed -n 's/^LIBZLINK_VERSION=//p' VERSION)
-          test -n "${binding_version}" || { echo "::error::binding version is missing" >&2; exit 1; }
-          test -n "${core_version}" || { echo "::error::Core version is missing" >&2; exit 1; }
-          core_prefix=$(bash scripts/local-package/core/fetch-release.sh \
-            --version "${core_version}" \
-            --platform linux-x64 \
-            --cache-dir .artifacts/core-release)
-          package_root="${RUNNER_TEMP}/zlink-dotnet-binding"
-          mkdir -p "${package_root}"
-          dotnet pack bindings/dotnet/src/Zlink/Zlink.csproj \
-            -c Release \
-            -o "${package_root}" \
-            "-p:ZLinkCoreVersion=${core_version}" \
-            "-p:ZLinkCoreSource=local" \
-            "-p:ZLinkLinuxX64NativeRoot=${core_prefix}/lib" \
-            "-p:ZLinkCoreProvenancePath=${core_prefix}/share/zlink/core-package-provenance.json"
-          test -s "${package_root}/Zlink.${binding_version}.nupkg" || {
-            echo "::error::binding package was not created" >&2
-            exit 1
-          }
-          artifact_name="zlink-dotnet-binding-${binding_version}"
-          echo "binding_version=${binding_version}" >> "${GITHUB_OUTPUT}"
-          echo "artifact_name=${artifact_name}" >> "${GITHUB_OUTPUT}"
+        run: bash scripts/ci/framework-dotnet-pack-binding.sh
 
       - name: Upload the binding package
         uses: actions/upload-artifact@v6
@@ -200,54 +176,14 @@ jobs:
 
       - name: Prepare local dependency packages
         shell: bash
-        run: |
-          # The framework consumes the public binding package contract. During
-          # pre-release CI the package is packed from this checkout against the
-          # verified Core release instead of waiting for nuget.org publication.
-          package_root="${RUNNER_TEMP}/zlink-local-packages"
-          nuget_source="${package_root}/nuget"
-          mkdir -p "${nuget_source}"
-          binding_version=$(sed -n 's/^ZLINK_BINDING_VERSION=//p' bindings/dotnet/VERSION)
-          if [ -z "${binding_version}" ]; then
-            echo "::error::Zlink binding version not found in bindings/dotnet/VERSION" >&2
-            exit 1
-          fi
-          binding_artifact="${{ needs.prepare-dotnet-binding.outputs.artifact_name }}"
-          test -n "${binding_artifact}" || {
-            echo "::error::binding artifact name is missing" >&2
-            exit 1
-          }
-          test -s "${nuget_source}/Zlink.${binding_version}.nupkg" \
-            || { echo "::error::Downloaded Zlink ${binding_version} package is missing" >&2; exit 1; }
-          dotnet pack framework/languages/dotnet/src/Zlink.HttpClient/Zlink.HttpClient.csproj -c Release -o "${nuget_source}"
-          echo "ZLINK_LOCAL_PACKAGE_ROOT=${package_root}" >> "${GITHUB_ENV}"
-          echo "ZLinkLocalPackageRoot=${package_root}" >> "${GITHUB_ENV}"
-          echo "binding_version=${binding_version}" >> "${GITHUB_OUTPUT}"
+        run: bash scripts/ci/framework-dotnet-prepare-packages.sh "${{ needs.prepare-dotnet-binding.outputs.artifact_name }}"
         id: packages
 
       - name: Prepare the Core release runtime for this platform
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          # The released binding package carries the linux-x64 runtime only; the
-          # other RIDs run the tests against the verified Core release archive.
-          # The binding package version and the Core release it embeds differ; VERSION owns Core.
-          core_version=$(sed -n 's/^LIBZLINK_VERSION=//p' VERSION)
-          core_prefix=$(bash scripts/local-package/core/fetch-release.sh \
-            --version "${core_version}" \
-            --platform "${{ matrix.target.core_platform }}" \
-            --cache-dir .artifacts/core-release)
-          case "${{ matrix.target.core_platform }}" in
-            windows-*) library="${core_prefix}/bin/zlink.dll" ;;
-            macos-*) library="${core_prefix}/lib/libzlink.dylib" ;;
-            *) library="${core_prefix}/lib/libzlink.so.${core_version}" ;;
-          esac
-          test -f "${library}" || { echo "::error::Core runtime not found at ${library}" >&2; ls -R "${core_prefix}" >&2; exit 1; }
-          if [ "${RUNNER_OS}" = "Windows" ]; then
-            library=$(cygpath -w "${library}")
-          fi
-          echo "ZLINK_LIBRARY_PATH=${library}" >> "${GITHUB_ENV}"
+        run: bash scripts/ci/framework-dotnet-core-runtime.sh "${{ matrix.target.core_platform }}"
 
       - name: Verify the packaged public contract
         if: ${{ matrix.target.name == 'linux-x64' }}
@@ -258,13 +194,13 @@ jobs:
         run: bash framework/languages/dotnet/scripts/verify_packaged_contract.sh
 
       - name: Restore framework solution
-        run: dotnet restore ${{ env.FRAMEWORK_SOLUTION }}
+        run: bash scripts/ci/framework-dotnet-solution.sh restore
 
       - name: Build framework solution (Debug)
-        run: dotnet build ${{ env.FRAMEWORK_SOLUTION }} -c Debug --no-restore
+        run: bash scripts/ci/framework-dotnet-solution.sh Debug
 
       - name: Build framework solution (Release)
-        run: dotnet build ${{ env.FRAMEWORK_SOLUTION }} -c Release --no-restore
+        run: bash scripts/ci/framework-dotnet-solution.sh Release
 
       # Redis-backed tests fail instead of skipping once the job provides Redis (#4542).
       - name: Start Redis for Redis-backed tests

@@ -47,7 +47,6 @@ export interface ZLinkCanonicalAuthorityPayload {
 }
 
 interface ActorRelocationEnvelope {
-  readonly prefix: Buffer;
   readonly phase: number;
   readonly applicationPayload: Buffer;
 }
@@ -204,27 +203,6 @@ export function relocatingActorAuthorityApplicationPayload(payload: Uint8Array):
   return Buffer.from(decodeActorRelocationEnvelope(payload)?.applicationPayload ?? payload);
 }
 
-/** Replaces only the application payload of a valid ZLAP phase envelope. */
-export function replaceActorRelocationAuthorityApplicationPayload(
-  payload: Uint8Array,
-  applicationPayload: Uint8Array
-): Buffer {
-  const current = decodeActorRelocationEnvelope(payload);
-  if (current === undefined) return Buffer.from(applicationPayload);
-  const withoutChecksum = concat(
-    current.prefix,
-    i32le(applicationPayload.byteLength),
-    applicationPayload
-  );
-  const encoded = concat(withoutChecksum, u32le(crc32c(withoutChecksum)));
-  if (encoded.byteLength > AUTHORITY_ENVELOPE_MAX_BYTES) {
-    throw new RangeError(
-      `Actor relocation authority payload exceeds ${AUTHORITY_ENVELOPE_MAX_BYTES / (1024 * 1024)} MiB.`
-    );
-  }
-  return encoded;
-}
-
 function decodeActorRelocationEnvelope(payload: Uint8Array): ActorRelocationEnvelope | undefined {
   try {
     const bytes = Buffer.from(payload);
@@ -277,12 +255,11 @@ function decodeActorRelocationEnvelope(payload: Uint8Array): ActorRelocationEnve
         return undefined;
       }
     }
-    const prefix = Buffer.from(reader.bytes.subarray(0, reader.offset));
     const applicationLength = reader.i32();
     if (applicationLength < 1 || applicationLength > AUTHORITY_ENVELOPE_MAX_BYTES) return undefined;
     const applicationPayload = Buffer.from(reader.take(applicationLength));
     if (!reader.done) return undefined;
-    return { prefix, phase, applicationPayload };
+    return { phase, applicationPayload };
   } catch {
     return undefined;
   }
@@ -328,18 +305,6 @@ function u16be(value: number): Buffer {
 function u32be(value: number): Buffer {
   const result = Buffer.alloc(4);
   result.writeUInt32BE(value);
-  return result;
-}
-
-function u32le(value: number): Buffer {
-  const result = Buffer.alloc(4);
-  result.writeUInt32LE(value);
-  return result;
-}
-
-function i32le(value: number): Buffer {
-  const result = Buffer.alloc(4);
-  result.writeInt32LE(value);
   return result;
 }
 

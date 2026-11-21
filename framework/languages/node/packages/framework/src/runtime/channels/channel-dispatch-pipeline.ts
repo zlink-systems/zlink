@@ -30,7 +30,8 @@ import { invokeZLinkHandlerFilters } from '../handlers';
 import {
   decodeChannelPayload,
   type ZLinkChannelEnvelope,
-  type ZLinkChannelEnvelopeCodecRegistry
+  type ZLinkChannelEnvelopeCodecRegistry,
+  type ZLinkChannelPayloadDecoder
 } from './channel-envelope';
 import type { ZLinkMalformedChannelHeaderInfo } from './channel-envelope-inspection';
 import type { ZLinkDispatchErrorReporter } from './dispatch-error-reporter';
@@ -66,6 +67,7 @@ export interface ZLinkOneWayDispatch<TContext extends ZLinkMessageContext> {
   readonly codecs?: ZLinkChannelEnvelopeCodecRegistry;
   readonly handler?: ZLinkChannelDispatchHandler<TContext, void>;
   readonly messageType?: ZLinkHandlerMessageType;
+  readonly decodePayload?: ZLinkChannelPayloadDecoder;
   readonly context: TContext;
   readonly signal?: AbortSignal;
 }
@@ -76,6 +78,7 @@ export interface ZLinkRequestDispatch<TContext extends ZLinkMessageContext> {
   readonly codecs?: ZLinkChannelEnvelopeCodecRegistry;
   readonly handler?: ZLinkChannelDispatchHandler<TContext, unknown>;
   readonly messageType?: ZLinkHandlerMessageType;
+  readonly decodePayload?: ZLinkChannelPayloadDecoder;
   readonly context: TContext;
   readonly signal?: AbortSignal;
   readonly missingHandlerMessage: string;
@@ -338,55 +341,28 @@ export class ZLinkChannelDispatchPipeline {
     | undefined
     | typeof HANDLER_FILTER_REJECTED
     | Promise<TResult | undefined | typeof HANDLER_FILTER_REJECTED> {
-    const envelope = dispatch.envelope;
-    const codecs = dispatch.codecs;
-    const context = dispatch.context;
-    const fields = dispatch.fields;
-    const signal = dispatch.signal;
+    const { context, fields } = dispatch;
     if (this.filters.length === 0) {
-      //  Fast path for the dominant unfiltered dispatch: skip the filter
-      //  context object and chain machinery entirely.
-      const payload = decodeChannelPayload(
-        envelope,
-        codecs,
-        resolveMessageTypeForDecode(dispatch.messageType)
-      );
+      const payload = decodeDispatchPayload(dispatch);
       this.trace(ZLinkMessageFlowOutcome.Dispatched, fields);
       releaseApplicationJobPermitBeforeHandler();
       return handler.handle(payload, context);
     }
-    return this.invokeFiltered(
-      envelope,
-      codecs,
-      handler,
-      context,
-      fields,
-      dispatch.messageType,
-      signal
-    );
+    return this.invokeFiltered(dispatch, handler);
   }
 
   private async invokeFiltered<TContext extends ZLinkMessageContext, TResult>(
-    envelope: ZLinkChannelEnvelope,
-    codecs: ZLinkChannelEnvelopeCodecRegistry | undefined,
-    handler: ZLinkChannelDispatchHandler<TContext, TResult>,
-    context: TContext,
-    fields: ZLinkChannelDispatchFields,
-    messageType?: ZLinkHandlerMessageType,
-    signal?: AbortSignal
+    dispatch: ZLinkOneWayDispatch<TContext> | ZLinkRequestDispatch<TContext>,
+    handler: ZLinkChannelDispatchHandler<TContext, TResult>
   ): Promise<TResult | undefined | typeof HANDLER_FILTER_REJECTED> {
+    const { context, fields, signal } = dispatch;
     let value: TResult | undefined;
     const handlerInvoked = await invokeZLinkHandlerFilters(
       this.filters,
       this.createFilterContext(context, fields),
       async () => {
-        // Filters are the channel admission gate. Decode only after they have
-        // allowed the handler turn to proceed.
-        const payload = decodeChannelPayload(
-          envelope,
-          codecs,
-          resolveMessageTypeForDecode(messageType)
-        );
+        // Filters must admit the handler turn before payload decode.
+        const payload = decodeDispatchPayload(dispatch);
         this.trace(ZLinkMessageFlowOutcome.Dispatched, fields);
         releaseApplicationJobPermitBeforeHandler();
         value = await handler.handle(payload, context);
@@ -502,3 +478,18 @@ const DEFAULT_UNHANDLED_DISPATCH: ZLinkUnhandledDispatchOptions = {
   send: ZLinkUnhandledDispatchAction.LogAndDrop,
   publish: ZLinkUnhandledDispatchAction.LogAndDrop
 };
+
+function decodeDispatchPayload(
+  dispatch: Pick<
+    ZLinkOneWayDispatch<ZLinkMessageContext>,
+    'decodePayload' | 'envelope' | 'codecs' | 'messageType'
+  >
+): unknown {
+  return dispatch.decodePayload === undefined
+    ? decodeChannelPayload(
+        dispatch.envelope,
+        dispatch.codecs,
+        resolveMessageTypeForDecode(dispatch.messageType)
+      )
+    : dispatch.decodePayload(dispatch.envelope);
+}

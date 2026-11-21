@@ -13,7 +13,8 @@ internal static class ZLinkClientCallCodec
         string? topic = null,
         string? source = null,
         bool includeDeadline = true,
-        IReadOnlyDictionary<string, string>? metadata = null
+        IReadOnlyDictionary<string, string>? metadata = null,
+        ZLinkEnvelopeCodec.PreparedEncoding? encoding = null
     )
     {
         if (kind is ZLinkMessageKind.Response or ZLinkMessageKind.Error)
@@ -39,6 +40,7 @@ internal static class ZLinkClientCallCodec
         )
         {
             Metadata = metadata,
+            Encoding = encoding,
             FlowId = flow?.FlowId,
             FlowOrigin = flow?.Origin,
         };

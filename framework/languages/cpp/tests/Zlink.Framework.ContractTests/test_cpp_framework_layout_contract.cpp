@@ -612,7 +612,7 @@ bool actor_model_documents_actor_destroy_lifecycle (const std::filesystem::path 
       "또는 Entry Spot join을 완료해야 한다.",
       "Destroy는 membership 이동이 아니다.",
       "성공 과정에서 `OnLeaveActor`를 다시",
-      "새로운 payload admission을 닫는다.",
+      "1. 새로운 payload admission을 닫고, Location Store의 Actor authority record를 `Closing`으로",
       "Session binding을 제거한다.",
       "Location ownership과 registry entry를 제거한다.",
       "Idempotent `false`를 반환한다.",
@@ -1451,7 +1451,7 @@ int main (int argc, char **argv)
     ok &= require_exists (
       root / "tests/Zlink.Framework.UnitTests/test_cpp_framework_handler_registry.cpp");
     ok &= require_exists (
-      root / "tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector.cpp");
+      root / "tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_main.cpp");
     ok &= require_exists (
       root / "tests/Zlink.Unreal.Stream.Connector.Tests/test_unreal_stream_connector.cpp");
     const auto old_unreal_connector_dir = std::string ("unreal") + "-connector";

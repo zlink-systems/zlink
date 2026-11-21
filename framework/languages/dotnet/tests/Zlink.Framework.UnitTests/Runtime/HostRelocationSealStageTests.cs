@@ -673,9 +673,12 @@ public sealed class HostRelocationSealStageTests
         );
         var builder = Host.CreateApplicationBuilder();
         var handler = new SealStageHandler();
+        var sessionTime = new ControllableTimeProvider();
         builder.Services.AddSingleton(handler);
         builder.Services.AddZLinkFramework(options =>
         {
+            // This scenario checks replay and continuity before the Session seal expires.
+            options.UseTestTimeProvider(sessionTime);
             options.AddLocationStore(store);
             options.AddRelocationStore(roots);
             options.ConfigureLocations().PollingInterval = TimeSpan.FromMilliseconds(10);
@@ -706,6 +709,7 @@ public sealed class HostRelocationSealStageTests
                     WaitForReadyPeersAsync(target.Services, 2, readyDeadline.Token),
                     WaitForReadyPeersAsync(session.Services, 2, readyDeadline.Token)
                 );
+            sessionTime.Advance(TimeSpan.FromMilliseconds(1));
             await using var connector = ZlinkStreamConnectorFactory.Create(
                 new ZlinkStreamConnectorOptions
                 {

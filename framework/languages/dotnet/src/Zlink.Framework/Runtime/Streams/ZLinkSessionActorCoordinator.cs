@@ -823,9 +823,6 @@ internal sealed class ZLinkSessionActorCoordinator(
                                 .AsTask()
                     )
                     .ConfigureAwait(false);
-                Zlink.Framework.Runtime.Execution.ZLinkStateLane.ObserveWork(
-                    "session-actor-reply-completed"
-                );
                 await (
                     replySubmission
                     ?? throw new InvalidOperationException(

@@ -217,3 +217,18 @@ test('reply assertion detects an admission wrapper dropping the domain failure c
   );
   assert.throws(() => assert.equal(fixture.replies(), 1), assert.AssertionError);
 });
+
+test('registered routed handlers reuse their JSON decoder contract across dispatches', (t) => {
+  const attributes = require('../../packages/framework/dist/contracts/Handlers/Attributes');
+  class Ping {}
+  attributes.ZLinkPacket('Ping', {
+    payload: { type: 'object', properties: {}, required: [] }
+  })(Ping);
+  let calls = 0;
+  const fixture = dispatchFixture(false, { handle() { calls++; } });
+  const lookup = t.mock.method(attributes, 'readZLinkPacketJsonContract');
+  fixture.dispatcher.dispatchMesh(fixture.record);
+  fixture.dispatcher.dispatchMesh(fixture.record);
+  assert.equal(calls, 2);
+  assert.equal(lookup.mock.callCount(), 0);
+});

@@ -102,7 +102,8 @@ int publish_request (queue_state_t *state_,
                      reservation_t *reservation_,
                      zlink_request_result_t result_,
                      zlink_msg_t *parts_,
-                     size_t part_count_);
+                     size_t part_count_,
+                     bool *became_ready_out_ = NULL);
 int recv (queue_state_t *state_,
           zlink_completion_t *completion_out_,
           zlink_recv_flags_t flags_,

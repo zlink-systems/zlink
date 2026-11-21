@@ -23,7 +23,8 @@ namespace Zlink.Framework.Runtime.Backend.Contracts;
 /// </summary>
 internal sealed class ZLinkBackendRouteReceived : IDisposable
 {
-    private readonly Func<IReadOnlyList<Message>, SubmitResult>? _reply;
+    // The dispatch record carries one application reply capability.
+    private readonly object? _replyRoute;
     private readonly IDisposable? _payloadOwner;
     private int _disposed;
 
@@ -47,14 +48,15 @@ internal sealed class ZLinkBackendRouteReceived : IDisposable
         ZLinkMultipartPayloadView? applicationPayloadView = null,
         bool instanceIntent = false,
         DateTimeOffset? receivedAt = null,
-        TimeProvider? timeProvider = null
+        TimeProvider? timeProvider = null,
+        ZLinkManagedMeshNode.NativeApplicationReply? nativeApplicationReply = null
     )
     {
         Parts = parts;
         SourceNodeRid = sourceNodeRid;
         SpotId = spotId;
         RequestSeq = requestSeq;
-        _reply = reply;
+        _replyRoute = reply ?? (object?)nativeApplicationReply;
         ChannelName = channelName;
         Metadata = metadata ?? ZLinkMessageMetadata.Empty;
         OperationId = operationId;
@@ -127,14 +129,20 @@ internal sealed class ZLinkBackendRouteReceived : IDisposable
     internal ZLinkApplicationJobQueueLease? ApplicationJobAdmission =>
         (_payloadOwner as ZLinkApplicationJobQueueRecordOwner)?.Admission;
 
-    public bool CanReply => _reply is not null;
+    internal ZLinkManagedMeshNode.NativeApplicationReply? NativeApplicationReply =>
+        _replyRoute as ZLinkManagedMeshNode.NativeApplicationReply;
 
-    public SubmitResult Reply(IReadOnlyList<Message> parts)
-    {
-        if (_reply is null)
-            throw new InvalidOperationException("This route record does not carry a reply token.");
-        return _reply(parts);
-    }
+    public bool CanReply => _replyRoute is not null;
+
+    public SubmitResult Reply(IReadOnlyList<Message> parts) =>
+        _replyRoute switch
+        {
+            Func<IReadOnlyList<Message>, SubmitResult> callback => callback(parts),
+            ZLinkManagedMeshNode.NativeApplicationReply native => native.SubmitParts(parts),
+            _ => throw new InvalidOperationException(
+                "This route record does not carry a reply token."
+            ),
+        };
 
     public void Dispose()
     {
