@@ -1,7 +1,8 @@
 name: Framework templates
 
 # Builds every Framework genre template and runs its Docker e2e (#1683). source=public
-# uses the published packages pinned in each template; source=local (manual or nightly runs)
+# uses the published packages pinned in each template (manual runs after a release);
+# source=local (pull requests, nightly and manual runs)
 # builds the Framework packages of this commit at framework_version and links them into
 # a copy of each template (scripts/templates/use-local-packages.py). Pull requests run only
 # the templates they change. Not a required check.
@@ -93,18 +94,23 @@ jobs:
       - id: plan
         shell: bash
         env:
-          # Pull requests have no inputs and always use the published packages.
+          # Manual runs choose the source. Pull requests and the nightly run build the
+          # packages of this commit: main templates follow the next release's API, which
+          # the published packages do not have yet (#5308). source=public runs after a
+          # release (doc/building/release-pipeline.md §6).
           SOURCE: ${{ inputs.source || 'public' }}
           LANGUAGES: ${{ inputs.languages }}
           TEMPLATES: ${{ inputs.templates }}
           FRAMEWORK_VERSION: ${{ inputs.framework_version }}
         run: |
           set -euo pipefail
-          if [ "${GITHUB_EVENT_NAME}" = schedule ]; then
+          if [ "${GITHUB_EVENT_NAME}" = schedule ] || [ "${GITHUB_EVENT_NAME}" = pull_request ]; then
             SOURCE=local
+            FRAMEWORK_VERSION="$(python3 -c 'import json; print(json.load(open("framework/languages/node/packages/framework/package.json"))["version"])')"
+          fi
+          if [ "${GITHUB_EVENT_NAME}" = schedule ]; then
             LANGUAGES=node
             TEMPLATES=''
-            FRAMEWORK_VERSION="$(python3 -c 'import json; print(json.load(open("framework/languages/node/packages/framework/package.json"))["version"])')"
           fi
           case "${SOURCE}" in
             public) ;;
