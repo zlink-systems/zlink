@@ -16,7 +16,9 @@ merge_queue:
 
 queue_rules:
   - name: default
-    batch_size: 16
+    # 8, not 16: on 2026-11-21 one batch in three failed (a PR whose own checks
+    # do not run the language suites), and each failure re-tested 16 PRs.
+    batch_size: 8
     merge_method: squash
     # The C++ check runs on GitHub-hosted runners by default (ops/ci); a batch
     # that rebuilds the C++ runtime takes 55-80 min there. The automatic timeout

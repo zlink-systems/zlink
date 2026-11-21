@@ -607,8 +607,12 @@ add_library(zlink_framework_channel_header_proto OBJECT
 target_link_libraries(zlink_framework_channel_header_proto PRIVATE protobuf::libprotobuf)
 target_include_directories(zlink_framework_channel_header_proto PRIVATE
   ${CMAKE_CURRENT_BINARY_DIR})
+# The schema lives outside this project; APPEND_PATH names the output after the
+# import directory, not CMAKE_CURRENT_SOURCE_DIR, under both FindProtobuf's and
+# protobuf's own protobuf_generate.
 protobuf_generate(
   TARGET zlink_framework_channel_header_proto
+  APPEND_PATH
   IMPORT_DIRS ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol
   PROTOC_OUT_DIR ${CMAKE_CURRENT_BINARY_DIR})
 target_link_libraries(zlink_framework_codec_protobuf INTERFACE protobuf::libprotobuf)
@@ -2225,6 +2229,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     LABELS "framework-unit;framework-contract;framework-actor;stream"
     TIER contract
     TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_session_bound_policy
+    COMMAND test_cpp_framework_actor_gateway --session-bound-policy
+    LABELS "framework-unit;framework-contract;framework-actor;stream"
+    TIER contract
+    TIMEOUT 30)
   target_include_directories(test_cpp_framework_actor_gateway PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   foreach(termination_case physical logical disconnect-then-shutdown)
@@ -3041,10 +3051,24 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     LABELS "framework-integration;framework-contract;stream;stream-session"
     TIER contract
     TIMEOUT 30)
+  foreach(bound_failure_case IN ITEMS standard nonstandard)
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_framework_same_node_duplicate_bind_bound_${bound_failure_case}_error
+      COMMAND test_cpp_framework_same_node_duplicate_bind bound-${bound_failure_case}-error
+      LABELS "framework-integration;framework-contract;stream;stream-session"
+      TIER contract
+      TIMEOUT 30)
+  endforeach()
   add_zlink_framework_test(
     test_cpp_framework_stream_framework
     tests/Zlink.Framework.UnitTests/test_cpp_framework_stream_framework.cpp
     "framework-integration;framework-regression;framework-zlink;framework-zlink-stream;stream")
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_stream_disconnect_reason
+    COMMAND test_cpp_framework_stream_framework --disconnect-reason
+    LABELS "framework-unit;framework-contract;stream;stream-session"
+    TIER contract
+    TIMEOUT 30)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_binding_submission_order
     COMMAND test_cpp_framework_stream_framework --binding-submission-order

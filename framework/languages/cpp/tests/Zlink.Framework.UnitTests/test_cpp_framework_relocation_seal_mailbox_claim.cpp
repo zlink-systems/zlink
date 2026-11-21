@@ -116,7 +116,7 @@ TEST (FrameworkRelocationSealContract, ordinary_claim_transfers_batch_before_cut
         ASSERT_TRUE (mailbox.try_enqueue (std::move (original)));
     }
     const auto claim = mailbox.try_claim (domain, 64, 65536, [&] (const auto &claimed) noexcept {
-        for (auto original : claimed->records)
+        for (const auto &original : claimed->records)
             batch.push_back (std::move (*original));
     });
     ASSERT_TRUE (claim);

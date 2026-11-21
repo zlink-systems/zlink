@@ -390,7 +390,8 @@ void zlink::object_t::send_activate_read (pipe_t *destination_)
 {
     command_t cmd;
     cmd.type = command_t::activate_read;
-    send_pipe_command (destination_, cmd, false);
+    if (prepare_pipe_command (destination_, cmd))
+        send_prepared_command (cmd);
 }
 
 void zlink::object_t::send_activate_write (pipe_t *destination_,
@@ -699,8 +700,7 @@ bool zlink::object_t::send_pipe_command (pipe_t *destination_,
     if (!destination_)
         return false;
 
-    cmd_.destination = destination_;
-    if (!destination_->retain_lifetime_ref ())
+    if (!prepare_pipe_command (destination_, cmd_))
         return false;
     //  Self-dispatch runs the handler synchronously on the caller's stack, not
     //  through the mailbox. A caller that passes the inline flag must therefore
@@ -713,7 +713,42 @@ bool zlink::object_t::send_pipe_command (pipe_t *destination_,
     return true;
 }
 
+bool zlink::object_t::prepare_pipe_command (pipe_t *destination_, command_t &cmd_)
+{
+    zlink_assert (destination_);
+    if (!destination_)
+        return false;
+
+    cmd_.destination = destination_;
+    return destination_->retain_lifetime_ref ();
+}
+
+#ifdef ZLINK_BUILD_TESTS
+namespace
+{
+thread_local zlink::object_t::command_delivery_test_hook_fn delivery_hook = NULL;
+thread_local void *delivery_hook_userdata = NULL;
+}
+
+void zlink::object_t::test_set_command_delivery_hook (command_delivery_test_hook_fn hook_,
+                                                      void *userdata_)
+{
+    delivery_hook = hook_;
+    delivery_hook_userdata = userdata_;
+}
+#endif
+
 void zlink::object_t::send_command (const command_t &cmd_)
 {
     _ctx->send_command (cmd_.destination->get_tid (), cmd_);
+}
+
+void zlink::object_t::send_prepared_command (const command_t &cmd_)
+{
+#ifdef ZLINK_BUILD_TESTS
+    if (delivery_hook)
+        delivery_hook (cmd_, delivery_hook_userdata);
+#endif
+    zlink_assert (cmd_.destination);
+    cmd_.destination->get_ctx ()->send_command (cmd_.destination->get_tid (), cmd_);
 }
