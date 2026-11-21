@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.spots;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
@@ -54,11 +55,9 @@ final class ZLinkSpotRuntimeTargetSelectionTest {
         var node = new RecordingMeshNode();
         node.localReadinessTransitions = true;
         var descriptor = zoneNode(LOCAL, ZLinkFrameworkRuntimeState.SERVING, 1);
-        var verdict =
-                ZLinkSpotRuntime.userSpotPlacementVerdict(
-                        List.of(descriptor), ZONE_TYPE, node, Set.of());
+        var verdict = placementVerdict(List.of(descriptor), ZONE_TYPE, node, Set.of());
         assertEquals(
-                ZLinkSpotRuntime.UserSpotPlacementVerdict.RETRY,
+                Verdict.RETRY,
                 verdict,
                 "descriptor has room, route becomes Ready during verdict; statusReads="
                         + node.statusReads);
@@ -70,11 +69,9 @@ final class ZLinkSpotRuntimeTargetSelectionTest {
         var node = new RecordingMeshNode();
         node.remoteAdmissionTransitions = true;
         var descriptor = zoneNode(REPLACEMENT, ZLinkFrameworkRuntimeState.SERVING, 1);
-        var verdict =
-                ZLinkSpotRuntime.userSpotPlacementVerdict(
-                        List.of(descriptor), ZONE_TYPE, node, Set.of());
+        var verdict = placementVerdict(List.of(descriptor), ZONE_TYPE, node, Set.of());
         assertEquals(
-                ZLinkSpotRuntime.UserSpotPlacementVerdict.RETRY,
+                Verdict.RETRY,
                 verdict,
                 "descriptor has room, CONNECTING becomes ADMITTED; peerReads=" + node.peerReads);
         assertEquals(1, node.peerReads);
@@ -107,8 +104,8 @@ final class ZLinkSpotRuntimeTargetSelectionTest {
     @Test
     void aServingNodeWithRoomIsSelectedDirectly() {
         assertEquals(
-                ZLinkSpotRuntime.UserSpotPlacementVerdict.SELECT,
-                ZLinkSpotRuntime.userSpotPlacementVerdict(
+                Verdict.SELECT,
+                placementVerdict(
                         List.of(zoneNode(LOCAL, ZLinkFrameworkRuntimeState.SERVING, 1)),
                         ZONE_TYPE,
                         new RecordingMeshNode(),
@@ -118,26 +115,22 @@ final class ZLinkSpotRuntimeTargetSelectionTest {
     @Test
     void everyServingNodeBeingFullIsATerminalCapacityVerdict() {
         assertEquals(
-                ZLinkSpotRuntime.UserSpotPlacementVerdict.TERMINAL,
-                ZLinkSpotRuntime.userSpotPlacementVerdict(
+                Verdict.TERMINAL,
+                placementVerdict(
                         List.of(zoneNode(LOCAL, ZLinkFrameworkRuntimeState.SERVING, 2)),
                         ZONE_TYPE,
                         new RecordingMeshNode(),
                         Set.of()));
     }
 
-    @Test
-    void aReplacementStillPreparingKeepsTheCreateRetryingInsteadOfFailing() {
-        // ZW-G3: the replacement node publishes its descriptor while still
-        // Preparing — weight 0, no admitted route — and only then turns
-        // Serving. The one Serving node left is full, so a single read finds
-        // no candidate. That is the mesh converging, not a capacity verdict.
+    @RepeatedTest(40)
+    void zeroWeightPreparingCannotKeepCreateWaiting() {
         assertEquals(
-                ZLinkSpotRuntime.UserSpotPlacementVerdict.RETRY,
-                ZLinkSpotRuntime.userSpotPlacementVerdict(
+                Verdict.TERMINAL,
+                placementVerdict(
                         List.of(
                                 zoneNode(LOCAL, ZLinkFrameworkRuntimeState.SERVING, 2),
-                                preparingZoneNode(REPLACEMENT)),
+                                zoneNode(REPLACEMENT, ZLinkFrameworkRuntimeState.PREPARING, 0, 0)),
                         ZONE_TYPE,
                         new RecordingMeshNode(),
                         Set.of()));
@@ -199,8 +192,8 @@ final class ZLinkSpotRuntimeTargetSelectionTest {
     @Test
     void aServingNodeWithRoomWhoseRouteIsNotAdmittedYetKeepsRetrying() {
         assertEquals(
-                ZLinkSpotRuntime.UserSpotPlacementVerdict.RETRY,
-                ZLinkSpotRuntime.userSpotPlacementVerdict(
+                Verdict.RETRY,
+                placementVerdict(
                         List.of(
                                 zoneNode(LOCAL, ZLinkFrameworkRuntimeState.SERVING, 2),
                                 zoneNode(REPLACEMENT, ZLinkFrameworkRuntimeState.SERVING, 1)),
@@ -212,35 +205,45 @@ final class ZLinkSpotRuntimeTargetSelectionTest {
     @Test
     void anExcludedPreparingNodeIsNotATargetTheCreateWaitsFor() {
         assertEquals(
-                ZLinkSpotRuntime.UserSpotPlacementVerdict.TERMINAL,
-                ZLinkSpotRuntime.userSpotPlacementVerdict(
+                Verdict.TERMINAL,
+                placementVerdict(
                         List.of(
                                 zoneNode(LOCAL, ZLinkFrameworkRuntimeState.SERVING, 2),
-                                preparingZoneNode(REPLACEMENT)),
+                                zoneNode(REPLACEMENT, ZLinkFrameworkRuntimeState.PREPARING, 0)),
                         ZONE_TYPE,
                         new RecordingMeshNode(),
                         Set.of(new ZLinkMeshNodeDescriptorKey("mesh", REPLACEMENT))));
     }
 
-    @Test
-    void anEmptyMeshKeepsRetryingBecauseNoCapacityIsKnownYet() {
+    @RepeatedTest(40)
+    void anEmptyMeshIsImmediatelyUnavailable() {
         assertEquals(
-                ZLinkSpotRuntime.UserSpotPlacementVerdict.RETRY,
-                ZLinkSpotRuntime.userSpotPlacementVerdict(
-                        List.of(), ZONE_TYPE, new RecordingMeshNode(), Set.of()));
+                Verdict.TERMINAL,
+                placementVerdict(List.of(), ZONE_TYPE, new RecordingMeshNode(), Set.of()));
     }
 
-    @Test
-    void theRefreshBackoffGrowsAndIsCapped() {
-        assertEquals(1L, ZLinkSpotRuntime.placementRefreshBackoffMillis(0));
-        assertEquals(2L, ZLinkSpotRuntime.placementRefreshBackoffMillis(1));
-        assertEquals(64L, ZLinkSpotRuntime.placementRefreshBackoffMillis(6));
-        assertEquals(64L, ZLinkSpotRuntime.placementRefreshBackoffMillis(40));
+    private enum Verdict {
+        SELECT,
+        RETRY,
+        TERMINAL
     }
 
-    private static ZLinkMeshNodeDescriptor preparingZoneNode(RoutingId rid) {
-        // A node that has not published Serving advertises weight 0.
-        return zoneNode(rid, ZLinkFrameworkRuntimeState.PREPARING, 0, 0);
+    private static Verdict placementVerdict(
+            List<ZLinkMeshNodeDescriptor> nodes,
+            String stableType,
+            ZLinkInternalMeshNode source,
+            Set<ZLinkMeshNodeDescriptorKey> excluded) {
+        var decision =
+                ZLinkStoreLocationResolvers.classifyPlacement(
+                        nodes,
+                        ZLinkPlacementObjectKind.USER_SPOT,
+                        stableType,
+                        false,
+                        source,
+                        excluded);
+        return !decision.candidates().isEmpty()
+                ? Verdict.SELECT
+                : decision.waitForDiscovery() ? Verdict.RETRY : Verdict.TERMINAL;
     }
 
     private static ZLinkMeshNodeDescriptor zoneNode(

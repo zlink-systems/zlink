@@ -273,6 +273,10 @@ public final class ZLinkFrameworkRuntimeTestAccess {
                 options, backendProvider, ZLinkHandlerActivator.reflection(), null);
     }
 
+    public static ZLinkStoreLocationResolvers discovery(ZLinkFrameworkRuntime runtime) {
+        return runtime.storeLocationResolvers;
+    }
+
     public static CompletionStage<Void> startupCompletion(ZLinkFrameworkRuntime runtime) {
         return runtime.startupCompletion();
     }

@@ -70,6 +70,10 @@ public final class ZLinkLiveLocationRows {
         return leaseTracker.remainingAdmissionLifetime(ownerId, ownerLeaseGeneration);
     }
 
+    boolean hasObservedLiveLease(ZLinkMeshNodeDescriptor node) {
+        return leaseTracker.hasObservedLiveLease(node.ownerId(), node.leaseGeneration());
+    }
+
     Duration routeCacheMaxAge() {
         return routeCacheMaxAge;
     }
