@@ -324,6 +324,7 @@ public sealed class SpotAutoRegistrationScannerTests
     {
         public ValueTask HandleAsync(
             AutoRoomSpot spot,
+            IZLinkMessageContext context,
             AutoRoomPacket message,
             CancellationToken cancellationToken
         ) => ValueTask.CompletedTask;

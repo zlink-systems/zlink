@@ -2895,7 +2895,8 @@ internal sealed class SpotCloseHost : IAsyncDisposable
         bool registerUserSpotFactory = true,
         int spotLimit = 100,
         TimeProvider? timeProvider = null,
-        bool clientOnly = false
+        bool clientOnly = false,
+        Action<IServiceCollection, IZLinkMeshObjectServerBuilder>? configureServer = null
     )
     {
         var store =
@@ -2941,6 +2942,7 @@ internal sealed class SpotCloseHost : IAsyncDisposable
                     ActorType,
                     static factory => factory.DisableRelocation()
                 );
+            configureServer?.Invoke(services, server);
             if (registerUserSpotFactory)
                 server
                     .AddSpotFactory<SpotCloseProbeSpot>(
@@ -3219,6 +3221,7 @@ internal sealed class SpotCloseInstanceHandler
 {
     public async ValueTask<SpotCloseInstanceReply> HandleAsync(
         SpotCloseInstance spot,
+        IZLinkMessageContext context,
         SpotCloseProbeRequest request,
         CancellationToken cancellationToken
     )
@@ -3248,6 +3251,7 @@ internal sealed class SpotCloseInstanceSignalHandler
 {
     public ValueTask HandleAsync(
         SpotCloseInstance spot,
+        IZLinkMessageContext context,
         SpotCloseProbeSignal message,
         CancellationToken cancellationToken
     )
@@ -3494,6 +3498,7 @@ internal sealed class SpotCloseProbeHandler
 {
     public ValueTask<SpotCloseProbeReply> HandleAsync(
         SpotCloseProbeSpot spot,
+        IZLinkMessageContext context,
         SpotCloseProbeRequest request,
         CancellationToken cancellationToken
     )

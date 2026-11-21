@@ -1,3 +1,4 @@
+using Zlink.Framework.Contracts.Handlers;
 using Zlink.Framework.Contracts.Spots;
 
 namespace ZLink.Framework.Perf;
@@ -13,7 +14,12 @@ public sealed class PerfEchoSpot(IZLinkSpotContext context) : IZLinkSpot
 public sealed class PerfEchoRequestHandler(Measurement measurement, ScenarioMetrics metrics)
     : IZLinkSpotRequestHandler<PerfEchoSpot, PerfEchoRequest, PerfEchoReply>
 {
-    public ValueTask<PerfEchoReply> HandleAsync(PerfEchoSpot spot, PerfEchoRequest request, CancellationToken cancellationToken)
+    public ValueTask<PerfEchoReply> HandleAsync(
+        PerfEchoSpot spot,
+        IZLinkMessageContext context,
+        PerfEchoRequest request,
+        CancellationToken cancellationToken
+    )
     {
         var received = PerfClock.Now;
         measurement.HandlerEnter();

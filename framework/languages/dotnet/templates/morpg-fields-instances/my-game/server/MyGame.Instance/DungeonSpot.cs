@@ -118,6 +118,7 @@ public sealed class Prepare : IZLinkSpotRequestHandler<DungeonSpot, PrepareDunge
 {
     public ValueTask<DungeonPrepared> HandleAsync(
         DungeonSpot spot,
+        IZLinkMessageContext context,
         PrepareDungeon request,
         CancellationToken ct
     )
@@ -150,6 +151,11 @@ public sealed class DungeonRelocation : IZLinkSpotRelocationAdapter<DungeonSpot>
 [ZLinkSpotActorSendHandler(nameof(BorderVisible))]
 public sealed class DungeonSpotBorderVisibleNotification : IZLinkSpotActorSendHandler<DungeonSpot, PlayerActor, BorderVisible>
 {
-    public ValueTask HandleAsync(DungeonSpot spot, PlayerActor actor, IZLinkMessageContext context,
-        BorderVisible message, CancellationToken ct) => actor.DeliverAsync(message);
+    public ValueTask HandleAsync(
+        DungeonSpot spot,
+        PlayerActor actor,
+        IZLinkMessageContext context,
+        BorderVisible message,
+        CancellationToken ct
+    ) => actor.DeliverAsync(message);
 }
