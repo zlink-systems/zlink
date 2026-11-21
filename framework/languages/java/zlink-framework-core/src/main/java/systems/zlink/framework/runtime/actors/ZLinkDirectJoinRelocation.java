@@ -86,7 +86,10 @@ final class ZLinkDirectJoinRelocation {
             return CompletableFuture.failedFuture(
                     new IllegalStateException("direct Actor Join relocation fence is missing"));
         }
-        return relocationAuthority.publishTargetReady(actor);
+        return relocationAuthority.publishTargetReady(
+                actor,
+                new UUID(manifest.aggregateIdHigh(), manifest.aggregateIdLow()),
+                manifest.aggregateGeneration());
     }
 
     CompletionStage<PreparedRoot> loadPrepared(
