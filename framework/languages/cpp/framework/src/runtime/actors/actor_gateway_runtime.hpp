@@ -44,6 +44,8 @@ class public_host_runtime_t;
 namespace zlink::framework::detail
 {
 
+class stream_reply_submission_t;
+
 inline constexpr char actor_message_channel_name[] = "actor";
 
 runtime::messaging::message_parts_t
@@ -72,6 +74,7 @@ struct bound_session_relay_source_t
     zlink::routing_id_t session_rid;
     std::uint64_t binding_generation = 0;
     std::uint64_t session_sequence = 0;
+    std::shared_ptr<stream_reply_submission_t> reply_submission;
 };
 
 inline bool is_local_actor_ref (const actor_ref_t &actor_ref)
@@ -82,7 +85,8 @@ inline bool is_local_actor_ref (const actor_ref_t &actor_ref)
 class stream_relay_dispatch_scope_t final
 {
   public:
-    explicit stream_relay_dispatch_scope_t (stream_header_t header);
+    explicit stream_relay_dispatch_scope_t (
+      stream_header_t header, std::shared_ptr<stream_reply_submission_t> reply_submission = {});
     ~stream_relay_dispatch_scope_t () noexcept;
 
     stream_relay_dispatch_scope_t (const stream_relay_dispatch_scope_t &) = delete;
@@ -90,6 +94,7 @@ class stream_relay_dispatch_scope_t final
 };
 
 std::optional<stream_header_t> current_stream_relay_dispatch ();
+std::shared_ptr<stream_reply_submission_t> current_stream_reply_submission ();
 
 struct actor_bound_session_route_t
 {
@@ -256,6 +261,11 @@ class actor_gateway_state_t
     using join_barrier_reserver_t =
       std::function<result_t<std::shared_ptr<deferred_barrier_t>> (const actor_ref_t &)>;
 
+    using bound_session_close_submit_t =
+      std::function<bool (std::function<task_t<bool> ()>, std::function<void (result_t<void>)>)>;
+    using bound_session_closer_t = std::function<task_t<void> (
+      actor_ref_t, actor_bound_session_route_t, bound_session_close_submit_t)>;
+
     struct pending_session_relay_t
     {
         std::function<task_t<void> ()> dispatch;
@@ -267,6 +277,8 @@ class actor_gateway_state_t
     {
         std::function<task_t<result_t<void>> ()> dispatch;
         std::function<void (result_t<void>)> completion;
+        bool barrier = true;
+        std::shared_ptr<task_t<result_t<void>>> running;
     };
 
     struct bound_session_send_queue_key_t
@@ -296,9 +308,9 @@ class actor_gateway_state_t
     std::vector<relayed_frame_t> bound_session_pushes;
     std::map<std::string, std::deque<pending_session_relay_t>> pending_session_relays;
     std::set<std::string> active_session_relays;
-    std::map<bound_session_send_queue_key_t, std::deque<pending_bound_session_send_t>>
+    std::map<bound_session_send_queue_key_t,
+             std::deque<std::shared_ptr<pending_bound_session_send_t>>>
       pending_bound_session_sends;
-    std::set<bound_session_send_queue_key_t> active_bound_session_sends;
     std::map<std::string, std::weak_ptr<bound_session_delivery_fence_t>>
       join_completion_delivery_fences;
     create_dispatcher_t create_dispatcher;
@@ -309,7 +321,7 @@ class actor_gateway_state_t
     disconnect_dispatcher_t disconnect_dispatcher;
     bound_session_registrar_t bound_session_registrar;
     bound_session_sender_t bound_session_sender;
-    std::function<task_t<void> (actor_ref_t, actor_bound_session_route_t)> bound_session_closer;
+    bound_session_closer_t bound_session_closer;
     membership_query_t membership_query;
     join_barrier_reserver_t join_barrier_reserver;
     serializer_registry_t *serializers = nullptr;
@@ -488,7 +500,7 @@ class actor_gateway_runtime_t
                                                 stream_codec_t codec,
                                                 const zlink::message_t &payload) const;
     using admitted_bound_session_delivery_t =
-      std::function<result_t<void> (std::string, stream_codec_t, const zlink::message_t &)>;
+      std::function<task_t<void> (std::string, stream_codec_t, const zlink::message_t &)>;
     std::optional<admitted_bound_session_delivery_t>
     admit_bound_session_delivery (const actor_ref_t &actor_ref,
                                   std::uint64_t binding_generation) const;
@@ -509,8 +521,7 @@ class actor_gateway_runtime_t
     void on_join_barrier (actor_gateway_state_t::join_barrier_reserver_t reserver);
     void on_disconnect (actor_gateway_state_t::disconnect_dispatcher_t dispatcher);
     void on_bound_session (actor_gateway_state_t::bound_session_registrar_t registrar);
-    void on_bound_session_close (
-      std::function<task_t<void> (actor_ref_t, actor_bound_session_route_t)> close);
+    void on_bound_session_close (actor_gateway_state_t::bound_session_closer_t close);
     void on_bound_session_send (actor_gateway_state_t::bound_session_sender_t sender);
     std::shared_ptr<bound_session_delivery_fence_t>
     begin_join_completion_delivery_fence (const actor_ref_t &actor_ref);
