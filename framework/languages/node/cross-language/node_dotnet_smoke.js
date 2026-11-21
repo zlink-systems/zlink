@@ -97,7 +97,8 @@ async function createBrowserConnectorDriver() {
 }
 
 async function nodeDotnetRedisLocationRows(tempDir) {
-  const redis = await startRedisContainer();
+  const endpoint = process.env.ZLINK_REDIS_TEST_ENDPOINT;
+  const redis = endpoint ? { endpoint } : await startRedisContainer();
   const prefix = `zlink:cross:node:${process.pid}:${Date.now()}`;
   try {
     await nodeOpaqueStoreRoundTrip(redis.endpoint, `${prefix}:node`);
@@ -113,7 +114,7 @@ async function nodeDotnetRedisLocationRows(tempDir) {
     ];
   } finally {
     await removeRedisPrefix(redis.endpoint, prefix);
-    await redis.stop();
+    await redis.stop?.();
   }
 }
 
