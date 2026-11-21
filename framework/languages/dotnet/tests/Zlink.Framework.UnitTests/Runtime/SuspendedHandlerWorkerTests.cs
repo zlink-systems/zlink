@@ -114,7 +114,12 @@ public sealed class Room(IZLinkSpotContext context) : IZLinkSpot<IZLinkActor>
 
 public sealed class OuterHandler(Probe probe) : IZLinkSpotRequestHandler<Room, Outer, Reply>
 {
-    public async ValueTask<Reply> HandleAsync(Room spot, Outer request, CancellationToken ct)
+    public async ValueTask<Reply> HandleAsync(
+        Room spot,
+        IZLinkMessageContext context,
+        Outer request,
+        CancellationToken ct
+    )
     {
         if (Interlocked.Increment(ref probe.Arrived) == 2)
             probe.Both.TrySetResult();
@@ -128,6 +133,10 @@ public sealed class OuterHandler(Probe probe) : IZLinkSpotRequestHandler<Room, O
 
 public sealed class InnerHandler : IZLinkSpotRequestHandler<Room, Inner, Reply>
 {
-    public ValueTask<Reply> HandleAsync(Room spot, Inner request, CancellationToken ct) =>
-        ValueTask.FromResult(new Reply(request.Id, true));
+    public ValueTask<Reply> HandleAsync(
+        Room spot,
+        IZLinkMessageContext context,
+        Inner request,
+        CancellationToken ct
+    ) => ValueTask.FromResult(new Reply(request.Id, true));
 }

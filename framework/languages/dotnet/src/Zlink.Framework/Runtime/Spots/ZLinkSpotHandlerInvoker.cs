@@ -23,38 +23,11 @@ internal sealed class ZLinkSpotHandlerInvoker(
     )
         : this(handlerInstances, spot, "test-mesh", codecs, compressionCodec) { }
 
-    public async ValueTask InvokePacketAsync(
+    public async ValueTask<object?> InvokeMessageAsync(
         ZLinkSpotDescriptor descriptor,
         object? message,
-        CancellationToken cancellationToken
-    )
-    {
-        using var joins = ZLinkDeferredActorJoinHandlerScope.Open(spot is not IZLinkInstanceSpot);
-        using var relocationReady = ZLinkSpotRelocationReadyHandlerScope.Open(activation);
-        var invocation = descriptor.IsAttributed
-            ? descriptor.PassCancellationToken
-                ? InvokeAsync(
-                    descriptor.HandlerType,
-                    descriptor.Invoker,
-                    message,
-                    cancellationToken
-                )
-                : InvokeAsync(descriptor.HandlerType, descriptor.Invoker, message)
-            : InvokeAsync(
-                descriptor.HandlerType,
-                descriptor.Invoker,
-                spot,
-                message,
-                cancellationToken
-            );
-        await invocation.ConfigureAwait(false);
-        joins.Complete();
-        relocationReady.Complete();
-    }
-
-    public async ValueTask<object?> InvokeRequestAsync(
-        ZLinkSpotDescriptor descriptor,
-        object? message,
+        ZLinkEnvelopeHeader header,
+        ZLinkBackendRouteReceived received,
         CancellationToken cancellationToken
     )
     {
@@ -74,6 +47,15 @@ internal sealed class ZLinkSpotHandlerInvoker(
                     descriptor.HandlerType,
                     descriptor.Invoker,
                     spot,
+                    new ZLinkMessageContext(
+                        meshName,
+                        received.ChannelName,
+                        header.MessageName,
+                        header.ContentType,
+                        received.Metadata,
+                        header.CorrelationId,
+                        received.ReceivedAt
+                    ),
                     message,
                     cancellationToken
                 )
