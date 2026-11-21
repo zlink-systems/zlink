@@ -5339,7 +5339,8 @@ spot_node_builder_t &spot_node_builder_t::add_actor_factory_erased (
   detail::factory_relocation_configuration_t relocation,
   std::function<task_t<std::vector<std::byte>> (void *, std::stop_token)> capture,
   std::function<task_t<void> (void *, std::vector<std::byte>, std::stop_token)> restore,
-  bool duplicate_bind_is_default)
+  bool duplicate_bind_is_default,
+  bool session_bound_is_default)
 {
     if ((!create_instance && !create_context_instance) || !configure_instance || !serialize_instance
         || !deserialize_instance || !as_actor) {
@@ -5360,14 +5361,16 @@ spot_node_builder_t &spot_node_builder_t::add_actor_factory_erased (
              create_context_instance = std::move (create_context_instance),
              as_actor = std::move (as_actor), on_join_completed = std::move (on_join_completed),
              relocation = std::move (relocation), capture = std::move (capture),
-             restore = std::move (restore), duplicate_bind_is_default] () mutable {
+             restore = std::move (restore), duplicate_bind_is_default,
+             session_bound_is_default] () mutable {
           const auto [_, inserted] = _state->actor_factories.emplace (
-            actor_type, detail::spot_node_builder_state_t::actor_factory_registration_t{
-                          actor_instance_type, relocation, std::move (create_instance),
-                          std::move (configure_instance), std::move (serialize_instance),
-                          std::move (deserialize_instance), std::move (create_context_instance),
-                          std::move (as_actor), std::move (on_join_completed), std::move (capture),
-                          std::move (restore), duplicate_bind_is_default});
+            actor_type,
+            detail::spot_node_builder_state_t::actor_factory_registration_t{
+              actor_instance_type, relocation, std::move (create_instance),
+              std::move (configure_instance), std::move (serialize_instance),
+              std::move (deserialize_instance), std::move (create_context_instance),
+              std::move (as_actor), std::move (on_join_completed), std::move (capture),
+              std::move (restore), duplicate_bind_is_default, session_bound_is_default});
           if (!inserted) {
               throw framework_exception_t (framework_error_kind_t::already_exists,
                                            "duplicate actor factory registration");
@@ -14396,6 +14399,8 @@ task_t<result_t<bool>> spot_node_runtime_t::run_actor_turn (
                 actor_ref, actor_type);
           }
           const auto key = actor_key (actor_ref);
+          if (state->retiring_actor_keys.contains (key) || state->destroying_actors.contains (key))
+              return std::nullopt;
           const auto factory = state->actor_factories.find (actor_type);
           const auto instance = state->actor_instances.find (key);
           const auto membership = state->actor_spot_ids.find (key);
