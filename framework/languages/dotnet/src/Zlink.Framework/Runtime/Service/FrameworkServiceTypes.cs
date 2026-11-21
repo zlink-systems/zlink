@@ -816,16 +816,24 @@ internal sealed class MeshReceiveBatch : IDisposable
     public void Dispose() => Reset();
 }
 
-internal sealed class MeshClaim : IDisposable
+internal sealed class MeshClaim(bool singleReceive = false) : IDisposable
 {
     internal Func<MeshReceiveBatch, RecvFlags, ValueTask<bool>>? Receiver { get; init; }
     internal Action? Releaser { get; init; }
-    private int _disposed;
 
-    public ValueTask<bool> ReceiveAsync(MeshReceiveBatch batch, RecvFlags flags = RecvFlags.None) =>
-        Volatile.Read(ref _disposed) == 0 && Receiver is { } receiver
+    // -1 permits one receive, 0 a reusable prefix, 1 a consumed or disposed claim.
+    // The existing disposal state also arbitrates a single-record receive.
+    private int _disposed = singleReceive ? -1 : 0;
+
+    public ValueTask<bool> ReceiveAsync(MeshReceiveBatch batch, RecvFlags flags = RecvFlags.None)
+    {
+        var state = Volatile.Read(ref _disposed);
+        if (state == -1)
+            state = Interlocked.CompareExchange(ref _disposed, 1, -1) == -1 ? 0 : 1;
+        return state == 0 && Receiver is { } receiver
             ? receiver(batch, flags)
             : ValueTask.FromResult(false);
+    }
 
     // Blocking compatibility surface for callers outside a framework execution context.
     public bool Receive(MeshReceiveBatch batch, RecvFlags flags = RecvFlags.None) =>
@@ -833,7 +841,7 @@ internal sealed class MeshClaim : IDisposable
 
     public void Dispose()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) == 0)
+        if (Interlocked.Exchange(ref _disposed, 1) != 1)
             Releaser?.Invoke();
     }
 }

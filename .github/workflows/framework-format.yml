@@ -52,6 +52,9 @@ jobs:
           package-manager-cache: false
           node-version: 22
 
+      - name: Install service-wire tooling dependencies
+        run: npm ci --prefix framework/runtime/protocol --ignore-scripts
+
       - name: Check generated service-wire codecs
         run: node framework/runtime/protocol/generate-service-wire-codecs.mjs --check
 

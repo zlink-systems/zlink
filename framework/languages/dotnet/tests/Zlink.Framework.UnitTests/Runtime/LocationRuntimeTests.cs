@@ -2924,6 +2924,7 @@ public sealed partial class LocationRuntimeTests
     {
         public ValueTask<OutageExecutionReply> HandleAsync(
             OutageExecutionSpot spot,
+            IZLinkMessageContext context,
             string request,
             CancellationToken ct
         ) => ValueTask.FromResult(new OutageExecutionReply(++spot.Messages));

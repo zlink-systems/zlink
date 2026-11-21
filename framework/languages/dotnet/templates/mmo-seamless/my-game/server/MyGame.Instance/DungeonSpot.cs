@@ -16,6 +16,7 @@ public sealed class DungeonOpenHandler(NodeSettings settings)
 {
     public ValueTask<DungeonOpened> HandleAsync(
         DungeonSpot spot,
+        IZLinkMessageContext context,
         OpenDungeonRequest request,
         CancellationToken cancellationToken
     ) => ValueTask.FromResult(new DungeonOpened(spot.Context.SpotId, settings.Id));

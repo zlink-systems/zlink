@@ -31,6 +31,24 @@ idea {
 }
 
 val junitVersion = "5.10.2"
+val testEventsClasspath = configurations.create("testEventsClasspath")
+dependencies {
+    add(testEventsClasspath.name, platform("org.junit:junit-bom:$junitVersion"))
+    add(testEventsClasspath.name, "org.junit.platform:junit-platform-launcher")
+}
+val compileTestEvents by tasks.registering(JavaCompile::class) {
+    source("gradle/test-events/src/main/java")
+    classpath = testEventsClasspath
+    sourceCompatibility = gradle.extensions.extraProperties["zlink.javaLanguageVersion"].toString()
+    targetCompatibility = sourceCompatibility
+    destinationDirectory.set(layout.buildDirectory.dir("test-events-listener/classes"))
+}
+val testEventsJar by tasks.registering(Jar::class) {
+    archiveFileName.set("test-events-listener.jar")
+    destinationDirectory.set(layout.buildDirectory.dir("test-events-listener"))
+    from(compileTestEvents.flatMap { it.destinationDirectory })
+    from("gradle/test-events/src/main/resources")
+}
 val signingKey = providers.environmentVariable("SIGNING_KEY").orNull
 val signingPassphrase = providers.environmentVariable("SIGNING_PASSPHRASE").orNull
 val centralBundleDir = providers.environmentVariable("MAVEN_CENTRAL_BUNDLE_DIR").orNull
@@ -132,11 +150,21 @@ subprojects {
             add("testImplementation", platform("org.junit:junit-bom:$junitVersion"))
             add("testImplementation", "org.junit.jupiter:junit-jupiter")
             add("testRuntimeOnly", "org.junit.platform:junit-platform-launcher")
+            add("testRuntimeOnly", files(testEventsJar))
         }
 
         tasks.withType<Test>().configureEach {
             useJUnitPlatform()
             jvmArgs("--enable-native-access=ALL-UNNAMED")
+            val testEvents = layout.buildDirectory.file("test-events/$name.log").get().asFile
+            val crashDirectory = layout.buildDirectory.dir("jvm-crashes/$name").get().asFile
+            jvmArgs("-XX:ErrorFile=${crashDirectory.resolve("hs_err_pid%p.log").absolutePath}")
+            systemProperty("zlink.test.events.file", testEvents.absolutePath)
+            doFirst {
+                testEvents.parentFile.mkdirs()
+                testEvents.writeText("")
+                crashDirectory.mkdirs()
+            }
             if (singleWorker || name == "integrationTest") {
                 maxParallelForks = 1
             }

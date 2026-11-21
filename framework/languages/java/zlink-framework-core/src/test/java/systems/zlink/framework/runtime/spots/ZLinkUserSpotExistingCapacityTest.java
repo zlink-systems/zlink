@@ -330,7 +330,7 @@ final class ZLinkUserSpotExistingCapacityTest {
         }
     }
 
-    @Test
+    @RepeatedTest(40)
     void failedCreatingWinnerReleasesCapacityForFreshSelection() throws Exception {
         FACTORY_CALLS.set(0);
         var store = new MissingReadBarrier(2);
@@ -358,6 +358,17 @@ final class ZLinkUserSpotExistingCapacityTest {
                 store.foundAfterRelease.get(5, TimeUnit.SECONDS);
                 hold.completeExceptionally(
                         new IllegalStateException("controlled winner initialization failure"));
+                store.missingAfterFailureObserved.get(5, TimeUnit.SECONDS);
+                // MeshNode §5.2 selects the discovery projection, not a request-owned Store list.
+                ZLinkFrameworkRuntimeTestAccess.discovery(runtime)
+                        .listPeers(
+                                systems.zlink.framework.runtime.internal.locations
+                                        .ZLinkAutoConnectType.ROUTE_MESH,
+                                "existing-capacity",
+                                null)
+                        .toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS);
+                store.capacityDiscoveryPublished.complete(null);
                 assertThrows(ExecutionException.class, () -> winner.get(5, TimeUnit.SECONDS));
                 var created = first.get(5, TimeUnit.SECONDS);
                 assertEquals(ZLinkSpotCreateState.CREATED, created.state());
@@ -372,6 +383,7 @@ final class ZLinkUserSpotExistingCapacityTest {
                 assertEquals(1, descriptor.capacity().spots().active());
                 assertEquals(0, descriptor.capacity().spots().reserved());
             } finally {
+                store.capacityDiscoveryPublished.complete(null);
                 store.release.complete(null);
                 hold.completeExceptionally(new IllegalStateException("test cleanup"));
             }
@@ -431,6 +443,8 @@ final class ZLinkUserSpotExistingCapacityTest {
         private final int holdMissingNumber;
         final AtomicBoolean watchFoundAfterRelease = new AtomicBoolean();
         final CompletableFuture<Void> foundAfterRelease = new CompletableFuture<>();
+        final CompletableFuture<Void> capacityDiscoveryPublished = new CompletableFuture<>();
+        final CompletableFuture<Void> missingAfterFailureObserved = new CompletableFuture<>();
 
         MissingReadBarrier(int holdMissingNumber) {
             this.holdMissingNumber = holdMissingNumber;
@@ -458,6 +472,14 @@ final class ZLinkUserSpotExistingCapacityTest {
                                         && result instanceof ZLinkStoreReadFound
                                         && watchFoundAfterRelease.get()) {
                                     foundAfterRelease.complete(null);
+                                }
+                                if (key.value().startsWith("authority\0")
+                                        && key.value().endsWith("\0raced-room")
+                                        && result instanceof ZLinkStoreReadMissing
+                                        && watchFoundAfterRelease.get()
+                                        && foundAfterRelease.isDone()) {
+                                    missingAfterFailureObserved.complete(null);
+                                    return capacityDiscoveryPublished.thenApply(ignored -> result);
                                 }
                                 return CompletableFuture.completedFuture(result);
                             });

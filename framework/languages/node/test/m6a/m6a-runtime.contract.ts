@@ -1,8 +1,7 @@
-import { ConnectError, ConnectResult } from '@zlink-systems/zlink';
+import { ConnectError, ConnectResult, ConnectionAttemptState } from '@zlink-systems/zlink';
 import { disconnectSocketPeer } from '../../packages/framework/src/runtime/backend/node/node-socket-backend-adapter';
 import { inspectRuntime } from '../../packages/framework/src/runtime/internal-observation';
 import assert from 'node:assert/strict';
-import net from 'node:net';
 import { test } from 'node:test';
 import {
   SERVICE_WIRE_MAGIC,
@@ -91,24 +90,6 @@ function descriptor(
 
 function nativeTestEndpoint(name: string): string {
   return process.platform === 'win32' ? 'tcp://127.0.0.1:0' : `ipc:///tmp/${name}.sock`;
-}
-
-async function nativePrebindTestEndpoint(name: string): Promise<string> {
-  if (process.platform !== 'win32') return nativeTestEndpoint(name);
-  const server = net.createServer();
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', resolve);
-  });
-  const address = server.address();
-  if (address === null || typeof address === 'string') {
-    server.close();
-    throw new Error('Failed to reserve a Windows loopback test endpoint.');
-  }
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error === undefined ? resolve() : reject(error)));
-  });
-  return `tcp://127.0.0.1:${address.port}`;
 }
 
 function rawServiceRuntime(
@@ -1169,15 +1150,15 @@ test('mailbox has no hidden admission cap and owner claims progress independentl
   const application = mailbox.tryClaim('application', 1, 8)!;
   const parallelOwner = mailbox.tryClaim('application', 1, 8)!;
   assert.equal(parallelOwner.owner, 'spot-b');
-  mailbox.releaseClaimedPayload(application.records[0]!);
-  assert.equal(application.records[0]!.parts.length, 0);
+  mailbox.releaseClaimedPayload(application.records![0]!);
+  assert.equal(application.records![0]!.parts.length, 0);
   const infrastructure = mailbox.tryClaim('infrastructure', 1, 8)!;
-  assert.equal(infrastructure.records.length, 1);
+  assert.equal(infrastructure.records!.length, 1);
   assert.equal(mailbox.release(infrastructure), true);
   assert.equal(mailbox.release(infrastructure), false);
   assert.equal(mailbox.release(parallelOwner), true);
   assert.equal(mailbox.release(application), true);
-  assert.equal(mailbox.tryClaim('application', 1, 8)?.records.length, 1);
+  assert.equal(mailbox.tryClaim('application', 1, 8)?.records!.length, 1);
 });
 
 test('remote request is not rejected by legacy mailbox limits after shared admission', async () => {
@@ -1707,7 +1688,7 @@ test('raw runtime admits peers and completes node/channel requests once', async 
     );
     await pollUntil(async () => (await right.pumpOne()) === 'application');
     const request = right.mailbox.tryClaim('application', 1, 4096)!;
-    right.reply(request.records[0]!, {
+    right.reply(request.record!, {
       packetName: 'Answer',
       contentType: 'application/json',
       payload: Buffer.from('reply')
@@ -1828,7 +1809,7 @@ test('terminal reply completion progresses while ordinary job flow is saturated'
     );
     await pollUntil(async () => (await right.pumpOne()) === 'application');
     const request = right.mailbox.tryClaim('application', 1, 4096)!;
-    right.reply(request.records[0]!, {
+    right.reply(request.record!, {
       packetName: 'Answer',
       contentType: 'application/json',
       payload: Buffer.from('reply')
@@ -1869,8 +1850,8 @@ test('terminal reply completion progresses while ordinary job flow is saturated'
     );
     const drained = left.mailbox.tryClaim('application', 1, Number.MAX_SAFE_INTEGER)!;
     assert.equal(drained.owner, 'node:m6a-r6-left');
-    assert.equal(drained.records.length, 1);
-    const record = drained.records[0]!;
+    assert.ok(drained.record, 'Node owner claim carries one original');
+    const record = drained.record;
     assert.equal(record.sourceRoutingId, 'm6a-r6-right');
     assert.deepEqual(decodeApplicationPayload(record.parts[1]!), {
       packetName: 'OrdinaryNotice',
@@ -2025,7 +2006,7 @@ test('one-sided endpoint-only client upgrades the provisional route before Ready
       return provider.mailbox.pendingMessages('application') > 0;
     });
     const request = provider.mailbox.tryClaim('application', 1, 4_096)!;
-    provider.reply(request.records[0]!, {
+    provider.reply(request.record!, {
       packetName: 'ManualEndpointAnswer',
       contentType: 'application/json',
       payload: Buffer.from('reply')
@@ -2045,6 +2026,10 @@ test('one-sided endpoint-only client upgrades the provisional route before Ready
 
 test('bilateral endpoint-only manual connections learn peer RIDs and converge', async () => {
   await verifyBilateralEndpointRequests();
+});
+
+test('bilateral TCP port-zero endpoints connect using their bound addresses', async () => {
+  await verifyBilateralEndpointRequests(undefined, () => 'tcp://127.0.0.1:0');
 });
 
 test('bilateral endpoint requests keep liveness progressing after re-admission', async () => {
@@ -2073,21 +2058,23 @@ test('bilateral endpoint requests keep liveness progressing after re-admission',
 });
 
 async function verifyBilateralEndpointRequests(
-  afterFirstReply?: (left: RawServiceMeshRuntime, right: RawServiceMeshRuntime) => void
+  afterFirstReply?: (left: RawServiceMeshRuntime, right: RawServiceMeshRuntime) => void,
+  endpoint: (name: string) => string = nativeTestEndpoint
 ): Promise<void> {
   const endpointNonce = `${process.pid}-${Date.now()}`;
   const leftDescriptor = descriptor(
     'm6a-endpoint-left',
-    await nativePrebindTestEndpoint(`zlink-m6a-endpoint-left-${endpointNonce}`)
+    endpoint(`zlink-m6a-endpoint-left-${endpointNonce}`)
   );
   const rightDescriptor = descriptor(
     'm6a-endpoint-right',
-    await nativePrebindTestEndpoint(`zlink-m6a-endpoint-right-${endpointNonce}`)
+    endpoint(`zlink-m6a-endpoint-right-${endpointNonce}`)
   );
   const left = rawServiceRuntime({ descriptor: leftDescriptor });
   const right = rawServiceRuntime({ descriptor: rightDescriptor });
   const progress = async (): Promise<void> => {
     for (const runtime of [right, left]) {
+      await runtime.pumpBatch(false, false, true);
       await runtime.observeSelectedRoutes();
       await runtime.announceExpectedPeers();
     }
@@ -2097,10 +2084,11 @@ async function verifyBilateralEndpointRequests(
   };
   right.start();
   try {
-    right.connectPeerEndpoint(leftDescriptor.advertisedEndpoint);
-    await new Promise((resolve) => setTimeout(resolve, 20));
     left.start();
-    left.connectPeerEndpoint(rightDescriptor.advertisedEndpoint);
+    const leftEndpoint = left.topology.localDescriptor().advertisedEndpoint;
+    const rightEndpoint = right.topology.localDescriptor().advertisedEndpoint;
+    right.connectPeerEndpoint(leftEndpoint);
+    left.connectPeerEndpoint(rightEndpoint);
     for (const [source, target, targetRid] of [
       [left, right, rightDescriptor.nodeRoutingId],
       [right, left, leftDescriptor.nodeRoutingId]
@@ -2108,6 +2096,22 @@ async function verifyBilateralEndpointRequests(
       await pollUntil(async () => {
         await progress();
         return (
+          // Core's connect snapshot includes standby connections. Both outbound
+          // intents must finish before Ready describes the converged selection.
+          left
+            .observePeerRoute(rightDescriptor.nodeRoutingId)
+            .connectionAttempts?.some(
+              (attempt) =>
+                attempt.endpoint === rightEndpoint &&
+                attempt.state === ConnectionAttemptState.Connected
+            ) === true &&
+          right
+            .observePeerRoute(leftDescriptor.nodeRoutingId)
+            .connectionAttempts?.some(
+              (attempt) =>
+                attempt.endpoint === leftEndpoint &&
+                attempt.state === ConnectionAttemptState.Connected
+            ) === true &&
           left.isPeerRouteReady(rightDescriptor.nodeRoutingId) &&
           right.isPeerRouteReady(leftDescriptor.nodeRoutingId)
         );
@@ -2144,7 +2148,7 @@ async function verifyBilateralEndpointRequests(
         return target.mailbox.pendingMessages('application') > 0;
       });
       const request = target.mailbox.tryClaim('application', 1, 4_096)!;
-      target.reply(request.records[0]!, {
+      target.reply(request.record!, {
         packetName: 'BilateralAnswer',
         contentType: 'application/json',
         payload: Buffer.from('reply')
@@ -2159,7 +2163,7 @@ async function verifyBilateralEndpointRequests(
       if (source === left) afterFirstReply?.(left, right);
     }
 
-    left.disconnectPeerEndpoint(rightDescriptor.advertisedEndpoint);
+    left.disconnectPeerEndpoint(rightEndpoint);
     assert.equal(left.topology.peer(rightDescriptor.nodeRoutingId), undefined);
   } finally {
     left.close();
@@ -2215,12 +2219,12 @@ test('remote channel requests preserve successful and failed terminal results', 
       successClaim = claimed;
       return true;
     });
-    peer.reply(successClaim.records[0]!, {
+    peer.reply(successClaim.record!, {
       packetName: 'Answer',
       contentType: 'application/json',
       payload: Buffer.from('reply')
     });
-    successClaim.records[0]!.applicationJob?.close();
+    successClaim.record!.applicationJob?.close();
     assert.equal(peer.mailbox.release(successClaim), true);
     const successResult = await success.promise;
     assert.equal(successResult.terminalResult, 0);
@@ -2244,7 +2248,7 @@ test('remote channel requests preserve successful and failed terminal results', 
       return true;
     });
     peer.reply(
-      failureClaim.records[0]!,
+      failureClaim.record!,
       {
         packetName: 'Ignored',
         contentType: 'application/json',
@@ -2253,7 +2257,7 @@ test('remote channel requests preserve successful and failed terminal results', 
       RequestResult.NotFound,
       14
     );
-    failureClaim.records[0]!.applicationJob?.close();
+    failureClaim.record!.applicationJob?.close();
     assert.equal(peer.mailbox.release(failureClaim), true);
     const failureResult = await failure.promise;
     assert.equal(failureResult.terminalResult, RequestResult.NotFound);

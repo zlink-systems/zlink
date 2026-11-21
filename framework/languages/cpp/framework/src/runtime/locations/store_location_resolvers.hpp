@@ -136,6 +136,17 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
         if (auto cached = cached_route (_spot_routes, spot_id)) {
             co_return std::optional<spot_address_t>{std::move (*cached)};
         }
+        const auto read = std::make_shared<spot_route_read_t> ();
+        _lane.run ([&] { _spot_route_reads[spot_id] = read; }).get ();
+        const std::shared_ptr<void> finish_read (nullptr, [this, spot_id, read] (void *) {
+            _lane
+              .run ([&] {
+                  const auto found = _spot_route_reads.find (spot_id);
+                  if (found != _spot_route_reads.end () && found->second == read)
+                      _spot_route_reads.erase (found);
+              })
+              .get ();
+        });
         if (const auto authority =
               co_await read_ready_authority (false, spot_id, instance_intent)) {
             const auto &snapshot = authority->snapshot;
@@ -163,7 +174,7 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
                 : user_spot_authority_state_t::closing;
             if (address.authority_state == user_spot_authority_state_t::ready)
                 co_await cache_ready_route (_spot_routes, spot_id, address,
-                                            authority->owner_admission_deadline);
+                                            authority->owner_admission_deadline, read);
             co_return std::optional<spot_address_t>{std::move (address)};
         }
         if (!mesh_name.empty ()) {
@@ -193,7 +204,12 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
 
     void invalidate_spot_address (std::string_view spot_id) override
     {
-        _lane.run ([&] { _spot_routes.erase (std::string (spot_id)); }).get ();
+        _lane
+          .run ([&] {
+              _spot_route_reads.erase (std::string (spot_id));
+              _spot_routes.erase (std::string (spot_id));
+          })
+          .get ();
     }
 
     bool invalidate_spot_address_if_matches (std::string_view spot_id,
@@ -213,8 +229,33 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
                       && cached.owner.owner_id != expected.owner.owner_id)
                   || cached.owner.lease_generation != expected.owner.lease_generation)
                   return false;
+              _spot_route_reads.erase (std::string (spot_id));
               _spot_routes.erase (found);
               return true;
+          })
+          .get ();
+    }
+
+    void observe_authority_version (const authority_key_t &key, std::optional<std::string> version)
+    {
+        const auto identity = authority_key_codec_detail::decode_authority_key (key.value);
+        if (!identity || identity->kind != 's')
+            return;
+        _lane
+          .run ([&] {
+              const auto &id = identity->object_id;
+              if (const auto found = _spot_route_reads.find (id);
+                  found != _spot_route_reads.end ()) {
+                  auto &read = *found->second;
+                  if (!version || (read.version && read.version != version))
+                      _spot_route_reads.erase (found);
+                  else
+                      read.version = version;
+              }
+              const auto cached = _spot_routes.find (id);
+              if (cached != _spot_routes.end ()
+                  && (!version || cached->second.address.store_version != *version))
+                  _spot_routes.erase (cached);
           })
           .get ();
     }
@@ -319,6 +360,7 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
   private:
     void invalidate_routes_after_recovery_owned ()
     {
+        _spot_route_reads.clear ();
         _spot_routes.clear ();
         _actor_routes.clear ();
         ++_store_recovery_generation;
@@ -357,6 +399,11 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
           resolved_actor_address_t{std::move (address), authority->owner_admission_deadline}};
     }
 
+    struct spot_route_read_t
+    {
+        std::optional<std::string> version;
+    };
+
     struct cached_address_t
     {
         spot_address_t address;
@@ -390,7 +437,8 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
       std::map<std::string, cached_address_t> &routes,
       std::string key,
       spot_address_t address,
-      std::optional<std::chrono::steady_clock::time_point> owner_admission_deadline)
+      std::optional<std::chrono::steady_clock::time_point> owner_admission_deadline,
+      std::shared_ptr<spot_route_read_t> read = {})
     {
         const auto max_age = _options.route_cache_max_age;
         if (max_age <= std::chrono::milliseconds::zero ()) {
@@ -413,6 +461,12 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
         }
         _lane
           .run ([&] {
+              if (read) {
+                  const auto found = _spot_route_reads.find (key);
+                  if (found == _spot_route_reads.end () || found->second != read
+                      || (read->version && *read->version != address.store_version))
+                      return;
+              }
               routes.insert_or_assign (
                 std::move (key), cached_address_t{address, expires_at, _store_recovery_generation});
           })
@@ -502,6 +556,7 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
     std::string _actor_mesh_name;
 
     mutable state_lane_t _lane;
+    std::map<std::string, std::shared_ptr<spot_route_read_t>> _spot_route_reads;
     std::map<std::string, cached_address_t> _spot_routes;
     std::map<std::string, cached_address_t> _actor_routes;
     std::uint64_t _store_recovery_generation = 0;

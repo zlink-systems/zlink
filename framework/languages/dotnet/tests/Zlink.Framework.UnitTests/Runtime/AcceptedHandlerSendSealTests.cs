@@ -983,6 +983,7 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         public async ValueTask HandleAsync(
             AcceptedSendSpot spot,
+            IZLinkMessageContext context,
             ProbeRouteMessage message,
             CancellationToken cancellationToken
         )

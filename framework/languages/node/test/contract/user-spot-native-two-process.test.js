@@ -26,6 +26,7 @@ test(
     });
 
     const target = startChild(children, {
+      signal: t.signal,
       role: 'target',
       meshName,
       // Each node binds an OS-assigned port and publishes the endpoint it bound.
@@ -39,6 +40,7 @@ test(
     assert.equal(targetReady.role, 'target');
 
     const source = startChild(children, {
+      signal: t.signal,
       role: 'source',
       meshName,
       endpoint: 'tcp://127.0.0.1:*',

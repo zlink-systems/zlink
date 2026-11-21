@@ -47,9 +47,19 @@ template <> struct zlink::json::dto_traits<Push>
 namespace
 {
 std::atomic<int> callbacks{0};
+std::atomic<int> bound_callbacks{0};
+std::mutex bound_gate;
+std::condition_variable bound_ready;
 std::atomic<int> replacements{0};
 std::atomic<int> actor_ingress{0};
 bool reject_duplicate = false;
+enum class bound_failure_t
+{
+    none,
+    standard,
+    nonstandard
+};
+bound_failure_t bound_failure = bound_failure_t::none;
 std::mutex sessions_gate;
 std::condition_variable sessions_ready;
 std::deque<fw::stream_t> sessions;
@@ -77,6 +87,24 @@ class Player final : public fw::actor_t
     explicit Player (fw::actor_context_t context) : _context (std::move (context)) {}
     fw::actor_context_t &context () noexcept override { return _context; }
     const fw::actor_context_t &context () const noexcept override { return _context; }
+    fw::task_t<void> on_session_bound (const fw::actor_session_binding_identity_t &incoming,
+                                       std::stop_token) override
+    {
+        require (!incoming.session_owner_node_rid.empty ()
+                   && incoming.session_owner_node_generation != 0
+                   && incoming.binding_generation != 0,
+                 "committed callback identity is incomplete");
+        {
+            const std::lock_guard lock (bound_gate);
+            ++bound_callbacks;
+        }
+        bound_ready.notify_all ();
+        if (bound_failure == bound_failure_t::standard)
+            throw std::runtime_error ("session-bound-public-test-failure");
+        if (bound_failure == bound_failure_t::nonstandard)
+            throw 42;
+        co_return;
+    }
     fw::task_t<std::optional<std::string>>
     on_duplicate_bind (const fw::actor_session_binding_identity_t &,
                        const fw::actor_session_binding_identity_t &,
@@ -278,7 +306,12 @@ int main (int argc, char **argv)
             return 0;
         }
         const bool remote = argc > 1 && std::string_view (argv[1]) == "remote";
-        const std::string name = remote ? "accept" : argc > 1 ? argv[1] : "accept";
+        const std::string argument = argc > 1 ? argv[1] : "accept";
+        bound_failure = argument == "bound-standard-error"      ? bound_failure_t::standard
+                        : argument == "bound-nonstandard-error" ? bound_failure_t::nonstandard
+                                                                : bound_failure_t::none;
+        const std::string name =
+          remote || bound_failure != bound_failure_t::none ? "accept" : argument;
         std::ifstream input (ZLINK_BINDING_CONFORMANCE_PATH);
         require (static_cast<bool> (input), "shared binding fixture was not found");
         const auto fixture = nlohmann::json::parse (input);
@@ -296,6 +329,11 @@ int main (int argc, char **argv)
           await (host.observer->actors->find (fw::actor_id_t ("duplicate-player"))).value ();
         Client current (host);
         await (current.stream.actors ().bind (actor).async ());
+        {
+            std::unique_lock lock (bound_gate);
+            require (bound_ready.wait_for (lock, 10s, [] { return bound_callbacks == 1; }),
+                     "initial bind callback missing");
+        }
         auto old_bound = current.bound.get_future ();
         require (old_bound.wait_for (10s) == std::future_status::ready,
                  "initial bound notification missing");
@@ -316,6 +354,13 @@ int main (int argc, char **argv)
                   << " replacements=" << replacements << std::endl;
         require (callbacks == scenario->at ("callbackCount").get<int> (),
                  "same-node bind bypassed Actor duplicate callback");
+        if (!reject_duplicate) {
+            std::unique_lock lock (bound_gate);
+            require (bound_ready.wait_for (lock, 10s, [] { return bound_callbacks == 2; }),
+                     "replacement bind callback missing");
+        }
+        require (bound_callbacks == (reject_duplicate ? 1 : 2),
+                 "rejected bind invoked committed callback");
         if (reject_duplicate) {
             require (!*result, "rejected duplicate bind succeeded");
             require (result->error_kind () == fw::framework_error_kind_t::rejected,

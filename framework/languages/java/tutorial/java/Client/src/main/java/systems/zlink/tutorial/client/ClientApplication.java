@@ -20,6 +20,7 @@ import systems.zlink.framework.channels.ZLinkRouteClient;
 import systems.zlink.framework.configuration.ZLinkMeshNodeBuilder;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationOptions;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.spots.SpotRef;
 import systems.zlink.framework.spots.ZLinkSpotManager;
 import systems.zlink.framework.spring.EnableZLinkFramework;
@@ -105,18 +106,28 @@ class TutorialController {
     private final ZLinkSpotManager rooms;
     private final ZLinkActorManager playerManager;
     private final ZLinkActorClient players;
+    private final ZLinkFrameworkRuntime runtime;
 
     TutorialController(
             ZLinkRouteClient route,
             ZLinkFanoutClient fanout,
             ZLinkSpotManager rooms,
             ZLinkActorManager playerManager,
-            ZLinkActorClient players) {
+            ZLinkActorClient players,
+            ZLinkFrameworkRuntime runtime) {
         this.route = route;
         this.fanout = fanout;
         this.rooms = rooms;
         this.playerManager = playerManager;
         this.players = players;
+        this.runtime = runtime;
+    }
+
+    @GetMapping("/ops/ready")
+    ResponseEntity<Void> readiness() {
+        return runtime.status().isReady()
+                ? ResponseEntity.ok().build()
+                : ResponseEntity.status(503).build();
     }
 
     // --8<-- [start:channel-request-call]

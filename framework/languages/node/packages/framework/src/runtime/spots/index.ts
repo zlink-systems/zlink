@@ -1889,6 +1889,7 @@ export class DefaultZLinkSpotManager {
     const context = {
       channelName: envelope.header.channelName,
       contentType: envelope.header.contentType,
+      metadata: envelope.header.metadata,
       workOptions: zlinkSerialWorkOptions(
         envelope.payload.byteLength,
         record.applicationMetadata?.byteLength ?? zlinkMetadataByteLength(envelope.header.metadata)

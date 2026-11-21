@@ -1,4 +1,4 @@
-import { AsyncLocalStorage } from 'node:async_hooks';
+import { FrameworkContextField } from '../framework-context';
 const UNKNOWN_DIAGNOSTIC_CALLER = '<unknown caller>';
 
 type ZLinkStateLaneWork<T> = () => Promise<T> | T;
@@ -20,7 +20,7 @@ export function startOutsideStateLane<T>(work: () => T): T {
   );
 }
 
-const currentLaneStorage = new AsyncLocalStorage<ZLinkStateLane>();
+const currentLaneStorage = new FrameworkContextField<ZLinkStateLane>();
 const diagnosticPending = isStructuralGuardEnabled() ? new Map<number, string>() : undefined;
 const diagnosticLaneIds = isStructuralGuardEnabled()
   ? new WeakMap<ZLinkStateLane, number>()
@@ -28,7 +28,7 @@ const diagnosticLaneIds = isStructuralGuardEnabled()
 let nextDiagnosticLane = 0;
 let nextDiagnosticWork = 0;
 const diagnosticTurnStorage =
-  diagnosticPending === undefined ? undefined : new AsyncLocalStorage<ZLinkStateLaneTurn>();
+  diagnosticPending === undefined ? undefined : new FrameworkContextField<ZLinkStateLaneTurn>();
 
 /**
  * Single-owner execution lane for a component's mutable state.

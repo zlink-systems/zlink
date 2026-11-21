@@ -114,7 +114,11 @@ final class ZLinkActorContextState {
     }
 
     boolean steady() {
-        return actorRef != null && !moving && !destroying;
+        return active() && !moving;
+    }
+
+    boolean active() {
+        return actorRef != null && !destroying;
     }
 
     boolean moving() {

@@ -1,3 +1,4 @@
+import { ZLinkStateLane, startOutsideStateLane } from '../execution/state-lane';
 import { requestTerminalError } from '../messaging/request-deadline';
 import type { PendingOperation } from './operation-registry';
 import type { RequestRuntime } from './request-runtime';
@@ -281,6 +282,7 @@ export function sessionOwnerFenceMatches(
 }
 
 export interface ServiceSessionDelivery {
+  readonly egress: ZLinkStateLane;
   readonly binding: ServiceSessionBinding;
   /**
    * Delivers the M6A application frame after the binding fence has
@@ -2078,6 +2080,10 @@ export class ServiceStatefulRuntime {
       membershipEpoch: this.registry.actor(actor.actorId)?.membershipEpoch ?? 1n
     };
     const delivery: ServiceSessionDelivery = {
+      egress:
+        previousDelivery !== undefined && sameSessionBinding(previousDelivery.binding, localBinding)
+          ? previousDelivery.egress
+          : new ZLinkStateLane(),
       binding: localBinding,
       deliver,
       ...(close === undefined ? {} : { close }),
@@ -2198,6 +2204,22 @@ export class ServiceStatefulRuntime {
         return result;
       })
     });
+  }
+
+  private enqueueSessionDelivery<T>(
+    delivery: ServiceSessionDelivery,
+    submit: () => Promise<T>
+  ): Promise<T> {
+    // This FIFO orders Core submission; transport preparation may consult another owner's lane.
+    return delivery.egress.run(() => startOutsideStateLane(submit));
+  }
+
+  captureSessionSubmission(
+    binding: ServiceSessionBinding
+  ): (<T>(submit: () => Promise<T>) => Promise<T>) | undefined {
+    const delivery = this.sessionDeliveries.get(actorKey(binding.actor));
+    if (delivery === undefined || !sameSessionBinding(delivery.binding, binding)) return undefined;
+    return <T>(submit: () => Promise<T>) => this.enqueueSessionDelivery(delivery, submit);
   }
 
   closeBoundSession(
@@ -2352,6 +2374,23 @@ export class ServiceStatefulRuntime {
     }
     const actorFence = this.tryActorFence(actor);
     if (actorFence === undefined) return SubmitResult.InvalidState;
+    if (binding.sessionOwnerNodeRid === this.nodeRid) {
+      const delivery = this.sessionDeliveries.get(actorKey(actor));
+      if (
+        delivery === undefined ||
+        delivery.binding.bindingGeneration !== expectedBindingGeneration
+      ) {
+        return SubmitResult.NotFound;
+      }
+      try {
+        const delivered = await this.enqueueSessionDelivery(delivery, () =>
+          delivery.deliver(delivery.binding.sessionRid, encodeApplicationPayload(payload))
+        );
+        return delivered ? SubmitResult.Ok : SubmitResult.NotFound;
+      } catch (error) {
+        return localSubmitFailure(error);
+      }
+    }
     const header = encodeBoundSessionSendHeader(actorFence, expectedBindingGeneration);
     return this.submitOneWay(binding.sessionOwnerNodeRid, [
       header,
@@ -4053,7 +4092,18 @@ export class ServiceStatefulRuntime {
           'The requested session binding is no longer current.'
         );
       }
-      await delivery.close();
+      await this.enqueueSessionDelivery(delivery, () => {
+        if (
+          ingress.sourceRoutingId === this.nodeRid &&
+          !this.operations.isPending(record.correlation)
+        ) {
+          throw new OperationCancelledError(
+            record.correlation,
+            'Session close is already terminal.'
+          );
+        }
+        return delivery.close!();
+      });
       this.replyWire(ingress, record.correlation, RequestResult.Ok, 0);
     } catch (error) {
       const result = failure(error);
@@ -4293,7 +4343,9 @@ export class ServiceStatefulRuntime {
     }
     const sessionRid = delivery.binding.sessionRid;
     try {
-      const delivered = await delivery.deliver(sessionRid, payloadFrame);
+      const delivered = await this.enqueueSessionDelivery(delivery, () =>
+        delivery.deliver(sessionRid, payloadFrame)
+      );
       if (!delivered) return 'protocolError';
     } catch (error) {
       // Remote command 36 is one-way: its source transport admission has
@@ -4966,10 +5018,7 @@ export class ServiceStatefulRuntime {
           ? SubmitResult.Ok
           : SubmitResult.InvalidState;
       } catch (error) {
-        if (isZLinkBackendResultError(error) && error.operation === 'submit') {
-          return error.result;
-        }
-        throw error;
+        return localSubmitFailure(error);
       } finally {
         applicationJobOwner.close();
       }
@@ -6192,6 +6241,13 @@ function activationRefused(): ZLinkFrameworkException {
     ZLinkFrameworkErrorKind.Unavailable,
     'Instance cold activation authority was refused.'
   );
+}
+
+function localSubmitFailure(error: unknown): number {
+  if (isZLinkBackendResultError(error) && error.operation === 'submit') {
+    return error.result;
+  }
+  throw error;
 }
 
 function failure(error: unknown): ServiceStatefulResult {
