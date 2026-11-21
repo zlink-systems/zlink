@@ -3952,5 +3952,276 @@ for (const scenario of placement.scenarios) {
   }
 }
 
+// This model checks fixture expectations; language runners must separately execute the runtime.
+function validateLoginAdmission(fixture) {
+  assert.equal(fixture.fixture, 'zlink.framework.login-admission');
+  assert.equal(fixture.version, 1);
+  assert.equal(fixture.status, 'approved-design-fixture-runtime-not-yet-implemented');
+  assert.deepEqual(fixture.contract, {
+    settings: {
+      AuthenticationPacketName: null,
+      MaxConcurrentAuthentications: 'effectiveCpuCores * 8',
+      AuthenticationRetryDelay: 500
+    },
+    retryMetadataKey: '$zlink.admission.retryAfterMs',
+    retryValueFormat: 'relativeMillisecondsDecimalString',
+    errorBody: { code: 'unavailable', message: 'Authentication admission is full.' },
+    connector: {
+      maxAdmissionWaitDefault: 'effectiveRequestTimeout',
+      jitterMinMs: 0, jitterMaxMs: 50,
+      correlation: 'preserved', requestSequence: 'newPerAttempt',
+      waitingCallback: 'OnAdmissionWaiting',
+      deadline: 'min(originalRequestDeadline, firstWaitingAt + maxAdmissionWait)'
+    },
+    serviceWireChanges: false
+  });
+  const positiveInteger = (value) => assert.ok(Number.isSafeInteger(value) && value > 0);
+  const terminalReasons = [
+    'replySuccess', 'replyFailure', 'handlerException', 'cancellation',
+    'enqueueRejected', 'callbackWithoutReply', 'shutdown'
+  ];
+  assert.deepEqual(fixture.terminalReasons, terminalReasons);
+  uniqueNames(fixture.serverScenarios, 'name');
+  assert.deepEqual(fixture.serverScenarios.map(({ name }) => name).sort(), [
+    'below-limit-accepted', 'over-limit-rejected-before-handler',
+    ...terminalReasons.map((reason) => `terminal-releases-${reason}`),
+    'non-authentication-packets-unaffected', 'unnamed-authentication-disabled',
+    'default-limit-effective-cores-times-eight'
+  ].sort());
+  for (const scenario of fixture.serverScenarios) {
+    const given = scenario.given;
+    positiveInteger(given.effectiveCpuCores);
+    positiveInteger(given.authenticationRetryDelayMs);
+    assert.ok(given.authenticationRetryDelayMs <= 2 ** 31 - 1, scenario.name);
+    assert.ok(given.authenticationPacketName === null
+      || (typeof given.authenticationPacketName === 'string' && given.authenticationPacketName.length > 0));
+    const limit = given.maxConcurrentAuthentications ?? given.effectiveCpuCores * 8;
+    positiveInteger(limit);
+    assert.equal(scenario.expectedEffectiveLimit, limit, scenario.name);
+    const requests = new Map();
+    let inFlight = 0;
+    let heldPermits = 0;
+    let handlerCalls = 0;
+    const decisions = [];
+    assert.ok(scenario.steps.length > 0);
+    for (const event of scenario.steps) {
+      const label = `${scenario.name}: ${event.action} ${event.requestId}`;
+      let observation = {};
+      if (event.action === 'receive') {
+        assert.ok(!requests.has(event.requestId), label);
+        assert.ok(typeof event.sessionId === 'string' && event.sessionId.length > 0, label);
+        assert.ok(['Request', 'Send', 'Heartbeat'].includes(event.kind), label);
+        assert.ok(typeof event.packetName === 'string' && event.packetName.length > 0, label);
+        if (event.kind === 'Request') assert.match(event.requestSeq, /^[1-9][0-9]*$/, label);
+        else assert.equal(event.requestSeq, null, label);
+        heldPermits += 1;
+        const authentication = given.authenticationPacketName !== null
+          && event.kind === 'Request' && event.packetName === given.authenticationPacketName;
+        const rejected = authentication && inFlight >= limit;
+        const infrastructure = event.kind === 'Heartbeat';
+        const lease = authentication && !rejected;
+        if (lease) inFlight += 1;
+        if (rejected || infrastructure) heldPermits -= 1;
+        requests.set(event.requestId, {
+          lease, leaseReturns: 0,
+          phase: rejected || infrastructure ? 'terminal' : 'queued'
+        });
+        observation = {
+          decision: rejected ? 'rejected' : infrastructure ? 'infrastructure' : 'accepted',
+          error: rejected ? {
+            kind: 'Error', packetName: '', requestSeq: event.requestSeq,
+            body: fixture.contract.errorBody,
+            metadata: {
+              [fixture.contract.retryMetadataKey]: String(given.authenticationRetryDelayMs)
+            },
+            connectionClosed: false
+          } : null
+        };
+        decisions.push(observation.decision);
+        if (rejected) Object.assign(observation, {
+          permitReservations: 1, permitReturns: 1, applicationQueuedJobs: 0,
+          handlerCallsForRequest: 0, actorCreates: 0, storeWrites: 0
+        });
+      } else {
+        const request = requests.get(event.requestId);
+        assert.ok(request, label);
+        if (event.action === 'handlerStart') {
+          assert.equal(request.phase, 'queued', label);
+          request.phase = 'running';
+          heldPermits -= 1;
+          handlerCalls += 1;
+        } else if (event.action === 'terminal') {
+          assert.ok(terminalReasons.includes(event.reason), label);
+          if (request.phase !== 'terminal') {
+            if (request.phase === 'queued') heldPermits -= 1;
+            request.phase = 'terminal';
+            if (request.lease) {
+              inFlight -= 1;
+              request.lease = false;
+              request.leaseReturns += 1;
+            }
+          }
+          observation.leaseReturns = request.leaseReturns;
+        } else {
+          assert.ok(['clientTimeout', 'await'].includes(event.action), label);
+          assert.equal(request.phase, 'running', label);
+        }
+      }
+      assert.ok(inFlight >= 0 && heldPermits >= 0 && inFlight <= limit, label);
+      assert.deepEqual(event.expect, { inFlight, heldPermits, handlerCalls, ...observation }, label);
+    }
+    if (scenario.name.startsWith('terminal-releases-')) {
+      const reason = scenario.name.slice('terminal-releases-'.length);
+      assert.equal(scenario.steps.filter((event) => event.action === 'terminal'
+        && event.reason === reason).length, 2, scenario.name);
+      assert.equal(scenario.steps.at(-1).action, 'receive', scenario.name);
+      assert.equal(decisions.at(-1), 'accepted', scenario.name);
+    } else if (scenario.name === 'over-limit-rejected-before-handler'
+      || scenario.name === 'below-limit-accepted') {
+      assert.deepEqual(decisions, scenario.name === 'below-limit-accepted'
+        ? ['accepted', 'accepted'] : ['accepted', 'rejected'], scenario.name);
+      const sessions = scenario.steps.filter(({ action }) => action === 'receive')
+        .map(({ sessionId }) => sessionId);
+      assert.equal(new Set(sessions).size, 2, scenario.name);
+    } else if (scenario.name === 'non-authentication-packets-unaffected') {
+      assert.deepEqual(scenario.steps.filter(({ action }) => action === 'receive')
+        .map(({ kind, packetName }) => [kind, packetName]), [
+        ['Request', 'Login'], ['Request', 'Profile'], ['Send', 'Login'], ['Heartbeat', 'Heartbeat']
+      ], scenario.name);
+    } else if (scenario.name === 'unnamed-authentication-disabled') {
+      assert.equal(given.authenticationPacketName, null, scenario.name);
+      assert.deepEqual(decisions, ['accepted', 'accepted'], scenario.name);
+    } else if (scenario.name === 'default-limit-effective-cores-times-eight') {
+      assert.equal(given.maxConcurrentAuthentications, null, scenario.name);
+      assert.equal(given.effectiveCpuCores, 2, scenario.name);
+    }
+  }
+  uniqueNames(fixture.connectorScenarios, 'name');
+  assert.deepEqual(fixture.connectorScenarios.map(({ name }) => name).sort(), [
+    'automatic-retry-then-success', 'maximum-admission-wait-exceeded',
+    'original-deadline-not-extended', 'repeated-rejection-single-operation',
+    'zero-retry-delay-jitter', 'unavailable-without-admission-metadata', 'malformed-retry-metadata',
+    'negative-sign-retry-metadata', 'positive-sign-retry-metadata',
+    'leading-zero-retry-metadata', 'out-of-range-retry-metadata'
+  ].sort());
+  for (const { name, given, expect } of fixture.connectorScenarios) {
+    positiveInteger(given.requestTimeoutMs);
+    const maximumWait = given.maxAdmissionWaitMs ?? given.requestTimeoutMs;
+    positiveInteger(maximumWait);
+    assert.ok(typeof given.packetName === 'string' && given.packetName.length > 0, name);
+    assert.ok(typeof given.payloadBase64 === 'string', name);
+    assert.ok(typeof given.correlationId === 'string' && given.correlationId.length > 0, name);
+    assert.match(given.correlationId, /^[\x00-\x7f]{1,64}$/, name);
+    const attempts = [{ at: 0, seq: '1', payload: given.payloadBase64,
+      metadata: { ...given.applicationMetadata }, correlation: given.correlationId }];
+    let firstWaitingAt;
+    let deadline = given.requestTimeoutMs;
+    let waitingCallbacks = 0;
+    let result;
+    for (const response of given.responses) {
+      assert.equal(result, undefined, name);
+      const attempt = attempts.at(-1);
+      assert.ok(Number.isSafeInteger(response.atElapsedMs)
+        && response.atElapsedMs >= attempt.at && response.atElapsedMs < deadline, name);
+      assert.equal(response.requestSeq, attempt.seq, name);
+      if (response.kind === 'Response') {
+        result = 'success';
+        continue;
+      }
+      assert.equal(response.kind, 'Error', name);
+      const retryAfterMs = response.retryAfterMs;
+      if (retryAfterMs !== null && (typeof retryAfterMs !== 'string'
+        || !/^(0|[1-9][0-9]*)$/.test(retryAfterMs) || Number(retryAfterMs) > 2 ** 31 - 1)) {
+        result = 'FrameDecodeFailed';
+        continue;
+      }
+      if (response.remoteCode !== 'unavailable' || retryAfterMs === null) {
+        result = 'RemoteError';
+        continue;
+      }
+      assert.ok(Number.isInteger(response.jitterMs)
+        && response.jitterMs >= fixture.contract.connector.jitterMinMs
+        && response.jitterMs <= fixture.contract.connector.jitterMaxMs, name);
+      firstWaitingAt ??= response.atElapsedMs;
+      waitingCallbacks += 1;
+      deadline = Math.min(deadline, firstWaitingAt + maximumWait);
+      const retryAt = response.atElapsedMs + Number(retryAfterMs) + response.jitterMs;
+      if (retryAt >= deadline) {
+        result = 'RequestTimeout';
+        continue;
+      }
+      attempts.push({ ...attempt, at: retryAt, seq: String(attempts.length + 1) });
+    }
+    result ??= 'RequestTimeout';
+    const observed = {
+      sendAtElapsedMs: attempts.map(({ at }) => at),
+      requestSeqs: attempts.map(({ seq }) => seq), result, waitingCallbacks,
+      requestCallbacks: 1, replyReceivedHooks: 1, requestSendingHooks: 1,
+      payloadPreserved: attempts.every(({ payload }) => payload === given.payloadBase64),
+      applicationMetadataPreserved: attempts.every(({ metadata }) =>
+        JSON.stringify(metadata) === JSON.stringify(given.applicationMetadata)),
+      correlationPreserved: attempts.every(({ correlation }) => correlation === given.correlationId)
+    };
+    if (result === 'RequestTimeout') observed.terminalAtElapsedMs = deadline;
+    assert.deepEqual(expect, observed, name);
+    if (name === 'automatic-retry-then-success') {
+      assert.equal(given.maxAdmissionWaitMs, null, name);
+      assert.equal(result, 'success', name);
+      assert.equal(attempts.length, 2, name);
+    } else if (name === 'maximum-admission-wait-exceeded') {
+      assert.equal(result, 'RequestTimeout', name);
+      assert.equal(deadline, firstWaitingAt + maximumWait, name);
+      assert.ok(deadline < given.requestTimeoutMs, name);
+    } else if (name === 'original-deadline-not-extended') {
+      assert.equal(result, 'RequestTimeout', name);
+      assert.equal(deadline, given.requestTimeoutMs, name);
+    }
+  }
+}
+
+const loginAdmission = await readFixture('./login-admission-v1.json');
+validateLoginAdmission(loginAdmission);
+console.log('Login admission contract: valid server/connector scenarios accepted');
+for (const [name, corrupt] of [
+  ['missing scenario', (f) => { f.serverScenarios.pop(); }],
+  ['duplicate scenario', (f) => { f.serverScenarios.push(f.serverScenarios[0]); }],
+  ['missing rejected request', (f) => { f.serverScenarios[1].steps.pop(); }],
+  ['same-session-only capacity case', (f) => {
+    f.serverScenarios[1].steps[2].sessionId = f.serverScenarios[1].steps[0].sessionId;
+  }],
+  ['absolute retry format', (f) => { f.contract.retryValueFormat = 'utcUnixEpochMillisecondsDecimalString'; }],
+  ['old retry metadata key', (f) => { f.contract.retryMetadataKey = '$zlink.admission.retryAfter'; }],
+  ['wrong default limit', (f) => { f.serverScenarios.at(-1).expectedEffectiveLimit = 8; }],
+  ['handler on rejection', (f) => { f.serverScenarios[1].steps[2].expect.handlerCallsForRequest = 1; }],
+  ['zero permit reservations', (f) => { f.serverScenarios[1].steps[2].expect.permitReservations = 0; }],
+  ['queued rejection', (f) => { f.serverScenarios[1].steps[2].expect.applicationQueuedJobs = 1; }],
+  ['absolute retry timestamp', (f) => {
+    f.serverScenarios[1].steps[2].expect.error.metadata['$zlink.admission.retryAfterMs'] = '1800000000500';
+  }],
+  ['wrong error sequence', (f) => { f.serverScenarios[1].steps[2].expect.error.requestSeq = '3'; }],
+  ['missing lease return', (f) => { f.serverScenarios[2].steps[4].expect.inFlight = 1; }],
+  ['duplicate lease return', (f) => { f.serverScenarios[2].steps[5].expect.leaseReturns = 2; }],
+  ['timeout releases running lease', (f) => { f.serverScenarios[2].steps[2].expect.inFlight = 0; }],
+  ['out-of-range server delay', (f) => { f.serverScenarios[0].given.authenticationRetryDelayMs = 2 ** 31; }],
+  ['retry ignores receipt time', (f) => { f.connectorScenarios[0].expect.sendAtElapsedMs[1] = 525; }],
+  ['early retry', (f) => { f.connectorScenarios[0].expect.sendAtElapsedMs[1] = 499; }],
+  ['jitter outside range', (f) => { f.connectorScenarios[0].given.responses[0].jitterMs = 51; }],
+  ['changed correlation', (f) => { f.connectorScenarios[0].expect.correlationPreserved = false; }],
+  ['reused request sequence', (f) => { f.connectorScenarios[0].expect.requestSeqs[1] = '1'; }],
+  ['duplicate final callback', (f) => { f.connectorScenarios[0].expect.requestCallbacks = 2; }],
+  ['send after maximum wait', (f) => { f.connectorScenarios[1].expect.sendAtElapsedMs.push(1000); }],
+  ['extended original deadline', (f) => { f.connectorScenarios[2].expect.terminalAtElapsedMs = 2010; }],
+  ...['malformed', 'negative-sign', 'positive-sign', 'leading-zero', 'out-of-range'].map((kind) => [
+    `retry ${kind} metadata`, (f) => {
+      f.connectorScenarios.find(({ name }) => name === `${kind}-retry-metadata`).expect.result = 'success';
+    }
+  ])
+]) {
+  const invalid = structuredClone(loginAdmission);
+  corrupt(invalid);
+  assert.throws(() => validateLoginAdmission(invalid), { name: 'AssertionError' }, name);
+  console.log(`Login admission contract: invalid ${name} rejected`);
+}
+
 await (await import('../../../scripts/etcd/validate-fixtures.mjs')).validateEtcdFixtures();
 console.log('runtime conformance fixtures: PASS');
