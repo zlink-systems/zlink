@@ -127,19 +127,17 @@ export class ServiceStatefulRegistry {
 
   constructor(
     readonly nodeRid: string,
-    readonly nodeGeneration: bigint,
-    private readonly entrySpotId: string = nodeRid
+    readonly nodeGeneration: bigint
   ) {
     requireText(nodeRid, 'nodeRid');
     requirePositive(nodeGeneration, 'nodeGeneration');
-    requireText(entrySpotId, 'entrySpotId');
   }
 
-  createEntrySpot(spotId = this.entrySpotId): ServiceSpotState {
+  createEntrySpot(spotId = this.nodeRid): ServiceSpotState {
     return this.createEntrySpotCore(spotId);
   }
 
-  private createEntrySpotCore(spotId = this.entrySpotId): ServiceSpotState {
+  private createEntrySpotCore(spotId = this.nodeRid): ServiceSpotState {
     const current = this.spots.get(spotId);
     if (current !== undefined) return current;
     return this.restoreSpotCore(
@@ -209,7 +207,7 @@ export class ServiceStatefulRegistry {
     requirePositive(authorityOwnerGeneration, 'authorityOwnerGeneration');
     if (
       kind === 'entry' &&
-      (ref.spotId !== this.entrySpotId ||
+      (ref.spotId !== this.nodeRid ||
         ref.generation !== this.nodeGeneration ||
         stableType !== 'entry')
     ) {

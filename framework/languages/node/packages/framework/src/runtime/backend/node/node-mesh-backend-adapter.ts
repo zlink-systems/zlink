@@ -34,9 +34,7 @@ export class ZLinkNodeMeshBackendAdapter implements ZLinkMeshBackendAdapter {
       options.applicationJobQueue,
       options.applicationJobReceiveFlowFailureSink,
       options.peerAdmissionSealed,
-      options.infrastructureTaskRunner,
-      undefined,
-      options.entrySpotId
+      options.infrastructureTaskRunner
     );
   }
 }

@@ -153,7 +153,7 @@ function fixture({
         return target;
       }
     },
-    entrySpotTargetSelector: async () => target,
+    entrySpotIdProvider: () => entrySpotId,
     locationLifecycle: { commitActorMembership: publish },
     localSpotJoin: (...args) => {
       joinSignal = args[4];
