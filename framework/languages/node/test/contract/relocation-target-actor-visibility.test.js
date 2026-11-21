@@ -336,7 +336,7 @@ for (const [changedVersion, departed] of [
       };
       runtime.commitTargetReservation = async () => committed;
       runtime.clearTargetRelocationPublication = async () => {
-        await probe();
+        assert.equal(await manager.findActor(actorId), manager.getState(actorId).actor);
         return committed;
       };
       runtime.submitActorJoinSourceLeave = async () => {};

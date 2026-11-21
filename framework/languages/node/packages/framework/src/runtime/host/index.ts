@@ -883,6 +883,7 @@ export class ZLinkFrameworkRuntimeHost
       sourceQuiescenceChanged: () => this.publishCurrentRuntimeStatus(),
       providerResolver: options.providerResolver,
       locationStore: () => this.locationOwner.currentStores?.locationStore,
+      relocationStore: this.relocationStore,
       currentOwner: () => this.locationOwner.currentRuntime?.currentOwnerToken,
       liveDescriptors: (meshName, signal) =>
         this.locationOwner.currentRuntime?.listLiveMeshNodes(meshName, signal) ??
@@ -1144,6 +1145,15 @@ export class ZLinkFrameworkRuntimeHost
       // maintenance operation must observe that publication before it writes
       // Retiring/Draining, otherwise two descriptor revisions can race and
       // make a valid drain look like a Store failure.
+      if (await this.serviceRelocation.hasPendingDeliveries()) {
+        return this.resetBlockedRelocation(
+          blockedRelocation(
+            mode,
+            effectiveTargetApplicationVersion,
+            ZLinkFrameworkRelocationReason.OperationInProgress
+          )
+        );
+      }
       await this.spotNodeRuntime?.waitForRuntimeWeightPublication();
       const blocker = await this.preflightAutomaticPeerReadiness(
         deadlineAtMs,
@@ -2899,8 +2909,13 @@ export class ZLinkFrameworkRuntimeHost
         this.spotNodeRuntime?.discardActorActivation(actor, error);
         this.spotManager?.discardActorActivation(actor, error);
       },
-      terminateActorActivation: (actor, terminal) =>
-        this.spotNodeRuntime?.terminateActorActivation(actor, terminal) ?? terminal(),
+      terminateActorActivation: (actor, terminal) => {
+        const cleanup = async () => {
+          await this.serviceRelocation.drainTargetActorRelocation(actor);
+          await terminal();
+        };
+        return this.spotNodeRuntime?.terminateActorActivation(actor, cleanup) ?? cleanup();
+      },
       registration: this.options.registration,
       messageFlow: () => this.createDispatchErrorReporter(this.runtimeOrPreStartErrorSink).flow,
       routeTransport: this.routeTransport,
@@ -3427,14 +3442,16 @@ export class ZLinkFrameworkRuntimeHost
       return;
     }
 
-    const current = state.boundSession;
     const actor = state.actor;
-    const duplicateCallback =
-      current !== undefined && !samePhysicalSession(current, incomingTarget)
-        ? actor?.onDuplicateBind
-        : undefined;
     const boundCallback = actor?.onSessionBound;
-    if (actor === undefined || (duplicateCallback === undefined && boundCallback === undefined)) {
+    const currentAtAdmission = state.boundSession;
+    if (
+      actor === undefined ||
+      (boundCallback === undefined &&
+        (actor.onDuplicateBind === undefined ||
+          currentAtAdmission === undefined ||
+          samePhysicalSession(currentAtAdmission, incomingTarget)))
+    ) {
       state.installBoundSessionBinding(incomingTarget);
       replyBindingSuccess();
       return;
@@ -3468,7 +3485,13 @@ export class ZLinkFrameworkRuntimeHost
       actor.context.spotId,
       state.actorId,
       async () => {
-        if (duplicateCallback !== undefined && current !== undefined) {
+        const current = state.boundSession;
+        const duplicateCallback = actor.onDuplicateBind;
+        if (
+          duplicateCallback !== undefined &&
+          current !== undefined &&
+          !samePhysicalSession(current, incomingTarget)
+        ) {
           startCallbackTimeout();
           const decision = await duplicateCallback.call(
             actor,
