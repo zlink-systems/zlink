@@ -59,6 +59,7 @@
         <Compile Include="Runtime/BoundSessionDisconnectTests.cs"/>
         <Compile Include="Runtime/BoundSessionReplacementCloseTests.cs"/>
         <Compile Include="Runtime/SameNodeDuplicateBindTests.cs"/>
+        <Compile Include="Runtime/EntrySpotActorDispatchTests.SessionBound.cs"/>
         <Compile Include="AssemblyInfo.cs"/>
         <Compile Include="Support/PerCallAllocation.cs"/>
         <Compile Include="Support/MessageFinalizerProbe.cs"/>
@@ -142,6 +143,7 @@
         <Compile Include="Runtime/MeshChannelSelectionHotPathTests.cs"/>
         <Compile Include="Runtime/MeshApplicationWorkerTests.cs"/>
         <Compile Include="Runtime/MeshReceiveHandoffTests.cs"/>
+        <Compile Include="Runtime/InboundOperationAdmissionTests.cs"/>
         <Compile Include="Runtime/MeshWorkerWaitCostTests.cs"/>
         <Compile Include="Runtime/ReceiveSourceDeadlineTests.cs"/>
         <Compile Include="Runtime/ReceiveBatchRearmTests.cs"/>
@@ -294,6 +296,7 @@
         <Compile Include="Runtime/SpotMessageFollowSubmitTests.cs"/>
         <Compile Include="Runtime/SpotOutboundTransportTests.cs"/>
         <Compile Include="Runtime/SpotRouteDispatcherTests.cs"/>
+        <Compile Include="Runtime/SpotMessageContextTests.cs"/>
         <Compile Include="Runtime/SpotPeerConnectorTests.cs"/>
         <Compile Include="Runtime/SpotAutoRegistrationScannerTests.cs"/>
         <Compile Include="Runtime/RequestFailureMappingTests.cs"/>

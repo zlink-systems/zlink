@@ -528,6 +528,7 @@ public sealed class StreamControlProgressTests(Xunit.Abstractions.ITestOutputHel
     {
         public ValueTask<TouchedUser> HandleAsync(
             ProgressUserSpot spot,
+            IZLinkMessageContext context,
             TouchUser request,
             CancellationToken cancellationToken
         ) => ValueTask.FromResult(new TouchedUser(++spot.Touches));

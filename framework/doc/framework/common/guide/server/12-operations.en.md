@@ -806,6 +806,37 @@ draining, stopped, error). The notation follows the language. The status's reloc
 termination results must match that operation's terminal result. To view it as numbers, use
 the `zlink.host.*` instruments in [Runtime Metrics](#2-runtime-metrics).
 
+#### 8.1.1 Waiting for Serving before accepting requests {#wait-for-serving}
+
+Subscribe to runtime status and confirm `Serving` before accepting application requests. The first
+status reflects the state at subscription time, so a runtime already in `Serving` requires no further
+transition. A newer snapshot can supersede that first status. Check the readiness of any components
+your application requires as described in [Wiring Operational Calls and Readiness](#5-wiring-operational-calls-and-readiness).
+
+Finish the startup wait and end the observation once you confirm `Serving`. Keep request intake
+disabled if you first see `Error` or `Stopped`, or if observation fails, is canceled, or ends before
+you confirm readiness. Canceling observation leaves the runtime and other subscriptions running.
+
+=== "C#/.NET"
+
+    Compare `Status.State` from `ObserveAsync(cancellationToken)` with `ZLinkFrameworkRuntimeState.Serving`. Exit `await foreach` on success, or cancel the token to interrupt the wait. Treat an enumeration exception as a failed startup wait.
+
+=== "C++"
+
+    In the callback passed to `observe(capacity, observer)`, compare `status.state` with `framework_runtime_state_t::serving`. Release the returned observation handle when the wait ends.
+
+=== "Java"
+
+    Subscribe to the `Flow.Publisher` returned by `observe()`. In `onNext`, compare `status().state()` with `ZLinkFrameworkRuntimeState.SERVING`. Call `Flow.Subscription.cancel()` when confirmed or when canceling the wait. Treat `onError` or `onComplete` before `Serving` as a failed startup wait.
+
+=== "Kotlin"
+
+    From `observe().asFlow()`, compare `status().state()` with `ZLinkFrameworkRuntimeState.SERVING`. End collection when confirmed or when canceling the wait. Treat an exception during collection as a failed startup wait.
+
+=== "Node/TypeScript"
+
+    Compare `status.state` from `observe(signal)` with `ZLinkFrameworkRuntimeState.Serving`. Exit `for await` on success, or signal cancellation through `AbortSignal` to interrupt the wait. Treat rejection during async iteration as a failed startup wait.
+
 ### 8.2 Restarting with the same RoutingId
 
 A server restarted immediately after forced termination with a fixed RoutingId can encounter the

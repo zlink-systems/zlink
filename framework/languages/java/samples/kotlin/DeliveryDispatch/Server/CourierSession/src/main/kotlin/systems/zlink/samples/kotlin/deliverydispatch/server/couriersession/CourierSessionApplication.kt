@@ -25,25 +25,27 @@ import systems.zlink.samples.kotlin.deliverydispatch.server.couriersession.sessi
 )
 class CourierSessionApplication {
     @Bean
-    fun courierSessionFramework(): ZLinkFrameworkConfigurer = ZLinkFrameworkConfigurer { options ->
-        options.useCoroutineHandlers(Dispatchers.Default)
-        // #895: configuration package scanning has no Kotlin form in the spec.
-        options.addHandlersFromPackageOf<CourierSessionApplication>()
-        options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
+    fun courierSessionFramework(locations: ZLinkRedisLocationStore): ZLinkFrameworkConfigurer =
+        ZLinkFrameworkConfigurer { options ->
+            options.addLocationStore(locations)
+            options.useCoroutineHandlers(Dispatchers.Default)
+            // #895: configuration package scanning has no Kotlin form in the spec.
+            options.addHandlersFromPackageOf<CourierSessionApplication>()
+            options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
 
-        options.addClientServerChannel(SampleNames.CourierChannel).client()
-        val node = options.addRouteMesh(SampleNames.CourierSpotMesh)
-        node
-            .listen(SampleTopology.CourierSessionSpotEndpoint)
-            .setRoutingIdPrefix("delivery-session")
-        node.objects().client()
-        options
-            .addStreamNode(SampleNames.CourierStreamNode)
-            .bind(SampleTopology.CourierStreamEndpoint)
-            .enableActorDispatch()
-            // #895: session registration has no Kotlin form in the spec.
-            .registerSession<CourierSession>()
-    }
+            options.addClientServerChannel(SampleNames.CourierChannel).client()
+            val node = options.addRouteMesh(SampleNames.CourierSpotMesh)
+            node
+                .listen(SampleTopology.CourierSessionSpotEndpoint)
+                .setRoutingIdPrefix("delivery-session")
+            node.objects().client()
+            options
+                .addStreamNode(SampleNames.CourierStreamNode)
+                .bind(SampleTopology.CourierStreamEndpoint)
+                .enableActorDispatch()
+                // #895: session registration has no Kotlin form in the spec.
+                .registerSession<CourierSession>()
+        }
 
     @Bean fun locationStore(): ZLinkRedisLocationStore = SampleLocationStore.create()
 

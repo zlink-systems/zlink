@@ -516,6 +516,29 @@ its binding effect directly instead of queueing it on the Actor gate or lifecycl
 ([Handler Turn and Execution Gate §1 and §13](../01-execution/02-handler-turn-and-execution-gate.en.md)).
 Whether the Actor gate is used is decided by one question: whether the callback is called.
 
+**If the Actor defines a bind notification callback, the Actor owner calls it once within the same Actor handler
+order that confirms the bind.** Its argument is the confirmed binding identity. The callback does not change the bind
+result. Because this bind calls a callback, it uses the Actor gate; without the callback it does not wait for the gate,
+as before. A bind that arrives after the Actor started its destroy in its own turn ends with the §12 result. The default
+implementation does nothing.
+
+The callback runs after the bind is confirmed, so its failure changes neither the bind result nor the incoming bind
+reply. If the callback ends with an exception, the framework reports it once as a runtime task exception and the Actor
+keeps running. Its time limit is `SessionReplacementCallbackTimeout` above; past it, the framework passes cancellation
+to the callback and reports it once the same way. A callback cancelled by Actor destroy or runtime shutdown is not
+reported.
+
+| Language | Public callback |
+| --- | --- |
+| .NET | `ValueTask OnSessionBoundAsync(ZLinkSessionBindingIdentity incoming, CancellationToken cancellationToken)` |
+| Java | `default CompletionStage<Void> onSessionBound(ZLinkSessionBindingIdentity incoming, ZLinkActorCallbackCancellation cancellation)` |
+| Kotlin | `open suspend fun onSessionBoundSuspending(incoming: ZLinkSessionBindingIdentity, cancellation: ZLinkActorCallbackCancellation)` |
+| Node.js | `onSessionBound?(incoming: ZLinkSessionBindingIdentity, signal: AbortSignal): void \| Promise<void>` |
+| C++ | `task_t<void> on_session_bound(const actor_session_binding_identity_t &incoming, std::stop_token)` |
+
+Argument types and the cancellation form match each language's duplicate-bind callback (`OnDuplicateBindAsync`,
+`onDuplicateBind`, `on_duplicate_bind`).
+
 The callback execution timeout uses the server setting `SessionReplacementCallbackTimeout`, default
 `30,000 ms`. This setting also applies to the Actor owner's duplicate-bind callback. If no result arrives within that time, end the incoming
 bind with `DeadlineExceeded` and signal cancellation to the callback. A late acceptance does not

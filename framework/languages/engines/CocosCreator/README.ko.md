@@ -10,7 +10,7 @@ Packet 이름과 JSON field는 [공통 engine-lobby 계약](https://github.com/z
 ## 대상과 transport
 
 이 project의 실행 대상은 **Cocos Creator 3.8 web**이다. `@zlink-systems/stream-connector`
-`0.22.0`의 package root를 사용하며 endpoint는 `ws://` 또는 `wss://`이다. 브라우저의
+(`package.json`에 고정한 버전)의 package root를 사용하며 endpoint는 `ws://` 또는 `wss://`이다. 브라우저의
 `WebSocket`이 연결과 프레이밍을 맡고 connector는 기본 제공 `zlinkStreamJsonCodec`으로 typed
 payload를 처리한다. `Manual` dispatch를 사용하므로 Cocos `update()`가 callback을 실행한다.
 

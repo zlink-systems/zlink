@@ -68,6 +68,13 @@ class session_base_t : public own_t, public io_object_t, public i_pipe_events
     //  longer used.
     virtual int pull_msg (msg_t *msg_);
 
+    // Termination is draining output after a term request or pipe detachment.
+    bool is_termination_drain_pending () const
+    {
+        return _pending || (!_pipe && _socket_pipe);
+    }
+    void finish_termination (bool force_ = false, bool pipe_drained_ = false);
+
     socket_base_t *get_socket () const;
     const endpoint_uri_pair_t &get_endpoint () const;
     void set_peer_routing_id (const unsigned char *data_, size_t size_);

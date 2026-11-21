@@ -26,6 +26,10 @@ test('channel header, application frame and request header bytes equal origin/ma
   assert.equal(actual.replyHeader, golden.replyHeader);
 });
 
+test('direct service multipart writes match every stored channel wire case', () => {
+  assert.deepEqual(buildCases(dist, true, true), buildCases(dist, false, true));
+});
+
 test('multipart application frames equal origin/main across packet-name changes', () => {
   assert.deepEqual(actual.frames, golden.frames);
 });
@@ -57,4 +61,33 @@ test('a header that starts with a known prefix but continues differently still d
   // A truncated header is malformed whether or not its prefix is known.
   assert.throws(() => decodeHeader(envelope, base.subarray(0, base.length - 3)), /malformed/);
   assert.equal(decodeAgain().channelName, 'echo');
+});
+
+test('service multipart keeps the generated header in scratch until the final frame write', (t) => {
+  const { Writer } = require('protobufjs/minimal');
+  const wire = require(`${dist}/runtime/foundation/service-wire-m6a-codec`);
+  const encode = (forService) =>
+    envelope.encodeChannelEnvelopePartsAtDeadline(
+      1, 'echo', 'Echo', { body: '한글' }, 1000, undefined, undefined, 'c', false,
+      undefined, forService
+    );
+  const constants = require(`${dist}/runtime/foundation/service-wire-constants.generated`);
+  const expected = wire.encodeMultipartApplicationPayload(
+    encode(false), constants.SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME, constants.SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE
+  );
+  const original = Writer.prototype.finish;
+  let ownedHeaderBuffers = 0;
+  t.mock.method(Writer.prototype, 'finish', function (shared) {
+    if (shared !== true) ownedHeaderBuffers++;
+    return original.call(this, shared);
+  });
+  const parts = encode(true);
+  // A second encode must be free to reuse framework-owned scratch.
+  envelope.encodeChannelEnvelopePartsAtDeadline(
+    1, 'echo', 'Echo', { body: 'other' }, 2000, undefined, undefined, 'other', false
+  );
+  assert.equal(ownedHeaderBuffers, 1);
+  const actual = wire.borrowPackedMultipartApplicationFrame(parts);
+  assert.equal(ownedHeaderBuffers, 1);
+  assert.deepEqual(actual, expected);
 });

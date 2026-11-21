@@ -13,6 +13,7 @@ else()
 endif()
 
 set(unittests
+    unittest_pipe_wake_delivery
     unittest_auto_hwm_physical_attempt
     unittest_auto_hwm_incremental_plan
     unittest_zmp_engine_controls
@@ -77,6 +78,7 @@ set(unittests
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   # Count the existing epoch observation without instrumenting production Core.
   list(APPEND unittests unittest_request_writable_registration)
+  list(APPEND unittests unittest_connect_io_thread_placement)
 endif()
 
 # This binary contains several independent socket contracts whose aggregate
@@ -165,6 +167,16 @@ foreach(test ${unittests})
   endif()
 
   target_link_libraries(${test} testutil-common test-core)
+  if(test STREQUAL "unittest_connect_io_thread_placement")
+    foreach(symbol
+        _ZN5zlink14session_base_t6createEPNS_11io_thread_tEbPNS_13socket_base_tERKNS_9options_tEPNS_9address_tE
+        _ZN5zlink20asio_tcp_connecter_tC1EPNS_11io_thread_tEPNS_14session_base_tERKNS_9options_tEPNS_9address_tEb
+        _ZN5zlink14session_base_t12engine_readyEv
+        _ZNK5zlink8object_t26choose_io_thread_transportEm)
+      set_property(TARGET ${test} APPEND_STRING PROPERTY LINK_FLAGS
+        " -Wl,--wrap=${symbol}")
+    endforeach()
+  endif()
   if(test STREQUAL "unittest_request_writable_registration")
     set_property(TARGET ${test} APPEND_STRING PROPERTY LINK_FLAGS
       " -Wl,--wrap=_ZNK5zlink6pipe_t33request_correlation_release_epochEv")
@@ -208,6 +220,35 @@ foreach(test ${unittests})
   set_tests_properties(${registered_tests} PROPERTIES LABELS "unittest;parallel-safe")
 
 endforeach()
+
+# Exercise the Windows branch on every host with deterministic CRT/WinSock
+# failures. Extract the production bodies rather than maintaining a copy.
+set(fdpair_source "${ZLINK_CORE_SOURCE_DIR}/src/runtime/utils/ip_fdpair.cpp")
+set(ip_source "${ZLINK_CORE_SOURCE_DIR}/src/runtime/utils/ip.cpp")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  "${fdpair_source}" "${ip_source}")
+file(READ "${fdpair_source}" fdpair_text)
+string(FIND "${fdpair_text}" "int zlink::make_fdpair (" fdpair_start)
+file(READ "${ip_source}" ip_text)
+string(FIND "${ip_text}" "int zlink::create_ipc_wildcard_address (" wildcard_start)
+if(fdpair_start LESS 0 OR wildcard_start LESS 0)
+  message(FATAL_ERROR "Windows fdpair test could not locate production functions")
+endif()
+string(SUBSTRING "${fdpair_text}" ${fdpair_start} -1 FDPAIR_BODY)
+string(SUBSTRING "${ip_text}" ${wildcard_start} -1 wildcard_text)
+string(FIND "${wildcard_text}" "#else" wildcard_end)
+if(wildcard_end LESS 0)
+  message(FATAL_ERROR "Windows fdpair test could not locate CRT branch boundary")
+endif()
+string(SUBSTRING "${wildcard_text}" 0 ${wildcard_end} WILDCARD_BODY)
+string(APPEND WILDCARD_BODY "#endif\n    return 0;\n}\n")
+configure_file(unittest_windows_fdpair.cpp.in unittest_windows_fdpair.cpp @ONLY)
+add_executable(unittest_windows_fdpair
+  "${CMAKE_CURRENT_BINARY_DIR}/unittest_windows_fdpair.cpp")
+set_property(TARGET unittest_windows_fdpair PROPERTY INTERPROCEDURAL_OPTIMIZATION OFF)
+add_test(NAME unittest_windows_fdpair COMMAND unittest_windows_fdpair)
+set_tests_properties(unittest_windows_fdpair PROPERTIES
+  TIMEOUT 10 LABELS "unittest;parallel-safe")
 
 # UBSan's vptr check probes memory with pipe(), which fails once a test
 # exhausts RLIMIT_NOFILE and turns into a false invalid-vptr report (#4149).

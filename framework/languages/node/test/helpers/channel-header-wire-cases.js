@@ -29,10 +29,11 @@ const DEADLINES = [
   ['max-date', 8640000000000000]
 ];
 
-function buildCases(dist) {
+function buildCases(dist, forService = false, canonicalService = false) {
   const env = require(`${dist}/runtime/channels/channel-envelope`);
   const wire = require(`${dist}/runtime/foundation/service-wire-m6a-codec`);
   const { runWithFlow } = require(`${dist}/runtime/diagnostics/flow-context`);
+  const constants = require(`${dist}/runtime/foundation/service-wire-constants.generated`);
   const bytes = (part) =>
     typeof part === 'string' ? Buffer.from(part) : Buffer.isBuffer(part) ? part : Buffer.from(part.data());
   const views = (parts) => parts.map((part) => (typeof part === 'string' ? part : bytes(part)));
@@ -40,11 +41,18 @@ function buildCases(dist) {
 
   function add(name, makeParts, packet = ['multipart', 'x']) {
     const parts = makeParts();
-    const headerBytes = bytes(parts[0]);
+    const packed = forService ? wire.borrowPackedMultipartApplicationFrame(parts) : undefined;
+    const names = canonicalService
+      ? [constants.SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME, constants.SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE]
+      : packet;
+    const frame = packed ?? wire.encodeMultipartApplicationPayload(views(parts), names[0], names[1]);
+    const headerBytes = packed === undefined
+      ? bytes(parts[0])
+      : wire.decodeMultipartParts(wire.decodeApplicationPayloadView(packed).payload, (part) => part, () => {})[0];
     const entry = {
       name,
       header: headerBytes.toString('hex'),
-      frame: wire.encodeMultipartApplicationPayload(views(parts), packet[0], packet[1]).toString('hex'),
+      frame: frame.toString('hex'),
       requestHeader: wire.encodeNodeRequestHeader(0x0102030405060708n).toString('hex'),
       decoded: JSON.stringify(decodeHeader(env, headerBytes))
     };
@@ -54,7 +62,7 @@ function buildCases(dist) {
   const request = (kind, channel, packet, payload, deadline, topic, id, createFlow, metadata) =>
     () =>
       env.encodeChannelEnvelopePartsAtDeadline(
-        kind, channel, packet, payload, deadline, topic, undefined, id, createFlow, metadata
+        kind, channel, packet, payload, deadline, topic, undefined, id, createFlow, metadata, forService
       );
   const withFlow = (flow, make) => () => runWithFlow(flow, make);
 
@@ -80,13 +88,13 @@ function buildCases(dist) {
     kind: KIND.Request, channelName: 'echo', messageName: 'Echo', contentType: 'application/json',
     correlationId, deadline: null, topic: null, metadata: {}, flowId: flow?.flowId, flowOrigin: flow?.flowOrigin
   });
-  add('reply-flow', () => env.encodeChannelReplyParts(replyRequest(FLOW), { body: 'reply' }));
-  add('reply-no-flow', () => env.encodeChannelReplyParts(replyRequest(undefined), { body: 'reply' }));
-  add('reply-binary-empty', () => env.encodeChannelReplyParts(replyRequest(TIMER_FLOW, 'c-1'), undefined));
-  add('reply-bench', () => env.encodeChannelReplyParts({ ...replyRequest(undefined, 'c-1'), channelName: 'bench', messageName: 'BenchGameMessage' }, Buffer.alloc(1100, 0x61)));
+  add('reply-flow', () => env.encodeChannelReplyParts(replyRequest(FLOW), { body: 'reply' }, undefined, forService));
+  add('reply-no-flow', () => env.encodeChannelReplyParts(replyRequest(undefined), { body: 'reply' }, undefined, forService));
+  add('reply-binary-empty', () => env.encodeChannelReplyParts(replyRequest(TIMER_FLOW, 'c-1'), undefined, undefined, forService));
+  add('reply-bench', () => env.encodeChannelReplyParts({ ...replyRequest(undefined, 'c-1'), channelName: 'bench', messageName: 'BenchGameMessage' }, Buffer.alloc(1100, 0x61), undefined, forService));
   add('error-reply-origin-metadata', () =>
-    env.encodeChannelErrorReplyParts(replyRequest(FLOW), new Error('boom'), { 'zlink.origin': 'framework', extra: 'e' }));
-  add('error-reply-no-metadata-no-flow', () => env.encodeChannelErrorReplyParts(replyRequest(undefined), new Error('boom')));
+    env.encodeChannelErrorReplyParts(replyRequest(FLOW), new Error('boom'), { 'zlink.origin': 'framework', extra: 'e' }, forService));
+  add('error-reply-no-metadata-no-flow', () => env.encodeChannelErrorReplyParts(replyRequest(undefined), new Error('boom'), undefined, forService));
 
   // More distinct (kind, channel, packet, content type) tuples than the prefix
   // cache keeps, visited in an order that evicts and re-learns entries.

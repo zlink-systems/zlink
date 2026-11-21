@@ -22,6 +22,7 @@ import { encodeRemoteBoundSessionSendPayload } from '../actors/bound-session-wir
 import type { ZLinkNativeFallbackBoundSessionPort } from './stream-binding-runtime-ports';
 import type { ZLinkBackendActorSessionNode } from '../backend';
 import { resolveFrameworkPacketName } from '../messaging/packet-name';
+import { routingIdsEqual } from '../routing-id';
 import { currentOrCreateFlow, runWithOutboundFlow } from '../diagnostics/flow-context';
 
 export interface ZLinkNativeFallbackBoundSessionOptions {
@@ -116,7 +117,15 @@ class ZLinkNativeFallbackBoundSessionSendCall implements ZLinkBoundSessionSendCa
   private async executeScoped(packetName: string): Promise<ZLinkSubmitResult> {
     const localActor = this.options.localActorProvider?.() === true;
     const remoteTarget = this.options.remoteBoundSessionTargetProvider();
-    if (localActor || remoteTarget === undefined) {
+    const actorRef = this.options.actorRefProvider();
+    const sameNodeBinding =
+      localActor &&
+      currentBindingGeneration(actorRef) !== undefined &&
+      (remoteTarget === undefined ||
+        (remoteTarget.sessionNodeRid !== undefined &&
+          actorRef?.nodeRid !== undefined &&
+          routingIdsEqual(remoteTarget.sessionNodeRid, actorRef.nodeRid)));
+    if (!sameNodeBinding && (localActor || remoteTarget === undefined)) {
       const localResult = await this.options.runtime.submitLocalBoundSession(
         this.options.actorId,
         this.message,
@@ -128,7 +137,7 @@ class ZLinkNativeFallbackBoundSessionSendCall implements ZLinkBoundSessionSendCa
         return localResult;
       }
     }
-    if (remoteTarget !== undefined) {
+    if (remoteTarget !== undefined && !sameNodeBinding) {
       const actorRef = this.options.actorRefProvider();
       const ownershipGeneration = (
         actorRef as (ActorRef & { ownershipGeneration?: bigint }) | undefined
@@ -174,7 +183,6 @@ class ZLinkNativeFallbackBoundSessionSendCall implements ZLinkBoundSessionSendCa
       this.traceSubmitted(result, packetName);
       return result;
     }
-    const actorRef = this.options.actorRefProvider();
     const node = this.options.nativeActorNodeProvider();
     const bindingGeneration = currentBindingGeneration(actorRef);
     if (actorRef !== undefined && node !== undefined && bindingGeneration !== undefined) {

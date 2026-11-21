@@ -697,16 +697,19 @@ test('redis-backed aggregate prepare commit and abort converge across repository
     );
     assert.equal(retained.kind, 'snapshot');
     assert.equal(retained.ownerId, sourceOwner.token.ownerId);
-    assert.equal(retained.storeVersion.value, abortSnapshot.storeVersion.value);
     const retainedRow = await providerA.read({
       value: authorityPreimage(abortRequest.participants[0].authorityKey)
     });
     assert.equal(retainedRow.kind, 'found');
     if (retainedRow.kind === 'found') {
+      // Location runtime §3.4 omits visibleStoreVersion after progress is cleared.
+      assert.equal(retained.storeVersion.value, retainedRow.value.version.value);
+      assert.notEqual(retained.storeVersion.value, abortSnapshot.storeVersion.value);
       const retainedRecord = JSON.parse(
         Buffer.from(retainedRow.value.bytes).toString('utf8')
       );
       assert.equal(retainedRecord.aggregate, undefined);
+      assert.equal(Object.hasOwn(retainedRecord, 'visibleStoreVersion'), false);
     }
 
     const damagedSnapshot = await createReadyUserSpot(
@@ -2093,3 +2096,249 @@ test('immediately resolved reservation Abort Conflict terminates at the original
   );
   assert.ok(attempts > 0);
 });
+
+for (const backing of ['repository', 'in-memory']) {
+  test(`completion accepted count is installed atomically at target commit/${backing}`, async () => {
+    const provider = new frameworkInternal.ZLinkInMemoryProviderLocationStore();
+    const repository =
+      backing === 'repository'
+        ? testLocationRepository(provider)
+        : new frameworkInternal.ZLinkInMemoryLocationStore();
+    const sourceOwner = await repository.claimOwnerLease(`completion-source-${backing}`, 60000);
+    const targetOwner = await repository.claimOwnerLease(`completion-target-${backing}`, 60000);
+    assert.equal(sourceOwner.kind, 'claimed');
+    assert.equal(targetOwner.kind, 'claimed');
+    const sourceTarget = {
+      meshName: 'completion-mesh',
+      nodeRid: 'completion-source',
+      nodeLifecycleGeneration: 1n,
+      owner: sourceOwner.token
+    };
+    const target = {
+      meshName: 'completion-mesh',
+      nodeRid: 'completion-target',
+      nodeLifecycleGeneration: 1n,
+      owner: targetOwner.token
+    };
+    for (const descriptor of [sourceTarget, target]) {
+      assert.equal(
+        (
+          await repository.updateMeshNode(
+            aggregateDescriptor(descriptor, 16),
+            frameworkInternal.ZLinkLocationWriteIntent.NewClaim
+          )
+        ).status,
+        frameworkInternal.ZLinkLocationWriteStatus.Stored
+      );
+    }
+    const snapshot = await createReadyUserSpot(repository, `completion-${backing}`, sourceTarget);
+    const request = aggregateRequest(
+      { value: 'cccccccc-cccc-4ccc-8ccc-ccccccccccc1' },
+      1n,
+      [snapshot],
+      target,
+      [`completion-${backing}`]
+    );
+    const sourceFence = {
+      nodeRid: sourceTarget.nodeRid,
+      nodeGeneration: 1n,
+      ownerId: sourceOwner.token.ownerId,
+      ownerLeaseGeneration: sourceOwner.token.leaseGeneration
+    };
+    request.participants[0].relocation = {
+      relocationId: request.aggregateId.value,
+      phase: 'prepared',
+      source: sourceFence,
+      target: {
+        nodeRid: target.nodeRid,
+        nodeGeneration: 1n,
+        ownerId: target.owner.ownerId,
+        ownerLeaseGeneration: target.owner.leaseGeneration,
+        attemptGeneration: 1n
+      },
+      coordinator: { ...sourceFence, expectedStoreVersion: snapshot.storeVersion.value },
+      sourceInventorySha256: 'ab'.repeat(32),
+      applicationVersion: 1n
+    };
+    const prepared = await repository.prepareAggregate(request);
+    assert.equal(prepared.kind, 'prepared');
+    const key = request.participants[0].authorityKey;
+    assert.equal((await repository.readAuthority(key)).relocation.completion, undefined);
+    const fence = { ...prepared.fence, acceptedRequests: new Map([[key.value, 9n]]) };
+    assert.equal((await repository.commitAggregate(fence)).kind, 'committed');
+    const moved = await repository.readAuthority(key);
+    assert.equal(moved.ownerId, target.owner.ownerId);
+    assert.deepEqual(moved.relocation.completion, {
+      acceptedRequests: 9n,
+      completedResults: 0n,
+      pendingDeliveries: 0n,
+      reference: null,
+      sha256: null
+    });
+    assert.equal(
+      (
+        await repository.commitAggregate({
+          ...fence,
+          acceptedRequests: new Map([[key.value, 123n]])
+        })
+      ).kind,
+      'alreadyCommitted'
+    );
+    assert.equal((await repository.readAuthority(key)).relocation.completion.acceptedRequests, 9n);
+  });
+}
+
+for (const transition of ['preserve', 'newOwner']) {
+  for (const outcome of ['abort', 'commit']) {
+    test(`shared aggregate authority ${transition} ${outcome} preserves preparation visibility and clears progress`, async () => {
+      const provider = new frameworkInternal.ZLinkInMemoryProviderLocationStore();
+      const repository = testLocationRepository(provider);
+      const sourceOwner = await repository.claimOwnerLease('shared-source', 60_000);
+      const targetOwner = await repository.claimOwnerLease('shared-target', 60_000);
+      const source = {
+        meshName: 'shared',
+        nodeRid: 'source',
+        nodeLifecycleGeneration: 1n,
+        owner: sourceOwner.token
+      };
+      const target = {
+        meshName: 'shared',
+        nodeRid: 'target',
+        nodeLifecycleGeneration: 1n,
+        owner: targetOwner.token
+      };
+      for (const descriptor of [source, target]) {
+        await repository.updateMeshNode(
+          aggregateDescriptor(descriptor, 4),
+          frameworkInternal.ZLinkLocationWriteIntent.NewClaim
+        );
+      }
+      const ready = await createReadyUserSpot(repository, 'shared-room', source);
+      const authorityKey = encodeAuthorityKey('user_spot', 'shared-room');
+      const rowKey = { value: authorityPreimage(authorityKey) };
+      const before = await provider.read(rowKey);
+      const initialRecord = JSON.parse(Buffer.from(before.value.bytes).toString());
+      assert.equal(Object.hasOwn(initialRecord, 'aggregate'), false);
+      assert.equal(Object.hasOwn(initialRecord, 'visibleStoreVersion'), false);
+      const request = aggregateRequest(
+        { value: '47304730-4730-4730-8730-473047304730' },
+        9007199254740993n,
+        [ready],
+        target,
+        ['shared-room']
+      );
+      request.participants[0].ownerTransition = transition;
+      if (transition === 'preserve') request.capacity = { actors: 0, spots: 0 };
+      const prepared = await repository.prepareAggregate(request);
+      assert.equal(prepared.kind, 'prepared');
+      const stored = await provider.read(rowKey);
+      const record = JSON.parse(Buffer.from(stored.value.bytes).toString());
+      assert.deepEqual(
+        Object.keys(record.aggregate).sort(),
+        [
+          'aggregateId',
+          'aggregateGeneration',
+          'index',
+          'expectedStoreVersion',
+          'ownerTransition',
+          'targetAuthorityOwnerGeneration',
+          'authorityPayloadSha256',
+          'membershipMutationSha256'
+        ].sort()
+      );
+      assert.equal(record.aggregate.aggregateId, request.aggregateId.value);
+      assert.equal(record.aggregate.aggregateGeneration, '9007199254740993');
+      assert.equal(record.aggregate.index, 0);
+      assert.equal(record.aggregate.expectedStoreVersion, ready.storeVersion.value);
+      assert.equal(record.aggregate.ownerTransition, transition);
+      assert.match(record.aggregate.targetAuthorityOwnerGeneration, /^[1-9][0-9]*$/);
+      assert.equal(
+        record.aggregate.authorityPayloadSha256,
+        createHash('sha256').update(request.participants[0].authorityPayload).digest('hex')
+      );
+      assert.equal(
+        record.aggregate.membershipMutationSha256,
+        createHash('sha256').update(request.participants[0].membershipMutation).digest('hex')
+      );
+      assert.equal(record.visibleStoreVersion, ready.storeVersion.value);
+      assert.notEqual(stored.value.version.value, ready.storeVersion.value);
+      const aggregateRow = await provider.read({
+        value: `zlink:v11:aggregate:${request.aggregateId.value}:9007199254740993`
+      });
+      assert.equal(aggregateRow.kind, 'found');
+      const preparing = await repository.readAuthority(authorityKey);
+      assert.deepEqual(preparing.payload, ready.payload);
+      assert.equal(preparing.storeVersion.value, ready.storeVersion.value);
+      assert.equal(
+        (
+          await repository.compareExchangeAuthority(authorityKey, ready.storeVersion, {
+            kind: 'put',
+            payload: Buffer.from('must-conflict'),
+            generationTransition: 'preserve'
+          })
+        ).kind,
+        'conflict'
+      );
+      if (process.env.ZLINK_TEST_JAVA_AUTHORITY_CLASSPATH) {
+        const java = spawnSync(
+          'java',
+          [
+            '--class-path',
+            process.env.ZLINK_TEST_JAVA_AUTHORITY_CLASSPATH,
+            path.join(__dirname, 'fixtures/AuthorityRecordRoundTrip.java')
+          ],
+          { input: stored.value.bytes, encoding: 'utf8' }
+        );
+        assert.equal(java.status, 0, java.stderr);
+        const javaRecord = JSON.parse(java.stdout);
+        assert.deepEqual(javaRecord.aggregate, record.aggregate);
+        assert.equal(javaRecord.visibleStoreVersion, record.visibleStoreVersion);
+        assert.equal(
+          (
+            await provider.write({
+              conditions: [{ kind: 'version', key: rowKey, expected: stored.value.version }],
+              mutations: [{ kind: 'put', key: rowKey, bytes: Buffer.from(java.stdout) }]
+            })
+          ).kind,
+          'applied'
+        );
+        const javaVisible = await testLocationRepository(provider).readAuthority(authorityKey);
+        assert.equal(javaVisible.storeVersion.value, ready.storeVersion.value);
+        assert.deepEqual(javaVisible.payload, ready.payload);
+        console.log(`Java authority codec -> Node ${transition} ${outcome}: read and update`);
+      }
+      const recovered = testLocationRepository(provider);
+      const result =
+        outcome === 'abort'
+          ? await recovered.abortAggregate(prepared.fence)
+          : await recovered.commitAggregate(prepared.fence);
+      assert.equal(result.kind, outcome === 'abort' ? 'aborted' : 'committed');
+      const finalized = await provider.read(rowKey);
+      const finalRecord = JSON.parse(Buffer.from(finalized.value.bytes).toString());
+      assert.equal(Object.hasOwn(finalRecord, 'aggregate'), false);
+      assert.equal(Object.hasOwn(finalRecord, 'visibleStoreVersion'), false);
+      const visible = await recovered.readAuthority(authorityKey);
+      assert.equal(visible.storeVersion.value, finalized.value.version.value);
+      assert.deepEqual(
+        visible.payload,
+        outcome === 'abort' ? ready.payload : request.participants[0].authorityPayload
+      );
+      assert.equal(
+        visible.ownerId,
+        outcome === 'commit' && transition === 'newOwner'
+          ? target.owner.ownerId
+          : source.owner.ownerId
+      );
+      assert.equal(
+        (
+          await recovered.compareExchangeAuthority(authorityKey, visible.storeVersion, {
+            kind: 'put',
+            payload: Buffer.from('updated'),
+            generationTransition: 'preserve'
+          })
+        ).kind,
+        'stored'
+      );
+    });
+  }
+}

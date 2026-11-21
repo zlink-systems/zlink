@@ -6045,3 +6045,22 @@ function physicalRequest(work) {
 // Provider bootstrap is test setup; message handling itself never waits for it.
 test.beforeEach(async () => telemetry.observed());
 test.after(() => telemetry.close());
+
+test('RouteMesh Channel send reuses the completed Promise after immediate admission', async () => {
+  const registration = meshChannelRegistration('mesh', 'api');
+  let submissions = 0;
+  const transport = new framework.ZLinkRuntimeRouteTransport(
+    () => undefined,
+    undefined,
+    () => ({
+      meshNode: () => ({ sendToChannel() { submissions++; return 0; } })
+    })
+  );
+  const client = new framework.DefaultZLinkRouteClient(registration, transport);
+  const first = client.sendToChannel('api', typedPacket('Notice', { id: 1 })).submit();
+  const second = client.sendToChannel('api', typedPacket('Notice', { id: 2 })).submit();
+  assert.equal(await first, undefined);
+  assert.equal(await second, undefined);
+  assert.equal(submissions, 2);
+  assert.equal(first, second);
+});

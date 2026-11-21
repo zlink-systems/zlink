@@ -389,6 +389,7 @@ public interface IZLinkSpotPacketHandler<TSpot, in TMessage>
 {
  ValueTask HandleAsync(
  TSpot spot,
+ IZLinkMessageContext context,
  TMessage message,
  CancellationToken cancellationToken);
 }
@@ -398,6 +399,7 @@ public interface IZLinkSpotRequestHandler<TSpot, in TRequest, TReply>
 {
  ValueTask<TReply> HandleAsync(
  TSpot spot,
+ IZLinkMessageContext context,
  TRequest request,
  CancellationToken cancellationToken);
 }

@@ -35,6 +35,14 @@ class object_t
     void set_tid (uint32_t id_);
     ctx_t *get_ctx () const;
     void process_command (const zlink::command_t &cmd_);
+    // Sends a command whose destination lifetime reference is already held.
+    static void send_prepared_command (const command_t &cmd_);
+#ifdef ZLINK_BUILD_TESTS
+    typedef void (*command_delivery_test_hook_fn) (const command_t &, void *);
+    // Thread-local so a barrier observes only the submitting test thread.
+    static void test_set_command_delivery_hook (command_delivery_test_hook_fn hook_,
+                                                void *userdata_);
+#endif
     void send_inproc_connected (zlink::socket_base_t *socket_);
     bool send_bind (zlink::own_t *destination_, zlink::pipe_t *pipe_, bool inc_seqnum_ = true);
 
@@ -108,6 +116,7 @@ class object_t
       zlink::session_base_t *destination_, uint64_t connection_id_,
       uint64_t pair_id_, uint64_t generation_, unsigned char lane_count_,
       int error_number_);
+    bool prepare_pipe_command (zlink::pipe_t *destination_, command_t &cmd_);
 
 
     //  These handlers can be overridden by the derived objects. They are

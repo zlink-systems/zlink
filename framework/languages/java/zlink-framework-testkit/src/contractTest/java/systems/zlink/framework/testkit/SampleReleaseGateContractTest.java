@@ -1147,8 +1147,8 @@ final class SampleReleaseGateContractTest {
                                         + "DispatchServerApplication.java"));
         assertTrue(
                 javaDispatchApplication.contains("SampleNames.DispatchChannel).client()")
-                        && javaDispatchApplication.contains(
-                                "SampleNames.DispatchChannel)\n                    .server()"),
+                        && withoutWhitespace(javaDispatchApplication)
+                                .contains("SampleNames.DispatchChannel).server()"),
                 "Java dispatch registration must expose both the channel client and its server"
                         + " handler");
         String kotlinDispatchApplication =
@@ -1158,8 +1158,8 @@ final class SampleReleaseGateContractTest {
                                         + "DispatchServerApplication.kt"));
         assertTrue(
                 kotlinDispatchApplication.contains("SampleNames.DispatchChannel).client()")
-                        && kotlinDispatchApplication.contains(
-                                "SampleNames.DispatchChannel)\n            .server()"),
+                        && withoutWhitespace(kotlinDispatchApplication)
+                                .contains("SampleNames.DispatchChannel).server()"),
                 "Kotlin dispatch registration must expose both the channel client and its server"
                         + " handler");
 
@@ -3856,6 +3856,11 @@ final class SampleReleaseGateContractTest {
      * Reads a repository file for content assertions with line breaks normalised to {@code \n},
      * because this test compares content, not the checkout's line endings.
      */
+    /** Registration checks compare code, not the formatter's line breaks and indentation. */
+    private static String withoutWhitespace(String source) {
+        return source.replaceAll("\\s+", "");
+    }
+
     private static String readSource(Path path) throws IOException {
         return Files.readString(path).replace("\r\n", "\n");
     }

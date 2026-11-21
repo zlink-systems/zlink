@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using System.Net.Sockets;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -115,6 +116,178 @@ public sealed class StreamSessionForcedCleanupTests
                 }
             }
         }
+    }
+
+    [Theory]
+    [InlineData(0UL)]
+    [InlineData(3UL)]
+    [InlineData(4UL)]
+    [InlineData(5UL)]
+    public async Task Monitor_disconnect_preserves_reason_and_existing_terminal_effects(
+        ulong reason
+    )
+    {
+        var registration = new ZLinkFrameworkRegistration();
+        var lifetime = new SessionOrderingLifetime();
+        ZLinkFrameworkRuntime runtime = null!;
+        await using var provider = new ServiceCollection()
+            .AddSingleton(registration)
+            .AddSingleton(lifetime)
+            .AddSingleton(_ => runtime)
+            .BuildServiceProvider();
+        runtime = CreateRuntime(provider, registration);
+        var socket = new TestStreamSocket();
+        var monitor = new TestSocketMonitor();
+        var runner = new ZLinkRuntimeTaskRunner(
+            new ZLinkRuntimeErrorSink(),
+            CancellationToken.None,
+            runtime.ExecutionOwner
+        );
+        var closed = new ConcurrentQueue<(long Count, string? Reason)>();
+        using var listener = new MeterListener
+        {
+            InstrumentPublished = (instrument, owner) =>
+            {
+                if (
+                    instrument.Meter.Name == ZLinkMeters.Framework
+                    && instrument.Name == "zlink.stream.connections.closed"
+                )
+                    owner.EnableMeasurementEvents(instrument);
+            },
+        };
+        listener.SetMeasurementEventCallback<long>(
+            (_, value, tags, _) =>
+            {
+                string? transport = null;
+                string? closeReason = null;
+                foreach (var tag in tags)
+                {
+                    if (tag.Key == "transport")
+                        transport = tag.Value?.ToString();
+                    if (tag.Key == "close_reason")
+                        closeReason = tag.Value?.ToString();
+                }
+                if (transport == "disconnect-contract")
+                    closed.Enqueue((value, closeReason));
+            }
+        );
+        listener.Start();
+        await using var node = new ZLinkStreamNodeRuntime(
+            "disconnect-contract",
+            provider,
+            socket,
+            monitor,
+            typeof(SessionOrderingSession),
+            runner,
+            "disconnect-contract"
+        );
+        var routingId = RoutingId.From("disconnect-contract");
+        node.Start();
+        // A handshake failure and disconnect before session creation have no callback target.
+        monitor.Emit(
+            new ZLinkBackendSocketMonitorEvent(
+                ZLinkSocketNativeEventType.HandshakeFailedProtocol,
+                routingId,
+                "local",
+                "remote",
+                3
+            )
+        );
+        monitor.Emit(
+            new ZLinkBackendSocketMonitorEvent(
+                ZLinkSocketNativeEventType.Disconnected,
+                routingId,
+                "local",
+                "remote",
+                reason
+            )
+        );
+        monitor.Emit(
+            new ZLinkBackendSocketMonitorEvent(
+                ZLinkSocketNativeEventType.ConnectionReady,
+                routingId,
+                "local",
+                "remote",
+                1,
+                MonitorEventFlags.ConnectionReadyEdge
+            )
+        );
+        await lifetime.WaitConnectedAsync(routingId);
+        Assert.Equal(new[] { "connected" }, lifetime.Events(routingId));
+        Assert.Empty(closed);
+        monitor.Emit(
+            new ZLinkBackendSocketMonitorEvent(
+                ZLinkSocketNativeEventType.Disconnected,
+                routingId,
+                "local",
+                "remote",
+                reason
+            )
+        );
+        await lifetime.WaitDisconnectedAsync(routingId);
+        // Drain the existing terminal path before checking duplicate delivery and metric count.
+        Assert.True(await node.DrainSessionsAsync(CancellationToken.None));
+        monitor.Emit(
+            new ZLinkBackendSocketMonitorEvent(
+                ZLinkSocketNativeEventType.Disconnected,
+                routingId,
+                "local",
+                "remote",
+                reason
+            )
+        );
+        await monitor.WaitReceivedAsync(5);
+        await node.DisposeAsync();
+        Assert.Equal(new[] { "connected", "error", "disconnected" }, lifetime.Events(routingId));
+        var error = Assert.Single(lifetime.Errors);
+        Assert.Equal(ZLinkStreamSessionError.TransportError, error.Error);
+        Assert.Equal((1L, (string?)"transport_error"), Assert.Single(closed));
+        // Reflection lets this regression execute against the pre-change public contract.
+        var property = typeof(ZLinkStreamError).GetProperty("DisconnectReason");
+        Assert.NotNull(property);
+        var observed = property.GetValue(error);
+        Assert.NotNull(observed);
+        Assert.Equal(reason, Convert.ToUInt64(observed));
+    }
+
+    [Fact]
+    public async Task Non_monitor_error_has_no_disconnect_reason_and_keeps_existing_constructor()
+    {
+        var registration = new ZLinkFrameworkRegistration();
+        var lifetime = new SessionOrderingLifetime();
+        ZLinkFrameworkRuntime runtime = null!;
+        await using var provider = new ServiceCollection()
+            .AddSingleton(registration)
+            .AddSingleton(lifetime)
+            .AddSingleton(_ => runtime)
+            .BuildServiceProvider();
+        runtime = CreateRuntime(provider, registration);
+        await using var session = await ZLinkStreamSessionRuntime.CreateAsync(
+            provider,
+            new TestStreamSocket(),
+            RoutingId.From("protocol-contract"),
+            typeof(SessionOrderingSession),
+            static _ => { },
+            "test",
+            TimeProvider.System
+        );
+        Assert.Equal(
+            ZLinkSerialPostAdmission.Accepted,
+            session.EnqueueConnected("local", "remote")
+        );
+        await lifetime.WaitConnectedAsync(RoutingId.From("protocol-contract"));
+        await session.CloseForProtocolErrorAsync(new InvalidOperationException("protocol failure"));
+        await lifetime.WaitDisconnectedAsync(RoutingId.From("protocol-contract"));
+        var error = Assert.Single(lifetime.Errors);
+        Assert.Equal(ZLinkStreamSessionError.Internal, error.Error);
+        var property = typeof(ZLinkStreamError).GetProperty("DisconnectReason");
+        Assert.NotNull(property);
+        Assert.Null(property.GetValue(error));
+        Assert.Null(
+            property.GetValue(
+                new ZLinkStreamError(ZLinkStreamSessionError.TransportError, "legacy")
+            )
+        );
     }
 
     [Theory]
@@ -3144,7 +3317,7 @@ public sealed class StreamSessionForcedCleanupTests
 
         public ValueTask OnErrorAsync(ZLinkStreamError error, CancellationToken cancellationToken)
         {
-            _ = error;
+            lifetime.Errors.Enqueue(error);
             cancellationToken.ThrowIfCancellationRequested();
             lifetime.Record(Context.RoutingId!.Value, "error");
             return ValueTask.CompletedTask;
@@ -3178,6 +3351,7 @@ public sealed class StreamSessionForcedCleanupTests
 
     private sealed class SessionOrderingLifetime
     {
+        public ConcurrentQueue<ZLinkStreamError> Errors { get; } = new();
         private readonly object _gate = new();
         private readonly Dictionary<string, List<string>> _events = new(StringComparer.Ordinal);
         private readonly Dictionary<string, TaskCompletionSource> _connected = new(

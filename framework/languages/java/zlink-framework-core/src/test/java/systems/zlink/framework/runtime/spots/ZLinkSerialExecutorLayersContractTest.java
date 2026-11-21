@@ -549,6 +549,85 @@ final class ZLinkSerialExecutorLayersContractTest {
         }
     }
 
+    @Test
+    void spotWideActorConsumerTakesNoActorMonitor() throws Exception {
+        assertTrue(spotWideTurnsProgressWhileActorMonitorIsHeld().actorA());
+    }
+
+    @Test
+    void spotWideProducerMonitorHeldDoesNotStallOtherActorOrTimerTurns() throws Exception {
+        MonitorProbe probe = spotWideTurnsProgressWhileActorMonitorIsHeld();
+        assertTrue(probe.actorC());
+        assertTrue(probe.timer());
+    }
+
+    private record MonitorProbe(boolean actorA, boolean actorC, boolean timer) {}
+
+    // Actor A's ingress monitor is held by the test thread after A, C and a timer queued
+    // behind a handler that owns the shared gate. Their turns must not need that monitor.
+    private static MonitorProbe spotWideTurnsProgressWhileActorMonitorIsHeld() throws Exception {
+        try (Fixture fixture = fixture(ZLinkUserSpotExecutionMode.SPOT_WIDE)) {
+            CompletableFuture<Void> holderStarted = new CompletableFuture<>();
+            CompletableFuture<Void> holderRelease = new CompletableFuture<>();
+            CompletableFuture<Void> actorARan = new CompletableFuture<>();
+            CompletableFuture<Void> actorCRan = new CompletableFuture<>();
+            CompletableFuture<Void> timerRan = new CompletableFuture<>();
+            CompletionStage<Void> holder =
+                    fixture.serial.executeActor(
+                            "holder",
+                            () -> {
+                                holderStarted.complete(null);
+                                return holderRelease;
+                            },
+                            null);
+            holderStarted.get(3, TimeUnit.SECONDS);
+            CompletionStage<Void> actorA =
+                    fixture.serial.executeActor(
+                            "actor-a",
+                            () -> {
+                                actorARan.complete(null);
+                                return CompletableFuture.completedFuture(null);
+                            },
+                            null);
+            CompletionStage<Void> actorC =
+                    fixture.serial.executeActor(
+                            "actor-c",
+                            () -> {
+                                actorCRan.complete(null);
+                                return CompletableFuture.completedFuture(null);
+                            },
+                            null);
+            CompletionStage<Void> timer =
+                    fixture.serial.executeTimer(
+                            "tick",
+                            ignored -> {
+                                timerRan.complete(null);
+                                return CompletableFuture.completedFuture(null);
+                            });
+            Object actorAMonitor = fixture.serial.actorRelocationLane("actor-a");
+            boolean ranA;
+            boolean ranC;
+            boolean ranTimer;
+            synchronized (actorAMonitor) {
+                holderRelease.complete(null);
+                ranA = completesWithin(actorARan);
+                ranC = completesWithin(actorCRan);
+                ranTimer = completesWithin(timerRan);
+            }
+            await(holder, actorA, actorC, timer);
+            return new MonitorProbe(ranA, ranC, ranTimer);
+        }
+    }
+
+    private static boolean completesWithin(CompletableFuture<Void> stage) throws Exception {
+        try {
+            stage.get(2, TimeUnit.SECONDS);
+            return true;
+        } catch (TimeoutException timeout) {
+            return false;
+        }
+    }
+
     private static Fixture fixture(ZLinkUserSpotExecutionMode mode) {
         ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
         return new Fixture(

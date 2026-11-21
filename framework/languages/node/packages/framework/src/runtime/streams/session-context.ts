@@ -1,3 +1,4 @@
+import { relocationDebug, relocationDebugTerminal } from '../diagnostics';
 import type {
   ActorRef,
   RoutingId,
@@ -46,6 +47,7 @@ import {
 import { ZLinkSessionLocalActorBindings } from './session-local-actors';
 
 export interface ZLinkSessionContextStream extends ZLinkStream {
+  captureBoundSessionSubmission?(actorId: string): (payload: Message) => Promise<ZLinkSubmitResult>;
   writeRaw(payload: Message, flags?: number): boolean;
   submitRaw(payload: Message): Promise<ZLinkSubmitResult>;
   enqueueActorBound?(actorSlot: number, actorId: string): Promise<void>;
@@ -169,7 +171,20 @@ export class DefaultZLinkSessionContext implements ZLinkSessionContext {
   }
 
   async cleanupBindings(): Promise<void> {
-    await this.runtime.cleanup(this);
+    relocationDebug('cleanupBindings.enter', { sessionId: this.stream.sessionId });
+    let failure: { error: unknown } | undefined;
+    try {
+      await this.runtime.cleanup(this);
+    } catch (error) {
+      failure = { error };
+      throw error;
+    } finally {
+      relocationDebugTerminal(
+        'cleanupBindings.exit',
+        { sessionId: this.stream.sessionId },
+        failure
+      );
+    }
   }
 
   setActorBindingReplacementHandler(handler: ZLinkActorBindingReplacementHandler): void {

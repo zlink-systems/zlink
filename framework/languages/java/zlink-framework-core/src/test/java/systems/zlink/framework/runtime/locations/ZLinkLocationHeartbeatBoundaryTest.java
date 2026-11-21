@@ -169,6 +169,8 @@ final class ZLinkLocationHeartbeatBoundaryTest {
                     .toCompletableFuture()
                     .get(3, TimeUnit.SECONDS);
             assertTrue(host.isReady());
+            // Startup readiness can precede completion of the location publication operation.
+            runtime.publishWithStartupOwnerLease().toCompletableFuture().get(3, TimeUnit.SECONDS);
             var execution = runtime.execution(() -> true, () -> {});
             execution.ready().toCompletableFuture().join();
             var owner = runtime.currentOwnerToken();

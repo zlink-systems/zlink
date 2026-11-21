@@ -5,10 +5,14 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import re
+import shutil
+import subprocess
 import sys
+import tarfile
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Callable
 
 
@@ -128,6 +132,117 @@ class Synchronizer:
             return result
 
         self.transform(relative, apply)
+
+
+def is_managed_node_package(location: str) -> bool:
+    return location.startswith("node_modules/@zlink-systems/") or (
+        "/node_modules/@zlink-systems/" in location
+    )
+
+
+def check_node_lock(relative: str) -> None:
+    """Validate available manifests and required graph edges without registry access."""
+    path = REPO_ROOT / relative
+    packages = json.loads(path.read_text(encoding="utf-8"))["packages"]
+    for location, entry in packages.items():
+        if entry.get("link"):
+            continue
+        package_dir = path.parent / location
+        manifest = None
+        source_package = "node_modules/" not in location
+        managed_package = is_managed_node_package(location)
+        if source_package or managed_package:
+            candidate = package_dir / "package.json"
+            if candidate.is_file():
+                installed = json.loads(candidate.read_text(encoding="utf-8"))
+                name = location.rsplit("node_modules/", 1)[-1]
+                if source_package or (
+                    installed.get("name") == name
+                    and installed.get("version") == entry.get("version")
+                ):
+                    manifest = installed
+            resolved = entry.get("resolved", "")
+            if managed_package and resolved.startswith("file:"):
+                archive = path.parent / resolved[5:]
+                if archive.is_file():
+                    try:
+                        with tarfile.open(archive, "r:gz") as handle:
+                            member = handle.extractfile("package/package.json")
+                            if member is None:
+                                raise SyncError(f"{relative}: {archive} has no package.json")
+                            manifest = json.load(member)
+                    except (tarfile.TarError, KeyError) as error:
+                        raise SyncError(f"{relative}: cannot read {archive}: {error}") from error
+                    if (
+                        manifest.get("name") != location.rsplit("node_modules/", 1)[-1]
+                        or manifest.get("version") != entry.get("version")
+                    ):
+                        raise SyncError(f"{relative}: {location} name/version differs from {archive}")
+            if manifest is not None:
+                fields = ("dependencies", "optionalDependencies")
+                if source_package:
+                    fields += ("devDependencies",)
+                for field in fields:
+                    if entry.get(field, {}) != manifest.get(field, {}):
+                        raise SyncError(
+                            f"{relative}: {location or 'root'} {field} differ from package.json; "
+                            "regenerate the lockfile with npm after materializing local packages"
+                        )
+
+        if entry.get("optional") or not (source_package or managed_package):
+            continue
+        required = dict(entry.get("dependencies", {}))
+        if source_package:
+            required.update(entry.get("devDependencies", {}))
+        for name in entry.get("optionalDependencies", {}):
+            required.pop(name, None)
+        for name in required:
+            parent = PurePosixPath(location)
+            while True:
+                candidate = (parent / "node_modules" / name).as_posix()
+                if parent.name != "node_modules" and candidate in packages:
+                    break
+                if parent == PurePosixPath("."):
+                    raise SyncError(
+                        f"{relative}: {location or 'root'} dependency {name} has no lock entry"
+                    )
+                parent = parent.parent
+
+
+def synchronize_node_lock(
+    sync: Synchronizer, relative: str, regenerate: bool = True
+) -> None:
+    """Let npm own dependency metadata; preserve the lock if npm cannot refresh it."""
+    path = REPO_ROOT / relative
+    if sync.write and regenerate:
+        original = path.read_bytes()
+        lock = json.loads(original)
+        packages = lock["packages"]
+        # Synthetic new version/resolved fields otherwise make npm trust old dependencies.
+        lock["packages"] = {
+            location: entry for location, entry in packages.items()
+            if entry.get("link") or not is_managed_node_package(location)
+        }
+        try:
+            path.write_text(json.dumps(lock, indent=2) + "\n", encoding="utf-8")
+            npm = shutil.which("npm")
+            if npm is None:
+                raise SyncError(f"{relative}: npm is required to regenerate the lockfile")
+            result = subprocess.run(
+                [npm, "install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"],
+                cwd=path.parent, text=True, capture_output=True,
+            )
+            if result.returncode:
+                details = "\n".join((result.stdout + result.stderr).splitlines()[-20:])
+                raise SyncError(f"{relative}: npm lockfile regeneration failed:\n{details}")
+            check_node_lock(relative)
+        except (OSError, SyncError):
+            path.write_bytes(original)
+            raise
+        if path.read_bytes() != original and path not in sync.changed:
+            sync.changed.append(path)
+    else:
+        check_node_lock(relative)
 
 
 @dataclass(frozen=True)
@@ -659,6 +774,7 @@ def update_framework_node_lock(source: str, version: str) -> str:
         raise SyncError("Framework Node lockfile binding entry is not structurally bounded")
     end += len("\n    },")
     block = source[start:end]
+    original_block = block
     block, version_count = re.subn(
         rf'("version"\s*:\s*"){SEMVER}(")',
         rf"\g<1>{version}\2",
@@ -676,103 +792,31 @@ def update_framework_node_lock(source: str, version: str) -> str:
     )
     if version_count != 1 or resolved_count != 1:
         raise SyncError("Framework Node lockfile binding entry lacks version/resolved fields")
-    block = re.sub(r'^\s*"integrity"\s*:\s*"[^"]+",\n', "", block, flags=re.MULTILINE)
-    return source[:start] + block + source[end:]
-
-
-def update_node_registry_package_block(
-    source: str, package_name: str, version: str
-) -> str:
-    marker = f'    "node_modules/{package_name}": {{'
-    start = source.find(marker)
-    if start < 0:
-        raise SyncError(f"Node lockfile has no {package_name} entry")
-    end = source.find('\n    },\n    "node_modules/', start)
-    if end < 0:
-        raise SyncError(
-            f"Node lockfile entry for {package_name} is not structurally bounded"
-        )
-    end += len("\n    },")
-    block = source[start:end]
-    original_block = block
-    block, version_count = re.subn(
-        rf'("version"\s*:\s*"){SEMVER}(")',
-        rf"\g<1>{version}\2",
-        block,
-        count=1,
-    )
-    artifact_name = package_name.rsplit("/", 1)[-1]
-    block, resolved_count = re.subn(
-        rf'("resolved"\s*:\s*"https://registry\.npmjs\.org/{re.escape(package_name)}/-/{re.escape(artifact_name)}-){SEMVER}(\.tgz")',
-        rf"\g<1>{version}\2",
-        block,
-        count=1,
-    )
-    if version_count != 1 or resolved_count != 1:
-        raise SyncError(
-            f"Node lockfile entry for {package_name} lacks version/resolved fields"
-        )
     if block != original_block:
-        block = re.sub(
-            r'^\s*"integrity"\s*:\s*"[^"]+",\n',
-            "",
-            block,
-            flags=re.MULTILINE,
-        )
+        block = re.sub(r'^\s*"integrity"\s*:\s*"[^"]+",\n', "", block, flags=re.MULTILINE)
     return source[:start] + block + source[end:]
 
 
-# Lockfiles of published-package consumers (quickstart, tutorial StreamClient): the
-# Framework pins and the installed registry entries follow the Node Framework version.
+# Published consumers own only root declarations. npm owns installed metadata.
 NODE_REGISTRY_CONSUMER_LOCKS = (
-    (
-        "framework/languages/node/quickstart/package-lock.json",
-        6,
-        (
-            "@zlink-systems/framework",
-            "@zlink-systems/http-client",
-            "@zlink-systems/nestjs",
-            "@zlink-systems/stream-wire",
-        ),
-    ),
-    (
-        "framework/languages/node/tutorial/StreamClient/package-lock.json",
-        6,
-        (
-            "@zlink-systems/framework-codec-protobuf",
-            "@zlink-systems/stream-connector",
-            "@zlink-systems/stream-wire",
-        ),
-    ),
+    "framework/languages/node/quickstart/package-lock.json",
+    "framework/languages/node/tutorial/StreamClient/package-lock.json",
 )
 
 
-def update_node_registry_consumer_lock(
-    source: str, version: str, relative: str, expected: int, packages: tuple[str, ...]
-) -> str:
-    pattern = node_internal_dependency_pattern()
-    source, count = re.subn(
-        pattern,
-        lambda match: replace_version_group(match, version),
-        source,
-    )
-    if count != expected:
-        raise SyncError(
-            f"{relative} expected {expected} Framework dependency pins, found {count}"
-        )
-    for package_name in packages:
-        source = update_node_registry_package_block(source, package_name, version)
-    return source
+def update_node_registry_consumer_lock(source: str, version: str) -> str:
+    lock = json.loads(source)
+    root = lock["packages"][""]
+    for field in ("dependencies", "devDependencies", "optionalDependencies"):
+        for name in root.get(field, {}):
+            if re.fullmatch(FRAMEWORK_NODE_INTERNAL_NAME, name):
+                root[field][name] = version
+    return json.dumps(lock, indent=2) + "\n"
 
 
-def update_node_quickstart_binding_lock(source: str, version: str) -> str:
-    source = update_framework_node_dependency(source, version, 1)
-    return update_node_registry_package_block(
-        source, "@zlink-systems/zlink", version
-    )
-
-
-def synchronize_framework(sync: Synchronizer, versions: dict[str, str]) -> None:
+def synchronize_framework(
+    sync: Synchronizer, versions: dict[str, str], local_packages: bool = False
+) -> None:
     for field in FRAMEWORK_SCALAR_FIELDS:
         if not field.required and not (REPO_ROOT / field.relative).is_file():
             continue
@@ -822,14 +866,10 @@ def synchronize_framework(sync: Synchronizer, versions: dict[str, str]) -> None:
         lambda match, version=version: replace_version_group(match, version),
         1,
     )
-    for relative, expected, packages in NODE_REGISTRY_CONSUMER_LOCKS:
+    for relative in NODE_REGISTRY_CONSUMER_LOCKS:
         sync.transform(
             relative,
-            lambda source, relative=relative, expected=expected, packages=packages: (
-                update_node_registry_consumer_lock(
-                    source, version, relative, expected, packages
-                )
-            ),
+            lambda source: update_node_registry_consumer_lock(source, version),
         )
     sync.regex(
         node_lock,
@@ -859,6 +899,8 @@ def synchronize_framework(sync: Synchronizer, versions: dict[str, str]) -> None:
             lambda match, version=version: replace_version_group(match, version),
             1,
         )
+    for relative in NODE_REGISTRY_CONSUMER_LOCKS:
+        synchronize_node_lock(sync, relative, regenerate=not local_packages)
 
 
 # Genre templates use only published packages (framework/templates/TEMPLATE-AUTHORING.ko.md),
@@ -967,21 +1009,10 @@ TEMPLATE_TRANSITIVE_BINDING = (
     "framework/languages/dotnet/templates/starter",
 )
 
-# Node templates that commit a lockfile: Framework dependency pins, and the installed
-# Framework packages whose registry entries follow the template pin.
-TEMPLATE_NODE_LOCKS = {
-    "framework/languages/node/templates/board-tables": (
-        10,
-        (
-            "@zlink-systems/framework",
-            "@zlink-systems/framework-locations-redis",
-            "@zlink-systems/http-client",
-            "@zlink-systems/nestjs",
-            "@zlink-systems/stream-connector",
-            "@zlink-systems/stream-wire",
-        ),
-    ),
-}
+# Node templates whose lock root declarations follow TEMPLATE_VERSIONS.
+TEMPLATE_NODE_LOCKS = (
+    "framework/languages/node/templates/board-tables",
+)
 
 TEMPLATE_ROOTS = {
     "cpp": ("framework/languages/cpp/templates",),
@@ -1093,17 +1124,10 @@ def template_document_pattern(values: set[str]) -> str:
     )
 
 
-def update_template_node_lock(
-    source: str, pins: dict[str, str], relative: str, expected: int, packages: tuple[str, ...]
-) -> str:
-    source = update_node_registry_consumer_lock(
-        source, pins["framework"], relative, expected, packages
-    )
-    # The root dependency list, @zlink-systems/framework and framework-locations-redis.
-    source = update_framework_node_dependency(source, pins["binding"], 3)
-    return update_node_registry_package_block(
-        source, "@zlink-systems/zlink", pins["binding"]
-    )
+def update_template_node_lock(source: str, pins: dict[str, str]) -> str:
+    lock = json.loads(update_node_registry_consumer_lock(source, pins["framework"]))
+    lock["packages"][""]["dependencies"]["@zlink-systems/zlink"] = pins["binding"]
+    return json.dumps(lock, indent=2) + "\n"
 
 
 def synchronize_templates(sync: Synchronizer, pins: dict[str, dict[str, str]]) -> None:
@@ -1140,14 +1164,9 @@ def synchronize_templates(sync: Synchronizer, pins: dict[str, dict[str, str]]) -
                 )
             lock = f"{game}/package-lock.json"
             if template in TEMPLATE_NODE_LOCKS:
-                expected, packages = TEMPLATE_NODE_LOCKS[template]
                 sync.transform(
                     lock,
-                    lambda source, lock=lock, expected=expected, packages=packages: (
-                        update_template_node_lock(
-                            source, pins[language], lock, expected, packages
-                        )
-                    ),
+                    lambda source: update_template_node_lock(source, pins[language]),
                 )
             elif (REPO_ROOT / lock).exists():
                 raise SyncError(f"{lock} is not registered in TEMPLATE_NODE_LOCKS")
@@ -1190,16 +1209,20 @@ def update_template_document(
 
 
 def synchronize_template_versions(
-    write: bool,
+    write: bool, local_packages: bool = False,
 ) -> tuple[dict[str, dict[str, str]], list[Path]]:
     templates = template_versions()
     sync = Synchronizer(write)
     synchronize_templates(sync, templates)
+    for template in TEMPLATE_NODE_LOCKS:
+        synchronize_node_lock(
+            sync, f"{template}/my-game/package-lock.json", regenerate=not local_packages
+        )
     return templates, sync.changed
 
 
 def synchronize(
-    write: bool,
+    write: bool, local_packages: bool = False,
 ) -> tuple[
     str,
     dict[str, str],
@@ -1564,10 +1587,6 @@ def synchronize(
         "framework/languages/node/package-lock.json",
         lambda source: update_framework_node_lock(source, binding_version),
     )
-    sync.transform(
-        "framework/languages/node/quickstart/package-lock.json",
-        lambda source: update_node_quickstart_binding_lock(source, binding_version),
-    )
     sync.regex(
         "framework/languages/node/test/contract/fixtures/node-public-contract.json",
         rf'("bindingVersion"\s*:\s*"){SEMVER}(")',
@@ -1575,8 +1594,24 @@ def synchronize(
         1,
     )
     framework_sync = Synchronizer(write)
-    synchronize_framework(framework_sync, frameworks)
-    templates, template_changed = synchronize_template_versions(write)
+    synchronize_framework(framework_sync, frameworks, local_packages)
+    templates, template_changed = synchronize_template_versions(write, local_packages)
+    node_lock = "framework/languages/node/package-lock.json"
+    node_lock_path = REPO_ROOT / node_lock
+    packages = json.loads(node_lock_path.read_text(encoding="utf-8"))["packages"]
+    archives = [
+        node_lock_path.parent / entry["resolved"][5:]
+        for entry in packages.values() if entry.get("resolved", "").startswith("file:")
+    ]
+    materialized = all(archive.is_file() for archive in archives)
+    if write and not materialized:
+        print(
+            f"{node_lock}: deferred npm regeneration until local tarballs exist; "
+            "run --write --local-packages after creating them",
+            file=sys.stderr,
+        )
+    synchronize_node_lock(framework_sync, node_lock, regenerate=materialized)
+    check_node_lock("bindings/node/package-lock.json")
     return (
         core_version,
         bindings,
@@ -1593,7 +1628,13 @@ def main() -> int:
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--write", action="store_true", help="rewrite managed values")
     mode.add_argument("--check", action="store_true", help="fail if managed values differ")
+    parser.add_argument(
+        "--local-packages", action="store_true",
+        help="defer registry consumer locks while building unpublished local packages",
+    )
     args = parser.parse_args()
+    if args.local_packages and not args.write:
+        parser.error("--local-packages requires --write")
     try:
         (
             core_version,
@@ -1603,7 +1644,7 @@ def main() -> int:
             changed,
             framework_changed,
             template_changed,
-        ) = synchronize(args.write)
+        ) = synchronize(args.write, args.local_packages)
     except (OSError, SyncError) as error:
         print(f"version sync failed: {error}", file=sys.stderr)
         return 1

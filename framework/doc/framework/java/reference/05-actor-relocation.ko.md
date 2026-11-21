@@ -172,3 +172,27 @@ factory 등록 시점에 한 번만 정하고 나중에 호출별로 바꿀 수 
 전체 근거는
 [Java Actor exact interface](../../common/spec/server/languages/java/interfaces/actors.ko.md)를
 참고한다.
+
+
+## `ZLinkActor.onSessionBound`
+
+Actor owner가 bind를 확정한 뒤 해당 Actor의 handler 순서에서 호출한다.
+
+```java
+default CompletionStage<Void> onSessionBound(
+    ZLinkSessionBindingIdentity incoming,
+    ZLinkActorCallbackCancellation cancellation)
+```
+
+| 항목 | 의미 |
+| --- | --- |
+| `incoming` | 확정된 session owner node RID·lifecycle generation·binding generation |
+| `cancellation` | 실행 제한 시간 초과, Actor 종료 또는 runtime 종료 시 취소 여부 |
+| 반환값 | 통지 처리의 완료를 나타내는 `CompletionStage<Void>` |
+| 기본 구현 | 아무 작업 없이 완료 |
+
+재정의한 callback은 `SpotWide`의 shared Spot gate 또는 Entry·`PerActor`의 Actor gate를
+사용한다. 재정의하지 않으면 이 통지를 위한 gate 대기가 없다. 예외는 runtime task 예외로
+한 번 보고하고 Actor 실행을 계속한다. `SessionReplacementCallbackTimeout`(기본 30,000 ms)을
+넘으면 취소를 전달하고 한 번 보고한다. Actor 또는 runtime 종료로 취소된 callback은 보고하지
+않는다. 통지 실패나 취소는 bind 결과와 incoming bind reply를 바꾸지 않는다.

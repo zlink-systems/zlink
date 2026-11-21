@@ -27,10 +27,17 @@ enum pipe_write_observer_phase_t
 {
     pipe_write_observer_prepare,
     pipe_write_observer_commit,
-    pipe_write_observer_finish
+    pipe_write_observer_finish,
+    pipe_write_observer_defer_command,
+    pipe_write_observer_has_deferred_command,
+    pipe_write_observer_dispatch_deferred_command
 };
-typedef bool (*pipe_write_observer_fn) (
-  pipe_t *pipe_, void *userdata_, pipe_write_observer_phase_t phase_);
+// A true defer-command result transfers the prepared command's destination
+// lifetime reference to the observer; dispatch transfers it to the mailbox.
+typedef bool (*pipe_write_observer_fn) (pipe_t *pipe_,
+                                        void *userdata_,
+                                        pipe_write_observer_phase_t phase_,
+                                        command_t *command_);
 #ifdef ZLINK_BUILD_TESTS
 typedef void (*pipe_write_commit_test_hook_fn) (pipe_t *pipe_, bool more_,
                                                 void *userdata_);
@@ -675,7 +682,7 @@ class pipe_t ZLINK_FINAL : public object_t,
     void arm_hwm_credit_wait_unlocked ();
     void clear_hwm_credit_wait_unlocked ();
     void rollback_unlocked (bool publish_peer_control_ = true);
-    void flush_unlocked ();
+    void flush_unlocked (pipe_write_observer_fn observer_ = NULL, void *observer_userdata_ = NULL);
     static uint64_t committed_frame_accounted_bytes_ref (const msg_t &msg_);
     static bool counted_pending_message_ref (const msg_t &msg_);
     void publish_outbound_frame_unlocked (const msg_t &msg_, bool more_);

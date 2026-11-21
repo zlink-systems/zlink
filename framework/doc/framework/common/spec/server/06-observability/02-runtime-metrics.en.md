@@ -139,6 +139,8 @@ don't walk queues or handlers to collect metrics.
 | `zlink.host.application_job_queue.pressure_transitions` | counter | `{transition}` | `state` | Transitions into the labeled `running` or `paused` state in the current epoch. |
 | `zlink.host.application_job_queue.pause_duration` | observable | `s` | `state` | Pause time selected by `current` or `cumulative`. |
 | `zlink.host.application_job_queue.flow_state_config_failures` | counter | `{failure}` | none | Failures to apply an absolute Core flow state in the current epoch. |
+| `zlink.host.authentication_admission.in_flight` | observable | `{request}` | none | Authentication requests accepted by [authentication admission](../04-session/03-authentication-admission.en.md) and still in flight. |
+| `zlink.host.authentication_admission.rejections` | counter | `{request}` | none | Requests rejected by authentication admission in the current epoch. |
 
 **Reset preserves current gauges, including pressure state and current
 pause duration, rebases peak to current, and clears epoch counters and

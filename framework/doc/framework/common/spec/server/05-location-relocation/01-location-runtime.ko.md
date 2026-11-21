@@ -494,6 +494,11 @@ field는 다른 record의 generation field와 마찬가지로 JSON number가 아
 | `ownerId`, `ownerLeaseGeneration` | 현재 owner의 `(OwnerId, LeaseGeneration)`이다(§3.1). |
 | `allocation` | 배치 정보(§3.3)다. dotnet `ZLinkPlacementAllocation`(내부 구현)에서 파생한다. `state`(`reserved \| active`), `objectKind`(`actor \| userSpot \| instanceSpot` — Entry Spot은 없다. Entry Spot의 Actor는 `actor`로 집계한다, §4), `stableType`, `descriptor`(`{meshName, routingIdHex}` — MeshNode descriptor key와 같은 모양), `descriptorLifecycleGeneration`(target MeshNode의 `lifecycleGeneration`과 CAS로 맞춰야 하는 값)과 `capacity`를 포함한다. `capacity`는 `{actors, spots, spotType}`이며 `actors`·`spots`는 이번 allocation이 확보한 정수 slot 수, `spotType`은 Spot이 아니면 `null`이고 Spot이면 `{objectKind, stableType, count}`다(§3.3의 "Spot slot 1과 해당 Spot 종류·stable type slot 1" — flat counter 하나로는 어떤 `(spotKind, stableType)` 조합을 확보했는지 표현할 수 없다). |
 | `pendingCreation` | 생성 진행 상태다(§7). 없으면 `null`이다. 있으면 `reservationId`, `requestContentReference`, `requestSha256`(hex, 64자)과 `requestEncodedSize`(정수)를 포함한다. `requestContentReference`의 형식은 `inline-v1:{base64url}`이며, `{base64url}`은 생성 요청 bytes를 `A-Z a-z 0-9 - _` 알파벳으로 인코딩한 값으로 padding `=`을 붙이지 않는다. 다른 형식은 인식하지 않는다. |
+| `aggregate` | 이 record가 참여 중인 aggregate 변경의 진행 정보다(§8.1). 없으면 field를 쓰지 않는다. 있으면 `aggregateId`(lowercase canonical UUID), `aggregateGeneration`(문자열 정수), `index`(JSON number, 참여 목록 안의 위치), `expectedStoreVersion`, `ownerTransition`(`preserve \| newOwner`), `targetAuthorityOwnerGeneration`(문자열 정수), `authorityPayloadSha256`·`membershipMutationSha256`(hex 64자)를 포함한다. |
+| `visibleStoreVersion` | `aggregate`가 있는 동안 Framework가 공개 `StoreVersion`으로 내놓는 값이다. Aggregate 준비가 이 record를 다시 써도 공개 `StoreVersion`은 준비 전 값으로 유지한다. `aggregate`가 없으면 field를 쓰지 않는다. |
+| `aggregate.relocation` | 이 authority record의 relocation 진행 정보다(§9.1). `relocationId`(lowercase canonical UUID), `phase`(`preparing \| captured \| prepared \| committed \| activating \| activated \| cleaning \| completed \| aborted`), `source`, `target`, `coordinator`, `sourceInventorySha256`(hex 64자), `applicationVersion`(문자열 정수)을 포함한다. `source`·`target`은 `nodeRid`, `nodeGeneration`, `ownerId`, `ownerLeaseGeneration`을 담고 `target`은 `attemptGeneration`도 담는다. `target`은 `preparing`·`captured`에서 `null`이고 `prepared`부터 전체 값을 갖는다. `aborted`는 abort 직전 phase의 `target`을 그대로 둔다. 그래서 `preparing`·`captured`에서 abort하면 `null`이고 `prepared` 이후에서 abort하면 전체 값이다. 64-bit 정수는 문자열로 쓴다. |
+| `aggregate.relocation.completion` | §9.3 완료 기록의 진행이다. Target commit CAS에서 처음 쓰며 relocation 진행 정보와 함께 제거한다. `acceptedRequests`는 source가 수락했지만 target이 끝내는 request 수다. Capture로 확정한 queue의 request와 cutover boundary 전에 relay한 request([Relocation flow §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover))를 더한 값이며, target commit에서 정한 뒤 바꾸지 않는다. Boundary 뒤에 도착한 request는 target이 받은 일반 request이므로 넣지 않는다. 나머지 field는 `completedResults`, `pendingDeliveries`(모두 문자열 정수), `reference`(완료 기록 payload의 맨 앞 목록 reference, 완료 결과가 없으면 `null`), `sha256`(그 payload 전체 bytes의 SHA-256, hex 64자, `reference`가 `null`이면 `null`)을 포함한다. 수락한 request가 없으면 `acceptedRequests`는 `"0"`이다. Send·event·timer는 `acceptedRequests`에 넣지 않는다. |
+| `aggregate.relocation.coordinator.expectedStoreVersion` | 이동을 시작한 coordinator가 읽은 원래 authority StoreVersion이다. Opaque 문자열이며 같은 값인지만 비교한다. Phase CAS의 현재 expected StoreVersion과 구분한다. |
 
 생성을 실행하는 node는 `requestContentReference`를 decode한 뒤 그 bytes의 길이가
 `requestEncodedSize`와 같고 SHA-256이 `requestSha256`과 같은지 확인한다. 어느 하나라도
@@ -505,7 +510,12 @@ field는 다른 record의 generation field와 마찬가지로 JSON number가 아
 예약의 식별자다. 예약 전용 logical key를 두지 않으며, 다른 node가 만든 예약의 완료와
 취소도 이 record와 §7의 최종 결과 record만으로 판정한다. 예약 상태를 위 표의 field 밖에
 두지 않는다 — 한 언어만 읽는 field에 예약 정보를 담으면 다른 언어가 그 record를 갱신할 때
-그 정보가 남지 않는다.
+그 정보가 남지 않는다. Aggregate·relocation 진행도 별도 lock record가 아니라 이 record의 상태다. 진행 여부와 commit 전 값은
+`aggregate`·`visibleStoreVersion` 두 field만으로 판정한다. Aggregate 기록, 이동 대상 목록과 participant 변경 bytes의 key와 본문 형식은 [§8.3](#83-aggregate-기록과-이동-대상-목록의-저장-형식)이 정한다.
+
+`aggregate` field는 aggregate marker field와 선택적인 `relocation` field를 담는다. Aggregate marker가 아직 materialize되지 않은 relocation에서는 `aggregate`에 `relocation`만 기록할 수 있으며, 이 형태는 aggregate transaction marker가 준비되었음을 뜻하지 않는다. `aggregate`가 있으면 marker field는 전부 있거나 전부 없어야 하고, 빈 object는 유효하지 않다. Aggregate marker를 materialize하거나 갱신하는 authority 변경은 기존 `aggregate.relocation`을 보존하며, 그동안 `visibleStoreVersion`은 aggregate 준비 전 공개 StoreVersion을 유지한다. Relocation 진행 정보는 기존 terminal cleanup의 조건부 authority 변경에서 제거하고, 제거 뒤 marker도 없으면 `aggregate` field를 쓰지 않는다.
+
+`aggregate.relocation`은 이 record의 durable relocation phase와 source·target·coordinator fence를 소유한다. 같은 사실을 `payload`나 `visibleStoreVersion`에 중복 기록하지 않으며, `payload`는 application 정의 opaque bytes로 유지한다. Aggregate generation은 같은 record의 aggregate marker(`aggregate.aggregateGeneration`)만 소유하고 `aggregate.relocation`에 사본을 두지 않는다. Marker가 아직 없는 Direct Join은 호출자가 가진 이동 요청의 fence로 aggregate generation을 받는다. Source 정리의 진행은 phase `cleaning` 하나로 나타내며 별도 정리 상태 field를 두지 않는다. 이전 언어별 relocation 표현은 호환 reader의 입력으로만 읽고 새 writer는 이 표현 하나만 쓴다. 이 field는 `recordVersion` 1의 선택적 확장이다. Field가 없는 기존 record는 그대로 읽되 그 부재로 relocation이 없다고 추측하지 않는다. 이 field를 쓰는 runtime으로 올리기 전에 진행 중인 relocation을 끝내고, 이 field가 남은 record가 있으면 이전 버전으로 되돌리지 않는다.
 
 Relocation Store가 보관하는 payload(cold activation envelope, 완료 기록)는 이 opaque
 record를 사용하지 않는다. 별도로 버전을 매긴 key 공간과 raw bytes 저장 형식을
@@ -1008,8 +1018,11 @@ Target owner lease가 유효하고 descriptor가 같은 lifecycle이면 해제�
 만드는 operation은 Actor `Create`·`GetOrCreate`, User Spot `GetOrCreate`, [Instance intent](../00-foundation/02-glossary.ko.md#instance-intent)가 있는 새
 message다. 이 operation이 steady `Ready` record를 읽었고, 그 record의 owner lease가 없거나 다른
 `LeaseGeneration`이거나 만료됐으며, 새 incarnation을 `Reserve`하는 node에 등록된 그 type의 relocation
-정책이 `Disabled`이면 Location repository가 그 record를 해제한다. `Closing`이나 미완료 최초 activation은
-allocation이 `Active`라는 이유로 이 대상이 되지 않으며 각자의 lifecycle·recovery 절차를 따른다. `Reserve`하는 node는 Actor와 User Spot에서는 생성을 요청한
+정책이 `Disabled`이면 Location repository가 그 record를 해제한다. User Spot의 `Closing`이나 미완료 최초
+activation은 allocation이 `Active`라는 이유로 이 대상이 되지 않으며 각자의 lifecycle·recovery 절차를 따른다.
+Actor의 `Closing`은 destroy가 admission을 이미 닫은 상태이므로, owner lease가 없거나 다른
+`LeaseGeneration`이거나 만료됐으면 같은 조건부 batch로 해제한다. 이 경우 relocation 정책 조건은 적용하지
+않으며, 생성 operation과 같은 generation을 destroy하려는 호출이 이 해제를 시작한다. `Reserve`하는 node는 Actor와 User Spot에서는 생성을 요청한
 node이고, Instance Spot에서는 activation envelope를 받은 target이다. 그 node에 type이 등록되어 있지
 않으면 `Disabled`로 보지 않는다. User Spot은 그 SpotId와 `ObjectGeneration`에 남은 Actor membership이
 모두 **owner가 끝난 member**일 때만 해제한다. Membership이 없으면 이 조건을 만족한다. Owner가 끝난
@@ -1036,7 +1049,7 @@ incarnation으로 시작한다. 이 batch가 provider의 한 batch 상한을 넘
 kind와 stable type이 같은지 확인한다(다르면 기존 `TypeMismatch`). Owner lease가 유효하면 type과
 operation에 따른 기존 결과를 반환한다. Owner lease가 무효이고 해제 조건을 만족하지 않으면
 `Unavailable`을 반환한다. 일반 message와 `Find`는 이 해제를 시작하지 않는다. 이 해제는 유효한 owner
-lease를 요구하는 `Delete`와 다른, repository의 조건부 batch다. 생성 operation 외에는 §5.1의 폐기 후
+lease를 요구하는 `Delete`와 다른, repository의 조건부 batch다. 생성 operation과 Actor `Closing`을 destroy하려는 호출 외에는 §5.1의 폐기 후
 정리만 이 해제를 시작한다. Owner 자신의 같은 incarnation record가 자기 옛 무효 token을 가리킬 때다.
 조건은 같지만 새 incarnation을 만들지 않으므로 type의 relocation 정책 조건은 적용하지 않는다.
 
@@ -1057,7 +1070,7 @@ owner와 현재 수용 공간을 모두 확인한다. 성공하면 reservation�
 owner와 generation은 그대로 두고 version을 바꾸므로 늦은 target CAS는 실패한다. Source는
 현재 owner lease를 확인하고 같은 `RelocationId`의 target 정보를 정리한다. 반대로 target
 `NewOwner`가 먼저 commit했으면 source `Preserve`는 성공하지 않는다. 응답이 불명확하면
-[§10](#10-when-a-store-response-isnt-received)에 따라 같은 key와 version으로 확인한다.
+[§10](#10-store-응답을-받지-못했을-때)에 따라 같은 key와 version으로 확인한다.
 
 ### 6.2 여러 페이지를 같은 시점의 목록으로 읽는다
 
@@ -1144,7 +1157,7 @@ Application이 반환한 `Rejected`와 callback exception은 다른 결과다. P
 |---|---|---|
 | 같은 type의 `Ready` | `AlreadyExists` | 기존 ref |
 | 같은 type의 `Creating` | `AlreadyExists` | 진행 중인 생성 결과를 기다린다. |
-| 같은 type의 `Closing` | `AlreadyExists` | User Spot은 [Spot 주소 메시징 §3.2](../03-spot-actor/06-spot-address-messaging.ko.md#32-동시-요청의-수렴)의 authority 변경 대기와 후속 절차를 따른다. |
+| 같은 type의 `Closing` | `AlreadyExists` | Actor와 User Spot은 [Spot 주소 메시징 §3.2](../03-spot-actor/06-spot-address-messaging.ko.md#32-동시-요청의-수렴)의 authority 변경 대기와 후속 절차를 따른다. |
 | 다른 Actor type | `TypeMismatch` | `TypeMismatch` |
 | 다른 Spot 종류 또는 type | `TypeMismatch` | `TypeMismatch` |
 
@@ -1479,6 +1492,110 @@ Target factory와 `Restore`는 `Prepared`를 기록하기 전에 끝낸다. Queu
 전환, callback과 dispatch 개방의 정확한 순서는
 [04 「4. 정상 처리 순서」](04-relocation-flow.ko.md)가 정의한다.
 
+### 8.3 Aggregate 기록과 이동 대상 목록의 저장 형식
+
+이 절은 aggregate 변경(§8.1의 `SpotWide` User Spot 전체 이동 등)이 Location Store에 남기는
+aggregate 기록, 이동 대상 목록(inventory)과 participant 변경 bytes의 key와 본문 형식을 정한다.
+네 runtime은 같은 key에 같은 bytes를 쓰고 서로가 쓴 record를 읽는다. Location Store
+provider는 이 record를 opaque bytes로만 다루며 의미를 해석하지 않는다
+([02 §4](02-location-store-redis.ko.md#4-conditional-atomic-batch)).
+
+**key.** `{prefix}`는 authority record와 같은 provider storage namespace prefix다. `aggregateId`는
+lowercase canonical UUID(8-4-4-4-12)이고 `aggregateGeneration`과 `index`·`level`은 앞에 0을
+붙이지 않은 10진 정수다.
+
+| Record | Key |
+|---|---|
+| Aggregate 기록 | `{prefix}aggregate:{aggregateId}:{aggregateGeneration}` |
+| 목록 root | `{prefix}aggregate-inventory:{aggregateId}:{aggregateGeneration}:root` |
+| 목록 page | `{prefix}aggregate-inventory:{aggregateId}:{aggregateGeneration}:page:{level}:{index}` |
+| Participant의 새 authority payload | `{prefix}aggregate-inventory:{aggregateId}:{aggregateGeneration}:participant:{index}:authorityPayload` |
+| Participant의 membership 변경 | `{prefix}aggregate-inventory:{aggregateId}:{aggregateGeneration}:participant:{index}:membershipMutation` |
+
+**Participant 변경 bytes.** Participant의 새 authority payload record와 membership 변경 record는
+JSON이 아니라 bytes를 그대로 저장한다. 새 authority payload record는 commit 때 그 participant의
+authority `payload`가 될 application 정의 opaque bytes이고, membership 변경 record는 규범 schema의
+`aggregate-participant-mutation-bytes` 본문 bytes다. 아래 본문 공통 규칙은 이 두 record에 적용하지 않는다.
+
+**본문 공통 규칙.** Aggregate 기록, 목록 root와 page의 본문은 UTF-8 JSON object이며
+[RFC 8785](https://www.rfc-editor.org/rfc/rfc8785)(JSON Canonicalization Scheme, JCS)로
+직렬화한 bytes를 그대로 저장한다. 64-bit 정수(generation)는 10진 문자열, 개수·위치(32-bit 범위)는
+JSON number, SHA-256은 lowercase hex 64자다. 아래 표에 없는 field가 있거나 표의 field가 빠진
+record는 손상된 record로 취급한다. 형식 version field는 두지 않는다 — 이 형식을 쓰는 runtime은
+네 언어를 동시에 올리고, 올리기 전에 진행 중인 aggregate를 끝낸다.
+
+**Aggregate 기록.** 같은 aggregate 변경의 준비 요청 내용과 진행 상태를 담는다. 같은 요청인지는
+`state`를 뺀 나머지 field가 모두 같은지로 판정한다(§8.1의 `AlreadyPrepared`·`Conflict`).
+
+| Field | 형식 | 의미 |
+|---|---|---|
+| `aggregateId`, `aggregateGeneration` | UUID 문자열, 10진 문자열 | Key의 값과 같아야 한다. |
+| `state` | `preparing \| prepared \| committed \| aborted` | 진행 상태다. `preparing`에서 `prepared` 또는 `aborted`로, `prepared`에서 `committed` 또는 `aborted`로만 바뀐다. Relocation phase(`aggregate.relocation.phase`)와 다른 값이다. |
+| `participantCount` | number | 목록 전체 항목 수다. |
+| `inventoryDigestSha256` | hex 64자 | 목록 root의 `digestSha256`과 같은 값이다. |
+| `targetDescriptor` | `{meshName, routingIdHex}` | 준비 요청이 고정한 target MeshNode다. 모양은 authority의 `allocation.descriptor`와 같다(§3.3). |
+| `targetDescriptorLifecycleGeneration` | 10진 문자열 | 준비 요청이 고정한 target 실행 세대다. |
+| `targetOwner` | `{ownerId, ownerLeaseGeneration}` | 준비 요청이 고정한 target owner다. `ownerLeaseGeneration`은 10진 문자열이다. |
+| `capacity` | `{actors, spots, spotType}` | 합산 확보 공간이다. 모양은 authority의 `allocation.capacity`와 같다(§3.3). |
+
+**목록 root와 page.** 목록은 participant를 canonical authority key의 UTF-8 bytes 오름차순으로 정렬해
+0부터 번호(`index`)를 붙인 것이다. Saved-work의 participant ID는 `index + 1`이다(규범 schema의
+`saved-work-vector`). Level 0 page(leaf)는 항목을 담고, level 1 이상 page는 바로 아래 level의
+page reference를 담는다. Page 하나에는 항목이나 reference를 최대 1,024개, encoded 크기 최대 1 MiB까지
+담는다([02 §4](02-location-store-redis.ko.md#4-conditional-atomic-batch)).
+
+Page 분할은 저장 bytes만으로 정해서, 같은 목록은 어느 언어가 써도 같은 page와 확인값이 된다. 항목
+하나의 크기는 authority key(최대 776 bytes)와 `expectedStoreVersion`(최대 4,096 bytes)에 따라 다르므로
+개수만으로는 1 MiB 상한을 지킬 수 없다.
+
+1. Level 0 page는 `index` 순서로 항목을 채운다. 다음 항목을 더하면 그 page의 저장 bytes가 1 MiB를 넘거나
+   항목이 1,025개가 되면 그 항목부터 다음 page를 시작한다. Page `index`는 0부터 1씩 늘어난다.
+2. 한 level의 page가 둘 이상이면 그 위 level을 만든다. Level `L + 1`의 page는 level `L`의 page reference를
+   page `index` 순서로 같은 방법(1 MiB와 1,024개)으로 채운다.
+3. Page가 하나뿐인 level이 가장 위 level이다. Root의 `topLevel`은 그 level이고 `topPages`는 그 page
+   하나의 reference다.
+4. 항목이 0개이면 page를 만들지 않는다. Root는 `totalCount` 0, `topLevel` 0, 빈 `topPages`다.
+
+항목 하나의 저장 bytes는 1 MiB보다 훨씬 작으므로 모든 page는 항목이나 reference를 하나 이상 담는다.
+
+| Record·field | 형식 | 의미 |
+|---|---|---|
+| root `totalCount` | number | 목록 전체 항목 수다. Aggregate 기록의 `participantCount`와 같다. |
+| root `topLevel` | number | 가장 위 page의 level이다. |
+| root `topPages` | reference 배열 | 가장 위 level의 page reference다. |
+| root `digestSha256` | hex 64자 | 목록 전체의 확인값이다(아래 확인값 규칙). |
+| page `level`, `index` | number | Key의 값과 같아야 한다. |
+| page `startIndex`, `entryCount` | number | 이 page 아래에 있는 항목의 첫 `index`와 개수다. |
+| page `entries` | 항목 배열 | Level 0에서만 항목을 담고 level 1 이상에서는 빈 배열이다. |
+| page `children` | reference 배열 | Level 1 이상에서만 reference를 담고 level 0에서는 빈 배열이다. |
+| reference `level`, `index`, `startIndex`, `entryCount` | number | 가리키는 page의 같은 field와 같다. |
+| reference `sha256` | hex 64자 | 가리키는 page의 저장 bytes(JCS bytes) 전체의 SHA-256이다. |
+| 항목 `index` | number | 목록 안의 위치다. |
+| 항목 `authorityKey` | 문자열 | Participant의 canonical authority key다. |
+| 항목 `expectedStoreVersion` | 문자열 | 준비 때 읽은 participant authority의 `StoreVersion`이다. Opaque 값이며 같은지만 비교한다. |
+| 항목 `ownerTransition` | `preserve \| newOwner` | Participant authority의 `aggregate.ownerTransition`과 같다. |
+| 항목 `authorityPayloadSha256`, `membershipMutationSha256` | hex 64자 | 같은 `index`의 participant 변경 bytes record(위 key 표) 저장 bytes의 SHA-256이다. Participant authority의 `aggregate`에 있는 같은 이름의 값과 같다. |
+
+**확인값 규칙.** 확인값은 모두 저장 bytes의 SHA-256이다. 저장 bytes가 JCS bytes이므로 같은 내용은
+어느 언어가 써도 같은 확인값이 된다.
+
+- Page reference의 `sha256`은 가리키는 page record 하나의 저장 bytes 전체(그 page의 모든 field 포함)를
+  입력으로 한다. 항목 하나나 `entries` 배열만 따로 hash하지 않는다.
+- Root의 `digestSha256`은 root object에서 `digestSha256` field만 뺀 object(`totalCount`, `topLevel`,
+  `topPages`)의 JCS bytes를 입력으로 한다. Reference에 아래 page의 확인값이 들어 있으므로 이 값이
+  목록 전체를 고정한다.
+- Aggregate 기록의 `inventoryDigestSha256`은 root의 `digestSha256`과 같은 값이다. 확인값을 따로
+  계산해 두 번 기록하지 않는다.
+- Authority의 `aggregate.relocation.sourceInventorySha256`도 seal 때 고정한 이동 대상 목록 root의
+  `digestSha256`과 같은 값이다. 항목의 `expectedStoreVersion`은 준비 때 읽은 값이므로 이 값은 `preparing`
+  뒤에 바뀌지 않는다. Aggregate 기록이 없는 Actor 하나의 이동은 그 Actor 하나를 항목으로 가진 목록의
+  root `digestSha256`을 쓴다.
+
+목록 root, page와 participant 변경 bytes record는 한 번 쓰면 바꾸지 않는다. 같은
+`(aggregateId, aggregateGeneration)`의 record를 다른 내용으로 다시 쓰지 않으며, 다른 내용이 필요하면
+새 `aggregateGeneration`을 쓴다. Commit 또는 abort 뒤 이 record들의 정리는 §8.1의 진행 정보
+제거 변경이 맡는다.
+
 ## 9. Restore·완료 기록과 Store의 관계
 
 Queue 중지, 동시 이동 수, payload 구성, timer와 Session 처리는
@@ -1590,6 +1707,30 @@ Framework는 각 object의 완료 결과를 object 순서로 저장한다. 같�
 저장한 뒤 Location Store의 payload 위치, checksum, 완료 수와 전달 대기 수를 CAS 한 번으로
 바꾼다.**
 
+완료 기록 payload는 [Relocation Store 공통 blob 형식](03-relocation-store-redis.ko.md)으로 저장하는 JSON object이며
+[RFC 8785](https://www.rfc-editor.org/rfc/rfc8785) canonical 형식으로 직렬화한다. 정수는 부호와 선행 0이 없는 10진수 문자열로 쓴다. `OperationId`는 §3.4 creation terminal key와 같이 big-endian 16 bytes를 소문자 16진수 32자로 쓰고, `ReplyRouteId`(`u64`)는 10진수 문자열로 쓴다. `nodeRid`는 RoutingId raw bytes를 소문자 16진수로 쓴다. `reply`는 [RFC 4648 §4](https://www.rfc-editor.org/rfc/rfc4648#section-4) 표준 base64(padding 포함, 줄바꿈 없음)다. Object 순서는 [Relocation flow §4.2](04-relocation-flow.ko.md#42-source는-실행을-멈추지만-message-수신은-멈추지-않는다)의 UTF-8 authority-key byte 순서다.
+
+| Field | 의미 |
+|---|---|
+| `formatVersion` | 현재 값은 `1`이다. 다른 값은 읽지 않고 `DataLost`로 처리한다. |
+| `relocationId` | 이 기록이 속한 relocation이다. Location Store의 `aggregate.relocation.relocationId`와 같아야 한다. |
+| `entries` | 완료 결과 배열이다. Object 순서, 같은 object 안에서는 source가 request를 수락한 순서로 둔다. |
+| `entries[].objectKey` | 결과를 낸 object의 authority logical key다. |
+| `entries[].source` | 위 표의 source request 정보(`ownerId`, `leaseGeneration`, `nodeRid`, `nodeGeneration`)다. |
+| `entries[].operationId`, `entries[].replyRouteId` | 위 표의 값이다. |
+| `entries[].reply` | 기존 reply 직렬화가 만든 최종 reply bytes를 base64로 쓴 값이다. 성공·실패 결과 모두 여기에 담는다. |
+| `entries[].delivery` | `pending`, `terminalReceived`, `alreadyTerminal`, `sourceLeaseExpired` 중 하나다. 아래 표의 확인 근거를 얻으면 `pending`에서 해당 값으로 한 번만 바뀐다. |
+
+완료 결과를 추가하거나 `delivery`를 바꿀 때는 기존 payload를 고치지 않는다. 새 reference로 전체 payload를 저장하고
+다시 확인한 뒤 `reference`, `sha256`, `completedResults`, `pendingDeliveries`를 CAS 한 번으로 바꾼다. 여러 결과나 확인
+근거를 한 번의 교체로 묶을 수 있다. `completedResults`는 `entries` 수, `pendingDeliveries`는 `delivery`가 `pending`인
+항목 수와 같아야 한다. 다르면 `DataLost`다. 원래 requester에게 reply를 보내는 일은 그 결과를 담은 CAS가 끝난 뒤에만
+한다. 교체로 더 이상 가리키지 않는 이전 payload는 보관 기한 뒤 삭제한다.
+
+전달 중 Store 오류나 연결 끊김이 있으면 target은 같은 실행 안에서 `reference`가 가리키는 payload의 `pending` 항목을 현재 route로 다시 보낸다. Target 실행이 끝난 뒤의 처리는 [Host relocation와 shutdown](05-host-relocation-flow.ko.md)의 장애 계약을 따른다. Target 실행이 끝나면 [실패 정책 §5](06-failure-failover-policy.ko.md#5-host-relocation-장애)대로 다른 runtime이 이 relocation을 이어받지 않으며, 저장한 완료 기록은 그 정책이 object를 다시 활성화하는 경우에만 쓰인다. 그때 그 runtime은 활성화 전에 `pending` 항목의 reply bytes만 다시 보내고, handler, Restore, 끝나지 않은 queue와 target 재선택은 다시 하지 않는다.
+
+결과를 더하면 encoded payload가 [Relocation Store](03-relocation-store-redis.ko.md)의 공통 blob 상한을 넘을 때는 그 request의 reply bytes 대신 `InternalFailure`(failure code `requestFailed`, [Framework error model §2](../00-foundation/07-framework-error-model.ko.md)) 실패 reply를 그 항목의 `reply`로 저장한다. Request는 이미 실행됐고 결과 bytes만 보관하지 못한 것이므로 새 error kind를 두지 않는다. 이미 저장한 항목은 바꾸지 않고 relocation도 실패로 바꾸지 않는다.
+
 수락한 request 수와 완료 결과 수가 같고 전달 대기 수가 0일 때만 `Completed`를 기록한다.
 다르면 복구 오류다.
 
@@ -1600,8 +1741,13 @@ Framework는 각 object의 완료 결과를 object 순서로 저장한다. 같�
 | `SourceLeaseExpired` | Location Store에서 source owner lease가 끝났음을 확인했다. |
 
 Connection 종료나 재연결만으로 완료 결과를 받았다고 판단하지 않는다. Target은 현재 route로
-전달을 계속한다. Source owner lease가 유효한 상태에서 `Relocate` deadline을 넘으면
-`ForceStopped`다. 이 경우 relocation root와 payload, reply bytes를 24시간 보관한다.
+전달을 계속한다. `Relocate` deadline은 `Relocate` 호출만 끝내며 전달을 멈추지 않는다. Framework는
+`pendingDeliveries`가 0이 될 때까지 — 위 표의 확인 근거를 모든 항목이 얻을 때까지 — `aggregate.relocation.completion`과
+`reference`가 가리키는 payload를 유지하고, payload의 data chunk와 맨 앞 목록은 [Relocation Store](03-relocation-store-redis.ko.md)의
+renew 규칙으로 보관 기간을 연장한다. `pendingDeliveries`가 0보다 큰 동안 그 object의 다음 `Relocate`는
+`Blocked/OperationInProgress`로 끝나며, Framework는 그 사유가 전달 대기(pending delivery)임을 `RelocationId`,
+`pendingDeliveries`와 함께 runtime log에 남긴다. 결과에 설명 문자열을 담는 언어는 같은 사유를 그 문자열에도 넣는다.
+`pendingDeliveries`가 0이 되면 기존 terminal cleanup으로 relocation 진행 정보와 payload를 정리한다.
 
 ### 9.4 Relay-ready accepted 전 취소
 
@@ -1838,7 +1984,7 @@ provider conformance test가 store record golden fixture로 관찰하는 key·va
   적용한다. 해제되는 입력(Disabled Actor, member가 없거나 owner가 끝난 member만 남은 User Spot, steady `Ready` Instance Spot의 새 Instance
   intent)은 새 `ObjectGeneration`, 이전 allocation의 공간 반환과 factory 실행 한 번을 확인한다. 해제 조건을
   하나씩 어긴 입력(유효한 lease, `Disabled`가 아니거나 등록되지 않은 type, owner lease가 유효하거나 이동 중인 member가 남은 User Spot, provider 한 batch 상한을 넘는 member, recovery
-  pointer, `Closing`, aggregate·relocation 진행, 일반 message·`Find`)은 authority·membership·수용 공간과
+  pointer, User Spot의 `Closing`, owner lease가 유효한 Actor `Closing`, aggregate·relocation 진행, 일반 message·`Find`)은 authority·membership·수용 공간과
   factory 실행 수가 바뀌지 않음을 확인한다. 생성을 요청한 node와 factory target(Instance는 source와 수신
   target)의 등록 정책이 다른 입력으로 정책의 출처를 확인한다. Owner가 끝난 member가 남은 User Spot의 해제는 그 member
   Actor authority와 수용 공간도 같은 batch에서 해제되고, 이후 같은 ActorId 생성이 새 incarnation으로 시작함을 확인한다.

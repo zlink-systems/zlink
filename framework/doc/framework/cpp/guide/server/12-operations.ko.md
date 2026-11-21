@@ -393,6 +393,19 @@ host lifecycle 상태(preparing · serving · relocating · relocated · drainin
 stopped · error)을 그대로 관측한다. 표기는 언어를 따른다. Status의 relocation·termination 결과는 해당 operation의 terminal 결과와 같아야 한다.
 수치로 보려면 [런타임 메트릭](#2-런타임-메트릭)의 `zlink.host.*` 계기를 사용한다.
 
+#### 8.1.1 요청 수락 전 Serving 대기 {#wait-for-serving}
+
+응용에서 요청을 받기 전에 runtime 상태를 구독하고 `Serving`을 확인한다. 구독의 첫 상태에는
+등록 시점의 상태가 반영되므로 이미 `Serving`이면 다음 전이를 기다릴 필요가 없다. 첫 상태도
+더 최근 snapshot과 합쳐질 수 있다. 업무에 필요한 component readiness는
+[운영 호출과 readiness 연결](#5-운영-호출과-readiness-연결)에서 함께 확인한다.
+
+`Serving`을 확인하면 시작 대기를 끝내고 해당 관찰을 종료한다. 먼저 `Error` 또는 `Stopped`를
+관찰하거나, 관찰이 실패하거나 취소되거나 상태를 확인하기 전에 끝나면 요청 수락을 시작하지 않는다.
+관찰을 취소해도 runtime과 다른 구독은 계속 동작한다.
+
+`observe(capacity, observer)`의 callback에서 `status.state`를 `framework_runtime_state_t::serving`과 비교한다. 대기가 끝나면 반환된 observation handle의 소유권을 해제한다.
+
 ### 8.2 같은 RoutingId로 재시작
 
 Fixed RoutingId를 사용하는 서버를 강제 종료한 직후 다시 시작하면 이전 process의 owner lease가

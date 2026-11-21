@@ -222,6 +222,14 @@ export class ZLinkActorTransferRuntime {
     this.options.spotManager()?.captureSourceActorPacketPrefix(actor);
   }
 
+  beginRelocationTargetIngress(
+    actorId: string,
+    objectGeneration: bigint
+  ): (reason?: unknown) => void {
+    this.options.actorHandoff.beginProvisional(actorId, objectGeneration);
+    return (reason) => this.options.actorHandoff.cancel(actorId, reason);
+  }
+
   /** Relocation activation owns admission; handler terminals are observed independently. */
   admitRelocationPrefix(
     actor: ZLinkActor,
@@ -229,7 +237,7 @@ export class ZLinkActorTransferRuntime {
     packets: readonly ZLinkActorHandoffPacket[],
     start: Promise<void>,
     onResult: (packet: ZLinkActorHandoffPacket, result: ZLinkActorHandoffResult) => Promise<void>
-  ): void {
+  ): Promise<void> {
     const manager = this.options.spotManager();
     if (manager === undefined) throw new Error('Relocated Actor has no local FIFO owner.');
     const admitted = this.options.actorHandoff.admitTransferredPrefix(
@@ -240,10 +248,12 @@ export class ZLinkActorTransferRuntime {
       this.options.prepareApplicationJob,
       start,
       (packet, result) => {
-        void this.observeHandoffReplay(onResult(packet, result));
+        const delivery = onResult(packet, result);
+        void this.observeHandoffReplay(delivery);
+        return delivery;
       }
     );
-    void this.observeHandoffReplay(admitted.terminal);
+    return admitted.terminal;
   }
 
   async completeDeferredActorHandoff(
