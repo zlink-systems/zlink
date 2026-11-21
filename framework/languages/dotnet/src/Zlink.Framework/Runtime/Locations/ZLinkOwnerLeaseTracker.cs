@@ -32,24 +32,20 @@ internal sealed class ZLinkOwnerLeaseTracker
     internal async ValueTask<bool> IsOwnerLiveAsync(
         string ownerId,
         CancellationToken cancellationToken = default
+    ) => await ReadLiveSnapshotAsync(ownerId, cancellationToken).ConfigureAwait(false) is not null;
+
+    internal async ValueTask<Snapshot?> ReadLiveSnapshotAsync(
+        string ownerId,
+        CancellationToken cancellationToken
     )
     {
         var (snapshot, fromCache) = await GetSnapshotAsync(ownerId, cancellationToken)
             .ConfigureAwait(false);
-        if (snapshot.Token is not null)
-            return IsUnexpired(snapshot);
 
-        // A cached "no lease" answer must not decide a caller that treats the
-        // result as terminal. An owner that has just published its lease still
-        // reads as missing for the rest of the polling interval, and callers
-        // like the remote join target resolver turn that into a NotFound they
-        // never retry. Confirm a negative against the store once before it is
-        // allowed to stand. Positive answers keep using the cache.
-        if (!fromCache)
-            return false;
-        var confirmed = await RefreshSnapshotAsync(ownerId, cancellationToken)
-            .ConfigureAwait(false);
-        return confirmed.Token is not null && IsUnexpired(confirmed);
+        // Confirm a cached absence before a caller treats it as terminal.
+        if (snapshot.Token is null && fromCache)
+            snapshot = await RefreshSnapshotAsync(ownerId, cancellationToken).ConfigureAwait(false);
+        return snapshot.Token is not null && IsUnexpired(snapshot) ? snapshot : null;
     }
 
     internal async ValueTask<bool> IsOwnerTokenLiveAsync(
@@ -81,14 +77,21 @@ internal sealed class ZLinkOwnerLeaseTracker
     {
         var (snapshot, _) = await GetSnapshotAsync(token.OwnerId, cancellationToken)
             .ConfigureAwait(false);
+        return GetAdmissionLifetime(snapshot, token)?.Remaining;
+    }
+
+    internal (long MeasuredAt, TimeSpan Lifetime, TimeSpan Remaining)? GetAdmissionLifetime(
+        Snapshot snapshot,
+        ZLinkLocationOwnerToken token
+    )
+    {
         if (snapshot.Token != token)
             return null;
-        var remaining =
-            snapshot.LeaseExpiresAt
-            - snapshot.StoreNow
-            - _time.GetElapsedTime(snapshot.FetchedAt)
-            - _options.OwnerLeaseFencingMargin;
-        return remaining > TimeSpan.Zero ? remaining : null;
+
+        var lifetime =
+            snapshot.LeaseExpiresAt - snapshot.StoreNow - _options.OwnerLeaseFencingMargin;
+        var remaining = lifetime - _time.GetElapsedTime(snapshot.FetchedAt);
+        return remaining > TimeSpan.Zero ? (snapshot.FetchedAt, lifetime, remaining) : null;
     }
 
     private async ValueTask<(Snapshot Snapshot, bool FromCache)> GetSnapshotAsync(
@@ -149,7 +152,7 @@ internal sealed class ZLinkOwnerLeaseTracker
         snapshot.LeaseExpiresAt - snapshot.StoreNow - _time.GetElapsedTime(snapshot.FetchedAt)
         > TimeSpan.Zero;
 
-    private sealed record Snapshot(
+    internal sealed record Snapshot(
         ZLinkLocationOwnerToken? Token,
         DateTimeOffset LeaseExpiresAt,
         DateTimeOffset StoreNow,

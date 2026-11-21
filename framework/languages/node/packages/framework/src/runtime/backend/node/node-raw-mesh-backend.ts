@@ -176,6 +176,7 @@ const ACTOR_JOIN_ADVERTISED_RECEIVE_CHUNK_LIMIT_BYTES = 32 * 1024;
  */
 export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   readonly nativeInstance = this;
+  readonly acceptsPackedChannelFrames = true as const;
 
   private readonly channels = new Map<string, number>();
   private readonly peerIntents = new Map<
