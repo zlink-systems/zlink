@@ -9,6 +9,10 @@ namespace Zlink.Framework.Runtime.Locations;
 
 internal sealed partial class ZLinkInMemoryLocationStore
 {
+    private readonly Dictionary<string, EntrySpotIdClaim> _entrySpotIdClaims = new(
+        StringComparer.Ordinal
+    );
+
     private readonly Dictionary<string, ZLinkAuthoritySnapshot> _authorities = new(
         StringComparer.Ordinal
     );
@@ -427,6 +431,77 @@ internal sealed partial class ZLinkInMemoryLocationStore
         });
     }
 
+    private EntrySpotIdClaim? ReadLiveEntrySpotClaimNoLock(string spotId, DateTimeOffset now) =>
+        _entrySpotIdClaims.TryGetValue(spotId, out var claim)
+        && MatchesLiveOwnerLease(claim.Owner, now)
+            ? claim
+            : null;
+
+    private bool TryClaimEntrySpotIdNoLock(
+        ZLinkMeshNodeDescriptor? previous,
+        ZLinkMeshNodeDescriptor descriptor,
+        string descriptorKey,
+        DateTimeOffset now
+    )
+    {
+        var entrySpotId = descriptor.EntrySpotId;
+        var claim = new EntrySpotIdClaim(descriptorKey, descriptor);
+        if (entrySpotId is not null)
+        {
+            if (ReadLiveEntrySpotClaimNoLock(entrySpotId, now) is { } existing)
+                return existing == claim;
+            if (_authorities.ContainsKey(ZLinkAuthorityKeyCodec.EncodeSpot(entrySpotId).Value))
+                return false;
+        }
+
+        if (previous is not null && previous.EntrySpotId != entrySpotId)
+            RemoveEntrySpotIdClaimNoLock(previous, descriptorKey);
+        if (entrySpotId is not null)
+            _entrySpotIdClaims[entrySpotId] = claim;
+        return true;
+    }
+
+    private void RemoveEntrySpotIdClaimNoLock(
+        ZLinkMeshNodeDescriptor descriptor,
+        string descriptorKey
+    )
+    {
+        if (
+            descriptor.EntrySpotId is { } entrySpotId
+            && _entrySpotIdClaims.TryGetValue(entrySpotId, out var claim)
+            && claim == new EntrySpotIdClaim(descriptorKey, descriptor)
+        )
+            _entrySpotIdClaims.Remove(entrySpotId);
+    }
+
+    private void ReleaseOwnerEntrySpotClaimsNoLock(ZLinkLocationOwnerToken owner)
+    {
+        foreach (var (spotId, claim) in _entrySpotIdClaims)
+        {
+            if (
+                claim.Owner == owner
+                && _meshNodes.Rows.TryGetValue(claim.DescriptorKey, out var row)
+                && row.EntrySpotId == spotId
+                && claim == new EntrySpotIdClaim(claim.DescriptorKey, row)
+            )
+                _entrySpotIdClaims.Remove(spotId);
+        }
+    }
+
+    private readonly record struct EntrySpotIdClaim(
+        string DescriptorKey,
+        ulong DescriptorLifecycleGeneration,
+        ZLinkLocationOwnerToken Owner
+    )
+    {
+        internal EntrySpotIdClaim(string descriptorKey, ZLinkMeshNodeDescriptor descriptor)
+            : this(
+                descriptorKey,
+                descriptor.LifecycleGeneration,
+                new ZLinkLocationOwnerToken(descriptor.OwnerId, descriptor.LeaseGeneration)
+            ) { }
+    }
+
     public ValueTask<ZLinkObjectReserveResult> ReserveAsync(
         ZLinkObjectReservationRequest request,
         CancellationToken cancellationToken = default
@@ -442,11 +517,8 @@ internal sealed partial class ZLinkInMemoryLocationStore
                 request.ObjectKind
                     is ZLinkPlacementObjectKind.UserSpot
                         or ZLinkPlacementObjectKind.InstanceSpot
-                && Zlink.Framework.Runtime.Spots.ZLinkUserSpotAuthorityPayloadCodec.TryGetSpotId(
-                    request.Key,
-                    out var spotId
-                )
-                && _entrySpotIdClaims.ContainsKey(spotId)
+                && ZLinkAuthorityKeyCodec.TryDecodeSpot(request.Key, out var spotId)
+                && ReadLiveEntrySpotClaimNoLock(spotId, now) is not null
             )
                 return new ZLinkObjectReserveResult.Conflict(
                     new ZLinkAuthorityReadResult.Missing(now)

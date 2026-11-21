@@ -2,6 +2,7 @@ using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Messaging;
 using Zlink.Framework.Runtime.Service;
+using Zlink.Framework.Runtime.Spots;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
@@ -27,6 +28,7 @@ public sealed partial class EntrySpotActorDispatchTests
             var source = local with
             {
                 Rid = RoutingId.From("new-client"),
+                EntrySpotId = ZLinkSpotId.CreateEntrySpotId(local.MeshName),
                 LifecycleGeneration = 77UL,
                 Endpoint = "inproc://new-client",
                 DescriptorRevision = 1,
