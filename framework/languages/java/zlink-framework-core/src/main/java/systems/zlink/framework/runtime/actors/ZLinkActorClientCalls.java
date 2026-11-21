@@ -8,6 +8,7 @@ import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import systems.zlink.framework.runtime.internal.calls.ZLinkRequestStages;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRequestMetrics;
 import systems.zlink.framework.runtime.messaging.ZLinkPacketNames;
 
@@ -124,6 +125,12 @@ public final class ZLinkActorClientCalls implements ZLinkActorClient {
 
         @Override
         public <TReply> ZLinkRequestStage<TReply> submit(Class<TReply> replyType) {
+            return submit(replyType, false);
+        }
+
+        private <TReply> ZLinkRequestStage<TReply> submit(
+                Class<TReply> replyType, boolean releaseTurn) {
+            ZLinkSuspendInvocationContext.validateActorRequest(actorId, releaseTurn);
             CompletionStage<TReply> duplicate = ZLinkOneWayCalls.beginOneWay(submitGate, this);
             if (duplicate != null)
                 return ZLinkRequestStages.observe(duplicate, new CompletableFuture<>());
@@ -132,10 +139,7 @@ public final class ZLinkActorClientCalls implements ZLinkActorClient {
         }
 
         private <TReply> CompletionStage<TReply> submitReply(Class<TReply> replyType) {
-
             try (var flowScope = runtime.enterApplicationFlow()) {
-                systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
-                        .rejectSameActorWait(actorId);
                 ZLinkInternalSpotNode node = runtime.spotNode.get();
                 ZLinkRequestMetrics.Series metric = ZLinkRequestMetrics.actor(node.name());
                 long started =
@@ -171,9 +175,7 @@ public final class ZLinkActorClientCalls implements ZLinkActorClient {
 
         @Override
         public <TReply> CompletionStage<TReply> yield(Class<TReply> replyType) {
-            systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
-                    .requireYieldAllowed("Actor request");
-            return ZLinkSerialExecutionQueue.yieldCurrent(submit(replyType));
+            return ZLinkSerialExecutionQueue.yieldCurrent(submit(replyType, true));
         }
     }
 }
