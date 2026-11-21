@@ -897,13 +897,13 @@ test('mailbox seal captures queued work, holds new ingress, and restores or rela
   assert.equal(mailbox.tryClaim('application', 16, 1_024), undefined);
   const infrastructure = mailbox.tryClaim('infrastructure', 4, 256);
   assert.ok(infrastructure);
-  assert.equal(firstPart(infrastructure.records[0]!), 'probe');
+  assert.equal(firstPart(infrastructure.records![0]!), 'probe');
   assert.equal(mailbox.release(infrastructure), true);
 
   assert.equal(mailbox.abortRelocation(first), true);
   const restored = mailbox.tryClaim('application', 16, 1_024);
   assert.ok(restored);
-  assert.deepEqual(restored.records.map(firstPart), ['one', 'two', 'three']);
+  assert.deepEqual(restored.records!.map(firstPart), ['one', 'two', 'three']);
   assert.equal(mailbox.release(restored), true);
 
   assert.equal(mailbox.tryEnqueue(mailboxRecord('spot:room', 'application', 'four')), true);
@@ -927,7 +927,7 @@ test('relocation ingress hold adds no relocation-specific message or byte cap', 
   assert.equal(byCount.tryEnqueue(mailboxRecord('spot:count', 'application', 'overflow')), true);
   assert.equal(byCount.abortRelocation(countSeal), true);
   const restored = byCount.tryClaim('application', 2048, 32 * 1024 * 1024);
-  assert.equal(restored?.records.length, 1025);
+  assert.equal(restored?.records!.length, 1025);
   assert.ok(restored);
   assert.equal(byCount.release(restored), true);
   byCount.close();
