@@ -1,4 +1,4 @@
-import { AsyncLocalStorage } from 'node:async_hooks';
+import { FrameworkContextField } from '../framework-context';
 import { ZLinkConfigurationException } from '../configuration';
 
 interface DeferredActorJoin {
@@ -68,7 +68,7 @@ class ActorJoinRegistrationScope {
   }
 }
 
-const actorJoinScope = new AsyncLocalStorage<ActorJoinRegistrationScope>();
+const actorJoinScope = new FrameworkContextField<ActorJoinRegistrationScope>();
 
 export function deferActorJoin(intent: DeferredActorJoin): void {
   const scope = actorJoinScope.getStore();
