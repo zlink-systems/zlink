@@ -973,8 +973,10 @@ MeshNode lifecycle 재시작에서 바뀌지 않을 수 있기 때문이다. Rec
 않고 기존 조건만 검사한다. 해제자는 해당 authority record에 기록된 owner token이 Store exact
 read에서 무효 — 그 token의 owner lease record가 `Missing`, 다른 `LeaseGeneration`, 또는
 `ExpiresAt ≤ StoreNow`인 만료 record — 인 것을 처음 관찰한 순간을 자기 local monotonic의 `t0`로
-기록한다. User Spot member 해제에도 각 owner token에 같은 규칙을 적용한다. 다른 authority
-token으로 관찰을 넘겨 쓰지 않는다. Authority record 자체가 `Missing`이면 해제할 record가 없으므로
+기록한다. User Spot member 해제에도 각 owner token에 같은 규칙을 적용한다. `t0`는 owner token(owner id와
+`LeaseGeneration`)마다 하나다. 같은 token을 기록한 다른 authority record를 해제할 때는 그 token에
+이미 기록한 `t0`를 그대로 쓴다. 대기는 옛 owner lease의 무효에서 유도되며 record 주소와 관계없기
+때문이다. 다른 authority token으로 관찰을 넘겨 쓰지 않는다. Authority record 자체가 `Missing`이면 해제할 record가 없으므로
 이 대기를 적용하지 않고 §7의 생성 절차를 그대로 따른다.
 
 해제 CAS는 **`t0 + 3·margin`** 이후에만 허용한다. 대기 산식은 보존 활성 시의
