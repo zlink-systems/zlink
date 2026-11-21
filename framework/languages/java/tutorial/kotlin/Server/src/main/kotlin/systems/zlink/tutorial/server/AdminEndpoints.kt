@@ -1,10 +1,13 @@
 package systems.zlink.tutorial.server
 
+import org.springframework.http.ResponseEntity
+import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
 import systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime
 
 /** The only HTTP this node serves. Everything else it does arrives over the mesh. */
 @RestController
@@ -26,4 +29,13 @@ class AdminEndpoints(private val mesh: ZLinkRouteMeshRuntimeOptions) {
 
     data class WeightChanged(val channel: String, val weight: Int)
     // --8<-- [end:weight-runtime]
+}
+
+@RestController
+class HostReadinessEndpoints(private val runtime: ZLinkFrameworkRuntime) {
+
+    @GetMapping("/ops/ready")
+    fun readiness(): ResponseEntity<Void> =
+        if (runtime.status().isReady()) ResponseEntity.ok().build()
+        else ResponseEntity.status(503).build()
 }
