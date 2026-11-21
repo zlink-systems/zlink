@@ -1,3 +1,6 @@
+/** Reused when terminal cleanup aborts local waits and removes subscriptions. */
+export const NORMAL_COMPLETION = new DOMException('This operation was aborted', 'AbortError');
+
 /** The typed cancellation error produced by Framework admission helpers. */
 export class ZLinkAbortError extends Error {
   constructor(message = 'The operation was aborted.') {
