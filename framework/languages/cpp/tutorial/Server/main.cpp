@@ -11,6 +11,7 @@
 #include "spots/lobby_spot.hpp"
 #include "spots/match_queue.hpp"
 #include "sessions/game_session.hpp"
+#include "../Shared/host_readiness_handler.hpp"
 
 #include <zlink/framework.hpp>
 #include <zlink/locations/redis.hpp>
@@ -144,6 +145,7 @@ int main (int argc, char **argv)
         // Client's 5180 when both run on the same host.
         options.http ()
           .listen ("http://127.0.0.1:5181")
+          .map_get<host_readiness_http_handler_t> ("/ops/ready")
           .map_post<authenticated_channel_weight_handler_t> ("/admin/channels/{channel}/weight");
     });
 
