@@ -73,7 +73,7 @@ export class ZLinkRequestSourceResolver {
     stableType: string,
     node: ZLinkBackendMeshNode | undefined,
     signal?: AbortSignal,
-    excludedNodeRids?: ReadonlySet<string>
+    excludedHostRuns?: ReadonlyMap<string, bigint>
   ): Promise<ZLinkMeshNodeDescriptor | undefined> {
     // An absent mesh has no discovery observation yet (startup or after clear()).
     // An observed empty snapshot already establishes that no target is available.
@@ -100,7 +100,8 @@ export class ZLinkRequestSourceResolver {
           return (
             descriptor.objectRole === 'server' &&
             descriptor.placementWeight > 0 &&
-            excludedNodeRids?.has(encodeRoutingIdStorageHex(descriptor.rid)) !== true &&
+            excludedHostRuns?.get(encodeRoutingIdStorageHex(descriptor.rid)) !==
+              descriptor.lifecycleGeneration &&
             capability !== undefined &&
             (kind !== 'actor' ||
               (descriptor.entrySpotId !== undefined && capability.entryAccepted)) &&
