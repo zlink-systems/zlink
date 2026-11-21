@@ -16,6 +16,7 @@
 #include "api/message/request_result_internal.hpp"
 #include "api/message/submit_result_internal.hpp"
 #include "core/msg.hpp"
+#include "core/command.hpp"
 #include "core/pipe.hpp"
 #include "utils/routing_id.hpp"
 
@@ -32,9 +33,20 @@ struct pending_pair_observer_t
         accounted_bytes (0),
         reserved_pipe (NULL),
         reservation_committed (false),
+        deferred_command (),
         request_wait (NULL),
         observer_errno (0)
     {
+    }
+
+    ~pending_pair_observer_t ()
+    {
+        if (publication_lock.owns_lock ())
+            publication_lock.unlock ();
+        // The pipe write is already published, so a sleeping reader must still
+        // be woken even when this admission attempt does not reach dispatch.
+        if (deferred_command.destination)
+            zlink::object_t::send_prepared_command (deferred_command);
     }
 
     // The observer lives through the single physical admission attempt.
@@ -47,6 +59,9 @@ struct pending_pair_observer_t
     uint64_t accounted_bytes;
     zlink::pipe_t *reserved_pipe;
     bool reservation_committed;
+    // A non-null destination owns the retained wake-command reference until
+    // dispatch transfers it to the mailbox.
+    zlink::command_t deferred_command;
     zlink::socket_completion::request_writable_wait_t *request_wait;
     int observer_errno;
     std::unique_lock<std::mutex> publication_lock;
@@ -68,15 +83,34 @@ uint64_t request_correlation_accounted_bytes (
     return total == 0 ? 1 : total;
 }
 
-bool publish_pending_pair_before_flush (
-  zlink::pipe_t *pipe_, void *userdata_,
-  zlink::pipe_write_observer_phase_t phase_)
+bool publish_pending_pair_before_flush (zlink::pipe_t *pipe_,
+                                        void *userdata_,
+                                        zlink::pipe_write_observer_phase_t phase_,
+                                        zlink::command_t *command_)
 {
     pending_pair_observer_t *observer =
       static_cast<pending_pair_observer_t *> (userdata_);
-    if (!observer || !observer->state
-        || observer->identity.request_seq == 0
-        || observer->identity.cookie == 0) {
+    if (!observer)
+        return false;
+
+    if (phase_ == zlink::pipe_write_observer_defer_command) {
+        if (!command_ || command_->type != zlink::command_t::activate_read || !command_->destination
+            || observer->deferred_command.destination)
+            return false;
+        observer->deferred_command = *command_;
+        return true;
+    }
+    if (phase_ == zlink::pipe_write_observer_has_deferred_command)
+        return observer->deferred_command.destination != NULL;
+    if (phase_ == zlink::pipe_write_observer_dispatch_deferred_command) {
+        if (!observer->deferred_command.destination)
+            return false;
+        zlink::object_t::send_prepared_command (observer->deferred_command);
+        observer->deferred_command.destination = NULL;
+        return true;
+    }
+
+    if (!observer->state || observer->identity.request_seq == 0 || observer->identity.cookie == 0) {
         errno = ECANCELED;
         return false;
     }
