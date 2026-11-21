@@ -216,10 +216,17 @@ final class JavaTargetContractGapTest {
 
         Class<?> streamError = Class.forName("systems.zlink.framework.streams.ZLinkStreamError");
         assertEquals(
-                List.of("error", "message"),
+                List.of("error", "message", "disconnectReason"),
                 Arrays.stream(streamError.getRecordComponents())
                         .map(component -> component.getName())
                         .toList());
+        assertEquals(
+                "java.util.Optional<systems.zlink.framework.streams.ZLinkDisconnectReason>",
+                streamError.getMethod("disconnectReason").getGenericReturnType().getTypeName());
+        Class<?> streamSessionError =
+                Class.forName("systems.zlink.framework.streams.ZLinkStreamSessionError");
+        assertNotNull(streamError.getConstructor(streamSessionError, String.class));
+        assertNotNull(streamError.getConstructor(streamSessionError, String.class, Optional.class));
         assertClassAbsent("systems.zlink.framework.streams.ZLinkStreamDiagnostic");
     }
 
