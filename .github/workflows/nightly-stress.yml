@@ -111,7 +111,7 @@ jobs:
         if: ${{ steps.vcpkg-cache.outputs.cache-hit != 'true' }}
         run: |
           set -euo pipefail
-          "${VCPKG_ROOT}/vcpkg" install \
+          bash scripts/ci/vcpkg-install.sh \
             opentelemetry-cpp:x64-linux \
             'redis-plus-plus[async-std]:x64-linux' \
             --x-install-root="${VCPKG_INSTALLED_DIR}" \
