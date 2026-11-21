@@ -1451,7 +1451,7 @@ int main (int argc, char **argv)
     ok &= require_exists (
       root / "tests/Zlink.Framework.UnitTests/test_cpp_framework_handler_registry.cpp");
     ok &= require_exists (
-      root / "tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector.cpp");
+      root / "tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_main.cpp");
     ok &= require_exists (
       root / "tests/Zlink.Unreal.Stream.Connector.Tests/test_unreal_stream_connector.cpp");
     const auto old_unreal_connector_dir = std::string ("unreal") + "-connector";
