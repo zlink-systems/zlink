@@ -2,7 +2,10 @@ namespace Zlink.Framework.Runtime.Locations;
 
 internal sealed class ZLinkLiveLocationRows(ZLinkOwnerLeaseTracker leaseTracker)
 {
-    public async ValueTask<(TRow? Row, bool LiveRowPresent)> ResolveWithPresenceAsync<TRow>(
+    public async ValueTask<(
+        TRow? Row,
+        ZLinkOwnerLeaseTracker.Snapshot? Lease
+    )> ResolveWithPresenceAsync<TRow>(
         TRow? row,
         Func<TRow, string> ownerOf,
         CancellationToken cancellationToken
@@ -10,21 +13,22 @@ internal sealed class ZLinkLiveLocationRows(ZLinkOwnerLeaseTracker leaseTracker)
         where TRow : class
     {
         if (row is null)
-            return (null, false);
+            return (null, null);
 
-        if (
-            !await leaseTracker
-                .IsOwnerLiveAsync(ownerOf(row), cancellationToken)
-                .ConfigureAwait(false)
-        )
+        var owner = ownerOf(row);
+        var lease = await leaseTracker
+            .ReadLiveSnapshotAsync(owner, cancellationToken)
+            .ConfigureAwait(false);
+        if (lease is null)
         {
-            Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"live_row_rejected reason=owner_not_live owner={ownerOf(row)}"
-            );
-            return (null, false);
+            if (Diagnostics.ZLinkFrameworkDebugLog.SpotDiscoveryEnabled)
+                Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
+                    $"live_row_rejected reason=owner_not_live owner={owner}"
+                );
+            return (null, null);
         }
 
-        return (row, true);
+        return (row, lease);
     }
 
     public async ValueTask<IReadOnlyList<TRow>> FilterAsync<TRow>(

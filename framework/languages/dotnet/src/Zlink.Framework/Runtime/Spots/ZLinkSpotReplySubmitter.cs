@@ -10,16 +10,18 @@ internal static class ZLinkSpotReplySubmitter
         try
         {
             if (received.CanReply)
-            {
-                var result = received.Reply(replyParts);
-                if (result != SubmitResult.Ok)
-                    throw new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)result);
-            }
+                EnsureSubmitted(received.Reply(replyParts));
         }
         finally
         {
             ZLinkMessageParts.DisposeAll(replyParts);
         }
+    }
+
+    internal static void EnsureSubmitted(SubmitResult result)
+    {
+        if (result != SubmitResult.Ok)
+            throw new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)result);
     }
 
     public static async ValueTask SubmitDirectAsync(
