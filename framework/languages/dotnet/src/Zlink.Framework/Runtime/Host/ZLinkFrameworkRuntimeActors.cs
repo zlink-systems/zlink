@@ -3749,14 +3749,16 @@ internal sealed partial class ZLinkFrameworkRuntime
         string actorId,
         ZlinkStreamHeader header,
         Message payload,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        Action<ZLinkActorReply>? registerReply = null
     ) =>
         SubmitActorForReplyAsync(
             actorId,
             header,
             payload,
             relocationReplay: false,
-            cancellationToken
+            cancellationToken,
+            registerReply
         );
 
     internal ValueTask<ZLinkActorReply> SubmitActorForReplyAsync(
@@ -3764,7 +3766,8 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZlinkStreamHeader header,
         Message payload,
         bool relocationReplay,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        Action<ZLinkActorReply>? registerReply = null
     )
     {
         return _actorSessionManager.SubmitActorForReplyAsync(
@@ -3772,7 +3775,8 @@ internal sealed partial class ZLinkFrameworkRuntime
             header,
             payload,
             relocationReplay,
-            cancellationToken
+            cancellationToken,
+            registerReply
         );
     }
 
@@ -4983,15 +4987,6 @@ internal sealed partial class ZLinkFrameworkRuntime
     internal bool SendActorBoundSession(string actorId, IReadOnlyList<Message> parts)
     {
         return _actorBoundSessionCoordinator.Send(actorId, parts);
-    }
-
-    internal bool SendActorBoundSessionIfCurrent(
-        string actorId,
-        string expectedBindingToken,
-        IReadOnlyList<Message> parts
-    )
-    {
-        return _actorBoundSessionCoordinator.SendIfBoundTo(actorId, expectedBindingToken, parts);
     }
 
     internal ValueTask<ZLinkOneWaySubmitResult> SendActorBoundSessionIfCurrentAsync(
