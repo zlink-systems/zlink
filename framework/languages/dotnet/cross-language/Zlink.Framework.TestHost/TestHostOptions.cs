@@ -30,7 +30,9 @@ internal sealed record TestHostOptions(
     string? OutageControlPrefix = null,
     string? OutageRunId = null,
     string? OutageOrder = null,
-    string? StartFilePath = null
+    string? StartFilePath = null,
+    string? RestartFilePath = null,
+    bool EntryJoin = false
 )
 {
     public static TestHostOptions Parse(string[] args)
@@ -68,6 +70,8 @@ internal sealed record TestHostOptions(
         public string? OutageRunId { get; set; }
         public string? OutageOrder { get; set; }
         public string? StartFilePath { get; set; }
+        public string? RestartFilePath { get; set; }
+        public bool EntryJoin { get; set; }
         public string? Mode { get; set; }
         public string? ReadyFilePath { get; set; }
         public string? StopFilePath { get; set; }
@@ -110,6 +114,12 @@ internal sealed record TestHostOptions(
                     break;
                 case "--start-file":
                     StartFilePath = readValue();
+                    break;
+                case "--restart-file":
+                    RestartFilePath = readValue();
+                    break;
+                case "--entry-join":
+                    EntryJoin = readValue() == "1";
                     break;
                 case "--ready-file":
                     ReadyFilePath = readValue();
@@ -221,7 +231,9 @@ internal sealed record TestHostOptions(
                 OutageControlPrefix,
                 OutageRunId,
                 OutageOrder,
-                StartFilePath
+                StartFilePath,
+                RestartFilePath,
+                EntryJoin
             );
         }
     }

@@ -222,6 +222,15 @@ for (const entry of [false, true]) {
     const state = new ZLinkActorRuntimeState(ref.actorId);
 
     state.setNativeActorRef(ref);
+    const resolveTarget = async (spotId) => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return {
+        routerChannelId: 'mesh',
+        targetNodeRid: 'target',
+        targetSpotGeneration: 1n,
+        spotId
+      };
+    };
     const coordinator = new ZLinkActorNativeJoinCoordinator({
       node,
       completionTableProvider: () => ({
@@ -236,18 +245,8 @@ for (const entry of [false, true]) {
           });
         }
       }),
-      entrySpotIdProvider: () => 'entry',
-      spotRouteResolver: {
-        async resolve(spotId) {
-          await new Promise((resolve) => setTimeout(resolve, 20));
-          return {
-            routerChannelId: 'mesh',
-            targetNodeRid: 'target',
-            targetSpotGeneration: 1n,
-            spotId
-          };
-        }
-      },
+      entrySpotTargetSelector: () => resolveTarget('entry'),
+      spotRouteResolver: { resolve: resolveTarget },
       actorJoinRelocation: {
         async relocateActorJoin(input) {
           hostD = input.deadlineAtMs;

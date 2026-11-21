@@ -2770,7 +2770,7 @@ test('Ready Instance application admission preserves generation and owner error 
   storeHarness.runtime.close();
 });
 
-test('remote Entry Spot actor join derives the well-known node route fence', async () => {
+test('remote Entry Spot actor join carries the selected descriptor route', async () => {
   const requests: Array<{
     readonly target: string;
     readonly header: ReturnType<typeof decodeStatefulHeader>;
@@ -2801,7 +2801,7 @@ test('remote Entry Spot actor join derives the well-known node route fence', asy
         encodeStatefulReply(header.correlation, RequestResult.Ok, 0, {
           kind: 'actorJoin',
           joinResult: 0,
-          spot: { spotId: 'entry-node', generation: 7n },
+          spot: { spotId: 'entry-spot-uuid', generation: 7n },
           membershipEpoch: 2n
         })
       ];
@@ -2809,8 +2809,15 @@ test('remote Entry Spot actor join derives the well-known node route fence', asy
   } as unknown as RawServiceMeshRuntime;
   const runtime = withTestSessionOwners(new ServiceStatefulRuntime(raw, 'actor-node', 3n));
   const actor = runtime.createActor('remote-entry-actor').ref;
+  const selected = {
+    spot: { spotId: 'entry-spot-uuid', generation: 7n },
+    targetNodeRid: 'entry-node',
+    targetNodeGeneration: 7n,
+    authorityOwnerGeneration: 7n,
+    ownerLeaseGeneration: 37n
+  };
 
-  const result = await runtime.joinActorEntrySpot(actor, 'entry-node', undefined, 1_000).promise;
+  const result = await runtime.joinActorEntrySpot(actor, selected, undefined, 1_000).promise;
 
   assert.equal(result.terminalResult, RequestResult.Ok);
   assert.equal(requests.length, 1);
@@ -2819,11 +2826,11 @@ test('remote Entry Spot actor join derives the well-known node route fence', asy
   if (requests[0]!.header.kind === 'actorJoin') {
     assert.equal(requests[0]!.header.entry, true);
     assert.deepEqual(requests[0]!.header.target, {
-      spot: { spotId: 'entry-node', generation: 7n },
+      spot: { spotId: 'entry-spot-uuid', generation: 7n },
       targetNodeRid: 'entry-node',
       targetNodeGeneration: 7n,
       authorityOwnerGeneration: 7n,
-      ownerLeaseGeneration: 7n
+      ownerLeaseGeneration: 37n
     });
   }
   runtime.close();

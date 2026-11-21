@@ -288,10 +288,10 @@ class RelocationActor {
 
   async onJoinCompleted(completion) {
     if (completion.status === 'failed') {
-      appendEvent(`user-spot-join-failed|kind=${errorKindName(completion.kind)}`);
+      appendEvent(`user-spot-join-failed|kind=${errorKindName(completion.kind)}|actor=${this.actorId}`);
       return;
     }
-    appendEvent(`user-spot-join-completed|status=${completion.status}`);
+    appendEvent(`user-spot-join-completed|status=${completion.status}|actor=${this.actorId}`);
   }
 }
 
@@ -335,7 +335,12 @@ class RelocationEntrySpot {
     return { accepted: true };
   }
 
-  async onJoinedActor() {}
+  // An existing Actor's application join to this Entry Spot commits its
+  // membership here (spec 03-spot-actor/01-spot-model 224-226).
+  async onJoinedActor(actor) {
+    appendEvent(`entry-spot-joined|actor=${actor.actorId}|nodeRid=${require_('node-rid')}`);
+    resolveUserSpotTargetJoined?.();
+  }
   async onLeaveActor() {}
   async onDisconnectActor() {}
 }
@@ -386,6 +391,36 @@ nestjs.zlinkEntrySpotActorRequestHandler({
   packetName: 'BeginUserSpotJoinReq'
 })(BeginUserSpotJoinHandler);
 
+class BeginEntrySpotJoinReq {
+  constructor(marker) { this.marker = marker; }
+}
+
+class EntrySpotJoinReq {
+  constructor(marker) { this.marker = marker; }
+}
+
+class BeginEntrySpotJoinHandler {
+  async handle(_spot, actor, _context, request) {
+    actor.context
+      .joinEntrySpot(new EntrySpotJoinReq(request.marker))
+      .timeout(30_000)
+      .defer();
+    return {
+      accepted: true,
+      actorId: actor.actorId,
+      spotId: String(actor.context.spotId),
+      nodeRid: require_('node-rid'),
+      marker: request.marker
+    };
+  }
+}
+Injectable()(BeginEntrySpotJoinHandler);
+nestjs.zlinkSpotActorRequestHandler({
+  actor: () => RelocationActor,
+  spot: () => RelocationUserSpot,
+  packetName: 'BeginEntrySpotJoinReq'
+})(BeginEntrySpotJoinHandler);
+
 class SourceProbeHandler {
   async handle(_spot, actor, _context, request) {
     probeExecutions += 1;
@@ -426,6 +461,42 @@ nestjs.zlinkSpotActorRequestHandler({
   spot: () => RelocationUserSpot,
   packetName: 'UserSpotProbeReq'
 })(TargetProbeHandler);
+
+async function awaitServing(app) {
+  const runtime = app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME, { strict: false });
+  let serving = false;
+  for await (const observed of runtime.observe()) {
+    if (observed.status.state === framework.ZLinkFrameworkRuntimeState.Serving) {
+      serving = true;
+      break;
+    }
+    if (observed.status.state === framework.ZLinkFrameworkRuntimeState.Error
+      || observed.status.state === framework.ZLinkFrameworkRuntimeState.Stopped) {
+      throw new Error(`Framework runtime reached ${observed.status.state} before serving`);
+    }
+  }
+  if (!serving) throw new Error('Framework runtime observation ended before serving');
+}
+
+async function waitForFile(file, what) {
+  const deadline = Date.now() + 120_000;
+  while (!fs.existsSync(file)) {
+    if (Date.now() >= deadline) throw new Error(`timed out waiting for ${what}`);
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+}
+
+async function waitForShutdownSignal() {
+  await new Promise(resolve => {
+    const shutdown = () => {
+      process.off('SIGTERM', shutdown);
+      process.off('SIGINT', shutdown);
+      resolve();
+    };
+    process.once('SIGTERM', shutdown);
+    process.once('SIGINT', shutdown);
+  });
+}
 
 async function userSpotJoinSource() {
   const meshName = require_('mesh-name');
@@ -481,6 +552,17 @@ async function userSpotJoinSource() {
   installCanonicalWireProbe(app, meshName);
   writeReady();
 
+  const actorManager = app.get(nestjs.ZLINK_ACTOR_MANAGER, { strict: false });
+  const entryJoin = args['entry-join'] === '1';
+  const createActor = async (id, event) => {
+    const created = await actorManager
+      .getOrCreate(id, RELOCATION_ACTOR_TYPE)
+      .inMesh(meshName)
+      .request(new UserSpotActorCreateReq(7))
+      .timeout(15_000)
+      .submit();
+    appendEvent(`${event}|status=${created.status}|node=${created.actor?.nodeRid}`);
+  };
   const routeMesh = app.get(nestjs.ZLINK_ROUTE_MESH_RUNTIME, { strict: false });
   const discoveryDeadline = Date.now() + 60_000;
   while (routeMesh.snapshot(meshName).readyPeerCount === 0) {
@@ -489,31 +571,20 @@ async function userSpotJoinSource() {
     }
     await new Promise(resolve => setTimeout(resolve, 100));
   }
-  const endpoint = app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME, { strict: false })
+  const endpoint = app
+    .get(nestjs.ZLINK_FRAMEWORK_RUNTIME, { strict: false })
     .getListenerStatus('routeMesh', meshName).endpoint;
   appendEvent(`user-spot-source-peer-ready|ready=true|endpoint=${endpoint}`);
-  const startFile = require_('start-file');
-  const startDeadline = Date.now() + 60_000;
-  while (!fs.existsSync(startFile)) {
-    if (Date.now() >= startDeadline) {
-      throw new Error('timed out waiting for the reciprocal discovery barrier');
-    }
-    await new Promise(resolve => setTimeout(resolve, 25));
-  }
-
-  const actorManager = app.get(nestjs.ZLINK_ACTOR_MANAGER, { strict: false });
-  const created = await actorManager
-    .getOrCreate(actorId, RELOCATION_ACTOR_TYPE)
-    .inMesh(meshName)
-    .request(new UserSpotActorCreateReq(7))
-    .timeout(15_000)
-    .submit();
-  appendEvent(`user-spot-source-actor-created|status=${created.status}|node=${created.actor?.nodeRid}`);
+  await waitForFile(require_('start-file'), 'the reciprocal discovery barrier');
+  await createActor(actorId, 'user-spot-source-actor-created');
 
   const actorClient = app.get(nestjs.ZLINK_ACTOR_CLIENT, { strict: false });
   if (outageStore) {
     await runOutageSource(app, actorManager, actorClient, actorId, targetSpotId);
-    await new Promise(() => {});
+    await waitForShutdownSignal();
+    await app.close();
+    await flowProvider?.shutdown();
+    return;
   }
   const reply = await actorClient
     .requestToActor(actorId, new BeginUserSpotJoinReq(targetSpotId, 'canonical-28'))
@@ -523,6 +594,21 @@ async function userSpotJoinSource() {
     `user-spot-join-request-reply|accepted=${reply.accepted === true}`
     + `|actor=${reply.actorId}|spot=${reply.spotId}`
   );
+
+  if (entryJoin) {
+    // Remote Entry Spot join: the second Actor joins the User Spot too, so the
+    // User Spot node can move it back to this node after a restart.
+    const restartActorId = `${actorId}-restart`;
+    await createActor(restartActorId, 'entry-join-restart-actor-created');
+    const second = await actorClient
+      .requestToActor(restartActorId, new BeginUserSpotJoinReq(targetSpotId, 'canonical-28'))
+      .timeout(45_000)
+      .submit();
+    appendEvent(
+      `user-spot-join-request-reply|accepted=${second.accepted === true}`
+      + `|actor=${second.actorId}|spot=${second.spotId}`
+    );
+  }
 
   if (process.env.ZLINK_NODE_JAVA_STATEFUL_PROBE === '1') {
     const javaEvents = path.join(path.dirname(require_('event-file')), 'java-user-spot-target.events');
@@ -583,7 +669,8 @@ async function userSpotJoinSource() {
     appendEvent(`stateful-25|nodeRid=${actorProbe.nodeRid}|actor=${actorProbe.actorId}`);
   }
 
-  await new Promise(() => {});
+  // The restart cell uses SIGTERM; close the old owner before the replacement claims this RID.
+  await waitForShutdownSignal();
   await app.close();
   await flowProvider?.shutdown();
 }
@@ -634,6 +721,8 @@ async function userSpotJoinTarget() {
       RelocationEntrySpot,
       RelocationUserSpot,
       BeginUserSpotJoinHandler,
+      BeginEntrySpotJoinHandler,
+      SourceProbeHandler,
       TargetProbeHandler
     ]
   })(UserSpotJoinTargetModule);
@@ -643,20 +732,9 @@ async function userSpotJoinTarget() {
     { logger: false, abortOnError: false }
   );
   installCanonicalReceiverProbe(app);
+  installCanonicalWireProbe(app, meshName);
   const spots = app.get(nestjs.ZLINK_SPOT_MANAGER, { strict: false });
-  const runtime = app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME, { strict: false });
-  let serving = false;
-  for await (const observed of runtime.observe()) {
-    if (observed.status.state === framework.ZLinkFrameworkRuntimeState.Serving) {
-      serving = true;
-      break;
-    }
-    if (observed.status.state === framework.ZLinkFrameworkRuntimeState.Error
-      || observed.status.state === framework.ZLinkFrameworkRuntimeState.Stopped) {
-      throw new Error(`Framework runtime reached ${observed.status.state} before serving`);
-    }
-  }
-  if (!serving) throw new Error('Framework runtime observation ended before serving');
+  await awaitServing(app);
   const created = await spots
     .getOrCreate(spotId, 'cross-lang-relocation-user-spot-type')
     .inMesh(meshName)
@@ -679,13 +757,61 @@ async function userSpotJoinTarget() {
   const actorClient = app.get(nestjs.ZLINK_ACTOR_CLIENT, { strict: false });
   if (outageStore) {
     await runOutageTarget(app, actorClient, created.spot.nodeRid);
-    await new Promise(() => {});
+    await waitForShutdownSignal();
+    await app.close();
+    await flowProvider?.shutdown();
+    return;
   }
   void probeUserSpotTarget(actorClient, created.spot.nodeRid);
 
-  await new Promise(() => {});
+  // The restart cell uses SIGTERM; close the old owner before the replacement claims this RID.
+  await waitForShutdownSignal();
   await app.close();
   await flowProvider?.shutdown();
+}
+
+// Remote Entry Spot join: the Actor in this node's User Spot defers
+// joinEntrySpot(); this node is no placement candidate, so the Framework must
+// move it to the Entry Spot of the other node. The second Actor does the same
+// after the other node restarted.
+async function entryJoinBack(actorClient, ownNodeRid) {
+  const actorId = require_('actor-id');
+  const restartActorId = `${actorId}-restart`;
+  const begin = async (id, phase) => {
+    const reply = await actorClient
+      .requestToActor(id, new BeginEntrySpotJoinReq(phase))
+      .timeout(45_000)
+      .submit();
+    appendEvent(`entry-join-request-reply|phase=${phase}|accepted=${reply.accepted === true}|actor=${reply.actorId}`);
+  };
+  const waitOwner = async (id, wantOwn) => {
+    const deadline = Date.now() + 90_000;
+    let last = 'none';
+    while (Date.now() < deadline) {
+      try {
+        const reply = await actorClient
+          .requestToActor(id, new UserSpotProbeReq('entry-join-probe'))
+          .timeout(5_000)
+          .submit();
+        last = reply.nodeRid;
+        if ((reply.nodeRid === ownNodeRid) === wantOwn) {
+          if (!wantOwn) {
+            appendEvent(`entry-join-probe|actor=${id}|nodeRid=${reply.nodeRid}|originRid=${ownNodeRid}`);
+          }
+          return;
+        }
+      } catch (error) {
+        last = `${errorKindName(error?.kind)}:${String(error?.message ?? error)}`;
+      }
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    appendEvent(`entry-join-probe-timeout|actor=${id}|last=${last}`);
+  };
+  await begin(actorId, 'join');
+  await waitOwner(actorId, false);
+  await waitOwner(restartActorId, true);
+  await waitForFile(require_('restart-file'), 'the home node restart barrier');
+  await begin(restartActorId, 'restart');
 }
 
 async function probeUserSpotTarget(actorClient, targetNodeRid) {
@@ -711,6 +837,7 @@ async function probeUserSpotTarget(actorClient, targetNodeRid) {
           `user-spot-probe|nodeRid=${reply.nodeRid}|targetRid=${targetNodeRid}`
           + `|actor=${reply.actorId}|stateVersion=${reply.stateVersion}`
         );
+        if (args['entry-join'] === '1') await entryJoinBack(actorClient, targetNodeRid);
         return;
       }
       lastFailure = `unexpected-owner:${reply.nodeRid}`;

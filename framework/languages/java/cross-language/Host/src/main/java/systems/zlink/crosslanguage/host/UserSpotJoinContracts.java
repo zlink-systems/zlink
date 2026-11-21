@@ -20,6 +20,14 @@ public final class UserSpotJoinContracts {
     public record BeginUserSpotJoinReq(String targetSpotId, String marker) {
     }
 
+    /** Source-local: entry-spot actor request that starts the deferred Entry Spot join. */
+    public record BeginEntrySpotJoinReq(String marker) {
+    }
+
+    /** Crosses the wire inside the Entry Spot join's application payload. */
+    public record EntrySpotJoinReq(String marker) {
+    }
+
     /** Crosses the wire inside canonical command 28's application payload. */
     public record UserSpotJoinReq(String marker) {
     }
