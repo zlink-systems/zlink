@@ -23,6 +23,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /** Spec 32 5.2, 5.7, 6.2, 9 and 12: how a connection ends and what a caller sees after it. */
 final class ZLinkStreamConnectionEndingTest {
@@ -82,23 +83,51 @@ final class ZLinkStreamConnectionEndingTest {
     }
 
     /**
-     * Spec 32 9: a protocol violation ends the connection before its error is published. While the
-     * Immediate error handler runs, the connector is not connected and a request it makes fails
-     * with Disconnected.
+     * Spec 32 9: a receive failure or heartbeat timeout ends the connection before its error is
+     * published. While the Immediate error handler runs, the connector is not connected and a
+     * request it makes fails with Disconnected.
      */
     @ParameterizedTest
-    @CsvSource({"decode, FRAME_DECODE_FAILED", "tooLarge, FRAME_TOO_LARGE"})
-    void aProtocolViolationEndsTheConnectionBeforeItsErrorHandlerRuns(
-            String failure, ZLinkStreamErrorCode expected) throws Exception {
+    @CsvSource({
+        "decode, FRAME_DECODE_FAILED, PROTOCOL_ERROR",
+        "tooLarge, FRAME_TOO_LARGE, PROTOCOL_ERROR",
+        "readFailure, DISCONNECTED, TRANSPORT_ERROR",
+        "heartbeat, DISCONNECTED, HEARTBEAT_TIMEOUT"
+    })
+    void aReceiveFailureEndsTheConnectionBeforeItsErrorHandlerRuns(
+            String failure, ZLinkStreamErrorCode expected, ZLinkStreamCloseReason expectedReason)
+            throws Exception {
         try (TcpStreamConnectorTestServer server = new TcpStreamConnectorTestServer()) {
             ZLinkStreamConnector connector =
-                    ZLinkStreamConnectorFactory.create(options(server.endpoint()));
+                    ZLinkStreamConnectorFactory.create(
+                            new ZLinkStreamConnectorOptions(
+                                    server.endpoint(),
+                                    ZLinkStreamDispatchMode.IMMEDIATE,
+                                    Duration.ofSeconds(30),
+                                    1,
+                                    Duration.ofSeconds(5),
+                                    64 * 1024,
+                                    failure.equals("heartbeat"),
+                                    Duration.ofMillis(20),
+                                    Duration.ofMillis(100),
+                                    false,
+                                    Duration.ofMillis(10),
+                                    Duration.ofMillis(20),
+                                    2.0));
             CompletableFuture<ZLinkStreamError> streamError = new CompletableFuture<>();
             CompletableFuture<Boolean> connectedInHandler = new CompletableFuture<>();
             CompletableFuture<ZLinkStreamEncodedPayload> requestInHandler =
                     new CompletableFuture<>();
+            AtomicInteger errorCount = new AtomicInteger();
+            CompletableFuture<Void> disconnected = new CompletableFuture<>();
+            connector.onDisconnected(
+                    event -> {
+                        disconnected.complete(null);
+                        return CompletableFuture.completedFuture(null);
+                    });
             connector.onErrorReceived(
                     error -> {
+                        errorCount.incrementAndGet();
                         if (streamError.complete(error)) {
                             connectedInHandler.complete(connector.isConnected());
                             try {
@@ -122,6 +151,7 @@ final class ZLinkStreamConnectionEndingTest {
                     });
             try {
                 ConnectorTestAwait.await(connector.connect());
+                server.sendBytesAsync(new byte[0]).join();
 
                 switch (failure) {
                     case "decode" ->
@@ -129,23 +159,28 @@ final class ZLinkStreamConnectionEndingTest {
                                             new byte[] {(byte) 0xFF, (byte) 0xFF, (byte) 0xFF},
                                             new byte[0])
                                     .join();
-                    default ->
+                    case "tooLarge" ->
                             server.sendBytesAsync(
                                             ByteBuffer.allocate(6)
                                                     .putShort((short) 0)
                                                     .putInt(64 * 1024 + 1)
                                                     .array())
                                     .join();
+                    case "readFailure" -> server.closeCurrentSocket();
+                    default -> {} // The server remains silent until the heartbeat expires.
                 }
 
+                disconnected.get(WAIT_SECONDS, TimeUnit.SECONDS);
+                assertTrue(
+                        streamError.isDone(),
+                        "The ending must publish its cause before onDisconnected");
                 assertEquals(expected, streamError.get(WAIT_SECONDS, TimeUnit.SECONDS).code());
                 assertFalse(connectedInHandler.get(WAIT_SECONDS, TimeUnit.SECONDS));
                 assertEquals(ZLinkStreamErrorCode.DISCONNECTED, codeOf(requestInHandler));
                 TcpStreamConnectorTestServer.awaitCondition(
                         () -> connector.closeReason().isPresent());
-                assertEquals(
-                        Optional.of(ZLinkStreamCloseReason.PROTOCOL_ERROR),
-                        connector.closeReason());
+                assertEquals(Optional.of(expectedReason), connector.closeReason());
+                assertEquals(1, errorCount.get());
             } finally {
                 ConnectorTestAwait.await(connector.close());
             }
