@@ -1,6 +1,7 @@
 const { inspectRuntime } = require('../../packages/framework/dist/runtime/internal-observation');
 const { createMeshHost } = require('./fixtures/mesh-host');
 const { createRelayHost } = require('./fixtures/relay-host');
+const { createSpotNodeLocationAutoConnectContext } = require('../../packages/framework/dist/runtime/spots/spot-node-autoconnect');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { performance } = require('node:perf_hooks');
@@ -26,7 +27,7 @@ const detachedTaskRunner = new ZLinkRuntimeTaskRunner(
 const nestjs = require('../../packages/nestjs/dist');
 
 for (const emptyFirstPage of [true, false]) {
-  test(`Actor placement consumes continuation after ${emptyFirstPage ? 'empty page' : 'candidate and preserves Store failure'}`, async () => {
+  test(`Actor discovery consumes continuation after ${emptyFirstPage ? 'empty page' : 'candidate and preserves Store failure'}`, async () => {
     const provider = new framework.ZLinkInMemoryProviderLocationStore();
     const { host, meshRuntime: hostMesh } = createMeshHost({
       registration: framework.createFrameworkRegistration({
@@ -39,6 +40,7 @@ for (const emptyFirstPage of [true, false]) {
       state: framework.ZLinkFrameworkRuntimeState.Serving, objectRole: 'server',
       placementWeight: 100, entrySpotId: 'entry', ownerId: 'owner', leaseGeneration: 1n,
       objectCapabilities: [{ objectKind: 'actor', stableType: 'SessionActor', entryAccepted: true }],
+      descriptorRevision: 1n, endpoint: 'tcp://peer', channelWeights: {}, securityIdentity: '',
       populationCapacity: { actors: { active: 0, reserved: 0, limit: 1000 } }
     };
     const calls = [];
@@ -61,11 +63,16 @@ for (const emptyFirstPage of [true, false]) {
     host.createPublicSpotManager({});
     Object.assign(hostMesh, { meshNode: () => ({ status: () => ({ routingId: 'node-a', lifecycleGeneration: 1n }) }) });
     const signal = new AbortController().signal;
+    const runtime = host.locationOwner.ensureRuntime('play');
+    const discovery = createSpotNodeLocationAutoConnectContext(runtime, host.locationOwner.currentStores, {});
+    hostMesh.locationAutoConnect = discovery;
+    const refresh = () => discovery.resolver.listLivePeers({ meshName: 'play' }, signal);
     const select = () => host.actorPlacement.options.target('play', 'SessionActor', signal);
     if (emptyFirstPage) {
+      await refresh();
       assert.equal((await select()).nodeRid, 'node-a');
     } else {
-      await assert.rejects(select, error => error === failure);
+      await assert.rejects(refresh, error => error === failure);
     }
     assert.equal(calls.length, 2);
     assert.equal(calls[1].page.continuationToken, 'next');
