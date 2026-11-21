@@ -239,6 +239,30 @@ An Actor knows the connection bound to it. This is not a reply but **a notificat
     After `sessionReplacementCallbackTimeoutMs` (default `30000 ms`), the Framework cancels `signal`
     and reports the timeout once. Cancellation caused by Actor or runtime shutdown is not reported.
 
+=== "C#/.NET"
+
+    ### 3.4 Bind notification
+
+    The .NET bind notification `OnSessionBoundAsync` is described in [the Session binding chapter, §7](39-session-binding.en.md).
+
+=== "C++"
+
+    ### 3.4 Bind notification
+
+    The C++ bind notification `on_session_bound` is described in [the Session binding chapter, §7](39-session-binding.en.md).
+
+=== "Java"
+
+    ### 3.4 Bind notification
+
+    The Java bind notification `onSessionBound` is shown in the example in [§3.1](#31-binding).
+
+=== "Kotlin"
+
+    ### 3.4 Bind notification
+
+    The Kotlin bind notification `onSessionBoundSuspending` is shown in the example in [§3.1](#31-binding).
+
 ## 4. The Attaching Side — a Client Outside the Mesh
 
 !!! info "The attaching process"

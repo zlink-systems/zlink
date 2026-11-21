@@ -159,6 +159,10 @@ command 51도 보내지 않는다. 받아들이면 새 session을 current로 등
 
 <!-- language-specific notification -->
 
+## 7. Actor의 bind 확정 통지
+
+Kotlin의 `onSessionBoundSuspending`은 [Actor와 session 장 §3.1](24-actor-session.ko.md)에서 설명한다.
+
 <script>
 (function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

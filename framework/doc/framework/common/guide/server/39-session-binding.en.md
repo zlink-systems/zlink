@@ -394,6 +394,24 @@ connection. [Session–Actor binding §6](../../../common/spec/server/04-session
     [Session–Actor binding §6](../../../common/spec/server/04-session/02-session-actor-binding.en.md#6-rebind-and-replacing-the-previous-connection)
     for the contract.
 
+=== "Java"
+
+    ## 7. Actor bind notification
+
+    The Java `onSessionBound` is described in [the Actor and session chapter, §3.1](24-actor-session.en.md).
+
+=== "Kotlin"
+
+    ## 7. Actor bind notification
+
+    The Kotlin `onSessionBoundSuspending` is described in [the Actor and session chapter, §3.1](24-actor-session.en.md).
+
+=== "Node/TypeScript"
+
+    ## 7. Actor bind notification
+
+    The Node `onSessionBound` is described in [the Actor and session chapter, §3.4](24-actor-session.en.md).
+
 <script>
 (function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>

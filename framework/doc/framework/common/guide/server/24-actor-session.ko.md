@@ -233,6 +233,30 @@ Actor는 자기에게 묶인 연결을 알고 있다. 응답이 아니라 **스�
     `sessionReplacementCallbackTimeoutMs`(기본 `30000 ms`)를 넘으면 `signal`로 취소하고
     같은 방식으로 한 번 보고한다. Actor 종료나 runtime 종료에 의한 취소는 보고하지 않는다.
 
+=== "C#/.NET"
+
+    ### 3.4 Bind 통지
+
+    .NET의 bind 확정 통지 `OnSessionBoundAsync`는 [Session binding 장 §7](39-session-binding.ko.md)에서 설명한다.
+
+=== "C++"
+
+    ### 3.4 Bind 통지
+
+    C++의 bind 확정 통지 `on_session_bound`는 [Session binding 장 §7](39-session-binding.ko.md)에서 설명한다.
+
+=== "Java"
+
+    ### 3.4 Bind 통지
+
+    Java의 bind 확정 통지 `onSessionBound`는 [§3.1](#31-묶기)의 예에서 설명한다.
+
+=== "Kotlin"
+
+    ### 3.4 Bind 통지
+
+    Kotlin의 bind 확정 통지 `onSessionBoundSuspending`은 [§3.1](#31-묶기)의 예에서 설명한다.
+
 ## 4. 접속하는 쪽 — mesh 밖의 client
 
 !!! info "접속하는 쪽 process"

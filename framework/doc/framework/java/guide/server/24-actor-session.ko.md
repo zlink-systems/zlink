@@ -111,6 +111,10 @@ Actor는 자기에게 묶인 연결을 알고 있다. 응답이 아니라 **스�
     `InvalidOperation`으로 끝나며, 언어별 비동기 완료 수단으로 그 실패를 관찰한다. 위 코드는 rename을
     이미 끝낸 뒤 push하므로 **그 실패만** 받아 버린다.
 
+### 3.4 Bind 통지
+
+Java의 bind 확정 통지 `onSessionBound`는 [§3.1](#31-묶기)의 예에서 설명한다.
+
 ## 4. 접속하는 쪽 — mesh 밖의 client
 
 !!! info "접속하는 쪽 process"

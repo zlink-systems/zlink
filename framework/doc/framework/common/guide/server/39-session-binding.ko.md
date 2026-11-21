@@ -418,6 +418,24 @@ UserSpot의 game Actor는 application 상태에 따라 연결 교체를 허용�
     Actor·runtime 종료로 취소된 callback은 보고하지 않습니다. 자세한 계약은
     [Session–Actor binding §6](../../../common/spec/server/04-session/02-session-actor-binding.ko.md#6-rebind와-이전-연결-교체)을 따릅니다.
 
+=== "Java"
+
+    ## 7. Actor의 bind 확정 통지
+
+    Java의 `onSessionBound`는 [Actor와 session 장 §3.1](24-actor-session.ko.md)에서 설명한다.
+
+=== "Kotlin"
+
+    ## 7. Actor의 bind 확정 통지
+
+    Kotlin의 `onSessionBoundSuspending`은 [Actor와 session 장 §3.1](24-actor-session.ko.md)에서 설명한다.
+
+=== "Node/TypeScript"
+
+    ## 7. Actor의 bind 확정 통지
+
+    Node의 `onSessionBound`는 [Actor와 session 장 §3.4](24-actor-session.ko.md)에서 설명한다.
+
 <script>
 (function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();
 </script>
