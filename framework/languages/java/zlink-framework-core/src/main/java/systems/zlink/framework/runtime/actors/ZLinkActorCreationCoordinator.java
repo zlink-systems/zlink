@@ -21,6 +21,7 @@ import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration.RelocationPolicy;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
+import systems.zlink.framework.runtime.internal.locations.ZLinkObjectCreationDeadline;
 import systems.zlink.framework.runtime.internal.messaging.ZLinkEncodedPayloadAccess;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
@@ -109,8 +110,16 @@ public final class ZLinkActorCreationCoordinator
         var operation = newOperation();
         long deadline = Math.addExact(System.currentTimeMillis(), timeout.toMillis());
         byte[] requestEnvelope = encodeCreateRequest(createRequest);
-        return resumeOrCreate(
-                operation, actorId, actorType, requestEnvelope, getOrCreate, deadline, Set.of());
+        return ZLinkObjectCreationDeadline.classify(
+                resumeOrCreate(
+                        operation,
+                        actorId,
+                        actorType,
+                        requestEnvelope,
+                        getOrCreate,
+                        deadline,
+                        Set.of()),
+                deadline);
     }
 
     private ZLinkCreationOperationIdentity newOperation() {
@@ -140,7 +149,8 @@ public final class ZLinkActorCreationCoordinator
                                 return completedResult(found.terminalEnvelope(), actorId);
                             }
                             if (System.currentTimeMillis() >= deadline) {
-                                return admissionUnavailable("Actor create deadline expired");
+                                return CompletableFuture.failedFuture(
+                                        ZLinkObjectCreationDeadline.exceeded(null));
                             }
                             if (!getOrCreate) {
                                 return createOnNewTarget(
