@@ -28,15 +28,25 @@ import {
 import { isCanonicalCodecContentType } from '../../contracts/Configuration/CodecContentType';
 import { parseFrameworkJsonV1, stringifyFrameworkJsonV1 } from '../messaging/framework-json-v1';
 import { currentOrCreateFlow } from '../diagnostics/flow-context';
+import { encodeChannelMultipartApplicationPayload } from '../foundation/service-wire-m6a-codec';
 import { SERVICE_WIRE_METADATA_BYTES } from '../foundation/service-wire-constants.generated';
 import { zlink as ChannelHeaderProto } from './generated/channel-header-v1';
 import { formatDeadlineText } from './channel-deadline-text';
 import { ChannelHeaderPrefixes } from './channel-header-prefix';
 import { codecsForFrameworkPacket } from './channel-framework-packets';
 import { readZLinkPacketJsonContract } from '../../contracts/Handlers/Attributes';
-import type { ZLinkJsonSchema } from '../../contracts/Handlers/JsonContract';
+import type {
+  ZLinkJsonSchema,
+  ZLinkPacketJsonContract
+} from '../../contracts/Handlers/JsonContract';
+import {
+  resolveMessageTypeForDecode,
+  type ZLinkHandlerMessageType
+} from '../../contracts/Common/HandlerMessageType';
 
 interface ChannelHeaderWriter {
+  readonly buf: Uint8Array;
+  readonly pos: number;
   finish(): Uint8Array;
   reset(): void;
   raw(value: Uint8Array): unknown;
@@ -154,7 +164,8 @@ export function encodeChannelEnvelopeParts(
   codecs?: ZLinkChannelEnvelopeCodecRegistry,
   correlationId?: string,
   createFlow = true,
-  metadata: ReadonlyMap<string, string> = EMPTY_OUTBOUND_METADATA
+  metadata: ReadonlyMap<string, string> = EMPTY_OUTBOUND_METADATA,
+  forService = false
 ): readonly MessageLike[] {
   return encodeChannelEnvelopePartsAtDeadline(
     kind,
@@ -166,7 +177,8 @@ export function encodeChannelEnvelopeParts(
     codecs,
     correlationId,
     createFlow,
-    metadata
+    metadata,
+    forService
   );
 }
 
@@ -186,7 +198,8 @@ export function encodeChannelEnvelopePartsAtDeadline(
   codecs?: ZLinkChannelEnvelopeCodecRegistry,
   correlationId?: string,
   createFlow = true,
-  metadata: ReadonlyMap<string, string> = EMPTY_OUTBOUND_METADATA
+  metadata: ReadonlyMap<string, string> = EMPTY_OUTBOUND_METADATA,
+  forService = false
 ): readonly MessageLike[] {
   if (
     deadlineUnixMs !== undefined &&
@@ -206,7 +219,8 @@ export function encodeChannelEnvelopePartsAtDeadline(
     deadlineUnixMs,
     topic,
     createFlow,
-    metadata
+    metadata,
+    forService
   );
 }
 
@@ -238,7 +252,8 @@ export function encodeChannelPublishEnvelopeParts(
 export function encodeChannelReplyParts(
   request: ZLinkChannelEnvelopeHeader,
   payload: unknown,
-  codecs?: ZLinkChannelEnvelopeCodecRegistry
+  codecs?: ZLinkChannelEnvelopeCodecRegistry,
+  forService = false
 ): readonly MessageLike[] {
   return encodePayload(
     payload ?? Buffer.alloc(0),
@@ -252,6 +267,7 @@ export function encodeChannelReplyParts(
     undefined,
     false,
     EMPTY_OUTBOUND_METADATA,
+    forService,
     request
   );
 }
@@ -312,30 +328,30 @@ export interface ZLinkChannelDecodedError extends Error {
 export function encodeChannelErrorReplyParts(
   request: ZLinkChannelEnvelopeHeader,
   error: unknown,
-  metadata: Readonly<Record<string, string>> = {}
+  metadata: Readonly<Record<string, string>> = EMPTY_APPLICATION_METADATA,
+  forService = false
 ): readonly MessageLike[] {
   const errorCode = channelErrorCodeName(
     error instanceof ZLinkFrameworkException ? error.kind : ZLinkFrameworkErrorKind.InternalFailure
   );
   const errorMessage = error instanceof Error ? error.message : String(error);
-  return [
-    encodeChannelHeader(
-      ZLinkChannelMessageKind.Error,
-      request.channelName,
-      request.messageName,
-      JSON_CONTENT_TYPE,
-      request.correlationId,
-      null,
-      null,
-      errorCode,
-      errorMessage,
-      undefined,
-      metadata,
-      request.flowId,
-      request.flowOrigin
-    ),
-    encodeJsonText(null)
-  ];
+  return writeChannelParts(
+    ZLinkChannelMessageKind.Error,
+    request.channelName,
+    request.messageName,
+    JSON_CONTENT_TYPE,
+    request.correlationId,
+    null,
+    null,
+    errorCode,
+    errorMessage,
+    undefined,
+    metadata,
+    request.flowId,
+    request.flowOrigin,
+    encodeJsonText(null),
+    forService
+  );
 }
 
 export function decodeChannelReply<TReply>(
@@ -430,37 +446,52 @@ export function decodeChannelEnvelope(
   return { header, packetName: header.messageName, payload: parts[1].data() };
 }
 
+export type ZLinkChannelPayloadDecoder = (envelope: ZLinkChannelEnvelope) => unknown;
+
+export function prepareChannelPayloadDecoder(
+  packetName: string,
+  codecs: ZLinkChannelEnvelopeCodecRegistry | undefined,
+  messageType: ZLinkHandlerMessageType | undefined
+): ZLinkChannelPayloadDecoder {
+  const contract = readZLinkPacketJsonContract(packetName);
+  return (envelope) =>
+    decodeChannelPayload(envelope, codecs, resolveMessageTypeForDecode(messageType), contract);
+}
+
 export function decodeChannelPayload(
   envelope: ZLinkChannelEnvelope,
   codecs?: ZLinkChannelEnvelopeCodecRegistry,
-  messageType?: Type
+  messageType?: Type,
+  contract?: ZLinkPacketJsonContract
 ): unknown {
   try {
-    if (!isCanonicalCodecContentType(envelope.header.contentType)) {
-      throw unsupportedChannelContentType(envelope.header.contentType);
+    const { header, payload } = envelope;
+    const { contentType } = header;
+    if (
+      contentType !== JSON_CONTENT_TYPE &&
+      contentType !== BINARY_CONTENT_TYPE &&
+      !isCanonicalCodecContentType(contentType)
+    ) {
+      throw unsupportedChannelContentType(contentType);
     }
-    const serializer = codecs?.serializers.get(envelope.header.contentType);
+    const serializer = codecs?.serializers.get(contentType);
     if (serializer !== undefined) {
       return serializer.deserialize(
-        encodedPayloadFromOwned(envelope.payload),
+        encodedPayloadFromOwned(payload),
         (messageType ?? Object) as never
       );
     }
-    if (envelope.header.contentType === BINARY_CONTENT_TYPE) {
-      // The receive loop owns the Message for the duration of dispatch, so
-      // the envelope's borrowed payload remains valid until this returns.
-      return envelope.payload;
+    if (contentType === BINARY_CONTENT_TYPE) {
+      // The receive loop owns the Message for the duration of dispatch.
+      return payload;
     }
-    if (envelope.header.contentType === JSON_CONTENT_TYPE) {
+    if (contentType === JSON_CONTENT_TYPE) {
       return materializeZLinkMessageValue(
-        parseWireJson(
-          envelope.payload.toString(),
-          schemaForInboundChannelEnvelope(envelope.header)
-        ),
+        parseWireJson(payload.toString(), schemaForInboundChannelEnvelope(header, contract)),
         messageType
       );
     }
-    throw unsupportedChannelContentType(envelope.header.contentType);
+    throw unsupportedChannelContentType(contentType);
   } catch (error) {
     if (error instanceof ZLinkFrameworkException) {
       throw error;
@@ -500,6 +531,7 @@ function encodePayload(
   topic: string | undefined,
   createFlow: boolean,
   metadata: ReadonlyMap<string, string>,
+  forService = false,
   request?: ZLinkChannelEnvelopeHeader
 ): readonly MessageLike[] {
   let declaredType;
@@ -528,26 +560,25 @@ function encodePayload(
     }
   }
   const flow = request ?? (createFlow ? currentOrCreateFlow('Application') : undefined);
-  return [
-    encodeChannelHeader(
-      kind,
-      channelName,
-      packetName,
-      contentType,
-      request === undefined
-        ? correlationIdForOutboundKind(kind, correlationId)
-        : request.correlationId,
-      deadlineUnixMs === undefined ? null : formatDeadlineText(deadlineUnixMs),
-      topic ?? null,
-      contractPart === 'reply' ? undefined : null,
-      contractPart === 'reply' ? undefined : null,
-      undefined,
-      applicationMetadataRecord(metadata),
-      flow?.flowId,
-      flow?.flowOrigin
-    ),
-    message
-  ];
+  return writeChannelParts(
+    kind,
+    channelName,
+    packetName,
+    contentType,
+    request === undefined
+      ? correlationIdForOutboundKind(kind, correlationId)
+      : request.correlationId,
+    deadlineUnixMs === undefined ? null : formatDeadlineText(deadlineUnixMs),
+    topic ?? null,
+    contractPart === 'reply' ? undefined : null,
+    contractPart === 'reply' ? undefined : null,
+    undefined,
+    applicationMetadataRecord(metadata),
+    flow?.flowId,
+    flow?.flowOrigin,
+    message,
+    forService
+  );
 }
 
 function toMessageLike(value: unknown, schema?: ZLinkJsonSchema): MessageLike {
@@ -575,7 +606,7 @@ function encodeJsonText(value: unknown, schema?: ZLinkJsonSchema): string {
   return stringifyFrameworkJsonV1(value, schema);
 }
 
-function encodeChannelHeader(
+function writeChannelParts(
   kind: ZLinkChannelMessageKind,
   channelName: string,
   messageName: string,
@@ -588,8 +619,10 @@ function encodeChannelHeader(
   source: string | null | undefined,
   metadata: Readonly<Record<string, string>>,
   flowId: string | undefined,
-  flowOrigin: ZLinkFlowOrigin | undefined
-): Buffer {
+  flowOrigin: ZLinkFlowOrigin | undefined,
+  payload: MessageLike,
+  forService: boolean
+): readonly MessageLike[] {
   const sortedMetadata =
     metadata === EMPTY_APPLICATION_METADATA
       ? EMPTY_PROTOBUF_METADATA
@@ -599,6 +632,7 @@ function encodeChannelHeader(
   const prefix = CHANNEL_HEADER_PREFIXES.forFields(kind, channelName, messageName, contentType);
   // OUTBOUND_CHANNEL_HEADER keeps kind, channelName, messageName and contentType at their
   // proto3 defaults, so the encoder skips them; the prefix bytes stand in for them.
+  const payloadView = forService && !isMessage(payload) ? payload : undefined;
   const header = OUTBOUND_CHANNEL_HEADER;
   header.correlationId = correlationId;
   header.deadline = deadline;
@@ -617,11 +651,14 @@ function encodeChannelHeader(
       );
     }
   }
-  CHANNEL_HEADER_WRITER.reset();
   try {
     CHANNEL_HEADER_WRITER.raw(prefix.bytes);
-    const encoded = CHANNEL_HEADER_CODEC.encode(header, CHANNEL_HEADER_WRITER).finish();
-    return Buffer.isBuffer(encoded) ? encoded : Buffer.from(encoded);
+    const writer = CHANNEL_HEADER_CODEC.encode(header, CHANNEL_HEADER_WRITER);
+    if (payloadView !== undefined) {
+      return encodeChannelMultipartApplicationPayload(writer.buf, writer.pos, payloadView);
+    }
+    const bytes = writer.finish();
+    return [Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes), payload];
   } finally {
     CHANNEL_HEADER_WRITER.reset();
   }
@@ -775,9 +812,9 @@ export function decodeChannelHeader(
 }
 
 function schemaForInboundChannelEnvelope(
-  header: ZLinkChannelEnvelopeHeader
+  header: ZLinkChannelEnvelopeHeader,
+  contract = readZLinkPacketJsonContract(header.messageName)
 ): ZLinkJsonSchema | undefined {
-  const contract = readZLinkPacketJsonContract(header.messageName);
   return header.kind === ZLinkChannelMessageKind.Response ? contract?.reply : contract?.payload;
 }
 

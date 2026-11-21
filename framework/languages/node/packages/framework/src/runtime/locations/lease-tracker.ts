@@ -17,7 +17,8 @@ export interface ZLinkOwnerLeaseTrackerOptions {
 
 interface OwnerLeaseTrackerSnapshot {
   readonly result: ZLinkOwnerLeaseReadResult;
-  readonly fetchedAtMs: number;
+  readonly refreshAtMs: number;
+  readonly deadlineMs: number;
 }
 
 interface OwnerLeaseRefresh {
@@ -49,13 +50,7 @@ export class ZLinkOwnerLeaseTracker {
 
   async remainingLeaseMs(ownerId: string, signal?: AbortSignal): Promise<number> {
     const snapshot = await this.getSnapshot(ownerId, signal);
-    if (snapshot.result.kind !== 'found') return 0;
-    return Math.max(
-      0,
-      snapshot.result.leaseExpiresAt.getTime() -
-        snapshot.result.storeNow.getTime() -
-        (this.monotonicNowMs() - snapshot.fetchedAtMs)
-    );
+    return Math.max(0, snapshot.deadlineMs - this.monotonicNowMs());
   }
 
   async remainingOwnerTokenLeaseMs(
@@ -63,17 +58,15 @@ export class ZLinkOwnerLeaseTracker {
     signal?: AbortSignal
   ): Promise<number> {
     const snapshot = await this.getSnapshot(owner.ownerId, signal);
-    if (
-      snapshot.result.kind !== 'found' ||
-      snapshot.result.token.leaseGeneration !== owner.leaseGeneration
-    )
-      return 0;
-    return Math.max(
-      0,
-      snapshot.result.leaseExpiresAt.getTime() -
-        snapshot.result.storeNow.getTime() -
-        (this.monotonicNowMs() - snapshot.fetchedAtMs)
-    );
+    return Math.max(0, deadlineForToken(snapshot, owner) - this.monotonicNowMs());
+  }
+
+  async ownerTokenLeaseDeadlineMs(
+    owner: ZLinkLocationOwnerToken,
+    signal?: AbortSignal
+  ): Promise<number> {
+    const snapshot = await this.getSnapshot(owner.ownerId, signal);
+    return deadlineForToken(snapshot, owner);
   }
 
   async isOwnerTokenLive(owner: ZLinkLocationOwnerToken, signal?: AbortSignal): Promise<boolean> {
@@ -103,34 +96,18 @@ export class ZLinkOwnerLeaseTracker {
     signal?: AbortSignal
   ): Promise<OwnerLeaseTrackerSnapshot> {
     const prepared = await this.lane.run(() => this.prepareSnapshotRefresh(ownerId));
-    if (prepared.snapshot !== undefined) return prepared.snapshot;
+    if ('result' in prepared) return prepared;
     if (prepared.start) {
       void startOutsideStateLane(() => this.refreshSnapshot(ownerId, signal, prepared.refresh));
     }
     return await prepared.refresh.promise;
   }
 
-  private prepareSnapshotRefresh(ownerId: string): {
-    readonly snapshot?: OwnerLeaseTrackerSnapshot;
-    readonly refresh: OwnerLeaseRefresh;
-    readonly start: boolean;
-  } {
+  private prepareSnapshotRefresh(
+    ownerId: string
+  ): OwnerLeaseTrackerSnapshot | { readonly refresh: OwnerLeaseRefresh; readonly start: boolean } {
     const current = this.snapshots.get(ownerId);
-    if (
-      current !== undefined &&
-      this.monotonicNowMs() - current.fetchedAtMs < this.options.pollingIntervalMs &&
-      this.isLive(current)
-    ) {
-      return {
-        snapshot: current,
-        refresh: {
-          promise: Promise.resolve(current),
-          resolve: () => undefined,
-          reject: () => undefined
-        },
-        start: false
-      };
-    }
+    if (current !== undefined && this.monotonicNowMs() < current.refreshAtMs) return current;
     const activeRefresh = this.refreshes.get(ownerId);
     if (activeRefresh !== undefined) return { refresh: activeRefresh, start: false };
 
@@ -151,10 +128,14 @@ export class ZLinkOwnerLeaseTracker {
     refresh: OwnerLeaseRefresh
   ): Promise<void> {
     try {
-      const snapshot = {
-        result: await this.store.readOwnerLease(ownerId, signal),
-        fetchedAtMs: this.monotonicNowMs()
-      };
+      const result = await this.store.readOwnerLease(ownerId, signal);
+      const fetchedAtMs = this.monotonicNowMs();
+      const deadlineMs =
+        result.kind === 'found'
+          ? fetchedAtMs + (result.leaseExpiresAt.getTime() - result.storeNow.getTime())
+          : -Infinity;
+      const refreshAtMs = Math.min(deadlineMs, fetchedAtMs + this.options.pollingIntervalMs);
+      const snapshot = { result, refreshAtMs, deadlineMs };
       await this.lane.run(() => this.completeSnapshotRefresh(ownerId, refresh, snapshot));
     } catch (error) {
       await this.lane.run(() => this.failSnapshotRefresh(ownerId, refresh, error));
@@ -179,12 +160,18 @@ export class ZLinkOwnerLeaseTracker {
   }
 
   private isLive(snapshot: OwnerLeaseTrackerSnapshot): boolean {
-    if (snapshot.result.kind !== 'found') return false;
-    const elapsedMs = this.monotonicNowMs() - snapshot.fetchedAtMs;
-    return (
-      snapshot.result.leaseExpiresAt.getTime() - snapshot.result.storeNow.getTime() - elapsedMs > 0
-    );
+    return snapshot.deadlineMs > this.monotonicNowMs();
   }
+}
+
+function deadlineForToken(
+  snapshot: OwnerLeaseTrackerSnapshot,
+  owner: ZLinkLocationOwnerToken
+): number {
+  return snapshot.result.kind === 'found' &&
+    snapshot.result.token.leaseGeneration === owner.leaseGeneration
+    ? snapshot.deadlineMs
+    : -Infinity;
 }
 
 export class ZLinkLiveRowFilter {

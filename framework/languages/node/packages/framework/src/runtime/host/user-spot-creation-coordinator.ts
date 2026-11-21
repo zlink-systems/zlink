@@ -1,3 +1,4 @@
+import { createObjectCreationDeadline } from './object-creation-deadline';
 import { encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
 import { createHash } from 'node:crypto';
 import {
@@ -50,7 +51,7 @@ export interface ZLinkUserSpotCreationCoordinatorOptions {
   readonly target: (
     request: Pick<ZLinkUserSpotCreationRequest, 'meshName' | 'stableType'>,
     signal?: AbortSignal,
-    excludedNodeRids?: ReadonlySet<string>
+    excludedHostRuns?: ReadonlyMap<string, bigint>
   ) => Promise<
     | {
         readonly meshName: string;
@@ -131,18 +132,18 @@ export class ZLinkUserSpotCreationCoordinator {
   ): Promise<ZLinkUserSpotCreationResult> {
     const deadlineUnixMs = Date.now() + request.timeoutMs;
     const remainingMs = Math.max(0, deadlineUnixMs - Date.now());
-    const deadline = createDeadline(remainingMs, request.signal);
+    request.signal?.throwIfAborted();
+    const deadline = createObjectCreationDeadline(remainingMs, 'User Spot', request.signal);
     const deadlineMs = performance.now() + remainingMs;
     const signal = deadline.signal;
-    signal.throwIfAborted();
     const sha256 = createHash('sha256').update(request.requestPayload).digest();
     const contentReference = encodeLocationCreationContent(request.requestPayload);
-    const excludedNodeRids = new Set<string>();
+    const excludedHostRuns = new Map<string, bigint>();
     let target: Awaited<ReturnType<ZLinkUserSpotCreationCoordinatorOptions['target']>>;
     let reserved: ZLinkObjectReserveResult;
     for (;;) {
       try {
-        const spot = await this.awaitReady(request, signal);
+        const spot = await this.awaitReady(request, signal, excludedHostRuns);
         if (spot !== undefined) {
           deadline.close();
           return { result: { spot, state: ZLinkSpotCreateState.Existing }, spot };
@@ -152,7 +153,7 @@ export class ZLinkUserSpotCreationCoordinator {
         throw error;
       }
       try {
-        target = await this.options.target(request, signal, excludedNodeRids);
+        target = await this.options.target(request, signal, excludedHostRuns);
       } catch (error) {
         deadline.close();
         if (error instanceof ZLinkFrameworkException) throw error;
@@ -178,14 +179,6 @@ export class ZLinkUserSpotCreationCoordinator {
         throw createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.PlacementCapacityExhausted,
           'No eligible User Spot placement target is ready.',
-          true
-        );
-      }
-      if (excludedNodeRids.has(encodeRoutingIdStorageHex(target.nodeRid))) {
-        deadline.close();
-        throw createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.PlacementCapacityExhausted,
-          'No additional User Spot placement target is ready.',
           true
         );
       }
@@ -249,9 +242,12 @@ export class ZLinkUserSpotCreationCoordinator {
         (reserved.kind === 'conflict' && reserved.current.kind === 'snapshot')
       )
         continue;
-      if (reserved.kind === 'placementCapacityExhausted') continue;
-      if (!(reserved.kind === 'conflict' && reserved.current.kind === 'missing')) break;
-      excludedNodeRids.add(encodeRoutingIdStorageHex(target.nodeRid));
+      if (
+        reserved.kind !== 'placementCapacityExhausted' &&
+        !(reserved.kind === 'conflict' && reserved.current.kind === 'missing')
+      )
+        break;
+      excludedHostRuns.set(encodeRoutingIdStorageHex(target.nodeRid), target.nodeGeneration);
     }
 
     if (reserved.kind === 'typeMismatch') {
@@ -569,8 +565,9 @@ export class ZLinkUserSpotCreationCoordinator {
       const publicationCleanup = await Promise.allSettled([
         Promise.resolve().then(() => local?.publication?.abort())
       ]);
-      const cleanupDeadline = createDeadline(
-        this.options.cleanupTimeoutMs ?? DEFAULT_USER_SPOT_CLEANUP_TIMEOUT_MS
+      const cleanupDeadline = createObjectCreationDeadline(
+        this.options.cleanupTimeoutMs ?? DEFAULT_USER_SPOT_CLEANUP_TIMEOUT_MS,
+        'User Spot'
       );
       const cleanupSignal = cleanupDeadline.signal;
       const cleanup = await Promise.allSettled([
@@ -726,13 +723,16 @@ export class ZLinkUserSpotCreationCoordinator {
 
   private async awaitReady(
     request: ZLinkUserSpotCreationRequest,
-    signal: AbortSignal
+    signal: AbortSignal,
+    excludedHostRuns: Map<string, bigint>
   ): Promise<SpotRef | undefined> {
     const key = encodeAuthorityKey('user_spot', String(request.spotId));
     for (;;) {
       signal.throwIfAborted();
       const current = await this.options.store.readAuthority(key, signal);
       if (current.kind === 'missing') return undefined;
+      // This authority may release its reservation before the next placement attempt.
+      excludedHostRuns.clear();
       if (request.generatedIdentity === true) throw spotIdConflict(request.spotId);
       if (
         current.allocation.objectKind !== 'user_spot' ||
@@ -1108,36 +1108,6 @@ function remoteUserSpotFailure(
     failureCode,
     `${message} terminalResult=${terminalResult}, failureCode=${failureCode}.`
   );
-}
-
-function createDeadline(
-  timeoutMs: number,
-  parent?: AbortSignal
-): {
-  readonly signal: AbortSignal;
-  close(): void;
-} {
-  const controller = new AbortController();
-  const timeout = setTimeout(
-    () =>
-      controller.abort(
-        createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
-          'User Spot creation exceeded its end-to-end deadline.',
-          true
-        )
-      ),
-    timeoutMs
-  );
-  const abort = () => controller.abort(parent?.reason);
-  parent?.addEventListener('abort', abort, { once: true });
-  return {
-    signal: controller.signal,
-    close: () => {
-      clearTimeout(timeout);
-      parent?.removeEventListener('abort', abort);
-    }
-  };
 }
 
 function wait(delayMs: number, signal?: AbortSignal): Promise<void> {

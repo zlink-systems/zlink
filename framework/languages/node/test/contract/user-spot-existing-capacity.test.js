@@ -11,6 +11,9 @@ const {
   ZLinkSpotCreateState
 } = require('../../packages/framework/dist');
 const { fixedRidHostClock, finishFixedRidHostStartup } = require('../helpers/fixed-rid-host-clock');
+const {
+  ZLinkRequestSourceResolver
+} = require('../../packages/framework/dist/runtime/locations/request-source-resolver');
 
 async function capacityOne(run, t) {
   const hostClock = fixedRidHostClock(t);
@@ -63,9 +66,23 @@ test('GetOrCreate returns the same Ready SpotRef when its target capacity is ful
 });
 
 test('GetOrCreate still rejects another Spot ID when its target capacity is full', async (t) => {
+  const publish = ZLinkRequestSourceResolver.prototype.observeLiveDescriptors;
+  t.mock.method(
+    ZLinkRequestSourceResolver.prototype,
+    'observeLiveDescriptors',
+    async function (meshName, descriptors, signal) {
+      // Keep the last discovery snapshot with room while the Store fills the slot.
+      if (
+        descriptors.some(({ populationCapacity: { spots } }) => spots.active + spots.reserved > 0)
+      ) {
+        return;
+      }
+      await publish.call(this, meshName, descriptors, signal);
+    }
+  );
   await capacityOne(async (spots) => {
     await assert.rejects(
-      spots.getOrCreate('room-2', 'room').inMesh('existing-capacity').submit(),
+      spots.getOrCreate('room-2', 'room').inMesh('existing-capacity').timeout(200).submit(),
       (error) =>
         error.kind === ZLinkFrameworkErrorKind.Unavailable &&
         error.message.includes('No eligible User Spot placement target is ready.')

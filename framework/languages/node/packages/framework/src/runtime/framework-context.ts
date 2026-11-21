@@ -23,16 +23,24 @@ export class FrameworkContextField<T> {
     return storage.run(this.withValue(value), callback, ...args);
   }
 
-  enterWith(value: T | undefined): void {
-    storage.enterWith(this.withValue(value));
+  enterWith(value: T | undefined): FrameworkContext | undefined {
+    const parent = storage.getStore();
+    storage.enterWith(this.withValue(value, parent));
+    return parent;
+  }
+
+  restore(parent: FrameworkContext | undefined): void {
+    storage.enterWith(parent);
   }
 
   exit<TResult>(callback: () => TResult): TResult {
     return this.run(undefined, callback);
   }
 
-  private withValue(value: T | undefined): FrameworkContext | undefined {
-    const parent = storage.getStore();
+  private withValue(
+    value: T | undefined,
+    parent = storage.getStore()
+  ): FrameworkContext | undefined {
     return parent?.[this.key] === value ? parent : Object.freeze({ ...parent, [this.key]: value });
   }
 }
