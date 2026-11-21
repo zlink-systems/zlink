@@ -2700,7 +2700,8 @@ task_t<bool> raw_mesh_node_owner_t::send_bound_session_replaced (
 
 task_t<void>
 raw_mesh_node_owner_t::request_bound_session_close (protocol::bound_session_close_t record,
-                                                    std::chrono::milliseconds timeout)
+                                                    std::chrono::milliseconds timeout,
+                                                    infrastructure_submit_t submit)
 {
     const auto deadline = capture_request_deadline (timeout);
     const auto target = record.session.session_owner_node_routing_id;
@@ -2742,7 +2743,8 @@ raw_mesh_node_owner_t::request_bound_session_close (protocol::bound_session_clos
               completion->complete (
                 result_t<void>::failure (framework_error_kind_t::protocol_error, error.what ()));
           }
-      });
+      },
+      0, std::move (submit));
     if (!submitted)
         completion->complete (result_t<void>::failure (framework_error_kind_t::unavailable,
                                                        "Session close was not admitted"));
@@ -3161,7 +3163,8 @@ task_t<bool> raw_mesh_node_owner_t::request_infrastructure (
     &decode_reply,
   foundation::operation_registry_t::clock_t::time_point deadline,
   foundation::operation_registry_t::callback_t callback,
-  std::uint64_t target_lifecycle_generation)
+  std::uint64_t target_lifecycle_generation,
+  infrastructure_submit_t submit)
 {
     std::shared_ptr<detail::backend::raw_route_port_t> port;
     std::uint64_t correlation = 0;
@@ -3185,27 +3188,56 @@ task_t<bool> raw_mesh_node_owner_t::request_infrastructure (
           target_routing_id, {}, {}, detail::current_wait_owner ())) {
         co_return false;
     }
-    if (target_routing_id == local.node_routing_id) {
-        const auto accepted = _mailbox.try_enqueue (service_mailbox_record_t::from_parts (
-          owner_key (local.node_routing_id), service_mailbox_domain_t::infrastructure,
-          detail::backend::materialize_binding_parts ({header (correlation)}),
-          local.node_routing_id, correlation));
+    auto dispatch = [this, target_routing_id, header, decode_reply, deadline,
+                     port = std::move (port), local, correlation, id, ended,
+                     target_lifecycle_generation] () mutable -> task_t<bool> {
+        if (ended->task ().await_ready ())
+            co_return true;
+        if (foundation::operation_registry_t::clock_t::now () >= deadline) {
+            (void) _operations->fail (id, foundation::operation_terminal_t::timed_out);
+            co_return true;
+        }
+        if (target_routing_id == local.node_routing_id) {
+            const auto accepted = _mailbox.try_enqueue (service_mailbox_record_t::from_parts (
+              owner_key (local.node_routing_id), service_mailbox_domain_t::infrastructure,
+              detail::backend::materialize_binding_parts ({header (correlation)}),
+              local.node_routing_id, correlation));
+            if (!accepted)
+                (void) _operations->fail (id, foundation::operation_terminal_t::transport_failed);
+            if (accepted)
+                signal_activity ();
+            co_return accepted;
+        }
+        const auto operations = _operations;
+        detail::backend::raw_message_t request_parts{header (correlation)};
+        const auto remaining = std::chrono::ceil<std::chrono::milliseconds> (
+          deadline - foundation::operation_registry_t::clock_t::now ());
+        if (remaining <= std::chrono::milliseconds::zero ())
+            co_return true;
+        co_return co_await submit_registered_request (
+          std::move (port), observe_request_peer (target_routing_id), std::move (operations), id,
+          correlation, target_routing_id, std::move (request_parts), decode_reply, deadline,
+          ended->task (), {}, {}, {}, target_lifecycle_generation);
+    };
+    if (submit) {
+        const bool accepted = submit (
+          [dispatch = std::move (dispatch), ended] () mutable -> task_t<bool> {
+              return [] (decltype (dispatch) action, decltype (ended) completion) -> task_t<bool> {
+                  const bool submitted = co_await action ();
+                  if (submitted)
+                      co_await completion->task ();
+                  co_return submitted;
+              }(std::move (dispatch), ended);
+          },
+          [operations = _operations, id] (result_t<void> terminal) {
+              if (!terminal)
+                  (void) operations->fail (id, foundation::operation_terminal_t::transport_failed);
+          });
         if (!accepted)
             (void) _operations->fail (id, foundation::operation_terminal_t::transport_failed);
-        if (accepted)
-            signal_activity ();
         co_return accepted;
     }
-    const auto operations = _operations;
-    detail::backend::raw_message_t request_parts{header (correlation)};
-    const auto remaining = std::chrono::ceil<std::chrono::milliseconds> (
-      deadline - foundation::operation_registry_t::clock_t::now ());
-    if (remaining <= std::chrono::milliseconds::zero ())
-        co_return true;
-    co_return co_await submit_registered_request (
-      std::move (port), observe_request_peer (target_routing_id), std::move (operations), id,
-      correlation, target_routing_id, std::move (request_parts), decode_reply, deadline,
-      ended->task (), {}, {}, {}, target_lifecycle_generation);
+    co_return co_await dispatch ();
 }
 
 bool raw_mesh_node_owner_t::reply_infrastructure (service_mailbox_reply_view_t request,

@@ -78,7 +78,7 @@ target 실행에서 이어질 수 있으며 factory가 같은 입력으로 다�
 위치 저장소를 수동으로 비우거나 위치·세대 정보를 유실한 상황의 단일 활성은 보장 범위에
 포함하지 않는다. 그 상태를 정상적인 close나 owner 장애 복구로 취급해서는 안 된다.
 
-### 1.2 영속 상태와 공개 세대 값
+### 1.2 영속 상태와 공개 세대 값 {#object-generation}
 
 **공동 잭팟처럼 돈이 걸린 영속 상태는 application 저장소에서도 보호한다.** Instance Spot은
 그 Spot으로 들어오는 callback을 직렬로 실행한다. 다른 서비스의 DB 변경이나 이미 시작한
@@ -87,12 +87,15 @@ target 실행에서 이어질 수 있으며 factory가 같은 입력으로 다�
 Timeout이나 연결 유실 뒤에는 기존 요청의 결과를 조회하거나 같은 업무 요청 id로 중복 영향을
 막은 뒤 새 요청을 시작한다.
 
-공개 Instance Spot context에서 읽는 `ObjectGeneration`은 **같은 id의 재생성을 구분하는 값**이다.
+공개 Instance Spot context에서 읽는 `ObjectGeneration`은 같은 ID의 서로 다른 논리적
+instance(logical incarnation)를 구분한다.
 
 `ZLinkInstanceSpotContext.objectGeneration`으로 읽는다.
 
-Relocation은 같은 object를 옮기므로 `ObjectGeneration`이 바뀌지 않는다. 따라서 이 값을
-owner 교체를 구분하는 fencing token으로 사용하지 않는다. Fencing은 저장소가 이전 쓰기
+Join과 relocation 중에는 `ObjectGeneration`을 유지한다. Relocation에서
+`RecreateOnRelocation`으로 application 객체를 다시 만들어도 같은 logical incarnation이
+이어진다. 기존 incarnation을 종료하고 같은 ID로 새로 생성하면 Location Store가 새 값을 발급한다. Application 데이터의 변경 순서나 버전, 쓰기 권한을
+검증하는 fencing에는 이 값을 사용하지 않는다. Fencing은 저장소가 이전 쓰기
 권한으로 온 변경을 거부하는 방식이다. 그 보호가 필요하면 application 저장소에서 권한을
 발급하고 모든 쓰기에서 검증한다. Framework context가 owner 교체용 token을 제공한다고
 가정하지 않는다. 위치 저장소의 세대 정보를 유실했을 때도 이전 값과의 순서를 가정하지 않는다.

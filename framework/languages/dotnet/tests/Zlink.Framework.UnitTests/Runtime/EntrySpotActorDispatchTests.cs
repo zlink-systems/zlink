@@ -15179,6 +15179,7 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         public async ValueTask HandleAsync(
             BlockingDisposeEntrySpot spot,
+            IZLinkMessageContext context,
             ProbeRouteMessage message,
             CancellationToken cancellationToken
         )
@@ -15418,6 +15419,7 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         public async ValueTask HandleAsync(
             TimerProbeEntrySpot spot,
+            IZLinkMessageContext context,
             ProbeRouteMessage message,
             CancellationToken cancellationToken
         )
@@ -15459,6 +15461,7 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         public ValueTask HandleAsync(
             ProbeEntrySpot spot,
+            IZLinkMessageContext context,
             ProbeRouteMessage message,
             CancellationToken cancellationToken
         )

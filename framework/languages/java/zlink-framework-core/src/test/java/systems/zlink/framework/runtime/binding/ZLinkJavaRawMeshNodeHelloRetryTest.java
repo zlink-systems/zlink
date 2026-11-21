@@ -87,7 +87,6 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
                 dispatchNext(node, port, router, ServiceWireConstants.COMMAND_ADMIT);
                 assertEquals(1, node.readyPeerCount());
                 assertNotNull(node.livenessForTest().connection(remoteRid));
-                assertEquals(ServiceWireConstants.COMMAND_UPDATE, receive(peerPort, peer, wire));
                 // A buffered REJECT from another generation cannot revoke this admission.
                 node.dispatch(
                         new ZLinkJavaRawServicePort.Inbound(
@@ -357,11 +356,6 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
                         events.observedReadyCount.get(),
                         "READY handler reenters the final root");
 
-                // Finish the original UPDATEs before the next expected command in each FIFO.
-                dispatchNext(local, localPort, localRouter, ServiceWireConstants.COMMAND_UPDATE);
-                assertEquals(
-                        ServiceWireConstants.COMMAND_UPDATE,
-                        receive(remotePort, remoteRouter, wire));
                 local.observePeerAdmissionExpectation(
                                 remoteRid,
                                 remoteDescriptor.advertisedEndpoint(),
@@ -702,7 +696,6 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
                     .toCompletableFuture()
                     .get(2, java.util.concurrent.TimeUnit.SECONDS);
             dispatchNext(node, port, router);
-            assertEquals(ServiceWireConstants.COMMAND_UPDATE, receive(peerPort, peer, wire));
             assertEquals(1, node.status().admittedPeerCount(), "duplicate ADMIT is idempotent");
             assertEquals(
                     1, readyEvents.count.get(), "duplicate ADMIT must not announce ready again");
@@ -711,7 +704,10 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
                 node.sendNode(remoteRid, null, List.of(body))
                         .toCompletableFuture()
                         .get(2, java.util.concurrent.TimeUnit.SECONDS);
-                assertEquals(ServiceWireConstants.COMMAND_NODE_SEND, receive(peerPort, peer, wire));
+                assertEquals(
+                        ServiceWireConstants.COMMAND_NODE_SEND,
+                        receive(peerPort, peer, wire),
+                        "duplicate ADMIT must not emit an UPDATE");
                 node.sendChannel("orders", null, List.of(body))
                         .toCompletableFuture()
                         .get(2, java.util.concurrent.TimeUnit.SECONDS);

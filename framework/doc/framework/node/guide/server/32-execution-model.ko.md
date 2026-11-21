@@ -134,6 +134,31 @@ request·worker와 같은 call에서는 언어별 terminator 이름이 다음과
 --8<-- "framework/languages/node/samples/Bingo.Ts/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/bingo-room-spot.ts:doc-bingo-room-join"
 ```
 
+### 5.1 DB·파일 같은 I/O를 handler에서 기다릴 때 {#io-worker-wait}
+
+DB나 파일에 비동기 I/O를 요청하는 작업은 Framework의 worker scheduler에 제출한다.
+아래 종결자는 I/O 결과를 기다리는 동안 현재 handler의 실행 권한을 어떻게 처리할지 정한다.
+`SpotWide`에서 일반 비동기 terminal은 저장이 끝날 때까지 turn을 유지한다. 그동안 같은 Spot의 다른 handler가
+저장 전 상태를 보지 않게 하려면 이 방식을 고르고, 기다리는 동안 다른 handler를 진행하려면 `Yield`를 고른다.
+
+| Spot 종류와 handler | 다른 handler를 진행시키는 terminator | 기다리는 동안 진행하는 것 | 기다리는 것 |
+| --- | --- | --- | --- |
+| `SpotWide` User Spot·Instance Spot의 member Actor handler | `Yield` | 같은 Spot의 다른 Actor, Spot handler, timer | 같은 Actor의 다음 message |
+| Entry Spot·`PerActor` User Spot의 Actor handler | 일반 비동기 terminal | 다른 Actor와 Spot 작업 | 같은 Actor의 다음 message. Actor별 gate를 유지한다. |
+| Entry Spot의 Spot handler·timer·lifecycle callback | 일반 비동기 terminal | Actor별 gate를 쓰는 Actor handler | 같은 Spot gate를 쓰는 다른 Spot handler·timer·lifecycle callback |
+
+Member Actor가 `Yield` 뒤에 재개할 때, 그 Actor가 단독으로 소유한 상태에는
+같은 Actor의 다른 message가 반영되지 않았다.
+Spot 공유 상태와 다른 Actor의 상태는 사용하기 전에 다시 확인한다.
+Entry Spot의 Spot 작업을 DB 응답과 독립적으로 진행하려면 Actor handler에서 DB I/O를 기다린다.
+
+한 turn에서 `Yield`를 사용하는 call은 하나다. 같은 turn의 두 번째 `Yield`는 제출 전에
+아래 오류로 끝난다.
+
+| I/O worker 선언 | 일반 비동기 / Yield | 두 번째 Yield 오류 |
+| --- | --- | --- |
+| `runIoWorker<T>(work: (signal: AbortSignal) => Promise<T>): ZLinkWorkerCall<T>` | `submit(signal?: AbortSignal)` / `yield(signal?: AbortSignal)` | `ZLinkFrameworkErrorKind.InvalidOperation` |
+
 ## 6. 관련 문서
 
 - id로 호출하는 상태 객체 — [Spot](21-spot.ko.md) · [Actor](22-actor.ko.md)

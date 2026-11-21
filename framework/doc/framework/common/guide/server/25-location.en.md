@@ -347,7 +347,18 @@ There is a place where the reference itself is passed on. A call that closes or 
 only the [generation that reference points at](22-actor.en.md#33-generation-in-a-reference) and
 leaves a target recreated under the same id untouched.
 
-## 6. Related Documents
+## 6. Creation under load {#creation-load}
+
+When concurrent calls try to create the same Actor ID or Spot ID, only the target that obtains
+creation authority from the Location Store runs the factory. Calls that do not obtain that
+authority start no separate factory.
+
+During a login surge with distinct Actor IDs, each new ID requires a Location Store round trip
+to reserve creation authority and a write to commit the approved creation. Throughput and latency
+depend on Store performance and placement and capacity at the target nodes. Measure end-to-end
+creation latency under the expected login load and use those results to set the deadline.
+
+## 7. Related Documents
 
 - State objects called by id — [Spot](21-spot.en.md) · [Actor](22-actor.en.md)
 - What the Store writes down — [How Channels Work](30-channel-patterns.en.md#61-location-store--where-who-is-where-is-written-down)

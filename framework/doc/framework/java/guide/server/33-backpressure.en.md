@@ -161,7 +161,7 @@ never infers ordering from arrival order.
 
 ## 4. Backpressure Visible in the API
 
-### 4.1 Why send Is `async`
+### 4.1 Why send Is `async` {#send-backpressure}
 
 `send` doesn't wait for a response, but there's one thing it does have to wait for — **a
 slot to send into.**
@@ -175,6 +175,8 @@ resubmission and the `admitted` completion. A send waits with no time limit or c
 Admission after capacity recovers completes normally. Route removal while pending ends with
 `Unavailable`; socket close or runtime shutdown ends with `ShuttingDown`. Only a Classic fanout
 publisher uses a send timeout.
+The application observes the final outcome of the capacity wait. The binding handles internal
+`EAGAIN` without exposing it as a send result.
 
 **The framework does not create or resend a second operation** — after a terminal failure,
 whether to start a new operation, drop it, or tell the user it failed is up to the

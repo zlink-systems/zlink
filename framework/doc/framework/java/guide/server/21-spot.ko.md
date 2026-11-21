@@ -133,6 +133,8 @@ node 집합의 이름이고, `inMesh`는 route mesh에 참여한 node 가운데 
 --8<-- "framework/languages/java/tutorial/java/Client/src/main/java/systems/zlink/tutorial/client/ClientApplication.java:spot-create-call"
 ```
 
+Spot 생성의 deadline과 호출자 취소는 [생성이 deadline 안에 끝나지 않을 때](22-actor.ko.md#creation-deadline)의 결과와 같다.
+
 ### 4.2 호출하기
 
 만들 때 받은 id만 준다. 지금 어느 node에 있는지는 Framework가 찾는다.
