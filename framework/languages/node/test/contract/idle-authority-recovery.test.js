@@ -263,7 +263,7 @@ test('remote relocation reaches the new owner through cold lookup and warm cache
       return current;
     }
   };
-  const lease = { remainingOwnerTokenLeaseMs: async () => 30000 };
+  const lease = { ownerTokenLeaseDeadlineMs: async () => performance.now() + 30000 };
   const warm = new ZLinkAuthoritySpotRouteResolver(
     store,
     (mesh) => mesh,

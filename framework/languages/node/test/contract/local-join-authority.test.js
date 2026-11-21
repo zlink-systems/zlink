@@ -1378,7 +1378,7 @@ for (const outcome of ['stored', 'same-version conflict', 'new-version conflict'
     };
     const resolver = new ZLinkStoreLocationResolvers({
       stores: { authorityStore: store },
-      leaseTracker: { async remainingOwnerTokenLeaseMs() { return 60_000; } }
+      leaseTracker: { async ownerTokenLeaseDeadlineMs() { return performance.now() + 60_000; } }
     });
     await resolver.resolveDirectActorRoute('player');
     const observed = [];

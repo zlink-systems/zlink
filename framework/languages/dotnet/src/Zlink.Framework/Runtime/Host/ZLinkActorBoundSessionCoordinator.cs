@@ -797,35 +797,35 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         var state = _getState(actorId);
         if (state.TryGetBoundSessionForOutbound(out var session))
         {
-            byte[]? localFrame = null;
             Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"bound_session_send actor={actorId} session_node={session.SessionNodeRid} session_rid={session.SessionRid} binding={session.BindingToken} parts={parts.Count}"
             );
-            if (parts.Count == 1)
-            {
-                localFrame = ConcatParts(parts);
-                var admission = AwaitStateLane(
-                    _sessionBindings.AdmitOutboundAsync(
-                        OutboundTenure(actorId, session),
-                        localFrame
-                    )
-                );
-                if (admission.Kind == ZLinkSessionOutboundAdmissionKind.Immediate)
-                {
-                    Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
-                        $"bound_session_send_local actor={actorId}"
-                    );
-                    return admission.Delivery == ZLinkSessionOutboundDelivery.Delivered;
-                }
-            }
-            else if (
+            if (
                 AwaitStateLane(_sessionBindings.GetContextAsync(OutboundTenure(actorId, session)))
                 is not null
             )
-                throw new InvalidOperationException(
-                    "A local actor bound-session send requires one encoded stream frame."
+            {
+                if (parts.Count != 1)
+                    throw new InvalidOperationException(
+                        "A local actor bound-session send requires one encoded stream frame."
+                    );
+                Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
+                    $"bound_session_send_local actor={actorId}"
                 );
-            if (TryRelayRemotePush(actorId, session, localFrame ?? ConcatParts(parts)))
+                var admission = AwaitStateLane(
+                    _sessionBindings.AdmitOutboundAsync(
+                        OutboundTenure(actorId, session),
+                        ConcatParts(parts)
+                    )
+                );
+                return admission.Kind switch
+                {
+                    ZLinkSessionOutboundAdmissionKind.Immediate => admission.Delivery
+                        == ZLinkSessionOutboundDelivery.Delivered,
+                    _ => false,
+                };
+            }
+            if (TryRelayRemotePush(actorId, session, ConcatParts(parts)))
             {
                 Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
                     $"bound_session_send_remote_submitted actor={actorId}"
@@ -863,6 +863,16 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             .SendActorBoundSession(actorRef, parts);
     }
 
+    public bool SendIfBoundTo(
+        string actorId,
+        string expectedBindingToken,
+        IReadOnlyList<Message> parts
+    )
+    {
+        var state = _getState(actorId);
+        return state.TryUseBoundSession(expectedBindingToken, _ => Send(actorId, parts));
+    }
+
     public ValueTask<ZLinkOneWaySubmitResult> SendIfBoundToAsync(
         string actorId,
         string expectedBindingToken,
@@ -876,7 +886,9 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             || !string.Equals(session.BindingToken, expectedBindingToken, StringComparison.Ordinal)
         )
         {
-            // Nothing was submitted for this stale binding, so report the drop explicitly.
+            //  Designed stale-binding drop (same contract as the sync
+            //  SendIfBoundTo path), reported honestly: nothing was
+            //  submitted, so this must not read as a delivery signal.
             return ValueTask.FromResult(
                 new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.SkippedNotBound)
             );
@@ -895,34 +907,33 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
             $"bound_session_send_async actor={actorId} session_node={session.SessionNodeRid} session_rid={session.SessionRid} binding={session.BindingToken} binding_gen={session.BindingGeneration} parts={parts.Count}"
         );
-        byte[]? localFrame = null;
-        if (parts.Count == 1)
-        {
-            localFrame = ConcatParts(parts);
-            var admission = await _sessionBindings
-                .AdmitOutboundAsync(OutboundTenure(actorId, session), localFrame)
-                .ConfigureAwait(false);
-            if (admission.Kind == ZLinkSessionOutboundAdmissionKind.Immediate)
-            {
-                var status = admission.Delivery switch
-                {
-                    ZLinkSessionOutboundDelivery.Delivered => ZLinkOneWaySubmitStatus.Submitted,
-                    ZLinkSessionOutboundDelivery.Backpressured =>
-                        ZLinkOneWaySubmitStatus.Backpressured,
-                    _ => ZLinkOneWaySubmitStatus.TargetNotFound,
-                };
-                return new ZLinkOneWaySubmitResult(status);
-            }
-        }
-        else if (
+        if (
             await _sessionBindings
                 .GetContextAsync(OutboundTenure(actorId, session))
                 .ConfigureAwait(false)
             is not null
         )
-            throw new InvalidOperationException(
-                "A local actor bound-session send requires one encoded stream frame."
-            );
+        {
+            if (parts.Count != 1)
+                throw new InvalidOperationException(
+                    "A local actor bound-session send requires one encoded stream frame."
+                );
+            var admission = await _sessionBindings
+                .AdmitOutboundAsync(OutboundTenure(actorId, session), ConcatParts(parts))
+                .ConfigureAwait(false);
+            var status = admission.Kind switch
+            {
+                ZLinkSessionOutboundAdmissionKind.Immediate => admission.Delivery switch
+                {
+                    ZLinkSessionOutboundDelivery.Delivered => ZLinkOneWaySubmitStatus.Submitted,
+                    ZLinkSessionOutboundDelivery.Backpressured =>
+                        ZLinkOneWaySubmitStatus.Backpressured,
+                    _ => ZLinkOneWaySubmitStatus.TargetNotFound,
+                },
+                _ => ZLinkOneWaySubmitStatus.TargetNotFound,
+            };
+            return new ZLinkOneWaySubmitResult(status);
+        }
 
         if (
             RemotePushRelayAsync is { } relay
@@ -931,12 +942,7 @@ internal sealed class ZLinkActorBoundSessionCoordinator
             && _getNodeForMesh(session.MeshName.Value) is { } localNode
             && !sessionNodeRid.Equals(localNode.RoutingId)
         )
-            return await relay(
-                    actorId,
-                    session,
-                    localFrame ?? ConcatParts(parts),
-                    cancellationToken
-                )
+            return await relay(actorId, session, ConcatParts(parts), cancellationToken)
                 .ConfigureAwait(false);
 
         if (!ZLinkActorBoundSessionBindingToken.IsNative(session.BindingToken))
