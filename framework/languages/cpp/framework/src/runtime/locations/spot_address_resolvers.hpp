@@ -7,6 +7,8 @@
 #include <runtime/locations/location_repository_values.hpp>
 #include <runtime/locations/actor_authority_payload.hpp>
 
+#include "../../../../../../runtime/protocol/generated/cpp/service_wire_constants.hpp"
+
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -54,6 +56,21 @@ class spot_address_resolver_t
     }
     virtual void invalidate_all_routes_after_store_recovery () = 0;
 };
+
+// Routing §2.2: only framework stale-route results invalidate the next call.
+inline void invalidate_stale_spot_route (spot_address_resolver_t &resolver,
+                                         std::string_view target,
+                                         const framework_exception_t *error)
+{
+    if (error
+        && (error->kind () == framework_error_kind_t::not_found
+            || error->kind () == framework_error_kind_t::unavailable
+            || detail::failure_code (*error)
+                 == static_cast<std::uint32_t> (
+                   protocol::framework_error_code::spotGenerationStale))
+        && detail::error_origin (*error) != detail::error_origin_t::application)
+        resolver.invalidate_spot_address (target);
+}
 
 class actor_address_resolver_t
 {
