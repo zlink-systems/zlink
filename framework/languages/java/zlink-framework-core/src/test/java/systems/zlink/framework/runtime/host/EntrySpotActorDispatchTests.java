@@ -98,7 +98,7 @@ final class EntrySpotActorDispatchTests {
     }
 
     @org.junit.jupiter.api.RepeatedTest(40)
-    void sessionBoundConcurrentBindsDecideAgainstCommittedCurrent() throws Exception {
+    void sessionBoundQueuedBindsDecideAgainstCommittedCurrent() throws Exception {
         var backend = startBackend();
         try (var runtime = startRuntime(backend)) {
             String id = "bound-duplicate-actor";
@@ -121,74 +121,62 @@ final class EntrySpotActorDispatchTests {
                             initial.sessionOwnerNodeRid(), initial.sessionOwnerNodeGeneration(),
                             initial.sessionOwnerId(), initial.sessionOwnerLeaseGeneration(),
                             RoutingId.from("second-session"), initial.bindingGeneration() + 2);
-            backend.node.canonicalBoundSessionRoute = Optional.empty();
-            var entered = new CompletableFuture<Void>();
-            var release = new CompletableFuture<Void>();
-            var lane =
-                    actors.actorRelocationLaneAsync(id)
-                            .toCompletableFuture()
-                            .get(5, TimeUnit.SECONDS);
-            var handler =
-                    lane.enqueue(
-                            () -> {
-                                entered.complete(null);
-                                return release;
-                            },
-                            null);
-            entered.get(5, TimeUnit.SECONDS);
             java.util.function.Function<
                             ZLinkInternalSpotNode.BoundSessionRoute, CompletionStage<Boolean>>
                     bind =
-                            incoming ->
-                                    actors.applyRemoteSessionBindingAsync(
-                                            backend.node,
-                                            ref,
-                                            applied ->
-                                                    applied.acceptBinding(
-                                                            incoming.sessionBindingIdentity(),
-                                                            incoming.sessionRid(),
-                                                            selected ->
-                                                                    selected.decideDuplicateBind(
-                                                                                    incoming
-                                                                                            .sessionBindingIdentity(),
-                                                                                    incoming
-                                                                                            .sessionRid(),
-                                                                                    () -> {},
-                                                                                    () -> false)
-                                                                            .thenCompose(
-                                                                                    rejection ->
-                                                                                            rejection
-                                                                                                            .isPresent()
-                                                                                                    ? CompletableFuture
-                                                                                                            .completedFuture(
-                                                                                                                    false)
-                                                                                                    : selected
-                                                                                                            .commit(
-                                                                                                                    () -> {
-                                                                                                                        backend.node
-                                                                                                                                        .canonicalBoundSessionRoute =
-                                                                                                                                Optional
-                                                                                                                                        .of(
-                                                                                                                                                incoming);
-                                                                                                                        return CompletableFuture
-                                                                                                                                .completedFuture(
-                                                                                                                                        true);
-                                                                                                                    }))));
+                            incoming -> {
+                                var identity = incoming.sessionBindingIdentity();
+                                var sessionRid = incoming.sessionRid();
+                                java.util.function.Function<
+                                                ZLinkInternalSpotNode.RemoteSessionBindingTransition,
+                                                CompletionStage<Boolean>>
+                                        decide =
+                                                selected -> {
+                                                    var decision =
+                                                            selected.decideDuplicateBind(
+                                                                    identity,
+                                                                    sessionRid,
+                                                                    () -> {},
+                                                                    () -> false);
+                                                    return decision.thenCompose(
+                                                            rejection -> {
+                                                                if (rejection.isPresent()) {
+                                                                    return CompletableFuture
+                                                                            .completedFuture(false);
+                                                                }
+                                                                return selected.commit(
+                                                                        () -> {
+                                                                            backend.node
+                                                                                    .canonicalBoundSessionRoute =
+                                                                                    Optional.of(
+                                                                                            incoming);
+                                                                            return CompletableFuture
+                                                                                    .completedFuture(
+                                                                                            true);
+                                                                        });
+                                                            });
+                                                };
+                                return actors.applyRemoteSessionBindingAsync(
+                                        backend.node,
+                                        ref,
+                                        applied -> applied.acceptBinding(identity, sessionRid, decide));
+                            };
             var firstBind = bind.apply(first).toCompletableFuture();
-            actors.activeActorIds();
-            var secondBind = bind.apply(second).toCompletableFuture();
-            actors.activeActorIds();
+            CompletableFuture<Boolean> secondBind;
             try {
+                actor.firstDecisionEntered.get(5, TimeUnit.SECONDS);
+                secondBind = bind.apply(second).toCompletableFuture();
                 assertFalse(firstBind.isDone());
                 assertFalse(secondBind.isDone());
-                assertTrue(actor.decidedCurrent.isEmpty());
+                assertEquals(List.of(initial.sessionBindingIdentity()), actor.decidedCurrent);
             } finally {
-                release.complete(null);
-                handler.toCompletableFuture().get(5, TimeUnit.SECONDS);
+                actor.releaseFirstDecision.complete(Optional.empty());
             }
             assertTrue(firstBind.get(5, TimeUnit.SECONDS));
             assertFalse(secondBind.get(5, TimeUnit.SECONDS));
-            assertEquals(List.of(first.sessionBindingIdentity()), actor.decidedCurrent);
+            assertEquals(
+                    List.of(initial.sessionBindingIdentity(), first.sessionBindingIdentity()),
+                    actor.decidedCurrent);
             assertEquals(Optional.of(first), backend.node.canonicalBoundSessionRoute);
         }
     }
@@ -1905,8 +1893,11 @@ final class EntrySpotActorDispatchTests {
     }
 
     public static final class BoundDuplicateCallbackProbeActor extends BoundCallbackProbeActor {
+        private final CompletableFuture<Void> firstDecisionEntered = new CompletableFuture<>();
+        private final CompletableFuture<Optional<String>> releaseFirstDecision =
+                new CompletableFuture<>();
         final List<systems.zlink.framework.actors.ZLinkSessionBindingIdentity> decidedCurrent =
-                new java.util.concurrent.CopyOnWriteArrayList<>();
+                new CopyOnWriteArrayList<>();
 
         BoundDuplicateCallbackProbeActor(ZLinkActorContext context) {
             super(context);
@@ -1918,6 +1909,10 @@ final class EntrySpotActorDispatchTests {
                 systems.zlink.framework.actors.ZLinkSessionBindingIdentity incoming,
                 systems.zlink.framework.actors.ZLinkActorCallbackCancellation cancellation) {
             decidedCurrent.add(current);
+            if (decidedCurrent.size() == 1) {
+                firstDecisionEntered.complete(null);
+                return releaseFirstDecision;
+            }
             return CompletableFuture.completedFuture(Optional.of("already bound"));
         }
     }

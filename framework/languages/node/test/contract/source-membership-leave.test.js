@@ -78,7 +78,7 @@ function fixture({ sourceLeave = async () => {}, storeFailure = false } = {}) {
   });
   const coordinator = new framework.ZLinkActorNativeJoinCoordinator({
     node,
-    entrySpotIdProvider: () => 'node-a',
+    entrySpotTargetSelector: async () => ({ routerChannelId: 'game', targetNodeRid: 'node-a', spotId: 'node-a', spotKind: framework.ZLinkSpotKind.Entry }),
     locationLifecycle: {
       async commitActorMembership() {
         events.push('store');
