@@ -49,7 +49,7 @@ final class ServiceWireCodec {
   enum AuthorityObjectKind { ACTOR(1L), SPOT(2L); final long wire; AuthorityObjectKind(long wire){this.wire=wire;} }
   enum SpotKind { ENTRY(1L), USER(2L), INSTANCE(3L); final long wire; SpotKind(long wire){this.wire=wire;} }
   enum EntryUserSpotAuthorityState { CREATING(0L), READY(1L), CLOSING(2L), RELOCATING(3L); final long wire; EntryUserSpotAuthorityState(long wire){this.wire=wire;} }
-  enum ActorAuthorityState { CREATING(0L), READY(1L); final long wire; ActorAuthorityState(long wire){this.wire=wire;} }
+  enum ActorAuthorityState { CREATING(0L), READY(1L), CLOSING(2L); final long wire; ActorAuthorityState(long wire){this.wire=wire;} }
   enum RelocationPolicyKind { DISABLED(0L), RECREATE(1L), SNAPSHOT(2L); final long wire; RelocationPolicyKind(long wire){this.wire=wire;} }
   enum TimerOverrunPolicyKind { SKIP_LATE_TICKS(1L), CATCH_UP_BOUNDED(2L), DELAY_NEXT_TICK(3L); final long wire; TimerOverrunPolicyKind(long wire){this.wire=wire;} }
   enum ActorSpotKind { ENTRY(1L), USER(2L); final long wire; ActorSpotKind(long wire){this.wire=wire;} }
@@ -410,7 +410,7 @@ final class ServiceWireCodec {
   private static void encodeSpotKind(SpotKind value, Writer w, DecoderContext c, int flags){w.uint(1,value.wire);}
   private static EntryUserSpotAuthorityState decodeEntryUserSpotAuthorityState(Reader r, DecoderContext c, int flags) throws IOException { long wire=r.uint(1);if(wire==0L)return EntryUserSpotAuthorityState.CREATING;if(wire==1L)return EntryUserSpotAuthorityState.READY;if(wire==2L)return EntryUserSpotAuthorityState.CLOSING;if(wire==3L)return EntryUserSpotAuthorityState.RELOCATING;throw error("entry-user-spot-authority-state enum"); }
   private static void encodeEntryUserSpotAuthorityState(EntryUserSpotAuthorityState value, Writer w, DecoderContext c, int flags){w.uint(1,value.wire);}
-  private static ActorAuthorityState decodeActorAuthorityState(Reader r, DecoderContext c, int flags) throws IOException { long wire=r.uint(1);if(wire==0L)return ActorAuthorityState.CREATING;if(wire==1L)return ActorAuthorityState.READY;throw error("actor-authority-state enum"); }
+  private static ActorAuthorityState decodeActorAuthorityState(Reader r, DecoderContext c, int flags) throws IOException { long wire=r.uint(1);if(wire==0L)return ActorAuthorityState.CREATING;if(wire==1L)return ActorAuthorityState.READY;if(wire==2L)return ActorAuthorityState.CLOSING;throw error("actor-authority-state enum"); }
   private static void encodeActorAuthorityState(ActorAuthorityState value, Writer w, DecoderContext c, int flags){w.uint(1,value.wire);}
   private static RelocationPolicyKind decodeRelocationPolicyKind(Reader r, DecoderContext c, int flags) throws IOException { long wire=r.uint(1);if(wire==0L)return RelocationPolicyKind.DISABLED;if(wire==1L)return RelocationPolicyKind.RECREATE;if(wire==2L)return RelocationPolicyKind.SNAPSHOT;throw error("relocation-policy-kind enum"); }
   private static void encodeRelocationPolicyKind(RelocationPolicyKind value, Writer w, DecoderContext c, int flags){w.uint(1,value.wire);}
