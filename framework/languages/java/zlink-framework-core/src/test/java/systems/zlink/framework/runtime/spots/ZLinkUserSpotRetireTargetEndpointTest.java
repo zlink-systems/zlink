@@ -271,46 +271,41 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         AuthorityState authority = new AuthorityState();
         ZLinkLocationRepository authorityStore = authority.proxy();
         var coordinator = new ZLinkAggregateRelocationCoordinator(authorityStore);
-        var prepared =
-                coordinator
-                        .prepare(
-                                new ZLinkAggregateRelocationCoordinator.Request(
-                                        relocationId,
-                                        1,
-                                        1,
-                                        List.of(
-                                                new ZLinkAggregateRelocationCoordinator.Participant(
-                                                        actorAuthorityKey,
-                                                        ZLinkPlacementObjectKind.ACTOR,
-                                                        4,
-                                                        7,
-                                                        "actor-version-1",
-                                                        ZLinkAuthorityGenerationTransition
-                                                                .NEW_OWNER,
-                                                        new ZLinkActorAuthorityPayloadCodec()
-                                                                .encode(
-                                                                        ZLinkActorAuthorityPayloadCodec
-                                                                                .State.READY,
-                                                                        "player",
-                                                                        actorId,
-                                                                        "room-a",
-                                                                        1,
-                                                                        1,
-                                                                        "source-owner",
-                                                                        12,
-                                                                        "mesh",
-                                                                        sourceRid,
-                                                                        11),
-                                                        new byte[0])),
-                                        root,
-                                        new ZLinkMeshNodeDescriptorKey("mesh", targetRid),
-                                        targetNodeGeneration,
-                                        new ZLinkPlacementCapacityBundle(1, 0, Optional.empty()),
-                                        new ZLinkLocationOwnerToken("target-owner", 23),
-                                        "actor-version-1"),
-                                OPEN)
-                        .toCompletableFuture()
-                        .join();
+        var storeRequest =
+                new ZLinkAggregateRelocationCoordinator.Request(
+                        relocationId,
+                        1,
+                        1,
+                        List.of(
+                                new ZLinkAggregateRelocationCoordinator.Participant(
+                                        actorAuthorityKey,
+                                        ZLinkPlacementObjectKind.ACTOR,
+                                        4,
+                                        7,
+                                        "actor-version-1",
+                                        ZLinkAuthorityGenerationTransition.NEW_OWNER,
+                                        new ZLinkActorAuthorityPayloadCodec()
+                                                .encode(
+                                                        ZLinkActorAuthorityPayloadCodec.State.READY,
+                                                        "player",
+                                                        actorId,
+                                                        "room-a",
+                                                        1,
+                                                        1,
+                                                        "source-owner",
+                                                        12,
+                                                        "mesh",
+                                                        sourceRid,
+                                                        11),
+                                        new byte[0])),
+                        root,
+                        new ZLinkMeshNodeDescriptorKey("mesh", targetRid),
+                        targetNodeGeneration,
+                        new ZLinkPlacementCapacityBundle(1, 0, Optional.empty()),
+                        new ZLinkLocationOwnerToken("target-owner", 23),
+                        "actor-version-1");
+        authority.seed(storeRequest);
+        var prepared = coordinator.prepare(storeRequest, OPEN).toCompletableFuture().join();
         List<String> operations = new CopyOnWriteArrayList<>();
         var actorBackend = new RestartActorBackend(operations);
         var actorStaging = new ZLinkStandaloneActorRelocationStagingOwner(actorBackend);
@@ -744,51 +739,44 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                                 actorAuthorityKey, 1, actorId, "player", false, 4, 7),
                         new ZLinkSpotRetireControl.ParticipantFence(
                                 authorityKey, 2, spotId, "room", true, 3, 5));
-        var prepared =
-                coordinator
-                        .prepare(
-                                new ZLinkAggregateRelocationCoordinator.Request(
-                                        aggregateId,
-                                        1,
-                                        1,
-                                        List.of(
-                                                new ZLinkAggregateRelocationCoordinator.Participant(
-                                                        actorAuthorityKey,
-                                                        ZLinkPlacementObjectKind.ACTOR,
-                                                        4,
-                                                        7,
-                                                        "actor-version-1",
-                                                        ZLinkAuthorityGenerationTransition
-                                                                .NEW_OWNER,
-                                                        sourceAuthority(actorId, sourceRid),
-                                                        new byte[0]),
-                                                new ZLinkAggregateRelocationCoordinator.Participant(
-                                                        authorityKey,
-                                                        ZLinkPlacementObjectKind.USER_SPOT,
-                                                        3,
-                                                        5,
-                                                        "version-1",
-                                                        ZLinkAuthorityGenerationTransition
-                                                                .NEW_OWNER,
-                                                        sourceAuthority(spotId, sourceRid),
-                                                        new byte[0])),
-                                        ZLinkCanonicalUserSpotRelocationEnvelope.encode(
-                                                envelope, aggregateId, 5, participants),
-                                        new ZLinkMeshNodeDescriptorKey("mesh", targetRid),
-                                        targetNodeGeneration,
-                                        new ZLinkPlacementCapacityBundle(
-                                                1,
-                                                1,
-                                                Optional.of(
-                                                        new ZLinkSpotTypeCapacityDelta(
-                                                                ZLinkPlacementObjectKind.USER_SPOT,
-                                                                "room",
-                                                                1))),
-                                        new ZLinkLocationOwnerToken("target-owner", 23),
-                                        "version-1"),
-                                OPEN)
-                        .toCompletableFuture()
-                        .join();
+        var storeRequest =
+                new ZLinkAggregateRelocationCoordinator.Request(
+                        aggregateId,
+                        1,
+                        1,
+                        List.of(
+                                new ZLinkAggregateRelocationCoordinator.Participant(
+                                        actorAuthorityKey,
+                                        ZLinkPlacementObjectKind.ACTOR,
+                                        4,
+                                        7,
+                                        "actor-version-1",
+                                        ZLinkAuthorityGenerationTransition.NEW_OWNER,
+                                        sourceAuthority(actorId, sourceRid),
+                                        new byte[0]),
+                                new ZLinkAggregateRelocationCoordinator.Participant(
+                                        authorityKey,
+                                        ZLinkPlacementObjectKind.USER_SPOT,
+                                        3,
+                                        5,
+                                        "version-1",
+                                        ZLinkAuthorityGenerationTransition.NEW_OWNER,
+                                        sourceAuthority(spotId, sourceRid),
+                                        new byte[0])),
+                        ZLinkCanonicalUserSpotRelocationEnvelope.encode(
+                                envelope, aggregateId, 5, participants),
+                        new ZLinkMeshNodeDescriptorKey("mesh", targetRid),
+                        targetNodeGeneration,
+                        new ZLinkPlacementCapacityBundle(
+                                1,
+                                1,
+                                Optional.of(
+                                        new ZLinkSpotTypeCapacityDelta(
+                                                ZLinkPlacementObjectKind.USER_SPOT, "room", 1))),
+                        new ZLinkLocationOwnerToken("target-owner", 23),
+                        "version-1");
+        authority.seed(storeRequest);
+        var prepared = coordinator.prepare(storeRequest, OPEN).toCompletableFuture().join();
         FakeStagingBackend backend = new FakeStagingBackend();
         var staging = new ZLinkUserSpotAggregateStagingOwner(backend);
         RoutingId sessionOwnerRid = RoutingId.from("session-owner");
@@ -1195,6 +1183,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                                                 ZLinkPlacementObjectKind.USER_SPOT, "room", 1))),
                         new ZLinkLocationOwnerToken("target-owner", 23),
                         "version-1");
+        authority.seed(storeRequest);
         var finalPrepared = coordinator.prepare(storeRequest, OPEN).toCompletableFuture().join();
         coordinator.commit(finalPrepared, OPEN).toCompletableFuture().join();
 
@@ -1455,6 +1444,54 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         private final AtomicInteger reads = new AtomicInteger();
         private String progressStoreVersion;
 
+        void seed(ZLinkAggregateRelocationCoordinator.Request request) {
+            for (var participant : request.participants()) {
+                byte[] payload = participant.applicationAuthorityPayload();
+                var actor = new ZLinkActorAuthorityPayloadCodec().decode(payload);
+                var spot =
+                        new systems.zlink.framework.runtime.locations
+                                        .ZLinkServiceAuthorityPayloadCodec()
+                                .decode(payload);
+                String owner =
+                        actor.isPresent() ? actor.get().ownerId() : spot.orElseThrow().ownerId();
+                long lease =
+                        actor.isPresent()
+                                ? actor.get().ownerLeaseGeneration()
+                                : spot.orElseThrow().ownerLeaseGeneration();
+                String mesh =
+                        actor.isPresent() ? actor.get().meshName() : spot.orElseThrow().meshName();
+                var rid = actor.isPresent() ? actor.get().nodeRid() : spot.orElseThrow().nodeRid();
+                long generation =
+                        actor.isPresent()
+                                ? actor.get().nodeGeneration()
+                                : spot.orElseThrow().nodeGeneration();
+                String stableType =
+                        actor.isPresent()
+                                ? actor.get().stableType()
+                                : spot.orElseThrow().stableType();
+                rows.put(
+                        participant.authorityKey(),
+                        new ZLinkAuthoritySnapshot(
+                                participant.expectedStoreVersion(),
+                                payload,
+                                participant.objectGeneration(),
+                                participant.authorityOwnerGeneration(),
+                                owner,
+                                lease,
+                                new ZLinkPlacementAllocation(
+                                        ZLinkPlacementAllocationState.ACTIVE,
+                                        participant.objectKind(),
+                                        stableType,
+                                        new ZLinkMeshNodeDescriptorKey(mesh, rid),
+                                        generation,
+                                        participant.objectKind() == ZLinkPlacementObjectKind.ACTOR
+                                                ? ZLinkPlacementCapacityBundle.actor(1)
+                                                : ZLinkPlacementCapacityBundle.spot(
+                                                        participant.objectKind(), "room", 1)),
+                                Instant.now()));
+            }
+        }
+
         ZLinkLocationRepository proxy() {
             return (ZLinkLocationRepository)
                     Proxy.newProxyInstance(
@@ -1533,7 +1570,12 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                                         prepared.targetDescriptor(),
                                         prepared.targetDescriptorLifecycleGeneration(),
                                         prepared.capacityBundle()),
-                                Instant.now()));
+                                Optional.empty(),
+                                Instant.now(),
+                                participant.relocation() == null
+                                        ? null
+                                        : participant.relocation().phase("committed"),
+                                0));
             }
             progress = true;
             progressStoreVersion = "aggregate-commit";
@@ -1577,14 +1619,17 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
             }
             ZLinkAuthoritySnapshot stored =
                     new ZLinkAuthoritySnapshot(
-                            "cas-" + key,
+                            "cas-" + key + "-" + current.storeVersion(),
                             put.payload(),
                             current.objectGeneration(),
                             current.authorityOwnerGeneration(),
                             current.ownerId(),
                             current.ownerLeaseGeneration(),
                             current.allocation(),
-                            Instant.now());
+                            Optional.empty(),
+                            Instant.now(),
+                            put.replaceRelocation() ? put.relocation() : current.relocation(),
+                            0);
             rows.put(key, stored);
             return CompletableFuture.completedFuture(
                     new ZLinkAuthorityStored(

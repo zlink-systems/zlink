@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -42,7 +44,6 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimed
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocation;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocationState;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle;
-import systems.zlink.framework.runtime.internal.locations.ZLinkServiceRelocationEnvelopeCodec;
 import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
@@ -71,6 +72,33 @@ final class ZLinkCanonicalRelocationStateMachineTest {
     private static final java.time.Instant STAGE_DEADLINE =
             java.time.Instant.parse("2100-01-01T00:00:00Z");
     private static final ZLinkStoreCancellation OPEN = () -> false;
+
+    @Test
+    void sourcePhaseCasPrecedesPrepareWithoutChangingApplicationPayload() {
+        Fixture fixture = fixture();
+        fixture.source
+                .stage(
+                        fixture.targetRid,
+                        fixture.request(new byte[] {1}),
+                        Duration.ofSeconds(2),
+                        STAGE_DEADLINE)
+                .toCompletableFuture()
+                .join();
+        assertEquals(
+                2,
+                fixture.sourcePhaseWrites().size(),
+                "Preparing and Captured require authority CAS before PREPARE");
+        assertEquals(
+                fixture.sourceSnapshot.storeVersion(),
+                fixture.sourcePhaseWrites().getFirst().getKey());
+        assertNotEquals(
+                fixture.sourcePhaseWrites().getFirst().getKey(),
+                fixture.sourcePhaseWrites().getLast().getKey());
+        for (var write : fixture.sourcePhaseWrites())
+            assertArrayEquals(fixture.sourceSnapshot.payload(), write.getValue());
+        assertEquals(1, fixture.endpoint.staged.get());
+        assertEquals(0, fixture.endpoint.published.get());
+    }
 
     @Test
     void boundRelocationWithNoPriorPeerWaitsForNativeAdmissionAndFirstPushSucceeds()
@@ -983,12 +1011,13 @@ final class ZLinkCanonicalRelocationStateMachineTest {
     void conflictingPrepareRepliesFailedWithoutReplacingTheOriginalStage() {
         Fixture fixture = fixture();
         var request = fixture.request(new byte[] {1});
-        var prepare = prepare(fixture, request);
         fixture.source
                 .stage(fixture.targetRid, request, Duration.ofSeconds(2), STAGE_DEADLINE)
                 .toCompletableFuture()
                 .join();
 
+        var prepare = fixture.sentPrepare().get();
+        assertNotNull(prepare);
         assertPrepareConflictReply(fixture, prepare);
         byte[] exactReply =
                 fixture.target
@@ -1012,12 +1041,12 @@ final class ZLinkCanonicalRelocationStateMachineTest {
     void exactPrepareRequestAfterTargetCutoverRepliesReady() throws Exception {
         Fixture fixture = fixture();
         var request = fixture.request(new byte[] {1});
-        var prepare = prepare(fixture, request);
-
         fixture.source
                 .stage(fixture.targetRid, request, Duration.ofSeconds(2), STAGE_DEADLINE)
                 .toCompletableFuture()
                 .join();
+        var prepare = fixture.sentPrepare().get();
+        assertNotNull(prepare);
         byte[] encodedPrepare = ZLinkCanonicalRelocationProtocol.encodePrepare(prepare);
         fixture.source
                 .publish(fixture.targetRid, request.fence(), Duration.ofSeconds(2))
@@ -1134,38 +1163,6 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                                 ZLinkCanonicalRelocationProtocol.encodePrepare(differentTarget))
                         .toCompletableFuture()
                         .join());
-    }
-
-    private static ZLinkCanonicalRelocationProtocol.Prepare prepare(
-            Fixture fixture, ZLinkSpotRetireControl.StageRequest request) {
-        var participant = request.participants().getFirst();
-        byte[] payload = request.relocationPayload();
-        return new ZLinkCanonicalRelocationProtocol.Prepare(
-                request.fence().aggregateId(),
-                request.fence().aggregateGeneration(),
-                new ZLinkCanonicalRelocationProtocol.Coordinator(
-                        request.sourceOwnerId(),
-                        request.sourceOwnerLeaseGeneration(),
-                        request.sourceNodeRid(),
-                        request.sourceNodeGeneration(),
-                        fixture.sourceSnapshot.storeVersion()),
-                new ZLinkCanonicalRelocationProtocol.Target(
-                        request.targetNodeRid(),
-                        request.targetNodeGeneration(),
-                        request.targetOwnerId(),
-                        request.targetOwnerLeaseGeneration()),
-                ZLinkCanonicalRelocationProtocol.SOURCE,
-                new ZLinkCanonicalRelocationProtocol.ObjectFence(
-                        participant.objectKind(),
-                        participant.objectId(),
-                        "",
-                        participant.objectGeneration(),
-                        participant.sourceAuthorityOwnerGeneration()),
-                request.sourceNodeRid(),
-                request.sourceNodeGeneration(),
-                ZLinkRelocationPayloadTransfer.manifest(payload, payload.length),
-                ZLinkServiceRelocationEnvelopeCodec.decode(payload).applicationVersion(),
-                STAGE_DEADLINE.toEpochMilli());
     }
 
     private Fixture fixture() {
@@ -1285,6 +1282,7 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                         ZLinkAuthoritySnapshot.class,
                         locations.read(authorityKey, OPEN).toCompletableFuture().join());
         var prepareInvocations = new AtomicInteger();
+        var sourcePhaseWrites = new CopyOnWriteArrayList<Map.Entry<String, byte[]>>();
         ZLinkLocationRepository tracedLocations =
                 (ZLinkLocationRepository)
                         Proxy.newProxyInstance(
@@ -1293,6 +1291,20 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                                 (proxy, method, args) -> {
                                     if (method.getName().equals("prepareAggregate"))
                                         prepareInvocations.incrementAndGet();
+                                    if (method.getName().equals("compareExchange")
+                                            && args[1]
+                                                    instanceof
+                                                    systems.zlink.framework.runtime.internal
+                                                                    .locations
+                                                                    .ZLinkAuthorityExpectFound
+                                                            expected
+                                            && args[2]
+                                                    instanceof
+                                                    systems.zlink.framework.runtime.internal
+                                                                    .locations.ZLinkAuthorityPut
+                                                            put)
+                                        sourcePhaseWrites.add(
+                                                Map.entry(expected.storeVersion(), put.payload()));
                                     try {
                                         return method.invoke(locations, args);
                                     } catch (InvocationTargetException failure) {
@@ -1321,6 +1333,25 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                                 new CopyOnWriteArrayList<>(),
                                 targetCommands);
         sourceNode = decorateSource.apply(sourceNode);
+        var sentPrepare = new AtomicReference<ZLinkCanonicalRelocationProtocol.Prepare>();
+        var sourceDelegate = sourceNode;
+        sourceNode =
+                (ZLinkInternalMeshNode)
+                        Proxy.newProxyInstance(
+                                ZLinkInternalMeshNode.class.getClassLoader(),
+                                new Class<?>[] {ZLinkInternalMeshNode.class},
+                                (proxy, method, args) -> {
+                                    if (method.getName()
+                                            .equals("requestCanonicalRelocationPrepare"))
+                                        sentPrepare.set(
+                                                ZLinkCanonicalRelocationProtocol.decodePrepare(
+                                                        (byte[]) args[1]));
+                                    try {
+                                        return method.invoke(sourceDelegate, args);
+                                    } catch (InvocationTargetException failure) {
+                                        throw failure.getCause();
+                                    }
+                                });
         // Tests advance only the route deadlines they explicitly capture below.
         ZLinkCanonicalRelocationStateMachine.RetentionScheduler retention =
                 (deadline, cleanup) -> {};
@@ -1393,7 +1424,9 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                 targetState,
                 routeWaitStarted,
                 securedRoutes,
-                prepareInvocations);
+                prepareInvocations,
+                sentPrepare,
+                sourcePhaseWrites);
     }
 
     private record Fixture(
@@ -1413,7 +1446,9 @@ final class ZLinkCanonicalRelocationStateMachineTest {
             AtomicReference<MeshNodeState> targetState,
             CompletableFuture<Void> routeWaitStarted,
             List<Map.Entry<RoutingId, Long>> securedRoutes,
-            AtomicInteger prepareInvocations) {
+            AtomicInteger prepareInvocations,
+            AtomicReference<ZLinkCanonicalRelocationProtocol.Prepare> sentPrepare,
+            List<Map.Entry<String, byte[]>> sourcePhaseWrites) {
         ZLinkSpotRetireControl.StageRequest boundRequest() {
             return boundRequest(13);
         }
