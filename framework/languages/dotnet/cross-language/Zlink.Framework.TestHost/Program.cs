@@ -109,7 +109,11 @@ internal sealed class ChannelClientStartupRequestHostedService(
 /// today. A whole-node RelocateAsync() drain then moves it to the peer node,
 /// and a post-relocation probe confirms it answers on the new owner.
 /// </summary>
-internal sealed class RelocationActor(string actorId, IZLinkActorContext context) : IZLinkActor
+internal sealed class RelocationActor(
+    string actorId,
+    IZLinkActorContext context,
+    TestHostEventSink sink
+) : IZLinkActor
 {
     public string InstanceId { get; } = Guid.NewGuid().ToString("N");
     public int CreationCount { get; } = OutageActorObservations.Created(actorId);
@@ -117,16 +121,38 @@ internal sealed class RelocationActor(string actorId, IZLinkActorContext context
     public IZLinkActorContext Context { get; } = context;
     public byte[] ApplicationState { get; set; } = [];
     public int StateVersion { get; set; }
+
+    public ValueTask OnJoinCompletedAsync(
+        ZLinkActorJoinCompletion completion,
+        CancellationToken cancellationToken
+    )
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        sink.Append(
+            completion switch
+            {
+                ZLinkActorJoinCompletion.Accepted =>
+                    $"user-spot-join-completed|status=accepted|actor={ActorId}",
+                ZLinkActorJoinCompletion.Rejected =>
+                    $"user-spot-join-completed|status=rejected|actor={ActorId}",
+                ZLinkActorJoinCompletion.Failed failed =>
+                    $"user-spot-join-failed|kind={failed.Kind}|actor={ActorId}",
+                _ => $"user-spot-join-completed|status=unknown|actor={ActorId}",
+            }
+        );
+        return ValueTask.CompletedTask;
+    }
 }
 
-internal sealed class RelocationActorFactory : IZLinkActorFactory<RelocationActor>
+internal sealed class RelocationActorFactory(TestHostEventSink sink)
+    : IZLinkActorFactory<RelocationActor>
 {
     public ValueTask<RelocationActor> CreateAsync(
         IZLinkActorContext context,
         CancellationToken cancellationToken = default
     )
     {
-        return ValueTask.FromResult(new RelocationActor(context.ActorId, context));
+        return ValueTask.FromResult(new RelocationActor(context.ActorId, context, sink));
     }
 }
 
@@ -195,8 +221,11 @@ internal sealed record CrossLangProbeRes(
     string Marker
 );
 
-internal sealed class RelocationEntrySpot(IZLinkEntrySpotContext context)
-    : IZLinkEntrySpot<RelocationActor>
+internal sealed class RelocationEntrySpot(
+    IZLinkEntrySpotContext context,
+    TestHostEventSink sink,
+    UserSpotJoinObserver? observer = null
+) : IZLinkEntrySpot<RelocationActor>
 {
     public const string ActorType = "cross-lang-relocation-actor-type";
 
@@ -206,6 +235,7 @@ internal sealed class RelocationEntrySpot(IZLinkEntrySpotContext context)
     {
         Context.Handlers.AddHandler<RelocationProbeHandler>();
         Context.Handlers.AddHandler<BeginUserSpotJoinHandler>();
+        Context.Handlers.AddHandler<SourceUserSpotProbeHandler>();
         Context.Handlers.AddHandler<OutageProbeHandler>();
     }
 
@@ -227,9 +257,12 @@ internal sealed class RelocationEntrySpot(IZLinkEntrySpotContext context)
         return ValueTask.FromResult(ZLinkActorCreateResponse.Accept());
     }
 
+    // An existing Actor's application join to this Entry Spot commits its
+    // membership here (spec 03-spot-actor/01-spot-model 224-226).
     public ValueTask OnJoinedActorAsync(RelocationActor actor, CancellationToken cancellationToken)
     {
-        _ = actor;
+        sink.Append($"entry-spot-joined|actor={actor.ActorId}|nodeRid={Context.NodeRid}");
+        observer?.Complete();
         return ValueTask.CompletedTask;
     }
 
@@ -274,6 +307,10 @@ internal sealed record UserSpotCreateReq(string Marker);
 internal sealed record BeginUserSpotJoinReq(string TargetSpotId, string Marker);
 
 internal sealed record UserSpotJoinReq(string Marker);
+
+internal sealed record BeginEntrySpotJoinReq(string Marker);
+
+internal sealed record EntrySpotJoinReq(string Marker);
 
 internal sealed record UserSpotJoinRes(
     bool Accepted,
@@ -331,6 +368,72 @@ internal sealed class BeginUserSpotJoinHandler
     }
 }
 
+internal sealed class BeginEntrySpotJoinHandler
+    : IZLinkSpotActorRequestHandler<
+        RelocationUserSpot,
+        RelocationActor,
+        BeginEntrySpotJoinReq,
+        UserSpotJoinRes
+    >
+{
+    public ValueTask<UserSpotJoinRes> HandleAsync(
+        RelocationUserSpot spot,
+        RelocationActor actor,
+        IZLinkMessageContext context,
+        BeginEntrySpotJoinReq request,
+        CancellationToken cancellationToken
+    )
+    {
+        _ = context;
+        cancellationToken.ThrowIfCancellationRequested();
+        actor
+            .Context.JoinEntrySpot(new EntrySpotJoinReq(request.Marker))
+            .Timeout(TimeSpan.FromSeconds(30))
+            .Defer();
+        return ValueTask.FromResult(
+            new UserSpotJoinRes(
+                true,
+                actor.ActorId,
+                spot.Context.SpotId,
+                spot.Context.NodeRid.ToString(),
+                request.Marker
+            )
+        );
+    }
+}
+
+// Answers the owner probe while the Actor is a member of this node's Entry Spot,
+// like the Node, Java and C++ source Entry Spots.
+internal sealed class SourceUserSpotProbeHandler
+    : IZLinkEntrySpotActorRequestHandler<
+        RelocationEntrySpot,
+        RelocationActor,
+        UserSpotProbeReq,
+        UserSpotProbeRes
+    >
+{
+    public ValueTask<UserSpotProbeRes> HandleAsync(
+        RelocationEntrySpot entrySpot,
+        RelocationActor actor,
+        IZLinkMessageContext context,
+        UserSpotProbeReq request,
+        CancellationToken cancellationToken
+    )
+    {
+        _ = context;
+        cancellationToken.ThrowIfCancellationRequested();
+        return ValueTask.FromResult(
+            new UserSpotProbeRes(
+                actor.ActorId,
+                "",
+                entrySpot.Context.NodeRid.ToString(),
+                actor.StateVersion,
+                request.Marker
+            )
+        );
+    }
+}
+
 internal sealed class UserSpotJoinObserver
 {
     private readonly TaskCompletionSource _joined = new(
@@ -355,6 +458,7 @@ internal sealed class RelocationUserSpot(
     public void Configure()
     {
         Context.Handlers.AddHandler<UserSpotProbeHandler>();
+        Context.Handlers.AddHandler<BeginEntrySpotJoinHandler>();
     }
 
     public ValueTask<ZLinkSpotCreateResponse> OnCreateAsync(
@@ -448,7 +552,9 @@ internal sealed class UserSpotTargetHostedService(
     string actorId,
     string meshName,
     string sourceNodeRid,
-    int placementWeight
+    int placementWeight,
+    bool entryJoin = false,
+    string? restartFilePath = null
 ) : IHostedService
 {
     public async Task StartAsync(CancellationToken cancellationToken)
@@ -496,7 +602,8 @@ internal sealed class UserSpotTargetHostedService(
         sink.Append(
             $"user-spot-created|spot={created.Spot.SpotId}|nodeRid={targetNodeRid}|state={created.State}"
         );
-        _ = ObserveSourcePeerAsync(routes, routeMesh, cancellationToken);
+        if (sourceNodeRid.Length > 0)
+            _ = ObserveSourcePeerAsync(routes, routeMesh, cancellationToken);
         _ = ProbeAsync(targetNodeRid, observer, cancellationToken);
     }
 
@@ -558,6 +665,8 @@ internal sealed class UserSpotTargetHostedService(
                         $"user-spot-probe|nodeRid={reply.NodeRid}|targetRid={targetNodeRid}"
                             + $"|actor={reply.ActorId}|stateVersion={reply.StateVersion}"
                     );
+                    if (entryJoin)
+                        await EntryJoinBackAsync(targetNodeRid, cancellationToken);
                     return;
                 }
                 lastFailure = $"unexpected-owner:{reply.NodeRid}";
@@ -571,6 +680,77 @@ internal sealed class UserSpotTargetHostedService(
         sink.Append(
             $"user-spot-probe-timeout|targetRid={targetNodeRid}|failure={lastFailure ?? "none"}"
         );
+    }
+
+    // Remote Entry Spot join: the Actor in this node's User Spot defers
+    // JoinEntrySpot(); this node is no placement candidate, so the Framework
+    // must move it to the Entry Spot of the other node. The second Actor does
+    // the same after the other node restarted.
+    private async Task EntryJoinBackAsync(string ownNodeRid, CancellationToken cancellationToken)
+    {
+        await BeginEntryJoinAsync(actorId, "join", cancellationToken);
+        await WaitForOwnerAsync(actorId, ownNodeRid, false, cancellationToken);
+        var restartActorId = actorId + "-restart";
+        await WaitForOwnerAsync(restartActorId, ownNodeRid, true, cancellationToken);
+        using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+        {
+            deadline.CancelAfter(TimeSpan.FromSeconds(180));
+            while (!File.Exists(restartFilePath ?? throw new InvalidOperationException("--entry-join requires --restart-file.")))
+                await Task.Delay(10, deadline.Token);
+        }
+        await BeginEntryJoinAsync(restartActorId, "restart", cancellationToken);
+    }
+
+    private async Task BeginEntryJoinAsync(
+        string id,
+        string phase,
+        CancellationToken cancellationToken
+    )
+    {
+        var reply = await actors
+            .RequestToActor(id, new BeginEntrySpotJoinReq(phase))
+            .Timeout(TimeSpan.FromSeconds(45))
+            .Async<UserSpotJoinRes>(cancellationToken);
+        sink.Append(
+            $"entry-join-request-reply|phase={phase}|accepted={reply.Accepted.ToString().ToLowerInvariant()}|actor={reply.ActorId}"
+        );
+    }
+
+    // wantOwn: wait until the Actor answers from this node; otherwise until it answers from another.
+    private async Task WaitForOwnerAsync(
+        string id,
+        string ownNodeRid,
+        bool wantOwn,
+        CancellationToken cancellationToken
+    )
+    {
+        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(90);
+        string? last = null;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            try
+            {
+                var reply = await actors
+                    .RequestToActor(id, new UserSpotProbeReq("entry-join-probe"))
+                    .Timeout(TimeSpan.FromSeconds(5))
+                    .Async<UserSpotProbeRes>(cancellationToken);
+                last = reply.NodeRid;
+                if (StringComparer.Ordinal.Equals(reply.NodeRid, ownNodeRid) == wantOwn)
+                {
+                    if (!wantOwn)
+                        sink.Append(
+                            $"entry-join-probe|actor={id}|nodeRid={reply.NodeRid}|originRid={ownNodeRid}"
+                        );
+                    return;
+                }
+            }
+            catch (ZLinkFrameworkException failure)
+            {
+                last = $"{failure.Kind}:{failure.Message}";
+            }
+            await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
+        }
+        sink.Append($"entry-join-probe-timeout|actor={id}|last={last ?? "none"}");
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
@@ -587,7 +767,8 @@ internal sealed class UserSpotSourceHostedService(
     IZLinkRouteMeshRuntimeOptions runtimeOptions,
     int placementWeight,
     OutageLocationStore? outage = null,
-    string? startFilePath = null
+    string? startFilePath = null,
+    bool entryJoin = false
 ) : IHostedService
 {
     public Task StartAsync(CancellationToken cancellationToken)
@@ -668,6 +849,29 @@ internal sealed class UserSpotSourceHostedService(
             if (!reply.Accepted)
                 throw new InvalidOperationException("Outage relocation Join was rejected.");
             outage.JoinCompleted.TrySetResult();
+        }
+
+        if (entryJoin)
+        {
+            // Remote Entry Spot join: the second Actor joins the User Spot too, so
+            // the User Spot node can move it back to this node after a restart.
+            var restartActorId = actorId + "-restart";
+            var second = await actors
+                .GetOrCreate(restartActorId, RelocationEntrySpot.ActorType)
+                .Request(new CrossLangActorCreateReq(7, 4))
+                .Timeout(TimeSpan.FromSeconds(15))
+                .Async(cancellationToken);
+            sink.Append(
+                $"entry-join-restart-actor-created|status={(second is ZLinkActorCreateResult.Created ? "created" : "other")}"
+            );
+            var secondReply = await actorClient
+                .RequestToActor(restartActorId, new BeginUserSpotJoinReq(spotId, "canonical-28"))
+                .Timeout(TimeSpan.FromSeconds(45))
+                .Async<UserSpotJoinRes>(cancellationToken);
+            sink.Append(
+                $"user-spot-join-request-reply|accepted={secondReply.Accepted.ToString().ToLowerInvariant()}"
+                    + $"|actor={secondReply.ActorId}|spot={secondReply.SpotId}"
+            );
         }
     }
 

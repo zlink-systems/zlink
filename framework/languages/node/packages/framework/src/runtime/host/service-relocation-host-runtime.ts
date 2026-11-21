@@ -199,6 +199,7 @@ import { decodeRoutingId, encodeRoutingIdStorageHex, routingIdsEqual } from '../
 import type { DefaultZLinkSpotManager } from '../spots';
 import type { ZLinkSpotActivation } from '../spots/spot-activation-state';
 import type { ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
+import { entrySpotRouteTarget } from '../spots/spot-routing-internal';
 import { createProviderInstance } from '../spots/spot-provider';
 import { decodeHandoffBacklog } from '../spots/spot-remote-codec';
 import { committedActorOwnerFence, type ZLinkActorTransferRuntime } from './actor-transfer-runtime';
@@ -2484,6 +2485,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           return;
         const failures: unknown[] = [];
         try {
+          const targetRoute = targetMembership ?? entrySpotRouteTarget(meshName, target);
+          if (targetRoute === undefined) {
+            throw new Error(`Relocation target RouteMesh '${meshName}' has no Entry Spot.`);
+          }
           const committedAuthority = followAuthorities.get(
             encodeAuthorityKey('actor', state.actorId).value
           );
@@ -2494,12 +2499,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
             nodeRid: target.rid
           };
           await ownSession.prepared.commit(
-            targetMembership ?? {
-              routerChannelId: meshName,
-              targetNodeRid: target.rid,
-              spotId: (target.entrySpotId ?? String(target.rid)) as RoutingId,
-              spotKind: ZLinkSpotKind.Entry
-            },
+            targetRoute,
             targetActorRef,
             committedAuthority === undefined
               ? null
