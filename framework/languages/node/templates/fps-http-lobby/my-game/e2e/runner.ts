@@ -9,7 +9,11 @@ import { checkStructure } from './structure';
 import { runDomainChecks } from './domain-checks';
 import { runLobbyDomainChecks } from './lobby-domain-checks';
 import { Limits, Control } from '../server/shared/constants';
-import { LobbyScenarios as Scenarios, NodeEntrypoints, type NodeRole } from '../server/shared/lobby-constants';
+import {
+  LobbyScenarios as Scenarios,
+  NodeEntrypoints,
+  type NodeRole
+} from '../server/shared/lobby-constants';
 import type { NodeConfig } from '../server/shared/config';
 const RunRoomCapacity = 1;
 
@@ -67,7 +71,9 @@ class NodeProcess {
     details: Record<string, string | null> = {},
     at = new Date().toISOString()
   ): void {
-    this.out.write(`ZLINK_E2E_DIAG ${JSON.stringify({ at, event, node: this.config.id, ...details })}\n`);
+    this.out.write(
+      `ZLINK_E2E_DIAG ${JSON.stringify({ at, event, node: this.config.id, ...details })}\n`
+    );
   }
   async wait(prefix: string, timeoutMs: number): Promise<string> {
     if (prefix.startsWith(Control.ready)) this.logDiagnostic('ready-wait-start');
@@ -198,7 +204,7 @@ async function runScenario(name: string): Promise<boolean> {
     writeFileSync(path, JSON.stringify(config, null, 2));
     const entrypoint = `dist/${NodeEntrypoints[role].replace(/\.ts$/, '.js')}`;
     let command = process.execPath;
-    let args = [entrypoint, path];
+    let args = ['--require', './dist/server/shared/diagnostics.js', entrypoint, path];
     if (dockerProject) {
       const container = `${dockerProject}-${config.id.toLowerCase()}-${runId}-${all.length}`;
       const image = process.env.MY_GAME_NODE_IMAGE;
