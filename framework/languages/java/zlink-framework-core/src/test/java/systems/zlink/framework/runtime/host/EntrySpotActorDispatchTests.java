@@ -92,12 +92,116 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class EntrySpotActorDispatchTests {
+    @org.junit.jupiter.api.RepeatedTest(40)
+    void sessionBoundCallbackWaitsForActiveHandler() throws Exception {
+        bindingWaitsForActorGateOnlyWhenInvokingCallback("bound-first");
+    }
+
+    @org.junit.jupiter.api.RepeatedTest(40)
+    void sessionBoundQueuedBindsDecideAgainstCommittedCurrent() throws Exception {
+        var backend = startBackend();
+        try (var runtime = startRuntime(backend)) {
+            String id = "bound-duplicate-actor";
+            runtime.actorManager()
+                    .create(id, "probe")
+                    .submit()
+                    .toCompletableFuture()
+                    .get(5, TimeUnit.SECONDS);
+            var actors = ZLinkFrameworkRuntimeTestAccess.actors(runtime);
+            var actor = (BoundDuplicateCallbackProbeActor) actors.localActor(id).orElseThrow();
+            var ref = actors.currentRef(actor);
+            var initial = backend.node.canonicalBoundSessionRoute.orElseThrow();
+            var first =
+                    new ZLinkInternalSpotNode.BoundSessionRoute(
+                            initial.sessionOwnerNodeRid(), initial.sessionOwnerNodeGeneration(),
+                            initial.sessionOwnerId(), initial.sessionOwnerLeaseGeneration(),
+                            RoutingId.from("first-session"), initial.bindingGeneration() + 1);
+            var second =
+                    new ZLinkInternalSpotNode.BoundSessionRoute(
+                            initial.sessionOwnerNodeRid(), initial.sessionOwnerNodeGeneration(),
+                            initial.sessionOwnerId(), initial.sessionOwnerLeaseGeneration(),
+                            RoutingId.from("second-session"), initial.bindingGeneration() + 2);
+            java.util.function.Function<
+                            ZLinkInternalSpotNode.BoundSessionRoute, CompletionStage<Boolean>>
+                    bind =
+                            incoming -> {
+                                var identity = incoming.sessionBindingIdentity();
+                                var sessionRid = incoming.sessionRid();
+                                java.util.function.Function<
+                                                ZLinkInternalSpotNode
+                                                        .RemoteSessionBindingTransition,
+                                                CompletionStage<Boolean>>
+                                        decide =
+                                                selected -> {
+                                                    var decision =
+                                                            selected.decideDuplicateBind(
+                                                                    identity,
+                                                                    sessionRid,
+                                                                    () -> {},
+                                                                    () -> false);
+                                                    return decision.thenCompose(
+                                                            rejection -> {
+                                                                if (rejection.isPresent()) {
+                                                                    return CompletableFuture
+                                                                            .completedFuture(false);
+                                                                }
+                                                                return selected.commit(
+                                                                        () -> {
+                                                                            backend.node
+                                                                                            .canonicalBoundSessionRoute =
+                                                                                    Optional.of(
+                                                                                            incoming);
+                                                                            return CompletableFuture
+                                                                                    .completedFuture(
+                                                                                            true);
+                                                                        });
+                                                            });
+                                                };
+                                return actors.applyRemoteSessionBindingAsync(
+                                        backend.node,
+                                        ref,
+                                        applied ->
+                                                applied.acceptBinding(
+                                                        identity, sessionRid, decide));
+                            };
+            var firstBind = bind.apply(first).toCompletableFuture();
+            CompletableFuture<Boolean> secondBind;
+            try {
+                actor.firstDecisionEntered.get(5, TimeUnit.SECONDS);
+                secondBind = bind.apply(second).toCompletableFuture();
+                assertFalse(firstBind.isDone());
+                assertFalse(secondBind.isDone());
+                assertEquals(List.of(initial.sessionBindingIdentity()), actor.decidedCurrent);
+            } finally {
+                actor.releaseFirstDecision.complete(Optional.empty());
+            }
+            assertTrue(firstBind.get(5, TimeUnit.SECONDS));
+            assertFalse(secondBind.get(5, TimeUnit.SECONDS));
+            assertEquals(
+                    List.of(initial.sessionBindingIdentity(), first.sessionBindingIdentity()),
+                    actor.decidedCurrent);
+            assertEquals(Optional.of(first), backend.node.canonicalBoundSessionRoute);
+        }
+    }
+
     @ParameterizedTest
-    @org.junit.jupiter.params.provider.ValueSource(strings = {"none", "first", "same", "different"})
+    @org.junit.jupiter.params.provider.ValueSource(
+            strings = {
+                "none",
+                "first",
+                "same",
+                "different",
+                "bound-first",
+                "bound-same",
+                "bound-different"
+            })
     void bindingWaitsForActorGateOnlyWhenInvokingCallback(String scenario) throws Exception {
         var backend = startBackend();
         try (var runtime = startRuntime(backend)) {
-            String id = scenario.equals("none") ? "actor-a" : "callback-actor";
+            String id =
+                    scenario.startsWith("bound-")
+                            ? "bound-actor"
+                            : scenario.equals("none") ? "actor-a" : "callback-actor";
             runtime.actorManager()
                     .create(id, "probe")
                     .submit()
@@ -113,13 +217,13 @@ final class EntrySpotActorDispatchTests {
                             current.sessionOwnerNodeGeneration(),
                             current.sessionOwnerId(),
                             current.sessionOwnerLeaseGeneration(),
-                            scenario.equals("same")
+                            scenario.endsWith("same")
                                     ? current.sessionRid()
                                     : RoutingId.from("incoming-session"),
-                            scenario.equals("same")
+                            scenario.endsWith("same")
                                     ? current.bindingGeneration()
                                     : current.bindingGeneration() + 1);
-            if (scenario.equals("first"))
+            if (scenario.endsWith("first"))
                 backend.node.canonicalBoundSessionRoute = Optional.empty();
             var entered = new CompletableFuture<Void>();
             var release = new CompletableFuture<Void>();
@@ -169,11 +273,15 @@ final class EntrySpotActorDispatchTests {
                                                                                                 });
                                                                             })))
                             .toCompletableFuture();
+            actors.activeActorIds();
             try {
-                if (scenario.equals("different")) {
+                if (scenario.equals("different") || scenario.startsWith("bound-")) {
                     assertFalse(binding.isDone());
-                    assertEquals(0, ((CallbackProbeActor) actor).duplicateCallbacks.get());
-                    assertEquals(Optional.of(current), backend.node.canonicalBoundSessionRoute);
+                    if (actor instanceof CallbackProbeActor callbackActor)
+                        assertEquals(0, callbackActor.duplicateCallbacks.get());
+                    assertEquals(
+                            scenario.endsWith("first") ? Optional.empty() : Optional.of(current),
+                            backend.node.canonicalBoundSessionRoute);
                 } else {
                     assertTrue(binding.get(5, TimeUnit.SECONDS));
                     assertFalse(handler.toCompletableFuture().isDone());
@@ -1775,13 +1883,54 @@ final class EntrySpotActorDispatchTests {
         }
     }
 
+    public static class BoundCallbackProbeActor extends ProbeActor {
+        BoundCallbackProbeActor(ZLinkActorContext context) {
+            super(context.actorId(), context);
+        }
+
+        public CompletionStage<Void> onSessionBound(
+                systems.zlink.framework.actors.ZLinkSessionBindingIdentity incoming,
+                systems.zlink.framework.actors.ZLinkActorCallbackCancellation cancellation) {
+            return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    public static final class BoundDuplicateCallbackProbeActor extends BoundCallbackProbeActor {
+        private final CompletableFuture<Void> firstDecisionEntered = new CompletableFuture<>();
+        private final CompletableFuture<Optional<String>> releaseFirstDecision =
+                new CompletableFuture<>();
+        final List<systems.zlink.framework.actors.ZLinkSessionBindingIdentity> decidedCurrent =
+                new CopyOnWriteArrayList<>();
+
+        BoundDuplicateCallbackProbeActor(ZLinkActorContext context) {
+            super(context);
+        }
+
+        @Override
+        public CompletionStage<Optional<String>> onDuplicateBind(
+                systems.zlink.framework.actors.ZLinkSessionBindingIdentity current,
+                systems.zlink.framework.actors.ZLinkSessionBindingIdentity incoming,
+                systems.zlink.framework.actors.ZLinkActorCallbackCancellation cancellation) {
+            decidedCurrent.add(current);
+            if (decidedCurrent.size() == 1) {
+                firstDecisionEntered.complete(null);
+                return releaseFirstDecision;
+            }
+            return CompletableFuture.completedFuture(Optional.of("already bound"));
+        }
+    }
+
     public static final class ProbeActorFactory implements ZLinkActorFactory {
         @Override
         public CompletionStage<ZLinkActor> create(ZLinkActorContext context) {
             return CompletableFuture.completedFuture(
-                    context.actorId().startsWith("callback-")
-                            ? new CallbackProbeActor(context)
-                            : new ProbeActor(context.actorId(), context));
+                    context.actorId().startsWith("bound-duplicate-")
+                            ? new BoundDuplicateCallbackProbeActor(context)
+                            : context.actorId().startsWith("bound-")
+                                    ? new BoundCallbackProbeActor(context)
+                                    : context.actorId().startsWith("callback-")
+                                            ? new CallbackProbeActor(context)
+                                            : new ProbeActor(context.actorId(), context));
         }
     }
 

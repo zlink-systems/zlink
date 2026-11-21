@@ -78,6 +78,7 @@ ZLink에서는 runtime 사이의 직접 연결과 Spot의 직렬 실행이 이 �
     {
         public async ValueTask<DefeatBossResult> HandleAsync(
             PlayerSpot player,
+            IZLinkMessageContext context,
             DefeatBossRequest request,
             CancellationToken ct)
         {
@@ -106,6 +107,7 @@ ZLink에서는 runtime 사이의 직접 연결과 Spot의 직렬 실행이 이 �
     {
         public ValueTask<GuildBenefitResult> HandleAsync(
             GuildSpot guild,
+            IZLinkMessageContext context,
             GuildBenefitRequest request,
             CancellationToken ct)
         {

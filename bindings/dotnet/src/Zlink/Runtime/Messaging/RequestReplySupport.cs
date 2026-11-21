@@ -75,6 +75,19 @@ internal static class RequestReplySupport
         SocketHandle socket, IReadOnlyList<Message> parts, ref T submitter)
         where T : struct, INativeMessageSubmitter<T>
     {
+        var (result, errno) = TrySubmitPreservingOnFailure(socket, parts,
+            ref submitter);
+        if (result != SubmitResult.Ok)
+            throw new ZlinkSubmitException(result, errno);
+    }
+
+    internal static (SubmitResult Result, int NativeErrno)
+        TrySubmitPreservingOnFailure<T>(
+            SocketHandle socket, IReadOnlyList<Message> parts, ref T submitter)
+        where T : struct, INativeMessageSubmitter<T>
+    {
+        int rc;
+        int errno;
         using (var call = socket.ReserveSubmit())
         {
             EnsureParts(parts, nameof(parts));
@@ -83,8 +96,6 @@ internal static class RequestReplySupport
                 ? stackalloc ZlinkMsg[NativeMessageParts.StackPartLimit]
                 : rented = ArrayPool<ZlinkMsg>.Shared.Rent(parts.Count);
             var built = 0;
-            int rc;
-            int errno;
             try
             {
                 // Core consumes the whole native record on every returned result.
@@ -102,10 +113,10 @@ internal static class RequestReplySupport
                 if (rented != null)
                     ArrayPool<ZlinkMsg>.Shared.Return(rented);
             }
-            if (rc != 0)
-                throw new ZlinkSubmitException((SubmitResult)rc, errno);
         }
-        ConsumeParts(parts);
+        if (rc == (int)SubmitResult.Ok)
+            ConsumeParts(parts);
+        return ((SubmitResult)rc, errno);
     }
 }
 

@@ -95,6 +95,24 @@ Actor는 자기에게 묶인 연결을 알고 있다. 응답이 아니라 **스�
     `InvalidOperation`으로 끝나며, 언어별 비동기 완료 수단으로 그 실패를 관찰한다. 위 코드는 rename을
     이미 끝낸 뒤 push하므로 **그 실패만** 받아 버린다.
 
+### 3.4 Bind 통지
+
+Actor는 optional `onSessionBound(incoming, signal)` callback으로 확정된 binding을 받는다.
+`incoming`은 session owner node RID, lifecycle generation과 binding generation을 담은
+`ZLinkSessionBindingIdentity`다. 최초 bind와 같은 physical Session의 재제출에도 한 번 호출한다.
+
+```typescript
+onSessionBound(incoming: ZLinkSessionBindingIdentity, signal: AbortSignal): void | Promise<void>
+```
+
+Framework는 binding을 확정하고 성공 reply를 보낸 뒤 같은 Actor handler 순서에서 callback을
+실행한다. Callback을 생략하면 아무 작업도 하지 않으며 callback이 없는 bind는 Actor gate를
+기다리지 않는다. 중복 bind가 거부되면 통지하지 않는다.
+
+Callback 실패는 bind 결과를 바꾸지 않고 runtime task 예외로 한 번 보고한다.
+`sessionReplacementCallbackTimeoutMs`(기본 `30000 ms`)를 넘으면 `signal`로 취소하고
+같은 방식으로 한 번 보고한다. Actor 종료나 runtime 종료에 의한 취소는 보고하지 않는다.
+
 ## 4. 접속하는 쪽 — mesh 밖의 client
 
 !!! info "접속하는 쪽 process"

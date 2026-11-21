@@ -17,9 +17,7 @@ for (const notification of ['delayed', 'lost']) {
     const {
       ServiceStatefulRegistry
     } = require('../../packages/framework/dist/runtime/foundation/service-stateful-registry');
-    const {
-      ZLinkHostServiceRelocationRuntime
-    } = require('../../packages/framework/dist/internal');
+    const { ZLinkHostServiceRelocationRuntime } = require('../../packages/framework/dist/internal');
     const {
       encodeAuthorityKey
     } = require('../../packages/framework/dist/runtime/locations/authority-key-codec');
@@ -41,6 +39,7 @@ for (const notification of ['delayed', 'lost']) {
     };
     const sourceAuthority = {
       kind: 'snapshot',
+      storeVersion: { value: 'source-v1' },
       objectGeneration: sourceRef.generation,
       authorityOwnerGeneration: 1n,
       ownerId: 'source-owner',
@@ -142,6 +141,7 @@ for (const notification of ['delayed', 'lost']) {
     const leave = new Promise((resolve) => {
       releaseLeave = resolve;
     });
+    let storedAuthority = sourceAuthority;
     const runtime = new ZLinkHostServiceRelocationRuntime({
       registration: {
         spotNodes: new Map([
@@ -150,8 +150,25 @@ for (const notification of ['delayed', 'lost']) {
       },
       meshNode: () => node,
       actorManager: () => manager,
-      liveDescriptors: async () => [{ rid: 'target', lifecycleGeneration: 11n }],
-      locationStore: () => ({ readAuthority: async () => sourceAuthority }),
+      liveDescriptors: async () => [
+        { rid: 'target', lifecycleGeneration: 11n, applicationVersion: 1n }
+      ],
+      locationStore: () => ({
+        readAuthority: async () => storedAuthority,
+        async compareExchangeAuthority(_key, expected, mutation) {
+          assert.equal(expected.value, storedAuthority.storeVersion.value);
+          storedAuthority = {
+            ...storedAuthority,
+            payload: mutation.payload,
+            relocation:
+              mutation.relocation === undefined
+                ? storedAuthority.relocation
+                : (mutation.relocation ?? undefined),
+            storeVersion: { value: `${expected.value}:cas` }
+          };
+          return { ...storedAuthority, kind: 'stored' };
+        }
+      }),
       actorTransfer: {
         async prepareMaintenanceSession() {
           return { handoffBacklog: [], async commit() {} };

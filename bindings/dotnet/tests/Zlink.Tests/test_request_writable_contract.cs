@@ -63,6 +63,94 @@ public sealed class test_request_writable_contract
     }
 
     [Fact]
+    public async Task competing_requests_rearm_writable_without_throwing()
+    {
+        _ = Zlink.Version();
+
+        using var context = Zlink.CreateContext();
+        context.Options.AutoHwmEnabled = false;
+        using var dealer = context.CreateDealerSocket();
+        using var router = context.CreateRouterSocket();
+        dealer.Options.SendHighWaterMark = RecordHwm;
+        router.Options.ReceiveHighWaterMark = RecordHwm;
+        string endpoint = CoreTestSupport.NewEndpoint(
+            "inproc", "request-writable-competing");
+        router.Bind(endpoint);
+        dealer.Connect(endpoint);
+        Handshake(dealer, router);
+        using var poller = Zlink.CreatePoller();
+        poller.Add(dealer, PollEventFlags.PollOut | PollEventFlags.PollCompletion, 0);
+
+        using Message occupying = Message.From(LargePayload);
+        dealer.Send().Message(occupying).Submit();
+        using Message firstPart = Message.From(LargePayload + "-first");
+        using Message secondPart = Message.From(LargePayload + "-second");
+
+        var backpressureExceptions = 0;
+        void Observe(object? sender,
+            System.Runtime.ExceptionServices.FirstChanceExceptionEventArgs args)
+        {
+            if (args.Exception is ZlinkSubmitException
+                { Result: ZlinkSubmitException.ErrorCode.Backpressured }
+                && Environment.StackTrace.Contains("CompletionOwner.SubmitRequest",
+                    StringComparison.Ordinal))
+                Interlocked.Increment(ref backpressureExceptions);
+        }
+
+        AppDomain.CurrentDomain.FirstChanceException += Observe;
+        try
+        {
+            var timeout = TimeSpan.FromSeconds(3);
+            var first = dealer.Request().Message(firstPart).Timeout(timeout).Async();
+            var second = dealer.Request().Message(secondPart).Timeout(timeout).Async();
+            Assert.Equal(SubmitResult.Backpressured, first.Result);
+            Assert.Equal(SubmitResult.Backpressured, second.Result);
+            var initialExceptions = Volatile.Read(ref backpressureExceptions);
+
+            using (Received occupyingRecord = Receive(router))
+                Assert.Equal(LargePayload, occupyingRecord.SinglePartOrThrow().GetString());
+
+            var events = new PollEvent[1];
+            Assert.Equal(1, poller.Wait(events, timeout));
+            Assert.NotEqual(first.Admitted.IsCompletedSuccessfully,
+                second.Admitted.IsCompletedSuccessfully);
+            var retryExceptions = Volatile.Read(ref backpressureExceptions) - initialExceptions;
+
+            Assert.True(poller.Remove(dealer));
+            using var completions = new CompletionPollerDriver(dealer);
+            var payloads = new HashSet<string>();
+            for (var i = 0; i < 2; i++)
+            {
+                using Received request = Receive(router);
+                Assert.True(payloads.Add(request.SinglePartOrThrow().GetString()));
+                Reply(router, request, "reply");
+            }
+
+            foreach (var pending in new[] { first, second })
+            {
+                await pending.Admitted.WaitAsync(timeout);
+                IReadOnlyList<Message> reply = await pending.Reply.WaitAsync(timeout);
+                try
+                {
+                    Assert.Equal("reply", reply.Single().GetString());
+                }
+                finally
+                {
+                    Zlink.MultipartClose(reply);
+                }
+            }
+
+            Assert.Contains(LargePayload + "-first", payloads);
+            Assert.Contains(LargePayload + "-second", payloads);
+            Assert.Equal((0, 0), (initialExceptions, retryExceptions));
+        }
+        finally
+        {
+            AppDomain.CurrentDomain.FirstChanceException -= Observe;
+        }
+    }
+
+    [Fact]
     public async Task connect_before_bind_waits_for_writable_then_replies()
     {
         if (!CoreTestSupport.IsNativeAvailable())

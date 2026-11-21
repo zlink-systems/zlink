@@ -119,13 +119,70 @@ function fixture(targetRid = 'C', expired = false, sourceRid = 'A', flowEnabled 
       }
     }
   });
-  const target = new ZLinkHostServiceRelocationRuntime({
+  const blobBytes = new Map();
+  let authority = {
+    kind: 'snapshot',
+    storeVersion: { value: '1' },
+    payload: Buffer.from('application'),
+    ownerId: coordinator.ownerId,
+    ownerLeaseGeneration: coordinator.leaseGeneration,
+    relocation: {
+      relocationId: '00000000-0000-0000-0000-000000000001',
+      sourceInventorySha256: 'ab'.repeat(32),
+      completion: {
+        acceptedRequests: 1n,
+        completedResults: 0n,
+        pendingDeliveries: 0n,
+        reference: null,
+        sha256: null
+      }
+    }
+  };
+  const targetStore = {
+    ...store,
+    async readAuthority() {
+      return authority;
+    },
+    async compareExchangeAuthority(_key, version, mutation) {
+      assert.equal(version.value, authority.storeVersion.value);
+      authority = {
+        ...authority,
+        ...mutation,
+        kind: 'snapshot',
+        storeVersion: { value: String(Number(version.value) + 1) }
+      };
+      return { ...authority, kind: 'stored' };
+    }
+  };
+  const relocationStore = {
+    async put(reference, bytes, retention) {
+      blobBytes.set(reference.value, Buffer.from(bytes));
+      return { kind: 'stored', storeNow: new Date(0), expiresAt: new Date(retention) };
+    },
+    async read(reference) {
+      return blobBytes.has(reference.value)
+        ? {
+            kind: 'found',
+            bytes: blobBytes.get(reference.value),
+            storeNow: new Date(0),
+            expiresAt: new Date(86400000)
+          }
+        : { kind: 'missing', storeNow: new Date(0) };
+    }
+  };
+  const targetOptions = {
     registration: { messageSerializers: undefined },
     meshNode: () => targetNode,
     flowCreationEnabled: () => flowEnabled,
-    locationStore: () => store,
+    currentOwner: () => ({
+      ownerId: coordinator.ownerId,
+      leaseGeneration: coordinator.leaseGeneration
+    }),
+    relocationStore,
+    locationStore: () => targetStore,
     liveDescriptors: async () => descriptors
-  });
+  };
+  const target = new ZLinkHostServiceRelocationRuntime(targetOptions);
   const relays = [];
   const acks = [];
   const targetNode = {
@@ -136,6 +193,11 @@ function fixture(targetRid = 'C', expired = false, sourceRid = 'A', flowEnabled 
   };
   const sendRelay = async (rid, parts) => {
     assert.equal(routingIds.routingIdsEqual(rid, sourceRid), true);
+    assert.equal(
+      authority.relocation.completion.completedResults,
+      1n,
+      'reply must follow completion CAS'
+    );
     const relay = wire.decodeMaintenanceReplyRelay(parts);
     relays.push(relay);
     await deliver(receiver, targetRid, parts);
@@ -175,11 +237,21 @@ function fixture(targetRid = 'C', expired = false, sourceRid = 'A', flowEnabled 
     }
   };
   const stage = {
-    staging: { envelope: { aggregateId: '00000000-0000-0000-0000-000000000001' } },
+    lane: Promise.resolve(),
+    staging: {
+      envelope: {
+        aggregateId: '00000000-0000-0000-0000-000000000001',
+        participants: [{ key: 'zla1:a:actor' }]
+      }
+    },
     offer: { prepare: { targetAttemptGeneration: 1n } }
   };
   return {
     requester,
+    currentAuthority: () => authority,
+    targetStore,
+    targetOptions,
+    relocationStore,
     targetNode,
     pending,
     operation,
@@ -345,19 +417,32 @@ test('the target rejects an ACK whose original source generation changed', async
     failureCode: 0
   };
   const delivery = f.target.sendReplyRelay('mesh', 'A', request, f.source);
-  const rejected = assert.rejects(delivery, /durable source fence/);
+
   try {
     await admission;
+    await assert.rejects(
+      deliver(
+        f.target,
+        'A',
+        wire.encodeMaintenanceReplyRelayAck({
+          ...request,
+          requestSource: { ...f.source, nodeGeneration: 8n },
+          status: 'terminalReceived'
+        })
+      ),
+      /durable source fence/
+    );
+    assert.equal(f.target[inspectRuntime]().pendingReplyRelays, 1);
     await deliver(
       f.target,
       'A',
       wire.encodeMaintenanceReplyRelayAck({
         ...request,
-        requestSource: { ...f.source, nodeGeneration: 8n },
+        requestSource: f.source,
         status: 'terminalReceived'
       })
     );
-    await rejected;
+    assert.equal(await delivery, 'terminalReceived');
     assert.equal(f.target[inspectRuntime]().pendingReplyRelays, 0);
   } finally {
     const closed = assert.rejects(f.pending.promise);
@@ -483,3 +568,124 @@ for (const local of [false, true]) {
     }
   });
 }
+
+test('completion Put rejection forbids both authority CAS and reply', async () => {
+  const f = fixture();
+  let cas = 0;
+  f.targetStore.compareExchangeAuthority = async () => {
+    cas++;
+    throw new Error('CAS must not run');
+  };
+  f.relocationStore.put = async () => {
+    throw new TypeError('injected Put failure');
+  };
+  try {
+    await assert.rejects(
+      f.target.relayTerminalReply('mesh', f.stage, f.coordinator, 1n, f.packet, {
+        index: 0,
+        ok: true,
+        response: {}
+      }),
+      /injected Put failure/
+    );
+    assert.equal(cas, 0);
+    assert.equal(f.relays.length, 0);
+  } finally {
+    void f.pending.promise.catch(() => {});
+    f.requester.close();
+  }
+});
+
+test('the same target runtime redelivers stored bytes after relay ACK storage failed', async () => {
+  const f = fixture();
+  const original = f.targetStore.compareExchangeAuthority;
+  f.targetStore.compareExchangeAuthority = async (...args) => {
+    if (args[2].relocation.completion.pendingDeliveries === 0n)
+      throw new TypeError('injected ACK storage failure');
+    return original(...args);
+  };
+  try {
+    await assert.rejects(
+      f.target.relayTerminalReply('mesh', f.stage, f.coordinator, 1n, f.packet, {
+        index: 0,
+        ok: true,
+        response: { answer: 42 }
+      }),
+      /injected ACK storage failure/
+    );
+    assert.equal(f.currentAuthority().relocation.completion.pendingDeliveries, 1n);
+    const first = f.relays[0];
+    f.targetNode.status = () => ({ routingId: 'C', lifecycleGeneration: 11n });
+    f.targetStore.compareExchangeAuthority = original;
+    const current = await f.target.redeliverPendingCompletions(
+      'mesh',
+      { value: 'zla1:a:actor' },
+      f.currentAuthority()
+    );
+    assert.equal(current.relocation.completion.pendingDeliveries, 0n);
+    assert.equal(f.relays.length, 2);
+    assert.deepEqual(f.relays[1].payload, first.payload);
+    assert.deepEqual(f.relays[1].operation, first.operation);
+    assert.equal(f.acks[1].status, 'alreadyTerminal');
+    await f.target.redeliverPendingCompletions('mesh', { value: 'zla1:a:actor' }, current);
+    assert.equal(f.relays.length, 2);
+  } finally {
+    f.target.dispose();
+    void f.pending.promise.catch(() => {});
+    f.requester.close();
+  }
+});
+
+for (const lease of [
+  { kind: 'missing' },
+  {
+    kind: 'found',
+    token: { ownerId: 'owner-A', leaseGeneration: 10n },
+    storeNow: new Date(0),
+    leaseExpiresAt: new Date(1000)
+  },
+  {
+    kind: 'found',
+    token: { ownerId: 'owner-A', leaseGeneration: 9n },
+    storeNow: new Date(1000),
+    leaseExpiresAt: new Date(1000)
+  }
+])
+  test(`exact requester lease terminal: ${lease.kind}-${lease.token?.leaseGeneration}`, async () => {
+    const f = fixture();
+    f.targetStore.readOwnerLease = async () => lease;
+    try {
+      await f.target.relayTerminalReply('mesh', f.stage, f.coordinator, 1n, f.packet, {
+        index: 0,
+        ok: true,
+        response: {}
+      });
+      assert.equal(f.currentAuthority().relocation.completion.pendingDeliveries, 0n);
+      assert.equal(f.relays.length, 0);
+    } finally {
+      void f.pending.promise.catch(() => {});
+      f.requester.close();
+    }
+  });
+
+test('Relocate deadline ends the caller while durable terminal delivery continues', async () => {
+  const f = fixture();
+  const deadline = new AbortController();
+  deadline.abort(new Error('Relocate deadline'));
+  try {
+    await f.target.relayTerminalReply(
+      'mesh',
+      f.stage,
+      f.coordinator,
+      1n,
+      f.packet,
+      { index: 0, ok: true, response: { answer: 42 } },
+      deadline.signal
+    );
+    assert.equal((await f.pending.promise).terminalResult, RequestResult.Ok);
+    assert.equal(f.currentAuthority().relocation.completion.pendingDeliveries, 0n);
+  } finally {
+    void f.pending.promise.catch(() => {});
+    f.requester.close();
+  }
+});

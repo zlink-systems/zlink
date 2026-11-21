@@ -135,20 +135,32 @@ public sealed class TownDelivery : IZLinkSpotActorSendHandler<TownSpot, PlayerAc
 [ZLinkSpotPacketHandler(nameof(RunStarted))]
 public sealed class RunStartedHandler : IZLinkSpotPacketHandler<TownSpot, RunStarted>
 {
-    public ValueTask HandleAsync(TownSpot spot, RunStarted message, CancellationToken ct) =>
-        spot.RunStartedAsync(message);
+    public ValueTask HandleAsync(
+        TownSpot spot,
+        IZLinkMessageContext context,
+        RunStarted message,
+        CancellationToken ct
+    ) => spot.RunStartedAsync(message);
 }
 
 [ZLinkSpotPacketHandler(nameof(RunCompleted))]
 public sealed class RunCompletedHandler : IZLinkSpotPacketHandler<TownSpot, RunCompleted>
 {
-    public ValueTask HandleAsync(TownSpot spot, RunCompleted message, CancellationToken ct) =>
-        spot.RunCompletedAsync(message);
+    public ValueTask HandleAsync(
+        TownSpot spot,
+        IZLinkMessageContext context,
+        RunCompleted message,
+        CancellationToken ct
+    ) => spot.RunCompletedAsync(message);
 }
 
 [ZLinkSpotPacketHandler(nameof(PartyViewRequest))]
 public sealed class PartyViewRequestHandler : IZLinkSpotPacketHandler<TownSpot, PartyViewRequest>
 {
-    public ValueTask HandleAsync(TownSpot spot, PartyViewRequest message, CancellationToken ct) =>
-        spot.ShowPartyAsync(message.PlayerId);
+    public ValueTask HandleAsync(
+        TownSpot spot,
+        IZLinkMessageContext context,
+        PartyViewRequest message,
+        CancellationToken ct
+    ) => spot.ShowPartyAsync(message.PlayerId);
 }

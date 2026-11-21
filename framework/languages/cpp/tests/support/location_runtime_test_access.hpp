@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 #pragma once
 
+#include "runtime/dispatch/coroutine_executor.hpp"
+#include "runtime/execution/infrastructure_wait_guard.hpp"
 #include "runtime/locations/location_runtime.hpp"
 #include <thread>
 
@@ -8,6 +10,23 @@ namespace zlink::framework::runtime
 {
 struct location_runtime_test_access_t
 {
+    static task_t<void> drain_repository_operations (location_runtime_t &runtime)
+    {
+        auto ambient = detail::capture_ambient_context ();
+        ambient.infrastructure_wait = true;
+        const auto context = detail::enter_ambient_context (ambient);
+        return runtime.drain_repository_operations ();
+    }
+
+    static void settle_publication (location_runtime_t &runtime)
+    {
+        runtime._lane->run_checked ([] {}).get ();
+        task_completion_source_t<void> completion;
+        infrastructure_executor ()->submit (
+          [&] { completion.complete (result_t<void>::success ()); });
+        completion.task ().result ();
+    }
+
     using outage_t = location_runtime_t::store_outage_t;
     using time_point = std::chrono::steady_clock::time_point;
 

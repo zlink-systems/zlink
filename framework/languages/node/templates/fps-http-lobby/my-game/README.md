@@ -40,7 +40,9 @@ Start with the Lobby HTTP endpoint in `server/config/lobby.json`: `http://127.0.
 
 Connect to that `sessionEndpoint` using STREAM. The Session `players` listener defaults to `ws://127.0.0.1:0` in `server/config/session.json`; Session `READY` JSON publishes its actual `endpoint`. Configure the Lobby's advertised `sessionEndpoint` with that running listener, as the e2e runner does. Both port-zero defaults need runtime addresses. WebSocket uses root path `/`. Match mesh listeners and Redis are internal endpoints.
 
-The first STREAM packet is `JoinRoomRequest(playerId, roomId)`, using the assigned player and room. Only assigned members can join; success produces `MatchFound` and `RoomView` pushes. Later `SessionInfoRequest` is request/reply after binding. Room admission is not product authentication; validate identity before binding when adding authentication.
+The first STREAM packet is `JoinRoomRequest(playerId, roomId)`, using the assigned player and room. Only assigned members can join; success produces `MatchFound` and `RoomView` pushes. After binding, use request/reply for `RoomViewRequest` and `SessionInfoRequest`. A `RoomView` push is an unsolicited update and does not complete a room query. Room admission is not product authentication; validate identity before binding when adding authentication.
+
+The local runner and Docker node entrypoint preload `dist/server/shared/diagnostics.js` with Node's `--require` option. Keep this preload when starting a node directly so the Framework telemetry worker inherits the logger provider and writes message-flow records to stderr.
 
 ### Connector installation
 
@@ -142,14 +144,14 @@ pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
 
 The default run executes `lobby`, `hit`, `wall`, `input`, `reconnect`, and `update` in that order. The runner checks the structure and 46 game plus 19 HTTP lobby boundaries before starting nodes, assigns a unique Redis key prefix to each scenario, starts Match nodes before Session and the HTTP Lobby, and waits for public runtime readiness. Listeners bind port zero and publish their actual endpoints. The runner removes only processes and the Compose project that it created; cleanup failures produce a nonzero exit code.
 
-| Scenario | Client observations |
-|---|---|
-| `lobby` | An omitted mode defaults to duel; modes receive separate Rooms; each pair shares a Room and Session endpoint; an outsider is rejected from an empty Room; client `PrepareRoom` is rejected before joining and during a match; a Lobby restart preserves the existing match and provisions a new Room ID. |
-| `hit` | A hit changes HP by 25; upward and out-of-range rays miss; the fourth hit finishes the match and later actions are rejected. |
-| `wall` | An intervening wall blocks a ray; the wall behind the target does not block a hit. |
-| `input` | Shared sequences, movement bounds, wall contact, movement budget, fire interval, rejection reasons, unchanged state, and server-issued retry delays are checked. |
-| `reconnect` | A new Session retains the Actor identity, Room, position, HP, and sequence; a finished match retains its winner. |
-| `update` | Relocation preserves Session bindings and Room state; an outsider is rejected after relocation; safe shutdown is observed, and the replacement accepts a new Room. |
+| Scenario    | Client observations                                                                                                                                                                                                                                                                                      |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `lobby`     | An omitted mode defaults to duel; modes receive separate Rooms; each pair shares a Room and Session endpoint; an outsider is rejected from an empty Room; client `PrepareRoom` is rejected before joining and during a match; a Lobby restart preserves the existing match and provisions a new Room ID. |
+| `hit`       | A hit changes HP by 25; upward and out-of-range rays miss; the fourth hit finishes the match and later actions are rejected.                                                                                                                                                                             |
+| `wall`      | An intervening wall blocks a ray; the wall behind the target does not block a hit.                                                                                                                                                                                                                       |
+| `input`     | Shared sequences, movement bounds, wall contact, movement budget, fire interval, rejection reasons, unchanged state, and server-issued retry delays are checked.                                                                                                                                         |
+| `reconnect` | A new Session retains the Actor identity, Room, position, HP, and sequence; a finished match retains its winner.                                                                                                                                                                                         |
+| `update`    | Relocation preserves Session bindings and Room state; an outsider is rejected after relocation; safe shutdown is observed, and the replacement accepts a new Room.                                                                                                                                       |
 
 `e2e/domain-checks.ts` runs 46 game boundary checks and `e2e/lobby-domain-checks.ts` runs 19 HTTP lobby boundary checks before any scenario starts. The game checks cover closed ray/AABB faces, tangents, range limits, wall/player ties, movement and fire timing, rejected state, and snapshots restored under a different monotonic clock origin. The Lobby checks cover roster preparation and restoration, mode pairing, Room ID uniqueness, and HTTP response timing.
 
@@ -170,6 +172,16 @@ Hit detection uses the current server state. The template has no lag compensatio
 Message Follow is configured explicitly to 30 seconds. After `RELOCATED`, the safe shutdown observation budget is the follow duration plus the existing relocation observation budget; the relocation operation deadline is unchanged.
 
 `--check-domain` (`-CheckDomain` in PowerShell) runs 46 game domain checks and one separate wire golden check for four samples. The wire check runs in the Framework execution image; the runner does not load Framework. It briefly starts one local typed Session host and observes its public connector payloads; Redis and game scenario nodes are not started.
+
+## Framework behavior to know
+
+- **Waiting for DB or file I/O in a handler** — An ordinary async terminal retains the turn, while `Yield` lets other handlers on the same Spot proceed. [Guide](https://docs.zlink.systems/node/guide/server/32-execution-model/#io-worker-wait).
+- **Creation that misses its deadline** — `DeadlineExceeded` and caller cancellation have distinct outcomes. [Guide](https://docs.zlink.systems/node/guide/server/22-actor/#creation-deadline). [server/session/session.ts:41](server/session/session.ts).
+- **Many logins at once** — Each creation for a different ID requires a Location Store round trip, so measure expected load when setting the deadline. [Guide](https://docs.zlink.systems/node/guide/server/25-location/#creation-load).
+- **Sending under load** — Send waits for capacity, and the application sees the final result. [Guide](https://docs.zlink.systems/node/guide/server/33-backpressure/#send-backpressure). [server/session/session.ts:31](server/session/session.ts).
+- **Duplicate login** — Without a callback, a bind from another Session is accepted; reject it in the Actor duplicate-bind callback to prevent this. [Guide](https://docs.zlink.systems/node/guide/server/39-session-binding/#duplicate-session-bind). This template keeps the default (accepts the new Session).
+- **ObjectGeneration** — `ObjectGeneration` distinguishes logical incarnations of the same ID; it is not a data version or write authority. [Guide](https://docs.zlink.systems/node/guide/server/34-activation-lifetime/#object-generation). [server/session/session.ts:55](server/session/session.ts).
+- **READY and Serving** — The Framework host prints `READY` after observing runtime `Serving`. [Guide](https://docs.zlink.systems/node/guide/server/12-operations/#wait-for-serving). [server/shared/hosting.ts:92](server/shared/hosting.ts); [server/shared/hosting.ts:142](server/shared/hosting.ts).
 
 ## Known issues
 

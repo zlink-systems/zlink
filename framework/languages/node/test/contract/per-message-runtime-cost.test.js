@@ -1,15 +1,28 @@
+const { LegacyRelocationAuthorityFixture } = require('./fixtures/legacy-relocation-authority');
 const assert = require('node:assert/strict');
 const { getEventListeners } = require('node:events');
 const test = require('node:test');
-const { ZLinkActorRuntimeOptionsFactory } = require('../../packages/framework/dist/runtime/host/actor-runtime-options-factory');
-const { DefaultZLinkActorClient } = require('../../packages/framework/dist/runtime/actors/actor-client');
+const {
+  ZLinkActorRuntimeOptionsFactory
+} = require('../../packages/framework/dist/runtime/host/actor-runtime-options-factory');
+const {
+  DefaultZLinkActorClient
+} = require('../../packages/framework/dist/runtime/actors/actor-client');
 const publication = require('../../packages/framework/dist/runtime/actors/actor-authority-publication');
 const relocation = require('../../packages/framework/dist/runtime/foundation/service-relocation-runtime');
-const { ZLinkStatefulAuthorityRouteRuntime } = require('../../packages/framework/dist/runtime/host/stateful-authority-route-runtime');
-const { ZLinkStoreLocationResolvers } = require('../../packages/framework/dist/runtime/locations/resolvers');
+const {
+  ZLinkStatefulAuthorityRouteRuntime
+} = require('../../packages/framework/dist/runtime/host/stateful-authority-route-runtime');
+const {
+  ZLinkStoreLocationResolvers
+} = require('../../packages/framework/dist/runtime/locations/resolvers');
 const { ZLinkNodeBackendAdapterFactory } = require('../../packages/framework/dist/runtime/backend');
-const { nodeEventLoopPollerOf } = require('../../packages/framework/dist/runtime/backend/node/node-socket-backend-adapter');
-const { ZLinkManagedStream } = require('../../packages/framework/dist/runtime/streams/managed-stream');
+const {
+  nodeEventLoopPollerOf
+} = require('../../packages/framework/dist/runtime/backend/node/node-socket-backend-adapter');
+const {
+  ZLinkManagedStream
+} = require('../../packages/framework/dist/runtime/streams/managed-stream');
 const protocol = require('../../packages/framework/dist/runtime/streams/protocol');
 const { SubmitResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
 const framework = require('../../packages/framework/dist/internal');
@@ -26,13 +39,21 @@ function authoritySnapshot(version = 'version-a') {
       meshName: 'game',
       ownerNodeGeneration: 23n,
       owner: { ownerId: 'owner-a', leaseGeneration: 29n },
-      spotId: 'entry-a', spotGeneration: 23n, spotKind: 'entry'
+      spotId: 'entry-a',
+      spotGeneration: 23n,
+      spotKind: 'entry'
     }),
-    objectGeneration: 17n, authorityOwnerGeneration: 31n,
-    ownerId: 'owner-a', ownerLeaseGeneration: 29n, storeVersion: { value: version },
+    objectGeneration: 17n,
+    authorityOwnerGeneration: 31n,
+    ownerId: 'owner-a',
+    ownerLeaseGeneration: 29n,
+    storeVersion: { value: version },
     allocation: {
-      state: 'active', objectKind: 'actor', stableType: 'Player',
-      descriptor: { meshName: 'game', rid: 'node-a' }, descriptorLifecycleGeneration: 23n
+      state: 'active',
+      objectKind: 'actor',
+      stableType: 'Player',
+      descriptor: { meshName: 'game', rid: 'node-a' },
+      descriptorLifecycleGeneration: 23n
     }
   };
 }
@@ -40,19 +61,38 @@ function authoritySnapshot(version = 'version-a') {
 test('Actor send and request reuse client options without delivery provider discovery', async () => {
   const snapshot = authoritySnapshot();
   const resolver = new ZLinkStoreLocationResolvers({
-    stores: { authorityStore: { async readAuthority() { return snapshot; } } },
-    leaseTracker: { async remainingOwnerTokenLeaseMs() { return 100000; } }
+    stores: {
+      authorityStore: {
+        async readAuthority() {
+          return snapshot;
+        }
+      }
+    },
+    leaseTracker: {
+      async ownerTokenLeaseDeadlineMs() {
+        return performance.now() + 100000;
+      }
+    }
   });
   let providerLookups = 0;
   let sends = 0;
   let requests = 0;
   const options = new ZLinkActorRuntimeOptionsFactory({
     registration: { messageSerializers: new Map(), requestTimeoutMs: 1000 },
-    providerResolver: { get() { providerLookups += 1; } },
+    providerResolver: {
+      get() {
+        providerLookups += 1;
+      }
+    },
     createActorLocationResolver: () => resolver,
     meshNode: () => ({
-      status() { return { routingId: 'node-a' }; },
-      async sendToActor() { sends += 1; return SubmitResult.Ok; }
+      status() {
+        return { routingId: 'node-a' };
+      },
+      async sendToActor() {
+        sends += 1;
+        return SubmitResult.Ok;
+      }
     }),
     meshCompletions: () => undefined,
     actorHandoff: { isKnownStale: () => false }
@@ -66,7 +106,10 @@ test('Actor send and request reuse client options without delivery provider disc
   const client = new DefaultZLinkActorClient(options);
   for (let i = 0; i < 3; i += 1) {
     await client.sendToActor('actor-a', { value: 1 }).packetName('Notify').submit();
-    assert.deepEqual(await client.requestToActor('actor-a', { value: 1 }).packetName('Ask').submit(), { value: 2 });
+    assert.deepEqual(
+      await client.requestToActor('actor-a', { value: 1 }).packetName('Ask').submit(),
+      { value: 2 }
+    );
   }
   assert.equal(sends, 3);
   assert.equal(requests, 3);
@@ -79,11 +122,15 @@ for (const present of [false, true]) {
     let providerLookups = 0;
     const deliveries = [];
     const gate = {
-      async waitBeforeSubmit(actorId, kind) { deliveries.push({ actorId, kind }); }
+      async waitBeforeSubmit(actorId, kind) {
+        deliveries.push({ actorId, kind });
+      }
     };
     let registeredGate = present ? gate : undefined;
     const host = new framework.ZLinkFrameworkRuntimeHost({
-      registration: framework.createFrameworkRegistration(framework.createFrameworkOptions(() => {})),
+      registration: framework.createFrameworkRegistration(
+        framework.createFrameworkOptions(() => {})
+      ),
       providerResolver: {
         get(token) {
           if (token !== deliveryGateToken) return undefined;
@@ -101,18 +148,37 @@ for (const present of [false, true]) {
     await host.start();
     assert.equal(providerLookups, 1);
     assert.equal(options.transportDeliveryGate(), registeredGate);
-    registeredGate = { async waitBeforeSubmit() { throw new Error('provider was read again'); } };
+    registeredGate = {
+      async waitBeforeSubmit() {
+        throw new Error('provider was read again');
+      }
+    };
     const resolver = new ZLinkStoreLocationResolvers({
-      stores: { authorityStore: { async readAuthority() { return authoritySnapshot(); } } },
-      leaseTracker: { async remainingOwnerTokenLeaseMs() { return 100000; } }
+      stores: {
+        authorityStore: {
+          async readAuthority() {
+            return authoritySnapshot();
+          }
+        }
+      },
+      leaseTracker: {
+        async ownerTokenLeaseDeadlineMs() {
+          return performance.now() + 100000;
+        }
+      }
     });
     options.locationResolver = () => resolver;
     options.staleActorRefPredicate = undefined;
     let sends = 0;
     let requests = 0;
     options.nodeProvider = () => ({
-      status() { return { routingId: 'node-a' }; },
-      async sendToActor() { sends += 1; return SubmitResult.Ok; }
+      status() {
+        return { routingId: 'node-a' };
+      },
+      async sendToActor() {
+        sends += 1;
+        return SubmitResult.Ok;
+      }
     });
     options.handoffCapture = (_mesh, _actor, _parts, returnResponse) => {
       if (!returnResponse) return undefined;
@@ -122,14 +188,23 @@ for (const present of [false, true]) {
     const client = new DefaultZLinkActorClient(options);
     for (let i = 0; i < 3; i += 1) {
       await client.sendToActor('actor-a', { value: 1 }).packetName('Notify').submit();
-      assert.deepEqual(await client.requestToActor('actor-a', { value: 1 }).packetName('Ask').submit(), { value: 2 });
+      assert.deepEqual(
+        await client.requestToActor('actor-a', { value: 1 }).packetName('Ask').submit(),
+        { value: 2 }
+      );
     }
     assert.equal(sends, 3);
     assert.equal(requests, 3);
     assert.equal(providerLookups, 1, 'send and request perform no provider discovery');
-    assert.deepEqual(deliveries, present ? Array.from({ length: 3 }, () => [
-      { actorId: 'actor-a', kind: 'oneWay' }, { actorId: 'actor-a', kind: 'request' }
-    ]).flat() : []);
+    assert.deepEqual(
+      deliveries,
+      present
+        ? Array.from({ length: 3 }, () => [
+            { actorId: 'actor-a', kind: 'oneWay' },
+            { actorId: 'actor-a', kind: 'request' }
+          ]).flat()
+        : []
+    );
   });
 }
 
@@ -148,29 +223,46 @@ test('canonical Actor authority unwraps once on route miss and creates no legacy
     return originalUnwrap(...args);
   };
   global.TypeError = class extends OriginalTypeError {
-    constructor(...args) { super(...args); exceptions += 1; }
+    constructor(...args) {
+      super(...args);
+      exceptions += 1;
+    }
   };
   const resolver = new ZLinkStoreLocationResolvers({
-    stores: { authorityStore: { async readAuthority() { return snapshot; } } },
-    leaseTracker: { async remainingOwnerTokenLeaseMs() { return 100000; } }
+    stores: {
+      authorityStore: {
+        async readAuthority() {
+          return snapshot;
+        }
+      }
+    },
+    leaseTracker: {
+      async ownerTokenLeaseDeadlineMs() {
+        return performance.now() + 100000;
+      }
+    }
   });
   assert.equal((await resolver.resolveDirectActorRoute('actor-a')).kind, 'ready');
   assert.equal(unwraps, 1);
   assert.equal(exceptions, 0);
   assert.equal((await resolver.resolveDirectActorRoute('actor-a')).kind, 'ready');
   assert.equal(unwraps, 1);
-  const codec = new relocation.ServiceRelocationAuthorityPayloadCodec();
+  const codec = new LegacyRelocationAuthorityFixture();
   assert.equal(codec.read(snapshot.payload), undefined);
   assert.equal(exceptions, 0);
   assert.equal(publication.decodeActorAuthorityIdentity(Buffer.from('invalid'), 17n), undefined);
 });
 
 test('relocation authority preserves canonical and legacy envelope acceptance and rejection', () => {
-  const codec = new relocation.ServiceRelocationAuthorityPayloadCodec();
+  const codec = new LegacyRelocationAuthorityFixture();
   const value = {
-    reference: 'relocation-root', checksumCrc32c: 7,
-    aggregateId: '11111111-1111-4111-8111-111111111111', aggregateGeneration: 2n,
-    inventoryDigest: 'a'.repeat(64), targetOwnerId: 'owner-a', targetOwnerLeaseGeneration: 13n
+    reference: 'relocation-root',
+    checksumCrc32c: 7,
+    aggregateId: '11111111-1111-4111-8111-111111111111',
+    aggregateGeneration: 2n,
+    inventoryDigest: 'a'.repeat(64),
+    targetOwnerId: 'owner-a',
+    targetOwnerLeaseGeneration: 13n
   };
   const canonical = authoritySnapshot().payload;
   const legacyApplication = Buffer.from('legacy-application');
@@ -196,25 +288,41 @@ for (const exact of ['same', 'same-version', 'replaced', 'missing']) {
       decoded.push(args[1]);
       return originalDecode(...args);
     };
-    t.after(() => { publication.decodeActorAuthorityIdentity = originalDecode; });
+    t.after(() => {
+      publication.decodeActorAuthorityIdentity = originalDecode;
+    });
     let reads = 0;
     const recovered = [];
     const runtime = new ZLinkStatefulAuthorityRouteRuntime({
       store: {
-        async listAuthorities() { return { kind: 'page', items: [{ key: { value: 'actor:actor-a' }, snapshot: scanned }] }; },
+        async listAuthorities() {
+          return { kind: 'page', items: [{ key: { value: 'actor:actor-a' }, snapshot: scanned }] };
+        },
         async readAuthority() {
           reads += 1;
-          return exact === 'missing' ? { kind: 'missing' } : exact === 'same' ? scanned : replacement;
+          return exact === 'missing'
+            ? { kind: 'missing' }
+            : exact === 'same'
+              ? scanned
+              : replacement;
         }
       },
-      meshNodes: new Map(), pageSize: 10,
-      reportError(error) { throw error; },
-      async recoverActor(snapshot) { recovered.push(snapshot); }
+      meshNodes: new Map(),
+      pageSize: 10,
+      reportError(error) {
+        throw error;
+      },
+      async recoverActor(snapshot) {
+        recovered.push(snapshot);
+      }
     });
     await runtime.start();
     assert.equal(reads, 1);
     assert.deepEqual(decoded, exact === 'replaced' ? [17n, 18n] : [17n]);
-    assert.deepEqual(recovered, exact === 'missing' ? [] : [exact === 'same' ? scanned : replacement]);
+    assert.deepEqual(
+      recovered,
+      exact === 'missing' ? [] : [exact === 'same' ? scanned : replacement]
+    );
   });
 }
 
@@ -242,8 +350,10 @@ test('heartbeat submissions share protocol frames across sessions and retain the
     assert.equal(protocol.decodeStreamHeader(decoded.header).name, name);
     assert.equal(decoded.payload.byteLength, 0);
   }
-  assert.notEqual(protocol.streamControlFrame(protocol.ZLINK_STREAM_HEARTBEAT_PING),
-    protocol.streamControlFrame(protocol.ZLINK_STREAM_HEARTBEAT_PONG));
+  assert.notEqual(
+    protocol.streamControlFrame(protocol.ZLINK_STREAM_HEARTBEAT_PING),
+    protocol.streamControlFrame(protocol.ZLINK_STREAM_HEARTBEAT_PONG)
+  );
 });
 
 test('readable poller owns readiness, internal wake and stop completion without retaining listeners', async () => {
