@@ -130,7 +130,7 @@ internal sealed class ZlinkStreamReceiveDispatcher(
         if (header.Name == ZlinkStreamConnector.HeartbeatPingName)
         {
             await frameSender
-                .SendControlAsync(ZlinkStreamConnector.HeartbeatPongName, cancellationToken)
+                .SendHeartbeatAsync(pong: true, cancellationToken)
                 .ConfigureAwait(false);
             return;
         }
