@@ -522,8 +522,14 @@ export class ZLinkActorHandoffCoordinator {
     start: Promise<void>,
     onResult: (packet: ZLinkActorHandoffPacket, result: ZLinkActorHandoffResult) => void
   ): ZLinkActorHandoffPrefixAdmission {
-    this.beginProvisional(actorId, objectGeneration);
+    if (!this.isProvisional(actorId)) this.beginProvisional(actorId, objectGeneration);
     const handoff = this.requireActive(actorId);
+    if (handoff.oldGeneration !== objectGeneration) {
+      throw new Error(`Actor '${actorId}' target handoff ObjectGeneration changed.`);
+    }
+    // The captured and relayed source work precedes all target-local arrivals.
+    const temporary = handoff.pending.splice(0);
+    handoff.nextIndex = 0;
     for (const packet of packets) {
       handoff.pending.push({
         packet,
@@ -546,6 +552,12 @@ export class ZLinkActorHandoffCoordinator {
       });
       handoff.nextIndex = Math.max(handoff.nextIndex, packet.index + 1);
       handoff.pendingBytes += packetBytes(packet);
+    }
+    for (const record of temporary) {
+      handoff.pending.push({
+        ...record,
+        packet: { ...record.packet, index: handoff.nextIndex++ }
+      });
     }
     return this.admitHandoffPrefix(actorId, handoff, queue, preparation, start);
   }
@@ -850,18 +862,13 @@ export class ZLinkActorHandoffCoordinator {
     handoff.pendingBytes = 0;
   }
 
-  cancel(actorId: string): void {
+  cancel(actorId: string, reason?: unknown): void {
     const handoff = this.active.get(actorId);
     if (handoff === undefined) return;
     if (handoff.phase === 'releasing') return;
     this.active.delete(actorId);
-    const error = new Error(`Actor '${actorId}' transfer was canceled.`);
-    for (const pending of handoff.pending) {
-      if (pending.packet.source !== undefined) {
-        this.removeReplyRoute(pending.packet.source.replyRouteId);
-      }
-      pending.reject?.(error);
-    }
+    const error = reason ?? new Error(`Actor '${actorId}' transfer was canceled.`);
+    for (const pending of handoff.pending) this.failReleasedPending(pending, error);
   }
 
   capture(
@@ -1561,6 +1568,16 @@ export class ZLinkActorHandoffCoordinator {
     deadlineUnixMs?: number,
     origin?: ZLinkMessageFollowOrigin
   ): ZLinkActorMessageFollowContext {
+    // Native ingress has already validated this fence. A target hold can start
+    // before the Actor's committed owner generation is published locally.
+    const acceptedOwner =
+      origin?.target?.actor.generation === generation &&
+      origin.target.authorityOwnerGeneration.toString() !== sourceOwner.authorityOwnerGeneration
+        ? ownerFence({
+            ...sourceOwner,
+            authorityOwnerGeneration: origin.target.authorityOwnerGeneration
+          })
+        : sourceOwner;
     let operationId: string;
     if (origin === undefined) {
       operationId = createMessageFollowId();
@@ -1576,8 +1593,8 @@ export class ZLinkActorHandoffCoordinator {
     return Object.freeze({
       operationId,
       objectGeneration: generation.toString(),
-      sourceOwner,
-      targetOwner: sourceOwner,
+      sourceOwner: acceptedOwner,
+      targetOwner: acceptedOwner,
       deadlineUnixMs,
       correlationId: request ? createMessageFollowId() : undefined,
       replyRouteId: request
@@ -1587,7 +1604,7 @@ export class ZLinkActorHandoffCoordinator {
         : undefined,
       request,
       hopCount: 0,
-      visitedOwners: Object.freeze([messageFollowOwnerFenceKey(sourceOwner)]),
+      visitedOwners: Object.freeze([messageFollowOwnerFenceKey(acceptedOwner)]),
       payloadChecksumSha256: actorMessageFollowPayloadChecksum(parts)
     });
   }
