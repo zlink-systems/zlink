@@ -855,13 +855,17 @@ class session_actor_t
       std::uint64_t binding_token = 0,
       std::shared_ptr<detail::session_actor_binding_context_t> binding_context = {});
     result_t<std::uint64_t> reserve_relay_sequence ();
-    task_t<void> relay_internal (detail::stream_header_t header,
-                                 std::uint64_t relay_sequence,
-                                 const message_t &message);
-    request_task_t<message_t> relay_request_internal (detail::stream_header_t header,
-                                                      std::uint64_t relay_sequence,
-                                                      zlink::message_t payload,
-                                                      std::chrono::milliseconds timeout);
+    task_t<void>
+    relay_internal (detail::stream_header_t header,
+                    std::uint64_t relay_sequence,
+                    std::shared_ptr<detail::stream_reply_submission_t> reply_submission,
+                    const message_t &message);
+    request_task_t<message_t>
+    relay_request_internal (detail::stream_header_t header,
+                            std::uint64_t relay_sequence,
+                            std::shared_ptr<detail::stream_reply_submission_t> reply_submission,
+                            zlink::message_t payload,
+                            std::chrono::milliseconds timeout);
 
     std::shared_ptr<detail::actor_gateway_state_t> _state;
     actor_ref_t _ref;

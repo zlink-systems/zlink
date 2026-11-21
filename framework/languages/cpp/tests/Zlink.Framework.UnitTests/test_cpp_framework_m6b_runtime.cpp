@@ -2189,11 +2189,17 @@ void verify_bound_session_push_uses_session_registry_when_gateway_projection_rej
               return std::nullopt;
           return [admitted = std::move (*admitted)] (std::vector<zlink::message_t> parts) mutable {
               if (parts.size () != 1)
-                  return stateful::stateful_error_t::invalid;
-              const auto delivered =
+                  return task_t<stateful::stateful_error_t> (
+                    result_t<stateful::stateful_error_t>::success (
+                      stateful::stateful_error_t::invalid));
+              auto delivered =
                 admitted ("ProjectionPush", stream_codec_t::message_pack, parts.front ());
-              return delivered ? stateful::stateful_error_t::none
-                               : stateful::stateful_error_t::conflict;
+              return project_task_terminal<stateful::stateful_error_t> (
+                delivered, [] (const result_t<void> &terminal) {
+                    return result_t<stateful::stateful_error_t>::success (
+                      terminal ? stateful::stateful_error_t::none
+                               : stateful::stateful_error_t::conflict);
+                });
           };
       }});
 
