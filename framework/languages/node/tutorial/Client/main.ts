@@ -6,6 +6,7 @@ import { NestFactory } from '@nestjs/core';
 import {
   ZLINK_CHANNEL_CLIENT,
   ZLINK_FANOUT_CLIENT,
+  ZLINK_FRAMEWORK_RUNTIME,
   ZLINK_ROUTE_CLIENT,
   ZLINK_SPOT_MANAGER,
   ZLINK_SPOT_OUTBOUND,
@@ -17,6 +18,7 @@ import {
 import type {
   ZLinkChannelClient,
   ZLinkFanoutClient,
+  ZLinkFrameworkRuntime,
   ZLinkRouteClient,
   ZLinkSpotManager,
   ZLinkSpotOutbound,
@@ -151,6 +153,7 @@ function accepted(): HttpResult {
 }
 
 function registerRoutes(
+  runtime: ZLinkFrameworkRuntime,
   route: ZLinkRouteClient,
   channels: ZLinkChannelClient,
   fanout: ZLinkFanoutClient,
@@ -159,6 +162,8 @@ function registerRoutes(
   playerManager: ZLinkActorManager,
   players: ZLinkActorClient
 ): void {
+  map('GET', /^\/ops\/ready$/, async () => ({ status: runtime.status.isReady ? 200 : 503 }));
+
   // --8<-- [start:channel-request-call]
   map('GET', /^\/players\/([^/]+)\/profile$/, async ([playerId]) => {
     // The target is a channel name. Which node answers is decided at call time.
@@ -446,6 +451,7 @@ async function main(): Promise<void> {
     logger: ['error', 'warn', 'log']
   });
   registerRoutes(
+    app.get<ZLinkFrameworkRuntime>(ZLINK_FRAMEWORK_RUNTIME, { strict: false }),
     app.get<ZLinkRouteClient>(ZLINK_ROUTE_CLIENT, { strict: false }),
     app.get<ZLinkChannelClient>(ZLINK_CHANNEL_CLIENT, { strict: false }),
     app.get<ZLinkFanoutClient>(ZLINK_FANOUT_CLIENT, { strict: false }),
