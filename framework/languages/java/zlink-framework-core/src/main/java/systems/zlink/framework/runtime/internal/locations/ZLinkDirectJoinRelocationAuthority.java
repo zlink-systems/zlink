@@ -305,8 +305,8 @@ public final class ZLinkDirectJoinRelocationAuthority {
                                                         + " commit"));
                             }
                             var publication =
-                                    ZLinkCanonicalRelocationAuthorityStateCodec.decode(
-                                            snapshot.payload());
+                                    ZLinkAuthorityRelocation.publication(
+                                            snapshot, aggregateGeneration);
                             if (publication == null
                                     || !publication.aggregateId().equals(aggregateId)
                                     || publication.aggregateGeneration() != aggregateGeneration
@@ -362,7 +362,8 @@ public final class ZLinkDirectJoinRelocationAuthority {
     }
 
     /** Publishes Ready after target callbacks and temporary replay have ended. */
-    public CompletionStage<Void> publishTargetReady(ZLinkBackendActorRef actor) {
+    public CompletionStage<Void> publishTargetReady(
+            ZLinkBackendActorRef actor, UUID aggregateId, long aggregateGeneration) {
         Objects.requireNonNull(actor, "actor");
         String authorityKey = ZLinkAuthorityKeyCodec.actor(actor.actorId());
         return authority
@@ -391,11 +392,13 @@ public final class ZLinkDirectJoinRelocationAuthority {
                                 return CompletableFuture.completedFuture(null);
                             }
                             var publication =
-                                    ZLinkCanonicalRelocationAuthorityStateCodec.decode(
-                                            snapshot.payload());
+                                    ZLinkAuthorityRelocation.publication(
+                                            snapshot, aggregateGeneration);
                             if (authorityPayload.state()
                                             != ZLinkActorAuthorityPayloadCodec.State.CREATING
                                     || publication == null
+                                    || !publication.aggregateId().equals(aggregateId)
+                                    || publication.aggregateGeneration() != aggregateGeneration
                                     || !authorityPayload.actorId().equals(actor.actorId())
                                     || !authorityPayload.nodeRid().equals(actor.nodeRid())
                                     || !authorityPayload
@@ -425,7 +428,7 @@ public final class ZLinkDirectJoinRelocationAuthority {
                                     .compareExchange(
                                             authorityKey,
                                             new ZLinkAuthorityExpectFound(snapshot.storeVersion()),
-                                            new ZLinkAuthorityPut(ready),
+                                            ZLinkAuthorityPut.relocation(ready, null),
                                             NEVER)
                                     .thenCompose(
                                             stored -> {

@@ -804,7 +804,12 @@ final class ZLinkActorJoinPrewarmIngressTest {
                                         prepared.targetDescriptor(),
                                         prepared.targetDescriptorLifecycleGeneration(),
                                         prepared.capacityBundle()),
-                                Instant.now()));
+                                Optional.empty(),
+                                Instant.now(),
+                                participant.relocation() == null
+                                        ? null
+                                        : participant.relocation().phase("committed"),
+                                0));
             }
             progress = true;
             progressStoreVersion = "aggregate-commit";
