@@ -776,16 +776,18 @@ function writeEntryUserSpotAuthorityState(input: EntryUserSpotAuthorityState, wr
 export function decodeEntryUserSpotAuthorityState(bytes: Uint8Array, context: ServiceWireDecoderContext): EntryUserSpotAuthorityState { const reader = new Reader(bytes); const value = readEntryUserSpotAuthorityState(reader, context, {}, 0); reader.done("entry-user-spot-authority-state"); return value; }
 export function encodeEntryUserSpotAuthorityState(value: EntryUserSpotAuthorityState, context: ServiceWireDecoderContext): Uint8Array { const writer = new Writer(); writeEntryUserSpotAuthorityState(value, writer, context, {}, 0); return writer.result(); }
 
-export type ActorAuthorityState = "creating" | "ready";
+export type ActorAuthorityState = "creating" | "ready" | "closing";
 export function enumWireActorAuthorityState(value: ActorAuthorityState): number { switch (value) {
   case "creating": return 0;
   case "ready": return 1;
+  case "closing": return 2;
 } }
 function readActorAuthorityState(reader: Reader, context: ServiceWireDecoderContext, enclosing: any, flags: number): ActorAuthorityState {
   void context; void enclosing; void flags;
   const raw = reader.u(1); switch (Number(raw)) {
     case 0: return "creating";
     case 1: return "ready";
+    case 2: return "closing";
     default: fail("actor-authority-state enum");
   }
 }
