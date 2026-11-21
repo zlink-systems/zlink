@@ -187,6 +187,16 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
   internal document (`zlink/dev/development-workflow.md` in the private repository zlink-systems/docs).
 - Branches, commits, pushes and merges happen only on an explicit request, and the working
   branch follows the Issue-branch rule (`AGENTS.md` §1).
+- Before opening a PR, run `scripts/dev/pre-pr.sh` and paste its final `pre-pr:`
+  summary line into the PR description. It merges the latest `origin/main` by
+  default and runs the selected Linux x64 checks. Install Python 3 with PyYAML
+  and the toolchains for the checks you run. The language suites require a
+  running Redis instance at `ZLINK_REDIS_TEST_ENDPOINT` (`host:port`). Use
+  `--no-merge` to keep the current HEAD, or `--only docs,format` to select
+  specific components.
+  Set `PRE_PR_NODE20` or `PRE_PR_NODE22` to the corresponding Node bin directory
+  when that version is outside `PATH`. Set `BUILD_PARALLEL` to change the C++
+  build parallelism from its default of 2.
 - Commit message: `<module>: <one line>` plus a body with cause, fix, evidence numbers and
   gate results. Refactors keep their items (dead code removal / responsibility split /
   naming) distinguishable in the diff.
