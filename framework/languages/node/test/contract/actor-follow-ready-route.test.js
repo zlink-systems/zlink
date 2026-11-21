@@ -1,9 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const framework = require('../../packages/framework/dist/internal');
-const {
-  ZLinkHostServiceRelocationRuntime
-} = require('../../packages/framework/dist/internal');
+const { ZLinkHostServiceRelocationRuntime } = require('../../packages/framework/dist/internal');
 const {
   encodeAuthorityKey
 } = require('../../packages/framework/dist/runtime/locations/authority-key-codec');
@@ -13,16 +11,13 @@ const {
 } = require('../../packages/framework/dist/runtime/backend/runtime-message');
 const stream = require('../../packages/framework/dist/runtime/streams/protocol');
 
-for (const operation of ['join', 'user_spot', 'instance_spot']) {
+for (const operation of ['join', 'user_spot']) {
   test(`${operation} retains the Ready Spot route for a late Actor Message Follow send`, async () => {
     const target = {
       routerChannelId: 'mesh',
       targetNodeRid: 'target',
       spotId: 'matchmaking',
-      spotKind:
-        operation === 'instance_spot'
-          ? framework.ZLinkSpotKind.Instance
-          : framework.ZLinkSpotKind.User,
+      spotKind: framework.ZLinkSpotKind.User,
       targetSpotGeneration: 7n,
       targetNodeGeneration: 11n,
       targetOwnerId: 'owner-target',
@@ -58,22 +53,6 @@ for (const operation of ['join', 'user_spot', 'instance_spot']) {
       sealSpotMessageFollowIngress: () => ({}),
       abortSpotMessageFollowIngress: () => true,
       commitSpotMessageFollowIngress: async () => true,
-      async sendToInstanceSpot(route) {
-        submissions.push({
-          nodeRid: route.targetNodeRid,
-          spotId: route.targetSpotId,
-          generation: route.objectGeneration,
-          fence: {
-            spot: { spotId: route.targetSpotId, generation: route.objectGeneration },
-            targetNodeRid: route.targetNodeRid,
-            targetNodeGeneration: route.targetNodeGeneration,
-            authorityOwnerGeneration: route.authorityOwnerGeneration,
-            ownerLeaseGeneration: route.leaseGeneration,
-            storeVersion: route.storeVersion
-          }
-        });
-        return 0;
-      },
       entrySpot: () => ({
         async sendToSpot(nodeRid, spotId, generation, _parts, options) {
           submissions.push({
@@ -111,10 +90,11 @@ for (const operation of ['join', 'user_spot', 'instance_spot']) {
       storeVersion: { value: target.authorityStoreVersion },
       allocation: {
         ...committed.allocation,
-        objectKind: operation === 'instance_spot' ? 'instance_spot' : 'user_spot',
+        objectKind: 'user_spot',
         stableType: 'Matchmaking'
       }
     };
+    const authorityRows = new Map();
     const runtime = new ZLinkHostServiceRelocationRuntime({
       registration: {
         spotNodes: new Map([
@@ -122,10 +102,7 @@ for (const operation of ['join', 'user_spot', 'instance_spot']) {
             'mesh',
             {
               actorFactoryRegistrations: { Player: { relocation: { kind: 'recreate' } } },
-              spotFactoryRegistrations: { Matchmaking: { relocation: { kind: 'recreate' } } },
-              instanceSpotFactoryRegistrations: {
-                Matchmaking: { relocation: { kind: 'recreate' } }
-              }
+              spotFactoryRegistrations: { Matchmaking: { relocation: { kind: 'recreate' } } }
             }
           ]
         ])
@@ -137,13 +114,17 @@ for (const operation of ['join', 'user_spot', 'instance_spot']) {
         async completeRelocationSource() {}
       }),
       actorManager: () => ({ detachRelocationSource() {}, async completeRelocationSource() {} }),
-      liveDescriptors: async () => [{ rid: 'target', lifecycleGeneration: 11n }],
+      liveDescriptors: async () => [
+        { rid: 'target', lifecycleGeneration: 11n, applicationVersion: 1n }
+      ],
       locationStore: () => ({
         async readAuthority(key) {
+          if (authorityRows.has(key.value)) return authorityRows.get(key.value);
           const row =
             key.value === encodeAuthorityKey('actor', 'alice').value ? committed : spotAuthority;
-          return {
+          const snapshot = {
             ...row,
+            storeVersion: { value: `source:${key.value}` },
             kind: 'snapshot',
             payload: Buffer.alloc(0),
             authorityOwnerGeneration: source.authorityOwnerGeneration,
@@ -155,6 +136,23 @@ for (const operation of ['join', 'user_spot', 'instance_spot']) {
               descriptorLifecycleGeneration: source.nodeGeneration
             }
           };
+          authorityRows.set(key.value, snapshot);
+          return snapshot;
+        },
+        async compareExchangeAuthority(key, expected, mutation) {
+          const current = await this.readAuthority(key);
+          assert.equal(expected.value, current.storeVersion.value);
+          const next = {
+            ...current,
+            payload: mutation.payload,
+            relocation:
+              mutation.relocation === undefined
+                ? current.relocation
+                : (mutation.relocation ?? undefined),
+            storeVersion: { value: `${expected.value}:cas` }
+          };
+          authorityRows.set(key.value, next);
+          return { ...next, kind: 'stored' };
         }
       }),
       actorTransfer: {
@@ -176,13 +174,7 @@ for (const operation of ['join', 'user_spot', 'instance_spot']) {
       await captured.commitSource(
         new Map([
           [encodeAuthorityKey('actor', 'alice').value, committed],
-          [
-            encodeAuthorityKey(
-              operation === 'instance_spot' ? 'instance_spot' : 'user_spot',
-              'matchmaking'
-            ).value,
-            spotAuthority
-          ]
+          [encodeAuthorityKey('user_spot', 'matchmaking').value, spotAuthority]
         ])
       );
     };
@@ -192,7 +184,7 @@ for (const operation of ['join', 'user_spot', 'instance_spot']) {
         actor,
         state,
         target,
-        relocationId: '11111111111111111111111111111111'
+        relocationId: '11111111-1111-1111-1111-111111111111'
       });
     } else {
       const {
@@ -214,7 +206,7 @@ for (const operation of ['join', 'user_spot', 'instance_spot']) {
         },
         operation,
         [state],
-        { rid: 'target', lifecycleGeneration: 11n }
+        { rid: 'target', lifecycleGeneration: 11n, applicationVersion: 1n }
       );
     }
     const parts = [
