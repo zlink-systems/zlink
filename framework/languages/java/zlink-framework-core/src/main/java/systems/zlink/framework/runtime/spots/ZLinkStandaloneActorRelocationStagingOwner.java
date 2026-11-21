@@ -776,18 +776,7 @@ final class ZLinkStandaloneActorRelocationStagingOwner {
     }
 
     private static <T> T inStateLane(Staged staged, Supplier<T> work) {
-        try {
-            return staged.stateLane.runAsync(work).toCompletableFuture().join();
-        } catch (java.util.concurrent.CompletionException failure) {
-            Throwable cause = failure.getCause();
-            if (cause instanceof RuntimeException runtimeFailure) {
-                throw runtimeFailure;
-            }
-            if (cause instanceof Error error) {
-                throw error;
-            }
-            throw failure;
-        }
+        return staged.stateLane.awaitResult(work);
     }
 
     record Request(
