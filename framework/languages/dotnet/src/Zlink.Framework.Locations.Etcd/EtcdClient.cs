@@ -158,18 +158,7 @@ internal sealed class EtcdClient : IDisposable
         }
         // .NET 8 enables cleartext HTTP/2 for an http GrpcChannel without a global switch.
         channels = endpoints
-            .Select(uri =>
-                GrpcChannel.ForAddress(
-                    uri,
-                    new GrpcChannelOptions
-                    {
-                        HttpHandler = handler,
-                        DisposeHttpClient = false,
-                        MaxSendMessageSize = 16 * 1024 * 1024,
-                        MaxReceiveMessageSize = 8 * 1024 * 1024,
-                    }
-                )
-            )
+            .Select(uri => GrpcChannel.ForAddress(uri, ChannelOptions(handler)))
             .ToArray();
         transport = handler;
         kv = channels.Select(channel => new KV.KVClient(channel)).ToArray();
@@ -177,6 +166,23 @@ internal sealed class EtcdClient : IDisposable
     }
 
     private readonly SocketsHttpHandler transport;
+
+    // Spec 07 §9.2 client bounds: 16 MiB covers the largest batch transaction, 8 MiB a 1 MiB
+    // read and a 4 MiB scan page.
+    internal const int MaxSendMessageBytes = 16 * 1024 * 1024;
+    internal const int MaxReceiveMessageBytes = 8 * 1024 * 1024;
+
+    // Spec 07 §10.1 turns gRPC retry and hedging off. Grpc.Net.Client applies them only from a
+    // service config: the channel sets none and ignores one returned by a resolver.
+    internal static GrpcChannelOptions ChannelOptions(HttpMessageHandler handler) =>
+        new()
+        {
+            HttpHandler = handler,
+            DisposeHttpClient = false,
+            DisableResolverServiceConfig = true,
+            MaxSendMessageSize = MaxSendMessageBytes,
+            MaxReceiveMessageSize = MaxReceiveMessageBytes,
+        };
 
     internal static EtcdErrorKind Classify(StatusCode code, string description) =>
         (code, description) switch

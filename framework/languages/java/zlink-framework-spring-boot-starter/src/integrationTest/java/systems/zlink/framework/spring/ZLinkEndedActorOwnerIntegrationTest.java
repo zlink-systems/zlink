@@ -53,8 +53,9 @@ public class ZLinkEndedActorOwnerIntegrationTest {
     @Import(ZLinkFrameworkAutoConfiguration.class)
     public static class Config {
         @Bean
-        public ZLinkFrameworkConfigurer framework() {
+        public ZLinkFrameworkConfigurer framework(ZLinkRedisLocationStore store) {
             return options -> {
+                options.addLocationStore(store);
                 System.out.println(
                         "LEASE_TTL_MS=" + options.configureLocations().ownerLeaseTtl().toMillis());
                 renewInterval = options.configureLocations().ownerLeaseRenewInterval();

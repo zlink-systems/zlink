@@ -440,6 +440,10 @@ final class ZLinkUserSpotOperationHandler
                                                                     ZLinkSpotCloseCoordinator.Step
                                                                             .operation(
                                                                                     () -> {
+                                                                                        runtime
+                                                                                                .invalidateSpotRoute(
+                                                                                                        fence
+                                                                                                                .spotId());
                                                                                         return activation
                                                                                                 .context
                                                                                                 .commitClose();

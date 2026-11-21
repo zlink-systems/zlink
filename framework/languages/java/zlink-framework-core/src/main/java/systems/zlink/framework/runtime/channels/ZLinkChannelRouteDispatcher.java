@@ -298,7 +298,7 @@ final class ZLinkChannelRouteDispatcher {
                 source.toString(),
                 packet.header());
         registry.enqueueChannel(
-                registry.routeQueue(channelName),
+                registry.internalQueue(channelName),
                 () ->
                         handler.handle(source, payload)
                                 .thenAccept(
@@ -521,14 +521,10 @@ final class ZLinkChannelRouteDispatcher {
                                                         0L,
                                                         source);
                                             }
-                                        })
-                                .whenComplete(
-                                        (ignored, error) -> {
-                                            payload.close();
                                         });
                     },
-                    admission);
-            ZLinkChannelDispatchReporter.onAdmissionRejected(admission, payload::close, null);
+                    admission,
+                    ignored -> payload.close());
         } catch (RuntimeException error) {
             payload.close();
             throw error;

@@ -16,7 +16,7 @@ WORKDIR /template
 COPY --from=build /template/node_modules node_modules
 COPY --from=build /template/dist dist
 COPY package.json ./
-ENTRYPOINT ["node"]
+ENTRYPOINT ["node", "--require", "/template/dist/server/shared/diagnostics.js"]
 
 FROM ${DOCKER_CLI_IMAGE} AS docker-cli
 FROM node AS runner

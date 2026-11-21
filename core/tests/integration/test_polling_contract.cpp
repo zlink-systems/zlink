@@ -497,24 +497,34 @@ struct interrupted_wait_t
     void *poller; //  NULL: zlink_poll on socket
     void *socket;
     long timeout_ms;
-    std::atomic<bool> done;
+    test_thread_release_gate_t release_gate;
     int rc;
     zlink_config_result_t error;
     zlink_poller_event_t event;
     long long elapsed_ms;
 };
 
-//  Interrupts the waiting thread with SIGURG every 10 ms until the wait ends
-//  or the budget runs out, so every system wait inside it sees EINTR.
-void interrupt_wait (std::thread &waiter_, interrupted_wait_t &wait_,
-                     int budget_ms_)
+struct interrupt_result_t
 {
+    interrupt_result_t () : calls (0), first_error (0) {}
+
+    int calls;
+    int first_error;
+};
+
+//  Sends the requested number of signals. The waiter remains alive until its caller releases it.
+interrupt_result_t interrupt_wait (std::thread &waiter_, int signal_count_)
+{
+    interrupt_result_t result;
     const pthread_t target = waiter_.native_handle ();
-    for (int elapsed = 0; elapsed < budget_ms_ && !wait_.done.load ();
-         elapsed += 10) {
-        TEST_ASSERT_EQUAL_INT (0, pthread_kill (target, SIGURG));
+    for (int i = 0; i < signal_count_; ++i) {
+        const int rc = pthread_kill (target, SIGURG);
+        ++result.calls;
+        if (rc != 0 && result.first_error == 0)
+            result.first_error = rc;
         std::this_thread::sleep_for (std::chrono::milliseconds (10));
     }
+    return result;
 }
 
 void run_wait (interrupted_wait_t *wait_)
@@ -531,17 +541,47 @@ void run_wait (interrupted_wait_t *wait_)
     wait_->elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds> (
                           std::chrono::steady_clock::now () - started)
                           .count ();
-    wait_->done.store (true);
+    wait_->release_gate.complete_and_wait_for_release ();
 }
 
-void test_poller_wait_resumes_after_signal ()
+void test_poller_wait_timeout_zero_receives_five_signals ()
 {
+    void *poller = zlink_poller_new ();
+    TEST_ASSERT_NOT_NULL (poller);
+
     struct sigaction action = {};
     struct sigaction previous = {};
     action.sa_handler = count_interrupt;
     sigemptyset (&action.sa_mask);
     TEST_ASSERT_EQUAL_INT (0, sigaction (SIGURG, &action, &previous));
 
+    interrupted_wait_t immediate;
+    immediate.poller = poller;
+    immediate.socket = NULL;
+    immediate.timeout_ms = 0;
+    immediate.rc = -2;
+    immediate.error = ZLINK_CONFIG_INTERNAL_ERROR;
+    interrupt_count.store (0);
+    std::thread waiter (run_wait, &immediate);
+    immediate.release_gate.wait_until_done ();
+    const interrupt_result_t signals = interrupt_wait (waiter, 5);
+    immediate.release_gate.release ();
+    waiter.join ();
+
+    const int signal_count = interrupt_count.load ();
+    const zlink_close_result_t destroy_rc = zlink_poller_destroy (&poller);
+    const int restore_rc = sigaction (SIGURG, &previous, NULL);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, destroy_rc);
+    TEST_ASSERT_EQUAL_INT (0, restore_rc);
+    TEST_ASSERT_EQUAL_INT (0, immediate.rc);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, immediate.error);
+    TEST_ASSERT_EQUAL_INT (5, signals.calls);
+    TEST_ASSERT_EQUAL_INT (0, signals.first_error);
+    TEST_ASSERT_EQUAL_INT (5, signal_count);
+}
+
+void test_poller_wait_resumes_after_signal ()
+{
     void *receiver = test_context_socket (ZLINK_SOCKET_PAIR);
     void *sender = test_context_socket (ZLINK_SOCKET_PAIR);
     TEST_ASSERT_EQUAL_INT (ZLINK_BIND_OK,
@@ -553,79 +593,103 @@ void test_poller_wait_resumes_after_signal ()
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
                            zlink_poller_add (poller, receiver, NULL, ZLINK_POLLIN));
 
+    struct sigaction action = {};
+    struct sigaction previous = {};
+    action.sa_handler = count_interrupt;
+    sigemptyset (&action.sa_mask);
+    TEST_ASSERT_EQUAL_INT (0, sigaction (SIGURG, &action, &previous));
+
     //  A finite wait keeps its original deadline and ends as a timeout.
     interrupted_wait_t finite;
     finite.poller = poller;
     finite.socket = NULL;
     finite.timeout_ms = 300;
-    finite.done.store (false);
     finite.rc = -2;
     finite.error = ZLINK_CONFIG_INTERNAL_ERROR;
     interrupt_count.store (0);
     std::thread finite_waiter (run_wait, &finite);
-    interrupt_wait (finite_waiter, finite, 2000);
+    const interrupt_result_t finite_signals = interrupt_wait (finite_waiter, 30);
+    finite.release_gate.release ();
     finite_waiter.join ();
-    TEST_ASSERT_TRUE (interrupt_count.load () > 0);
-    TEST_ASSERT_EQUAL_INT (0, finite.rc);
-    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, finite.error);
-    TEST_ASSERT_TRUE (finite.elapsed_ms >= 250);
-    TEST_ASSERT_TRUE (finite.elapsed_ms < 2000);
+    const int finite_interrupts = interrupt_count.load ();
 
     //  An infinite wait keeps waiting through signals until the event.
     interrupted_wait_t infinite;
     infinite.poller = poller;
     infinite.socket = NULL;
     infinite.timeout_ms = -1;
-    infinite.done.store (false);
     infinite.rc = -2;
     infinite.error = ZLINK_CONFIG_INTERNAL_ERROR;
     interrupt_count.store (0);
     std::thread infinite_waiter (run_wait, &infinite);
-    interrupt_wait (infinite_waiter, infinite, 200);
-    TEST_ASSERT_TRUE (interrupt_count.load () > 0);
-    send_string_expect_success (sender, "wake", 0);
+    const interrupt_result_t infinite_signals = interrupt_wait (infinite_waiter, 20);
+    const int wake_rc = zlink_send (sender, "wake", 4, 0);
+    const int wake_errno = errno;
+    infinite.release_gate.release ();
     infinite_waiter.join ();
+    const int infinite_interrupts = interrupt_count.load ();
+
+    const zlink_close_result_t destroy_rc = zlink_poller_destroy (&poller);
+    const int restore_rc = sigaction (SIGURG, &previous, NULL);
+    test_context_socket_close_zero_linger (sender);
+    test_context_socket_close_zero_linger (receiver);
+
+    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, destroy_rc);
+    TEST_ASSERT_EQUAL_INT (0, restore_rc);
+    TEST_ASSERT_EQUAL_INT (30, finite_signals.calls);
+    TEST_ASSERT_EQUAL_INT (0, finite_signals.first_error);
+    TEST_ASSERT_EQUAL_INT (30, finite_interrupts);
+    TEST_ASSERT_EQUAL_INT (0, finite.rc);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, finite.error);
+    TEST_ASSERT_TRUE (finite.elapsed_ms >= 250);
+    TEST_ASSERT_TRUE (finite.elapsed_ms < 2000);
+    TEST_ASSERT_EQUAL_INT (20, infinite_signals.calls);
+    TEST_ASSERT_EQUAL_INT (0, infinite_signals.first_error);
+    TEST_ASSERT_EQUAL_INT (20, infinite_interrupts);
+    errno = wake_errno;
+    TEST_ASSERT_EQUAL_INT (4, wake_rc);
     TEST_ASSERT_EQUAL_INT (1, infinite.rc);
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, infinite.error);
     TEST_ASSERT_EQUAL_INT (ZLINK_POLLIN, infinite.event.events);
-
-    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_poller_destroy (&poller));
-    test_context_socket_close_zero_linger (sender);
-    test_context_socket_close_zero_linger (receiver);
-    TEST_ASSERT_EQUAL_INT (0, sigaction (SIGURG, &previous, NULL));
 }
 
 void test_poll_resumes_after_signal ()
 {
+    void *receiver = test_context_socket (ZLINK_SOCKET_PAIR);
+    TEST_ASSERT_EQUAL_INT (ZLINK_BIND_OK,
+                           zlink_bind (receiver, "inproc://poll-signal-resume"));
+
     struct sigaction action = {};
     struct sigaction previous = {};
     action.sa_handler = count_interrupt;
     sigemptyset (&action.sa_mask);
     TEST_ASSERT_EQUAL_INT (0, sigaction (SIGURG, &action, &previous));
-    void *receiver = test_context_socket (ZLINK_SOCKET_PAIR);
-    TEST_ASSERT_EQUAL_INT (ZLINK_BIND_OK,
-                           zlink_bind (receiver, "inproc://poll-signal-resume"));
 
     //  zlink_poll shares the same wait loop and keeps its deadline too.
     interrupted_wait_t poll_once;
     poll_once.poller = NULL;
     poll_once.socket = receiver;
     poll_once.timeout_ms = 300;
-    poll_once.done.store (false);
     poll_once.rc = -2;
     poll_once.error = ZLINK_CONFIG_INTERNAL_ERROR;
     interrupt_count.store (0);
     std::thread poll_waiter (run_wait, &poll_once);
-    interrupt_wait (poll_waiter, poll_once, 2000);
+    const interrupt_result_t signals = interrupt_wait (poll_waiter, 30);
+    poll_once.release_gate.release ();
     poll_waiter.join ();
-    TEST_ASSERT_TRUE (interrupt_count.load () > 0);
+    const int signal_count = interrupt_count.load ();
+
+    const int restore_rc = sigaction (SIGURG, &previous, NULL);
+    test_context_socket_close_zero_linger (receiver);
+
+    TEST_ASSERT_EQUAL_INT (0, restore_rc);
+    TEST_ASSERT_EQUAL_INT (30, signals.calls);
+    TEST_ASSERT_EQUAL_INT (0, signals.first_error);
+    TEST_ASSERT_EQUAL_INT (30, signal_count);
     TEST_ASSERT_EQUAL_INT (0, poll_once.rc);
     TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, poll_once.error);
     TEST_ASSERT_TRUE (poll_once.elapsed_ms >= 250);
     TEST_ASSERT_TRUE (poll_once.elapsed_ms < 2000);
-
-    test_context_socket_close_zero_linger (receiver);
-    TEST_ASSERT_EQUAL_INT (0, sigaction (SIGURG, &previous, NULL));
 }
 #endif
 }
@@ -647,6 +711,7 @@ int main ()
 #if !defined(ZLINK_HAVE_WINDOWS)
     RUN_TEST (test_poller_wait_resumes_after_signal);
     RUN_TEST (test_poll_resumes_after_signal);
+    RUN_TEST (test_poller_wait_timeout_zero_receives_five_signals);
 #endif
     return UNITY_END ();
 }

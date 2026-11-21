@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Template version sync tests on a temporary copy of the templates."""
 import importlib.util
+import json
 from pathlib import Path
 import re
 import shutil
@@ -34,6 +35,7 @@ class TemplateVersionTests(unittest.TestCase):
         previous = sync_version.REPO_ROOT
         sync_version.REPO_ROOT = self.root
         self.addCleanup(setattr, sync_version, 'REPO_ROOT', previous)
+        self.pins = sync_version.template_versions()
 
     def snapshot(self):
         # Bytes: templates also carry binary files such as gradle-wrapper.jar.
@@ -59,7 +61,7 @@ class TemplateVersionTests(unittest.TestCase):
         )
 
     def changed(self, write):
-        _templates, changed = sync_version.synchronize_template_versions(write)
+        _templates, changed = sync_version.synchronize_template_versions(write, local_packages=True)
         return sorted(path.relative_to(self.root).as_posix() for path in changed)
 
     def test_current_templates_match_their_owner_files(self):
@@ -67,15 +69,15 @@ class TemplateVersionTests(unittest.TestCase):
 
     def test_check_fails_when_one_template_pins_another_framework(self):
         relative = 'framework/languages/java/templates/kotlin/starter/my-game/build.gradle.kts'
-        self.edit(relative, 'extra["frameworkVersion"] = "0.31.0"', 'extra["frameworkVersion"] = "0.30.0"')
+        self.edit(relative, f'extra["frameworkVersion"] = "{self.pins["java"]["framework"]}"',
+                  'extra["frameworkVersion"] = "0.0.1"')
         self.assertEqual(self.changed(write=False), [relative])
         self.assertEqual(self.changed(write=True), [relative])
         self.assertEqual(self.snapshot(), self.original)
 
     def test_write_moves_every_managed_template_pin(self):
-        old = {'cpp': ('0.31.0',), 'dotnet': ('0.31.0', '1.21.0'), 'java': ('0.31.0', '1.21.0'),
-               'node': ('0.30.3', '1.20.0')}
-        new = ('0.32.0', '1.22.0')
+        old = {language: tuple(pins.values()) for language, pins in self.pins.items()}
+        new = ('9.8.7', '8.7.6')
         for language, pins in old.items():
             self.owner(language, *new[:len(pins)])
         changed = self.changed(write=True)
@@ -104,6 +106,19 @@ class TemplateVersionTests(unittest.TestCase):
                 continue
             pins = old[path.split('/')[2]]
             text = after[path].decode('utf-8')
+            if path.endswith('/package-lock.json'):
+                previous_lock = json.loads(before)
+                next_lock = json.loads(text)
+                # npm, rather than pin synchronization, owns installed package metadata.
+                self.assertEqual(
+                    {key: value for key, value in next_lock['packages'].items() if key},
+                    {key: value for key, value in previous_lock['packages'].items() if key},
+                )
+                root = previous_lock['packages']['']
+                manifest = json.loads(after[path.removesuffix('package-lock.json') + 'package.json'])
+                root['dependencies'] = manifest['dependencies']
+                self.assertEqual(next_lock['packages'][''], root)
+                continue
             values = '|'.join(re.escape(value) for value in pins)
             # No pin is left at the previous value, apart from milestone mentions.
             self.assertEqual(re.findall(
@@ -111,7 +126,7 @@ class TemplateVersionTests(unittest.TestCase):
                 rf'(?!\.?[0-9])(?! validation)',
                 text,
             ), [], path)
-            # Only those pins moved; a lockfile also drops each moved package's integrity.
+            # Only those pins moved.
             strip = lambda lines: [line for line in lines if not line.lstrip().startswith('"integrity"')]
             before_lines = strip(before.decode('utf-8').splitlines())
             after_lines = strip(text.splitlines())

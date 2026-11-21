@@ -102,6 +102,8 @@ final class SameNodeDuplicateBindIntegrationTest {
                 assertNotNull(current);
                 var bound = await(current.context.actors().bind(created.actor()));
                 assertSame(bound, await(current.context.actors().bindOrGet(created.actor())));
+                await(player.boundEntered);
+                assertEquals(1, player.boundCallbacks.get());
                 assertEquals(0, player.callbacks.get());
                 var oldActor = await(first.bound());
                 assertEquals(
@@ -192,6 +194,7 @@ final class SameNodeDuplicateBindIntegrationTest {
                     }
                     assertEquals(callbackCount, player.callbacks.get());
                     assertEquals(replacementCount, current.replaced.isDone() ? 1 : 0);
+                    assertEquals(accepted ? 2 : 1, player.boundCallbacks.get());
                 }
             }
         }
@@ -272,6 +275,172 @@ final class SameNodeDuplicateBindIntegrationTest {
         }
     }
 
+    @org.junit.jupiter.api.Test
+    void sessionBoundOldIncarnationIsInvalidOperation() throws Exception {
+        sessionBoundNotificationKeepsSuccessfulBind("recreated");
+    }
+
+    @ParameterizedTest
+    @ValueSource(
+            strings = {
+                "success",
+                "throw",
+                "failed",
+                "error",
+                "pending",
+                "timeout",
+                "shutdown",
+                "actor-destroy",
+                "destroyed"
+            })
+    void sessionBoundNotificationKeepsSuccessfulBind(String outcome) throws Exception {
+        sessions.clear();
+        var options = new DefaultZLinkFrameworkOptions();
+        if (outcome.equals("timeout")) {
+            options.setSessionReplacementCallbackTimeout(Duration.ofMillis(100));
+        }
+        options.addLocationStore(new ZLinkInMemoryLocationStore());
+        options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+        options.addRouteMesh("game")
+                .listen("tcp://127.0.0.1:0")
+                .objects()
+                .server()
+                .addEntrySpot(Entry.class)
+                .addActorFactory("player", Player.class, Factory.class, f -> f.disableRelocation());
+        options.addStreamNode("clients")
+                .bind("tcp://127.0.0.1:0")
+                .enableActorDispatch()
+                .registerSession(TestSession.class);
+        try (var failures = new RuntimeFailures();
+                var runtime =
+                        RuntimeTestSupport.startFramework(
+                                options, new ZLinkJavaBackendAdapterFactory())) {
+            var created =
+                    assertInstanceOf(
+                            ZLinkActorCreateResult.Created.class,
+                            await(
+                                    runtime.actorManager()
+                                            .create("bound-player", "player")
+                                            .submit()));
+            player.boundOutcome = outcome;
+            player.runtime = ZLinkFrameworkRuntimeTestAccess.actors(runtime);
+            try (var client = connect(runtime)) {
+                var session = sessions.poll(3, TimeUnit.SECONDS);
+                assertNotNull(session);
+                if (outcome.equals("destroyed") || outcome.equals("recreated")) {
+                    assertTrue(await(runtime.actorManager().destroy(created.actor())));
+                    if (outcome.equals("recreated")) {
+                        await(runtime.actorManager().create("bound-player", "player").submit());
+                    }
+                    var failure =
+                            assertThrows(
+                                    ExecutionException.class,
+                                    () -> await(session.context.actors().bind(created.actor())));
+                    assertEquals(
+                            outcome.equals("recreated")
+                                    ? ZLinkFrameworkErrorKind.INVALID_OPERATION
+                                    : ZLinkFrameworkErrorKind.UNAVAILABLE,
+                            assertInstanceOf(
+                                            ZLinkFrameworkException.class,
+                                            failure.getCause(),
+                                            failure.getCause().toString())
+                                    .kind());
+                    assertEquals(0, player.boundCallbacks.get());
+                    return;
+                }
+                await(session.context.actors().bind(created.actor()));
+                CompletionStage<Boolean> destruction = null;
+                try {
+                    var identity = await(player.boundEntered);
+                    assertEquals(
+                            identity,
+                            player.runtime
+                                    .boundSessionRoute(player)
+                                    .orElseThrow()
+                                    .sessionBindingIdentity());
+                    assertTrue(
+                            session.context.actors().find(created.actor().actorId()).isPresent());
+                    assertEquals(1, player.boundCallbacks.get());
+                    var cancellation = await(player.boundCancellation);
+                    if (outcome.equals("timeout")) {
+                        assertInstanceOf(
+                                TimeoutException.class, failures.next.poll(3, TimeUnit.SECONDS));
+                        assertTrue(cancellation.isCancellationRequested());
+                    } else if (outcome.equals("actor-destroy")) {
+                        destruction = runtime.actorManager().destroy(created.actor());
+                        assertTimeoutPreemptively(
+                                Duration.ofSeconds(3),
+                                () -> {
+                                    while (!cancellation.isCancellationRequested()) Thread.sleep(1);
+                                });
+                    } else if (outcome.equals("shutdown")) {
+                        player.runtime.beginDrain();
+                        assertTrue(cancellation.isCancellationRequested());
+                    } else if (outcome.equals("error")) {
+                        assertInstanceOf(
+                                AssertionError.class, failures.next.poll(3, TimeUnit.SECONDS));
+                        assertFalse(cancellation.isCancellationRequested());
+                    } else if (outcome.equals("throw") || outcome.equals("failed")) {
+                        assertInstanceOf(
+                                IllegalStateException.class,
+                                failures.next.poll(3, TimeUnit.SECONDS));
+                        assertFalse(cancellation.isCancellationRequested());
+                    }
+                } finally {
+                    if (outcome.equals("timeout")
+                            || outcome.equals("shutdown")
+                            || outcome.equals("actor-destroy"))
+                        player.boundTerminal.completeExceptionally(
+                                new CancellationException("bound callback cancelled"));
+                    else player.boundTerminal.complete(null);
+                }
+                if (destruction != null) assertTrue(await(destruction));
+                var actor = await(client.bound());
+                if (!outcome.equals("shutdown") && !outcome.equals("actor-destroy")) {
+                    assertEquals(
+                            "after-notification",
+                            await(
+                                    actor.request(new ActorProbe("after-notification"))
+                                            .submit(String.class)));
+                }
+                assertEquals(1, player.boundCallbacks.get());
+                assertEquals(
+                        outcome.equals("throw")
+                                        || outcome.equals("failed")
+                                        || outcome.equals("error")
+                                        || outcome.equals("timeout")
+                                ? 1
+                                : 0,
+                        failures.observed.size());
+            }
+        }
+    }
+
+    private static final class RuntimeFailures extends java.util.logging.Handler
+            implements AutoCloseable {
+        final java.util.logging.Logger logger =
+                java.util.logging.Logger.getLogger("systems.zlink.framework.runtime");
+        final BlockingQueue<Throwable> next = new LinkedBlockingQueue<>();
+        final List<Throwable> observed = new CopyOnWriteArrayList<>();
+
+        RuntimeFailures() {
+            logger.addHandler(this);
+        }
+
+        public void publish(java.util.logging.LogRecord record) {
+            if (record.getMessage().equals("ZLink runtime task failed")) {
+                observed.add(record.getThrown());
+                next.add(record.getThrown());
+            }
+        }
+
+        public void flush() {}
+
+        public void close() {
+            logger.removeHandler(this);
+        }
+    }
+
     private record Client(
             ZLinkStreamConnector connector,
             CompletableFuture<ZLinkStreamActor> bound,
@@ -335,6 +504,31 @@ final class SameNodeDuplicateBindIntegrationTest {
 
         public ZLinkActorContext context() {
             return context;
+        }
+
+        final AtomicInteger boundCallbacks = new AtomicInteger();
+        final CompletableFuture<ZLinkSessionBindingIdentity> boundEntered =
+                new CompletableFuture<>();
+        final CompletableFuture<Void> boundTerminal = new CompletableFuture<>();
+        final CompletableFuture<ZLinkActorCallbackCancellation> boundCancellation =
+                new CompletableFuture<>();
+        String boundOutcome = "success";
+
+        public CompletionStage<Void> onSessionBound(
+                ZLinkSessionBindingIdentity incoming, ZLinkActorCallbackCancellation cancellation) {
+            boundCallbacks.incrementAndGet();
+            assertTrue(runtime.activeActorIds().contains(context.actorId()));
+            boundCancellation.complete(cancellation);
+            boundEntered.complete(incoming);
+            return switch (boundOutcome) {
+                case "throw" -> throw new IllegalStateException("bound callback failed");
+                case "error" -> throw new AssertionError("bound callback error");
+                case "failed" ->
+                        CompletableFuture.failedFuture(
+                                new IllegalStateException("bound stage failed"));
+                case "pending", "timeout", "shutdown", "actor-destroy" -> boundTerminal;
+                default -> CompletableFuture.completedFuture(null);
+            };
         }
 
         public CompletionStage<Optional<String>> onDuplicateBind(

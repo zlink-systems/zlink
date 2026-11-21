@@ -1,4 +1,5 @@
-import { AsyncLocalStorage, AsyncResource } from 'node:async_hooks';
+import { AsyncResource } from 'node:async_hooks';
+import { FrameworkContextField } from '../framework-context';
 import type { Type, ZLinkMessageContext } from '../../contracts';
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
 import type { ZLinkDetachedTaskRunner } from '../spots/spot-actor-join-dispatch';
@@ -26,8 +27,8 @@ interface LifecycleScopeDisposal {
 }
 
 const HANDLER_SCOPE_FACTORY = Symbol.for('@zlink-systems/framework.handler-instance-scope-factory');
-const activeHandlerScope = new AsyncLocalStorage<ZLinkHandlerInstanceScope>();
-const activeLifecycleScope = new AsyncLocalStorage<LifecycleHandlerInstanceScope>();
+const activeHandlerScope = new FrameworkContextField<ZLinkHandlerInstanceScope>();
+const activeLifecycleScope = new FrameworkContextField<LifecycleHandlerInstanceScope>();
 const detachedLifecycleResource = new AsyncResource('zlink:handler-instance-scope');
 const dispatchScopes = new WeakMap<object, ZLinkHandlerInstanceScope>();
 const lifecycleScopes = new WeakMap<object, LifecycleHandlerInstanceScope>();

@@ -24,10 +24,7 @@ import {
   decodeServiceInstanceAuthorityPayload,
   encodeServiceInstanceAuthorityPayload
 } from '../foundation/service-authority-payload-codec';
-import {
-  replaceServiceRelocationAuthorityApplicationPayload,
-  serviceRelocationAuthorityApplicationPayload
-} from '../foundation/service-relocation-runtime';
+import { serviceRelocationAuthorityApplicationPayload } from '../foundation/service-relocation-runtime';
 
 export class ZLinkSpotLocationClaims {
   private readonly spots = new Map<string, TrackedSpot>();
@@ -150,19 +147,16 @@ export class ZLinkSpotLocationClaims {
     const result = await store.compareExchangeAuthority(key, current.storeVersion, {
       kind: 'put',
       generationTransition: 'preserve',
-      payload: replaceServiceRelocationAuthorityApplicationPayload(
-        current.payload,
-        encodeServiceInstanceAuthorityPayload({
-          state: 'closing',
-          stableType: decoded.stableType,
-          spotId: decoded.spotId,
-          ownerId: decoded.ownerId,
-          ownerLeaseGeneration: decoded.ownerLeaseGeneration,
-          ownerMeshName: decoded.ownerMeshName,
-          ownerNodeRid: decoded.ownerNodeRid,
-          ownerNodeGeneration: decoded.ownerNodeGeneration
-        })
-      )
+      payload: encodeServiceInstanceAuthorityPayload({
+        state: 'closing',
+        stableType: decoded.stableType,
+        spotId: decoded.spotId,
+        ownerId: decoded.ownerId,
+        ownerLeaseGeneration: decoded.ownerLeaseGeneration,
+        ownerMeshName: decoded.ownerMeshName,
+        ownerNodeRid: decoded.ownerNodeRid,
+        ownerNodeGeneration: decoded.ownerNodeGeneration
+      })
     });
     if (result.kind !== 'stored') {
       return undefined;
@@ -175,10 +169,7 @@ export class ZLinkSpotLocationClaims {
         const reincarnated = await store.compareExchangeAuthority(key, result.storeVersion, {
           kind: 'put',
           generationTransition: 'reincarnate',
-          payload: replaceServiceRelocationAuthorityApplicationPayload(
-            result.payload,
-            encodeServiceInstanceAuthorityPayload({ ...decoded, state: 'coldActivating' })
-          )
+          payload: encodeServiceInstanceAuthorityPayload({ ...decoded, state: 'coldActivating' })
         });
         if (reincarnated.kind !== 'stored') {
           throw createInternalFrameworkException(
@@ -200,10 +191,7 @@ export class ZLinkSpotLocationClaims {
           const ready = await store.compareExchangeAuthority(key, reincarnated.storeVersion, {
             kind: 'put',
             generationTransition: 'preserve',
-            payload: replaceServiceRelocationAuthorityApplicationPayload(
-              reincarnated.payload,
-              encodeServiceInstanceAuthorityPayload({ ...decoded, state: 'ready' })
-            )
+            payload: encodeServiceInstanceAuthorityPayload({ ...decoded, state: 'ready' })
           });
           if (ready.kind !== 'stored') {
             throw createInternalFrameworkException(

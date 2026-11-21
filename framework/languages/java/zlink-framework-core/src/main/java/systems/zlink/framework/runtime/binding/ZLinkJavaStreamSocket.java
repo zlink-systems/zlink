@@ -306,7 +306,11 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
                                                                     routingId, key.actorSlot()));
                                 }
                                 try {
-                                    handler.handle(routingId, eventType, 0, event.event());
+                                    handler.handle(
+                                            routingId,
+                                            eventType,
+                                            (int) event.value(),
+                                            event.event());
                                 } catch (RuntimeException failure) {
                                     LOGGER.log(
                                             Level.WARNING,

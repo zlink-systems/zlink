@@ -1,4 +1,5 @@
 #include "../Shared/contracts.hpp"
+#include "../Shared/host_readiness_handler.hpp"
 #include "http_operations.hpp"
 
 #include <zlink/framework.hpp>
@@ -414,6 +415,7 @@ int main (int argc, char **argv)
         // The HTTP surface the examples are driven through.
         options.http ()
           .listen ("http://127.0.0.1:5180")
+          .map_get<host_readiness_http_handler_t> ("/ops/ready")
           .map_get<get_profile_http_handler_t> ("/players/{playerId}/profile")
           .map_post<record_login_http_handler_t> ("/players/{playerId}/logins")
           .map_get<node_status_http_handler_t> ("/ops/nodes/{nodeRid}/status")

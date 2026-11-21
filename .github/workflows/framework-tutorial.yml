@@ -108,12 +108,21 @@ jobs:
           }
           trap 'fail "line ${LINENO}: ${BASH_COMMAND} (exit $?)"' ERR
 
-          # Wait until the two processes have found each other. The channel path
-          # and the object path come up at different times, and during startup one
-          # can answer while the other still refuses, so require both to succeed
-          # three times in a row. Every step after this runs exactly once.
-          # A fresh queue id each run, so a probe never reuses one whose
-          # earlier outcome is still cached.
+          # Channel traffic can work while the object server is still preparing.
+          # Read the public host status from both processes before running examples.
+          host_ready=0
+          for _ in $(seq 1 90); do
+            if curl -sf --max-time 10 http://127.0.0.1:5080/ops/ready > /dev/null \
+               && curl -sf --max-time 10 http://127.0.0.1:5081/ops/ready > /dev/null; then
+              host_ready=1
+              break
+            fi
+            sleep 1
+          done
+          [ "${host_ready}" -eq 1 ] || fail "both tutorial hosts did not become ready"
+
+          # Verify the channel and instance-spot paths after host readiness.
+          # The queue id is fresh so no earlier result can satisfy this request.
           warmup="warmup-$$-${RANDOM}"
           streak=0
           for _ in $(seq 1 90); do
@@ -325,15 +334,16 @@ jobs:
             }
             trap "cleanup '${client_pid}' '${server_pid}'" EXIT
 
-            local ready=0
+            local host_ready=0
             for _ in $(seq 1 90); do
-              if curl -sf --max-time 5 "http://127.0.0.1:${client_port}/players/warmup/profile" > /dev/null; then
-                ready=1
+              if curl -sf --max-time 5 "http://127.0.0.1:${client_port}/ops/ready" > /dev/null \
+                 && curl -sf --max-time 5 "http://127.0.0.1:${admin_port}/ops/ready" > /dev/null; then
+                host_ready=1
                 break
               fi
               sleep 1
             done
-            [ "${ready}" -eq 1 ] || fail "the two processes never connected"
+            [ "${host_ready}" -eq 1 ] || fail "${language}: both tutorial hosts did not become ready"
 
             profile=$(curl -sf "http://127.0.0.1:${client_port}/players/p1/profile")
             echo "${profile}" | grep -q '"playerId":"p1"' || fail "profile: ${profile}"
@@ -471,6 +481,19 @@ jobs:
           }
           trap 'fail "line ${LINENO}: ${BASH_COMMAND} (exit $?)"' ERR
 
+          # Confirm both public host readiness states before testing routes.
+          host_ready=0
+          for _ in $(seq 1 90); do
+            if curl -sf --max-time 10 http://127.0.0.1:5480/ops/ready > /dev/null \
+               && curl -sf --max-time 10 http://127.0.0.1:5481/ops/ready > /dev/null; then
+              host_ready=1
+              break
+            fi
+            sleep 1
+          done
+          [ "${host_ready}" -eq 1 ] || fail "both Node tutorial hosts did not become ready"
+
+          # Verify the channel and instance-spot paths after host readiness.
           warmup="warmup-$$-${RANDOM}"
           streak=0
           for _ in $(seq 1 90); do
@@ -626,12 +649,20 @@ jobs:
           }
           trap 'fail "line ${LINENO}: ${BASH_COMMAND} (exit $?)"' ERR
 
+          host_ready=0
           for _ in $(seq 1 90); do
-            if curl -sf http://127.0.0.1:5180/players/p1/profile > /dev/null; then
+            if curl -sf --max-time 10 http://127.0.0.1:5180/ops/ready > /dev/null \
+               && curl -sf --max-time 10 http://127.0.0.1:5181/ops/ready > /dev/null; then
+              host_ready=1
               break
             fi
             sleep 1
           done
+          [ "${host_ready}" -eq 1 ] || fail "both C++ tutorial hosts did not become ready"
+
+          # Channel traffic is checked independently from host readiness.
+          profile=$(curl -sf http://127.0.0.1:5180/players/p1/profile)
+          echo "${profile}" | grep -q '"playerId":"p1"' || fail "channel request/reply: ${profile}"
           curl -sf -u ops:tutorial-admin -X POST \
             'http://127.0.0.1:5181/admin/channels/profile/weight?value=100' > /dev/null
           output=$(./build/tutorial_http_client)

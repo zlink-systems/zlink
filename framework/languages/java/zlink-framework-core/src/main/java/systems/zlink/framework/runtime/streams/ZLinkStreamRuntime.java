@@ -40,6 +40,7 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
 import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
 import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 import systems.zlink.framework.runtime.spots.ZLinkSpotRuntime;
+import systems.zlink.framework.streams.ZLinkDisconnectReason;
 import systems.zlink.framework.streams.ZLinkSession;
 import systems.zlink.framework.streams.ZLinkSessionContext;
 import systems.zlink.framework.streams.ZLinkSessionPacketDispatcher;
@@ -51,6 +52,7 @@ import systems.zlink.framework.streams.ZLinkStreamSessionError;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -1404,7 +1406,13 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 recordSessionClosed(session, "protocol_error");
                 try {
                     disconnectSession(
-                            session, () -> transportErrorDisconnectSessionStage(session, reason));
+                            session,
+                            () ->
+                                    transportErrorDisconnectSessionStage(
+                                            session,
+                                            new ZLinkStreamError(
+                                                    ZLinkStreamSessionError.TRANSPORT_ERROR,
+                                                    reason)));
                 } catch (RuntimeException enqueueFailure) {
                     LOGGER.log(
                             Level.FINE,
@@ -1690,12 +1698,23 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         if (state == null) {
             return;
         }
-        recordSessionClosed(state, nativeCode == 0 ? "transport_error" : "protocol_error");
-        if (nativeCode == 0 && event == MonitorEventType.DISCONNECTED) {
-            disconnectSession(state, () -> disconnectSessionStage(state));
-            return;
+        Optional<ZLinkDisconnectReason> disconnectReason = Optional.empty();
+        if (event == MonitorEventType.DISCONNECTED) {
+            int reasonValue = nativeCode;
+            disconnectReason =
+                    Optional.of(
+                            Arrays.stream(ZLinkDisconnectReason.values())
+                                    .filter(reason -> reason.value() == reasonValue)
+                                    .findFirst()
+                                    .orElseThrow());
+            // DISCONNECTED carries a reason, not an errno. Preserve the existing close metric.
+            nativeCode = 0;
         }
-        disconnectSession(state, () -> transportErrorDisconnectSessionStage(state, message));
+        recordSessionClosed(state, nativeCode == 0 ? "transport_error" : "protocol_error");
+        ZLinkStreamError error =
+                new ZLinkStreamError(
+                        ZLinkStreamSessionError.TRANSPORT_ERROR, message, disconnectReason);
+        disconnectSession(state, () -> transportErrorDisconnectSessionStage(state, error));
     }
 
     /** Constructs outside the state lane and publishes one Session per peer in one lane turn. */
@@ -2181,14 +2200,8 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     }
 
     private CompletionStage<Void> transportErrorDisconnectSessionStage(
-            SessionState state, String message) {
-        return ZLinkHandlerStages.fromStageSupplier(
-                        () ->
-                                state.session()
-                                        .onError(
-                                                new ZLinkStreamError(
-                                                        ZLinkStreamSessionError.TRANSPORT_ERROR,
-                                                        message)))
+            SessionState state, ZLinkStreamError error) {
+        return ZLinkHandlerStages.fromStageSupplier(() -> state.session().onError(error))
                 .thenCompose(
                         ignored ->
                                 ZLinkHandlerStages.fromStageSupplier(

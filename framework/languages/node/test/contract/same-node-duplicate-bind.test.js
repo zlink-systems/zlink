@@ -12,167 +12,178 @@ const cases = JSON.parse(
   readFileSync('../../runtime/conformance/bound-session-relocation-v1.json', 'utf8')
 ).sameNodeDuplicateBind;
 
-for (const mode of ['SpotWide', 'PerActor', 'Entry']) {
-  test(`duplicate bind callback owns its lifecycle turn: ${mode}`, async () => {
-    const {
-      ZLinkSpotSerialTurnExecutor
-    } = require('../../packages/framework/dist/runtime/spots/spot-serial-turn-executor');
-    const {
-      ZLinkSpotSerialExecutor
-    } = require('../../packages/framework/dist/runtime/spots/spot-serial-executor');
-    const {
-      SubmitResult
-    } = require('../../packages/framework/dist/runtime/backend/runtime-values');
-    const serial = new ZLinkSpotSerialTurnExecutor(mode === 'SpotWide');
-    const executor = new ZLinkSpotSerialExecutor(
-      serial,
-      framework.ZLinkUserSpotExecutionMode[mode === 'Entry' ? 'PerActor' : mode],
-      'spot-a'
-    );
-    const activation = { serialExecutor: executor };
-    const manager = {
-      options: {
-        executeEntryActor: (_mesh, actorId, operation) =>
-          framework.ZLinkEntrySpotActivation.prototype.executeActor.call(
-            { spotSerialExecutor: executor },
-            actorId,
-            operation
-          )
-      },
-      resolveApplicationActivation: () => activation,
-      executeActorTurn: framework.DefaultZLinkSpotManager.prototype.executeActorTurn
-    };
-    let release;
-    let entered;
-    const held = new Promise((resolve) => {
-      release = resolve;
-    });
-    const started = new Promise((resolve) => {
-      entered = resolve;
-    });
-    const events = [];
-    const actor = { actorId: 'actor-a', nodeRid: 'node-a', generation: 1n };
-    const incoming = {
-      sessionNodeRid: 'session-owner',
-      sessionOwnerNodeGeneration: 4n,
-      sessionRid: 'session-new',
-      sessionOwnerId: 'owner',
-      sessionOwnerLeaseGeneration: 1n,
-      bindingGeneration: 5n
-    };
-    const current = { ...incoming, sessionRid: 'session-old', bindingGeneration: 3n };
-    const turns = [];
-    const state = {
-      nativeActorRef: actor,
-      actorId: 'actor-a',
-      meshName: 'mesh-a',
-      locationGeneration: 3n,
-      isMoving: false,
-      boundSession: current,
-      actor: {
-        context: { spotId: mode === 'Entry' ? undefined : 'spot-a' },
-        async onDuplicateBind() {
-          turns.push(
-            require('../../packages/framework/dist/runtime/execution').captureZLinkSpotSerialTurn()
-          );
-          events.push('callback:start');
-          entered();
-          await held;
-          turns.push(
-            require('../../packages/framework/dist/runtime/execution').captureZLinkSpotSerialTurn()
-          );
-          events.push('callback:end');
-        }
-      },
-      installBoundSessionBinding(binding) {
-        this.boundSession = binding;
-      }
-    };
-    const host = {
-      actorManager: { getState: () => state },
-      spotNodeRuntime: {
-        meshNode: () => ({ status: () => ({ routingId: 'node-a', lifecycleGeneration: 2n }) })
-      },
-      boundSessionRelay: { boundSessions: { resolveRemoteBoundSessionTarget: () => incoming } },
-      spotManager: manager,
-      options: { registration: { sessionReplacementCallbackTimeoutMs: 30000 } }
-    };
-    let replies = 0;
-    const binding = framework.ZLinkFrameworkRuntimeHost.prototype.dispatchMeshActorBinding.call(
-      host,
-      'mesh-a',
-      {
-        kindData: {
-          kind: 'actorBinding',
-          transition: 'active',
-          actor,
-          actorNodeGeneration: 2n,
-          authorityOwnerGeneration: 3n,
-          ...incoming
-        },
-        reply() {
-          replies++;
-          return SubmitResult.Ok;
-        },
-        replyFailure() {
-          assert.fail('valid binding was rejected');
-        }
-      }
-    );
-    await started;
-    const siblings = [
-      executor.executeActor('actor-b', (actorSerial) =>
-        actorSerial.execute(async () => {
-          events.push('actor');
-        })
-      ),
-      executor.executeSpot(async () => {
-        events.push('spot');
-      }),
-      executor.executeTimer('timer', async () => {
-        events.push('timer');
-      })
-    ];
-    const sameActor = executor.executeActor('actor-a', (actorSerial) =>
-      actorSerial.execute(async () => {
-        events.push('same-actor');
-      })
-    );
-    try {
-      await new Promise((resolve) => setImmediate(resolve));
-      assert.equal(replies, 0);
-      assert.equal(state.boundSession, current);
-      if (mode === 'SpotWide') {
-        assert.deepEqual(events, ['callback:start']);
-      } else {
-        await Promise.all(siblings);
-        assert.deepEqual([...events].sort(), ['actor', 'callback:start', 'spot', 'timer']);
-      }
-      assert.ok(turns[0], 'callback must enter a framework handler turn');
-      assert.equal(turns[0].work.lane, 'lifecycle');
-      assert.equal(
-        executor.actorExecutors.get('actor-a').scheduler.activeLifecycle.lane,
-        'lifecycle'
+for (const callbackName of ['onDuplicateBind', 'onSessionBound']) {
+  for (const mode of ['SpotWide', 'PerActor', 'Entry']) {
+    test(`${callbackName} owns its lifecycle turn: ${mode}`, async () => {
+      const {
+        ZLinkSpotSerialTurnExecutor
+      } = require('../../packages/framework/dist/runtime/spots/spot-serial-turn-executor');
+      const {
+        ZLinkSpotSerialExecutor
+      } = require('../../packages/framework/dist/runtime/spots/spot-serial-executor');
+      const {
+        SubmitResult
+      } = require('../../packages/framework/dist/runtime/backend/runtime-values');
+      const serial = new ZLinkSpotSerialTurnExecutor(mode === 'SpotWide');
+      const executor = new ZLinkSpotSerialExecutor(
+        serial,
+        framework.ZLinkUserSpotExecutionMode[mode === 'Entry' ? 'PerActor' : mode],
+        'spot-a'
       );
-    } finally {
-      release();
-      await binding;
-      await Promise.all(siblings);
-      await sameActor;
-      await executor.closeChildren();
-    }
-    assert.ok(turns[1], 'async continuation must retain its framework handler turn');
-    assert.equal(turns[0], turns[1]);
-    assert.equal(replies, 1);
-    assert.equal(state.boundSession.sessionRid, incoming.sessionRid);
-    if (mode === 'SpotWide') assert.equal(events[1], 'callback:end');
-    assert.ok(events.indexOf('same-actor') > events.indexOf('callback:end'));
-  });
+      const activation = { serialExecutor: executor };
+      const manager = {
+        options: {
+          executeEntryActor: (_mesh, actorId, operation) =>
+            framework.ZLinkEntrySpotActivation.prototype.executeActor.call(
+              { spotSerialExecutor: executor },
+              actorId,
+              operation
+            )
+        },
+        resolveApplicationActivation: () => activation,
+        executeActorTurn: framework.DefaultZLinkSpotManager.prototype.executeActorTurn
+      };
+      let release;
+      let entered;
+      const held = new Promise((resolve) => {
+        release = resolve;
+      });
+      const started = new Promise((resolve) => {
+        entered = resolve;
+      });
+      const events = [];
+      const actor = { actorId: 'actor-a', nodeRid: 'node-a', generation: 1n };
+      const incoming = {
+        sessionNodeRid: 'session-owner',
+        sessionOwnerNodeGeneration: 4n,
+        sessionRid: 'session-new',
+        sessionOwnerId: 'owner',
+        sessionOwnerLeaseGeneration: 1n,
+        bindingGeneration: 5n
+      };
+      const current = { ...incoming, sessionRid: 'session-old', bindingGeneration: 3n };
+      const turns = [];
+      const state = {
+        nativeActorRef: actor,
+        actorId: 'actor-a',
+        meshName: 'mesh-a',
+        locationGeneration: 3n,
+        isMoving: false,
+        boundSession: current,
+        actor: {
+          context: { spotId: mode === 'Entry' ? undefined : 'spot-a' },
+          async [callbackName]() {
+            turns.push(
+              require('../../packages/framework/dist/runtime/execution').captureZLinkSpotSerialTurn()
+            );
+            events.push('callback:start');
+            entered();
+            await held;
+            turns.push(
+              require('../../packages/framework/dist/runtime/execution').captureZLinkSpotSerialTurn()
+            );
+            events.push('callback:end');
+          }
+        },
+        installBoundSessionBinding(binding) {
+          this.boundSession = binding;
+        }
+      };
+      const host = {
+        actorManager: { getState: () => state },
+        spotNodeRuntime: {
+          meshNode: () => ({ status: () => ({ routingId: 'node-a', lifecycleGeneration: 2n }) })
+        },
+        boundSessionRelay: { boundSessions: { resolveRemoteBoundSessionTarget: () => incoming } },
+        spotManager: manager,
+        options: { registration: { sessionReplacementCallbackTimeoutMs: 30000 } }
+      };
+      let replies = 0;
+      const binding = framework.ZLinkFrameworkRuntimeHost.prototype.dispatchMeshActorBinding.call(
+        host,
+        'mesh-a',
+        {
+          kindData: {
+            kind: 'actorBinding',
+            transition: 'active',
+            actor,
+            actorNodeGeneration: 2n,
+            authorityOwnerGeneration: 3n,
+            ...incoming
+          },
+          reply() {
+            replies++;
+            return SubmitResult.Ok;
+          },
+          replyFailure() {
+            assert.fail('valid binding was rejected');
+          }
+        }
+      );
+      await Promise.race([
+        started,
+        binding.then(() => {
+          throw new Error('Binding completed without invoking its callback.');
+        })
+      ]);
+      const siblings = [
+        executor.executeActor('actor-b', (actorSerial) =>
+          actorSerial.execute(async () => {
+            events.push('actor');
+          })
+        ),
+        executor.executeSpot(async () => {
+          events.push('spot');
+        }),
+        executor.executeTimer('timer', async () => {
+          events.push('timer');
+        })
+      ];
+      const sameActor = executor.executeActor('actor-a', (actorSerial) =>
+        actorSerial.execute(async () => {
+          events.push('same-actor');
+        })
+      );
+      try {
+        await new Promise((resolve) => setImmediate(resolve));
+        assert.equal(replies, callbackName === 'onSessionBound' ? 1 : 0);
+        assert.deepEqual(
+          state.boundSession,
+          callbackName === 'onSessionBound' ? incoming : current
+        );
+        if (mode === 'SpotWide') {
+          assert.deepEqual(events, ['callback:start']);
+        } else {
+          await Promise.all(siblings);
+          assert.deepEqual([...events].sort(), ['actor', 'callback:start', 'spot', 'timer']);
+        }
+        assert.ok(turns[0], 'callback must enter a framework handler turn');
+        assert.equal(turns[0].work.lane, 'lifecycle');
+        assert.equal(
+          executor.actorExecutors.get('actor-a').scheduler.activeLifecycle.lane,
+          'lifecycle'
+        );
+      } finally {
+        release();
+        await binding;
+        await Promise.all(siblings);
+        await sameActor;
+        await executor.closeChildren();
+      }
+      assert.ok(turns[1], 'async continuation must retain its framework handler turn');
+      assert.equal(turns[0], turns[1]);
+      assert.equal(replies, 1);
+      assert.equal(state.boundSession.sessionRid, incoming.sessionRid);
+      if (mode === 'SpotWide') assert.equal(events[1], 'callback:end');
+      assert.ok(events.indexOf('same-actor') > events.indexOf('callback:end'));
+    });
+  }
 }
 
 for (const scenario of cases) {
   test(`public same-node duplicate bind: ${scenario.name}`, { timeout: 20000 }, async (t) => {
     let callbacks = 0;
+    const notifications = [];
     let replacements = 0;
     let ingress = 0;
     let player;
@@ -182,6 +193,10 @@ for (const scenario of cases) {
       constructor(context) {
         this.context = context;
         player = this;
+      }
+      onSessionBound(incoming, signal) {
+        assert.equal(signal.aborted, false);
+        notifications.push(incoming);
       }
       async onDuplicateBind() {
         callbacks++;
@@ -330,21 +345,28 @@ for (const scenario of cases) {
         'current'
       );
     }
+    assert.equal(notifications.length, scenario.accepted ? 2 : 1);
+    assert.ok(notifications.every((identity) => identity.bindingGeneration !== 0n));
     assert.equal(callbacks, scenario.callbackCount);
     assert.equal(replacements, scenario.replacementCount);
   });
 }
 
-for (const scenario of ['none', 'first', 'same', 'different']) {
-  test(`Actor binding gate admission: ${scenario}`, async () => {
+for (const scenario of ['none', 'first', 'same', 'different', 'overlapping']) {
+  const overlapping = scenario === 'overlapping';
+  const name = overlapping
+    ? 'Queued duplicate bind uses the current binding in its Actor turn'
+    : `Actor binding gate admission: ${scenario}`;
+  test(name, async () => {
     const {
       ZLinkSerialExecutionQueue
     } = require('../../packages/framework/dist/runtime/execution/serial-execution-queue');
     const {
-      SubmitResult
+      RequestResult, SubmitResult
     } = require('../../packages/framework/dist/runtime/backend/runtime-values');
     const queue = new ZLinkSerialExecutionQueue(async (record) => {
       record.resolve(await record.operation());
+      record.release();
     });
     let release;
     let entered;
@@ -354,13 +376,15 @@ for (const scenario of ['none', 'first', 'same', 'different']) {
     const held = new Promise((resolve) => {
       release = resolve;
     });
-    const handler = queue.submit(() => {
-      entered();
-      return held;
-    });
-    await started;
-    let callbacks = 0;
-    let replies = 0;
+    const handler = overlapping
+      ? undefined
+      : queue.submit(() => {
+          entered();
+          return held;
+        });
+    if (handler !== undefined) await started;
+    const callbackInputs = [];
+    const replies = [];
     const actor = { actorId: 'actor-a', nodeRid: 'node-a', generation: 1n };
     const incoming = {
       sessionNodeRid: 'session-owner',
@@ -370,12 +394,16 @@ for (const scenario of ['none', 'first', 'same', 'different']) {
       sessionOwnerLeaseGeneration: 1n,
       bindingGeneration: 5n
     };
+    const next = { ...incoming, sessionRid: 'session-b', bindingGeneration: 6n };
+    const rejectionMessage = 'The first replacement is current.';
+    const firstReply = { session: incoming.sessionRid, result: RequestResult.Ok };
     const current =
       scenario === 'first'
         ? undefined
         : {
             ...incoming,
-            sessionRid: scenario === 'same' ? 'session-a' : 'session-old'
+            sessionRid: scenario === 'same' ? 'session-a' : 'session-old',
+            bindingGeneration: 3n
           };
     const state = {
       nativeActorRef: actor,
@@ -389,8 +417,18 @@ for (const scenario of ['none', 'first', 'same', 'different']) {
         ...(scenario === 'none'
           ? {}
           : {
-              async onDuplicateBind() {
-                callbacks++;
+              async onDuplicateBind(bound, candidate) {
+                callbackInputs.push(bound.bindingGeneration);
+                if (overlapping && candidate.bindingGeneration === incoming.bindingGeneration) {
+                  entered();
+                  await held;
+                }
+                if (
+                  candidate.bindingGeneration === next.bindingGeneration &&
+                  bound.bindingGeneration === incoming.bindingGeneration
+                ) {
+                  return rejectionMessage;
+                }
               }
             })
       },
@@ -410,44 +448,75 @@ for (const scenario of ['none', 'first', 'same', 'different']) {
       },
       options: { registration: { sessionReplacementCallbackTimeoutMs: 30000 } }
     };
-    const binding = framework.ZLinkFrameworkRuntimeHost.prototype.dispatchMeshActorBinding.call(
-      host,
-      'mesh-a',
-      {
-        kindData: {
-          kind: 'actorBinding',
-          transition: 'active',
-          actor,
-          actorNodeGeneration: 2n,
-          authorityOwnerGeneration: 3n,
-          ...incoming
-        },
-        reply() {
-          replies++;
-          return SubmitResult.Ok;
-        },
-        replyFailure() {
-          assert.fail('valid binding was rejected');
+    const bind = (session) =>
+      framework.ZLinkFrameworkRuntimeHost.prototype.dispatchMeshActorBinding.call(
+        host,
+        'mesh-a',
+        {
+          kindData: {
+            kind: 'actorBinding',
+            transition: 'active',
+            actor,
+            actorNodeGeneration: 2n,
+            authorityOwnerGeneration: 3n,
+            ...session
+          },
+          reply() {
+            replies.push({ session: session.sessionRid, result: RequestResult.Ok });
+            return SubmitResult.Ok;
+          },
+          replyFailure(result, _failureCode, tail) {
+            replies.push({ session: session.sessionRid, result, tail });
+            return SubmitResult.Ok;
+          }
         }
-      }
-    );
+      );
+    const binding = bind(incoming);
+    let secondBinding;
     try {
-      await new Promise((resolve) => setImmediate(resolve));
-      assert.equal(callbacks, 0);
-      if (scenario === 'different') {
-        assert.equal(replies, 0);
+      if (overlapping) {
+        await Promise.race([
+          started,
+          binding.then(() => {
+            assert.fail('Binding completed without invoking its callback.');
+          })
+        ]);
+        assert.deepEqual(callbackInputs, [current.bindingGeneration]);
+        secondBinding = bind(next);
+        assert.equal(queue.lifecycle.records.length, 1);
+        assert.deepEqual(callbackInputs, [current.bindingGeneration]);
+        assert.deepEqual(replies, []);
         assert.equal(state.boundSession, current);
       } else {
-        assert.equal(replies, 1);
-        assert.equal(state.boundSession.sessionRid, incoming.sessionRid);
+        await new Promise((resolve) => setImmediate(resolve));
+        assert.deepEqual(callbackInputs, []);
+        if (scenario === 'different') {
+          assert.deepEqual(replies, []);
+          assert.equal(state.boundSession, current);
+        } else {
+          assert.deepEqual(replies, [firstReply]);
+          assert.deepEqual(state.boundSession, incoming);
+        }
       }
     } finally {
       release();
       await handler;
-      await binding;
+      await Promise.all([binding, secondBinding]);
     }
-    assert.equal(callbacks, scenario === 'different' ? 1 : 0);
-    assert.equal(replies, 1);
-    assert.equal(state.boundSession.sessionRid, incoming.sessionRid);
+    const expectedReplies = [firstReply];
+    const expectedCallbackInputs =
+      overlapping || scenario === 'different' ? [current.bindingGeneration] : [];
+    if (overlapping) {
+      expectedCallbackInputs.push(incoming.bindingGeneration);
+      expectedReplies.push({
+        session: next.sessionRid,
+        result: RequestResult.Rejected,
+        tail: { kind: 'streamBindRejected', rejectionMessage }
+      });
+    }
+    assert.deepEqual(
+      { callbackInputs, replies, current: state.boundSession },
+      { callbackInputs: expectedCallbackInputs, replies: expectedReplies, current: incoming }
+    );
   });
 }

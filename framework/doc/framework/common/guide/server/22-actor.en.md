@@ -324,6 +324,37 @@ The call that creates the Actor in that mesh follows.
 The result tells the two apart: `created` when it was made for the first time, `existing` when
 one was found.
 
+#### 3.1.1 When creation exceeds its deadline {#creation-deadline}
+
+`GetOrCreate` ends with `DeadlineExceeded` if it fails to complete within its deadline.
+Caller cancellation is reported through the language's cancellation mechanism.
+If the deadline expires while waiting for another call's creation attempt, that attempt can still succeed.
+
+=== "C#/.NET"
+
+    At the deadline, `Async(cancellationToken)` fails with a `ZLinkFrameworkException` whose `Kind` is `ZLinkFrameworkErrorKind.DeadlineExceeded`.
+    Caller cancellation cancels the `ValueTask`.
+
+=== "C++"
+
+    Awaiting `async()` with `co_await` throws `framework_exception_t` with `kind()` equal to `framework_error_kind_t::deadline_exceeded` at the deadline.
+    Caller cancellation throws `std::system_error` with `std::errc::operation_canceled`.
+
+=== "Java"
+
+    At the deadline, the `CompletionStage` from `submit()` completes exceptionally with a `ZLinkFrameworkException` whose `kind()` is `ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED`.
+    Caller cancellation is observable as cancellation of the returned stage.
+
+=== "Kotlin"
+
+    At the deadline, `await()` fails with a `ZLinkFrameworkException` whose `kind()` is `ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED`.
+    Caller cancellation is observable as cancellation of the coroutine await.
+
+=== "Node/TypeScript"
+
+    At the deadline, the `Promise` from `submit(signal)` rejects with a `ZLinkFrameworkException` whose `kind` is `ZLinkFrameworkErrorKind.DeadlineExceeded`.
+    Caller cancellation rejects the same `Promise` as a cancellation.
+
 ### 3.2 Calling
 
 Give only the actor id. The Framework finds which Spot that Actor is in now.
@@ -392,9 +423,8 @@ When you need an answer, send a request.
 
 ### 3.3 Generation in a Reference
 
-The **generation** in an `ActorRef` or `SpotRef` counts which instance of the same id this is. The
-Location Store issues it when the object is created; it does not change on join, relocation, or
-`RecreateOnRelocation`. Destroying and creating the same id again receives a new generation.
+The [generation](34-activation-lifetime.en.md#object-generation) in an `ActorRef` or `SpotRef`
+distinguishes instances that use the same ID.
 
 Ordinary messages do not look at generation: they go to the object that exists now. Lifecycle calls
 such as close, delete, and move through a reference take effect only while that reference's

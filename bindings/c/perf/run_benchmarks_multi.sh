@@ -572,7 +572,7 @@ Default PATTERN is:
   DEALER_DEALER,DEALER_ROUTER_SENDSEND,ROUTER_ROUTER_SENDSEND,DEALER_ROUTER_REQREP,ROUTER_ROUTER_REQREP,PUBSUB,STREAM
 This script invokes the shared comparison runner directly.
 By default, multi-bench measures saturated throughput for 5s, drains, then
-measures latency at 80% of the sender rate after 0.5s settling, for another 5s.
+measures latency at 80% of the saturated receive throughput after 0.5s settling, for another 5s.
 By default, multi-bench uses transports: tcp,tls,ws,wss (can be overridden with --transports).
 Policy contract:
   - benchmark binaries execute one pattern/transport/size/run case only

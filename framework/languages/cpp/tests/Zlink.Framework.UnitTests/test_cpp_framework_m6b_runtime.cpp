@@ -2189,11 +2189,17 @@ void verify_bound_session_push_uses_session_registry_when_gateway_projection_rej
               return std::nullopt;
           return [admitted = std::move (*admitted)] (std::vector<zlink::message_t> parts) mutable {
               if (parts.size () != 1)
-                  return stateful::stateful_error_t::invalid;
-              const auto delivered =
+                  return task_t<stateful::stateful_error_t> (
+                    result_t<stateful::stateful_error_t>::success (
+                      stateful::stateful_error_t::invalid));
+              auto delivered =
                 admitted ("ProjectionPush", stream_codec_t::message_pack, parts.front ());
-              return delivered ? stateful::stateful_error_t::none
-                               : stateful::stateful_error_t::conflict;
+              return project_task_terminal<stateful::stateful_error_t> (
+                delivered, [] (const result_t<void> &terminal) {
+                    return result_t<stateful::stateful_error_t>::success (
+                      terminal ? stateful::stateful_error_t::none
+                               : stateful::stateful_error_t::conflict);
+                });
           };
       }});
 
@@ -2647,6 +2653,82 @@ void verify_public_host_route_fence_reads_store_without_second_cache (bool relea
     } else
         std::this_thread::sleep_for (3s);
     assert (send () == zlink::submit_result_t::not_found);
+
+    source->close ();
+    target->close ();
+}
+
+// Submit/completion section 5: a public Spot or Actor send writes the owner
+// generation G its Location authority resolved, never the admitted peer's.
+// Authority G1 against a ready peer admitted at G0 is NotConnected.
+void verify_public_host_send_uses_authority_generation ()
+{
+    std::atomic<std::uint64_t> spot_node_generation{0};
+    auto source = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
+      mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("authority-send-host-source"),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()},
+      "entry",
+      {"framework.spot"}});
+    auto target = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("authority-send-host-target"),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
+    source->configure_spot_route_fence_resolver (
+      [&spot_node_generation] (
+        auto, auto, auto) -> zlink::framework::task_t<std::optional<host::route_fence_t>> {
+          return zlink::framework::task_t<std::optional<host::route_fence_t>> (
+            zlink::framework::result_t<std::optional<host::route_fence_t>>::success (
+              host::route_fence_t{1, 1, spot_node_generation.load ()}));
+      });
+    source->start ();
+    target->start ();
+    assert (
+      source->connect_peer (target->status ().local_endpoint (), target->status ().routing_id ()));
+    const auto noop_dispatch = [] (const host::ready_record_t &, const host::receive_record_t &,
+                                   std::vector<zlink::message_t>, auto) {};
+    const auto connect_deadline = std::chrono::steady_clock::now () + 5s;
+    while (
+      !ready_peer (source->transport ().topology (), target->status ().routing_id ().to_bytes ())
+      && std::chrono::steady_clock::now () < connect_deadline) {
+        (void) source->dispatch_ready (noop_dispatch);
+        (void) target->dispatch_ready (noop_dispatch);
+        std::this_thread::sleep_for (1ms);
+    }
+    assert (
+      ready_peer (source->transport ().topology (), target->status ().routing_id ().to_bytes ()));
+
+    const auto admitted_generation = target->status ().lifecycle_generation ();
+    const auto authority_generation = admitted_generation + 1;
+    const std::vector<zlink::message_t> parts{zlink::message_t::from (std::string ("payload"))};
+    const auto actor = host::public_host_runtime_t::remote_actor_ref (
+      target->status ().routing_id (), "authority-send-actor", 1);
+    const auto send_actor = [&] (std::uint64_t node_generation) {
+        return source->send_to_actor (actor, parts, {}, 1, 1, std::nullopt, node_generation)
+          .result ()
+          .value ();
+    };
+    auto caller = source->entry_spot ();
+    const auto send_spot = [&] (std::uint64_t node_generation) {
+        spot_node_generation.store (node_generation);
+        return caller
+          .send_to_spot (target->status ().routing_id (), "authority-send-spot", 1, parts)
+          .result ()
+          .value ();
+    };
+
+    // Authority G1, admitted peer G0: the admitted generation is not a source of G.
+    assert (send_actor (authority_generation) == zlink::submit_result_t::not_connected);
+    assert (send_spot (authority_generation) == zlink::submit_result_t::not_connected);
+    // An Actor send without an authority generation has no route to name.
+    assert (send_actor (0) == zlink::submit_result_t::not_found);
+    assert (
+      ready_peer (source->transport ().topology (), target->status ().routing_id ().to_bytes ()));
+    // The authority generation of the ready peer is its route.
+    assert (send_actor (admitted_generation) == zlink::submit_result_t::ok);
+    assert (send_spot (admitted_generation) == zlink::submit_result_t::ok);
 
     source->close ();
     target->close ();
@@ -10059,6 +10141,7 @@ int main (int argc, char **argv)
     verify_spot_route_fence_admission_precedes_body_decode ();
     verify_public_host_route_fence_reads_store_without_second_cache (false);
     verify_public_host_route_fence_reads_store_without_second_cache (true);
+    verify_public_host_send_uses_authority_generation ();
     verify_entry_spot_identity_claim_is_global_and_fenced ();
     verify_user_spot_execution_mode_registration ();
     verify_self_actor_request_rejected_before_submission ();

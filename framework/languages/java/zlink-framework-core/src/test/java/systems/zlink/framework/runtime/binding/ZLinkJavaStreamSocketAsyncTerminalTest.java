@@ -110,8 +110,9 @@ final class ZLinkJavaStreamSocketAsyncTerminalTest {
                                 .mask()));
         events.add(
                 new systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocketMonitorEvent(
-                        MonitorEventType.DISCONNECTED.name(), Optional.of(rid), "", "", 0));
+                        MonitorEventType.DISCONNECTED.name(), Optional.of(rid), "", "", 0, 4));
         var delivered = new java.util.ArrayList<MonitorEventType>();
+        var values = new java.util.ArrayList<Integer>();
         var monitorType =
                 systems.zlink.framework.runtime.internal.backend.ZLinkBackendSocketMonitor.class;
         var eventMonitor =
@@ -129,11 +130,16 @@ final class ZLinkJavaStreamSocketAsyncTerminalTest {
         try (var context = Zlink.createContext();
                 var stream = new ZLinkJavaStreamSocket(context.createStreamSocket(), null)) {
             systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamErrorHandler
-                    callback = (peer, event, nativeCode, message) -> delivered.add(event);
+                    callback =
+                            (peer, event, nativeCode, message) -> {
+                                delivered.add(event);
+                                values.add(nativeCode);
+                            };
             stream.receiveMonitorEvents(eventMonitor, callback);
             assertEquals(
                     List.of(MonitorEventType.CONNECTION_READY, MonitorEventType.DISCONNECTED),
                     delivered);
+            assertEquals(List.of(0, 4), values);
         }
     }
 

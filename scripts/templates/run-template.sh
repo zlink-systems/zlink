@@ -32,6 +32,23 @@ if [ "$package" = node ] && [ "${ZLINK_DEBUG_FRAMEWORK_RELOCATION:-}" = 1 ]; the
   sed -i '/^FROM .* AS node$/a ENV ZLINK_DEBUG_FRAMEWORK_RELOCATION=1' "$game/Dockerfile"
 fi
 
+# Only the CI copy receives the repository policy and the persistent BuildKit mount.
+# Cache dance imports/exports this mount; image-layer cache exports do not include it.
+if [ "$package" = java ]; then
+  cp "$repo_root/scripts/ci/gradle/ci-mirror.gradle" "$game/ci-mirror.gradle"
+  sed -i '/^FROM .* AS build$/a ENV GRADLE_OPTS="-Dorg.gradle.internal.repository.max.retries=5 -Dorg.gradle.internal.repository.initial.backoff=1000"' "$game/Dockerfile"
+  sed -i '/^RUN .*gradlew/s#^RUN #COPY ci-mirror.gradle /opt/ci-mirror.gradle\nRUN --mount=type=cache,target=/root/.gradle,sharing=locked #' "$game/Dockerfile"
+  sed -i 's#./gradlew --no-daemon #./gradlew --no-daemon --max-workers=2 --init-script /opt/ci-mirror.gradle #' "$game/Dockerfile"
+  grep -q -- '--init-script /opt/ci-mirror.gradle ' "$game/Dockerfile" \
+    || { echo "run-template: no Gradle build in $game/Dockerfile" >&2; exit 1; }
+  # The first (host) build uses the same policy without changing template files.
+  export GRADLE_USER_HOME="${GRADLE_USER_HOME:-$TEMPLATE_WORK/gradle-home}"
+  mkdir -p "$GRADLE_USER_HOME/init.d"
+  cp "$repo_root/scripts/ci/gradle/ci-mirror.gradle" "$GRADLE_USER_HOME/init.d/ci-mirror.gradle"
+  export GRADLE_OPTS="${GRADLE_OPTS:-} -Dorg.gradle.internal.repository.max.retries=5 -Dorg.gradle.internal.repository.initial.backoff=1000"
+  export DOCKER_BUILDKIT=1 BUILDKIT_PROGRESS=plain COMPOSE_PARALLEL_LIMIT=1
+fi
+
 if [ "$TEMPLATE_SOURCE" = local ]; then
   binding_version="$(sed -n 's/^ZLINK_BINDING_VERSION=//p' "$repo_root/bindings/$package/VERSION")"
   python3 "$repo_root/scripts/templates/use-local-packages.py" \
