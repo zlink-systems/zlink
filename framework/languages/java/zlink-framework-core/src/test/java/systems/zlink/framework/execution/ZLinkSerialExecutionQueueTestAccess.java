@@ -11,6 +11,15 @@ public final class ZLinkSerialExecutionQueueTestAccess {
         return queue.relocation;
     }
 
+    public static void exhaustSequence(ZLinkSerialExecutionQueue queue)
+            throws ReflectiveOperationException {
+        var sequence = ZLinkSerialExecutionQueue.class.getDeclaredField("nextSequence");
+        sequence.setAccessible(true);
+        synchronized (queue) {
+            sequence.setLong(queue, Long.MAX_VALUE);
+        }
+    }
+
     /** Tells whether an accepted application entry waits in the queue, published or not. */
     public static boolean retainsApplication(ZLinkSerialExecutionQueue queue) {
         synchronized (queue) {
