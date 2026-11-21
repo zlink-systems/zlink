@@ -11,6 +11,10 @@ import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.configuration.ZLinkDispatchOptionsRegistration;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
@@ -19,8 +23,11 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResul
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceCompletionDispatcher;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
+import systems.zlink.framework.runtime.internal.spots.SpotTerminalProbe;
+import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 import systems.zlink.framework.runtime.messaging.ZLinkStringMessageSerializer;
 
 import java.lang.reflect.Proxy;
@@ -41,6 +48,99 @@ import java.util.function.BiConsumer;
 final class ZLinkSpotDirectCompletionDispatchTest {
     private static final Duration REGISTRY_TIMEOUT = Duration.ofHours(1);
     private static final long WAIT_SECONDS = 5;
+
+    @Test
+    void sameSpotRequestCanYieldButCannotHoldTheGate() {
+        var submissions = new AtomicInteger();
+        var sends = new AtomicInteger();
+        var response = new CompletableFuture<ZLinkBackendReceived>();
+        var backend =
+                (ZLinkBackendSpot)
+                        Proxy.newProxyInstance(
+                                ZLinkBackendSpot.class.getClassLoader(),
+                                new Class<?>[] {ZLinkBackendSpot.class},
+                                (proxy, method, arguments) ->
+                                        switch (method.getName()) {
+                                            case "rememberSpotAuthority" -> null;
+                                            case "requestToSpot" -> {
+                                                submissions.incrementAndGet();
+                                                yield response;
+                                            }
+                                            case "sendToSpot" -> {
+                                                sends.incrementAndGet();
+                                                yield CompletableFuture.completedFuture(null);
+                                            }
+                                            default -> throw new AssertionError(method.getName());
+                                        });
+        var resolver = new SpotTerminalProbe(null, false);
+        var outbound =
+                new DefaultSpotOutbound(
+                        backend,
+                        "mesh",
+                        null,
+                        new ZLinkStringMessageSerializer(),
+                        ignored -> ZLinkChannelEnvelope.DEFAULT_CONTENT_TYPE,
+                        null,
+                        outbound(),
+                        null,
+                        null,
+                        false,
+                        Duration.ofSeconds(WAIT_SECONDS),
+                        () -> resolver,
+                        null);
+        var execution =
+                new ZLinkSuspendInvocationContext.ApplicationExecution(
+                        "spot", null, true, true, null);
+        var worker = new ZLinkManualExecutor();
+        var queue = new ZLinkSerialExecutionQueue(worker, ZLinkExecutionLanePolicy.spot());
+        var released = new CountDownLatch(1);
+        try {
+            var turn =
+                    queue.enqueue(
+                            () -> {
+                                try (var ignored =
+                                        ZLinkSuspendInvocationContext.enterApplicationExecution(
+                                                execution)) {
+                                    var failure =
+                                            assertThrows(
+                                                    ZLinkFrameworkException.class,
+                                                    () ->
+                                                            outbound.requestToSpot(
+                                                                            "spot", "request")
+                                                                    .submit(String.class));
+                                    assertEquals(
+                                            ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                                            failure.kind());
+                                    assertEquals(0, submissions.get());
+                                    var notice = outbound.sendToSpot("spot", "notice").submit();
+                                    return outbound.requestToSpot("spot", "request")
+                                            .yield(String.class)
+                                            .thenCombine(
+                                                    notice,
+                                                    (value, sent) -> {
+                                                        assertEquals("reply", value);
+                                                        return null;
+                                                    });
+                                }
+                            },
+                            null);
+            var sibling =
+                    queue.enqueue(
+                            () -> {
+                                assertEquals(1, submissions.get());
+                                response.complete(reply(released));
+                                return CompletableFuture.completedFuture(null);
+                            },
+                            null);
+            worker.drainUntil(turn);
+            worker.drainUntil(sibling);
+            assertEquals(1, sends.get());
+            assertEquals(1, submissions.get());
+            assertEquals(0, released.getCount());
+        } finally {
+            queue.close();
+        }
+    }
 
     @Test
     void exceptionalBackendEmitsOnePublicTerminalWithErrorDetails() {
