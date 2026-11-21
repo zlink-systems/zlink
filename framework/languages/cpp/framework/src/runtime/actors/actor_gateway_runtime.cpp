@@ -2486,9 +2486,8 @@ bool same_physical_bound_session (const actor_bound_session_route_t &left,
     // Actor authority changes on relocation while the physical Session and
     // its binding generation remain current. Only a physical identity change
     // retires the existing stream binding.
-    return left.node_rid == right.node_rid && left.session_rid == right.session_rid
+    return left.is_same_physical_session (right)
            && left.object_generation == right.object_generation
-           && left.node_generation == right.node_generation
            && left.binding_generation == right.binding_generation
            && left.binding_token == right.binding_token;
 }

@@ -2979,15 +2979,27 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                     (accepted, commitFailure) -> {
                                         if (commitFailure != null) {
                                             result.completeExceptionally(commitFailure);
+                                        } else if (accepted == null) {
+                                            result.complete(false);
                                         } else {
-                                            result.complete(accepted);
+                                            applied.sessionBound(
+                                                            sessionBindingIdentity(accepted),
+                                                            duplicateBindCallbackTimeout)
+                                                    .whenComplete(
+                                                            (ignored, notificationFailure) -> {
+                                                                if (notificationFailure == null)
+                                                                    result.complete(true);
+                                                                else
+                                                                    result.completeExceptionally(
+                                                                            notificationFailure);
+                                                            });
                                         }
                                     });
                 });
         return result;
     }
 
-    private CompletionStage<Boolean> commitRemoteStreamBinding(
+    private CompletionStage<ActorSessionBinding> commitRemoteStreamBinding(
             ZLinkServiceM6BWireCodec.ActorRouteFence route,
             ActorSessionBinding candidate,
             ZLinkServiceM6BWireCodec.BoundSessionBind command,
@@ -3008,7 +3020,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                             internalFailure[1],
                             null,
                             ""));
-            return CompletableFuture.completedFuture(false);
+            return CompletableFuture.completedFuture(null);
         }
         if (accepted == null) {
             int[] unavailable =
@@ -3017,11 +3029,11 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                             (int) ServiceWireConstants.FRAMEWORK_ERROR_ROUTE_NOT_CONNECTED);
             reply.accept(
                     bindReply(command.correlation(), unavailable[0], unavailable[1], null, ""));
-            return CompletableFuture.completedFuture(false);
+            return CompletableFuture.completedFuture(null);
         }
         reply.accept(bindReply(command.correlation(), RequestResult.OK.value(), 0, accepted, ""));
         if (accepted == candidate) installActorBinding(accepted);
-        return CompletableFuture.completedFuture(true);
+        return CompletableFuture.completedFuture(accepted);
     }
 
     private static ZLinkServiceM6BWireCodec.BoundSessionBindReply bindReply(
