@@ -8081,7 +8081,7 @@ task_t<bool> public_host_runtime_t::dispatch_native_spot (
         }
         record.spot_route = header.target;
         record.before_application_handler = std::move (before);
-        record.transferred_owner_byte_cost = slot.claim->record_bytes[slot.index];
+        record.transferred_owner_byte_cost = slot.claim->records[slot.index].byte_cost;
         auto accepted = std::make_shared<runtime::serial_application_record_t> ();
         accepted->target = std::move (target);
         accepted->admission.jobs = _options.mesh.application_jobs;
@@ -8361,7 +8361,7 @@ public_host_runtime_t::dispatch_application_claim (
                   mailbox_record.before_application_handler;
                 application.record.release_mailbox_reservation = release_mailbox_reservation;
                 application.record.retain_mailbox_reservation = retain_mailbox_reservation;
-                application.record.transferred_owner_byte_cost = claim->record_bytes[index];
+                application.record.transferred_owner_byte_cost = claim->records[index].byte_cost;
                 batch->handoff (
                   application.owner, application.record, std::move (application.parts),
                   mailbox_record.application_permit ? std::move (*mailbox_record.application_permit)
@@ -8499,7 +8499,7 @@ public_host_runtime_t::dispatch_application_claim (
                 + " parts=" + std::to_string (mailbox_record.parts ().size ()));
             record.release_mailbox_reservation = release_mailbox_reservation;
             record.retain_mailbox_reservation = retain_mailbox_reservation;
-            record.transferred_owner_byte_cost = claim->record_bytes[index];
+            record.transferred_owner_byte_cost = claim->records[index].byte_cost;
             batch->handoff (owner, record, std::move (parts),
                             mailbox_record.application_permit
                               ? std::move (*mailbox_record.application_permit)

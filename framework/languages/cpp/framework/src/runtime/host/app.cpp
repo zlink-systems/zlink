@@ -12,6 +12,7 @@
 #include "runtime/channels/channel_runtime.hpp"
 #include "runtime/channels/channel_runtime_manager.hpp"
 #include "runtime/diagnostics/monitoring_runtime.hpp"
+#include "runtime/diagnostics/diagnostic_event_sink.hpp"
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
 #include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/handlers/handler_registry_runtime.hpp"
@@ -282,13 +283,9 @@ class app_state_t
         bind_zlink_monitoring (zlink, monitoring);
         monitoring->runtime_failures->bind_runtime_reporter (
           [state = std::weak_ptr (monitoring)] (std::exception_ptr failure) {
-              try {
-                  std::rethrow_exception (failure);
-              }
-              catch (const std::exception &error) {
-                  if (auto monitoring = state.lock ())
-                      monitoring->diagnostics_logger.error (error.what ());
-              }
+              if (auto monitoring = state.lock ())
+                  monitoring->diagnostics_logger.error (
+                    diagnostic_event_sink_t::exception_summary (failure).message);
           });
     }
     ~app_state_t ()
@@ -1193,7 +1190,7 @@ apply_bound_session_bind_async (
         co_return;
     };
 
-    const actor_bound_session_route_t incoming_route{
+    actor_bound_session_route_t incoming_route{
       session_owner,
       session_rid,
       bind.actor.object_generation,
@@ -1251,99 +1248,137 @@ apply_bound_session_bind_async (
         return ::zlink::framework::result_t<bind_result_t>::success (
           bind_result_t{runtime::stateful::stateful_error_t::none, std::move (replacement)});
     };
-    const auto current = co_await actor_gateway_runtime.bound_session_route_async (actor);
-    const bool duplicate = current && current->session_rid && current->node_generation != 0
-                           && current->binding_generation != 0
-                           && (current->node_rid != incoming_route.node_rid
-                               || current->node_generation != incoming_route.node_generation
-                               || *current->session_rid != *incoming_route.session_rid);
-    if (!duplicate)
-        co_return replace_binding ();
-    const bool callback_absent = co_await spot_state->lane.run_task ([spot_state, actor] {
+    auto is_duplicate = [incoming_route = std::move (incoming_route)] (
+                          const std::optional<actor_bound_session_route_t> &current) {
+        return current && current->session_rid && current->node_generation != 0
+               && current->binding_generation != 0
+               && !current->is_same_physical_session (incoming_route);
+    };
+    const auto callbacks = co_await spot_state->lane.run_task ([spot_state, actor] {
         auto actor_type = std::string (actor_ref_access_t::actor_type (actor));
         if (actor_type.empty ()) {
             const auto type =
               spot_state->actor_types_by_id.find (std::string (actor.actor_id ().value ()));
             if (type == spot_state->actor_types_by_id.end ())
-                return false;
+                return std::pair{false, false};
             actor_type = type->second;
         }
         const auto factory = spot_state->actor_factories.find (actor_type);
         const auto instance = spot_state->actor_instances.find (
           actor_type + ":" + std::string (actor.actor_id ().value ()));
-        if (factory == spot_state->actor_factories.end ()
-            || !factory->second.duplicate_bind_is_default || !factory->second.as_actor
+        if (factory == spot_state->actor_factories.end () || !factory->second.as_actor
             || instance == spot_state->actor_instances.end () || !instance->second)
-            return false;
+            return std::pair{false, false};
         const auto *actor_instance = factory->second.as_actor (instance->second.get ());
-        // A factory may return a subtype with an override absent from its registered type.
-        return actor_instance
-               && std::type_index (typeid (*actor_instance)) == factory->second.actor_type;
+        // A factory may return a subtype with overrides absent from its registered type.
+        const bool exact_type =
+          actor_instance
+          && std::type_index (typeid (*actor_instance)) == factory->second.actor_type;
+        return std::pair{exact_type && factory->second.duplicate_bind_is_default,
+                         exact_type && factory->second.session_bound_is_default};
     });
-    if (callback_absent)
+    const bool has_duplicate_callback = !callbacks.first;
+    const bool has_session_bound_callback = !callbacks.second;
+    bool requires_actor_turn = has_session_bound_callback;
+    if (!requires_actor_turn && has_duplicate_callback) {
+        const auto current = co_await actor_gateway_runtime.bound_session_route_async (actor);
+        requires_actor_turn = is_duplicate (current);
+    }
+    if (!requires_actor_turn)
         co_return replace_binding ();
+    const auto failures = spot_state->runtime_failures ();
+    const auto shutdown = spot_state->worker_cancellation.get_token ();
     struct callback_race_t
     {
-        std::atomic<std::uint8_t> decision{0};
         std::stop_source cancellation;
+        bool try_finish (std::uint8_t terminal)
+        {
+            std::uint8_t pending = 0;
+            return decision.compare_exchange_strong (pending, terminal);
+        }
+
+      private:
+        std::atomic<std::uint8_t> decision{0};
     };
     auto race = std::make_shared<callback_race_t> ();
     auto completion = std::make_shared<task_completion_source_t<bind_result_t>> ();
-    auto start_callback_timeout = [&delays, callback_timeout, race, completion] {
+    auto start_callback_timeout = [&delays, callback_timeout, completion, failures] (
+                                    const std::shared_ptr<callback_race_t> &race, bool committed) {
         auto timeout = delay (delays, callback_timeout, race->cancellation.get_token ());
-        observe_task_completion (timeout, [race, completion] (const result_t<void> &elapsed) {
-            std::uint8_t pending = 0;
-            if (!race->decision.compare_exchange_strong (pending, 2))
-                return;
-            race->cancellation.request_stop ();
-            if (!elapsed) {
-                completion->complete (::zlink::framework::result_t<bind_result_t>::failure (
-                  elapsed.error_kind (),
-                  elapsed.error () ? elapsed.error ()->what () : "Actor callback timer failed"));
-                return;
-            }
-            completion->complete (
-              ::zlink::framework::result_t<bind_result_t>::success (bind_result_t{
-                runtime::stateful::stateful_error_t::unavailable, std::nullopt,
-                static_cast<std::uint32_t> (runtime::protocol::request_terminal_result::timedOut),
-                static_cast<std::uint32_t> (runtime::protocol::framework_error_code::none),
-                std::nullopt}));
-        });
+        observe_task_completion (
+          timeout, [race, completion, failures, committed] (const result_t<void> &elapsed) {
+              if (!race->try_finish (2))
+                  return;
+              if (committed) {
+                  if (elapsed)
+                      failures->report (std::make_exception_ptr (
+                        framework_exception_t (framework_error_kind_t::deadline_exceeded,
+                                               "Actor session-bound callback timed out")));
+                  race->cancellation.request_stop ();
+                  return;
+              }
+              race->cancellation.request_stop ();
+              if (!elapsed) {
+                  completion->complete (::zlink::framework::result_t<bind_result_t>::failure (
+                    elapsed.error_kind (),
+                    elapsed.error () ? elapsed.error ()->what () : "Actor callback timer failed"));
+                  return;
+              }
+              completion->complete (
+                ::zlink::framework::result_t<bind_result_t>::success (bind_result_t{
+                  runtime::stateful::stateful_error_t::unavailable, std::nullopt,
+                  static_cast<std::uint32_t> (runtime::protocol::request_terminal_result::timedOut),
+                  static_cast<std::uint32_t> (runtime::protocol::framework_error_code::none),
+                  std::nullopt}));
+          });
     };
-    auto spot_runtime = spot_node_runtime_t (std::move (spot_state));
+    auto spot_runtime = spot_node_runtime_t (spot_state);
     struct accept_session_binding_t
     {
         static task_t<::zlink::framework::result_t<bool>>
-        run (actor_session_binding_identity_t current_identity,
-             std::decay_t<decltype (actor_session_binding_identity_t{
-               node_rid_t::from_string (session_owner.to_string ()), session_owner_generation,
-               bind.binding.generation})> incoming_identity,
+        run (actor_session_binding_identity_t incoming_identity,
              std::decay_t<decltype (replace_binding)> replace_binding,
              std::decay_t<decltype (race)> race,
              std::decay_t<decltype (completion)> completion,
              std::decay_t<decltype (start_callback_timeout)> start_callback_timeout,
              actor_t *actor_instance,
-             std::stop_token cancellation)
+             std::stop_token cancellation,
+             bool has_duplicate_callback,
+             bool has_session_bound_callback,
+             std::shared_ptr<runtime::runtime_failure_collector_t> failures,
+             std::stop_token shutdown,
+             std::shared_ptr<spot_node_builder_state_t> owner,
+             actor_gateway_runtime_t gateway,
+             actor_ref_t actor,
+             std::decay_t<decltype (is_duplicate)> is_duplicate)
         {
-            start_callback_timeout ();
-            const auto rejection = co_await actor_instance->on_duplicate_bind (
-              current_identity, incoming_identity, cancellation);
-            std::uint8_t pending = 0;
-            if (!race->decision.compare_exchange_strong (pending, 1))
-                co_return ::zlink::framework::result_t<bool>::success (false);
-            if (rejection && !rejection->empty ()) {
-                completion->complete (
-                  ::zlink::framework::result_t<bind_result_t>::success (bind_result_t{
-                    runtime::stateful::stateful_error_t::conflict, std::nullopt,
-                    static_cast<std::uint32_t> (
-                      runtime::protocol::request_terminal_result::rejected),
-                    static_cast<std::uint32_t> (runtime::protocol::framework_error_code::none),
-                    runtime::protocol::stream_bind_reply_tail_t{0, 0, *rejection}}));
-                co_return ::zlink::framework::result_t<bool>::success (false);
-            }
-            if (cancellation.stop_requested ())
-                co_return ::zlink::framework::result_t<bool>::success (false);
+            std::optional<actor_bound_session_route_t> current;
+            if (has_duplicate_callback)
+                current = co_await gateway.bound_session_route_async (actor);
+            if (is_duplicate (current)) {
+                const actor_session_binding_identity_t current_identity{
+                  node_rid_t::from_string (current->node_rid.to_string ()),
+                  current->node_generation, current->binding_generation};
+                start_callback_timeout (race, false);
+                const auto rejection = co_await actor_instance->on_duplicate_bind (
+                  current_identity, incoming_identity, cancellation);
+                if (!race->try_finish (1))
+                    co_return ::zlink::framework::result_t<bool>::success (false);
+                if (rejection && !rejection->empty ()) {
+                    completion->complete (
+                      ::zlink::framework::result_t<bind_result_t>::success (bind_result_t{
+                        runtime::stateful::stateful_error_t::conflict, std::nullopt,
+                        static_cast<std::uint32_t> (
+                          runtime::protocol::request_terminal_result::rejected),
+                        static_cast<std::uint32_t> (runtime::protocol::framework_error_code::none),
+                        runtime::protocol::stream_bind_reply_tail_t{0, 0, *rejection}}));
+                    co_return ::zlink::framework::result_t<bool>::success (false);
+                }
+                if (cancellation.stop_requested ())
+                    co_return ::zlink::framework::result_t<bool>::success (false);
 
+                race->cancellation.request_stop ();
+            }
             auto transition = replace_binding ();
             if (!transition)
                 co_return ::zlink::framework::result_t<bool>::failure (
@@ -1351,32 +1386,69 @@ apply_bound_session_bind_async (
                                               ? transition.error ()->what ()
                                               : "Actor bound Session route replacement failed");
             completion->complete (std::move (transition));
+            if (has_session_bound_callback) {
+                auto notification = std::make_shared<callback_race_t> ();
+                std::stop_callback stop (shutdown, [notification] {
+                    (void) notification->try_finish (2);
+                    notification->cancellation.request_stop ();
+                });
+                start_callback_timeout (notification, true);
+                auto outcome = result_t<void>::success ();
+                bool cancelled = false;
+                try {
+                    co_await actor_instance->on_session_bound (
+                      incoming_identity, notification->cancellation.get_token ());
+                }
+                catch (const std::exception &error) {
+                    cancelled = detail::is_cancellation_exception (error);
+                    outcome = detail::current_exception_result<void> ();
+                }
+                catch (...) {
+                    outcome = detail::current_exception_result<void> ();
+                }
+                const bool terminal = notification->try_finish (1);
+                notification->cancellation.request_stop ();
+                if (terminal && !outcome) {
+                    bool actor_ending = false;
+                    if (cancelled)
+                        actor_ending = co_await owner->lane.run_task ([owner, actor_instance] {
+                            const auto &ref = actor_instance->context ().actor_ref ();
+                            const auto key = std::string (actor_ref_access_t::actor_type (ref))
+                                             + ":" + std::string (ref.actor_id ().value ());
+                            return owner->retiring_actor_keys.contains (key)
+                                   || owner->destroying_actors.contains (key)
+                                   || !owner->actor_instances.contains (key);
+                        });
+                    if (!cancelled || (!shutdown.stop_requested () && !actor_ending))
+                        failures->report (outcome.exception ());
+                }
+            }
             co_return ::zlink::framework::result_t<bool>::success (true);
         }
     };
     auto turn = spot_runtime.run_actor_turn (
       actor,
-      [current_identity =
-         actor_session_binding_identity_t{node_rid_t::from_string (current->node_rid.to_string ()),
-                                          current->node_generation, current->binding_generation},
-       replace_binding = std::move (replace_binding),
+      [replace_binding = std::move (replace_binding),
        incoming_identity =
          actor_session_binding_identity_t{node_rid_t::from_string (session_owner.to_string ()),
                                           session_owner_generation, bind.binding.generation},
-       race, completion, start_callback_timeout] (
+       race, completion, start_callback_timeout, has_duplicate_callback, has_session_bound_callback,
+       failures, shutdown, spot_state, actor_gateway_runtime, actor,
+       is_duplicate = std::move (is_duplicate)] (
         actor_t &actor_instance,
         std::stop_token cancellation) mutable -> task_t<::zlink::framework::result_t<bool>> {
           // run_actor_turn owns the Actor instance until this task completes.
           return accept_session_binding_t::run (
-            current_identity, incoming_identity, std::move (replace_binding), race, completion,
-            start_callback_timeout, &actor_instance, cancellation);
+            incoming_identity, std::move (replace_binding), race, completion,
+            start_callback_timeout, &actor_instance, cancellation, has_duplicate_callback,
+            has_session_bound_callback, failures, shutdown, spot_state, actor_gateway_runtime,
+            actor, std::move (is_duplicate));
       },
       race->cancellation.get_token ());
     observe_task_completion (
       turn, [race, completion] (
               const ::zlink::framework::result_t<::zlink::framework::result_t<bool>> &finished) {
-          std::uint8_t pending = 0;
-          (void) race->decision.compare_exchange_strong (pending, 1);
+          (void) race->try_finish (1);
           race->cancellation.request_stop ();
           if (!finished) {
               completion->complete (::zlink::framework::result_t<bind_result_t>::failure (
@@ -1732,8 +1804,13 @@ void app_t::_apply_zlink_framework ()
             const auto location_options = options.location_options ();
             _state->services.add_factory<runtime::location_runtime_t> (
               [location_options, monitoring = _state->monitoring] (service_provider_t &provider) {
+                  const auto resolver = detail::service_scope_access_t::get_required_shared<
+                    runtime::store_location_resolvers_t> (provider);
                   auto runtime = std::make_unique<runtime::location_runtime_t> (
-                    provider.get_required<location_repository_t> (), location_options);
+                    provider.get_required<location_repository_t> (), location_options,
+                    [resolver] (authority_key_t key, std::optional<std::string> version) {
+                        resolver->observe_authority_version (key, std::move (version));
+                    });
                   runtime->bind_monitoring (monitoring);
                   return runtime;
               },

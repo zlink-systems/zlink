@@ -526,10 +526,42 @@ class service_mailbox_t
 // claim settles; read them only before their take. Each slot credit settles once.
 struct service_mailbox_claim_t
 {
+    class slot_t
+    {
+      public:
+        slot_t (std::list<service_mailbox_record_t>::iterator position, std::size_t bytes) noexcept
+            :
+            byte_cost (bytes), _position (position)
+        {
+        }
+        // The vector is populated before publication; moving its storage
+        // preserves each slot's original, byte cost and settlement state.
+        slot_t (slot_t &&other) noexcept :
+            byte_cost (other.byte_cost),
+            _position (other._position),
+            _settled (other._settled.load (std::memory_order_relaxed))
+        {
+        }
+        slot_t (const slot_t &) = delete;
+        slot_t &operator= (const slot_t &) = delete;
+
+        service_mailbox_record_t &operator* () const noexcept { return *_position; }
+        service_mailbox_record_t *operator->() const noexcept
+        {
+            return std::addressof (*_position);
+        }
+
+        const std::size_t byte_cost;
+
+      private:
+        friend class service_mailbox_t;
+        std::list<service_mailbox_record_t>::iterator _position;
+        std::atomic_bool _settled{false};
+    };
+
     std::string owner;
     service_mailbox_domain_t domain = service_mailbox_domain_t::application;
-    std::vector<std::list<service_mailbox_record_t>::iterator> records;
-    std::vector<std::size_t> record_bytes;
+    std::vector<slot_t> records;
     std::size_t claimed_messages = 0;
     std::size_t claimed_bytes = 0;
 
@@ -542,7 +574,6 @@ struct service_mailbox_claim_t
   private:
     friend class service_mailbox_t;
     std::weak_ptr<service_mailbox_t::state_t> _mailbox;
-    std::unique_ptr<std::atomic_bool[]> _settled;
     std::atomic_size_t _remaining{0};
 };
 

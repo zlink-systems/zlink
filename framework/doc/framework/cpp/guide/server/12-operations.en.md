@@ -419,6 +419,19 @@ draining, stopped, error). The notation follows the language. The status's reloc
 termination results must match that operation's terminal result. To view it as numbers, use
 the `zlink.host.*` instruments in [Runtime Metrics](#2-runtime-metrics).
 
+#### 8.1.1 Waiting for Serving before accepting requests {#wait-for-serving}
+
+Subscribe to runtime status and confirm `Serving` before accepting application requests. The first
+status reflects the state at subscription time, so a runtime already in `Serving` requires no further
+transition. A newer snapshot can supersede that first status. Check the readiness of any components
+your application requires as described in [Wiring Operational Calls and Readiness](#5-wiring-operational-calls-and-readiness).
+
+Finish the startup wait and end the observation once you confirm `Serving`. Keep request intake
+disabled if you first see `Error` or `Stopped`, or if observation fails, is canceled, or ends before
+you confirm readiness. Canceling observation leaves the runtime and other subscriptions running.
+
+In the callback passed to `observe(capacity, observer)`, compare `status.state` with `framework_runtime_state_t::serving`. Release the returned observation handle when the wait ends.
+
 ### 8.2 Restarting with the same RoutingId
 
 A server restarted immediately after forced termination with a fixed RoutingId can encounter the
