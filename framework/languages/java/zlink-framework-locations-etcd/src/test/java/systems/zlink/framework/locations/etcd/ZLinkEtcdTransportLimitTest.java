@@ -23,7 +23,7 @@ class ZLinkEtcdTransportLimitTest {
     @Test
     void sendLimitAcceptsExactly16MiBAndFailsOneByteMoreBeforeDispatch() throws Exception {
         for (int excess : new int[] {-1, 0, 1}) {
-            String password = passwordForRequestSize(16 * 1024 * 1024 + excess);
+            String password = passwordForRequestSize(EtcdClient.MAX_SEND_MESSAGE_BYTES + excess);
             try (var backend = new EtcdTestServer();
                     var store = new ZLinkEtcdLocationStore(withCredentials(backend, password))) {
                 if (excess <= 0) {
@@ -42,7 +42,7 @@ class ZLinkEtcdTransportLimitTest {
     @Test
     void receiveLimitAcceptsExactly8MiBAndFailsOneByteMore() throws Exception {
         for (int excess : new int[] {-1, 0, 1}) {
-            int size = 8 * 1024 * 1024 + excess;
+            int size = EtcdClient.MAX_RECEIVE_MESSAGE_BYTES + excess;
             try (var backend = new EtcdTestServer();
                     var store = new ZLinkEtcdLocationStore(withCredentials(backend, "p"))) {
                 backend.authReply = response -> padded(response, size);

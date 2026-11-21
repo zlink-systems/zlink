@@ -208,6 +208,35 @@ foreach(test ${unittests})
 
 endforeach()
 
+# Exercise the Windows branch on every host with deterministic CRT/WinSock
+# failures. Extract the production bodies rather than maintaining a copy.
+set(fdpair_source "${ZLINK_CORE_SOURCE_DIR}/src/runtime/utils/ip_fdpair.cpp")
+set(ip_source "${ZLINK_CORE_SOURCE_DIR}/src/runtime/utils/ip.cpp")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  "${fdpair_source}" "${ip_source}")
+file(READ "${fdpair_source}" fdpair_text)
+string(FIND "${fdpair_text}" "int zlink::make_fdpair (" fdpair_start)
+file(READ "${ip_source}" ip_text)
+string(FIND "${ip_text}" "int zlink::create_ipc_wildcard_address (" wildcard_start)
+if(fdpair_start LESS 0 OR wildcard_start LESS 0)
+  message(FATAL_ERROR "Windows fdpair test could not locate production functions")
+endif()
+string(SUBSTRING "${fdpair_text}" ${fdpair_start} -1 FDPAIR_BODY)
+string(SUBSTRING "${ip_text}" ${wildcard_start} -1 wildcard_text)
+string(FIND "${wildcard_text}" "#else" wildcard_end)
+if(wildcard_end LESS 0)
+  message(FATAL_ERROR "Windows fdpair test could not locate CRT branch boundary")
+endif()
+string(SUBSTRING "${wildcard_text}" 0 ${wildcard_end} WILDCARD_BODY)
+string(APPEND WILDCARD_BODY "#endif\n    return 0;\n}\n")
+configure_file(unittest_windows_fdpair.cpp.in unittest_windows_fdpair.cpp @ONLY)
+add_executable(unittest_windows_fdpair
+  "${CMAKE_CURRENT_BINARY_DIR}/unittest_windows_fdpair.cpp")
+set_property(TARGET unittest_windows_fdpair PROPERTY INTERPROCEDURAL_OPTIMIZATION OFF)
+add_test(NAME unittest_windows_fdpair COMMAND unittest_windows_fdpair)
+set_tests_properties(unittest_windows_fdpair PROPERTIES
+  TIMEOUT 10 LABELS "unittest;parallel-safe")
+
 # UBSan's vptr check probes memory with pipe(), which fails once a test
 # exhausts RLIMIT_NOFILE and turns into a false invalid-vptr report (#4149).
 # CI passes -fsanitize through CXXFLAGS, so check the flags as well as ENABLE_UBSAN.

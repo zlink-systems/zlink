@@ -1,6 +1,8 @@
 package systems.zlink.framework.runtime.spots;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
@@ -23,7 +25,9 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 
 final class ZLinkSpotLifecycleAwaitRegressionTest {
     private static final long BOUND_SECONDS = 3;
@@ -350,6 +354,111 @@ final class ZLinkSpotLifecycleAwaitRegressionTest {
         } finally {
             release.complete(null);
             serials.closeAsync().toCompletableFuture().get(BOUND_SECONDS, TimeUnit.SECONDS);
+        }
+    }
+
+    private enum ClosingOutcome {
+        SUCCESS,
+        SYNCHRONOUS_FAILURE,
+        ASYNCHRONOUS_FAILURE
+    }
+
+    @ParameterizedTest
+    @EnumSource(ClosingOutcome.class)
+    void onClosingSharesItsResultWithoutHoldingTheActivationMonitor(ClosingOutcome outcome)
+            throws Exception {
+        var activation = new ZLinkInstanceSpotActivation(null, null, null, null, null);
+        var callbackEntered = new CompletableFuture<Boolean>();
+        var releaseCallback = new CompletableFuture<Void>();
+        var callbackResult = new CompletableFuture<Void>();
+        var callbackCalls = new AtomicInteger();
+        var cleanupCalls = new AtomicInteger();
+        var diagnostic = new AtomicReference<Throwable>();
+        var failure = new IllegalStateException("OnClosing failed");
+        var application = Executors.newSingleThreadExecutor();
+        var queue = new ZLinkSerialExecutionQueue(application, ZLinkExecutionLanePolicy.spot());
+        var serials =
+                new ZLinkSpotSerialExecutor(
+                        queue,
+                        Runnable::run,
+                        Runnable::run,
+                        ZLinkUserSpotExecutionMode.SPOT_WIDE,
+                        false);
+        Supplier<CompletionStage<Void>> onClosing =
+                () -> {
+                    callbackCalls.incrementAndGet();
+                    callbackEntered.complete(Thread.holdsLock(activation));
+                    assertTrue(queue.isCurrent());
+                    releaseCallback.join();
+                    if (outcome == ClosingOutcome.SYNCHRONOUS_FAILURE) {
+                        throw failure;
+                    }
+                    return callbackResult;
+                };
+        Supplier<CompletionStage<Void>> unexpectedCallback =
+                () -> {
+                    throw new AssertionError("OnClosing ran again");
+                };
+        var coordinator =
+                new ZLinkSpotCloseCoordinator(
+                        () -> CompletableFuture.completedFuture(true),
+                        List.of(
+                                ZLinkSpotCloseCoordinator.Step.onClosing(
+                                        () -> activation.closingCallback(onClosing)),
+                                ZLinkSpotCloseCoordinator.Step.operation(
+                                        () -> {
+                                            cleanupCalls.incrementAndGet();
+                                            return CompletableFuture.completedFuture(null);
+                                        })),
+                        diagnostic::set);
+        activation.closeCoordinator(() -> coordinator);
+        try (application;
+                var observer = Executors.newSingleThreadExecutor()) {
+            try {
+                var closed =
+                        serials.enqueueClose(
+                                () -> coordinator.close().thenApply(ignored -> null),
+                                coordinator::committed);
+                assertFalse(
+                        callbackEntered.get(BOUND_SECONDS, TimeUnit.SECONDS),
+                        "OnClosing must run outside the activation monitor");
+                var duplicate =
+                        observer.submit(
+                                () -> {
+                                    assertTrue(activation.closeStarted());
+                                    assertSame(coordinator, activation.existingCloseCoordinator());
+                                    return activation.closingCallback(unexpectedCallback);
+                                });
+                var shared = duplicate.get(BOUND_SECONDS, TimeUnit.SECONDS);
+                var duplicateClose = coordinator.close().toCompletableFuture();
+                assertFalse(shared.toCompletableFuture().isDone());
+                assertFalse(duplicateClose.isDone());
+                assertEquals(0, cleanupCalls.get());
+
+                releaseCallback.complete(null);
+                application.submit(() -> {}).get(BOUND_SECONDS, TimeUnit.SECONDS);
+                if (outcome == ClosingOutcome.ASYNCHRONOUS_FAILURE) {
+                    callbackResult.completeExceptionally(failure);
+                } else {
+                    callbackResult.complete(null);
+                }
+                closed.toCompletableFuture().get(BOUND_SECONDS, TimeUnit.SECONDS);
+                assertTrue(duplicateClose.get(BOUND_SECONDS, TimeUnit.SECONDS));
+                assertSame(shared, activation.closingCallback(unexpectedCallback));
+                Throwable expected = outcome == ClosingOutcome.SUCCESS ? null : failure;
+                assertSame(
+                        expected,
+                        shared.handle((ignored, error) -> error)
+                                .toCompletableFuture()
+                                .get(BOUND_SECONDS, TimeUnit.SECONDS));
+                assertSame(expected, diagnostic.get());
+                assertEquals(1, callbackCalls.get());
+                assertEquals(1, cleanupCalls.get());
+            } finally {
+                releaseCallback.complete(null);
+                callbackResult.complete(null);
+                serials.closeAsync().toCompletableFuture().get(BOUND_SECONDS, TimeUnit.SECONDS);
+            }
         }
     }
 

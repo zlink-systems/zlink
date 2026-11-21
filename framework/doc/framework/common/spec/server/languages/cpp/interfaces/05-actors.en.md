@@ -73,6 +73,9 @@ public:
  const actor_session_binding_identity_t &current,
  const actor_session_binding_identity_t &incoming,
  std::stop_token cancellation);
+ virtual task_t<void> on_session_bound(
+ const actor_session_binding_identity_t &incoming,
+ std::stop_token cancellation);
  virtual task_t<void> on_join_completed(
  const actor_join_completion_t &completion);
 };

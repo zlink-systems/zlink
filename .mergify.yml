@@ -5,15 +5,18 @@
 # PRs to main are squash-merged so a merged fix is one commit that Mergify can
 # backport. A PR labelled `backport-0.30.3` then gets a backport PR to the release
 # branch, which enters the release queue by itself and merges after the same checks.
-# One batch already needs about 20 GitHub-hosted jobs (the hosted concurrency
-# limit), so more parallel batches only wait for runners and get reset by
-# requeues. Fewer, larger batches merge more PRs per hour.
+# Since 2026-11-21 C++ batch jobs run on the home PC self-hosted runners and the other Linux suites on GitHub-hosted runners, so four batches fit at
+# once. Two left the self-hosted runners idle while 60+ PRs waited.
 merge_queue:
-  max_parallel_checks: 2
+  max_parallel_checks: 4
+  # Docs-only PRs and queue-unblocking CI fixes merge outside the queue (CI rules 1).
+  # Such a push used to cancel every in-flight batch, even one that had passed, and
+  # restarted 40-60 min of batch CI each time (2026-11-21: #5062, #5094).
+  reset_on_external_merge: never
 
 queue_rules:
   - name: default
-    batch_size: 8
+    batch_size: 16
     merge_method: squash
     # The C++ check runs on GitHub-hosted runners by default (ops/ci); a batch
     # that rebuilds the C++ runtime takes 55-80 min there. The automatic timeout
@@ -28,11 +31,10 @@ queue_rules:
       - or:
           - author=zlink-systems
           - label=reviewed
+      # Entering the queue waits only for the quick checks. The batch runs the full
+      # suites once for all its PRs, so waiting for each PR's own full run first
+      # doubled the CI load and held the queue behind the PR runs (2026-11-21).
       - check-success=core-release / Core release exists
-      - check-success=framework-dotnet / dotnet-release-gate
-      - check-success=framework-node / node-release-gate
-      - check-success=framework-java / linux-x64 / Java 25
-      - check-success=framework-cpp / Framework C++ unit and contract tests
       - check-success=framework-format / Framework source format
     merge_conditions:
       - check-success=dotnet-release-gate
@@ -71,6 +73,15 @@ merge_protections_settings:
         - and:
             - base~=^release/
             - head~=^mergify/bp/
+
+# Fixes for failures that break batches (intermittent tests, CI runners) go first so
+# the next batch does not fail on the same defect. Running batches are not interrupted.
+priority_rules:
+  - name: batch-breaking fixes first
+    conditions:
+      - label=queue-priority
+    priority: high
+    allow_checks_interruption: false
 
 pull_request_rules:
   - name: backport merged fixes to the 0.30.3 release branch

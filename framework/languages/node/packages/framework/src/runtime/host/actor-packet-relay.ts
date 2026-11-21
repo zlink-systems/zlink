@@ -908,28 +908,34 @@ export class ZLinkActorPacketRelay {
     const returnResponse =
       frameHeader.kind === ZLinkStreamMessageKind.Request && frameHeader.requestSeq !== undefined;
     try {
+      let responseSubmission: Promise<boolean> | undefined;
+      const dispatch = this.requireSpotNodeRuntime().dispatchEntryActorPacket(
+        'local',
+        actor.actorId,
+        [header, body],
+        returnResponse,
+        undefined,
+        actor.ref,
+        returnResponse
+          ? (response) => {
+              // Register egress before dispatch exposes its terminal. Observe transport outside the turn.
+              responseSubmission = this.sendCapturedOrCurrentBoundSessionResponse(
+                responseTarget,
+                actor.actorId,
+                frameHeader.name,
+                frameHeader.requestSeq!,
+                response,
+                streamMetadataMap(frameHeader.metadata)
+              );
+              void responseSubmission.catch(() => undefined);
+            }
+          : undefined
+      );
+
       this.options.detachedTaskRunner.runDetached('local actor packet relay', async () => {
         try {
-          const response = await this.requireSpotNodeRuntime().dispatchEntryActorPacket(
-            'local',
-            actor.actorId,
-            [header, body],
-            returnResponse,
-            undefined,
-            actor.ref
-          );
-          if (!returnResponse) {
-            return;
-          }
-          const sent = await this.sendCapturedOrCurrentBoundSessionResponse(
-            responseTarget,
-            actor.actorId,
-            frameHeader.name,
-            frameHeader.requestSeq,
-            response,
-            streamMetadataMap(frameHeader.metadata)
-          );
-          if (!sent) {
+          await dispatch;
+          if (responseSubmission !== undefined && !(await responseSubmission)) {
             throw new Error(
               `Actor '${actor.actorId}' local bound session response route is not ready.`
             );

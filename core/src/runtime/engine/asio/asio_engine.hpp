@@ -61,6 +61,7 @@ class asio_engine_t : public i_engine
     bool has_handshake_stage () ZLINK_OVERRIDE { return _has_handshake_stage; }
     void plug (zlink::io_thread_t *io_thread_, zlink::session_base_t *session_) ZLINK_OVERRIDE;
     void terminate () ZLINK_OVERRIDE;
+    bool has_pending_output () const ZLINK_OVERRIDE;
     bool restart_input () ZLINK_OVERRIDE;
     void restart_output () ZLINK_OVERRIDE;
     const endpoint_uri_pair_t &get_endpoint () const ZLINK_OVERRIDE;

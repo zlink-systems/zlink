@@ -36,7 +36,9 @@ final class EtcdClient implements AutoCloseable {
         final ErrorKind kind;
 
         CallFailure(ErrorKind kind) {
-            super(new java.io.IOException(EtcdEncoding.FAILURE_MESSAGE));
+            super(
+                    new java.io.IOException(
+                            "The Location Store operation failed; its write outcome may be unknown."));
             this.kind = kind;
         }
     }
@@ -88,6 +90,11 @@ final class EtcdClient implements AutoCloseable {
             context.close();
         }
     }
+
+    // Spec 07 §9.2 client bounds: 16 MiB covers the largest batch transaction, 8 MiB a 1 MiB read
+    // and a 4 MiB scan page.
+    static final int MAX_SEND_MESSAGE_BYTES = 16 * 1024 * 1024;
+    static final int MAX_RECEIVE_MESSAGE_BYTES = 8 * 1024 * 1024;
 
     private final List<ManagedChannel> channels = new ArrayList<>();
     private final AtomicInteger endpoint = new AtomicInteger();
@@ -167,7 +174,7 @@ final class EtcdClient implements AutoCloseable {
                                         uri.getPort() == -1 ? (secure ? 443 : 80) : uri.getPort())
                                 .disableRetry()
                                 .disableServiceConfigLookUp()
-                                .maxInboundMessageSize(8 * 1024 * 1024);
+                                .maxInboundMessageSize(MAX_RECEIVE_MESSAGE_BYTES);
                 if (secure) builder.sslContext(tls);
                 else builder.usePlaintext();
                 channels.add(builder.build());
@@ -207,8 +214,8 @@ final class EtcdClient implements AutoCloseable {
     private <Q extends MessageLite, R> CompletableFuture<R> invoke(
             MethodDescriptor<Q, R> method, Q request, Operation operation, boolean authenticated) {
         operation.start();
-        // Reject before gRPC queues serialization; transport overflow is a Store failure.
-        if (request.getSerializedSize() > 16 * 1024 * 1024) throw EtcdEncoding.failure();
+        // An oversized request is a Store failure, like the gRPC bound below, and sends nothing.
+        if (request.getSerializedSize() > MAX_SEND_MESSAGE_BYTES) throw EtcdEncoding.failure();
         int index = endpoint.get();
         Channel channel = channels.get(index);
         String current = token;
@@ -223,7 +230,11 @@ final class EtcdClient implements AutoCloseable {
         Context previous = operation.context.attach();
         try {
             ClientCall<Q, R> call =
-                    channel.newCall(method, CallOptions.DEFAULT.withDeadline(operation.deadline));
+                    channel.newCall(
+                            method,
+                            CallOptions.DEFAULT
+                                    .withDeadline(operation.deadline)
+                                    .withMaxOutboundMessageSize(MAX_SEND_MESSAGE_BYTES));
             ClientCalls.asyncUnaryCall(
                     call,
                     request,
