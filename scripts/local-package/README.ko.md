@@ -36,6 +36,26 @@ scripts/local-package/build-wsl.sh --verify-versions
 버전 파일을 변경한 뒤에는 위의 `--sync-versions`를 명시적으로 실행한다.
 Framework package 자체 version과 언어별 sample pin도 같은 동기화 대상이다.
 
+`--write`는 Node quickstart, StreamClient, board-tables의 consumer lock을
+`npm install --package-lock-only --ignore-scripts --no-audit --no-fund`로 다시 만든다.
+npm과 고정한 registry version에 대한 접근이 필요하다. 게시 전 package를 빌드할 때는
+`python3 scripts/local-package/sync-version.py --write --local-packages`를 실행한다.
+이 모드는 consumer의 root pin만 바꾸고 registry dependency tree는 다시 만들지 않는다.
+이 임시 consumer lock으로 `npm ci`를 실행하지 않는다. local template 설치 경로는 lock을
+삭제하고 실제 local tarball로 설치한다. consumer 변경을 게시하기 전에는 일반 `--write`를
+다시 실행한다.
+
+Node workspace lock은 참조하는 local tarball이 모두 존재할 때 다시 만든다. 아직 없으면
+동기화가 보류 사실을 출력한다. tarball 생성 뒤, `npm ci` 전에 `--write --local-packages`를
+다시 실행한다. binding 자체의 lock은 root version만 바꾼다.
+
+`--check`는 offline으로 동작한다. root·workspace의 선언, 같은 version으로 설치된 package의
+manifest, 존재하는 local tarball을 비교한다. root·workspace·관리 대상 package가 선언한 필수
+dependency의 entry도 확인한다. 해당 version의
+manifest나 tarball이 없는 registry package는 원래 dependency 선언 전체를 독립적으로 확인할 수
+없으므로, 그 선언 자체의 누락은 offline 검사 범위에 포함하지 않는다. npm version range의
+모든 호환 조건을 검사하지도 않는다.
+
 ### 장르 템플릿의 고정 버전
 
 장르 템플릿은 공개 package만 쓰므로([템플릿 제작 규칙](../../framework/templates/TEMPLATE-AUTHORING.ko.md))
