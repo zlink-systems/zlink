@@ -135,6 +135,17 @@ export class ZLinkManagedStream implements ZLinkStream {
     return this.socket.send(this.backendRoutingId(), payload, flags ?? 0);
   }
 
+  captureBoundSessionSubmission(actorId: string): (payload: Message) => Promise<ZLinkSubmitResult> {
+    const native = this.nativeActorBindings.get(actorId);
+    if (native?.route === undefined || native.binding === undefined) {
+      return (payload) => this.submitRaw(payload);
+    }
+    const enqueue = native.route.service.captureSubmission(native.binding);
+    return enqueue === undefined
+      ? () => Promise.resolve({ status: ZLinkSubmitStatus.TargetNotFound })
+      : (payload) => enqueue(() => this.submitRaw(payload));
+  }
+
   async submitRaw(payload: Message): Promise<ZLinkSubmitResult> {
     try {
       await this.socket.submit(this.backendRoutingId(), payload);
