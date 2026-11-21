@@ -22,11 +22,11 @@ import java.io.IOException;
 class ZLinkEtcdTransportLimitTest {
     @Test
     void sendLimitAcceptsExactly16MiBAndFailsOneByteMoreBeforeDispatch() throws Exception {
-        for (int excess : new int[] {0, 1}) {
+        for (int excess : new int[] {-1, 0, 1}) {
             String password = passwordForRequestSize(EtcdClient.MAX_SEND_MESSAGE_BYTES + excess);
             try (var backend = new EtcdTestServer();
                     var store = new ZLinkEtcdLocationStore(withCredentials(backend, password))) {
-                if (excess == 0) {
+                if (excess <= 0) {
                     assertInstanceOf(ZLinkStoreReadMissing.class, await(store.read(KEY, NEVER)));
                     assertEquals(1, backend.authCalls.get());
                     assertEquals(1, backend.txnCalls.get());
@@ -41,12 +41,12 @@ class ZLinkEtcdTransportLimitTest {
 
     @Test
     void receiveLimitAcceptsExactly8MiBAndFailsOneByteMore() throws Exception {
-        for (int excess : new int[] {0, 1}) {
+        for (int excess : new int[] {-1, 0, 1}) {
             int size = EtcdClient.MAX_RECEIVE_MESSAGE_BYTES + excess;
             try (var backend = new EtcdTestServer();
                     var store = new ZLinkEtcdLocationStore(withCredentials(backend, "p"))) {
                 backend.authReply = response -> padded(response, size);
-                if (excess == 0) {
+                if (excess <= 0) {
                     assertInstanceOf(ZLinkStoreReadMissing.class, await(store.read(KEY, NEVER)));
                     assertEquals(1, backend.txnCalls.get());
                 } else {
