@@ -1,0 +1,166 @@
+'use strict';
+
+const assert = require('node:assert/strict');
+const test = require('node:test');
+const { setImmediate: boundary } = require('node:timers/promises');
+const framework = require('../../packages/framework/dist/internal');
+const { createMeshHost } = require('./fixtures/mesh-host');
+const {
+  ZLinkRequestSourceResolver
+} = require('../../packages/framework/dist/runtime/locations/request-source-resolver');
+const {
+  ZLinkLocationStoreRepository
+} = require('../../packages/framework/dist/runtime/locations/location-store-repository');
+const {
+  internalFrameworkErrorKind
+} = require('../../packages/framework/dist/runtime/framework-errors-internal');
+
+function remoteDescriptor(kind) {
+  return {
+    meshName: 'play',
+    rid: 'remote-node',
+    lifecycleGeneration: 1n,
+    descriptorRevision: 1n,
+    state: 1,
+    objectRole: 'server',
+    placementWeight: 100,
+    ownerId: 'remote-owner',
+    leaseGeneration: 1n,
+    entrySpotId: 'remote-entry',
+    objectCapabilities: [{ objectKind: kind, stableType: 'room', entryAccepted: true }],
+    populationCapacity: {
+      actors: { active: 0, reserved: 0, limit: 1 },
+      spots: { active: 0, reserved: 0, limit: 1 },
+      spotTypes: []
+    }
+  };
+}
+
+function resolver() {
+  return new ZLinkRequestSourceResolver({
+    async listLiveMeshNodes() {
+      assert.fail('placement must use discovery publications, not request-scoped Store reads');
+    },
+    async remainingOwnerTokenLeaseMs() {
+      return 30000;
+    }
+  });
+}
+
+for (let iteration = 1; iteration <= 40; iteration++) {
+  for (const kind of ['actor', 'user_spot']) {
+    for (const initial of ['before first poll', 'after clear']) {
+      test(`${iteration}: ${kind} ${initial} selects the remote-only candidate on publication`, async () => {
+        const sources = resolver();
+        const remote = remoteDescriptor(kind);
+        if (initial === 'after clear') {
+          await sources.observeLiveDescriptors('play', [remote]);
+          sources.clear();
+        }
+        const node = {
+          status: () => ({ routingId: 'local-client', lifecycleGeneration: 1n }),
+          isPeerRouteReady: (rid, generation) => rid === remote.rid && generation === 1n
+        };
+        let settled = false;
+        const selected = sources.selectPlacement('play', kind, 'room', node).finally(() => {
+          settled = true;
+        });
+        await boundary();
+        const settledBeforePublication = settled;
+        await sources.observeLiveDescriptors('play', [remote]);
+        assert.equal(await selected, remote);
+        assert.equal(settledBeforePublication, false);
+      });
+    }
+    test(`${iteration}: ${kind} absent type returns undefined after one discovery publication`, async () => {
+      const sources = resolver();
+      const incompatible = { ...remoteDescriptor(kind), objectCapabilities: [] };
+      let settled = false;
+      const selected = sources.selectPlacement('play', kind, 'room').finally(() => {
+        settled = true;
+      });
+      await boundary();
+      const settledBeforePublication = settled;
+      await sources.observeLiveDescriptors('play', [incompatible]);
+      assert.equal(await selected, undefined);
+      assert.equal(settledBeforePublication, false);
+    });
+  }
+}
+
+function emptyMeshCreate(t, kind) {
+  const sources = resolver();
+  const { host, meshRuntime } = createMeshHost({
+    registration: framework.createFrameworkRegistration({
+      locations: { storeInstance: new framework.ZLinkInMemoryProviderLocationStore() },
+      spotNodes: {
+        play: {
+          router: { bind: 'tcp://local-play', routingId: 'local-client' },
+          objectRole: 'client'
+        }
+      }
+    })
+  });
+  meshRuntime.locationAutoConnect = { requestSources: sources };
+  meshRuntime.meshNode = () => ({
+    registerUserSpotOperationHandler() {},
+    registerActorOperationHandler() {},
+    status: () => ({ routingId: 'local-client', lifecycleGeneration: 1n })
+  });
+  const store = ZLinkLocationStoreRepository.prototype;
+  t.mock.method(store, 'readAuthority', async () => ({ kind: 'missing' }));
+  t.mock.method(store, 'readCreationTerminal', async () => ({ kind: 'missing' }));
+  t.mock.method(store, 'reserve', async () => assert.fail('absent type must not reserve'));
+  const spots = host.createPublicSpotManager({});
+  const { placementCreate } = host.createActorManagerOptions();
+  return {
+    sources,
+    create: (timeoutMs) =>
+      kind === 'actor'
+        ? placementCreate('actor', 'room', false, { meshName: 'play', timeoutMs })
+        : spots.getOrCreate('spot', 'room').inMesh('play').timeout(timeoutMs).submit()
+  };
+}
+
+for (let iteration = 1; iteration <= 40; iteration++) {
+  for (const kind of ['actor', 'user_spot']) {
+    for (const deadlineMs of [1000, 10]) {
+      test(`${iteration}: ${kind} absent type, poll=50ms deadline=${deadlineMs}ms`, async (t) => {
+        const f = emptyMeshCreate(t, kind);
+        // No descriptor in this mesh advertises the requested stable type.
+        const rows = [{ ...remoteDescriptor(kind), objectCapabilities: [] }];
+        await f.sources.observeLiveDescriptors('play', rows);
+        let publications = 0;
+        const started = performance.now();
+        const poll = setTimeout(() => {
+          publications++;
+          void f.sources.observeLiveDescriptors('play', rows);
+        }, 50);
+        try {
+          const error = await f.create(deadlineMs).then(
+            () => assert.fail('absent type must fail'),
+            (error) => error
+          );
+          const elapsedMs = performance.now() - started;
+          const fine = internalFrameworkErrorKind(error);
+          t.diagnostic(
+            JSON.stringify({
+              kind,
+              deadlineMs,
+              pollMs: 50,
+              elapsedMs,
+              publications,
+              errorKind: error.kind,
+              internalKind: fine
+            })
+          );
+          assert.equal(error.kind, framework.ZLinkFrameworkErrorKind.Unavailable);
+          assert.equal(fine, 'placementCapacityExhausted');
+          assert.equal(publications, 0, 'an observed empty snapshot must not await another poll');
+        } finally {
+          clearTimeout(poll);
+        }
+      });
+    }
+  }
+}
