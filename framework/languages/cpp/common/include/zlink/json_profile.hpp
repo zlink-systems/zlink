@@ -1042,16 +1042,9 @@ class typed_sax final
 // Walk every parsed value, including unknown properties, through typed_sax.
 // Tokens are in document order with child counts, so an explicit stack of
 // open containers replaces recursion and nesting depth never grows the call stack.
-struct open_token_container
+inline bool visit_tokens (token_buffer &buffer, typed_sax &handler)
 {
-    std::size_t remaining;
-    bool object;
-};
-inline thread_local std::vector<open_token_container> open_token_containers;
-
-inline bool visit_tokens (const token_buffer &buffer, typed_sax &handler)
-{
-    auto &open = open_token_containers;
+    auto &open = buffer.open_containers;
     open.clear ();
     std::size_t cursor = 0;
     do {
@@ -1067,9 +1060,15 @@ inline bool visit_tokens (const token_buffer &buffer, typed_sax &handler)
         }
         bool accepted = false;
         switch (entry.kind) {
-            case token_kind::null: accepted = handler.null (); break;
-            case token_kind::boolean: accepted = handler.boolean (entry.boolean); break;
-            case token_kind::integer: accepted = handler.number_integer (entry.integer); break;
+            case token_kind::null:
+                accepted = handler.null ();
+                break;
+            case token_kind::boolean:
+                accepted = handler.boolean (entry.boolean);
+                break;
+            case token_kind::integer:
+                accepted = handler.number_integer (entry.integer);
+                break;
             case token_kind::unsigned_integer:
                 accepted = handler.number_unsigned (entry.unsigned_integer);
                 break;
@@ -1089,7 +1088,8 @@ inline bool visit_tokens (const token_buffer &buffer, typed_sax &handler)
                 open.push_back ({entry.child_count, false});
                 break;
             case token_kind::raw_number:
-            case token_kind::raw_json: break;
+            case token_kind::raw_json:
+                break;
         }
         if (!accepted)
             return false;
@@ -1107,7 +1107,7 @@ inline bool read_json (std::string_view text, typed_sax &handler)
 {
     // Preserve the existing reader's NUL-as-EOF behavior.
     text = text.substr (0, text.find ('\0'));
-    auto &buffer = reusable_tokens;
+    auto &buffer = reusable_tokens ();
     if (!parse_tokens (text, buffer))
         return false;
     return visit_tokens (buffer, handler);
