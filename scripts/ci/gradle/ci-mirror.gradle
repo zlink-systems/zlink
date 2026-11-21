@@ -8,6 +8,8 @@ def centralFirst = { repositories ->
         content { excludeGroupByRegex(/systems\.zlink(\..*)?/) }
     }
     repositories.mavenCentral {
+        // A distinct name keeps the build's own mavenCentral() alongside this one.
+        name = 'ciMavenCentral'
         content { excludeGroupByRegex(/systems\.zlink(\..*)?/) }
     }
 }
@@ -21,9 +23,14 @@ gradle.beforeSettings { settings ->
 
 gradle.beforeProject { project ->
     centralFirst(project.buildscript.repositories)
-    // Respect builds that resolve dependencies exclusively through settings.
-    if (project.gradle.settings.dependencyResolutionManagement.repositoriesMode.get() ==
-            org.gradle.api.initialization.resolve.RepositoriesMode.PREFER_PROJECT) {
-        centralFirst(project.repositories)
+    // Under PREFER_PROJECT any project repository hides the settings repositories,
+    // so only lead the repositories a project declares itself.
+    project.afterEvaluate {
+        def repositories = project.repositories
+        if (repositories.isEmpty()) return
+        def declared = new ArrayList(repositories)
+        repositories.clear()
+        centralFirst(repositories)
+        repositories.addAll(declared)
     }
 }
