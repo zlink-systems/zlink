@@ -183,7 +183,8 @@ final class ZLinkInMemoryAuthorityStore {
                             current.allocation.descriptor(),
                             current.allocation.descriptorLifecycleGeneration(),
                             preserve.replacementOwner());
-            if (participantIsPrepared(key)
+            if (current.relocation != null
+                    || participantIsPrepared(key)
                     || !preserve.matchesPreserved(snapshot(current, now))
                     || !snapshot(current, now).steadyReady()
                     || !preserve.replacementOwner().ownerId().equals(current.owner.ownerId())
@@ -231,7 +232,8 @@ final class ZLinkInMemoryAuthorityStore {
                             current.objectGeneration,
                             current.authorityOwnerGeneration,
                             current.owner,
-                            current.allocation);
+                            current.allocation,
+                            current.relocation);
             rows.put(key, stored);
             return stored(stored, now);
         }
@@ -262,7 +264,12 @@ final class ZLinkInMemoryAuthorityStore {
                                 ? ++authorityOwnerGeneration
                                 : current.authorityOwnerGeneration,
                         current.owner,
-                        current.allocation);
+                        current.allocation,
+                        reincarnatePayload != null
+                                ? null
+                                : ((ZLinkAuthorityPut) mutation).replaceRelocation()
+                                        ? ((ZLinkAuthorityPut) mutation).relocation()
+                                        : current.relocation);
         rows.put(key, stored);
         return stored(stored, now);
     }
@@ -423,7 +430,8 @@ final class ZLinkInMemoryAuthorityStore {
         if ((active && request == null && !discarded)
                 || (!active && discarded)
                 || (!active
-                        && (participantIsPrepared(key)
+                        && (current.relocation != null
+                                || participantIsPrepared(key)
                                 || !Arrays.equals(
                                         current.payload,
                                         ZLinkCanonicalRelocationAuthorityStateCodec
@@ -437,6 +445,7 @@ final class ZLinkInMemoryAuthorityStore {
             } else {
                 boolean steadyReady =
                         !participantIsPrepared(key)
+                                && current.relocation == null
                                 && ZLinkAuthoritySnapshot.steadyReady(
                                         current.payload, current.allocation);
                 if (discarded || steadyReady) {
@@ -455,7 +464,8 @@ final class ZLinkInMemoryAuthorityStore {
         boolean ownerLeaseReleaseBlocked = authorityOwnerWaiting;
         if (active) {
             if (ownerLive && (!discarded || !discardedOwner.equals(current.owner))) return false;
-            if (participantIsPrepared(key)
+            if (current.relocation != null
+                    || participantIsPrepared(key)
                     || !Arrays.equals(
                             current.payload,
                             ZLinkCanonicalRelocationAuthorityStateCodec
@@ -547,7 +557,8 @@ final class ZLinkInMemoryAuthorityStore {
                     || !actor.get().currentSpotId().equals(spotId)
                     || actor.get().currentSpotGeneration() != spot.objectGeneration) continue;
             if (discarded) return new EndedSpotMembers(List.of(entry.getKey()), false);
-            if (participantIsPrepared(entry.getKey())
+            if (row.relocation != null
+                    || participantIsPrepared(entry.getKey())
                     || !ZLinkAuthoritySnapshot.steadyReady(row.payload, row.allocation))
                 throw new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.UNAVAILABLE,
@@ -1094,7 +1105,10 @@ final class ZLinkInMemoryAuthorityStore {
                                         current.objectGeneration,
                                         ownerGeneration,
                                         changesOwner ? state.request.targetOwner() : current.owner,
-                                        targetAllocation));
+                                        targetAllocation,
+                                        participant.relocation() == null
+                                                ? current.relocation
+                                                : participant.relocation().phase("committed")));
                         membershipMutations.put(
                                 participant.authorityKey(), participant.membershipMutation());
                         if (changesOwner) {
@@ -1670,7 +1684,9 @@ final class ZLinkInMemoryAuthorityStore {
                 row.owner.leaseGeneration(),
                 row.allocation,
                 pending,
-                now);
+                now,
+                row.relocation,
+                0);
     }
 
     private static ZLinkAuthorityStored stored(Row row, Instant now) {
@@ -1702,7 +1718,25 @@ final class ZLinkInMemoryAuthorityStore {
             long objectGeneration,
             long authorityOwnerGeneration,
             ZLinkLocationOwnerToken owner,
-            ZLinkPlacementAllocation allocation) {
+            ZLinkPlacementAllocation allocation,
+            ZLinkAuthorityRelocation relocation) {
+        private Row(
+                String storeVersion,
+                byte[] payload,
+                long objectGeneration,
+                long authorityOwnerGeneration,
+                ZLinkLocationOwnerToken owner,
+                ZLinkPlacementAllocation allocation) {
+            this(
+                    storeVersion,
+                    payload,
+                    objectGeneration,
+                    authorityOwnerGeneration,
+                    owner,
+                    allocation,
+                    null);
+        }
+
         private Row {
             payload = payload.clone();
         }
@@ -1715,7 +1749,8 @@ final class ZLinkInMemoryAuthorityStore {
                     objectGeneration,
                     authorityOwnerGeneration,
                     owner,
-                    nextAllocation);
+                    nextAllocation,
+                    relocation);
         }
     }
 
