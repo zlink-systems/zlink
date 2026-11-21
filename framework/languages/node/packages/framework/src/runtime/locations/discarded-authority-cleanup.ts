@@ -30,10 +30,15 @@ export async function cleanupDiscardedAuthority(
     membershipSnapshot: for (;;) {
       let cursor: ZLinkAuthorityScanCursor | undefined;
       do {
-        const page = await store.listAuthorities('', cursor, ZLINK_PROVIDER_MAX_PAGE_SIZE, signal);
+        // Membership lives in Actor authority records (location runtime §3.4).
+        const page = await store.listAuthorities(
+          'zla1:a:',
+          cursor,
+          ZLINK_PROVIDER_MAX_PAGE_SIZE,
+          signal
+        );
         if (page.kind === 'scanExpired') continue membershipSnapshot;
         for (const entry of page.items) {
-          if (entry.snapshot.allocation.objectKind !== 'actor') continue;
           const actor = decodeActorAuthorityPayload(
             serviceRelocationAuthorityApplicationPayload(entry.snapshot.payload)
           );
