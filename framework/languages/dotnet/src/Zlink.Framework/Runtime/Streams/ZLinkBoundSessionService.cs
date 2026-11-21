@@ -48,11 +48,45 @@ internal sealed class ZLinkBoundSessionService(ZLinkFrameworkRuntime runtime)
             message,
             runtime.Registration.Codecs
         );
+        var deferredStatus = ZLinkBoundSessionDispatchScope.TrySubmitDeferred(
+            actorId,
+            ct => SubmitDeferredFrameAsync(actorId, route, frame, ct)
+        );
+        if (deferredStatus is { } status)
+        {
+            if (status == ZLinkOneWaySubmitStatus.Submitted)
+                TraceSent(actorId, packetName, frame, route.SessionRid);
+            return new ZLinkOneWaySubmitResult(status);
+        }
+
         var result = await SubmitFrameAsync(actorId, route, frame, cancellationToken)
             .ConfigureAwait(false);
         if (result.Status == ZLinkOneWaySubmitStatus.Submitted)
             TraceSent(actorId, packetName, frame, route.SessionRid);
         return result;
+    }
+
+    private async ValueTask SubmitDeferredFrameAsync(
+        string actorId,
+        ZLinkActorBoundSession route,
+        byte[] frame,
+        CancellationToken cancellationToken
+    )
+    {
+        var result = await SubmitFrameAsync(actorId, route, frame, cancellationToken)
+            .ConfigureAwait(false);
+        //  SkippedNotBound is the designed stale-binding drop: the session
+        //  was replaced while the frame sat in the deferred queue, so there
+        //  is nothing to deliver and nothing failed.
+        if (
+            result.Status
+            is not ZLinkOneWaySubmitStatus.Submitted
+                and not ZLinkOneWaySubmitStatus.SkippedNotBound
+        )
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.InternalFailure,
+                $"Deferred bound-session submit completed with '{result.Status}'."
+            );
     }
 
     private void TraceSent(string actorId, string? packetName, byte[] frame, RoutingId sessionRid)

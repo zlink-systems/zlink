@@ -1268,9 +1268,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         var target = RoutingId.From(request.Session.SessionOwnerNodeRid.Value);
         if (target == _routingId)
         {
-            // The existing command deadline also cancels a close queued behind egress.
-            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            deadline.CancelAfter(timeout);
             try
             {
                 await AcceptBoundSessionCloseAsync(
@@ -1278,15 +1275,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                             encoded,
                             ServiceWireCodec.DecodeContext.Empty
                         ),
-                        deadline.Token
+                        cancellationToken
                     )
                     .AsTask()
-                    .WaitAsync(deadline.Token)
+                    .WaitAsync(timeout, cancellationToken)
                     .ConfigureAwait(false);
             }
-            catch (OperationCanceledException error)
-                when (!cancellationToken.IsCancellationRequested && deadline.IsCancellationRequested
-                )
+            catch (TimeoutException error)
             {
                 throw ZLinkRequestFailureMapper.CreateTimedOutRequestException(
                     "Bound-session close timed out.",
