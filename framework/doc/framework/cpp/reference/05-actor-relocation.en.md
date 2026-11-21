@@ -10,6 +10,26 @@ selection. The exact signatures are owned by the
 
 ---
 
+
+## `actor_t::on_session_bound`
+
+```cpp
+virtual task_t<void> on_session_bound(
+    const actor_session_binding_identity_t& incoming,
+    std::stop_token cancellation);
+```
+
+Notifies the committed session binding in the same Actor lifecycle turn. The default is a no-op.
+`incoming` contains the session-owner node RID, node lifecycle generation, and binding generation.
+The callback runs for the first bind, a same-session resubmission, and session replacement.
+Failure preserves bind success and is reported once as a runtime task exception.
+`set_session_replacement_callback_timeout(...)` (default `30,000 ms`) requests cancellation and reports once
+when exceeded. Actor or runtime shutdown cancellation is not reported.
+
+See [Session binding](../guide/server/39-session-binding.en.md#7-observing-a-committed-actor-binding) for usage.
+
+---
+
 ## `actor_manager_t::create`
 
 Always creates a new Actor.

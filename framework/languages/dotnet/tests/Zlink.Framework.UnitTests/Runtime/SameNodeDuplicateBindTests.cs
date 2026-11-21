@@ -186,6 +186,7 @@ public sealed class SameNodeDuplicateBindTests
             }
             Assert.Equal(callbacks, state.Callbacks);
             Assert.Equal(replacements, state.Replacements);
+            Assert.Equal(accepted ? 2 : 1, state.BoundCallbacks);
         }
         finally
         {
@@ -198,6 +199,7 @@ public sealed class BindingState
 {
     public string Rejection = "";
     public int Callbacks;
+    public int BoundCallbacks;
     public int Replacements;
     public int Ingress;
     public Channel<BindingSession> Sessions { get; } = Channel.CreateUnbounded<BindingSession>();
@@ -206,6 +208,15 @@ public sealed class BindingState
 public sealed class BindingActor(IZLinkActorContext context, BindingState state) : IZLinkActor
 {
     public IZLinkActorContext Context { get; } = context;
+
+    public ValueTask OnSessionBoundAsync(
+        ZLinkSessionBindingIdentity incoming,
+        CancellationToken cancellationToken
+    )
+    {
+        Interlocked.Increment(ref state.BoundCallbacks);
+        return ValueTask.CompletedTask;
+    }
 
     public ValueTask<string?> OnDuplicateBindAsync(
         ZLinkSessionBindingIdentity current,

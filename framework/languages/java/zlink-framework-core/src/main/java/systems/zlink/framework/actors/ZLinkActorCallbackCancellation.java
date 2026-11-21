@@ -1,6 +1,6 @@
 package systems.zlink.framework.actors;
 
-/** Reports whether a duplicate-bind callback exceeded its configured deadline. */
+/** Reports cancellation of an Actor binding callback. */
 @FunctionalInterface
 public interface ZLinkActorCallbackCancellation {
     boolean isCancellationRequested();
