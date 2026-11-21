@@ -50,7 +50,7 @@ export interface ZLinkUserSpotCreationCoordinatorOptions {
   readonly target: (
     request: Pick<ZLinkUserSpotCreationRequest, 'meshName' | 'stableType'>,
     signal?: AbortSignal,
-    excludedNodeRids?: ReadonlySet<string>
+    excludedHostRuns?: ReadonlyMap<string, bigint>
   ) => Promise<
     | {
         readonly meshName: string;
@@ -137,12 +137,12 @@ export class ZLinkUserSpotCreationCoordinator {
     signal.throwIfAborted();
     const sha256 = createHash('sha256').update(request.requestPayload).digest();
     const contentReference = encodeLocationCreationContent(request.requestPayload);
-    const excludedNodeRids = new Set<string>();
+    const excludedHostRuns = new Map<string, bigint>();
     let target: Awaited<ReturnType<ZLinkUserSpotCreationCoordinatorOptions['target']>>;
     let reserved: ZLinkObjectReserveResult;
     for (;;) {
       try {
-        const spot = await this.awaitReady(request, signal);
+        const spot = await this.awaitReady(request, signal, excludedHostRuns);
         if (spot !== undefined) {
           deadline.close();
           return { result: { spot, state: ZLinkSpotCreateState.Existing }, spot };
@@ -152,7 +152,7 @@ export class ZLinkUserSpotCreationCoordinator {
         throw error;
       }
       try {
-        target = await this.options.target(request, signal, excludedNodeRids);
+        target = await this.options.target(request, signal, excludedHostRuns);
       } catch (error) {
         deadline.close();
         if (error instanceof ZLinkFrameworkException) throw error;
@@ -178,14 +178,6 @@ export class ZLinkUserSpotCreationCoordinator {
         throw createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.PlacementCapacityExhausted,
           'No eligible User Spot placement target is ready.',
-          true
-        );
-      }
-      if (excludedNodeRids.has(encodeRoutingIdStorageHex(target.nodeRid))) {
-        deadline.close();
-        throw createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.PlacementCapacityExhausted,
-          'No additional User Spot placement target is ready.',
           true
         );
       }
@@ -249,9 +241,12 @@ export class ZLinkUserSpotCreationCoordinator {
         (reserved.kind === 'conflict' && reserved.current.kind === 'snapshot')
       )
         continue;
-      if (reserved.kind === 'placementCapacityExhausted') continue;
-      if (!(reserved.kind === 'conflict' && reserved.current.kind === 'missing')) break;
-      excludedNodeRids.add(encodeRoutingIdStorageHex(target.nodeRid));
+      if (
+        reserved.kind !== 'placementCapacityExhausted' &&
+        !(reserved.kind === 'conflict' && reserved.current.kind === 'missing')
+      )
+        break;
+      excludedHostRuns.set(encodeRoutingIdStorageHex(target.nodeRid), target.nodeGeneration);
     }
 
     if (reserved.kind === 'typeMismatch') {
@@ -726,13 +721,16 @@ export class ZLinkUserSpotCreationCoordinator {
 
   private async awaitReady(
     request: ZLinkUserSpotCreationRequest,
-    signal: AbortSignal
+    signal: AbortSignal,
+    excludedHostRuns: Map<string, bigint>
   ): Promise<SpotRef | undefined> {
     const key = encodeAuthorityKey('user_spot', String(request.spotId));
     for (;;) {
       signal.throwIfAborted();
       const current = await this.options.store.readAuthority(key, signal);
       if (current.kind === 'missing') return undefined;
+      // This authority may release its reservation before the next placement attempt.
+      excludedHostRuns.clear();
       if (request.generatedIdentity === true) throw spotIdConflict(request.spotId);
       if (
         current.allocation.objectKind !== 'user_spot' ||

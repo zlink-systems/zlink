@@ -5,6 +5,7 @@ const test = require('node:test');
 const { setImmediate: boundary } = require('node:timers/promises');
 const framework = require('../../packages/framework/dist/internal');
 const { createMeshHost } = require('./fixtures/mesh-host');
+const { encodeRoutingIdStorageHex } = require('../../packages/framework/dist/runtime/routing-id');
 const {
   ZLinkRequestSourceResolver
 } = require('../../packages/framework/dist/runtime/locations/request-source-resolver');
@@ -46,6 +47,20 @@ function resolver() {
     }
   });
 }
+
+test('placement excludes only the host generation that rejected the reservation', async () => {
+  const sources = resolver();
+  const remote = remoteDescriptor('user_spot');
+  const excluded = new Map([[encodeRoutingIdStorageHex(remote.rid), remote.lifecycleGeneration]]);
+  const select = () =>
+    sources.selectPlacement('play', 'user_spot', 'room', undefined, undefined, excluded);
+  await sources.observeLiveDescriptors('play', [remote]);
+  assert.equal(await select(), undefined);
+
+  const restarted = { ...remote, lifecycleGeneration: remote.lifecycleGeneration + 1n };
+  await sources.observeLiveDescriptors('play', [restarted]);
+  assert.equal(await select(), restarted);
+});
 
 for (let iteration = 1; iteration <= 40; iteration++) {
   for (const kind of ['actor', 'user_spot']) {
