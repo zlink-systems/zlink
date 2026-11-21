@@ -720,10 +720,14 @@ final class ZLinkStreamRuntimeIngressTest {
         assertFalse(TestSession.connected.isDone());
     }
 
-    @AfterEach
-    void resetSessionProbe() {
+    private void closeRuntimes() {
         runtimes.forEach(runtime -> runtime.closeAsync().toCompletableFuture().join());
         runtimes.clear();
+    }
+
+    @AfterEach
+    void resetSessionProbe() {
+        closeRuntimes();
         TestSession.holdFirstDispatch = false;
         TestSession.failNextConstruction = false;
         TestSession.constructionHook = null;
@@ -732,8 +736,6 @@ final class ZLinkStreamRuntimeIngressTest {
         TestSession.decodeWirePayload = false;
         TestSession.replyOnDispatch = false;
         TestSession.decodedWirePayload.set(null);
-        runtimes.forEach(runtime -> runtime.closeAsync().toCompletableFuture().join());
-        runtimes.clear();
         // Retiring callbacks finish before probes become visible to the next test.
         TestSession.created.clear();
         TestSession.createdCount.set(0);
@@ -2086,8 +2088,7 @@ final class ZLinkStreamRuntimeIngressTest {
                 assertTrue(stream.sessionClosingSendsLatch.await(5, TimeUnit.SECONDS));
                 assertEquals(1, session.replacementCallbacks.get());
             }
-            fixture.runtime().close();
-            runtimes.remove(fixture.runtime());
+            closeRuntimes();
         }
     }
 
