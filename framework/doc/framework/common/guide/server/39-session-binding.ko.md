@@ -153,10 +153,40 @@ Framework가 합치므로, 직접 호출한 직후에 연결이 끊겨도 Spot�
 
 ## 6. 중복 연결은 Actor가 결정한다
 
-다른 session이 current인 Actor를 새 session에 bind하면 Framework는 Actor 순서 안에서
-`onDuplicateBind(current, incoming, signal)`을 호출한다. 두 인자는 session owner node, 그 node의
-lifecycle generation, binding generation으로 식별하는 읽기 전용 값이다. callback은 `undefined` 또는 빈 문자열을 반환해 받아들이고,
-비어 있지 않은 문자열을 반환해 그 메시지로 거부한다.
+=== "C++"
+
+    다른 session이 current인 Actor를 새 session에 bind하면 Framework는 Actor 순서 안에서
+    `on_duplicate_bind(current, incoming, cancellation)`을 호출한다. `current`와 `incoming`은 session owner node, 그 node의
+    lifecycle generation, binding generation으로 식별하는 읽기 전용 값이다. callback은 `std::nullopt` 또는 빈 문자열을 반환해 받아들이고,
+    비어 있지 않은 문자열을 반환해 그 메시지로 거부한다.
+
+=== "C#/.NET"
+
+    다른 session이 current인 Actor를 새 session에 bind하면 Framework는 Actor 순서 안에서
+    `OnDuplicateBindAsync(current, incoming, cancellationToken)`을 호출한다. 두 인자는 session owner node, 그 node의
+    lifecycle generation, binding generation으로 식별하는 읽기 전용 값이다. callback은 `null` 또는 빈 문자열을 반환해 받아들이고,
+    비어 있지 않은 문자열을 반환해 그 메시지로 거부한다.
+
+=== "Java"
+
+    다른 session이 current인 Actor를 새 session에 bind하면 Framework는 Actor 순서 안에서
+    `onDuplicateBind(current, incoming, signal)`을 호출한다. 두 인자는 session owner node, 그 node의
+    lifecycle generation, binding generation으로 식별하는 읽기 전용 값이다. callback은 `undefined` 또는 빈 문자열을 반환해 받아들이고,
+    비어 있지 않은 문자열을 반환해 그 메시지로 거부한다.
+
+=== "Kotlin"
+
+    다른 session이 current인 Actor를 새 session에 bind하면 Framework는 Actor 순서 안에서
+    `onDuplicateBind(current, incoming, signal)`을 호출한다. 두 인자는 session owner node, 그 node의
+    lifecycle generation, binding generation으로 식별하는 읽기 전용 값이다. callback은 `undefined` 또는 빈 문자열을 반환해 받아들이고,
+    비어 있지 않은 문자열을 반환해 그 메시지로 거부한다.
+
+=== "Node/TypeScript"
+
+    다른 session이 current인 Actor를 새 session에 bind하면 Framework는 Actor 순서 안에서
+    `onDuplicateBind(current, incoming, signal)`을 호출한다. 두 인자는 session owner node, 그 node의
+    lifecycle generation, binding generation으로 식별하는 읽기 전용 값이다. callback은 `undefined` 또는 빈 문자열을 반환해 받아들이고,
+    비어 있지 않은 문자열을 반환해 그 메시지로 거부한다.
 
 EntrySpot의 계정 Actor는 기존 로그인 연결을 유지하려고 새 연결을 거부할 수 있다.
 
@@ -301,10 +331,110 @@ UserSpot의 game Actor는 application 상태에 따라 연결 교체를 허용�
     }
     ```
 
-callback이 없으면 기존 동작처럼 새 session을 받아들인다. 거부하거나 callback이 제한 시간 안에 끝나지
-않으면 current binding을 유지하고 incoming bind만 오류로 끝낸다. Framework는 incoming 연결을 끊지 않고
-command 51도 보내지 않는다. 받아들이면 새 session을 current로 등록하고 이전 연결에 기존 교체 절차를
-적용한다. callback 제한 시간의 설정은 [Session–Actor binding §6](../../../common/spec/server/04-session/02-session-actor-binding.ko.md#6-rebind와-이전-연결-교체)이 소유한다.
+<!-- language-specific binding result -->
+
+=== "C++"
+
+    callback이 없으면 새 session을 받아들인다. 거부하거나 callback이 제한 시간 안에 끝나지
+    않으면 current binding을 유지하고 incoming bind만 오류로 끝낸다. Framework는 incoming 연결을 끊지 않고
+    command 51도 보내지 않는다. 받아들이면 새 session을 current로 등록하고 이전 연결에 기존 교체 절차를
+    적용한다. callback 제한 시간의 설정은 [Session–Actor binding §6](../../../common/spec/server/04-session/02-session-actor-binding.ko.md#6-rebind와-이전-연결-교체)이 소유한다.
+
+=== "C#/.NET"
+
+    callback이 없으면 기존 동작처럼 새 session을 받아들인다. 거부하거나 callback이 제한 시간 안에 끝나지
+    않으면 current binding을 유지하고 incoming bind만 오류로 끝낸다. Framework는 incoming 연결을 끊지 않고
+    command 51도 보내지 않는다. 받아들이면 새 session을 current로 등록하고 이전 연결에 기존 교체 절차를
+    적용한다. callback 제한 시간의 설정은 [Session–Actor binding §6](../../../common/spec/server/04-session/02-session-actor-binding.ko.md#6-rebind와-이전-연결-교체)이 소유한다.
+
+=== "Java"
+
+    callback이 없으면 기존 동작처럼 새 session을 받아들인다. 거부하거나 callback이 제한 시간 안에 끝나지
+    않으면 current binding을 유지하고 incoming bind만 오류로 끝낸다. Framework는 incoming 연결을 끊지 않고
+    command 51도 보내지 않는다. 받아들이면 새 session을 current로 등록하고 이전 연결에 기존 교체 절차를
+    적용한다. callback 제한 시간의 설정은 [Session–Actor binding §6](../../../common/spec/server/04-session/02-session-actor-binding.ko.md#6-rebind와-이전-연결-교체)이 소유한다.
+
+=== "Kotlin"
+
+    callback이 없으면 기존 동작처럼 새 session을 받아들인다. 거부하거나 callback이 제한 시간 안에 끝나지
+    않으면 current binding을 유지하고 incoming bind만 오류로 끝낸다. Framework는 incoming 연결을 끊지 않고
+    command 51도 보내지 않는다. 받아들이면 새 session을 current로 등록하고 이전 연결에 기존 교체 절차를
+    적용한다. callback 제한 시간의 설정은 [Session–Actor binding §6](../../../common/spec/server/04-session/02-session-actor-binding.ko.md#6-rebind와-이전-연결-교체)이 소유한다.
+
+=== "Node/TypeScript"
+
+    callback이 없으면 기존 동작처럼 새 session을 받아들인다. 거부하거나 callback이 제한 시간 안에 끝나지
+    않으면 current binding을 유지하고 incoming bind만 오류로 끝낸다. Framework는 incoming 연결을 끊지 않고
+    command 51도 보내지 않는다. 받아들이면 새 session을 current로 등록하고 이전 연결에 기존 교체 절차를
+    적용한다. callback 제한 시간의 설정은 [Session–Actor binding §6](../../../common/spec/server/04-session/02-session-actor-binding.ko.md#6-rebind와-이전-연결-교체)이 소유한다.
+
+<!-- language-specific notification -->
+
+=== "C++"
+
+    ## 7. Actor의 bind 확정 통지
+
+    `on_session_bound`는 session bind가 확정된 뒤 같은 Actor handler 순서에서 호출됩니다.
+    첫 bind, 같은 session의 idempotent bind와 다른 session으로의 교체에 모두 적용됩니다.
+    인자는 확정된 binding identity이며 기본 구현은 아무것도 하지 않습니다.
+
+    ```cpp
+    task_t<void> on_session_bound(
+        const actor_session_binding_identity_t& incoming,
+        std::stop_token cancellation) override {
+      // 확정된 binding을 사용하는 application 처리를 수행합니다.
+      co_return;
+    }
+    ```
+
+    이 callback을 정의하면 bind 확정과 callback이 Actor gate를 사용합니다.
+    Framework는 성공 reply를 제출한 뒤 callback을 실행하며, bind 완료는 callback의 완료를 기다리지 않습니다.
+    Callback의 예외나 제한 시간 초과는 성공한 bind와 incoming reply를 바꾸지 않습니다.
+    Framework는 예외를 runtime task 예외로 한 번 보고하고 Actor를 계속 실행합니다.
+    `set_session_replacement_callback_timeout(...)`(기본 `30,000 ms`)이 지나면 취소를 전달하고 한 번 보고합니다.
+    Actor 또는 runtime 종료로 취소되면 보고하지 않습니다.
+
+=== "C#/.NET"
+
+    ## 7. bind 확정 통지
+
+    Actor가 bind 확정 뒤 application 상태를 갱신해야 하면 다음 callback을 구현합니다.
+
+    ```csharp
+    public ValueTask OnSessionBoundAsync(
+        ZLinkSessionBindingIdentity incoming, // 확정한 Session owner와 binding generation
+        CancellationToken cancellationToken) // callback 시간 초과·종료 시 취소
+    {
+        return ValueTask.CompletedTask;
+    }
+    ```
+
+    기본 구현은 아무것도 하지 않습니다. 구현한 callback은 bind 확정 뒤 같은 Actor의 handler 순서에서
+    한 번 실행합니다. `SpotWide` Actor는 shared Spot gate, Entry·`PerActor` Actor는 Actor gate를 사용합니다.
+    Callback이 없으면 bind는 Actor gate를 기다리지 않습니다. 중복 bind가 거부되면 이 통지도 실행하지 않습니다.
+
+    Callback 예외는 runtime task 예외로 한 번 보고하며 Actor 실행과 이미 성공한 bind는 유지합니다.
+    `SessionReplacementCallbackTimeout`을 넘으면 callback에 취소를 전달하고 같은 방식으로 한 번 보고합니다.
+    Actor·runtime 종료로 취소된 callback은 보고하지 않습니다. 자세한 계약은
+    [Session–Actor binding §6](../../../common/spec/server/04-session/02-session-actor-binding.ko.md#6-rebind와-이전-연결-교체)을 따릅니다.
+
+=== "Java"
+
+    ## 7. Actor의 bind 확정 통지
+
+    Java의 `onSessionBound`는 [Actor와 session 장 §3.1](24-actor-session.ko.md)에서 설명한다.
+
+=== "Kotlin"
+
+    ## 7. Actor의 bind 확정 통지
+
+    Kotlin의 `onSessionBoundSuspending`은 [Actor와 session 장 §3.1](24-actor-session.ko.md)에서 설명한다.
+
+=== "Node/TypeScript"
+
+    ## 7. Actor의 bind 확정 통지
+
+    Node의 `onSessionBound`는 [Actor와 session 장 §3.4](24-actor-session.ko.md)에서 설명한다.
 
 <script>
 (function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();

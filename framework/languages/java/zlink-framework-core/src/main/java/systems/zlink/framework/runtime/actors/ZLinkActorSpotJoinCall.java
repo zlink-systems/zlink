@@ -279,7 +279,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
         }
         traceJoinSent();
         Message requestPart = Message.from(request);
-        return manage(
+        CompletionStage<ZLinkActorJoinOutcome> joined =
                 resolveJoinTarget(remaining)
                         .thenCompose(
                                 target -> {
@@ -329,7 +329,11 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                                                                                             deadlineNanos)));
                                 })
                         .whenComplete((result, failure) -> requestPart.close())
-                        .whenComplete((result, failure) -> traceJoinReplyReceived(failure)));
+                        .whenComplete((result, failure) -> traceJoinReplyReceived(failure));
+        return manage(
+                services.remoteAddressResolver() == null
+                        ? joined
+                        : services.remoteAddressResolver().observeTerminal(spotId, joined));
     }
 
     private CompletionStage<Void> executeDeferred(
