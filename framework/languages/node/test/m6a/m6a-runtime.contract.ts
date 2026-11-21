@@ -1169,15 +1169,15 @@ test('mailbox has no hidden admission cap and owner claims progress independentl
   const application = mailbox.tryClaim('application', 1, 8)!;
   const parallelOwner = mailbox.tryClaim('application', 1, 8)!;
   assert.equal(parallelOwner.owner, 'spot-b');
-  mailbox.releaseClaimedPayload(application.records[0]!);
-  assert.equal(application.records[0]!.parts.length, 0);
+  mailbox.releaseClaimedPayload(application.records![0]!);
+  assert.equal(application.records![0]!.parts.length, 0);
   const infrastructure = mailbox.tryClaim('infrastructure', 1, 8)!;
-  assert.equal(infrastructure.records.length, 1);
+  assert.equal(infrastructure.records!.length, 1);
   assert.equal(mailbox.release(infrastructure), true);
   assert.equal(mailbox.release(infrastructure), false);
   assert.equal(mailbox.release(parallelOwner), true);
   assert.equal(mailbox.release(application), true);
-  assert.equal(mailbox.tryClaim('application', 1, 8)?.records.length, 1);
+  assert.equal(mailbox.tryClaim('application', 1, 8)?.records!.length, 1);
 });
 
 test('remote request is not rejected by legacy mailbox limits after shared admission', async () => {
@@ -1707,7 +1707,7 @@ test('raw runtime admits peers and completes node/channel requests once', async 
     );
     await pollUntil(async () => (await right.pumpOne()) === 'application');
     const request = right.mailbox.tryClaim('application', 1, 4096)!;
-    right.reply(request.records[0]!, {
+    right.reply(request.record!, {
       packetName: 'Answer',
       contentType: 'application/json',
       payload: Buffer.from('reply')
@@ -1828,7 +1828,7 @@ test('terminal reply completion progresses while ordinary job flow is saturated'
     );
     await pollUntil(async () => (await right.pumpOne()) === 'application');
     const request = right.mailbox.tryClaim('application', 1, 4096)!;
-    right.reply(request.records[0]!, {
+    right.reply(request.record!, {
       packetName: 'Answer',
       contentType: 'application/json',
       payload: Buffer.from('reply')
@@ -1869,8 +1869,8 @@ test('terminal reply completion progresses while ordinary job flow is saturated'
     );
     const drained = left.mailbox.tryClaim('application', 1, Number.MAX_SAFE_INTEGER)!;
     assert.equal(drained.owner, 'node:m6a-r6-left');
-    assert.equal(drained.records.length, 1);
-    const record = drained.records[0]!;
+    assert.ok(drained.record, 'Node owner claim carries one original');
+    const record = drained.record;
     assert.equal(record.sourceRoutingId, 'm6a-r6-right');
     assert.deepEqual(decodeApplicationPayload(record.parts[1]!), {
       packetName: 'OrdinaryNotice',
@@ -2025,7 +2025,7 @@ test('one-sided endpoint-only client upgrades the provisional route before Ready
       return provider.mailbox.pendingMessages('application') > 0;
     });
     const request = provider.mailbox.tryClaim('application', 1, 4_096)!;
-    provider.reply(request.records[0]!, {
+    provider.reply(request.record!, {
       packetName: 'ManualEndpointAnswer',
       contentType: 'application/json',
       payload: Buffer.from('reply')
@@ -2144,7 +2144,7 @@ async function verifyBilateralEndpointRequests(
         return target.mailbox.pendingMessages('application') > 0;
       });
       const request = target.mailbox.tryClaim('application', 1, 4_096)!;
-      target.reply(request.records[0]!, {
+      target.reply(request.record!, {
         packetName: 'BilateralAnswer',
         contentType: 'application/json',
         payload: Buffer.from('reply')
@@ -2215,12 +2215,12 @@ test('remote channel requests preserve successful and failed terminal results', 
       successClaim = claimed;
       return true;
     });
-    peer.reply(successClaim.records[0]!, {
+    peer.reply(successClaim.record!, {
       packetName: 'Answer',
       contentType: 'application/json',
       payload: Buffer.from('reply')
     });
-    successClaim.records[0]!.applicationJob?.close();
+    successClaim.record!.applicationJob?.close();
     assert.equal(peer.mailbox.release(successClaim), true);
     const successResult = await success.promise;
     assert.equal(successResult.terminalResult, 0);
@@ -2244,7 +2244,7 @@ test('remote channel requests preserve successful and failed terminal results', 
       return true;
     });
     peer.reply(
-      failureClaim.records[0]!,
+      failureClaim.record!,
       {
         packetName: 'Ignored',
         contentType: 'application/json',
@@ -2253,7 +2253,7 @@ test('remote channel requests preserve successful and failed terminal results', 
       RequestResult.NotFound,
       14
     );
-    failureClaim.records[0]!.applicationJob?.close();
+    failureClaim.record!.applicationJob?.close();
     assert.equal(peer.mailbox.release(failureClaim), true);
     const failureResult = await failure.promise;
     assert.equal(failureResult.terminalResult, RequestResult.NotFound);
