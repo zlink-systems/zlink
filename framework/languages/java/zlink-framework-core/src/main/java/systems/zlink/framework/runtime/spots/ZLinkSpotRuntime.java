@@ -6230,6 +6230,11 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         });
     }
 
+    void invalidateSpotRoute(String spotId) {
+        var resolver = userSpotLocationResolvers;
+        if (resolver != null) resolver.invalidateSpotRoute(spotId);
+    }
+
     void retainClosingCoordinator(
             String spotId,
             long objectGeneration,
