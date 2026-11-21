@@ -64,6 +64,22 @@ client가 자기 id를 보내면, 그 id의 Actor를 찾거나 만들어 이 연
 --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/sessions/SessionHandlers.kt:session-actor-bind"
 ```
 
+Actor는 `onSessionBoundSuspending`를 재정의해 bind 확정 통지를 받을 수 있다.
+
+```kotlin
+override suspend fun onSessionBoundSuspending(
+    incoming: ZLinkSessionBindingIdentity,
+    cancellation: ZLinkActorCallbackCancellation,
+) {
+    // 확정된 binding으로 application 상태를 갱신한다.
+}
+```
+
+기본 구현은 아무것도 하지 않는다. 재정의한 callback은 bind 확정 뒤 Actor handler 순서에서
+한 번 실행되며, 예외나 시간 초과는 성공한 bind를 바꾸지 않는다. Callback은 전달받은
+`cancellation.isCancellationRequested`로 취소 요청을 확인한다. Framework는 실패와 시간 초과를
+runtime task 예외로 보고한다.
+
 **같은 id로 다시 접속하면 있던 Actor에 묶인다.** 그래서 만들기와 찾기를 한 호출로 처리한다.
 
 ### 3.2 남은 packet을 넘기기
