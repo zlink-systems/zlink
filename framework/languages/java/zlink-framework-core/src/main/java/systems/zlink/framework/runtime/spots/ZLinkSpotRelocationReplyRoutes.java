@@ -37,7 +37,16 @@ final class ZLinkSpotRelocationReplyRoutes {
     private static final Duration RETENTION = Duration.ofHours(24);
 
     private final Map<OperationId, Route> routes = new HashMap<>();
-    private final ZLinkStateLane stateLane = new ZLinkStateLane();
+    private final ZLinkStateLane stateLane;
+
+    ZLinkSpotRelocationReplyRoutes() {
+        this(new ZLinkStateLane());
+    }
+
+    /** Tests pass the lane to hold its turn without reflection. */
+    ZLinkSpotRelocationReplyRoutes(ZLinkStateLane stateLane) {
+        this.stateLane = stateLane;
+    }
 
     private <T> T inStateLane(Supplier<T> work) {
         return stateLane.awaitResult(work);

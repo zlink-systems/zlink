@@ -300,11 +300,9 @@ final class ZLinkSpotRelocationReplyRoutesTest {
                         List.of(),
                         parts -> parts.forEach(Message::close),
                         () -> {});
-        var routes = new ZLinkSpotRelocationReplyRoutes();
+        var lane = new ZLinkStateLane();
+        var routes = new ZLinkSpotRelocationReplyRoutes(lane);
         var registration = routes.register(accepted, received, "room-1", 1);
-        var field = ZLinkSpotRelocationReplyRoutes.class.getDeclaredField("stateLane");
-        field.setAccessible(true);
-        var lane = (ZLinkStateLane) field.get(routes);
         var held = new CountDownLatch(1);
         var release = new CountDownLatch(1);
         lane.runAsync(
