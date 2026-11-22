@@ -203,10 +203,16 @@ class NodeProcess {
       endpoint: string;
     };
   }
+  drained = false;
+  // Returns once the actors have moved; the node keeps forwarding messages sent to its old routes
+  // until SafeToShutdown, which only stopping the node has to wait for.
   async drain(): Promise<void> {
     this.child.stdin!.write(Control.drain + '\n');
+    this.drained = true;
     await this.wait(Control.requested, Limits.messageMs);
     await this.wait(Control.relocated, Limits.relocationMs);
+  }
+  async safe(): Promise<void> {
     await this.wait(Control.safe, Limits.safeMs);
   }
   async stop(): Promise<void> {
@@ -315,7 +321,15 @@ export function createServerHost(tableCapacity: number, consoleOptions?: Console
     async replace(id) {
       const node = nodes.get(id);
       assert(node, `Unknown host ${id}`);
-      serverConsole?.host(`e2e request: replace ${node.config.title ?? id}`);
+      const title = node.config.title ?? id;
+      serverConsole?.host(`e2e request: replace ${title}`);
+      if (node.drained) {
+        serverConsole?.host(
+          `waiting until ${title} is safe to shut down ` +
+            `(it forwards messages for old routes for ${Limits.messageFollowMs / 1000} s after a drain)`
+        );
+        await node.safe();
+      }
       await node.stop();
       const replacement = await start(node.config, node.role);
       await replacement.ready();

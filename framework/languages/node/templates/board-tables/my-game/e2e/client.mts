@@ -98,14 +98,9 @@ class PlayerClient {
       PacketNames.actionRejected
     ])
       this.connector.on(name, (message) => {
-        this.print('←', name, message.payload);
         const payload = decodeWirePayload(name, message.payload);
+        this.record('←', name, payload);
         this.messages.push({ name, payload });
-        appendFileSync(
-          log,
-          JSON.stringify({ name, payload }, (_, v) => (typeof v === 'bigint' ? v.toString() : v)) +
-            '\n'
-        );
         this.changed.emit('change');
       });
     this.connector.onDisconnected(() => {
@@ -117,15 +112,19 @@ class PlayerClient {
       this.changed.emit('change');
     });
   }
-  private print(direction: '→' | '←', name: string, payload: unknown): void {
-    const json = JSON.stringify(payload, (_, v) => (typeof v === 'bigint' ? v.toString() : v));
-    console.log(`[${this.name} ${direction}] ${name} ${json}`);
+  // Packets go to the client's file log only; the console shows the scenario steps.
+  private record(direction: '→' | '←', name: string, payload: unknown): void {
+    const line = { time: new Date().toISOString(), client: this.name, direction, name, payload };
+    appendFileSync(
+      this.log,
+      JSON.stringify(line, (_, v) => (typeof v === 'bigint' ? v.toString() : v)) + '\n'
+    );
   }
   async send(
     messageType: abstract new (...args: never[]) => object,
     payload: object
   ): Promise<void> {
-    this.print('→', messageType.name, payload);
+    this.record('→', messageType.name, payload);
     await this.connector.send(payload, messageType).submit();
   }
   async wait<T>(
@@ -180,9 +179,9 @@ class PlayerClient {
   }
   async sessionInfo(): Promise<SessionInfo> {
     const request = new SessionInfoRequest();
-    this.print('→', PacketNames.sessionInfoRequest, request);
+    this.record('→', PacketNames.sessionInfoRequest, request);
     const response = await this.connector.request(request).submit<SessionInfo>();
-    this.print('←', PacketNames.sessionInfo, response);
+    this.record('←', PacketNames.sessionInfo, response);
     const fields = response as unknown as Record<string, unknown>;
     return {
       ...response,
@@ -450,7 +449,9 @@ export async function scenario(
     assert.equal(p1.disconnects, 0);
     assert.equal(p2.disconnects, 0);
     if (name === 'update') {
-      step(`replace ${serverTitle(b1.nodeId)}: expect new tables on the new server`);
+      step(
+        `replace ${serverTitle(b1.nodeId)} once it is safe to shut down: expect new tables on it`
+      );
       await control.replace(b1.nodeId);
       await scenario('table', endpoint, `${runId}-replacement`, logDir, control, b1.nodeId);
     }

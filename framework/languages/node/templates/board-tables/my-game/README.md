@@ -111,7 +111,7 @@ Open two terminals in the template directory. In the first terminal, start Redis
 pwsh -NoProfile -File ./run-server.ps1
 ```
 
-In the second terminal, run the e2e. It finds the server from the first terminal through `logs/server.json` and runs the same scenarios against it; with no server running it starts its own nodes in Docker. Each client message appears on one line with the client name, a send (`→`) or receive (`←`) arrow, the message type, and compact JSON.
+In the second terminal, run the e2e. It finds the server from the first terminal through `logs/server.json` and runs the same scenarios against it; with no server running it starts its own nodes in Docker. The console shows each scenario (`━━ update (3/3) ━━`) and its steps (`▶ drain Play server A: …`), and the servers show the matching game events. Each client's packets go to `.logs/run-<id>/<scenario>-<client>.jsonl`, one JSON line per packet with its time, direction (`→` send, `←` receive), message type and payload. A drained server keeps forwarding messages sent to its old routes for the message follow window (30 s) before it is safe to shut down, so the update scenario waits for that before it replaces the server.
 
 ```sh
 ./run-e2e.sh
