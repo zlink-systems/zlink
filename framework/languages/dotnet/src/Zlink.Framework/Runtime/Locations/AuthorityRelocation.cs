@@ -68,7 +68,10 @@ internal sealed record ZLinkAuthoritySnapshot(
     ZLinkPlacementAllocation Allocation,
     ZLinkReservedObjectCreation? ReservedCreation,
     DateTimeOffset StoreNow
-);
+)
+{
+    internal Zlink.Framework.Runtime.Locations.ZLinkAuthorityRelocation? Relocation { get; init; }
+}
 
 internal abstract record ZLinkAuthorityReadResult
 {
@@ -122,7 +125,15 @@ internal abstract record ZLinkAuthorityMutation
         ZLinkLocationOwnerToken? TargetOwner,
         ZLinkPlacementAllocation? TargetAllocation,
         ulong TargetAuthorityOwnerGeneration = 0
-    ) : ZLinkAuthorityMutation;
+    ) : ZLinkAuthorityMutation
+    {
+        internal Zlink.Framework.Runtime.Locations.ZLinkAuthorityRelocation? Relocation { get; init; }
+        internal bool ClearRelocation { get; init; }
+
+        internal Zlink.Framework.Runtime.Locations.ZLinkAuthorityRelocation? ApplyRelocation(
+            ZLinkAuthoritySnapshot current
+        ) => ClearRelocation ? null : Relocation ?? current.Relocation;
+    }
 
     /// <summary>
     /// Replaces only the opaque payload after matching the exact store version
@@ -131,7 +142,10 @@ internal abstract record ZLinkAuthorityMutation
     public sealed record Restore(
         ReadOnlyMemory<byte> Payload,
         ZLinkLocationOwnerToken ExpectedOwner
-    ) : ZLinkAuthorityMutation;
+    ) : ZLinkAuthorityMutation
+    {
+        internal bool ClearRelocation { get; init; }
+    }
 
     internal static void Validate(ZLinkAuthorityMutation mutation)
     {
