@@ -156,11 +156,11 @@ export class ZLinkRequestSourceResolver {
     meshName: string,
     requestedType: string | undefined,
     node: ZLinkBackendMeshNode,
-    signal: AbortSignal
+    signal?: AbortSignal
   ): Promise<InstancePlacement> {
     let refreshAvailable = true;
     for (;;) {
-      signal.throwIfAborted();
+      signal?.throwIfAborted();
       const serving = this.liveDescriptors(this.polled.get(meshName)).filter(
         (descriptor) =>
           descriptor.state === ZLinkFrameworkRuntimeState.Serving &&

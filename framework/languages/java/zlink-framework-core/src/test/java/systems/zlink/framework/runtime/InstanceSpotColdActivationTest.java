@@ -7,7 +7,6 @@ import org.junit.jupiter.api.Test;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
-import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.internal.service.ZLinkInstanceActivationRecoveryCodec;
@@ -25,7 +24,6 @@ import java.time.ZoneOffset;
 import java.util.UUID;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.Function;
 
 final class InstanceSpotColdActivationTest {
     private static CompletableFuture<Void> entered;
@@ -105,9 +103,16 @@ final class InstanceSpotColdActivationTest {
                 var runtime =
                         ZLinkFrameworkRuntimeTestAccess.startWithConstruction(
                                 options,
-                                ZLinkFrameworkRuntimeTestAccess.withMeshNodeDecorator(
-                                        new ZLinkJavaBackendAdapterFactory(),
-                                        store::observeValidator),
+                                new InstanceActivationObserverBackend(
+                                        envelope -> {
+                                            store.envelope = envelope;
+                                            store.validatorEntered.complete(envelope);
+                                            if (store.phase == DeadlinePhase.VALIDATOR
+                                                    || store.phase
+                                                            == DeadlinePhase.CALLER_CANCELLATION) {
+                                                store.resume.join();
+                                            }
+                                        }),
                                 ZLinkHandlerActivator.reflection(),
                                 null,
                                 new ZLinkFrameworkRuntimeTestAccess.Construction()
@@ -326,47 +331,6 @@ final class InstanceSpotColdActivationTest {
                         });
             }
             return result;
-        }
-
-        @SuppressWarnings("unchecked")
-        ZLinkInternalMeshNode observeValidator(ZLinkInternalMeshNode node) {
-            return (ZLinkInternalMeshNode)
-                    Proxy.newProxyInstance(
-                            ZLinkInternalMeshNode.class.getClassLoader(),
-                            new Class<?>[] {ZLinkInternalMeshNode.class},
-                            (proxy, method, arguments) -> {
-                                if (method.getName().equals("setInstanceSpotActivationValidator")) {
-                                    var original =
-                                            (Function<
-                                                            ZLinkInstanceActivationRecoveryCodec
-                                                                    .RecoveryEnvelope,
-                                                            CompletionStage<
-                                                                    ZLinkAuthorityReadResult>>)
-                                                    arguments[0];
-                                    arguments[0] =
-                                            (Function<
-                                                            ZLinkInstanceActivationRecoveryCodec
-                                                                    .RecoveryEnvelope,
-                                                            CompletionStage<
-                                                                    ZLinkAuthorityReadResult>>)
-                                                    input -> {
-                                                        envelope = input;
-                                                        validatorEntered.complete(input);
-                                                        if (phase == DeadlinePhase.VALIDATOR
-                                                                || phase
-                                                                        == DeadlinePhase
-                                                                                .CALLER_CANCELLATION) {
-                                                            resume.join();
-                                                        }
-                                                        return original.apply(input);
-                                                    };
-                                }
-                                try {
-                                    return method.invoke(node, arguments);
-                                } catch (InvocationTargetException failure) {
-                                    throw failure.getCause();
-                                }
-                            });
         }
     }
 

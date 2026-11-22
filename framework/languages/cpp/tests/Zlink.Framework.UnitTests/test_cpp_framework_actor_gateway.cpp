@@ -4672,7 +4672,7 @@ int relocation_barrier_fences_late_actor_request_without_deadlock ()
     auto request_record = accepted_actor_fifo_record (source_fence, 1, envelope, "ask");
     const runtime::serial_application_record_t *transferred_record = nullptr;
     spot_inbound_message_t metadata;
-    metadata.values = envelope.metadata;
+    metadata.values = envelope.metadata.values ();
     auto asked = spots.relay_actor_packet (
       actor, gateway.actor_context (actor), stream_message_kind_t::request, "FencedAsk",
       zlink::message_t::from (std::string ("ask")), provider, serializers, std::move (metadata),

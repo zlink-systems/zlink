@@ -479,6 +479,7 @@ export class ZLinkFrameworkRuntimeHost
       requests: this.requests,
       resolver: () => this.createLocationSpotRouteResolver(),
       requestSources: () => this.spotNodeRuntime?.locationAutoConnect?.requestSources,
+      shutdownSignal: () => this.executionState?.abortController.signal,
       routed: this.routeTransport,
       meshNames: () =>
         [...this.options.registration.spotNodes]

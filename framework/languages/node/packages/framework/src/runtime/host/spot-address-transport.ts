@@ -11,7 +11,7 @@ import {
   ZLinkDispatchMessageKind,
   ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
-import { awaitWithAbort, NORMAL_COMPLETION } from '../abort';
+import { awaitWithAbort, isAbortError, NORMAL_COMPLETION } from '../abort';
 import type { ZLinkRequestSourceResolver } from '../locations/request-source-resolver';
 import type { ZLinkBackendMeshNode } from '../backend/contracts';
 import {
@@ -61,6 +61,7 @@ export interface ZLinkHostSpotAddressTransportOptions {
   readonly requests?: RequestRuntime;
   readonly resolver: () => ZLinkSpotRouteResolver | undefined;
   readonly requestSources?: () => ZLinkRequestSourceResolver | undefined;
+  readonly shutdownSignal?: () => AbortSignal | undefined;
   readonly routed: ZLinkSpotRoutedTransport;
   readonly meshNames: () => readonly string[];
   readonly isMeshConfigured?: (meshName: string) => boolean;
@@ -180,13 +181,16 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
     if (!call.instanceSpot) {
       return { status: ZLinkSubmitStatus.TargetNotFound };
     }
-    const remainingMs = Math.max(0, Number(activationDeadlineUnixMs) - Date.now());
-    const selected = await this.selectMissingTarget(
-      spotId,
-      call,
-      resolution,
-      AbortSignal.timeout(remainingMs)
-    );
+    const shutdown = this.options.shutdownSignal?.();
+    let selected: MissingTargetSelection;
+    try {
+      selected = await this.selectMissingTarget(spotId, call, resolution, shutdown);
+    } catch (error) {
+      if (shutdown?.aborted === true && isAbortError(error)) {
+        return { status: ZLinkSubmitStatus.Shutdown };
+      }
+      throw error;
+    }
     if (selected.kind === 'unsupported') {
       this.traceInstanceAddress(
         ZLinkMessageFlowOutcome.Dropped,
@@ -634,7 +638,7 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
     spotId: RoutingId,
     call: ZLinkSpotAddressCallOptions,
     current: ZLinkSpotRouteTarget | ZLinkInstanceReactivationRoute | undefined,
-    signal: AbortSignal
+    signal?: AbortSignal
   ): Promise<MissingTargetSelection> {
     const configuredMeshes = this.options.meshNames();
     if (

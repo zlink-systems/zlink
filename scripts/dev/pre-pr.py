@@ -264,7 +264,10 @@ def cpp(temp):
     })
     # The local gate uses the Core release cache. CI rebuilds Core from source.
     prefix = Path(release_prefix())
-    local_core = Path(job.env["ZLINK_LOCAL_PACKAGE_ROOT"]) / "install/zlink-core" / prefix.parent.name
+    # fetch-release.sh publishes <cache>/release/<version>/<platform>/<digest> (#4817);
+    # CMake reads the Core package at install/zlink-core/<version>.
+    version = prefix.parents[1].name
+    local_core = Path(job.env["ZLINK_LOCAL_PACKAGE_ROOT"]) / "install/zlink-core" / version
     # CMake package config and provenance come from the release cache.
     shutil.copytree(prefix, local_core, symlinks=True, dirs_exist_ok=True)
     return job.run(*CPP)
