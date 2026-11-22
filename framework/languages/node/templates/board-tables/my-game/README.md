@@ -34,7 +34,7 @@ This compiles TypeScript and generates the Framework default typed JSON schema f
 
 ### Endpoint and first packet
 
-Connect game clients to the Session node's `players` STREAM listener. Its default configuration in `server/config/session.json` is `ws://127.0.0.1:0`: WebSocket on loopback, with port `0` asking the OS to assign a free port and no application path (the WebSocket URL uses `/`). The Session process prints `READY {"id":"session","endpoint":"..."}` with the actual listening endpoint; use that endpoint, not port `0`. `e2e/runner.ts` reads this value and passes it to the client. Table mesh endpoints and Redis are not client endpoints.
+Connect game clients to the Session node's `players` STREAM listener. Its default configuration in `server/config/session.json` is `ws://127.0.0.1:0`: WebSocket on loopback, with port `0` asking the OS to assign a free port and no application path (the WebSocket URL uses `/`). The Session process prints `READY {"id":"session","endpoint":"..."}` with the actual listening endpoint; use that endpoint, not port `0`. `e2e/server-host.ts` reads this value and the e2e runner passes it to the client. Table mesh endpoints and Redis are not client endpoints.
 
 The default listener is reachable from the same host/network namespace. Docker e2e nodes share the runner's network namespace; the runner removes its nodes when it finishes. To connect an external game client, keep a deployment running, configure `streamEndpoint` with a reachable interface and port, and expose that port when using containers. Use the server's reachable host in the client URL. Browsers can use this WebSocket listener; an HTTPS page needs a secure `wss://` deployment, which the default configuration does not provide.
 
@@ -98,6 +98,30 @@ try {
   await connector.close();
 }
 ```
+
+## Run the server and the e2e separately
+
+Open two terminals in the template directory. In the first terminal, start Redis and the nodes. Wait for `Server ready:` and the Session endpoint. Each node's console lines start with its ID, such as `[session]` or `[tableA]`.
+
+```sh
+./run-server.sh
+```
+
+```powershell
+pwsh -NoProfile -File ./run-server.ps1
+```
+
+In the second terminal, attach the e2e runner. Each client message appears on one line with the client name, a send (`→`) or receive (`←`) arrow, the message type, and compact JSON.
+
+```sh
+./run-e2e.sh --attach
+```
+
+```powershell
+pwsh -NoProfile -File ./run-e2e.ps1 -Attach
+```
+
+Press Ctrl+C in the first terminal to shut down the nodes and remove the Redis container. The console shows each diagnostic record as its time and message; each node also appends the full records to `logs/<node-id>.log` as JSON lines, including when it is started directly with `node`. Set `logDir` in a node's JSON config to use another directory. Docker e2e nodes write that file inside their container; the runner keeps each node's stderr in `.logs/run-<id>/`. The e2e runner and server host also keep per-run logs under `.logs/`.
 
 ## Docker e2e
 

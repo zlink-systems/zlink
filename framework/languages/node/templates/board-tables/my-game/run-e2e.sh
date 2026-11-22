@@ -5,9 +5,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 local_mode=false
 no_build=false
 build_only=false
+attach=false
 arguments=()
 for argument in "$@"; do
   case "$argument" in
+    --attach) attach=true ;;
     --local) local_mode=true ;;
     --no-build) no_build=true ;;
     --build-only) build_only=true ;;
@@ -16,6 +18,13 @@ for argument in "$@"; do
 done
 cd "$ROOT"
 mkdir -p "$ROOT/.logs"
+if $attach; then
+  if $build_only || [[ "${arguments[0]:-}" == "--check-structure" ]]; then
+    echo '--attach requires a scenario run.' >&2
+    exit 1
+  fi
+  exec node dist/e2e/runner.js --attach "${arguments[@]}"
+fi
 if $local_mode; then
   if ! $no_build; then
     if ! (npm ci && npm run build) >"$ROOT/.logs/build.log" 2>&1; then

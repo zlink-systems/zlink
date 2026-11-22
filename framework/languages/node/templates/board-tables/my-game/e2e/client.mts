@@ -21,6 +21,7 @@ import {
   type SessionInfo,
   type TableView
 } from '../server/shared/messages.js';
+import type { NodeControl } from './server-control.js';
 interface Received {
   name: string;
   payload: unknown;
@@ -70,18 +71,15 @@ function decodeWirePayload(name: string, payload: unknown): unknown {
   }
   return payload;
 }
-export interface NodeControl {
-  drain(id: string): Promise<void>;
-  replace(id: string): Promise<void>;
-}
 class PlayerClient {
-  readonly connector: ZlinkStreamConnector;
+  private readonly connector: ZlinkStreamConnector;
   readonly messages: Received[] = [];
   private readonly changed = new EventEmitter();
   private failure?: Error;
   disconnects = 0;
   constructor(
     endpoint: string,
+    private readonly name: string,
     private readonly log: string
   ) {
     this.connector = zlinkStreamConnectorFactory.create({
@@ -99,13 +97,13 @@ class PlayerClient {
       PacketNames.actionRejected
     ])
       this.connector.on(name, (message) => {
+        this.print('←', name, message.payload);
         const payload = decodeWirePayload(name, message.payload);
         this.messages.push({ name, payload });
         appendFileSync(
           log,
-          JSON.stringify({ name, payload }, (_, v) =>
-            typeof v === 'bigint' ? v.toString() : v
-          ) + '\n'
+          JSON.stringify({ name, payload }, (_, v) => (typeof v === 'bigint' ? v.toString() : v)) +
+            '\n'
         );
         this.changed.emit('change');
       });
@@ -117,6 +115,17 @@ class PlayerClient {
       this.failure = new Error(`Connector error: ${error.code}: ${error.message}`);
       this.changed.emit('change');
     });
+  }
+  private print(direction: '→' | '←', name: string, payload: unknown): void {
+    const json = JSON.stringify(payload, (_, v) => (typeof v === 'bigint' ? v.toString() : v));
+    console.log(`[${this.name} ${direction}] ${name} ${json}`);
+  }
+  async send(
+    messageType: abstract new (...args: never[]) => object,
+    payload: object
+  ): Promise<void> {
+    this.print('→', messageType.name, payload);
+    await this.connector.send(payload, messageType).submit();
   }
   async wait<T>(
     name: string,
@@ -158,7 +167,7 @@ class PlayerClient {
   async join(playerId: string, tableId: string): Promise<TableView> {
     await this.connector.connect();
     const index = this.messages.length;
-    await this.connector.send(new JoinTableRequest(playerId, tableId)).submit();
+    await this.send(JoinTableRequest, new JoinTableRequest(playerId, tableId));
     const view = await this.wait<TableView>(
       PacketNames.tableView,
       index,
@@ -169,9 +178,10 @@ class PlayerClient {
     return view;
   }
   async sessionInfo(): Promise<SessionInfo> {
-    const response = await this.connector
-      .request(new SessionInfoRequest())
-      .submit<SessionInfo>();
+    const request = new SessionInfoRequest();
+    this.print('→', PacketNames.sessionInfoRequest, request);
+    const response = await this.connector.request(request).submit<SessionInfo>();
+    this.print('←', PacketNames.sessionInfo, response);
     const fields = response as unknown as Record<string, unknown>;
     return {
       ...response,
@@ -180,7 +190,7 @@ class PlayerClient {
   }
   async view(): Promise<TableView> {
     const index = this.messages.length;
-    await this.connector.send(new TableViewRequest()).submit();
+    await this.send(TableViewRequest, new TableViewRequest());
     return this.wait<TableView>(PacketNames.tableView, index);
   }
   async close(): Promise<void> {
@@ -250,12 +260,10 @@ function settlement(
   assert.equal(chips(result), 2n * Game.initialChips);
 }
 function sendBet(client: PlayerClient, handNumber: bigint, amount: bigint): Promise<void> {
-  return client.connector
-    .send(
-      { handNumber: handNumber.toString(10), amount: amount.toString(10) },
-      BetRequest
-    )
-    .submit();
+  return client.send(BetRequest, {
+    handNumber: handNumber.toString(10),
+    amount: amount.toString(10)
+  });
 }
 export async function scenario(
   name: string,
@@ -269,7 +277,7 @@ export async function scenario(
     ids = [`p1-${name}-${runId}`, `p2-${name}-${runId}`];
   const clients: PlayerClient[] = [];
   const create = (suffix: string): PlayerClient => {
-    const client = new PlayerClient(endpoint, `${logDir}/${name}-${suffix}.jsonl`);
+    const client = new PlayerClient(endpoint, suffix, `${logDir}/${name}-${suffix}.jsonl`);
     clients.push(client);
     return client;
   };
@@ -294,16 +302,8 @@ export async function scenario(
     assert.notEqual(session1.sessionId, session2.sessionId);
     if (name === 'table') {
       const rejectedAt = p2.messages.length;
-      await p2.connector
-        .send(
-          { handNumber: '0', pot: '0', winners: [], hands: [], seats: [] },
-          HandResult
-        )
-        .submit();
-      const rejected = await p2.wait<ActionRejected>(
-        PacketNames.actionRejected,
-        rejectedAt
-      );
+      await p2.send(HandResult, { handNumber: '0', pot: '0', winners: [], hands: [], seats: [] });
+      const rejected = await p2.wait<ActionRejected>(PacketNames.actionRejected, rejectedAt);
       assert.equal(rejected.reason, Reasons.packetNotAllowed);
       assert.equal(rejected.retryAfterMs, 0);
       const idleViewAt = p2.messages.length;
@@ -317,7 +317,7 @@ export async function scenario(
     }
     const start1 = p1.messages.length,
       start2 = p2.messages.length;
-    await p1.connector.send(new StartHandRequest()).submit();
+    await p1.send(StartHandRequest, new StartHandRequest());
     const [v1, v2, h1, h2] = await Promise.all([
       p1.wait<TableView>(PacketNames.tableView, start1, (v) => v.inHand),
       p2.wait<TableView>(PacketNames.tableView, start2, (v) => v.inHand),
@@ -343,10 +343,7 @@ export async function scenario(
 
       const overLimitAt = p1.messages.length;
       await sendBet(p1, v1.handNumber, MaxContractInteger + 1n);
-      const overLimit = await p1.wait<ActionRejected>(
-        PacketNames.actionRejected,
-        overLimitAt
-      );
+      const overLimit = await p1.wait<ActionRejected>(PacketNames.actionRejected, overLimitAt);
       assert.equal(overLimit.reason, Reasons.integerOutOfRange);
       assert.equal(overLimit.retryAfterMs, 0);
       assert.deepEqual(await p1.view(), v1);

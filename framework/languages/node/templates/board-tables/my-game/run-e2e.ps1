@@ -1,6 +1,7 @@
 [CmdletBinding(PositionalBinding = $false)]
 param(
     [switch]$Local,
+    [switch]$Attach,
     [switch]$NoBuild,
     [switch]$BuildOnly,
     [switch]$CheckStructure,
@@ -15,6 +16,11 @@ Set-Location $root
 New-Item -ItemType Directory -Force (Join-Path $root '.logs') | Out-Null
 if ($CheckStructure) { $RunnerArguments = @('--check-structure') + $RunnerArguments }
 elseif ($Scenario) { $RunnerArguments = @('--scenario', $Scenario) + $RunnerArguments }
+if ($Attach) {
+    if ($BuildOnly -or $CheckStructure) { throw '-Attach requires a scenario run.' }
+    & node dist/e2e/runner.js --attach @RunnerArguments
+    exit $LASTEXITCODE
+}
 if ($Local) {
     if (-not $NoBuild) {
         & npm ci *> (Join-Path $root '.logs/build.log')

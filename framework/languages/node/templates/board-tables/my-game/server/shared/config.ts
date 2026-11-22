@@ -7,6 +7,7 @@ export interface NodeConfig {
   meshEndpoint: string;
   streamEndpoint: string | null;
   tableCapacity?: number;
+  logDir?: string;
 }
 export function readConfig(path: string): NodeConfig {
   const value = JSON.parse(readFileSync(path, 'utf8')) as NodeConfig;
@@ -23,5 +24,7 @@ export function readConfig(path: string): NodeConfig {
     (!Number.isInteger(value.tableCapacity) || value.tableCapacity < 0)
   )
     throw new Error('Table capacity must be a nonnegative integer');
+  if (value.logDir !== undefined && (typeof value.logDir !== 'string' || !value.logDir))
+    throw new Error('Invalid logDir');
   return value;
 }

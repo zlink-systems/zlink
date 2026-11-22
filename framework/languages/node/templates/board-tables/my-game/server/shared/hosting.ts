@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { diagnostics } from './diagnostics';
+import { startDiagnostics } from './diagnostics';
 import '../../.zlink-framework-json-schemas.cjs';
 import { NestFactory } from '@nestjs/core';
 import { Global, Module, type Type } from '@nestjs/common';
@@ -42,6 +42,7 @@ export async function runHost(
   ) => HostComposition
 ): Promise<void> {
   const config = readConfig(process.argv[2]);
+  const diagnostics = startDiagnostics(config);
   const location = new ZLinkRedisLocationStore({
     url: `redis://${config.redisEndpoint}`,
     keyPrefix: `${config.keyPrefix}location`
