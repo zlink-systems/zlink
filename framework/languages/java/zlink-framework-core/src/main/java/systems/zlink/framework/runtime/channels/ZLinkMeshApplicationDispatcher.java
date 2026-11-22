@@ -45,6 +45,7 @@ import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
 import systems.zlink.framework.runtime.messaging.ZLinkPacketNames;
 
 import java.nio.ByteBuffer;
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -377,6 +378,7 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                             closeLocalSubmission(ownedPayload, claim);
                             return;
                         }
+                        Instant receivedAt = Instant.now();
                         try (ZLinkApplicationJobContext.Scope ignored =
                                 ZLinkApplicationJobContext.enter(permit)) {
                             boolean accepted =
@@ -404,7 +406,9 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                                                                                             ownedPayload
                                                                                                     .dataBuffer(),
                                                                                             metadata,
-                                                                                            contentType));
+                                                                                            contentType,
+                                                                                            receivedAt,
+                                                                                            null));
                                                 } catch (RuntimeException handlerFailure) {
                                                     invocation =
                                                             CompletableFuture.failedFuture(
@@ -494,6 +498,7 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                                                                 payload,
                                                                 metadata,
                                                                 contentType,
+                                                                record.receivedAt(),
                                                                 flow.enabled(
                                                                                 ZLinkMessageFlowOutcome
                                                                                         .DISPATCHED)
@@ -512,6 +517,7 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                                                                 payload,
                                                                 metadata,
                                                                 contentType,
+                                                                record.receivedAt(),
                                                                 flow.enabled(
                                                                                 ZLinkMessageFlowOutcome
                                                                                         .DISPATCHED)
@@ -632,6 +638,7 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                                                                     payload,
                                                                     metadata,
                                                                     contentType,
+                                                                    record.receivedAt(),
                                                                     flow.enabled(
                                                                                     ZLinkMessageFlowOutcome
                                                                                             .DISPATCHED)
@@ -650,6 +657,7 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                                                                     payload,
                                                                     metadata,
                                                                     contentType,
+                                                                    record.receivedAt(),
                                                                     flow.enabled(
                                                                                     ZLinkMessageFlowOutcome
                                                                                             .DISPATCHED)

@@ -193,7 +193,13 @@ final class ZLinkApplicationExecutionScheduler {
                             flow == null ? () -> {} : ZLinkFlowContext.enter(flow);
                     var job = enterApplicationJob()) {
                 if (ownership != null) ownership.requireRunnable();
-                operation.get().whenComplete((value, failure) -> finish(failure));
+                CompletionStage<Void> completion = operation.get();
+                if (completion instanceof CompletableFuture<Void> completed
+                        && completed.state() == java.util.concurrent.Future.State.SUCCESS) {
+                    finish(null);
+                } else {
+                    completion.whenComplete((value, failure) -> finish(failure));
+                }
             } catch (RuntimeException | Error failure) {
                 finish(failure);
             }

@@ -291,8 +291,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     // The pump's next rotation, built once per pump start.
     private volatile Runnable pumpRotation;
     private final List<ClaimedRecord> ingressRecords = new ArrayList<>(MAX_INGRESS_BATCH);
-    private final ZLinkApplicationJobQueue.Permit[] ingressPermits =
-            new ZLinkApplicationJobQueue.Permit[MAX_INGRESS_BATCH];
     // The pump's receive turn, built once with the pump socket like pumpRotation.
     private Supplier<ClaimedRecord> pumpClaim;
     private final AtomicReference<CompletableFuture<ZLinkApplicationJobQueue.Permit>>
@@ -2516,7 +2514,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 metadata == null || metadata.length == 0 ? 0 : ServiceWireConstants.FLAG_METADATA;
         List<Message> frames =
                 encodeApplicationFrames(
-                        wire.encodeNodeRequestHeader(correlation, flags), metadata, parts);
+                        wire.encodeNodeRequestMessage(correlation, flags), metadata, parts);
         try {
             return request(
                     router,
@@ -2571,7 +2569,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 metadata == null || metadata.length == 0 ? 0 : ServiceWireConstants.FLAG_METADATA;
         List<Message> frames =
                 encodeApplicationFrames(
-                        wire.encodeChannelRequestHeader(correlation, selectedChannel, flags),
+                        wire.encodeChannelRequestMessage(correlation, selectedChannel, flags),
                         metadata,
                         parts);
         try {
@@ -5428,7 +5426,11 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
 
     private List<Message> encodeApplicationFrames(
             byte[] header, byte[] metadata, List<Message> parts) {
-        Message headerFrame = Message.from(header);
+        return encodeApplicationFrames(Message.from(header), metadata, parts);
+    }
+
+    private List<Message> encodeApplicationFrames(
+            Message headerFrame, byte[] metadata, List<Message> parts) {
         Message metadataFrame = null;
         Message bodyFrame = null;
         try {
@@ -5698,7 +5700,6 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             final long startedAt = nanoTime.getAsLong();
             final ZLinkApplicationJobQueue budgetQueue = applicationJobQueue;
             final List<ClaimedRecord> records = ingressRecords;
-            final ZLinkApplicationJobQueue.Permit[] permits = ingressPermits;
             ZLinkApplicationJobQueue.Permit nextPermit;
             long receivedBytes;
             int count;
@@ -5775,16 +5776,16 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                         var record = pumpClaim.get();
                         if (record == null) break;
                         records.add(record);
-                        permits[records.size() - 1] = nextPermit;
+                        record.permit = nextPermit;
                         nextPermit = null;
                         receivedBytes =
                                 Math.addExact(
                                         receivedBytes,
-                                        retainedBytes(record.inbound().received().parts()));
+                                        retainedBytes(record.inbound.received().parts()));
                         count++;
                         // Dispatch creates fanout outside the lane, before the next native record.
-                        if (record.header() != null
-                                && record.header().command()
+                        if (record.header != null
+                                && record.header.command()
                                         == ServiceWireConstants.COMMAND_LOGICAL_MULTICAST) break;
                     }
                 } catch (RuntimeException failure) {
@@ -5797,8 +5798,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 for (int index = 0; index < records.size(); index++) {
                     if (logicalClose.get() != null) return;
                     var record = records.set(index, null);
-                    var permit = permits[index];
-                    permits[index] = null;
+                    var permit = record.permit;
                     ZLinkApplicationJobContext.Scope scope;
                     try {
                         scope =
@@ -5806,7 +5806,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                         ? () -> {}
                                         : ZLinkApplicationJobContext.enter(permit);
                     } catch (RuntimeException | Error failure) {
-                        record.inbound().close();
+                        record.inbound.close();
                         if (permit != null) permit.abandonReservation();
                         throw failure;
                     }
@@ -5824,14 +5824,14 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             public void close() {
                 for (int index = 0; index < records.size(); index++) {
                     var record = records.get(index);
-                    if (record != null) record.inbound().close();
-                    var permit = permits[index];
-                    if (permit != null) permit.abandonReservation();
+                    if (record != null) {
+                        record.inbound.close();
+                        if (record.permit != null) record.permit.abandonReservation();
+                    }
                 }
                 if (nextPermit != null) nextPermit.abandonReservation();
                 if (budget > 0) budgetQueue.abandonRotationBudget(budget);
                 records.clear();
-                java.util.Arrays.fill(permits, null);
             }
         }
         rotationReceivePeer = null;
@@ -5953,14 +5953,31 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 || command == ServiceWireConstants.COMMAND_RELOCATION_STATE;
     }
 
-    /** Owned header and the control commit's follow-up travel with the claimed inbound. */
-    private record ClaimedRecord(
-            ZLinkJavaRawServicePort.Inbound inbound,
-            Optional<ZLinkServiceTopologyRegistry.Peer> source,
-            byte[] head,
-            ZLinkServiceM6AWireCodec.Header header,
-            Runnable afterCommit,
-            RuntimeException claimFailure) {}
+    /** A claimed inbound and its application reservation belong to the same rotation slot. */
+    private static final class ClaimedRecord {
+        final ZLinkJavaRawServicePort.Inbound inbound;
+        final Optional<ZLinkServiceTopologyRegistry.Peer> source;
+        final byte[] head;
+        final ZLinkServiceM6AWireCodec.Header header;
+        final Runnable afterCommit;
+        final RuntimeException claimFailure;
+        ZLinkApplicationJobQueue.Permit permit;
+
+        ClaimedRecord(
+                ZLinkJavaRawServicePort.Inbound inbound,
+                Optional<ZLinkServiceTopologyRegistry.Peer> source,
+                byte[] head,
+                ZLinkServiceM6AWireCodec.Header header,
+                Runnable afterCommit,
+                RuntimeException claimFailure) {
+            this.inbound = inbound;
+            this.source = source;
+            this.head = head;
+            this.header = header;
+            this.afterCommit = afterCommit;
+            this.claimFailure = claimFailure;
+        }
+    }
 
     static Object claimedRecordForTest(
             ZLinkJavaRawServicePort.Inbound inbound,
@@ -6041,20 +6058,20 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     }
 
     private void dispatch(ClaimedRecord record) {
-        var inbound = record.inbound();
-        var source = record.source();
+        var inbound = record.inbound;
+        var source = record.source;
         boolean handedOff = false;
         RecordKind kind = null;
         Long correlation = null;
         AtomicBoolean replied = null;
         try {
-            var header = record.header();
+            var header = record.header;
             if (header == null) {
-                if (record.claimFailure() != null) throw record.claimFailure();
+                if (record.claimFailure != null) throw record.claimFailure;
                 return;
             }
             List<byte[]> frames = inbound.frames();
-            byte[] head = record.head();
+            byte[] head = record.head;
             int command = header.command();
             int flags = header.flags();
             String channelName = null;
@@ -6097,12 +6114,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 }
                 correlation = actorHeader.correlation();
             }
-            if (record.claimFailure() != null) throw record.claimFailure();
+            if (record.claimFailure != null) throw record.claimFailure;
             if (command == ServiceWireConstants.COMMAND_HELLO
                     || command == ServiceWireConstants.COMMAND_ADMIT
                     || command == ServiceWireConstants.COMMAND_UPDATE
                     || command == ServiceWireConstants.COMMAND_REJECT) {
-                record.afterCommit().run();
+                record.afterCommit.run();
                 return;
             }
             if (command == ServiceWireConstants.COMMAND_LIVENESS_PROBE
@@ -6263,7 +6280,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                             inbound.source(),
                                             inbound.requestSequence(),
                                             encodeApplicationFrames(
-                                                    wire.encodeReplyHeader(
+                                                    wire.encodeReplyMessage(
                                                             requestCorrelation, 0, 0),
                                                     null,
                                                     replyParts));
@@ -6319,8 +6336,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     correlation,
                     kind,
                     replied,
-                    !handedOff && record.claimFailure() == null,
-                    record.claimFailure() == null ? failure : record.claimFailure());
+                    !handedOff && record.claimFailure == null,
+                    record.claimFailure == null ? failure : record.claimFailure);
         } finally {
             if (!handedOff) {
                 inbound.close();
@@ -6546,7 +6563,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                 inbound.source(),
                                 inbound.requestSequence(),
                                 encodeApplicationFrames(
-                                        wire.encodeReplyHeader(correlation, 0, 0),
+                                        wire.encodeReplyMessage(correlation, 0, 0),
                                         null,
                                         replyParts));
                     } finally {
@@ -6960,7 +6977,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                                                     inbound.source(),
                                                                     inbound.requestSequence(),
                                                                     encodeApplicationFrames(
-                                                                            wire.encodeReplyHeader(
+                                                                            wire.encodeReplyMessage(
                                                                                     header
                                                                                             .correlation(),
                                                                                     0,
@@ -7205,7 +7222,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                                 inbound.source(),
                                                 inbound.requestSequence(),
                                                 encodeApplicationFrames(
-                                                        wire.encodeReplyHeader(
+                                                        wire.encodeReplyMessage(
                                                                 header.replyRouteId(), 0, 0),
                                                         null,
                                                         replyParts));
@@ -7996,7 +8013,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                                                                     .requestSequence(),
                                                                             encodeApplicationFrames(
                                                                                     wire
-                                                                                            .encodeReplyHeader(
+                                                                                            .encodeReplyMessage(
                                                                                                     header
                                                                                                             .correlation(),
                                                                                                     0,

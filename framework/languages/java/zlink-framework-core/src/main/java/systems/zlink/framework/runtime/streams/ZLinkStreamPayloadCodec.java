@@ -29,7 +29,7 @@ final class ZLinkStreamPayloadCodec {
             Message payload,
             ZLinkStreamCompressionCodec compressionCodec) {
         byte[] bytes = payload.toByteArray();
-        if (!header.flags().contains(ZLinkStreamHeaderFlag.PAYLOAD_COMPRESSED)) {
+        if (!header.hasFlag(ZLinkStreamHeaderFlag.PAYLOAD_COMPRESSED)) {
             return bytes;
         }
         if (compressionCodec == null) {

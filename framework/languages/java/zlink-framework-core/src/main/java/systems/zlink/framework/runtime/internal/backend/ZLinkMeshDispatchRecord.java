@@ -4,6 +4,7 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.runtime.internal.binding.spot.ReadyRecord;
 import systems.zlink.framework.runtime.internal.binding.spot.ReceiveRecord;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
@@ -19,11 +20,21 @@ public record ZLinkMeshDispatchRecord(
         ReceiveRecord receive,
         List<Message> parts,
         Consumer<List<Message>> frameworkReply,
-        Runnable terminalRelease)
+        Runnable terminalRelease,
+        Instant receivedAt)
         implements AutoCloseable {
     public ZLinkMeshDispatchRecord {
         parts = parts instanceof AutoCloseable ? parts : List.copyOf(parts);
         terminalRelease = once(terminalRelease);
+    }
+
+    public ZLinkMeshDispatchRecord(
+            ReadyRecord owner,
+            ReceiveRecord receive,
+            List<Message> parts,
+            Consumer<List<Message>> frameworkReply,
+            Runnable terminalRelease) {
+        this(owner, receive, parts, frameworkReply, terminalRelease, Instant.now());
     }
 
     public ZLinkMeshDispatchRecord(ReadyRecord owner, ReceiveRecord receive, List<Message> parts) {

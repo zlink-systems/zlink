@@ -53,7 +53,6 @@ import systems.zlink.framework.streams.ZLinkStreamSessionError;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -100,8 +99,8 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     private static final long EXECUTOR_TERMINATION_WAIT_SECONDS = 5;
     private static final Duration PHYSICAL_DISCONNECT_TIMEOUT = Duration.ofSeconds(5);
     private static final Logger LOGGER = Logger.getLogger(ZLinkStreamRuntime.class.getName());
-    private static final String HEARTBEAT_PING_NAME = "$zlink.heartbeat.ping";
-    private static final String HEARTBEAT_PONG_NAME = "$zlink.heartbeat.pong";
+    private static final ZLinkStreamHeader SESSION_CLOSING_HEADER =
+            ZLinkStreamHeader.control(ZLinkSessionClosingControl.NAME);
 
     private static final Duration BOUND_SESSION_REPLACEMENT_CLOSE_DELAY = Duration.ofMillis(100);
     private static final Duration RECEIVE_POLL_TIMEOUT = Duration.ofMillis(250);
@@ -1618,19 +1617,19 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             ZLinkStreamHeader header,
             Message payload) {
         String packetName = header.packetName();
-        if (HEARTBEAT_PING_NAME.equals(packetName)) {
+        if (ZLinkStreamHeader.HEARTBEAT_PING.packetName().equals(packetName)) {
             if (payload.size() != 0) {
                 logIgnoredControl(packetName, payload.size(), routingId);
             }
             sendControlAsync(
                     stream,
                     routingId,
-                    HEARTBEAT_PONG_NAME,
-                    Message.from(new byte[0]),
+                    ZLinkStreamHeader.HEARTBEAT_PONG,
+                    Message.allocate(0),
                     "STREAM heartbeat pong was not admitted by the transport: ");
             return;
         }
-        if (HEARTBEAT_PONG_NAME.equals(packetName)) {
+        if (ZLinkStreamHeader.HEARTBEAT_PONG.packetName().equals(packetName)) {
             if (payload.size() != 0) {
                 logIgnoredControl(packetName, payload.size(), routingId);
             }
@@ -2029,7 +2028,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         return sendControlAsync(
                 stream,
                 routingId,
-                ZLinkSessionClosingControl.NAME,
+                SESSION_CLOSING_HEADER,
                 Message.from(ZLinkSessionClosingControl.encode(reason, diagnostic)),
                 "STREAM session-closing control failed during transport teardown: ");
     }
@@ -2094,28 +2093,19 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         sendControlAsync(
                 state.stream(),
                 state.routingId(),
-                HEARTBEAT_PING_NAME,
-                Message.from(new byte[0]),
+                ZLinkStreamHeader.HEARTBEAT_PING,
+                Message.allocate(0),
                 "STREAM heartbeat ping failed during transport teardown: ");
     }
 
     private static CompletionStage<Void> sendControlAsync(
             ZLinkBackendStreamSocket stream,
             RoutingId routingId,
-            String packetName,
+            ZLinkStreamHeader header,
             Message payload,
             String failureMessage) {
         CompletionStage<Void> submission;
         try {
-            ZLinkStreamHeader header =
-                    new ZLinkStreamHeader(
-                            ZLinkStreamMessageKind.CONTROL,
-                            ZLinkStreamCodec.RAW,
-                            EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
-                            Optional.empty(),
-                            packetName,
-                            Map.of(),
-                            Optional.empty());
             submission = stream.sendAsync(routingId, header, List.of(payload));
         } catch (RuntimeException failure) {
             payload.close();
