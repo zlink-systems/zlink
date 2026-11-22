@@ -219,6 +219,7 @@ set(ZLINK_FRAMEWORK_CPP_M6A_RUNTIME_SOURCES
   framework/src/runtime/channels/channel_reply_writer.cpp
   framework/src/runtime/messaging/client_call_codec.cpp
   framework/src/runtime/messaging/envelope_codec.cpp
+  framework/src/runtime/messaging/request_completion_reply_status.cpp
   framework/src/runtime/messaging/request_failure_mapper.cpp
   framework/src/runtime/codecs/serializer.cpp
   framework/src/runtime/diagnostics/flow_context.cpp)
