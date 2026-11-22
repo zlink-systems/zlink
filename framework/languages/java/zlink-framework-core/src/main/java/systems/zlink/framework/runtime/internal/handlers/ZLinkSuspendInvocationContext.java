@@ -19,28 +19,43 @@ public final class ZLinkSuspendInvocationContext {
 
     private ZLinkSuspendInvocationContext() {}
 
-    public static Object currentEntrySpotDispatch() {
-        return ENTRY_SPOT_DISPATCH.get();
+    public record Snapshot(
+            Object entrySpotDispatch,
+            Object spotOutbound,
+            String actorDispatch,
+            Object deferredActorJoin,
+            Object serialExecutionTurn,
+            ApplicationExecution applicationExecution) {}
+
+    public static Snapshot snapshot() {
+        return new Snapshot(
+                ENTRY_SPOT_DISPATCH.get(),
+                SPOT_OUTBOUND.get(),
+                ACTOR_DISPATCH.get(),
+                DEFERRED_ACTOR_JOIN.get(),
+                SERIAL_EXECUTION_TURN.get(),
+                APPLICATION_EXECUTION.get());
     }
 
-    public static ThreadLocal<Object> entrySpotDispatchThreadLocal() {
-        return ENTRY_SPOT_DISPATCH;
+    public static void restore(Snapshot snapshot) {
+        set(ENTRY_SPOT_DISPATCH, snapshot.entrySpotDispatch());
+        set(SPOT_OUTBOUND, snapshot.spotOutbound());
+        set(ACTOR_DISPATCH, snapshot.actorDispatch());
+        set(DEFERRED_ACTOR_JOIN, snapshot.deferredActorJoin());
+        set(SERIAL_EXECUTION_TURN, snapshot.serialExecutionTurn());
+        set(APPLICATION_EXECUTION, snapshot.applicationExecution());
+    }
+
+    public static Object currentEntrySpotDispatch() {
+        return ENTRY_SPOT_DISPATCH.get();
     }
 
     public static Object currentSpotOutbound() {
         return SPOT_OUTBOUND.get();
     }
 
-    public static ThreadLocal<Object> spotOutboundThreadLocal() {
-        return SPOT_OUTBOUND;
-    }
-
     public static String currentActorDispatch() {
         return ACTOR_DISPATCH.get();
-    }
-
-    public static ThreadLocal<String> actorDispatchThreadLocal() {
-        return ACTOR_DISPATCH;
     }
 
     public static Object currentDeferredActorJoin() {
@@ -55,32 +70,12 @@ public final class ZLinkSuspendInvocationContext {
         return SERIAL_EXECUTION_TURN.get();
     }
 
-    public static ThreadLocal<Object> serialExecutionTurnThreadLocal() {
-        return SERIAL_EXECUTION_TURN;
-    }
-
     public static ApplicationExecution currentApplicationExecution() {
         return APPLICATION_EXECUTION.get();
     }
 
-    public static ThreadLocal<ApplicationExecution> applicationExecutionThreadLocal() {
-        return APPLICATION_EXECUTION;
-    }
-
     public static Scope enterEntrySpotDispatch(Object context) {
-        Object previous = ENTRY_SPOT_DISPATCH.get();
-        if (context == null) {
-            ENTRY_SPOT_DISPATCH.remove();
-        } else {
-            ENTRY_SPOT_DISPATCH.set(context);
-        }
-        return () -> {
-            if (previous == null) {
-                ENTRY_SPOT_DISPATCH.remove();
-            } else {
-                ENTRY_SPOT_DISPATCH.set(previous);
-            }
-        };
+        return enter(ENTRY_SPOT_DISPATCH, context);
     }
 
     public static Scope enterSpotOutbound(Object outbound) {
@@ -196,18 +191,13 @@ public final class ZLinkSuspendInvocationContext {
 
     private static <T> Scope enter(ThreadLocal<T> local, T value) {
         T previous = local.get();
-        if (value == null) {
-            local.remove();
-        } else {
-            local.set(value);
-        }
-        return () -> {
-            if (previous == null) {
-                local.remove();
-            } else {
-                local.set(previous);
-            }
-        };
+        set(local, value);
+        return () -> set(local, previous);
+    }
+
+    private static <T> void set(ThreadLocal<T> local, T value) {
+        if (value == null) local.remove();
+        else local.set(value);
     }
 
     @FunctionalInterface
