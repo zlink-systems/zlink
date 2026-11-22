@@ -47,7 +47,7 @@ final class ZLinkPlacementDiscoveryTest {
                                         "mesh",
                                         type,
                                         Set.of(fixture.rid),
-                                        OptionalLong.of(System.currentTimeMillis() + 1000))
+                                        System.currentTimeMillis() + 1000)
                                 .toCompletableFuture()
                                 .join();
                 assertEquals(fixture.rid, selected.descriptor().rid());
