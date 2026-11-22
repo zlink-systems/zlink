@@ -173,9 +173,11 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
     location_runtime_t *_location_runtime = nullptr;
     std::vector<mesh_node_descriptor_key_t> _published_mesh_nodes;
     std::vector<mesh_node_descriptor_t> _published_mesh_descriptors;
-    // Meshes whose runtime option change the renew schedule has not published yet.
+    // Meshes with option changes that the Store has not confirmed.
     std::set<std::string> _changed_mesh_descriptors;
     std::mutex _descriptor_publish_mutex;
+    std::shared_ptr<task_completion_source_t<bool>> _descriptor_publication;
+    std::stop_source _descriptor_stop;
     std::atomic_bool _stop{false};
     std::atomic_bool _accept_application_dispatch{false};
     mutable std::mutex _dispatch_gate_mutex;
@@ -193,6 +195,21 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
                                  std::shared_ptr<detail::mesh_node_builder_state_t> registration,
                                  std::string owner);
     std::optional<location_owner_token_t> current_location_owner () const;
+    bool write_mesh_descriptor_state (framework_runtime_state_t state) noexcept;
+    void request_descriptor_publication ();
+    task_t<bool> publish_requested_descriptors (location_write_intent_t intent,
+                                                std::stop_token cancellation,
+                                                std::chrono::steady_clock::time_point deadline,
+                                                bool background);
+    task_t<bool> publish_mesh_descriptors (location_write_intent_t intent,
+                                           std::stop_token cancellation,
+                                           std::chrono::steady_clock::time_point deadline);
+    task_t<bool> write_mesh_descriptors (
+      const std::vector<mesh_node_descriptor_t> &descriptors,
+      const std::set<std::string> &changed,
+      location_write_intent_t intent,
+      std::stop_token cancellation,
+      std::chrono::steady_clock::time_point deadline);
     // Caller holds _descriptor_publish_mutex. Null once a concurrent publication
     // replaced the descriptor copied before a Store write.
     mesh_node_descriptor_t *unchanged_published_descriptor (const mesh_node_descriptor_t &copied);

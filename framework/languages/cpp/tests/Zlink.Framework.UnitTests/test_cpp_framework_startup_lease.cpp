@@ -94,6 +94,10 @@ class held_lease_repository_t final : public runtime::in_memory_location_reposit
     std::atomic_bool hold_renew_write{false};
     task_completion_source_t<void> release_renew_write;
     std::promise<void> renew_write_requested;
+    std::atomic_bool hold_discovery{false};
+    task_completion_source_t<void> release_discovery;
+    std::promise<void> discovery_requested;
+    std::promise<void> channel_weight_stored;
     std::atomic_int fail_client_writes{0};
     std::atomic_int fail_fanout_writes{0};
     std::atomic_int client_attempts{0};
@@ -163,11 +167,26 @@ class held_lease_repository_t final : public runtime::in_memory_location_reposit
             renew_write_requested.set_value ();
             co_await release_renew_write.task ();
         }
+        const auto channel = descriptor.channel_weights.find ("profile");
+        const bool changed_channel =
+          channel != descriptor.channel_weights.end () && channel->second == 77;
         auto result = co_await in_memory_location_repository_t::update_mesh_node (
           std::move (descriptor), intent);
+        if (changed_channel && result.status == location_write_status_t::stored)
+            std::call_once (_channel_stored, [&] { channel_weight_stored.set_value (); });
         if (first)
             std::call_once (_stored, [&] { descriptor_stored.set_value (); });
         co_return result;
+    }
+    task_t<location_page_t<mesh_node_descriptor_t>>
+    list_mesh_nodes_core (std::string mesh_name, location_page_request_t page) override
+    {
+        if (hold_discovery.exchange (false)) {
+            discovery_requested.set_value ();
+            co_await release_discovery.task ();
+        }
+        co_return co_await in_memory_location_repository_t::list_mesh_nodes_core (
+          std::move (mesh_name), std::move (page));
     }
     task_t<location_write_result_t>
     update_fanout_publisher (fanout_publisher_descriptor_t descriptor,
@@ -221,6 +240,7 @@ class held_lease_repository_t final : public runtime::in_memory_location_reposit
         release_renew.complete (result_t<void>::success ());
         release_descriptor.complete (result_t<void>::success ());
         release_renew_write.complete (result_t<void>::success ());
+        release_discovery.complete (result_t<void>::success ());
         release_fanout.complete (result_t<void>::success ());
         release_client.complete (result_t<void>::success ());
     }
@@ -233,6 +253,7 @@ class held_lease_repository_t final : public runtime::in_memory_location_reposit
     std::once_flag _fanout_stored;
     std::once_flag _fanout_rejected;
     std::once_flag _client_requested;
+    std::once_flag _channel_stored;
 };
 
 class runtime_probe_t final : public hosted_service_t
@@ -596,6 +617,73 @@ TEST (ZLinkFrameworkStartupLease, PlacementWeightChangeDuringInFlightPublication
     }
     EXPECT_EQ (66, stored_weight);
 }
+
+class ChannelWeightPublication : public ::testing::TestWithParam<bool>
+{
+};
+
+TEST_P (ChannelWeightPublication, PublishesBeforeNextDiscoveryOrRenewal)
+{
+    using namespace std::chrono_literals;
+    const bool change_during_publication = GetParam ();
+    startup_signal_t startup;
+    auto store = std::make_shared<held_lease_repository_t> (held_lease_repository_t::mode_t::held);
+    store->release_claim.complete (result_t<void>::success ());
+    store->release_descriptor.complete (result_t<void>::success ());
+    auto discovery = store->discovery_requested.get_future ();
+    auto first_write = store->renew_write_requested.get_future ();
+    auto new_weight = store->channel_weight_stored.get_future ();
+    auto app = app_t::create ();
+    configure (app, store, false);
+    auto &framework = app.add_zlink_framework ();
+    framework.configure_locations ().polling_interval = 10s;
+    framework.configure_locations ().owner_lease_renew_interval = 10s;
+    framework.configure_locations ().owner_lease_renew_timeout = 5s;
+    framework.add_route_mesh ("startup-lease")
+      .listen ("tcp://127.0.0.1:0")
+      .set_automatic_routing_id_prefix ("weight-test")
+      .channel ("profile")
+      .server ()
+      .add_send_handler<startup_handler_t, startup_message_t> ();
+    auto probe = std::make_unique<runtime_probe_t> ();
+    auto location = probe->location.get_future ();
+    app.add_hosted_service (std::move (probe));
+    running_host_t host (app, store, startup);
+    ASSERT_EQ (std::future_status::ready, location.wait_for (3s));
+    for (int attempt = 0; attempt < 300 && !app.is_ready (); ++attempt)
+        std::this_thread::sleep_for (10ms);
+    ASSERT_TRUE (app.is_ready ());
+    auto services = app.advanced ().services ().build_provider ();
+    auto &channel = services.get_required<route_mesh_runtime_options_t> ().channel ("profile");
+
+    store->hold_discovery.store (true);
+    auto *const runtime = location.get ();
+    const auto discovery_deadline = std::chrono::steady_clock::now () + 2s;
+    do {
+        runtime->wake_owner_lease_observers ();
+    } while (discovery.wait_for (10ms) != std::future_status::ready
+             && std::chrono::steady_clock::now () < discovery_deadline);
+    ASSERT_EQ (std::future_status::ready, discovery.wait_for (0ms));
+    if (change_during_publication) {
+        store->hold_renew_write.store (true);
+        channel.weight (0);
+        store->release_discovery.complete (result_t<void>::success ());
+        ASSERT_EQ (std::future_status::ready, first_write.wait_for (2s));
+    }
+    channel.weight (77);
+    if (change_during_publication)
+        store->release_renew_write.complete (result_t<void>::success ());
+    ASSERT_EQ (std::future_status::ready, new_weight.wait_for (2s));
+    const auto rows = store->list_mesh_nodes ("startup-lease").result ().value ();
+    ASSERT_EQ (1u, rows.items.size ());
+    EXPECT_EQ (77, rows.items.front ().channel_weights.at ("profile"));
+}
+
+INSTANTIATE_TEST_SUITE_P (
+  ZLinkFrameworkStartupLease, ChannelWeightPublication, ::testing::Bool (),
+  [] (const ::testing::TestParamInfo<bool> &info) {
+      return info.param ? "ChangeBeforeNextWait" : "DiscoveryInFlight";
+  });
 
 TEST (ZLinkFrameworkStartupLease, ConfirmedDescriptorConflictFailsStartup)
 {
