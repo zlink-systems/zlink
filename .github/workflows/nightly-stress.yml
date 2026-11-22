@@ -116,6 +116,9 @@ jobs:
         if: ${{ steps.vcpkg-cache.outputs.cache-hit != 'true' }}
         run: bash scripts/ci/framework-cpp-vcpkg.sh install
 
+      - name: Check vcpkg dependency versions against vcpkg.json
+        run: bash scripts/ci/framework-cpp-vcpkg.sh verify
+
       # gcc's UBSan null check flags thread_local accesses (allocation counters,
       # the current lane pointer) as null loads and stores while the tests pass;
       # -fno-sanitize=null drops that noise and ASan still faults real null
