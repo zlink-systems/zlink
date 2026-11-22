@@ -4874,7 +4874,10 @@ test('source Preserve keeps membership rejection failed and preserves original r
     await harness.sourceFifoIdle();
     assert.equal(harness.location.preserves, 1);
     assert.equal(harness.membershipFailures.length, 1);
-    assert.match(String(harness.membershipFailures[0]), /committed Close/);
+    const [membershipFailure] = harness.membershipFailures;
+    assert.ok(membershipFailure instanceof ZLinkFrameworkException);
+    assert.equal(membershipFailure.kind, ZLinkFrameworkErrorKind.NotFound);
+    assert.equal(membershipFailure.message, 'SPOT is closing.');
     assert.equal(harness.sourceActivation!.hasDepartedActor('actor-host-profile'), true);
     assert.equal(harness.freshIngress(), 'stale');
     assert.equal(harness.sourceState.isMoving, false);

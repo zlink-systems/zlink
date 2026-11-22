@@ -297,7 +297,7 @@ for (const kind of ['deadline', 'rejected', 'shutdown']) {
         : new ServiceStatefulRuntime(
             {
               setServiceIngress() {},
-              async sendService(_target, parts) {
+              async sendApplication(_target, parts) {
                 await ingress({
                   sourceRoutingId: 'source',
                   sourceNodeGeneration: 1n,

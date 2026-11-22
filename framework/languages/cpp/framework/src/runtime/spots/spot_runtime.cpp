@@ -2298,10 +2298,10 @@ framework_exception_t spot_context_state_t::admission_error () const
         if ((node && (node->host_draining () || node->stopping.load (std::memory_order_acquire)))
             || closed == spot_close_reason_t::host_shutdown)
             return detail::make_framework_origin_exception (framework_error_kind_t::shutting_down,
-                                                            "Spot host is shutting down");
+                                                            "SPOT is closed.");
         if (closed == spot_close_reason_t::explicit_close
             || closed == spot_close_reason_t::idle_evicted)
-            return target_not_found ("Spot incarnation was closed");
+            return target_not_found ("SPOT is closing.");
         return detail::make_framework_origin_exception (framework_error_kind_t::rejected,
                                                         "Spot admission is sealed");
     });
@@ -4958,11 +4958,11 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                       complete ([state, completion, admission_terminal, retained_message] {
                           settle_handler_admission_once (admission_terminal);
                           completion->complete (
-                            retained_message ? result_t<zlink::message_t>::failure (
-                                                 framework_error_kind_t::internal_failure,
-                                                 "Spot incarnation was closed")
-                                             : detail::result_access_t::failure<zlink::message_t> (
-                                                 state->admission_error ()));
+                            retained_message
+                              ? result_t<zlink::message_t>::failure (
+                                  framework_error_kind_t::internal_failure, "SPOT is closed.")
+                              : detail::result_access_t::failure<zlink::message_t> (
+                                  state->admission_error ()));
                       });
                       return;
                   }
@@ -5158,7 +5158,7 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                   detail::result_access_t::failure<zlink::message_t> (detail::with_failure_code (
                     detail::make_framework_origin_exception (
                       framework_error_kind_t::unavailable,
-                      "Spot incarnation released its authority"),
+                      "The Instance Spot incarnation released its authority."),
                     static_cast<std::uint32_t> (
                       runtime::protocol::framework_error_code::spotMoving))));
             /* Dispatch rejection is framework-generated (zlink.origin
