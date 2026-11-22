@@ -29,7 +29,7 @@ inbound_message_context_t make_inbound_context (const std::string &channel_name,
     inbound.message.channel_name = channel_name;
     inbound.message.packet_name = header.message_name;
     inbound.message.content_type = header.content_type;
-    inbound.message.metadata = message_metadata_t (std::move (header.metadata));
+    inbound.message.metadata = message_metadata_t (std::move (header.metadata).take_values ());
     if (!header.correlation_id.empty ()) {
         inbound.message.correlation_id = header.correlation_id;
     }
