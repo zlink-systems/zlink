@@ -2179,19 +2179,33 @@ internal sealed partial class ZLinkFrameworkRuntime
                                 innerException: error
                             );
                         }
-                        var canonicalTargetFenceValid =
-                            canonical is null
-                            || await HasExactCanonicalTargetSpotAuthorityAsync(
-                                    target.TargetRid,
-                                    canonical.Request,
-                                    authorityStore,
-                                    ct
-                                )
-                                .ConfigureAwait(false);
                         var targetFenceValid =
-                            canonical is not null ? canonicalTargetFenceValid
-                            : target.EntrySpot is not null
+                            target.EntrySpot is not null
                                 ? request.TargetSpotAuthorityOwnerGeneration == targetNodeGeneration
+                                    && (
+                                        canonical is null
+                                        || (
+                                            canonical.Request.Entry
+                                            && canonical.Request.TargetSpotId == target.TargetRid
+                                            && canonical.Request.TargetNodeRid == target.NodeRid
+                                            && canonical.Request.TargetNodeGeneration
+                                                == targetNodeGeneration
+                                            && LocationLifecycle?.OwnerToken.LeaseGeneration
+                                                is > 0
+                                                    and var ownerLeaseGeneration
+                                            && (ulong)ownerLeaseGeneration
+                                                == canonical.Request.TargetOwnerLeaseGeneration
+                                        )
+                                    )
+                            : canonical is not null
+                                ? !canonical.Request.Entry
+                                    && await HasExactCanonicalUserSpotAuthorityAsync(
+                                            target.TargetRid,
+                                            canonical.Request,
+                                            authorityStore,
+                                            ct
+                                        )
+                                        .ConfigureAwait(false)
                             : await HasExactUserSpotAuthorityAsync(
                                     target.TargetRid,
                                     request.TargetSpotGeneration,
@@ -2205,7 +2219,6 @@ internal sealed partial class ZLinkFrameworkRuntime
                             || request.ActorAuthorityOwnerGeneration == 0
                             || request.PredictedPayloadBytes <= 0
                             || request.TargetSpotGeneration != targetSpotGeneration
-                            || !canonicalTargetFenceValid
                             || !targetFenceValid
                             || targetNodeGeneration == 0
                         )
@@ -2571,7 +2584,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             && found.Snapshot.AuthorityOwnerGeneration == authorityOwnerGeneration;
     }
 
-    private static async ValueTask<bool> HasExactCanonicalTargetSpotAuthorityAsync(
+    private static async ValueTask<bool> HasExactCanonicalUserSpotAuthorityAsync(
         string spotId,
         ActorJoinRequest request,
         IZLinkLocationRepository authorityStore,
