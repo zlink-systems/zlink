@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.internal.service;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.runtime.internal.messaging.ZLinkEncodedPayloadAccess;
+import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.HeaderEncoding;
 
 import java.nio.ByteBuffer;
 import java.util.AbstractList;
@@ -32,7 +33,15 @@ public final class ZLinkFrameworkMultipartView extends AbstractList<Message>
     public Message get(int index) {
         Object value = partValue(index);
         Message materialized;
-        if (value instanceof ByteBuffer bytes) {
+        if (value instanceof HeaderEncoding header) {
+            materialized = Message.allocate(header.size());
+            try {
+                header.writeTo(materialized.mutableDataBuffer());
+            } catch (RuntimeException | Error failure) {
+                materialized.close();
+                throw failure;
+            }
+        } else if (value instanceof ByteBuffer bytes) {
             materialized = Message.from(bytes);
         } else if (value instanceof byte[] bytes) {
             materialized = Message.from(bytes);
@@ -43,12 +52,7 @@ public final class ZLinkFrameworkMultipartView extends AbstractList<Message>
         return materialized;
     }
 
-    /**
-     * Outbound envelope parts: the header bytes are retained directly until the transport writes or
-     * materializes them. They may be shared with other envelopes, so they are only ever read and
-     * are exposed through read-only views. Closing the view releases {@code body}.
-     */
-    public static ZLinkFrameworkMultipartView encoded(byte[] header, Message body) {
+    public static ZLinkFrameworkMultipartView encoded(HeaderEncoding header, Message body) {
         return new ZLinkFrameworkMultipartView(
                 new Object[] {
                     Objects.requireNonNull(header, "header"), Objects.requireNonNull(body, "body")
@@ -58,7 +62,7 @@ public final class ZLinkFrameworkMultipartView extends AbstractList<Message>
 
     /** Transfers the single retained payload owner into its outbound envelope. */
     public static ZLinkFrameworkMultipartView encoded(
-            byte[] header, ZLinkFrameworkMultipartView body) {
+            HeaderEncoding header, ZLinkFrameworkMultipartView body) {
         var envelope =
                 new ZLinkFrameworkMultipartView(
                         new Object[] {Objects.requireNonNull(header, "header"), body.partValue(0)},
@@ -103,6 +107,7 @@ public final class ZLinkFrameworkMultipartView extends AbstractList<Message>
      */
     public static ByteBuffer buffer(List<Message> parts, int index) {
         Object value = partValue(parts, index);
+        if (value instanceof HeaderEncoding header) return header.buffer().asReadOnlyBuffer();
         if (value instanceof ByteBuffer bytes) return bytes.asReadOnlyBuffer();
         if (value instanceof byte[] bytes) return ByteBuffer.wrap(bytes).asReadOnlyBuffer();
         return ((Message) value).dataBuffer();
@@ -112,6 +117,7 @@ public final class ZLinkFrameworkMultipartView extends AbstractList<Message>
     public static int partSize(List<Message> parts, int index) {
         Object value = partValue(parts, index);
         if (value == null) return 0;
+        if (value instanceof HeaderEncoding header) return header.size();
         if (value instanceof byte[] bytes) {
             return bytes.length;
         }
@@ -121,7 +127,9 @@ public final class ZLinkFrameworkMultipartView extends AbstractList<Message>
     /** Writes one part once into {@code target}, without materializing it. */
     static void writePart(List<Message> parts, int index, ByteBuffer target) {
         Object value = partValue(parts, index);
-        if (value instanceof byte[] bytes) {
+        if (value instanceof HeaderEncoding header) {
+            header.writeTo(target);
+        } else if (value instanceof byte[] bytes) {
             target.put(bytes);
         } else if (value instanceof ByteBuffer bytes) {
             target.put(bytes.duplicate());
