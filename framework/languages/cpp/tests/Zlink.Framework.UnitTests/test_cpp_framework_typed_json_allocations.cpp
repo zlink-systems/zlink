@@ -177,7 +177,7 @@ int main (int argc, char **argv)
     const auto parse_reference = [&] () -> std::optional<allocation_dto_t> {
         allocation_dto_t value;
         typed_sax handler (value, nullptr);
-        if (!read_json (wire, handler) || !handler.complete ())
+        if (!read_document (wire, handler) || !handler.complete ())
             return std::nullopt;
         return value;
     };

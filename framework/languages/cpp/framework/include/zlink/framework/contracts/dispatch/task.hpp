@@ -76,6 +76,11 @@ void dispatch_completion (std::function<void ()> work,
                           bool inline_allowed = false,
                           const void *owner = nullptr,
                           completion_dispatcher_borrow_t dispatcher = {});
+class task_wait_registration_t;
+void dispatch_completion (const std::shared_ptr<task_wait_registration_t> &waiter,
+                          std::shared_ptr<void> lifetime,
+                          bool inline_allowed,
+                          completion_dispatcher_borrow_t dispatcher);
 inline bool dispatch_shutdown_fallback (std::function<void ()> &work,
                                         const std::stop_token &wait_owner,
                                         bool inline_allowed,
@@ -467,16 +472,15 @@ class task_wait_registration_t
         if (!delivery)
             return true;
         auto &[scheduler, inline_allowed] = *delivery;
-        std::function<void ()> resume = [self, lifetime = std::move (lifetime)] {
-            (void) lifetime; // Retain the terminal result until delivery finishes.
-            self->resume (false);
-        };
+        std::function<void ()> resume;
         try {
-            if (scheduler)
+            if (scheduler) {
+                resume = [self, lifetime = std::move (lifetime)] { self->resume (false); };
                 scheduler (std::move (resume));
-            else
-                dispatch_completion (std::move (resume), inline_allowed, nullptr,
+            } else {
+                dispatch_completion (self, std::move (lifetime), inline_allowed,
                                      _completion_dispatcher);
+            }
         }
         catch (const framework_exception_t &error) {
             if (error.kind () != framework_error_kind_t::shutting_down)
@@ -554,6 +558,10 @@ class task_wait_registration_t
 
     std::shared_ptr<task_wait_registration_t> _next;
 
+    friend void dispatch_completion (const std::shared_ptr<task_wait_registration_t> &,
+                                     std::shared_ptr<void>,
+                                     bool,
+                                     completion_dispatcher_borrow_t);
     template <typename> friend class task_shared_state_t;
 };
 
