@@ -17,6 +17,9 @@ const {
   DefaultZLinkActorContext
 } = require('../../packages/framework/dist/runtime/actors/actor-context');
 const {
+  runZLinkActorExecution
+} = require('../../packages/framework/dist/runtime/actors/actor-execution-context');
+const {
   runActorHandlerWithDeferredJoins
 } = require('../../packages/framework/dist/runtime/actors/actor-join-deferred-scope');
 const {
@@ -43,10 +46,15 @@ for (const [scenario, name] of [
     'outside request',
     'a Join waits for captured request delivery while a replayed send is still running'
   ],
-  ['inside request', 'a Join deferred by the captured request fails immediately with Unavailable']
+  ['inside request', 'a Join deferred by the captured request fails immediately with Unavailable'],
+  [
+    'send before request',
+    'a Join deferred by a replayed send fails immediately while the same Actor has a captured request queued'
+  ]
 ]) {
   test(name, { timeout: 10_000 }, async () => {
     const hasRequest = scenario !== 'send';
+    const sendBeforeRequest = scenario === 'send before request';
     const actorId = 'returning-actor';
     const key = encodeAuthorityKey('actor', actorId);
     const fence = {
@@ -209,6 +217,9 @@ for (const [scenario, name] of [
         objectGeneration: 2n,
         meshName: 'play'
       };
+      const captureSend = () =>
+        replay.capture('remote', actorId, parts, false, undefined, actorRef);
+      if (sendBeforeRequest) await captureSend();
       if (hasRequest) {
         const response = replay.capture(
           'remote',
@@ -232,19 +243,14 @@ for (const [scenario, name] of [
         );
         void response.catch(() => undefined);
       }
-      await replay.capture('remote', actorId, parts, false, undefined, {
-        nodeRid: 'current',
-        actorId,
-        objectGeneration: 2n,
-        meshName: 'play'
-      });
+      if (!sendBeforeRequest) await captureSend();
       packets = replay.snapshot(actorId);
     } finally {
       replay.cancel(actorId);
       [...parts, ...requestParts].forEach((part) => part.close());
     }
     assert.equal(packets.length, hasRequest ? 2 : 1);
-    if (hasRequest) assert.ok(packets[0].source);
+    if (hasRequest) assert.ok(packets[sendBeforeRequest ? 1 : 0].source);
 
     const requestStarted = deferred();
     const finishRequest = deferred();
@@ -259,6 +265,13 @@ for (const [scenario, name] of [
       runActorHandlerWithDeferredJoins(() => {
         context.joinSpot('room').timeout(1_500).defer();
       });
+
+    const joinInActorTurn = async () => {
+      const started = performance.now();
+      await startJoin();
+      elapsed = performance.now() - started;
+      joinFinished();
+    };
 
     let resumeReplay;
     const replayHeld = new Promise((done) => {
@@ -284,29 +297,23 @@ for (const [scenario, name] of [
                 record.onWithdrawable(() => false);
                 await record.preparation.prepare(new AbortController().signal);
                 await replayHeld;
-                await record.drain(async (frames) => {
-                  if (frames[1].data().toString() === 'Request') {
-                    events.push('request');
-                    requestStarted.resolve();
-                    if (scenario === 'inside request') {
-                      const started = performance.now();
-                      await startJoin();
-                      elapsed = performance.now() - started;
-                      joinFinished();
+                await record.drain((frames) =>
+                  runZLinkActorExecution(actorId, undefined, async () => {
+                    if (frames[1].data().toString() === 'Request') {
+                      events.push('request');
+                      requestStarted.resolve();
+                      if (scenario === 'inside request') await joinInActorTurn();
+                      await finishRequest.promise;
+                      return { accepted: true };
                     }
-                    await finishRequest.promise;
-                    return { accepted: true };
-                  }
-                  assert.equal(frames[1].data().toString(), 'RoomAssignment');
-                  events.push('handler');
-                  sendStarted.resolve();
-                  if (scenario === 'send') {
-                    await startJoin();
-                    joinFinished();
-                  }
-                  await replayTerminalHeld;
-                  events.push('replay-terminal');
-                });
+                    assert.equal(frames[1].data().toString(), 'RoomAssignment');
+                    events.push('handler');
+                    sendStarted.resolve();
+                    if (scenario === 'send' || sendBeforeRequest) await joinInActorTurn();
+                    await replayTerminalHeld;
+                    events.push('replay-terminal');
+                  })
+                );
               }
             })()
           };
@@ -420,14 +427,13 @@ for (const [scenario, name] of [
       },
       owner: {
         async publish() {},
-        normalize(_staging, authority) {
+        normalize() {
           replayCompletion = transfer.admitRelocationPrefix(
             actor,
             2n,
             packets,
             hidden.replayStart,
-            hidden.onReplayResult,
-            authority.relocation.relocationId
+            hidden.onReplayResult
           );
           return replayCompletion;
         },
@@ -467,7 +473,7 @@ for (const [scenario, name] of [
         assert.equal(completions[0]?.status, 'accepted', errors.filter(Boolean).join('\n'));
         assert.ok(events.indexOf('ack') < events.indexOf('release'));
         assert.ok(events.indexOf('release') < events.indexOf('capture'));
-      } else if (scenario === 'inside request') {
+      } else if (scenario === 'inside request' || sendBeforeRequest) {
         await Promise.race([joined, finalization]);
         assert.deepEqual(
           completions.map(({ status, kind }) => ({ status, kind })),
@@ -477,6 +483,12 @@ for (const [scenario, name] of [
         assert.ok(elapsed < 500, `Join took ${elapsed}ms with a 1500ms deadline`);
         assert.equal(current.relocation.phase, 'activated');
         assert.ok(!events.includes('capture'));
+        if (sendBeforeRequest) {
+          assert.ok(!events.includes('request'));
+          assert.equal(current.relocation.completion.completedResults, 0n);
+          finishReplay();
+          await Promise.race([requestStarted.promise, finalization]);
+        }
         finishRequest.resolve();
         acknowledgeReply.resolve();
         await Promise.race([sendStarted.promise, finalization]);
@@ -504,7 +516,7 @@ for (const [scenario, name] of [
       if (scenario === 'inside request') finishReplay();
       await stage.terminal;
       assert.equal(runtime.targetStages.has(stagingId), false);
-      if (scenario !== 'inside request') {
+      if (scenario !== 'inside request' && !sendBeforeRequest) {
         assert.ok(!events.includes('replay-terminal'));
       }
     } finally {
@@ -518,6 +530,11 @@ for (const [scenario, name] of [
       });
       await replayCompletion;
     }
-    assert.equal(events.at(-1) === 'replay-terminal' || scenario === 'inside request', true);
+    if (sendBeforeRequest) {
+      assert.ok(events.indexOf('replay-terminal') < events.indexOf('request'));
+      assert.ok(events.indexOf('ack') < events.indexOf('release'));
+    } else if (scenario !== 'inside request') {
+      assert.equal(events.at(-1), 'replay-terminal');
+    }
   });
 }

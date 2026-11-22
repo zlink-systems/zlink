@@ -62,8 +62,8 @@ import {
   decodeRelocatingActorAuthorityIdentity,
   rewriteActorAuthorityRoute
 } from '../actors/actor-authority-publication';
+import { currentZLinkActorExecution } from '../actors/actor-execution-context';
 import {
-  isRunningCapturedActorRequest,
   type ZLinkActorHandoffPacket,
   type ZLinkActorHandoffResult
 } from '../actors/actor-handoff';
@@ -2163,7 +2163,14 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     const key = encodeAuthorityKey('actor', state.actorId);
     const current = await requireAuthority(this.requireLocationStore(), key, signal);
     const authority = retainSourceForActorJoin
-      ? await this.waitForPreviousTarget(key, current, aggregateIdOverride, signal, deadlineAtMs)
+      ? await this.waitForPreviousTarget(
+          state.actorId,
+          key,
+          current,
+          aggregateIdOverride,
+          signal,
+          deadlineAtMs
+        )
       : current;
     const actorPolicy = this.actorRegistration(
       state.meshName ?? meshName,
@@ -2567,6 +2574,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
   }
 
   private async waitForPreviousTarget(
+    actorId: string,
     key: ZLinkAuthorityKey,
     authority: ZLinkAuthoritySnapshot,
     relocationId: string | undefined,
@@ -2578,10 +2586,14 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       return authority;
     }
 
-    if (isRunningCapturedActorRequest(previous.relocationId)) {
+    if (
+      currentZLinkActorExecution()?.actorId === actorId &&
+      (previous.completion?.acceptedRequests ?? 0n) > 0n &&
+      !isRelocationCompletionReady(authority)
+    ) {
       throw new ZLinkFrameworkException(
         ZLinkFrameworkErrorKind.Unavailable,
-        'Actor Join cannot wait for delivery of its own captured request.'
+        'Actor Join cannot wait for captured request delivery while holding the same Actor turn.'
       );
     }
 
@@ -5813,7 +5825,7 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
     }
   }
 
-  normalize(hidden: LocalHidden, authority: ZLinkAuthoritySnapshot): Promise<void> {
+  normalize(hidden: LocalHidden): Promise<void> {
     if (hidden.actor === undefined) return Promise.resolve();
     if (hidden.replayStart === undefined || hidden.onReplayResult === undefined) {
       throw new Error('Relocated Actor backlog has no target activation owner.');
@@ -5823,8 +5835,7 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
       hidden.participant.objectGeneration,
       hidden.replayPackets,
       hidden.replayStart,
-      hidden.onReplayResult,
-      authority.relocation?.relocationId
+      hidden.onReplayResult
     );
     hidden.replayPackets.length = 0;
     return terminal;

@@ -236,8 +236,7 @@ export class ZLinkActorTransferRuntime {
     objectGeneration: bigint,
     packets: readonly ZLinkActorHandoffPacket[],
     start: Promise<void>,
-    onResult: (packet: ZLinkActorHandoffPacket, result: ZLinkActorHandoffResult) => Promise<void>,
-    relocationId?: string
+    onResult: (packet: ZLinkActorHandoffPacket, result: ZLinkActorHandoffResult) => Promise<void>
   ): Promise<void> {
     const manager = this.options.spotManager();
     if (manager === undefined) throw new Error('Relocated Actor has no local FIFO owner.');
@@ -252,8 +251,7 @@ export class ZLinkActorTransferRuntime {
         const delivery = onResult(packet, result);
         void this.observeHandoffReplay(delivery);
         return delivery;
-      },
-      relocationId
+      }
     );
     return admitted.terminal;
   }

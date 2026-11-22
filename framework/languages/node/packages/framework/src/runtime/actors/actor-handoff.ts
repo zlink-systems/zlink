@@ -1,6 +1,5 @@
 import { RequestRuntime } from '../foundation/request-runtime';
 import type { PendingOperation } from '../foundation/operation-registry';
-import { FrameworkContextField } from '../framework-context';
 import { inspectRuntime } from '../internal-observation';
 import { type ActorRef, type RoutingId, ZLinkFrameworkException } from '../../contracts';
 
@@ -154,15 +153,7 @@ export type ZLinkActorHandoffPrefixQueue = (
   records: readonly ZLinkActorHandoffPrefixRecord[]
 ) => ZLinkActorHandoffPrefixAdmission;
 
-const capturedActorRequest = new FrameworkContextField<{ relocationId: string; active: boolean }>();
-
-export function isRunningCapturedActorRequest(relocationId: string): boolean {
-  const request = capturedActorRequest.getStore();
-  return request?.active === true && request.relocationId === relocationId;
-}
-
 interface PendingPacket {
-  readonly capturedRequestRelocationId?: string;
   withdraw?: () => boolean;
   readonly origin: ApplicationJobOrigin;
   readonly packet: ZLinkActorHandoffPacket;
@@ -532,8 +523,7 @@ export class ZLinkActorHandoffCoordinator {
     onResult: (
       packet: ZLinkActorHandoffPacket,
       result: ZLinkActorHandoffResult
-    ) => Promise<void> | void,
-    relocationId?: string
+    ) => Promise<void> | void
   ): ZLinkActorHandoffPrefixAdmission {
     if (!this.isProvisional(actorId)) this.beginProvisional(actorId, objectGeneration);
     const handoff = this.requireActive(actorId);
@@ -564,7 +554,6 @@ export class ZLinkActorHandoffCoordinator {
       handoff.pending.push({
         packet,
         origin: 'remote',
-        capturedRequestRelocationId: packet.returnResponse ? relocationId : undefined,
         resolve: (response) => {
           if (response !== RELOCATED_REQUEST_OWNED_BY_REQUESTER) {
             reportResult(packet, { index: packet.index, ok: true, response });
@@ -846,22 +835,8 @@ export class ZLinkActorHandoffCoordinator {
     const results = await replayActorHandoffBacklog(
       [pending.packet],
       (parts, returnResponse, remoteBoundSessionTarget, fallbackActorRef) => {
-        const dispatch = () =>
+        const operation = () =>
           replay(parts, returnResponse, remoteBoundSessionTarget, fallbackActorRef);
-        const relocationId = pending.capturedRequestRelocationId;
-        const operation =
-          relocationId === undefined
-            ? dispatch
-            : () => {
-                const context = { relocationId, active: true };
-                return capturedActorRequest.run(context, async () => {
-                  try {
-                    return await dispatch();
-                  } finally {
-                    context.active = false;
-                  }
-                });
-              };
         return admission === undefined ? operation() : admission(operation);
       }
     );
