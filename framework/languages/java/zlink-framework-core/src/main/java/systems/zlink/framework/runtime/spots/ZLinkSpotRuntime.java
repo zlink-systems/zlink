@@ -68,6 +68,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkPendingObjectCrea
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityBundle;
 import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementCapacityExhausted;
 import systems.zlink.framework.runtime.internal.locations.ZLinkRelocationFound;
+import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 import systems.zlink.framework.runtime.internal.messaging.ZLinkEncodedPayloadAccess;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkMeshMessageMetrics;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
@@ -108,6 +109,7 @@ import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -129,9 +131,11 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.BiFunction;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -189,6 +193,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     final Map<ClosingFence, RetainedClose> closingCoordinators = new ConcurrentHashMap<>();
     final Map<String, ZLinkUserSpotOperationHandler> userSpotOperationHandlers =
             new ConcurrentHashMap<>();
+    private final Clock instanceSpotActivationClock;
     private final Map<String, Duration> instanceSpotIdleTimeouts = new HashMap<>();
     private final List<ZLinkInternalMeshNode> routeMeshNodes;
     final Map<String, ZLinkInternalMeshNode> routeMeshNodesByName;
@@ -220,13 +225,16 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             Executors.newVirtualThreadPerTaskExecutor();
 
     private static ScheduledExecutorService createTimerExecutor() {
-        return Executors.newScheduledThreadPool(
-                1,
-                task -> {
-                    Thread thread = new Thread(task, "zlink-java-spot-timer");
-                    thread.setDaemon(true);
-                    return thread;
-                });
+        var executor =
+                new ScheduledThreadPoolExecutor(
+                        1,
+                        task -> {
+                            Thread thread = new Thread(task, "zlink-java-spot-timer");
+                            thread.setDaemon(true);
+                            return thread;
+                        });
+        executor.setRemoveOnCancelPolicy(true);
+        return executor;
     }
 
     public ZLinkSpotRuntime(
@@ -358,7 +366,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 timerExecutor,
                 multicastExecutor,
                 handlerExecutor,
-                timerStateLaneFactory);
+                timerStateLaneFactory,
+                null);
     }
 
     ZLinkSpotRuntime(
@@ -374,7 +383,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             ScheduledExecutorService timerExecutor,
             ThreadPoolExecutor multicastExecutor,
             Executor handlerExecutor,
-            Supplier<ZLinkStateLane> timerStateLaneFactory) {
+            Supplier<ZLinkStateLane> timerStateLaneFactory,
+            Clock instanceSpotActivationClock) {
         this(
                 backendFactory,
                 adapterOptions,
@@ -394,7 +404,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 timerExecutor,
                 multicastExecutor,
                 handlerExecutor,
-                timerStateLaneFactory);
+                timerStateLaneFactory,
+                instanceSpotActivationClock);
     }
 
     public ZLinkSpotRuntime(
@@ -536,6 +547,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 null,
                 null,
                 null,
+                null,
                 null);
     }
 
@@ -558,11 +570,14 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             ScheduledExecutorService timerExecutor,
             ThreadPoolExecutor multicastExecutor,
             Executor handlerExecutor,
-            Supplier<ZLinkStateLane> timerStateLaneFactory) {
+            Supplier<ZLinkStateLane> timerStateLaneFactory,
+            Clock instanceSpotActivationClock) {
         if (registration.spotNodes().isEmpty() && meshNodes.isEmpty()) {
             throw new ZLinkConfigurationException("at least one mesh node is required");
         }
         this.frameworkRegistration = registration;
+        this.instanceSpotActivationClock =
+                Objects.requireNonNullElseGet(instanceSpotActivationClock, Clock::systemUTC);
         this.routeMeshNodes = List.copyOf(meshNodes.values());
         this.routeMeshNodesByName = Map.copyOf(meshNodes);
         Map<String, ZLinkActivationAdmission> admissions = new HashMap<>();
@@ -2573,7 +2588,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         return new ZLinkInstanceSpotCallRuntime() {
             @Override
             public long activationDeadline(String meshName) {
-                long started = System.currentTimeMillis();
+                long started = instanceSpotActivationClock.millis();
                 String sourceMesh = resolveObjectMesh(meshName);
                 Duration activationTimeout =
                         frameworkRegistration.meshNodes().stream()
@@ -3191,18 +3206,14 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     CompletionStage<ZLinkAuthorityReadResult> readInstanceSpotActivationTarget(
             ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope envelope) {
         var store = requireUserSpotLocationStore();
+        ZLinkStoreCancellation cancellation =
+                () -> instanceSpotActivationExpired(envelope.deadlineUnixMs());
         String key =
                 systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec.spot(
                         envelope.targetSpotId());
         // A provider may throw cancellation before returning its stage.
         return CompletableFuture.completedFuture(key)
-                .thenCompose(
-                        value ->
-                                store.read(
-                                        value,
-                                        () ->
-                                                System.currentTimeMillis()
-                                                        >= envelope.deadlineUnixMs()))
+                .thenCompose(value -> store.read(value, cancellation))
                 .thenCompose(
                         read -> {
                             if (!(read instanceof ZLinkAuthoritySnapshot snapshot)
@@ -3252,11 +3263,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                             if (reference == null) return CompletableFuture.completedFuture(read);
                             return frameworkRegistration
                                     .relocationStore()
-                                    .get(
-                                            reference,
-                                            () ->
-                                                    System.currentTimeMillis()
-                                                            >= envelope.deadlineUnixMs())
+                                    .get(reference, cancellation)
                                     .thenApply(
                                             root -> {
                                                 if (!(root instanceof ZLinkRelocationFound found))
@@ -3340,6 +3347,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                             ZLinkFrameworkErrorKind.UNAVAILABLE,
                             "Cold activation target descriptor changed"));
         }
+        ZLinkStoreCancellation cancellation =
+                () -> instanceSpotActivationExpired(envelope.deadlineUnixMs());
         String key =
                 systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec.spot(
                         envelope.targetSpotId());
@@ -3394,11 +3403,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                         envelope.stableType(),
                                                         ZLinkPlacementObjectKind.INSTANCE_SPOT));
                                 return store.releaseEndedReservation(
-                                                request,
-                                                current.storeVersion(),
-                                                () ->
-                                                        System.currentTimeMillis()
-                                                                >= envelope.deadlineUnixMs())
+                                                request, current.storeVersion(), cancellation)
                                         .thenCompose(
                                                 released -> {
                                                     if (released)
@@ -3454,10 +3459,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                         .put(
                                                                 root,
                                                                 ACTIVATION_RECOVERY_RETENTION,
-                                                                () ->
-                                                                        System.currentTimeMillis()
-                                                                                >= envelope
-                                                                                        .deadlineUnixMs())
+                                                                cancellation)
                                                         .thenCompose(
                                                                 stored -> {
                                                                     var crc =
@@ -3565,11 +3567,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                                                     .INSTANCE_SPOT));
                                                                     return store.reserve(
                                                                                     request,
-                                                                                    () ->
-                                                                                            System
-                                                                                                            .currentTimeMillis()
-                                                                                                    >= envelope
-                                                                                                            .deadlineUnixMs())
+                                                                                    cancellation)
                                                                             .thenCompose(
                                                                                     result -> {
                                                                                         if (result
@@ -3849,33 +3847,48 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             java.util.function.BiFunction<
                             ZLinkBackendSpot, CompletableFuture<Void>, CompletionStage<Void>>
                     restoreFirst) {
-        long remaining = deadlineUnixMs - System.currentTimeMillis();
-        if (remaining <= 0)
+        long remaining = deadlineUnixMs - instanceSpotActivationClock.millis();
+        if (remaining <= 0) {
             return CompletableFuture.failedFuture(instanceSpotActivationDeadlineFailure(null));
-        return activateInstanceSpotTargetCore(
-                        meshName, factory, route, backendSpot, deadlineUnixMs, restoreFirst)
-                .toCompletableFuture()
-                .orTimeout(remaining, TimeUnit.MILLISECONDS)
-                .exceptionallyCompose(
-                        failure ->
-                                CompletableFuture.failedFuture(
-                                        unwrapCompletion(failure)
-                                                        instanceof
-                                                        java.util.concurrent.TimeoutException
-                                                ? instanceSpotActivationDeadlineFailure(
-                                                        unwrapCompletion(failure))
-                                                : instanceSpotActivationFailure(
-                                                        failure, deadlineUnixMs)));
+        }
+        var activation =
+                activateInstanceSpotTargetCore(
+                                meshName, factory, route, backendSpot, deadlineUnixMs, restoreFirst)
+                        .toCompletableFuture();
+        if (!activation.isDone()) {
+            // Keep activation continuations off the shared Spot timer thread.
+            var timeout =
+                    timerExecutor.schedule(
+                            () ->
+                                    infrastructureExecutor.execute(
+                                            () ->
+                                                    activation.completeExceptionally(
+                                                            new TimeoutException())),
+                            remaining,
+                            TimeUnit.MILLISECONDS);
+            activation.whenComplete((ignored, failure) -> timeout.cancel(false));
+        }
+        return activation.exceptionallyCompose(
+                failure ->
+                        CompletableFuture.failedFuture(
+                                unwrapCompletion(failure) instanceof TimeoutException
+                                        ? instanceSpotActivationDeadlineFailure(
+                                                unwrapCompletion(failure))
+                                        : instanceSpotActivationFailure(failure, deadlineUnixMs)));
     }
 
     private Throwable instanceSpotActivationFailure(Throwable failure, long deadlineUnixMs) {
         Throwable cause = unwrapCompletion(failure);
         if (cause instanceof java.util.concurrent.CancellationException
                 && !closing
-                && System.currentTimeMillis() >= deadlineUnixMs) {
+                && instanceSpotActivationExpired(deadlineUnixMs)) {
             return instanceSpotActivationDeadlineFailure(cause);
         }
         return cause;
+    }
+
+    private boolean instanceSpotActivationExpired(long deadlineUnixMs) {
+        return instanceSpotActivationClock.millis() >= deadlineUnixMs;
     }
 
     private static ZLinkFrameworkException instanceSpotActivationDeadlineFailure(Throwable cause) {
@@ -3900,6 +3913,13 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                             ZLinkBackendSpot, CompletableFuture<Void>, CompletionStage<Void>>
                     restoreFirst) {
         var store = requireUserSpotLocationStore();
+        ZLinkStoreCancellation commitCancellation =
+                () -> {
+                    if (instanceSpotActivationExpired(deadlineUnixMs)) {
+                        throw instanceSpotActivationDeadlineFailure(null);
+                    }
+                    return false;
+                };
         String key =
                 systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec.spot(
                         route.targetSpotId());
@@ -4049,7 +4069,9 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                                 0)));
                                                 ensureOwnerAdmissionOpen();
                                                 return store.commit(
-                                                                reservation, ready, deadlineUnixMs)
+                                                                reservation,
+                                                                ready,
+                                                                commitCancellation)
                                                         .thenCompose(
                                                                 result -> {
                                                                     if (result
