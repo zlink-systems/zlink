@@ -681,7 +681,10 @@ export class RawServiceMeshRuntime {
     targetNodeRoutingId: string,
     payload: ServiceApplicationPayloadInput
   ): boolean | Promise<boolean> {
-    return this.send(targetNodeRoutingId, [NODE_SEND_HEADER, this.applicationFrame(payload)]);
+    return this.sendApplication(targetNodeRoutingId, [
+      NODE_SEND_HEADER,
+      this.applicationFrame(payload)
+    ]);
   }
 
   sendToChannel(
@@ -692,7 +695,7 @@ export class RawServiceMeshRuntime {
     if (selection.kind !== 'selected') return selection.submitResult;
     const selected = selection.peer;
     const applicationFrame = this.applicationFrame(payload);
-    const submitted = this.send(selected.descriptor.nodeRoutingId, [
+    const submitted = this.sendApplication(selected.descriptor.nodeRoutingId, [
       encodeChannelSendHeader(channelName),
       applicationFrame
     ]);
@@ -2182,11 +2185,12 @@ export class RawServiceMeshRuntime {
     if (failure !== undefined) throw failure.error;
   }
 
-  private send(
+  sendApplication(
     targetNodeRoutingId: string,
-    parts: readonly Uint8Array[]
+    parts: readonly Uint8Array[],
+    lifecycleGeneration?: bigint
   ): boolean | Promise<boolean> {
-    if (!this.isPeerRouteReady(targetNodeRoutingId)) return false;
+    if (!this.isPeerRouteReady(targetNodeRoutingId, lifecycleGeneration)) return false;
     try {
       const submission = this.requireStarted().submitSend(targetNodeRoutingId, parts);
       if (submission.result === SubmitResult.Ok) return true;
