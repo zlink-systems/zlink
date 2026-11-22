@@ -9,6 +9,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket
 import systems.zlink.framework.runtime.internal.backend.ZLinkChannelBackendAdapter;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
+import systems.zlink.framework.runtime.internal.service.ZLinkClassicFanoutLiveness;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
@@ -49,5 +50,20 @@ public final class ZLinkChannelRuntimeTestAccess {
     public static ZLinkBackendRouterSocket requireRouteRouter(
             ZLinkChannelRuntime runtime, String channelName) {
         return runtime.requireRouteRouter(channelName);
+    }
+
+    public static void awaitManualFanoutPublisher(ZLinkChannelRuntime runtime, String channelName)
+            throws InterruptedException {
+        var manualFanout = runtime.monitoringManualFanout();
+        long deadline =
+                System.nanoTime() + ZLinkClassicFanoutLiveness.DEFAULT_PUBLISHER_TIMEOUT.toNanos();
+        do {
+            if (manualFanout.publisherSnapshots(channelName).stream()
+                    .anyMatch(ZLinkManualFanoutRuntime.PublisherSnapshot::ready)) {
+                return;
+            }
+            Thread.sleep(10);
+        } while (System.nanoTime() < deadline);
+        throw new AssertionError("No ready manual fanout publisher for " + channelName);
     }
 }
