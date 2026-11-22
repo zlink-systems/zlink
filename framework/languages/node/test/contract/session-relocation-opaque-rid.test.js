@@ -1,14 +1,11 @@
+const { relocationAuthorityStore } = require('./fixtures/relocation-authority-store');
 const { createRelayHost } = require('./fixtures/relay-host');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const framework = require('../../packages/framework/dist/internal');
 const { RoutingId } = require('@zlink-systems/zlink');
-const {
-  ZLinkActorTransferRuntime
-} = require('../../packages/framework/dist/internal');
-const {
-  ZLinkHostServiceRelocationRuntime
-} = require('../../packages/framework/dist/internal');
+const { ZLinkActorTransferRuntime } = require('../../packages/framework/dist/internal');
+const { ZLinkHostServiceRelocationRuntime } = require('../../packages/framework/dist/internal');
 const { SubmitResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
 const { encodeRoutingIdStorageHex } = require('../../packages/framework/dist/runtime/routing-id');
 const wire = require('../../packages/framework/dist/runtime/foundation/service-stateful-wire-codec');
@@ -44,40 +41,51 @@ async function relocationHarness(ids, nativeBinding = false, hooks = {}) {
   let bindWireSession;
   const completions = new ZLinkMeshCompletionTable();
   if (nativeBinding) {
-    stateful = withTestSessionOwners(new ServiceStatefulRuntime(
-      {
-        observePeerRoute: () => ({ generation: 2n, ready: true }),
-        observePeerRouteChanged: () => () => {},
-        observePeerConnectionIntentRemoved: () => () => {},
-        setServiceIngress() {},
-        async requestService(_target, parts) {
-          const command = wire.decodeStatefulHeader(parts[0]);
-          if (command.kind === 'boundSessionBind') {
-            bindWireSession = command.sessionRid;
-            return [
-              wire.encodeStatefulReply(
-                command.correlation,
-                RequestResult.Ok,
-                0,
-                command.binding.state === 'active'
-                  ? { kind: 'streamBind', bindingGeneration: 6n, authorityOwnerGeneration: 11n }
-                  : undefined
-              )
-            ];
+    stateful = withTestSessionOwners(
+      new ServiceStatefulRuntime(
+        {
+          observePeerRoute: () => ({ generation: 2n, ready: true }),
+          observePeerRouteChanged: () => () => {},
+          observePeerConnectionIntentRemoved: () => () => {},
+          setServiceIngress() {},
+          async requestService(_target, parts) {
+            const command = wire.decodeStatefulHeader(parts[0]);
+            if (command.kind === 'boundSessionBind') {
+              bindWireSession = command.sessionRid;
+              return [
+                wire.encodeStatefulReply(
+                  command.correlation,
+                  RequestResult.Ok,
+                  0,
+                  command.binding.state === 'active'
+                    ? { kind: 'streamBind', bindingGeneration: 6n, authorityOwnerGeneration: 11n }
+                    : undefined
+                )
+              ];
+            }
+            throw new Error('unexpected Session binding command');
           }
-          throw new Error('unexpected Session binding command');
-        }
-      },
-      ids.owner,
-      4n
-    ));
+        },
+        ids.owner,
+        4n
+      )
+    );
     stateful.rememberActorRoute({
       actor: { nodeRid: ids.source, actorId: 'opaque-relocation-actor', generation: 5n },
       targetNodeGeneration: 2n,
       authorityOwnerGeneration: 11n,
       ownerLeaseGeneration: 13n
     });
-    backend = new ZLinkNodeRawMeshBackend('mesh', ids.owner, {}, undefined, undefined, undefined, undefined, { stateful });
+    backend = new ZLinkNodeRawMeshBackend(
+      'mesh',
+      ids.owner,
+      {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { stateful }
+    );
     backend.setCompletionHandler((terminal, materialize) =>
       completions.complete(terminal, materialize)
     );
@@ -245,7 +253,14 @@ async function relocationHarness(ids, nativeBinding = false, hooks = {}) {
     sourceRuntime,
     sessionRuntime,
     dispatch,
-    seal: () => transfer.sealBoundSessionRoute(actor, state, abort.signal, { high: 7n, low: 9n }, { rid: ids.target, lifecycleGeneration: 3n }),
+    seal: () =>
+      transfer.sealBoundSessionRoute(
+        actor,
+        state,
+        abort.signal,
+        { high: 7n, low: 9n },
+        { rid: ids.target, lifecycleGeneration: 3n }
+      ),
     receiveSeal: (request) =>
       dispatch(sessionRuntime, ids.source, wire.encodeSessionRelocationSeal(request)),
     commit: async (sealed) => {
@@ -542,23 +557,28 @@ for (const peerOrder of ['none', 'before failure', 'after failure']) {
       }
     };
     const runtime = new ZLinkHostServiceRelocationRuntime({
-      registration: { spotNodes: new Map([['mesh', {
-        spotFactoryRegistrations: { Spot: { relocation: { kind: 'recreate' } } },
-        actorFactoryRegistrations: { Actor: { relocation: { kind: 'recreate' } } }
-      }]]) },
-      locationStore: () => ({
-        readAuthority: async () => ({
-          kind: 'snapshot',
-          storeVersion: { value: 'v1' },
-          payload: Buffer.alloc(0),
-          objectGeneration: 5n,
-          authorityOwnerGeneration: 11n,
-          ownerId: 'owner',
-          ownerLeaseGeneration: 13n,
-          allocation: { state: 'active', objectKind: 'user_spot', stableType: 'Spot' },
-          storeNow: new Date()
-        })
-      }),
+      registration: {
+        spotNodes: new Map([
+          [
+            'mesh',
+            {
+              spotFactoryRegistrations: { Spot: { relocation: { kind: 'recreate' } } },
+              actorFactoryRegistrations: { Actor: { relocation: { kind: 'recreate' } } }
+            }
+          ]
+        ])
+      },
+      locationStore: relocationAuthorityStore(async () => ({
+        kind: 'snapshot',
+        storeVersion: { value: 'v1' },
+        payload: Buffer.alloc(0),
+        objectGeneration: 5n,
+        authorityOwnerGeneration: 11n,
+        ownerId: 'owner',
+        ownerLeaseGeneration: 13n,
+        allocation: { state: 'active', objectKind: 'user_spot', stableType: 'Spot' },
+        storeNow: new Date()
+      })),
       spotManager: () => ({
         pendingSpotCloseDecision: () => undefined,
         isSpotClosing: () => false
@@ -613,7 +633,7 @@ for (const peerOrder of ['none', 'before failure', 'after failure']) {
       activation,
       'user_spot',
       states,
-      { rid: 'target' },
+      { rid: 'target', applicationVersion: 1n },
       undefined,
       closed.abort.signal
     );
@@ -860,11 +880,7 @@ test('command 42 with a stale owner lease is rejected after the previous closed 
       }
     };
     assert.equal(
-      (
-        await h.relay.boundSessions.receiveServiceWireSessionRelocationSeal(
-          current
-        )
-      ).sealResult,
+      (await h.relay.boundSessions.receiveServiceWireSessionRelocationSeal(current)).sealResult,
       'sealed'
     );
   } finally {
@@ -1024,10 +1040,7 @@ for (const binding of ['absent', 'same', 'successor']) {
                 sessionOwnerNodeGeneration: 4n,
                 bindingGeneration: 7n
               };
-      const absent =
-        await h.relay.boundSessions.receiveServiceWireSessionRelocationSeal(
-          h.sent[0]
-        );
+      const absent = await h.relay.boundSessions.receiveServiceWireSessionRelocationSeal(h.sent[0]);
       assert.equal(absent.sealResult, 'bindingAbsent');
       await h.host.streamBindingRuntime.cleanup(h.context);
       assert.equal(callbacks, 0, 'notification is still held after absence was acknowledged');
@@ -1066,23 +1079,28 @@ test('aggregate reaches coordinator with both Actors and membership but only the
   );
   let envelope;
   const runtime = new ZLinkHostServiceRelocationRuntime({
-    registration: { spotNodes: new Map([['mesh', {
-      spotFactoryRegistrations: { Unit: { relocation: { kind: 'recreate' } } },
-      actorFactoryRegistrations: { Actor: { relocation: { kind: 'recreate' } } }
-    }]]) },
-    locationStore: () => ({
-      readAuthority: async () => ({
-        kind: 'snapshot',
-        storeVersion: { value: 'v1' },
-        payload: Buffer.alloc(0),
-        objectGeneration: 5n,
-        authorityOwnerGeneration: 11n,
-        ownerId: 'owner',
-        ownerLeaseGeneration: 13n,
-        allocation: { state: 'active', objectKind: 'user_spot', stableType: 'Unit' },
-        storeNow: new Date()
-      })
-    }),
+    registration: {
+      spotNodes: new Map([
+        [
+          'mesh',
+          {
+            spotFactoryRegistrations: { Unit: { relocation: { kind: 'recreate' } } },
+            actorFactoryRegistrations: { Actor: { relocation: { kind: 'recreate' } } }
+          }
+        ]
+      ])
+    },
+    locationStore: relocationAuthorityStore(async () => ({
+      kind: 'snapshot',
+      storeVersion: { value: 'v1' },
+      payload: Buffer.alloc(0),
+      objectGeneration: 5n,
+      authorityOwnerGeneration: 11n,
+      ownerId: 'owner',
+      ownerLeaseGeneration: 13n,
+      allocation: { state: 'active', objectKind: 'user_spot', stableType: 'Unit' },
+      storeNow: new Date()
+    })),
     spotManager: () => ({ pendingSpotCloseDecision: () => undefined, isSpotClosing: () => false }),
     meshNode: () => ({
       status: () => ({ routingId: 'source', lifecycleGeneration: 2n }),
@@ -1114,7 +1132,9 @@ test('aggregate reaches coordinator with both Actors and membership but only the
     spotId: 'spot',
     serial: new ZLinkSpotSerialTurnExecutor(),
     captureRelocation: async () => ({ timers: [] }),
-    abortRelocation() { return true; }
+    abortRelocation() {
+      return true;
+    }
   };
   const states = [closed, live].map((h) => ({
     meshName: 'mesh',
@@ -1128,7 +1148,7 @@ test('aggregate reaches coordinator with both Actors and membership but only the
     activation,
     'user_spot',
     states,
-    { rid: 'target' },
+    { rid: 'target', applicationVersion: 1n },
     undefined,
     closed.abort.signal
   );

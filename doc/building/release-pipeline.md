@@ -125,6 +125,15 @@ curl -sI https://repo1.maven.org/maven2/systems/zlink/zlink/0.17.5/zlink-0.17.5.
 gh release view core/v0.17.5 --json assets -q '.assets[].name'
 ```
 
+After publishing the Framework, confirm that every language's templates build against the
+published packages and pass their e2e. Pull request and nightly template checks use packages
+built from the commit (`source=local`), so this step is the only check that main's templates,
+which follow the next release's API, match the published packages ([#5308](https://github.com/zlink-systems/zlink/issues/5308)).
+
+```bash
+gh workflow run framework-templates.yml --ref main -f source=public
+```
+
 ## 7. Supported platforms and runtime requirements
 
 | Platform | Core release | Framework C++ prebuilt | Node prebuild | .NET runtimes | Notes |
@@ -166,6 +175,7 @@ likewise outside the framework build, CI and releases; they are verified only by
 | `pr-verify.yml` | Core ctest and binding smoke, Java framework unit and contract tests, Windows x64 static contracts | ubuntu-24.04; only the Windows static contract job runs on windows-2022 |
 | `build.yml` | Core build and verification (also the release workflow) | 4 platforms |
 | `framework-tutorial.yml` | verifies the tutorial and quickstart **with the published packages, after publish**: `framework-release.yml` and `release-dotnet.yml` call it with `workflow_call(language)` once the registry index (npm view / Maven Central pom / nuget flatcontainer / GitHub Release asset, up to 30 min) serves the version. PRs and main pushes do not run it — a change that uses an unpublished API cannot pass before its release (#997); otherwise run it by hand | ubuntu-24.04, four languages |
+| `framework-templates.yml` | genre template builds and Docker e2e. Pull requests (changed templates) and the nightly run (Node) use packages built from the commit (`source=local`); manual runs use `source=public` (post-release check, §6) or `local` | ubuntu-24.04, five languages |
 | `examples-smoke.yml` | builds and runs the exported examples trees in jobs with no checkout, from the README commands alone (quickstart build, tutorial start and verify, one sample end to end); called by `examples-mirror.yml` before the push and rerun daily on the newest framework tag | ubuntu-24.04 for all five languages; windows-2022 for dotnet, java and kotlin |
 | `docs.yml` | documentation site build and deploy | ubuntu |
 

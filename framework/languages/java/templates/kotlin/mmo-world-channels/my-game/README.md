@@ -143,6 +143,16 @@ The runner checks `zlink.structure.json`, starts its own two Redis containers an
 | reconnect | A new connection retains Actor identity, channel, and gold |
 | update | Drain channelA1; preserve both worlds and the relocated Zone player list; stop and replace it; verify a new Zone and Player work on the replacement |
 
+## Framework behavior to know
+
+- **Waiting for DB or file I/O in a handler** — An ordinary async terminal retains the turn, while `Yield` lets other handlers on the same Spot proceed. [Guide](https://docs.zlink.systems/kotlin/guide/server/32-execution-model/#io-worker-wait). [server/channel/src/main/kotlin/MyGame/channel/infrastructure/zlink/Player.kt:36](server/channel/src/main/kotlin/MyGame/channel/infrastructure/zlink/Player.kt).
+- **Creation that misses its deadline** — `DeadlineExceeded` and caller cancellation have distinct outcomes. [Guide](https://docs.zlink.systems/kotlin/guide/server/22-actor/#creation-deadline). [server/session/src/main/kotlin/MyGame/session/Program.kt:93](server/session/src/main/kotlin/MyGame/session/Program.kt).
+- **Many logins at once** — Each creation for a different ID requires a Location Store round trip, so measure expected load when setting the deadline. [Guide](https://docs.zlink.systems/kotlin/guide/server/25-location/#creation-load).
+- **Sending under load** — Send waits for capacity, and the application sees the final result. [Guide](https://docs.zlink.systems/kotlin/guide/server/33-backpressure/#send-backpressure). [server/session/src/main/kotlin/MyGame/session/Program.kt:68](server/session/src/main/kotlin/MyGame/session/Program.kt).
+- **Duplicate login** — Without a callback, a bind from another Session is accepted; reject it in the Actor duplicate-bind callback to prevent this. [Guide](https://docs.zlink.systems/kotlin/guide/server/39-session-binding/#duplicate-session-bind). This template keeps the default (accepts the new Session).
+- **ObjectGeneration** — `ObjectGeneration` distinguishes logical incarnations of the same ID; it is not a data version or write authority. [Guide](https://docs.zlink.systems/kotlin/guide/server/34-activation-lifetime/#object-generation). [server/session/src/main/kotlin/MyGame/session/Program.kt:82](server/session/src/main/kotlin/MyGame/session/Program.kt).
+- **READY and Serving** — The Framework host prints `READY` after observing runtime `Serving`; the Accounts process prints `READY` without a Framework runtime. [Guide](https://docs.zlink.systems/kotlin/guide/server/12-operations/#wait-for-serving). [server/shared/src/main/kotlin/MyGame/Hosting.kt:84](server/shared/src/main/kotlin/MyGame/Hosting.kt); [server/shared/src/main/kotlin/MyGame/Hosting.kt:117](server/shared/src/main/kotlin/MyGame/Hosting.kt); [server/accounts/src/main/kotlin/MyGame/accounts/Program.kt:26](server/accounts/src/main/kotlin/MyGame/accounts/Program.kt); [server/accounts/src/main/kotlin/MyGame/accounts/Program.kt:29](server/accounts/src/main/kotlin/MyGame/accounts/Program.kt). The accounts HTTP process prints `READY` after its server starts, without observing Framework runtime `Serving`:  .
+
 ## Known issues
 
 Validated against the published Framework 0.32.0 packages.

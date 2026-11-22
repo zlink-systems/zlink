@@ -116,7 +116,11 @@ public final class ZLinkAuthorityRelocation {
         return new ZLinkAuthorityRelocation(next);
     }
 
-    static ZLinkCanonicalRelocationAuthorityStateCodec.Published publication(
+    public String coordinatorExpectedStoreVersion() {
+        return value.get("coordinator").get("expectedStoreVersion").textValue();
+    }
+
+    public static ZLinkCanonicalRelocationAuthorityStateCodec.Published publication(
             ZLinkAuthoritySnapshot snapshot, long requestAggregateGeneration) {
         ZLinkAuthorityRelocation relocation = snapshot.relocation();
         if (relocation == null)
@@ -154,7 +158,7 @@ public final class ZLinkAuthorityRelocation {
                 ZLinkAuthorityRelocation.integer(coordinator.get("ownerLeaseGeneration")),
                 RoutingId.fromHex(coordinator.get("nodeRid").asText()),
                 ZLinkAuthorityRelocation.integer(coordinator.get("nodeGeneration")),
-                coordinator.get("expectedStoreVersion").asText(),
+                relocation.coordinatorExpectedStoreVersion(),
                 relocation.phaseOrdinal(),
                 relocation.applicationVersion(),
                 0,
@@ -195,12 +199,14 @@ public final class ZLinkAuthorityRelocation {
                         : null;
         if (legacy != null
                 && (!legacy.aggregateId().equals(request.aggregateId())
-                        || !legacy.targetNodeRid().equals(request.targetDescriptor().rid())
-                        || legacy.targetNodeGeneration()
-                                != request.targetDescriptorLifecycleGeneration()
-                        || !legacy.targetOwnerId().equals(request.targetOwner().ownerId())
-                        || legacy.targetOwnerLeaseGeneration()
-                                != request.targetOwner().leaseGeneration()))
+                        || (legacy.phase() != 2
+                                && (!legacy.targetNodeRid().equals(request.targetDescriptor().rid())
+                                        || legacy.targetNodeGeneration()
+                                                != request.targetDescriptorLifecycleGeneration()
+                                        || !legacy.targetOwnerId()
+                                                .equals(request.targetOwner().ownerId())
+                                        || legacy.targetOwnerLeaseGeneration()
+                                                != request.targetOwner().leaseGeneration()))))
             throw new IllegalArgumentException("Legacy relocation successor fence differs");
         var value =
                 existing == null

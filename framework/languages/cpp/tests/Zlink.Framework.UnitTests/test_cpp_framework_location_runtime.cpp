@@ -6037,7 +6037,7 @@ void StoreOutageRetention::registered_owner (bool shared, bool retained, int los
             const auto snapshot = ready_snapshots.at ("early");
             const auto published =
               adapter.publish (source, target, token, snapshot.allocation.target, "adopted", 7, {},
-                               snapshot.payload);
+                               snapshot.payload, snapshot.store_version, {}, snapshot.owner);
             ASSERT_EQ (stateful::authority_publish_status_t::published, published.status);
             ASSERT_TRUE (published.current);
             EXPECT_EQ (stateful::stateful_error_t::none,

@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using Zlink.Framework.AspNetCore;
+using Zlink.Framework.Contracts.Locations;
 using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.UnitTests;
@@ -10,6 +11,48 @@ public sealed class LocationResolverTests
     private const string OwnerB = "owner-b";
     private static readonly TimeSpan LeaseTtl = TimeSpan.FromSeconds(15);
     private static readonly ZLinkActorLocationKey ActorKey = new("actor-1");
+
+    [Fact]
+    public async Task Ready_route_uses_one_owner_lease_read_on_a_cache_miss()
+    {
+        var time = new ManualTimeProvider();
+        var store = new ZLinkInMemoryLocationStore(time);
+        await store.ClaimLiveOwnerAsync(OwnerA, LeaseTtl);
+        await AuthorityLocationTestFixture.PublishActorAsync(
+            store,
+            InMemoryLocationStoreTests.Actor(OwnerA)
+        );
+        var counted = new CountingLeaseStore(store);
+        var options = new ZLinkLocationOptions { PollingInterval = TimeSpan.Zero };
+        var resolvers = new ZLinkStoreLocationResolvers(
+            counted,
+            new ZLinkOwnerLeaseTracker(counted, options, time),
+            options: options
+        );
+
+        Assert.Equal(OwnerA, (await resolvers.ResolveActorRowAsync(ActorKey))!.OwnerId);
+        Assert.Equal(1, counted.LeaseReads);
+    }
+
+    private sealed class CountingLeaseStore(ZLinkInMemoryLocationStore store)
+        : ZLinkLocationStoreTestDouble
+    {
+        internal int LeaseReads { get; private set; }
+
+        public override ValueTask<ZLinkOwnerLeaseReadResult> ReadOwnerLeaseAsync(
+            string ownerId,
+            CancellationToken cancellationToken = default
+        )
+        {
+            LeaseReads++;
+            return store.ReadOwnerLeaseAsync(ownerId, cancellationToken);
+        }
+
+        public override ValueTask<ZLinkAuthorityReadResult> ReadAuthorityAsync(
+            ZLinkAuthorityKey key,
+            CancellationToken cancellationToken = default
+        ) => store.ReadAuthorityAsync(key, cancellationToken);
+    }
 
     [Fact]
     public async Task Positive_Ready_Route_Is_Cached_Until_Its_Captured_Max_Age()

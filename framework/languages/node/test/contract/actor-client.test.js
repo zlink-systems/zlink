@@ -75,7 +75,7 @@ function createStoreResolver(authority, remainingLeaseMs, onRead = () => {}) {
       routeStore: unusedStore
     },
     leaseTracker: {
-      async remainingOwnerTokenLeaseMs() { return remainingLeaseMs; }
+      async ownerTokenLeaseDeadlineMs() { return remainingLeaseMs <= 0 ? -Infinity : performance.now() + remainingLeaseMs; }
     }
   });
 }
@@ -1326,7 +1326,7 @@ test('Actor route infrastructure admission cannot complete the user request admi
       actorStore: unusedStore,
       routeStore: unusedStore
     },
-    leaseTracker: { async remainingOwnerTokenLeaseMs() { return 10000; } }
+    leaseTracker: { async ownerTokenLeaseDeadlineMs() { return performance.now() + 10000; } }
   });
   const client = createActorClient({
     locationResolver: () => resolver,

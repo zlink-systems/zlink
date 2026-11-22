@@ -757,8 +757,7 @@ final class StreamSessionTest {
         options.addLocationStore(new ZLinkInMemoryLocationStore());
         {
             var node = options.addRouteMesh("game");
-            node.listen("inproc://stream-play-" + System.nanoTime())
-                    .setRoutingId(RoutingId.from("play-node"));
+            node.listen("inproc://stream-play-" + System.nanoTime());
             node.objects().server().addEntrySpot(GameEntrySpot.class);
             node.objects()
                     .server()
@@ -774,9 +773,13 @@ final class StreamSessionTest {
             stream.enableActorDispatch();
             stream.registerSession(ActorRelaySession.class);
         }
-        ;
-
-        return RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory());
+        var runtime =
+                RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory());
+        if (!runtime.isReady()) {
+            runtime.close();
+            throw new AssertionError("Actor relay fixture must start in Serving");
+        }
+        return runtime;
     }
 
     public static final class GameSpot implements ZLinkSpot<ZLinkActor> {
