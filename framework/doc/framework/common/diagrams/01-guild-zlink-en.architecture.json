@@ -39,7 +39,7 @@
     {
       "id": "api",
       "type": "frontend",
-      "label": "API servers ×N",
+      "label": "api node ×N",
       "sublabel": "route client",
       "row": 2,
       "col": 0
@@ -47,8 +47,8 @@
     {
       "id": "guild",
       "type": "backend",
-      "label": "GuildSpot ×N",
-      "sublabel": "guild-id owner · serial exec",
+      "label": "play node ×N",
+      "sublabel": "GuildSpot",
       "row": 2,
       "col": 2
     },

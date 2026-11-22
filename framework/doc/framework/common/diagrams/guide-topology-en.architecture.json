@@ -1,8 +1,8 @@
 {
   "diagram_type": "architecture",
   "meta": {
-    "title": "Servers talk in typed messages by role; clients receive over a stream",
-    "subtitle": "An HTTP request passes through channels to a SPOT; a live connection arrives over the stream",
+    "title": "Real-time game server deployment",
+    "subtitle": "Session management · Spot execution · request handling",
     "output": "guide-topology-en.html",
     "legend": {
       "mode": "hidden"
@@ -11,159 +11,83 @@
   "layout": {
     "mode": "grid",
     "origin": [
-      60,
+      50,
       150
     ],
-    "cols": 4,
-    "gapX": 150,
-    "gapY": 84,
-    "cellW": 130,
-    "cellH": 58
+    "cols": 5,
+    "gapX": 62,
+    "gapY": 78,
+    "cellW": 132,
+    "cellH": 60
   },
   "components": [
     {
       "id": "CL",
-      "type": "frontend",
-      "label": "client app",
+      "type": "external",
+      "label": "client",
       "row": 0,
       "col": 0
     },
     {
-      "id": "HTTP",
+      "id": "LB",
       "type": "external",
-      "label": "HTTP API",
+      "label": "L4",
       "row": 0,
       "col": 1
     },
     {
-      "id": "APIC",
-      "type": "backend",
-      "label": "channel client",
-      "row": 0,
-      "col": 2
-    },
-    {
-      "id": "REG",
+      "id": "SESS",
       "type": "database",
-      "label": "Registry",
-      "sublabel": "discovery",
+      "label": "session node ×N",
       "row": 0,
-      "col": 3
+      "col": 2,
+      "sublabel": "client sessions"
     },
     {
-      "id": "ST",
-      "type": "messagebus",
-      "label": "stream",
-      "row": 1,
-      "col": 1
-    },
-    {
-      "id": "CORES",
+      "id": "PLAY",
       "type": "backend",
-      "label": "channel server",
-      "row": 1,
-      "col": 2
+      "label": "play node ×N",
+      "row": 0,
+      "col": 3,
+      "sublabel": "zone · dungeon · table"
     },
     {
-      "id": "AG",
-      "type": "messagebus",
-      "label": "actor gateway",
-      "row": 2,
-      "col": 1
-    },
-    {
-      "id": "SPOT",
+      "id": "API",
       "type": "frontend",
-      "label": "SPOT",
-      "sublabel": "unit of state",
-      "row": 2,
-      "col": 3
-    }
-  ],
-  "boundaries": [
-    {
-      "kind": "region",
-      "label": "entry server",
-      "wraps": [
-        "HTTP",
-        "APIC"
-      ],
-      "pad": 26
-    },
-    {
-      "kind": "region",
-      "label": "domain server",
-      "wraps": [
-        "ST",
-        "CORES",
-        "AG",
-        "SPOT"
-      ],
-      "pad": 26
+      "label": "api node ×N",
+      "row": 0,
+      "col": 4,
+      "sublabel": "matchmaking · Actor DB"
     }
   ],
   "connections": [
     {
       "from": "CL",
-      "to": "HTTP",
-      "label": "① HTTP request",
-      "variant": "default"
+      "to": "LB"
     },
     {
-      "from": "HTTP",
-      "to": "APIC",
-      "variant": "default"
+      "from": "LB",
+      "to": "SESS"
     },
     {
-      "from": "APIC",
-      "to": "CORES",
-      "label": "② server-to-server",
-      "variant": "default",
-      "labelDy": 38
+      "from": "SESS",
+      "to": "PLAY"
     },
     {
-      "from": "CORES",
-      "to": "SPOT",
-      "variant": "default"
-    },
-    {
-      "from": "CL",
-      "to": "ST",
-      "label": "③ live connection",
-      "variant": "default"
-    },
-    {
-      "from": "ST",
-      "to": "AG",
-      "variant": "default"
-    },
-    {
-      "from": "AG",
-      "to": "SPOT",
-      "variant": "default"
-    },
-    {
-      "from": "APIC",
-      "to": "REG",
-      "label": "address lookup",
-      "variant": "dashed"
-    },
-    {
-      "from": "CORES",
-      "to": "REG",
-      "variant": "dashed",
-      "fromSide": "top",
-      "toSide": "bottom"
+      "from": "PLAY",
+      "to": "API",
+      "label": "client/server"
     }
   ],
   "cards": [
     {
-      "dot": "cyan",
-      "title": "Two ways in",
+      "dot": "emerald",
+      "title": "Node roles",
       "items": [
-        "A request goes HTTP API → channel client → channel server → SPOT; servers address each other by name, not by host.",
-        "A live connection arrives over the stream, passes the actor gateway and reaches the same SPOT.",
-        "The channel client and channel server look up the node behind a name in the Registry."
+        "A session node manages client sessions.",
+        "A play node hosts Spots for roles such as zones, dungeon instances, tables, and matches.",
+        "An api node receives and handles requests like an ordinary HTTP server, such as matchmaking requests and reads and writes of Actor data in a database.",
+        "The play node is the Client that calls the api node, which is the Server on the ZLink ClientServer Channel."
       ]
     }
   ],
