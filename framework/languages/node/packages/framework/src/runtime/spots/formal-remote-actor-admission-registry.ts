@@ -22,6 +22,8 @@ export interface ZLinkParkedActorArrival {
   readonly remoteBoundSessionTarget?: ZLinkRemoteBoundSessionTarget;
   readonly fallbackActorRef?: ActorRef;
   readonly requestTerminal?: ZLinkActorRequestTerminal;
+  readonly messageFollowOrigin?: import('../foundation/service-runtime-contracts').ZLinkMessageFollowOrigin;
+  readonly preparation?: import('../execution/serial-execution-queue').ZLinkSerialWorkPreparation;
   readonly resolve: (value: unknown) => void;
   readonly reject: (reason: unknown) => void;
 }

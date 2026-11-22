@@ -51,10 +51,11 @@ export class ZLinkSpotActorAdmissionCoordinator {
     remoteBoundSessionTarget?: ZLinkRemoteBoundSessionTarget,
     fallbackActorRef?: ActorRef,
     requestTerminal?: (response: unknown) => Promise<void> | void,
-    messageFollowOrigin?: ZLinkMessageFollowOrigin
+    messageFollowOrigin?: ZLinkMessageFollowOrigin,
+    preparation?: import('../execution/serial-execution-queue').ZLinkSerialWorkPreparation
   ): Promise<unknown> {
     return dispatchActorPacketInMailbox<ZLinkSpotSerialTurnExecutor>(
-      (operation) => activation.executeActor(actorId, operation, undefined, operation),
+      (operation) => activation.executeActor(actorId, operation, undefined, operation, preparation),
       (serial) =>
         this.actorPacketDispatch(activation).admitDelivery(
           serial,
