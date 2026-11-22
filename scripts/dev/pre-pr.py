@@ -255,6 +255,9 @@ def cpp(temp):
     env = os.environ
     job = Job(ROOT, temp, "framework-cpp", "framework-cpp", env={
         "BUILD_PARALLEL": env.get("BUILD_PARALLEL") or "2",
+        # The workflow reads the self-hosted parallelism from a repository variable,
+        # which a local run has no access to; the local gate uses BUILD_PARALLEL.
+        "BUILD_PARALLEL_SELF_HOSTED": env.get("BUILD_PARALLEL") or "2",
         "ZLINK_SCCACHE_LAUNCHER": env.get("ZLINK_SCCACHE_LAUNCHER", ""),
         **{key: env[key] for key in ("ZLINK_LOCAL_PACKAGE_ROOT", "VCPKG_INSTALLED_DIR",
                                     "ZLINK_VCPKG_TRIPLET") if key in env},

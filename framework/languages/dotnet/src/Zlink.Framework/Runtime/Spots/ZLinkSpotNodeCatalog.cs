@@ -2015,7 +2015,6 @@ internal sealed class ZLinkSpotNodeCatalog(
             await activation.AwaitStartedCloseCallsAsync(cancellationToken).ConfigureAwait(false);
             await activation
                 .InvokeExplicitClosingAsync(
-                    ZLinkSpotCloseReason.ExplicitClose,
                     deadline ?? DateTimeOffset.UtcNow + activation.DefaultRequestTimeout
                 )
                 .ConfigureAwait(false);

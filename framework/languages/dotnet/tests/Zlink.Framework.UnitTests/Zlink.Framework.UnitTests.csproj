@@ -72,6 +72,7 @@
         <Compile Include="Runtime/InstanceIntentAuthorityFollowTests.cs"/>
         <Compile Include="Runtime/SessionFailureClassificationTests.cs"/>
         <Compile Include="Runtime/SpotShutdownExecutionTests.cs"/>
+        <Compile Include="Runtime/SpotAdmissionRejectionTests.cs"/>
         <Compile Include="Runtime/SuspendedHandlerWorkerTests.cs"/>
         <Compile Include="Runtime/MeshLivenessPhysicalCloseTests.cs"/>
         <Compile Include="Runtime/MeshLivenessDisconnectContractTests.cs"/>
@@ -308,6 +309,7 @@
         <Compile Include="Runtime/RemoteRelayFrameAssemblerTests.cs"/>
         <Compile Include="Runtime/ReconciliationRunnerTests.cs"/>
         <Compile Include="Runtime/RelocationRuntimeTests.cs"/>
+        <Compile Include="Runtime/RelocationRuntimeTests.AggregatePublicationProbe.cs"/>
         <Compile Include="Runtime/AuditRuntimeFailureReporter.cs"/>
         <Compile Include="Runtime/ActorMembershipOwnershipTests.cs"/>
         <Compile Include="Runtime/RelocationBehaviorConformanceTests.cs"/>

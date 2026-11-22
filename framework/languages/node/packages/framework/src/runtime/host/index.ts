@@ -478,6 +478,7 @@ export class ZLinkFrameworkRuntimeHost
     this.spotAddressTransport = new ZLinkHostSpotAddressTransport({
       requests: this.requests,
       resolver: () => this.createLocationSpotRouteResolver(),
+      requestSources: () => this.spotNodeRuntime?.locationAutoConnect?.requestSources,
       routed: this.routeTransport,
       meshNames: () =>
         [...this.options.registration.spotNodes]
