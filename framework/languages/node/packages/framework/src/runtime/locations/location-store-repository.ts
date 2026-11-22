@@ -32,6 +32,7 @@ import {
   type ZLinkPageRequest,
   type ZLinkStoreCondition,
   type ZLinkStoreKey,
+  type ZLinkStoreMutation,
   type ZLinkStoreReadResult,
   type ZLinkStoreScanCursor,
   type ZLinkStoreValue,
@@ -155,7 +156,6 @@ interface AuthorityRecord {
 /** An Actor membership of an ended User Spot incarnation (location runtime §6.1). */
 interface EndedSpotMember {
   readonly key: ZLinkStoreKey;
-  readonly authorityKey: string;
   readonly version: ZLinkStoreVersion;
   readonly ownerId: string;
   readonly leaseGeneration: bigint;
@@ -311,11 +311,8 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     key: ZLinkAuthorityKey,
     signal?: AbortSignal
   ): Promise<ZLinkAuthorityReadResult> {
-    const releaseDelayScope = ownerLeaseReleaseDelayScope.authority(key.value);
-    const releaseDelayObservation = this.ownerLeaseReleaseDelay.observation(releaseDelayScope);
     const result = await this.provider.read(authorityKey(key.value), signal);
     if (result.kind === 'missing') {
-      this.ownerLeaseReleaseDelay.clearIfUnchanged(releaseDelayScope, releaseDelayObservation);
       return { kind: 'missing', storeNow: result.storeNow };
     }
     return await this.projectAuthority(
@@ -402,11 +399,8 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     const rowKey = authorityKey(requireText(key.value, 'authority key'));
     for (;;) {
       signal?.throwIfAborted();
-      const releaseDelayScope = ownerLeaseReleaseDelayScope.authority(key.value);
-      const releaseDelayObservation = this.ownerLeaseReleaseDelay.observation(releaseDelayScope);
       const current = await this.provider.read(rowKey, signal);
       if (current.kind === 'missing') {
-        this.ownerLeaseReleaseDelay.clearIfUnchanged(releaseDelayScope, releaseDelayObservation);
         return { kind: 'conflict', current: { kind: 'missing', storeNow: current.storeNow } };
       }
       const record = decodeAuthorityRecord(current.value.bytes);
@@ -591,10 +585,6 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
             throw error;
           const observed = await this.provider.read(rowKey, signal);
           if (observed.kind === 'missing') {
-            this.ownerLeaseReleaseDelay.clearIfUnchanged(
-              releaseDelayScope,
-              releaseDelayObservation
-            );
             return { kind: 'conflict', current: { kind: 'missing', storeNow: observed.storeNow } };
           }
           const observedRecord = decodeAuthorityRecord(observed.value.bytes);
@@ -675,10 +665,6 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         (entry) => entry.key.value === rowKey.value
       )?.version;
       if (mutation.kind === 'delete') {
-        this.ownerLeaseReleaseDelay.clearAuthorityIfOwner(key.value, {
-          ownerId: record.snapshot.ownerId,
-          leaseGeneration: record.snapshot.ownerLeaseGeneration
-        });
         return {
           kind: 'deleted',
           storeVersion: {
@@ -698,16 +684,18 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
 
   override async prepareAggregate(
     request: ZLinkAggregatePrepareRequest,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    deadlineUnixMs?: bigint
   ): Promise<ZLinkAggregatePrepareResult> {
     return this.observeStore('compare_exchange', () =>
-      this.prepareAggregateRequest(request, signal)
+      this.prepareAggregateRequest(request, signal, deadlineUnixMs)
     );
   }
 
   private async prepareAggregateRequest(
     request: ZLinkAggregatePrepareRequest,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    deadlineUnixMs?: bigint
   ): Promise<ZLinkAggregatePrepareResult> {
     validateProviderAggregateRequest(request);
     const fence = aggregateFence(request.aggregateId, request.aggregateGeneration);
@@ -790,29 +778,8 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         }
       );
 
-      const targetDescriptorKey = meshKey(
-        request.targetDescriptor.meshName,
-        request.targetDescriptor.rid
-      );
-      const targetLeaseKey = ownerKey(request.targetOwner.ownerId);
-      const targetCapacityKey = capacityKey(
-        request.targetDescriptor.meshName,
-        request.targetDescriptor.rid
-      );
-      const [descriptorRead, leaseRead, targetCapacityRead] = await Promise.all([
-        this.provider.read(targetDescriptorKey, signal),
-        this.provider.read(targetLeaseKey, signal),
-        this.provider.read(targetCapacityKey, signal)
-      ]);
-      const descriptor = liveTargetDescriptor(descriptorRead, leaseRead, aggregateTarget(request));
-      const targetCapacity =
-        targetCapacityRead.kind === 'missing'
-          ? emptyCapacityRecord()
-          : decodeJson<CapacityRecord>(targetCapacityRead.value.bytes);
-      if (
-        descriptor === undefined ||
-        !capacityAvailable(descriptor, request.capacity, targetCapacity)
-      ) {
+      let capacity = await this.readAggregateTargetCapacity(request, signal);
+      if (capacity === undefined) {
         await this.abortAggregateStaging(fence, signal);
         return { kind: 'conflict' };
       }
@@ -836,10 +803,6 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         await this.abortAggregateStaging(fence, signal);
         return { kind: 'conflict' };
       }
-      const installed: Array<{
-        readonly key: ZLinkStoreKey;
-        readonly expectedStoreVersion: string;
-      }> = [];
       for (let index = 0; index < request.participants.length; index++) {
         const participant = request.participants[index]!;
         const entry = entries[index]!;
@@ -866,10 +829,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
             ownerGenerationCounterRead = undefined;
             aggregateRead = reservedAggregate;
           }
-          installed.push({
-            key: authorityRowKey,
-            expectedStoreVersion: participant.expectedStoreVersion.value
-          });
+
           if (participant.ownerTransition === 'newOwner') {
             sourceCapacity = addCapacityVector(sourceCapacity, record.snapshot.allocation.capacity);
           }
@@ -880,14 +840,12 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           record.snapshot.allocation.state !== 'active' ||
           current.value.version.value !== participant.expectedStoreVersion.value
         ) {
-          await this.clearAggregateMarkers(fence, installed, signal);
           await this.abortAggregateStaging(fence, signal);
           return { kind: 'conflict' };
         }
         if (participant.ownerTransition === 'preserve') {
           const lease = await this.provider.read(ownerKey(record.snapshot.ownerId), signal);
           if (!sameLiveOwner(lease, record.snapshot)) {
-            await this.clearAggregateMarkers(fence, installed, signal);
             await this.abortAggregateStaging(fence, signal);
             return { kind: 'conflict' };
           }
@@ -982,10 +940,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
               ownerGenerationCounterRead = undefined;
               aggregateRead = reservedAggregate;
             }
-            installed.push({
-              key: authorityRowKey,
-              expectedStoreVersion: participant.expectedStoreVersion.value
-            });
+
             continue;
           }
           // A peer can be in the middle of publishing this same aggregate.
@@ -998,78 +953,113 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
               aggregateRecord.requestFingerprint === fingerprint &&
               (aggregateRecord.state === 'staging' || aggregateRecord.state === 'prepared')
             ) {
-              return await this.prepareAggregateRequest(request, signal);
+              return await this.prepareAggregateRequest(request, signal, deadlineUnixMs);
             }
           }
-          await this.clearAggregateMarkers(fence, installed, signal);
+
           await this.abortAggregateStaging(fence, signal);
           return { kind: 'conflict' };
         }
         if (reservingOwnerGenerationBlock) {
           ownerGenerationCounterRead = undefined;
         }
-        installed.push({
-          key: authorityRowKey,
-          expectedStoreVersion: participant.expectedStoreVersion.value
-        });
       }
       if (!sameCapacityVector(sourceCapacity, request.capacity)) {
-        await this.clearAggregateMarkers(fence, installed, signal);
         await this.abortAggregateStaging(fence, signal);
         return { kind: 'conflict' };
       }
 
-      aggregateRead = await this.provider.read(rowKey, signal);
-      if (aggregateRead.kind === 'missing') return { kind: 'conflict' };
-      const latest = decodeJson<AggregateRecord>(aggregateRead.value.bytes);
-      if (latest.state === 'prepared' && latest.requestFingerprint === fingerprint) {
-        return { kind: 'alreadyPrepared', fence };
-      }
-      if (latest.state !== 'staging' || latest.requestFingerprint !== fingerprint) {
-        return { kind: 'conflict' };
-      }
-      const reserved = await this.provider.write(
-        {
-          conditions: [
-            { kind: 'version', key: rowKey, expected: aggregateRead.value.version },
-            versionCondition(targetDescriptorKey, descriptorRead),
-            leaseValueCondition(targetLeaseKey, request.targetOwner),
-            conditionFor(targetCapacityKey, targetCapacityRead)
-          ],
-          mutations: [
-            {
-              kind: 'put',
-              key: rowKey,
-              bytes: encodeJson({ ...latest, state: 'prepared' } satisfies AggregateRecord)
-            },
-            {
-              kind: 'put',
-              key: targetCapacityKey,
-              bytes: encodeJson({
-                active: targetCapacity.active,
-                pending: addCapacity(targetCapacity.pending, request.capacity)
-              } satisfies CapacityRecord)
-            }
-          ]
-        },
-        signal
-      );
-      if (reserved.kind === 'conflict') {
-        const raced = await this.provider.read(rowKey, signal);
-        if (raced.kind === 'found') {
-          const record = decodeJson<AggregateRecord>(raced.value.bytes);
-          if (record.state === 'prepared' && record.requestFingerprint === fingerprint) {
-            return { kind: 'alreadyPrepared', fence };
-          }
+      for (;;) {
+        throwIfOperationExpired(signal, deadlineUnixMs);
+        aggregateRead = await this.provider.read(rowKey, signal);
+        if (aggregateRead.kind === 'missing') return { kind: 'conflict' };
+        const latest = decodeJson<AggregateRecord>(aggregateRead.value.bytes);
+        const reconciled = reconcileAggregatePrepare(latest, fingerprint, fence);
+        if (reconciled !== undefined) return reconciled;
+
+        capacity ??= await this.readAggregateTargetCapacity(request, signal);
+        if (capacity === undefined) {
+          await this.abortAggregateStaging(fence, signal);
+          return { kind: 'conflict' };
         }
-        await this.clearAggregateMarkers(fence, installed, signal);
-        return { kind: 'conflict' };
+
+        const reserved = await this.provider.write(
+          {
+            conditions: [
+              { kind: 'version', key: rowKey, expected: aggregateRead.value.version },
+              ...capacity.conditions
+            ],
+            mutations: [
+              {
+                kind: 'put',
+                key: rowKey,
+                bytes: encodeJson({ ...latest, state: 'prepared' } satisfies AggregateRecord)
+              },
+              capacity.mutation
+            ]
+          },
+          signal
+        );
+        if (reserved.kind === 'applied') return { kind: 'prepared', fence };
+
+        // The staging row keeps its participant fences while capacity is re-evaluated.
+        // Preserve or abort changes that row and prevents the next publication.
+        capacity = undefined;
       }
-      return { kind: 'prepared', fence };
     } catch (error) {
       await this.abortAggregateStaging(fence, signal);
       throw error;
     }
+  }
+
+  private async readAggregateTargetCapacity(
+    request: ZLinkAggregatePrepareRequest,
+    signal?: AbortSignal
+  ): Promise<
+    | { readonly conditions: ZLinkStoreCondition[]; readonly mutation: ZLinkStoreMutation }
+    | undefined
+  > {
+    const targetDescriptorKey = meshKey(
+      request.targetDescriptor.meshName,
+      request.targetDescriptor.rid
+    );
+    const targetLeaseKey = ownerKey(request.targetOwner.ownerId);
+    const targetCapacityKey = capacityKey(
+      request.targetDescriptor.meshName,
+      request.targetDescriptor.rid
+    );
+    const [descriptorRead, leaseRead, targetCapacityRead] = await Promise.all([
+      this.provider.read(targetDescriptorKey, signal),
+      this.provider.read(targetLeaseKey, signal),
+      this.provider.read(targetCapacityKey, signal)
+    ]);
+    const descriptor = liveTargetDescriptor(descriptorRead, leaseRead, aggregateTarget(request));
+    const targetCapacity =
+      targetCapacityRead.kind === 'missing'
+        ? emptyCapacityRecord()
+        : decodeJson<CapacityRecord>(targetCapacityRead.value.bytes);
+    if (
+      descriptor === undefined ||
+      !capacityAvailable(descriptor, request.capacity, targetCapacity)
+    ) {
+      return undefined;
+    }
+
+    return {
+      conditions: [
+        versionCondition(targetDescriptorKey, descriptorRead),
+        leaseValueCondition(targetLeaseKey, request.targetOwner),
+        conditionFor(targetCapacityKey, targetCapacityRead)
+      ],
+      mutation: {
+        kind: 'put',
+        key: targetCapacityKey,
+        bytes: encodeJson({
+          active: targetCapacity.active,
+          pending: addCapacity(targetCapacity.pending, request.capacity)
+        } satisfies CapacityRecord)
+      }
+    };
   }
 
   override async commitAggregate(
@@ -1464,12 +1454,9 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     const creation = request !== undefined && 'key' in request ? request : undefined;
     for (;;) {
       throwIfOperationExpired(signal, deadlineUnixMs);
-      const releaseDelayScope = ownerLeaseReleaseDelayScope.authority(key.value);
       const rowKey = authorityKey(key.value);
-      const releaseDelayObservation = this.ownerLeaseReleaseDelay.observation(releaseDelayScope);
       const current = await this.provider.read(rowKey, signal);
       if (current.kind === 'missing') {
-        this.ownerLeaseReleaseDelay.clearIfUnchanged(releaseDelayScope, releaseDelayObservation);
         return 'conflict';
       }
       const record = decodeAuthorityRecord(current.value.bytes);
@@ -1524,7 +1511,6 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
                 readySpot.stableType === creation.intent.stableType &&
                 readySpot.spotId === creation.key.globalId &&
                 readySpot.activationRecovery === undefined))));
-      if (!releaseCandidate) this.ownerLeaseReleaseDelay.clearAuthority(key.value);
       const descriptorKey = meshKey(
         snapshot.allocation.descriptor.meshName,
         snapshot.allocation.descriptor.rid
@@ -1534,12 +1520,10 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         String(snapshot.allocation.descriptor.rid)
       );
       const leaseRead = this.provider.read(leaseKey, signal).then((read) => {
-        const observedAtMs = this.ownerLeaseReleaseDelay.nowMs();
         const ownerLive = sameLiveOwner(read, snapshot);
-        const ownerReleaseAllowed = releaseCandidate
-          ? this.ownerLeaseReleaseDelay.allows(releaseDelayScope, owner, ownerLive, observedAtMs)
-          : false;
-        return { read, observedAtMs, ownerLive, ownerReleaseAllowed };
+        const ownerReleaseAllowed =
+          releaseCandidate && !ownerLive && this.ownerLeaseReleaseDelay.allowsAuthority(owner);
+        return { read, ownerLive, ownerReleaseAllowed };
       });
       const memberObservations = leaseRead.then(async (leaseObservation) => {
         if (
@@ -1550,8 +1534,8 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         )
           return {
             members: [] as EndedSpotMember[],
-            owners: new Map<string, { read: ZLinkStoreReadResult; observedAtMs: number }>(),
-            releaseStates: new Map<string, { ownerLive: boolean; allowed: boolean }>()
+            owners: new Map<string, ZLinkStoreReadResult>(),
+            allOwnersReleased: true
           };
 
         const members = await this.readEndedSpotMembers(
@@ -1562,51 +1546,37 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         if (discarded !== undefined) {
           return {
             members,
-            owners: new Map<string, { read: ZLinkStoreReadResult; observedAtMs: number }>(),
-            releaseStates: new Map<string, { ownerLive: boolean; allowed: boolean }>()
+            owners: new Map<string, ZLinkStoreReadResult>(),
+            allOwnersReleased: true
           };
         }
-        const targetsByOwner = new Map<
-          string,
-          { member: EndedSpotMember; scope: string; owner: ZLinkLocationOwnerToken }[]
-        >();
+        const targetsByOwner = new Map<string, EndedSpotMember[]>();
         for (const member of members) {
           const targets = targetsByOwner.get(member.ownerId) ?? [];
-          targets.push({
-            member,
-            scope: ownerLeaseReleaseDelayScope.userSpotMember(
-              readySpot.spotId,
-              snapshot.objectGeneration,
-              member.authorityKey
-            ),
-            owner: { ownerId: member.ownerId, leaseGeneration: member.leaseGeneration }
-          });
+          targets.push(member);
           targetsByOwner.set(member.ownerId, targets);
         }
-        const owners = new Map<string, { read: ZLinkStoreReadResult; observedAtMs: number }>();
-        const releaseStates = new Map<string, { ownerLive: boolean; allowed: boolean }>();
+        const owners = new Map<string, ZLinkStoreReadResult>();
+        let allOwnersReleased = true;
         await Promise.all(
           [...targetsByOwner].map(async ([ownerId, targets]) => {
             const observation = await this.provider.read(ownerKey(ownerId), signal).then((read) => {
               const observedAtMs = this.ownerLeaseReleaseDelay.nowMs();
-              for (const target of targets) {
+              for (const member of targets) {
+                const owner = { ownerId: member.ownerId, leaseGeneration: member.leaseGeneration };
                 const ownerLive =
                   read.kind === 'found' &&
-                  matchesLiveOwnerLease(read, target.owner.ownerId, target.owner.leaseGeneration);
-                const allowed = this.ownerLeaseReleaseDelay.allows(
-                  target.scope,
-                  target.owner,
-                  ownerLive,
-                  observedAtMs
-                );
-                releaseStates.set(target.member.key.value, { ownerLive, allowed });
+                  matchesLiveOwnerLease(read, owner.ownerId, owner.leaseGeneration);
+                const allowed =
+                  !ownerLive && this.ownerLeaseReleaseDelay.allowsAuthority(owner, observedAtMs);
+                allOwnersReleased &&= allowed;
               }
-              return { read, observedAtMs };
+              return read;
             });
             owners.set(ownerId, observation);
           })
         );
-        return { members, owners, releaseStates };
+        return { members, owners, allOwnersReleased };
       });
       const [leaseObservation, descriptor, capacity, memberObservation] = await Promise.all([
         leaseRead,
@@ -1658,7 +1628,6 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
             'Object owner lease release is waiting for the invalid lease delay.'
           );
       } else {
-        this.ownerLeaseReleaseDelay.clearAuthority(key.value);
         if (
           ownerLive &&
           descriptor.kind === 'found' &&
@@ -1686,29 +1655,20 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       const mutations: ZLinkStoreWriteRequest['mutations'][number][] = [
         { kind: 'delete', key: rowKey }
       ];
-      const owners = new Map<string, { read: ZLinkStoreReadResult; observedAtMs: number }>([
-        [snapshot.ownerId, { read: lease, observedAtMs: leaseObservation.observedAtMs }]
-      ]);
+      const owners = new Map<string, ZLinkStoreReadResult>([[snapshot.ownerId, lease]]);
       for (const [ownerId, observation] of memberObservation.owners)
         owners.set(ownerId, observation);
-      const endedSpotId = readySpot?.kind === 'user_spot' ? readySpot.spotId : undefined;
-      let memberReleasePending = false;
-      for (const member of members) {
-        const memberRelease = memberObservation.releaseStates.get(member.key.value);
-        if (memberRelease === undefined || !memberRelease.allowed || memberRelease.ownerLive) {
-          memberReleasePending = true;
-          continue;
-        }
-        conditions.push({ kind: 'version', key: member.key, expected: member.version });
-        mutations.push({ kind: 'delete', key: member.key });
-      }
-      if (memberReleasePending)
+      if (!memberObservation.allOwnersReleased)
         throw new ZLinkFrameworkException(
           ZLinkFrameworkErrorKind.Unavailable,
           'User Spot member owner lease release is waiting for the invalid lease delay.'
         );
+      for (const member of members) {
+        conditions.push({ kind: 'version', key: member.key, expected: member.version });
+        mutations.push({ kind: 'delete', key: member.key });
+      }
       for (const [ownerId, observation] of owners)
-        conditions.push(conditionFor(ownerKey(ownerId), observation.read));
+        conditions.push(conditionFor(ownerKey(ownerId), observation));
       const capacities = new Map<string, { read: ZLinkStoreReadResult; next?: CapacityRecord }>([
         [capacityRowKey.value, { read: capacity }]
       ]);
@@ -1773,28 +1733,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           'User Spot member release exceeds one Location Store batch.'
         );
       const result = await this.provider.write({ conditions, mutations }, signal);
-      if (result.kind === 'applied') {
-        this.ownerLeaseReleaseDelay.clearAuthorityIfOwner(key.value, {
-          ownerId: snapshot.ownerId,
-          leaseGeneration: snapshot.ownerLeaseGeneration
-        });
-        for (const member of members) {
-          const memberOwner = {
-            ownerId: member.ownerId,
-            leaseGeneration: member.leaseGeneration
-          };
-          this.ownerLeaseReleaseDelay.clearAuthorityIfOwner(member.authorityKey, memberOwner);
-          if (endedSpotId !== undefined) {
-            this.ownerLeaseReleaseDelay.clearUserSpotMemberIfOwner(
-              endedSpotId,
-              snapshot.objectGeneration,
-              member.authorityKey,
-              memberOwner
-            );
-          }
-        }
-        return 'reclaimed';
-      }
+      if (result.kind === 'applied') return 'reclaimed';
       await macrotaskBoundary();
     }
   }
@@ -1812,8 +1751,6 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   ): Promise<EndedSpotMember[]> {
     membershipSnapshot: for (;;) {
       const members: EndedSpotMember[] = [];
-      const memberScopePrefix = ownerLeaseReleaseDelayScope.userSpotMembers(spotId, spotGeneration);
-      const observedMemberScopes = new Set<string>();
       let unavailableMember = false;
       let cursor: ZLinkStoreScanCursor | undefined;
       do {
@@ -1839,13 +1776,6 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
             actor.currentSpotGeneration !== spotGeneration
           )
             continue;
-          const memberAuthorityKey = authorityContractValueFromPreimage(item.key.value);
-          const memberScope = ownerLeaseReleaseDelayScope.userSpotMember(
-            spotId,
-            spotGeneration,
-            memberAuthorityKey
-          );
-          observedMemberScopes.add(memberScope);
           if (
             authority.allocation.state !== 'active' ||
             record.aggregate !== undefined ||
@@ -1853,13 +1783,11 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
             hasRelocationAuthority(authority.payload) ||
             decodeActorAuthorityPayload(authority.payload)?.state !== 'ready'
           ) {
-            this.ownerLeaseReleaseDelay.clear(memberScope);
             unavailableMember = true;
             continue;
           }
           members.push({
             key: item.key,
-            authorityKey: memberAuthorityKey,
             version: item.value.version,
             ownerId: authority.ownerId,
             leaseGeneration: authority.ownerLeaseGeneration,
@@ -1868,7 +1796,6 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         }
         cursor = page.value.nextCursor;
       } while (cursor !== undefined);
-      this.ownerLeaseReleaseDelay.clearExcept(memberScopePrefix, observedMemberScopes);
       if (unavailableMember)
         throw new ZLinkFrameworkException(
           ZLinkFrameworkErrorKind.Unavailable,
@@ -1902,12 +1829,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       const descriptorKey = meshKey(request.target.meshName, request.target.nodeRid);
       const leaseKey = ownerKey(request.target.owner.ownerId);
       const capacityRowKey = capacityKey(request.target.meshName, String(request.target.nodeRid));
-      const releaseDelayScope = ownerLeaseReleaseDelayScope.authority(encodedAuthorityKey.value);
-      const releaseDelayObservation = this.ownerLeaseReleaseDelay.observation(releaseDelayScope);
       const current = await this.provider.read(rowKey, signal);
-      if (current.kind === 'missing') {
-        this.ownerLeaseReleaseDelay.clearIfUnchanged(releaseDelayScope, releaseDelayObservation);
-      }
       if (current.kind === 'found') {
         const record = decodeAuthorityRecord(current.value.bytes);
         const snapshot = authoritySnapshot(
@@ -3910,19 +3832,6 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         return;
       }
     }
-  }
-
-  private async clearAggregateMarkers(
-    fence: ZLinkAggregateFence,
-    installed: readonly {
-      readonly key: ZLinkStoreKey;
-      readonly expectedStoreVersion: string;
-    }[],
-    signal?: AbortSignal
-  ): Promise<void> {
-    await parallelForEach(installed, LOCATION_STORE_WRITE_CONCURRENCY, async (value) => {
-      await this.clearAggregateMarker(fence, value.key, signal);
-    });
   }
 
   private async clearAggregateMarkersByScan(

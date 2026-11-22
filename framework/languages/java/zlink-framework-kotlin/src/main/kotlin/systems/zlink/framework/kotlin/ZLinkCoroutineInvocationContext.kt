@@ -9,34 +9,39 @@ import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationC
 
 internal object ZLinkCoroutineInvocationContext {
     fun capture(dispatcher: CoroutineDispatcher): CoroutineContext =
-        dispatcher + Invocation(snapshot())
+        dispatcher + InvocationContextElement()
+}
 
-    private data class Snapshot(
-        val invocation: ZLinkSuspendInvocationContext.Snapshot,
-        val flow: ZLinkFlowContext.State?,
-    ) {
-        fun restore() {
-            ZLinkSuspendInvocationContext.restore(invocation)
-            val local = ZLinkFlowContext.threadLocal()
-            if (flow == null) local.remove() else local.set(flow)
-        }
+// Private top-level declarations compile to package-private JVM classes, so this file adds
+// nothing to the public JVM surface beyond ZLinkCoroutineInvocationContext.capture.
+private object InvocationContextKey : CoroutineContext.Key<InvocationContextElement>
+
+private class InvocationState(
+    private val invocation: ZLinkSuspendInvocationContext.Snapshot,
+    private val flow: ZLinkFlowContext.State?,
+) {
+    fun restore() {
+        ZLinkSuspendInvocationContext.restore(invocation)
+        val local = ZLinkFlowContext.threadLocal()
+        if (flow == null) local.remove() else local.set(flow)
+    }
+}
+
+/** One element carries every invocation thread-local across coroutine thread switches. */
+private class InvocationContextElement :
+    AbstractCoroutineContextElement(InvocationContextKey), ThreadContextElement<InvocationState> {
+    private val captured = current()
+
+    private fun current(): InvocationState =
+        InvocationState(ZLinkSuspendInvocationContext.snapshot(), ZLinkFlowContext.current())
+
+    override fun updateThreadContext(context: CoroutineContext): InvocationState {
+        val previous = current()
+        captured.restore()
+        return previous
     }
 
-    private fun snapshot(): Snapshot =
-        Snapshot(ZLinkSuspendInvocationContext.snapshot(), ZLinkFlowContext.current())
-
-    private class Invocation(private val captured: Snapshot) :
-        AbstractCoroutineContextElement(Key), ThreadContextElement<Snapshot> {
-        companion object Key : CoroutineContext.Key<Invocation>
-
-        override fun updateThreadContext(context: CoroutineContext): Snapshot {
-            val previous = snapshot()
-            captured.restore()
-            return previous
-        }
-
-        override fun restoreThreadContext(context: CoroutineContext, oldState: Snapshot) {
-            oldState.restore()
-        }
+    override fun restoreThreadContext(context: CoroutineContext, oldState: InvocationState) {
+        oldState.restore()
     }
 }

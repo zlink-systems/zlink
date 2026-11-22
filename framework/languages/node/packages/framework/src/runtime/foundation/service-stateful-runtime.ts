@@ -4208,10 +4208,13 @@ export class ServiceStatefulRuntime {
       sessionRid: previous.sessionRid,
       retiredBindingGeneration: previous.bindingGeneration
     });
-    // submitOneWay owns the normal transport admission timeout. A replacement
-    // notice is one-way, so an unsuccessful admission has no caller terminal
-    // to complete and must not delay the already-completed bind.
-    void this.submitOneWay(previous.sessionOwnerNodeRid, [header]).catch(() => {});
+    // The replacement notice is infrastructure. Submit it independently of
+    // the completed bind and use local ingress for a local Session owner.
+    const notice =
+      previous.sessionOwnerNodeRid === this.nodeRid
+        ? this.submitOneWay(this.nodeRid, [header])
+        : this.raw.sendService(previous.sessionOwnerNodeRid, [header]);
+    void notice.catch(() => {});
   }
 
   private enqueueSessionBindingTombstone(
@@ -4982,7 +4985,7 @@ export class ServiceStatefulRuntime {
         //  serial owner nests a turn and is rejected with "cannot
         //  implicitly execute another turn for the same owner". A one-way
         //  submit completes at admission, exactly like the remote path
-        //  (sendService returns once the transport accepts the frame), so
+        //  (sendApplication returns once the transport accepts the frame), so
         //  run the ingress detached like a frame arriving on the receive
         //  pump (spec 26 §2.1 `sent` boundary; spec 33 pre-handler flow).
         void ServiceStatefulRuntime.detachedIngressScope(async () => {
@@ -5023,13 +5026,7 @@ export class ServiceStatefulRuntime {
         applicationJobOwner.close();
       }
     }
-    if (
-      targetNodeGeneration !== undefined &&
-      this.raw.topology.peer(targetNodeRid)?.descriptor.lifecycleGeneration !== targetNodeGeneration
-    ) {
-      return SubmitResult.NotConnected;
-    }
-    return (await this.raw.sendService(targetNodeRid, parts))
+    return (await this.raw.sendApplication(targetNodeRid, parts, targetNodeGeneration))
       ? SubmitResult.Ok
       : SubmitResult.NotConnected;
   }

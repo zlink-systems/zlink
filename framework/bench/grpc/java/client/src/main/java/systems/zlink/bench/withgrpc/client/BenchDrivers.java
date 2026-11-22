@@ -197,6 +197,19 @@ public final class BenchDrivers {
             runRaw(trigger, raw, streamCount, headerPhase, source, resources);
             return streamCount;
         }
+        if ("request-serial".equals(trigger.pattern())
+                && operation instanceof RawStack.RawOperation raw) {
+            // Same caller model as the Framework row and the C++/.NET binding rows: a dedicated
+            // completion thread drives the poller and the submit thread waits on the future.
+            RawCompletionPoller poller = RawCompletionPoller.start(raw);
+            try {
+                runWorkers(1, trigger, raw::invoke, headerPhase, source, resources);
+            } finally {
+                poller.close();
+            }
+            poller.rethrowFailure();
+            return 1;
+        }
         return switch (trigger.pattern()) {
             case "request-serial" -> {
                 runWorkers(1, trigger, operation, headerPhase, source, resources);
@@ -239,21 +252,7 @@ public final class BenchDrivers {
             throws InterruptedException {
         List<SourceMetrics> streams = source.createStreams(count);
         List<Thread> workers = new ArrayList<>(count);
-        AtomicBoolean pollerRunning = new AtomicBoolean(true);
-        AtomicReference<Throwable> pollerFailure = new AtomicReference<>();
-        Thread completionPoller = Thread.ofPlatform().name("bench-completion-poller").start(() -> {
-            while (pollerRunning.get()) {
-                try {
-                    operation.pollCompletions(Duration.ofMillis(20));
-                } catch (InterruptedException interrupted) {
-                    Thread.currentThread().interrupt();
-                    break;
-                } catch (Throwable error) {
-                    pollerFailure.compareAndSet(null, error);
-                    break;
-                }
-            }
-        });
+        RawCompletionPoller completionPoller = RawCompletionPoller.start(operation);
         Set<CompletableFuture<Void>> pendingAll = ConcurrentHashMap.newKeySet();
         for (int index = 0; index < count; index++) {
             final int stream = index;
@@ -325,12 +324,48 @@ public final class BenchDrivers {
         for (Thread worker : workers) worker.join();
         long drainDeadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(options.drainBoundMs);
         while (!pendingAll.isEmpty() && System.nanoTime() < drainDeadline) Thread.sleep(1);
-        pollerRunning.set(false);
-        completionPoller.join();
-        if (pollerFailure.get() != null) {
-            throw new IllegalStateException("raw completion poller failed", pollerFailure.get());
-        }
+        completionPoller.close();
+        completionPoller.rethrowFailure();
         source.freezeTerminal();
+    }
+
+    /** Drives one raw socket's completion poller on its own platform thread until closed. */
+    private static final class RawCompletionPoller implements AutoCloseable {
+        private final AtomicBoolean running = new AtomicBoolean(true);
+        private final AtomicReference<Throwable> failure = new AtomicReference<>();
+        private final Thread thread;
+
+        private RawCompletionPoller(RawStack.RawOperation operation) {
+            thread = Thread.ofPlatform().name("bench-completion-poller").start(() -> {
+                while (running.get()) {
+                    try {
+                        operation.pollCompletions(Duration.ofMillis(20));
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    } catch (Throwable error) {
+                        failure.compareAndSet(null, error);
+                        break;
+                    }
+                }
+            });
+        }
+
+        static RawCompletionPoller start(RawStack.RawOperation operation) {
+            return new RawCompletionPoller(operation);
+        }
+
+        void rethrowFailure() {
+            if (failure.get() != null) {
+                throw new IllegalStateException("raw completion poller failed", failure.get());
+            }
+        }
+
+        @Override
+        public void close() throws InterruptedException {
+            running.set(false);
+            thread.join();
+        }
     }
 
     private static long sequence(int stream, long ordinal) {
