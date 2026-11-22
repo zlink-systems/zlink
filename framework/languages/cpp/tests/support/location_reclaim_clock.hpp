@@ -33,12 +33,14 @@ struct location_reclaim_test_access_t
     {
         const std::lock_guard lock (repository._reclaim_mutex);
         repository._reclaim_observations.clear ();
+        repository._authority_reclaim_observations.clear ();
     }
 
     static std::size_t observations (location_repository_t &repository)
     {
         const std::lock_guard lock (repository._reclaim_mutex);
-        return repository._reclaim_observations.size ();
+        return repository._reclaim_observations.size ()
+               + repository._authority_reclaim_observations.size ();
     }
 
     static bool observe (location_repository_t &repository,

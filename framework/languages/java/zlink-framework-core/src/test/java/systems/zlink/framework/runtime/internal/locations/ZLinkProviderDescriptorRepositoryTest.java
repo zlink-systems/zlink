@@ -1,8 +1,10 @@
 package systems.zlink.framework.runtime.internal.locations;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
@@ -722,5 +724,57 @@ class ZLinkProviderDescriptorRepositoryTest {
         public Instant instant() {
             return now;
         }
+    }
+
+    @RepeatedTest(100)
+    void validLeaseCleanupDoesNotRemoveAnotherTokenObservation() {
+        var monotonicNanos = new AtomicLong();
+        var waitTracker = new ZLinkOwnerLeaseWaitTracker(monotonicNanos::get, Duration.ofNanos(1));
+        var firstOwner = new ZLinkLocationOwnerToken("wait-owner-first", 1);
+        var nextOwner = new ZLinkLocationOwnerToken("wait-owner-next", 2);
+        String waitKey = ZLinkOwnerLeaseWaitTracker.descriptorRecordKey("valid-cleanup-race");
+
+        assertTrue(waitTracker.shouldWait(waitKey, firstOwner, true));
+        monotonicNanos.set(1);
+        assertTrue(waitTracker.shouldWait(waitKey, nextOwner, true));
+        assertFalse(waitTracker.shouldWait(waitKey, firstOwner, false));
+
+        monotonicNanos.set(4);
+        assertFalse(waitTracker.shouldWait(waitKey, nextOwner, true));
+    }
+
+    @RepeatedTest(100)
+    void missingReadCleanupOnlyRemovesTheObservationSeenBeforeTheRequest() {
+        var monotonicNanos = new AtomicLong();
+        var waitTracker = new ZLinkOwnerLeaseWaitTracker(monotonicNanos::get, Duration.ofNanos(1));
+        var firstOwner = new ZLinkLocationOwnerToken("missing-owner-first", 1);
+        var nextOwner = new ZLinkLocationOwnerToken("missing-owner-next", 2);
+        String waitKey = ZLinkOwnerLeaseWaitTracker.descriptorRecordKey("missing-read-race");
+
+        assertTrue(waitTracker.shouldWait(waitKey, firstOwner, true));
+        var requestObservation = waitTracker.snapshot(waitKey);
+        monotonicNanos.set(1);
+        assertTrue(waitTracker.shouldWait(waitKey, nextOwner, true));
+        waitTracker.clearIfUnchanged(waitKey, requestObservation);
+
+        monotonicNanos.set(4);
+        assertFalse(waitTracker.shouldWait(waitKey, nextOwner, true));
+    }
+
+    @RepeatedTest(100)
+    void missingReadCleanupPreservesAReplacementObservationForTheSameToken() {
+        var monotonicNanos = new AtomicLong();
+        var waitTracker = new ZLinkOwnerLeaseWaitTracker(monotonicNanos::get, Duration.ofNanos(1));
+        var owner = new ZLinkLocationOwnerToken("same-token-observation", 1);
+        String waitKey = ZLinkOwnerLeaseWaitTracker.descriptorRecordKey("same-token-missing-race");
+
+        assertTrue(waitTracker.shouldWait(waitKey, owner, true));
+        var requestObservation = waitTracker.snapshot(waitKey);
+        assertFalse(waitTracker.shouldWait(waitKey, owner, false));
+        assertTrue(waitTracker.shouldWait(waitKey, owner, true));
+        waitTracker.clearIfUnchanged(waitKey, requestObservation);
+
+        monotonicNanos.set(3);
+        assertFalse(waitTracker.shouldWait(waitKey, owner, true));
     }
 }

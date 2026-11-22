@@ -1984,7 +1984,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
     }
 
     @RepeatedTest(100)
-    void successfulDeleteClearsOwnerWaitObservationForOpaqueAuthorityKey() throws Exception {
+    void successfulDeleteRetainsOwnerWaitObservationForOpaqueAuthorityKey() throws Exception {
         var monotonicNanos = new AtomicLong();
         var provider = new ZLinkInMemoryProviderLocationStore();
         var owners = new ZLinkProviderOwnerLeaseRepository(provider);
@@ -2027,11 +2027,8 @@ final class ZLinkProviderAuthorityRepositoryTest {
                 assertInstanceOf(
                         ZLinkAuthoritySnapshot.class,
                         repository.read(key, () -> false).toCompletableFuture().get());
-        String waitKey =
-                ZLinkOwnerLeaseWaitTracker.authorityRecordKey(
-                        ZLinkProviderAuthorityRepository.authorityKey(key).value());
 
-        assertTrue(waitTracker.shouldWait(waitKey, owner, true));
+        assertTrue(waitTracker.shouldWait(owner));
         assertInstanceOf(
                 ZLinkAuthorityDeleted.class,
                 repository
@@ -2043,8 +2040,8 @@ final class ZLinkProviderAuthorityRepositoryTest {
                         .toCompletableFuture()
                         .get());
 
-        monotonicNanos.addAndGet(Duration.ofNanos(3).toNanos());
-        assertTrue(waitTracker.shouldWait(waitKey, owner, true));
+        monotonicNanos.addAndGet(3);
+        assertFalse(waitTracker.shouldWait(owner));
     }
 
     @RepeatedTest(100)
@@ -2094,10 +2091,7 @@ final class ZLinkProviderAuthorityRepositoryTest {
                 assertInstanceOf(
                         ZLinkAuthoritySnapshot.class,
                         repository.read(key, () -> false).toCompletableFuture().get());
-        String waitKey =
-                ZLinkOwnerLeaseWaitTracker.authorityRecordKey(
-                        ZLinkProviderAuthorityRepository.authorityKey(key).value());
-        assertTrue(waitTracker.shouldWait(waitKey, owner, true));
+        assertTrue(waitTracker.shouldWait(owner));
 
         monotonicNanos.set(1);
         var deleting =
@@ -2111,66 +2105,14 @@ final class ZLinkProviderAuthorityRepositoryTest {
         store.deleteApplied.get();
         assertFalse(deleting.isDone());
         var nextOwner = new ZLinkLocationOwnerToken("delete-wait-next", 2);
-        assertTrue(waitTracker.shouldWait(waitKey, nextOwner, true));
+        assertTrue(waitTracker.shouldWait(nextOwner));
 
         monotonicNanos.set(2);
         store.releaseDeleteResponse.complete(null);
         assertInstanceOf(ZLinkAuthorityDeleted.class, deleting.get());
 
         monotonicNanos.set(4);
-        assertFalse(waitTracker.shouldWait(waitKey, nextOwner, true));
-    }
-
-    @RepeatedTest(100)
-    void validLeaseCleanupDoesNotRemoveAnotherTokenObservation() {
-        var monotonicNanos = new AtomicLong();
-        var waitTracker = new ZLinkOwnerLeaseWaitTracker(monotonicNanos::get, Duration.ofNanos(1));
-        var firstOwner = new ZLinkLocationOwnerToken("wait-owner-first", 1);
-        var nextOwner = new ZLinkLocationOwnerToken("wait-owner-next", 2);
-        String waitKey = ZLinkOwnerLeaseWaitTracker.authorityRecordKey("valid-cleanup-race");
-
-        assertTrue(waitTracker.shouldWait(waitKey, firstOwner, true));
-        monotonicNanos.set(1);
-        assertTrue(waitTracker.shouldWait(waitKey, nextOwner, true));
-        assertFalse(waitTracker.shouldWait(waitKey, firstOwner, false));
-
-        monotonicNanos.set(4);
-        assertFalse(waitTracker.shouldWait(waitKey, nextOwner, true));
-    }
-
-    @RepeatedTest(100)
-    void missingReadCleanupOnlyRemovesTheObservationSeenBeforeTheRequest() {
-        var monotonicNanos = new AtomicLong();
-        var waitTracker = new ZLinkOwnerLeaseWaitTracker(monotonicNanos::get, Duration.ofNanos(1));
-        var firstOwner = new ZLinkLocationOwnerToken("missing-owner-first", 1);
-        var nextOwner = new ZLinkLocationOwnerToken("missing-owner-next", 2);
-        String waitKey = ZLinkOwnerLeaseWaitTracker.authorityRecordKey("missing-read-race");
-
-        assertTrue(waitTracker.shouldWait(waitKey, firstOwner, true));
-        var requestObservation = waitTracker.snapshot(waitKey);
-        monotonicNanos.set(1);
-        assertTrue(waitTracker.shouldWait(waitKey, nextOwner, true));
-        waitTracker.clearIfUnchanged(waitKey, requestObservation);
-
-        monotonicNanos.set(4);
-        assertFalse(waitTracker.shouldWait(waitKey, nextOwner, true));
-    }
-
-    @RepeatedTest(100)
-    void missingReadCleanupPreservesAReplacementObservationForTheSameToken() {
-        var monotonicNanos = new AtomicLong();
-        var waitTracker = new ZLinkOwnerLeaseWaitTracker(monotonicNanos::get, Duration.ofNanos(1));
-        var owner = new ZLinkLocationOwnerToken("same-token-observation", 1);
-        String waitKey = ZLinkOwnerLeaseWaitTracker.authorityRecordKey("same-token-missing-race");
-
-        assertTrue(waitTracker.shouldWait(waitKey, owner, true));
-        var requestObservation = waitTracker.snapshot(waitKey);
-        assertFalse(waitTracker.shouldWait(waitKey, owner, false));
-        assertTrue(waitTracker.shouldWait(waitKey, owner, true));
-        waitTracker.clearIfUnchanged(waitKey, requestObservation);
-
-        monotonicNanos.set(3);
-        assertFalse(waitTracker.shouldWait(waitKey, owner, true));
+        assertFalse(waitTracker.shouldWait(nextOwner));
     }
 
     private static final class DeferredAuthorityDeleteStore implements ZLinkLocationStore {
