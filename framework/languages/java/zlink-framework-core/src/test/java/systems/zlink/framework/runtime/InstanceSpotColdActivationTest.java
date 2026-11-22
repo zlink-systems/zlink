@@ -7,14 +7,18 @@ import org.junit.jupiter.api.Test;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
-import systems.zlink.framework.runtime.internal.backend.*;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.internal.service.ZLinkInstanceActivationRecoveryCodec;
 import systems.zlink.framework.runtime.locations.*;
 import systems.zlink.framework.runtime.spots.ZLinkSpotRuntimeTestAccess;
 import systems.zlink.framework.spots.*;
 
+import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.UUID;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -79,6 +83,8 @@ final class InstanceSpotColdActivationTest {
         initialized = new AtomicInteger();
         String spotId = "initialization-deadline-" + UUID.randomUUID();
         var store = new ActivationDeadlineStore(spotId, phase);
+        var clock = new ActivationClock();
+        var activationTimeout = Duration.ofMillis(200);
         var options = new DefaultZLinkFrameworkOptions();
         options.configureDispatch()
                 .messageFlow(systems.zlink.framework.configuration.ZLinkMessageFlowLogMode.NORMAL);
@@ -86,23 +92,30 @@ final class InstanceSpotColdActivationTest {
         options.addRelocationStore(new InMemoryRelocationStore());
         options.addRouteMesh("cold-test")
                 .listen("inproc://init-deadline-" + UUID.randomUUID())
-                .setDefaultRequestTimeout(Duration.ofMillis(200))
+                .setDefaultRequestTimeout(activationTimeout)
                 .objects()
                 .server()
                 .addInstanceSpotFactory(
                         "cold", WaitingInstance.class, factory -> factory.disableRelocation());
-        try (var runtime =
-                ZLinkFrameworkRuntimeTestAccess.start(
-                        options,
-                        new InstanceActivationObserverBackend(
-                                envelope -> {
-                                    store.envelope = envelope;
-                                    store.validatorEntered.complete(envelope);
-                                    if (store.phase == DeadlinePhase.VALIDATOR
-                                            || store.phase == DeadlinePhase.CALLER_CANCELLATION) {
-                                        store.resume.join();
-                                    }
-                                }))) {
+        try (var timer = new ActivationTimer(clock);
+                var runtime =
+                        ZLinkFrameworkRuntimeTestAccess.startWithConstruction(
+                                options,
+                                new InstanceActivationObserverBackend(
+                                        envelope -> {
+                                            store.envelope = envelope;
+                                            store.validatorEntered.complete(envelope);
+                                            if (store.phase == DeadlinePhase.VALIDATOR
+                                                    || store.phase
+                                                            == DeadlinePhase.CALLER_CANCELLATION) {
+                                                store.resume.join();
+                                            }
+                                        }),
+                                ZLinkHandlerActivator.reflection(),
+                                null,
+                                new ZLinkFrameworkRuntimeTestAccess.Construction()
+                                        .spotActivationClock(clock)
+                                        .spotTimerExecutor(timer))) {
             ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
                     .toCompletableFuture()
                     .get(5, TimeUnit.SECONDS);
@@ -123,20 +136,23 @@ final class InstanceSpotColdActivationTest {
                                                 .toCompletableFuture()
                                                 .get(5, TimeUnit.SECONDS));
                 try {
-                    ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope envelope = null;
-                    if (phase == DeadlinePhase.INITIALIZATION) entered.get(5, TimeUnit.SECONDS);
-                    else if (phase == DeadlinePhase.RECOVERY)
-                        envelope = store.recoveryEntered.get(5, TimeUnit.SECONDS);
-                    else envelope = store.validatorEntered.get(5, TimeUnit.SECONDS);
-                    long terminalUntil = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
-                    if (phase == DeadlinePhase.RECOVERY || phase == DeadlinePhase.VALIDATOR) {
-                        while (System.currentTimeMillis() < envelope.deadlineUnixMs()) {
-                            assertTrue(
-                                    System.nanoTime() < terminalUntil,
-                                    "The original activation deadline must expire");
-                            Thread.sleep(1);
-                        }
+                    var envelope =
+                            phase == DeadlinePhase.RECOVERY
+                                    ? store.recoveryEntered.get(5, TimeUnit.SECONDS)
+                                    : store.validatorEntered.get(5, TimeUnit.SECONDS);
+                    assertEquals(
+                            clock.millis() + activationTimeout.toMillis(),
+                            envelope.deadlineUnixMs());
+                    if (phase == DeadlinePhase.INITIALIZATION) {
+                        entered.get(5, TimeUnit.SECONDS);
+                        var timeout = timer.scheduled.get(5, TimeUnit.SECONDS);
+                        assertEquals(envelope.deadlineUnixMs(), timeout.deadlineUnixMs);
+                        clock.advanceTo(envelope.deadlineUnixMs());
+                        timer.execute(timeout);
+                    } else if (phase != DeadlinePhase.CALLER_CANCELLATION) {
+                        clock.advanceTo(envelope.deadlineUnixMs());
                     }
+                    long terminalUntil = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
                     store.resume.complete(null);
                     if (phase == DeadlinePhase.INITIALIZATION || phase == DeadlinePhase.RECOVERY) {
                         // The activation owner records this result before telemetry delivery.
@@ -179,7 +195,83 @@ final class InstanceSpotColdActivationTest {
         }
     }
 
-    /** Holds the existing provider boundary; the runtime clock and scheduler remain real. */
+    private static final class ActivationClock extends Clock {
+        private final Clock initial;
+        private final CompletableFuture<Instant> advanced;
+
+        ActivationClock() {
+            this(Clock.fixed(Instant.now(), ZoneOffset.UTC), new CompletableFuture<>());
+        }
+
+        private ActivationClock(Clock initial, CompletableFuture<Instant> advanced) {
+            this.initial = initial;
+            this.advanced = advanced;
+        }
+
+        @Override
+        public ZoneId getZone() {
+            return initial.getZone();
+        }
+
+        @Override
+        public Clock withZone(ZoneId zone) {
+            return new ActivationClock(initial.withZone(zone), advanced);
+        }
+
+        @Override
+        public Instant instant() {
+            return advanced.getNow(initial.instant());
+        }
+
+        void advanceTo(long deadlineUnixMs) {
+            advanced.complete(Instant.ofEpochMilli(deadlineUnixMs));
+        }
+    }
+
+    private static final class ActivationTimer extends ScheduledThreadPoolExecutor {
+        private final ActivationClock clock;
+        private final CompletableFuture<ActivationTimeout> scheduled = new CompletableFuture<>();
+
+        ActivationTimer(ActivationClock clock) {
+            super(1);
+            this.clock = clock;
+        }
+
+        @Override
+        public ScheduledFuture<?> schedule(Runnable command, long delay, TimeUnit unit) {
+            if (unit != TimeUnit.MILLISECONDS) {
+                return super.schedule(command, delay, unit);
+            }
+            var timeout = new ActivationTimeout(command, clock, clock.millis() + delay);
+            assertTrue(scheduled.complete(timeout), "Activation must schedule one timeout");
+            return timeout;
+        }
+    }
+
+    private static final class ActivationTimeout extends FutureTask<Void>
+            implements ScheduledFuture<Void> {
+        private final Clock clock;
+        private final long deadlineUnixMs;
+
+        ActivationTimeout(Runnable command, Clock clock, long deadlineUnixMs) {
+            super(command, null);
+            this.clock = clock;
+            this.deadlineUnixMs = deadlineUnixMs;
+        }
+
+        @Override
+        public long getDelay(TimeUnit unit) {
+            return unit.convert(deadlineUnixMs - clock.millis(), TimeUnit.MILLISECONDS);
+        }
+
+        @Override
+        public int compareTo(Delayed other) {
+            return Long.compare(
+                    getDelay(TimeUnit.NANOSECONDS), other.getDelay(TimeUnit.NANOSECONDS));
+        }
+    }
+
+    /** Holds recovery at the existing provider boundary. */
     private static final class ActivationDeadlineStore
             implements systems.zlink.framework.locationprovider.ZLinkLocationStore {
         private final ZLinkInMemoryLocationStore delegate = new ZLinkInMemoryLocationStore();

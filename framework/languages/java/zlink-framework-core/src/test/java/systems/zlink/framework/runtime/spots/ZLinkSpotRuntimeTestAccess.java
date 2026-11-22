@@ -20,6 +20,7 @@ import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
 import systems.zlink.framework.spots.ZLinkSpot;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -59,7 +60,8 @@ public final class ZLinkSpotRuntimeTestAccess {
             ScheduledExecutorService timerExecutor,
             ThreadPoolExecutor multicastExecutor,
             Executor handlerExecutor,
-            Supplier<ZLinkStateLane> timerStateLaneFactory) {
+            Supplier<ZLinkStateLane> timerStateLaneFactory,
+            Clock activationClock) {
         return new ZLinkSpotRuntime(
                 backendFactory,
                 adapterOptions,
@@ -73,7 +75,8 @@ public final class ZLinkSpotRuntimeTestAccess {
                 timerExecutor,
                 multicastExecutor,
                 handlerExecutor,
-                timerStateLaneFactory);
+                timerStateLaneFactory,
+                activationClock);
     }
 
     public static boolean actorQueuesEmpty(ZLinkSpotSerialExecutor executor) {
