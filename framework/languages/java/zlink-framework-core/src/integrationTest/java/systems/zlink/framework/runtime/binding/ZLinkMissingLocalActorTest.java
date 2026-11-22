@@ -27,8 +27,8 @@ import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.runtime.streams.*;
 import systems.zlink.framework.spots.*;
 import systems.zlink.framework.streams.*;
+import systems.zlink.framework.testsupport.ZLinkStreamTestFrames;
 
-import java.io.DataInputStream;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
 import java.net.Socket;
@@ -124,13 +124,12 @@ final class ZLinkMissingLocalActorTest {
                             null,
                             true,
                             ZLinkStreamCodec.JSON);
+            // Queue a ping before binding to exercise the wire order deterministically.
+            fixture.sendHeartbeatPing(connectedSession);
             session.bindOrGet(fixture.ref).toCompletableFuture().get(3, TimeUnit.SECONDS);
-            var input = new DataInputStream(client.getInputStream());
-            int controlHeaderSize = input.readUnsignedShort();
-            int controlBodySize = input.readInt();
-            var control = ZLinkStreamHeaderCodec.decodeOrPlain(input.readNBytes(controlHeaderSize));
-            assertEquals(ZLinkStreamActorControl.BOUND, control.name());
-            var controlBody = ByteBuffer.wrap(input.readNBytes(controlBodySize));
+            var control = ZLinkStreamTestFrames.readSkippingHeartbeatPings(client);
+            assertEquals(ZLinkStreamActorControl.BOUND, control.header().name());
+            var controlBody = ByteBuffer.wrap(control.body());
             assertEquals(1, controlBody.get());
             int slot = Short.toUnsignedInt(controlBody.getShort());
             var stay = fixture.spots.actors.remove(ACTOR);
@@ -146,6 +145,7 @@ final class ZLinkMissingLocalActorTest {
                                         "Echo",
                                         Map.of())
                                 .withActorSlot(slot);
+                fixture.sendHeartbeatPing(connectedSession);
                 // Inject backend ingress after Actor retirement while the published binding
                 // survives.
                 try (var payload = Message.from("{\"value\":\"missing\"}")) {
@@ -157,10 +157,9 @@ final class ZLinkMissingLocalActorTest {
                                     List.of(payload),
                                     SendFlags.DONT_WAIT));
                 }
-                int headerSize = input.readUnsignedShort();
-                int bodySize = input.readInt();
-                var reply = ZLinkStreamHeaderCodec.decodeOrPlain(input.readNBytes(headerSize));
-                var error = ZLinkStreamErrorPayload.decode(input.readNBytes(bodySize));
+                var frame = ZLinkStreamTestFrames.readSkippingHeartbeatPings(client);
+                var reply = frame.header();
+                var error = ZLinkStreamErrorPayload.decode(frame.body());
                 assertEquals(ZLinkStreamMessageKind.ERROR, reply.kind());
                 assertEquals(Optional.of(41L), reply.requestSequence());
                 CompletableFuture<Void> relayed;
@@ -350,6 +349,14 @@ final class ZLinkMissingLocalActorTest {
                     .requestToActor(ACTOR, new Echo(value))
                     .submit(String.class)
                     .toCompletableFuture();
+        }
+
+        void sendHeartbeatPing(RoutingId session) throws Exception {
+            try (var payload = Message.allocate(0)) {
+                stream.sendAsync(session, ZLinkStreamHeader.HEARTBEAT_PING, List.of(payload))
+                        .toCompletableFuture()
+                        .get(3, TimeUnit.SECONDS);
+            }
         }
 
         Socket connect() throws Exception {
