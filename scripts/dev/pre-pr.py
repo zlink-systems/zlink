@@ -23,6 +23,9 @@ CHECKS = (
 # their commands, arguments, working directories, environment and order.
 CPP = (
     "Verify framework relocation conformance inventory",
+    "Resolve the runner vcpkg",
+    "Install Framework C++ vcpkg dependencies",
+    "Check vcpkg dependency versions against vcpkg.json",
     "Build the checkout C++ binding package",
     "Configure and build Framework C++ tests",
     "Run Framework C++ unit and contract tests",
@@ -253,14 +256,18 @@ def core(temp):
 def cpp(temp):
     redis_required()
     env = os.environ
+    parallel = env.get("BUILD_PARALLEL") or "2"
     job = Job(ROOT, temp, "framework-cpp", "framework-cpp", env={
-        "BUILD_PARALLEL": env.get("BUILD_PARALLEL") or "2",
+        "BUILD_PARALLEL": parallel,
         # The workflow reads the self-hosted parallelism from a repository variable,
         # which a local run has no access to; the local gate uses BUILD_PARALLEL.
-        "BUILD_PARALLEL_SELF_HOSTED": env.get("BUILD_PARALLEL") or "2",
+        "BUILD_PARALLEL_SELF_HOSTED": parallel,
+        "VCPKG_MAX_CONCURRENCY": env.get("VCPKG_MAX_CONCURRENCY") or parallel,
         "ZLINK_SCCACHE_LAUNCHER": env.get("ZLINK_SCCACHE_LAUNCHER", ""),
-        **{key: env[key] for key in ("ZLINK_LOCAL_PACKAGE_ROOT", "VCPKG_INSTALLED_DIR",
-                                    "ZLINK_VCPKG_TRIPLET") if key in env},
+        "RUNNER_ARCH": "X64",
+        "RUNNER_NAME": f"pre-pr-{ROOT.name}",
+        "VCPKG_INSTALLATION_ROOT": env.get("VCPKG_INSTALLATION_ROOT") or env.get("VCPKG_ROOT", ""),
+        **{key: env[key] for key in ("ZLINK_LOCAL_PACKAGE_ROOT",) if key in env},
     })
     # The local gate uses the Core release cache. CI rebuilds Core from source.
     prefix = Path(release_prefix())
@@ -268,8 +275,9 @@ def cpp(temp):
     # CMake reads the Core package at install/zlink-core/<version>.
     version = prefix.parents[1].name
     local_core = Path(job.env["ZLINK_LOCAL_PACKAGE_ROOT"]) / "install/zlink-core" / version
-    # CMake package config and provenance come from the release cache.
-    shutil.copytree(prefix, local_core, symlinks=True, dirs_exist_ok=True)
+    # Preserve the release symlinks and refresh them when the local gate is rerun.
+    local_core.mkdir(parents=True, exist_ok=True)
+    command("cp", "-a", f"{prefix}/.", str(local_core))
     return job.run(*CPP)
 
 
