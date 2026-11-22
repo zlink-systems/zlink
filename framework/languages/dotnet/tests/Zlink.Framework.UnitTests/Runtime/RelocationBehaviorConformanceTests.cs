@@ -2379,7 +2379,7 @@ public sealed partial class RelocationBehaviorConformanceTests
                 );
                 completionLeftCanonicalAuthority =
                     ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                        completedAuthority.Snapshot.Payload.Span,
+                        completedAuthority.Snapshot,
                         out _
                     );
                 Assert.False(trace.ReleaseSourceLeave.Task.IsCompleted);
@@ -2942,14 +2942,18 @@ internal sealed class RecordingLocationStore(
                     relocationId
                 )
                 && ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                    current.Snapshot.Payload.Span,
+                    current.Snapshot,
                     out var projection
                 )
             )
             {
                 using var incoming = JsonDocument.Parse(put.Bytes);
                 if (
-                    incoming
+                    (
+                        !incoming.RootElement.TryGetProperty("aggregate", out var aggregate)
+                        || !aggregate.TryGetProperty("relocation", out _)
+                    )
+                    && incoming
                         .RootElement.GetProperty("payload")
                         .GetBytesFromBase64()
                         .AsSpan()
