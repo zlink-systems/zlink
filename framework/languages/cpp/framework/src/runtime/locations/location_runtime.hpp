@@ -532,6 +532,13 @@ class location_runtime_t
           });
     }
 
+    task_t<void> set_descriptor_renewal (std::function<void ()> renew)
+    {
+        return _lane->run_task ([this, renew = std::move (renew)] () mutable {
+            _descriptor_renewal = std::move (renew);
+        });
+    }
+
     task_t<bool>
     republish_descriptors (location_write_intent_t intent,
                            std::stop_token cancellation,
@@ -1626,12 +1633,14 @@ class location_runtime_t
                 co_await finishing;
         }
         runtime->wake_owner_lease_observers ();
-        co_await lease_lane (attempt, [runtime, token] {
+        co_await lease_lane (attempt, [runtime, token, renewal, recovering] {
             for (const auto &operation : *runtime->_repository_operations) {
                 if (const auto failure = operation->failure ())
                     runtime->_last_error = *failure;
                 operation->progress (token);
             }
+            if (renewal && !recovering && !runtime->_draining && runtime->_descriptor_renewal)
+                runtime->_descriptor_renewal ();
         });
     }
 
@@ -2167,6 +2176,7 @@ class location_runtime_t
 
     // Owner subscriptions contain no retained object inventory or Ready evidence.
     descriptor_publisher_t _descriptor_publisher;
+    std::function<void ()> _descriptor_renewal;
     std::shared_ptr<std::vector<execution_observer_t>> _execution_discard_requests =
       std::make_shared<std::vector<execution_observer_t>> ();
     mutable std::shared_ptr<state_lane_t> _lane = std::make_shared<state_lane_t> ();
