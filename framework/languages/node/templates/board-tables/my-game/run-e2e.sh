@@ -27,6 +27,8 @@ if $attach; then
 fi
 if $local_mode; then
   if ! $no_build; then
+    . "$ROOT/scripts/run-helpers.sh"
+    assert_no_running_server "$ROOT"
     if ! (npm ci && npm run build) >"$ROOT/.logs/build.log" 2>&1; then
       tail -n 20 "$ROOT/.logs/build.log" >&2
       exit 1

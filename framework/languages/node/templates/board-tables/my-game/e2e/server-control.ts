@@ -68,7 +68,7 @@ export async function publishServer(
       flag: 'wx'
     });
     try {
-      linkSync(temporaryPath, statePath);
+      await claimStatePath(temporaryPath);
     } finally {
       unlinkSync(temporaryPath);
     }
@@ -83,6 +83,44 @@ export async function publishServer(
       await close();
     }
   };
+}
+
+export class ServerAlreadyRunningError extends Error {}
+
+// A state file left by a server that ended without cleanup is replaced; a live one is not.
+async function claimStatePath(temporaryPath: string): Promise<void> {
+  try {
+    linkSync(temporaryPath, statePath);
+    return;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+  }
+  await assertNoRunningServer();
+  unlinkSync(statePath);
+  linkSync(temporaryPath, statePath);
+}
+
+export async function assertNoRunningServer(): Promise<void> {
+  if (await isRecordedServerAlive()) {
+    throw new ServerAlreadyRunningError(
+      `A server is already running (${statePath}). Stop it with Ctrl+C in its terminal first.`
+    );
+  }
+}
+
+async function isRecordedServerAlive(): Promise<boolean> {
+  let endpoint: string;
+  try {
+    endpoint = (JSON.parse(readFileSync(statePath, 'utf8')) as ServerState).controlEndpoint;
+  } catch {
+    return false;
+  }
+  try {
+    await fetch(endpoint, { redirect: 'error', signal: AbortSignal.timeout(Limits.controlMs) });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function attachServer(): { state: ServerState; control: NodeControl } {

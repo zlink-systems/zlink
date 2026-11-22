@@ -24,6 +24,7 @@ if ($Attach) {
 }
 if ($Local) {
     if (-not $NoBuild) {
+        Assert-NoRunningServer -Root $root
         $buildLog = Join-Path $root '.logs/build.log'
         $code = Invoke-Logged -Log $buildLog -Command npm -Arguments @('ci')
         if ($code -ne 0) { exit $code }

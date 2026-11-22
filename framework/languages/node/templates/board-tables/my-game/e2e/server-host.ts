@@ -17,7 +17,13 @@ import {
   type NodeRole
 } from '../server/shared/constants';
 import { checkStructure } from './structure';
-import { publishServer, type NodeControl, type ServerState } from './server-control';
+import {
+  assertNoRunningServer,
+  publishServer,
+  ServerAlreadyRunningError,
+  type NodeControl,
+  type ServerState
+} from './server-control';
 
 // What a standalone server prints. Each line is "<time>  [<server id>]  <message>". Server lines,
 // warnings and errors always appear; diagnostic records (message flow) appear only with trace. Every
@@ -386,6 +392,7 @@ async function main(): Promise<void> {
   process.on('SIGTERM', stop);
   const options: ConsoleOptions = { trace: process.argv.includes(LocalHost.traceFlag) };
   checkStructure();
+  await assertNoRunningServer();
   const host = createServerHost(Scenarios.length, options);
   try {
     const state = await host.startAll(stopping.signal);
@@ -417,7 +424,7 @@ async function main(): Promise<void> {
 
 if (require.main === module) {
   main().catch((error) => {
-    console.error(error);
+    console.error(error instanceof ServerAlreadyRunningError ? error.message : error);
     process.exitCode = 1;
   });
 }

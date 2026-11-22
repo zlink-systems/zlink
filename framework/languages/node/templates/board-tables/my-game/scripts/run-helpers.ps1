@@ -35,3 +35,24 @@ function Invoke-Logged {
     }
     return $code
 }
+
+# npm ci replaces node_modules, which a running server still uses, so a build must not start while
+# the server recorded in logs/server.json still answers on its control port.
+function Assert-NoRunningServer {
+    param([Parameter(Mandatory = $true)][string]$Root)
+    $state = Join-Path $Root 'logs/server.json'
+    if (-not (Test-Path -LiteralPath $state)) { return }
+    try { $endpoint = [Uri](Get-Content -LiteralPath $state -Raw | ConvertFrom-Json).controlEndpoint }
+    catch { return }
+    $client = New-Object System.Net.Sockets.TcpClient
+    try {
+        $connect = $client.BeginConnect($endpoint.Host, $endpoint.Port, $null, $null)
+        $running = $connect.AsyncWaitHandle.WaitOne(1000) -and $client.Connected
+    }
+    catch { $running = $false }
+    finally { $client.Close() }
+    if ($running) {
+        Write-Host 'A server is already running (logs/server.json). Stop it with Ctrl+C in its terminal first.' -ForegroundColor Red
+        exit 1
+    }
+}

@@ -4,6 +4,7 @@ Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'scripts/run-helpers.ps1')
 Assert-PowerShellVersion
 Set-Location $PSScriptRoot
+Assert-NoRunningServer -Root $PSScriptRoot
 New-Item -ItemType Directory -Force '.logs' | Out-Null
 $buildLog = Join-Path $PSScriptRoot '.logs/build.log'
 $code = Invoke-Logged -Log $buildLog -Command npm -Arguments @('ci')
