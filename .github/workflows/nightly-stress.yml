@@ -100,7 +100,7 @@ jobs:
 
       - name: Resolve the runner vcpkg
         id: vcpkg
-        run: bash scripts/ci/framework-cpp-vcpkg.sh resolve
+        run: bash scripts/ci/framework-cpp-vcpkg.sh resolve sanitizer
 
       - name: Cache Framework C++ vcpkg dependencies
         id: vcpkg-cache
@@ -197,7 +197,7 @@ jobs:
           touch build/linux-ninja-release/.cmake/api/v1/query/codemodel-v2
           cmake --preset linux-ninja-release \
             -DVCPKG_TARGET_TRIPLET="${ZLINK_VCPKG_TRIPLET}" \
-            -DVCPKG_HOST_TRIPLET="${ZLINK_VCPKG_TRIPLET}" \
+            -DVCPKG_HOST_TRIPLET="${ZLINK_VCPKG_HOST_TRIPLET}" \
             -DVCPKG_OVERLAY_TRIPLETS="${VCPKG_OVERLAY_TRIPLETS}" \
             -DZLINK_FRAMEWORK_CPP_TEST_PROBES=ON \
             -DZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK=OFF \
