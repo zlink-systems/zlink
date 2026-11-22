@@ -200,10 +200,22 @@ class channel_runtime_state_t
               runtime::messaging::message_parts_t (runtime::messaging::client_call_codec_t::*) (
                 runtime::messaging::envelope_header_t &&,
                 encoded_payload_t,
-                std::shared_ptr<const request_type_plan_t>) const;
+                std::shared_ptr<const request_type_plan_t>,
+                std::shared_ptr<const std::string>) const;
+            entry_t (std::string_view channel_name,
+                     node_transport_t transport,
+                     request_encoder_t encode_request =
+                       &runtime::messaging::client_call_codec_t::encode_payload_parts) :
+                transport (std::move (transport)),
+                request_channel_fields (
+                  runtime::messaging::encode_request_channel_header_fields (channel_name)),
+                encode_request (encode_request)
+            {
+            }
+
             node_transport_t transport;
-            request_encoder_t encode_request =
-              &runtime::messaging::client_call_codec_t::encode_payload_parts;
+            std::string request_channel_fields;
+            request_encoder_t encode_request;
         };
         std::map<std::string, entry_t> nodes;
         std::map<std::string, spot_mesh_send_t> spot_mesh_senders;
