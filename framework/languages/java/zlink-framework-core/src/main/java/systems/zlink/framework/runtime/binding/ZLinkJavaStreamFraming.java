@@ -16,6 +16,11 @@ import java.util.Map;
 import java.util.Optional;
 
 final class ZLinkJavaStreamFraming {
+    private static final byte[] HEARTBEAT_PING_FRAME =
+            ZLinkStreamFrameCodec.encode(ZLinkStreamHeader.HEARTBEAT_PING, new byte[0]);
+    private static final byte[] HEARTBEAT_PONG_FRAME =
+            ZLinkStreamFrameCodec.encode(ZLinkStreamHeader.HEARTBEAT_PONG, new byte[0]);
+
     private ZLinkJavaStreamFraming() {}
 
     static boolean submit(
@@ -61,9 +66,16 @@ final class ZLinkJavaStreamFraming {
         if (parts == null || parts.size() != 1) {
             throw new IllegalArgumentException("stream frame requires exactly one payload part");
         }
+        Message body = parts.getFirst();
+        if (body.size() == 0) {
+            if (header == ZLinkStreamHeader.HEARTBEAT_PING)
+                return Message.from(HEARTBEAT_PING_FRAME);
+            if (header == ZLinkStreamHeader.HEARTBEAT_PONG)
+                return Message.from(HEARTBEAT_PONG_FRAME);
+        }
         return Message.from(
                 ZLinkStreamFrameCodec.encode(
-                        ZLinkStreamHeaderCodec.encode(header), parts.get(0).toByteArray()));
+                        ZLinkStreamHeaderCodec.encode(header), body.toByteArray()));
     }
 
     static Message withActorSlot(List<Message> parts, int actorSlot) {

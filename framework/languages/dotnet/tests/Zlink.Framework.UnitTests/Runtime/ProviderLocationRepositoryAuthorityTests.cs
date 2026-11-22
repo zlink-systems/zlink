@@ -18,7 +18,7 @@ using Zlink.Framework.Runtime.Spots;
 
 namespace Zlink.Framework.UnitTests;
 
-public sealed class ProviderLocationRepositoryAuthorityTests
+public sealed partial class ProviderLocationRepositoryAuthorityTests
 {
     [Theory]
     [InlineData(false)]
@@ -2170,7 +2170,7 @@ public sealed class ProviderLocationRepositoryAuthorityTests
 
         time.Advance(TimeSpan.FromTicks(1));
         Assert.IsType<ZLinkObjectReserveResult.Reserved>(await repository.ReserveAsync(request));
-        Assert.Equal(0, ObservationCount(repository));
+        Assert.Equal(1, ObservationCount(repository));
     }
 
     [Theory]
@@ -4256,21 +4256,21 @@ public sealed class ProviderLocationRepositoryAuthorityTests
     }
 
     [Fact]
-    public void ReleaseWaitRestartsAfterValidityAndPreservesAnotherTokenObservation()
+    public void DescriptorReleaseWaitRestartsAfterValidityAndPreservesAnotherTokenObservation()
     {
         var time = new ManualTimeProvider();
         var wait = new ZLinkOwnerLeaseReleaseWait(time);
         var first = new ZLinkLocationOwnerToken("wait-owner", 1);
         var replacement = new ZLinkLocationOwnerToken("wait-owner", 2);
 
-        wait.Observe("record", first);
+        Assert.False(wait.HasElapsed("record", first, TimeSpan.FromSeconds(5)));
         time.Advance(TimeSpan.FromSeconds(10));
         wait.ForgetIfTokenMatches("record", first);
         Assert.Equal(0, wait.Count);
-        wait.Observe("record", first);
+        Assert.False(wait.HasElapsed("record", first, TimeSpan.FromSeconds(5)));
         Assert.False(wait.HasElapsed("record", first, TimeSpan.FromSeconds(5)));
 
-        wait.Observe("record", replacement);
+        Assert.False(wait.HasElapsed("record", replacement, TimeSpan.FromSeconds(5)));
         wait.ForgetIfTokenMatches("record", first);
         Assert.Equal(1, wait.Count);
         Assert.False(wait.HasElapsed("record", replacement, TimeSpan.FromSeconds(5)));
@@ -4281,7 +4281,7 @@ public sealed class ProviderLocationRepositoryAuthorityTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task SuccessfulAuthorityDeletesClearTheirTokenObservation(bool inMemory)
+    public async Task SuccessfulAuthorityDeletesRetainTheirTokenObservation(bool inMemory)
     {
         var time = new ManualTimeProvider();
         var provider = new ZLinkInMemoryProviderLocationStore(time);
@@ -4309,7 +4309,7 @@ public sealed class ProviderLocationRepositoryAuthorityTests
         var deletedAuthority = Assert.IsType<ZLinkAuthorityReadResult.Found>(
             await repository.ReadAuthorityAsync(deletedReservation.Key)
         );
-        releaseWait.Observe(deletedReservation.Key.Value, owner);
+        releaseWait.Observe(owner);
         Assert.Equal(1, releaseWait.Count);
         Assert.IsType<ZLinkAuthorityCompareExchangeResult.Deleted>(
             await repository.CompareExchangeAuthorityAsync(
@@ -4318,7 +4318,7 @@ public sealed class ProviderLocationRepositoryAuthorityTests
                 new ZLinkAuthorityMutation.Delete()
             )
         );
-        Assert.Equal(0, releaseWait.Count);
+        Assert.Equal(1, releaseWait.Count);
         Assert.IsType<ZLinkAuthorityReadResult.Missing>(
             await repository.ReadAuthorityAsync(deletedReservation.Key)
         );
@@ -4328,16 +4328,16 @@ public sealed class ProviderLocationRepositoryAuthorityTests
                 Reservation("release-wait-aborted-actor", descriptor, owner)
             )
         );
-        releaseWait.Observe(abortedReservation.Reservation.Key.Value, owner);
+        releaseWait.Observe(owner);
         Assert.IsType<ZLinkObjectAbortResult.Aborted>(
             await repository.AbortAsync(abortedReservation.Reservation)
         );
-        Assert.Equal(0, releaseWait.Count);
+        Assert.Equal(1, releaseWait.Count);
 
         var ownerRemovalReservation = await CreateActiveActorAsync("release-wait-owner-actor");
-        releaseWait.Observe(ownerRemovalReservation.Key.Value, owner);
+        releaseWait.Observe(owner);
         Assert.Equal(1, await repository.RemoveAllByOwnerAsync(owner));
-        Assert.Equal(0, releaseWait.Count);
+        Assert.Equal(1, releaseWait.Count);
     }
 
     [Theory]
@@ -5022,7 +5022,7 @@ public sealed class ProviderLocationRepositoryAuthorityTests
     }
 
     [Fact]
-    public async Task MissingAuthorityReadClearsObservationAfterOtherRepositoryDeletesIt()
+    public async Task MissingAuthorityReadRetainsObservationAfterOtherRepositoryDeletesIt()
     {
         var time = new ManualTimeProvider();
         var provider = new ZLinkInMemoryProviderLocationStore(time);
@@ -5055,7 +5055,7 @@ public sealed class ProviderLocationRepositoryAuthorityTests
         );
 
         var observation = repositoryA.OwnerLeaseReleaseWaitTestAccess;
-        observation.Observe(reservation.Reservation.Key.Value, owner);
+        observation.Observe(owner);
         Assert.Equal(1, observation.Count);
         Assert.IsType<ZLinkAuthorityCompareExchangeResult.Deleted>(
             await repositoryB.CompareExchangeAuthorityAsync(
@@ -5068,7 +5068,7 @@ public sealed class ProviderLocationRepositoryAuthorityTests
         Assert.IsType<ZLinkAuthorityReadResult.Missing>(
             await repositoryA.ReadAuthorityAsync(reservation.Reservation.Key)
         );
-        Assert.Equal(0, observation.Count);
+        Assert.Equal(1, observation.Count);
     }
 
     [Fact]
@@ -5085,31 +5085,30 @@ public sealed class ProviderLocationRepositoryAuthorityTests
         var wait = repository.OwnerLeaseReleaseWaitTestAccess;
         var first = new ZLinkLocationOwnerToken("delayed-authority-owner", 1);
         var replacement = new ZLinkLocationOwnerToken("delayed-authority-owner", 2);
-        wait.Observe(key.Value, first);
+        wait.Observe(first);
 
         var read = repository.ReadAuthorityAsync(key).AsTask();
         await delayedStore.ReadEntered.WaitAsync(TimeSpan.FromSeconds(5));
-        wait.Observe(key.Value, replacement);
+        wait.Observe(replacement);
         delayedStore.ReleaseRead();
 
         Assert.IsType<ZLinkAuthorityReadResult.Missing>(await read);
-        Assert.Equal(1, wait.Count);
-        Assert.False(wait.HasElapsed(key.Value, replacement, TimeSpan.FromSeconds(5)));
+        Assert.Equal(2, wait.Count);
+        Assert.False(wait.HasElapsed(replacement, TimeSpan.FromSeconds(5)));
     }
 
     [Fact]
-    public async Task InMemoryMissingAuthorityReadClearsObservedToken()
+    public async Task InMemoryMissingAuthorityReadRetainsObservedToken()
     {
         var time = new ManualTimeProvider();
         var repository = new ZLinkInMemoryLocationStore(time);
         var key = ZLinkAuthorityKeyCodec.EncodeActor("missing-authority-observation");
         repository.OwnerLeaseReleaseWaitTestAccess.Observe(
-            key.Value,
             new ZLinkLocationOwnerToken("missing-authority-owner", 1)
         );
 
         Assert.IsType<ZLinkAuthorityReadResult.Missing>(await repository.ReadAuthorityAsync(key));
-        Assert.Equal(0, repository.OwnerLeaseReleaseWaitTestAccess.Count);
+        Assert.Equal(1, repository.OwnerLeaseReleaseWaitTestAccess.Count);
     }
 
     [Theory]

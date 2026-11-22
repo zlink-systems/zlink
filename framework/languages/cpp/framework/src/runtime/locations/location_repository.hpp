@@ -866,7 +866,18 @@ class location_repository_t
     }
 
   protected:
-    // Location runtime §6.1: one observation per record and exact owner token.
+    // An invalid authority owner token keeps its first observation for this repository.
+    bool authority_release_wait_elapsed (const location_owner_token_t &owner)
+    {
+        const std::lock_guard lock (_reclaim_mutex);
+        const auto now = _reclaim_now ();
+        const auto first = _authority_reclaim_observations
+                             .try_emplace (std::pair{owner.owner_id, owner.lease_generation}, now)
+                             .first;
+        return reclaim_delay_elapsed (now - first->second);
+    }
+
+    // Fixed RID claims retain the descriptor-scoped observation.
     // Capture the sequence before Store I/O; older continuations cannot replace newer observations.
     std::uint64_t reclaim_read_sequence ()
     {
@@ -904,9 +915,7 @@ class location_repository_t
             found->second = {owner, now, read_sequence};
         else
             found->second.sequence = read_sequence;
-        // Divide elapsed time rather than multiplying a potentially large configured margin.
-        return std::chrono::duration_cast<std::chrono::milliseconds> (now - found->second.at) / 3
-               >= _reclaim_margin;
+        return reclaim_delay_elapsed (now - found->second.at);
     }
 
     void retain_reclaim_observation (
@@ -936,6 +945,12 @@ class location_repository_t
     }
 
   private:
+    bool reclaim_delay_elapsed (std::chrono::steady_clock::duration elapsed) const
+    {
+        return std::chrono::duration_cast<std::chrono::milliseconds> (elapsed) / 3
+               >= _reclaim_margin;
+    }
+
     struct reclaim_observation_t
     {
         location_owner_token_t owner;
@@ -944,6 +959,8 @@ class location_repository_t
     };
     std::mutex _reclaim_mutex;
     std::map<std::string, reclaim_observation_t> _reclaim_observations;
+    std::map<std::pair<std::string, std::int64_t>, std::chrono::steady_clock::time_point>
+      _authority_reclaim_observations;
     std::uint64_t _reclaim_sequence = 0;
     std::chrono::milliseconds _reclaim_margin{detail::default_owner_lease_fencing_margin};
     std::function<std::chrono::steady_clock::time_point ()> _reclaim_now{
