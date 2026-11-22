@@ -60,7 +60,8 @@ observe_aggregate_page_commit (task_t<aggregate_commit_result_t> commit,
 }
 
 template <typename TBytes>
-void aggregate_page_read_keeps_source_version_until_commit (location_store_t &store, TBytes bytes)
+void aggregate_page_read_keeps_source_version_until_commit (
+  location_store_t &store, TBytes bytes, authority_aggregate_codec::json_t captured = nullptr)
 {
     namespace stateful = zlink::framework::runtime::stateful;
     paused_aggregate_page_store_t provider (store);
@@ -109,7 +110,7 @@ void aggregate_page_read_keeps_source_version_until_commit (location_store_t &st
     const auto reservation = std::get<object_reserved_t> (reserved);
     const auto committed =
       repository.commit ({request.key, reservation.fence, bytes ("before")}).result ().value ();
-    const auto before = std::get<object_committed_t> (committed).ready;
+    auto before = std::get<object_committed_t> (committed).ready;
     object_reserve_request_t actor_request;
     actor_request.key = {placement_object_kind_t::actor, "page-actor"};
     actor_request.intent.stable_type = "player";
@@ -124,6 +125,27 @@ void aggregate_page_read_keeps_source_version_until_commit (location_store_t &st
         .value ();
     const auto actor_before = std::get<object_committed_t> (actor_committed).ready;
     const auto key = spot_authority_key (request.key.global_id);
+    const auto original_version = before.store_version;
+    protocol::relocation_id_t relocation{1, 1};
+    if (!captured.is_null ()) {
+        auto &record = captured["relocation"];
+        relocation = {0x0f1e2d3c4b5a4968, 0x8778a1b2c3d4e5f6};
+        auto &source_fence = record["source"];
+        source_fence["nodeRid"] = zlink::routing_id_t::from ("page-source").to_hex ();
+        source_fence["nodeGeneration"] = "1";
+        source_fence["ownerId"] = source.owner.owner_id;
+        source_fence["ownerLeaseGeneration"] = std::to_string (source.owner.lease_generation);
+        record["coordinator"] = source_fence;
+        record["coordinator"]["expectedStoreVersion"] = original_version;
+        authority_put_t put{before.payload};
+        put.replace_aggregate = authority_aggregate_codec::read (captured);
+        const auto result =
+          repository.compare_exchange_authority (key, original_version, std::move (put))
+            .result ()
+            .value ();
+        ASSERT_TRUE (std::holds_alternative<authority_stored_t> (result));
+        before = std::get<authority_stored_t> (result).snapshot;
+    }
     stateful::object_ref_t participant{stateful::object_kind_t::user_spot,
                                        request.key.global_id,
                                        before.object_generation,
@@ -131,7 +153,7 @@ void aggregate_page_read_keeps_source_version_until_commit (location_store_t &st
                                        source.mesh_name,
                                        std::string (source.node_rid.value ())};
     stateful::relocation_authority_fence_t source_fence{
-      participant.kind, participant.key, before.store_version, source.owner, target.owner, {1, 1}};
+      participant.kind, participant.key, original_version, source.owner, target.owner, relocation};
     stateful::public_authority_store_adapter_t adapter (repository);
     aggregate_prepare_request_t aggregate;
     aggregate.aggregate_id.value[15] = std::byte{0x63};
@@ -203,6 +225,11 @@ void aggregate_page_read_keeps_source_version_until_commit (location_store_t &st
         settlement = adapter.settle_source_relocation (source_fence, {participant}, false);
     EXPECT_EQ (settlement.outcome, stateful::relocation_authority_t::target_committed)
       << "Source settlement must remain open to the completed target commit";
+    if (!captured.is_null ()) {
+        const auto target_read = repository.read_authority (key).result ().value ();
+        const auto &target_authority = std::get<authority_snapshot_t> (target_read);
+        EXPECT_FALSE (target_authority.aggregate && target_authority.aggregate->relocation);
+    }
 }
 
 } // namespace zlink::framework::test

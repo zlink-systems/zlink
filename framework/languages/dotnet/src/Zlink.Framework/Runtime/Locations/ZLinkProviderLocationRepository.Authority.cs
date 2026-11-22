@@ -241,7 +241,13 @@ internal sealed partial class ZLinkProviderLocationRepository
                     {
                         MembershipFailure = membershipFailure,
                     };
-                meta = current.Meta with { Payload = restore.Payload.ToArray() };
+                meta = current.Meta with
+                {
+                    Payload = restore.Payload.ToArray(),
+                    Aggregate = restore.ClearRelocation
+                        ? ZLinkAuthorityAggregateCodec.Replace(current.Meta.Aggregate, null)
+                        : current.Meta.Aggregate,
+                };
             }
             else if (mutation is ZLinkAuthorityMutation.Delete)
             {
@@ -472,6 +478,13 @@ internal sealed partial class ZLinkProviderLocationRepository
                 meta = current.Meta with
                 {
                     Payload = put.Payload.ToArray(),
+                    Aggregate =
+                        put.Relocation is not null || put.ClearRelocation
+                            ? ZLinkAuthorityAggregateCodec.Replace(
+                                current.Meta.Aggregate,
+                                put.ApplyRelocation(current.Snapshot)
+                            )
+                            : current.Meta.Aggregate,
                     ObjectGeneration = nextObjectGeneration,
                     AuthorityOwnerGeneration = nextAuthorityOwnerGeneration,
                     OwnerId = targetOwner.OwnerId,
@@ -1071,6 +1084,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                 if (
                     stored.Meta.AggregateFence is not null
                     || stored.Snapshot.Allocation.State != ZLinkPlacementAllocationState.Active
+                    || stored.Snapshot.Relocation is not null
                     || !ZLinkActorAuthorityPayloadCodec.IsSteadyReady(stored.Snapshot.Payload.Span)
                 )
                     throw new ZLinkFrameworkException(
@@ -4925,7 +4939,12 @@ internal sealed partial class ZLinkProviderLocationRepository
             meta.Allocation,
             meta.ReservedCreation,
             now
-        );
+        )
+        {
+            Relocation = meta.Aggregate is { } aggregate
+                ? ZLinkAuthorityAggregateCodec.Read(aggregate)
+                : null,
+        };
 
     private static bool IsEligible(
         ZLinkMeshNodeDescriptor descriptor,
@@ -5544,6 +5563,14 @@ internal sealed partial class ZLinkProviderLocationRepository
         [JsonPropertyName("recordVersion")]
         [JsonPropertyOrder(-1)]
         public int RecordVersion { get; init; } = 1;
+
+        [JsonPropertyName("aggregate")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public JsonElement? Aggregate { get; init; }
+
+        [JsonPropertyName("visibleStoreVersion")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public string? VisibleStoreVersion { get; init; }
 
         [JsonPropertyName("aggregateFence")]
         public ZLinkAggregateFence? AggregateFence { get; init; }
