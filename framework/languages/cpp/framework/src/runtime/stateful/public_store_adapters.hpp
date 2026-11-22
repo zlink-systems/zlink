@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 #pragma once
 
+#include "runtime/locations/authority_aggregate_relocation.hpp"
+
 #include "runtime/stateful/maintenance_runtime.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/locations/actor_authority_payload.hpp"
@@ -91,17 +93,19 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
     {
     }
 
-    authority_publish_result_t publish (const object_ref_t &source,
-                                        const object_ref_t &target,
-                                        location_owner_token_t target_owner,
-                                        object_creation_target_t target_placement,
-                                        std::string relocation_reference,
-                                        std::uint32_t checksum_crc32c,
-                                        inventory_digest_t inventory_digest,
-                                        std::vector<std::byte> target_application_payload = {},
-                                        std::string expected_store_version = {},
-                                        protocol::relocation_id_t relocation = {},
-                                        location_owner_token_t source_owner = {}) override
+    authority_publish_result_t
+    publish (const object_ref_t &source,
+             const object_ref_t &target,
+             location_owner_token_t target_owner,
+             object_creation_target_t target_placement,
+             std::string relocation_reference,
+             std::uint32_t checksum_crc32c,
+             inventory_digest_t inventory_digest,
+             std::vector<std::byte> target_application_payload = {},
+             std::string expected_store_version = {},
+             protocol::relocation_id_t relocation = {},
+             location_owner_token_t source_owner = {},
+             const protocol::relocation_prepare_t *prepare = nullptr) override
     {
         if (target.kind != source.kind || target.key != source.key
             || target.object_generation != source.object_generation
@@ -137,8 +141,18 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
         // (05-spot-actor-membership :48); a relocation carries its coordinator fence
         // (04-relocation-flow §3, §4.5).
         const bool relocating = relocation.high != 0 || relocation.low != 0;
-        if (relocating ? !holds_source_fence (*snapshot, source.key, relocation, source_owner,
-                                              expected_store_version)
+        const std::span<const std::uint8_t> expected_node =
+          prepare ? std::span<const std::uint8_t> (prepare->coordinator.node_routing_id)
+                  : std::span<const std::uint8_t>{};
+        const auto expected_generation = prepare ? prepare->coordinator.node_generation : 0;
+        const bool source_claim_matches =
+          !prepare
+          || (prepare->source_node_routing_id == prepare->coordinator.node_routing_id
+              && prepare->source_node_generation == expected_generation);
+        if (relocating ? !source_claim_matches
+                           || !holds_source_fence (*snapshot, source.key, relocation, source_owner,
+                                                   expected_store_version, expected_node,
+                                                   expected_generation)
                        : !expected_store_version.empty ()
                            && snapshot->store_version != expected_store_version)
             return {authority_publish_status_t::conflict, decode_current (read)};
@@ -162,14 +176,18 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
                 || projection->actor.object_generation () != target.object_generation)
                 return {authority_publish_status_t::failed, std::nullopt};
         }
+        authority_retarget_t mutation{source.kind == object_kind_t::actor
+                                        ? reference.application_payload
+                                        : authority_relocation_payload_codec_t::encode (reference),
+                                      target_placement};
+        if (prepare)
+            mutation.replace_aggregate =
+              source.kind == object_kind_t::actor
+                ? committed_record (*snapshot, key, mutation.payload, *prepare)
+                : authority_aggregate_codec::without_capture (snapshot->aggregate);
         const auto exchanged =
           infrastructure_result ([&] {
-              return _store->compare_exchange_authority (
-                key, cas_version,
-                authority_retarget_t{source.kind == object_kind_t::actor
-                                       ? reference.application_payload
-                                       : authority_relocation_payload_codec_t::encode (reference),
-                                     target_placement});
+              return _store->compare_exchange_authority (key, cas_version, std::move (mutation));
           }).value ();
         if (const auto *stored = std::get_if<authority_stored_t> (&exchanged)) {
             if (source.kind == object_kind_t::actor) {
@@ -200,6 +218,123 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
             return {authority_publish_status_t::failed, std::nullopt};
         return {authority_publish_status_t::conflict, decode_current (conflict->current)};
     }
+    bool capture_source (const std::vector<object_ref_t> &participants,
+                         const relocation_authority_fence_t &fence,
+                         const std::string &target_node_id,
+                         std::uint64_t target_node_generation,
+                         std::uint64_t application_version) override
+    {
+        try {
+            const auto &primary = relocation_primary (participants);
+            std::optional<authority_snapshot_t> original;
+            auto inventory = nlohmann::json::array ();
+            for (const auto &participant : participants) {
+                const auto key = authority_key (participant);
+                const auto read =
+                  infrastructure_result ([&] { return _store->read_authority (key); }).value ();
+                const auto *snapshot = std::get_if<authority_snapshot_t> (&read);
+                if (!snapshot || snapshot->aggregate
+                    || snapshot->object_generation != participant.object_generation
+                    || snapshot->authority_owner_generation
+                         != participant.authority_owner_generation
+                    || !holds_source_fence (*snapshot, participant.key, fence.relocation,
+                                            fence.source_owner, fence.expected_store_version,
+                                            fence.source_node_routing_id,
+                                            fence.source_node_generation, &participant == &primary))
+                    return false;
+                auto payload =
+                  target_authority_payload (participant.kind, snapshot->payload, target_node_id,
+                                            fence.target_owner, target_node_generation);
+                if (!payload)
+                    return false;
+                inventory.push_back (inventory_entry (key, snapshot->store_version, *payload));
+                if (&participant == &primary)
+                    original = *snapshot;
+            }
+            const auto digest = inventory_digest (std::move (inventory));
+            const auto coordinator = protocol::relocation_coordinator_fence_t{
+              .owner_id = fence.source_owner.owner_id,
+              .lease_generation = static_cast<std::uint64_t> (fence.source_owner.lease_generation),
+              .node_routing_id = fence.source_node_routing_id,
+              .node_generation = fence.source_node_generation,
+              .expected_authority_store_version = fence.expected_store_version};
+            authority_put_t captured{original->payload};
+            captured.replace_aggregate = authority_aggregate_codec::replace (
+              original->aggregate,
+              captured_record (fence.relocation, coordinator, digest, application_version));
+            return std::holds_alternative<authority_stored_t> (
+              infrastructure_result ([&] {
+                  return _store->compare_exchange_authority (
+                    authority_key (primary), original->store_version, std::move (captured));
+              }).value ());
+        }
+        catch (const std::exception &) {
+            return false;
+        }
+    }
+
+    bool cancel_source_capture (const relocation_authority_fence_t &fence) override
+    {
+        try {
+            const auto key = authority_key (object_ref_t{.kind = fence.kind, .key = fence.key});
+            const auto read =
+              infrastructure_result ([&] { return _store->read_authority (key); }).value ();
+            const auto *snapshot = std::get_if<authority_snapshot_t> (&read);
+            if (!snapshot || !snapshot->aggregate || !snapshot->aggregate->relocation)
+                return true;
+            const auto &record = *snapshot->aggregate->relocation;
+            if (record.relocation_id
+                  != authority_aggregate_codec::wire_uuid (fence.relocation.high,
+                                                           fence.relocation.low)
+                || (record.phase != "captured" && record.phase != "prepared"))
+                return true;
+            if (!holds_source_fence (*snapshot, fence.key, fence.relocation, fence.source_owner,
+                                     fence.expected_store_version, fence.source_node_routing_id,
+                                     fence.source_node_generation, true, &fence))
+                return false;
+            const auto result = preserve_source (key, *snapshot);
+            return std::holds_alternative<authority_stored_t> (result);
+        }
+        catch (const std::exception &) {
+            return false;
+        }
+    }
+
+    bool finish_relocation (const object_ref_t &target,
+                            const protocol::relocation_prepare_t &prepare) override
+    {
+        const auto key = authority_key (target);
+        const auto read =
+          infrastructure_result ([&] { return _store->read_authority (key); }).value ();
+        const auto *snapshot = std::get_if<authority_snapshot_t> (&read);
+        if (!snapshot || snapshot->object_generation != target.object_generation
+            || snapshot->authority_owner_generation != target.authority_owner_generation)
+            return false;
+        if (!snapshot->aggregate || !snapshot->aggregate->relocation)
+            return true;
+        const auto &record = *snapshot->aggregate->relocation;
+        const auto &durable_target = snapshot->aggregate->encoded.at ("relocation").at ("target");
+        if (record.relocation_id
+              != authority_aggregate_codec::wire_uuid (prepare.relocation.high,
+                                                       prepare.relocation.low)
+            || record.phase != "committed"
+            || authority_aggregate_codec::number (durable_target, "attemptGeneration")
+                 != prepare.target_attempt_generation
+            || !same_owner (snapshot->owner, {prepare.target.target_owner_id,
+                                              static_cast<std::int64_t> (
+                                                prepare.target.target_owner_lease_generation)}))
+            return false;
+        return std::holds_alternative<authority_stored_t> (
+          infrastructure_result ([&] {
+              return _store->compare_exchange_authority (
+                key, snapshot->store_version,
+                authority_put_t{snapshot->payload,
+                                {},
+                                {},
+                                authority_aggregate_codec::replace (snapshot->aggregate, nullptr)});
+          }).value ());
+    }
+
     std::optional<std::vector<relocation_participant_identity_t>>
     list_participant_identities () override
     {
@@ -283,11 +418,7 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
                 if (!*live)
                     return {relocation_authority_t::source_lease_expired, {}};
                 const auto &snapshot = std::get<authority_snapshot_t> (read);
-                const auto exchanged =
-                  infrastructure_result ([&] {
-                      return _store->compare_exchange_authority (key, fence.expected_store_version,
-                                                                 authority_put_t{snapshot.payload});
-                  }).value ();
+                const auto exchanged = preserve_source (key, snapshot);
                 if (std::holds_alternative<authority_stored_t> (exchanged))
                     return {relocation_authority_t::source_preserved, {}};
                 if (const auto *conflict = std::get_if<authority_conflict_t> (&exchanged)) {
@@ -483,43 +614,258 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
         return {authority_publish_status_t::failed, std::nullopt};
     }
 
+    authority_compare_exchange_result_t preserve_source (const authority_key_t &key,
+                                                         const authority_snapshot_t &snapshot)
+    {
+        authority_put_t preserved{snapshot.payload};
+        if (snapshot.aggregate && snapshot.aggregate->relocation)
+            preserved.replace_aggregate =
+              authority_aggregate_codec::replace (snapshot.aggregate, nullptr);
+        else if (const auto actor =
+                   runtime::decode_direct_actor_authority_payload (snapshot.payload);
+                 actor && actor->has_relocation_state)
+            preserved.payload = runtime::encode_actor_authority_payload (*actor);
+        return infrastructure_result ([&] {
+                   return _store->compare_exchange_authority (key, snapshot.store_version,
+                                                              std::move (preserved));
+               })
+          .value ();
+    }
+
     static bool same_owner (const location_owner_token_t &left,
                             const location_owner_token_t &right) noexcept
     {
         return left.owner_id == right.owner_id && left.lease_generation == right.lease_generation;
     }
 
+    static std::optional<std::vector<std::byte>>
+    target_authority_payload (object_kind_t kind,
+                              const std::vector<std::byte> &source_payload,
+                              const std::string &target_node_id,
+                              const location_owner_token_t &target_owner,
+                              std::uint64_t target_node_generation)
+    {
+        const auto owner_lease = static_cast<std::uint64_t> (target_owner.lease_generation);
+        if (kind == object_kind_t::actor) {
+            auto payload = runtime::decode_direct_actor_authority_payload (source_payload);
+            if (!payload)
+                return std::nullopt;
+            payload->owner_id = target_owner.owner_id;
+            payload->owner_lease_generation = owner_lease;
+            payload->node_rid = node_rid_t::from_string (target_node_id);
+            payload->node_generation = target_node_generation;
+            return runtime::encode_actor_authority_payload (*payload);
+        }
+        if (kind == object_kind_t::user_spot) {
+            auto payload = runtime::decode_direct_user_spot_authority_payload (source_payload);
+            if (!payload)
+                return std::nullopt;
+            payload->owner_id = target_owner.owner_id;
+            payload->owner_lease_generation = owner_lease;
+            payload->node_rid = node_rid_t::from_string (target_node_id);
+            payload->node_generation = target_node_generation;
+            return runtime::encode_user_spot_authority_payload (*payload);
+        }
+        if (kind == object_kind_t::instance_spot) {
+            auto payload = runtime::decode_instance_spot_authority_payload (source_payload);
+            if (!payload)
+                return std::nullopt;
+            payload->owner_id = target_owner.owner_id;
+            payload->owner_lease_generation = owner_lease;
+            payload->node_rid = node_rid_t::from_string (target_node_id);
+            payload->node_generation = target_node_generation;
+            return runtime::encode_instance_spot_authority_payload (*payload);
+        }
+        return std::nullopt;
+    }
+
+    static authority_aggregate_codec::json_t encoded_fence (const std::vector<std::uint8_t> &rid,
+                                                            std::uint64_t generation,
+                                                            const std::string &owner,
+                                                            std::uint64_t lease)
+    {
+        return {{"nodeRid", zlink::routing_id_t::from (rid).to_hex ()},
+                {"nodeGeneration", std::to_string (generation)},
+                {"ownerId", owner},
+                {"ownerLeaseGeneration", std::to_string (lease)}};
+    }
+
+    static authority_aggregate_codec::json_t
+    captured_record (const protocol::relocation_id_t &relocation,
+                     const protocol::relocation_coordinator_fence_t &coordinator,
+                     std::string digest,
+                     std::uint64_t application_version)
+    {
+        auto source = encoded_fence (coordinator.node_routing_id, coordinator.node_generation,
+                                     coordinator.owner_id, coordinator.lease_generation);
+        auto coordinator_record = source;
+        coordinator_record["expectedStoreVersion"] = coordinator.expected_authority_store_version;
+        return {
+          {"relocationId", authority_aggregate_codec::wire_uuid (relocation.high, relocation.low)},
+          {"phase", "captured"},
+          {"source", std::move (source)},
+          {"target", nullptr},
+          {"coordinator", std::move (coordinator_record)},
+          {"sourceInventorySha256", std::move (digest)},
+          {"applicationVersion", std::to_string (application_version)}};
+    }
+
+    static std::shared_ptr<const authority_aggregate_t>
+    committed_record (const authority_snapshot_t &snapshot,
+                      const authority_key_t &key,
+                      const std::vector<std::byte> &payload,
+                      const protocol::relocation_prepare_t &prepare)
+    {
+        auto target = encoded_fence (
+          prepare.target.target_node_routing_id, prepare.target.target_node_generation,
+          prepare.target.target_owner_id, prepare.target.target_owner_lease_generation);
+        target["attemptGeneration"] = std::to_string (prepare.target_attempt_generation);
+        auto record =
+          snapshot.aggregate && snapshot.aggregate->relocation
+            ? snapshot.aggregate->encoded.at ("relocation")
+            : captured_record (
+                prepare.relocation, prepare.coordinator,
+                inventory_digest (nlohmann::json::array ({inventory_entry (
+                  key, prepare.coordinator.expected_authority_store_version, payload)})),
+                prepare.application_version);
+        record["phase"] = "committed";
+        record["target"] = std::move (target);
+        return authority_aggregate_codec::replace (snapshot.aggregate, std::move (record));
+    }
+
+    static nlohmann::json inventory_entry (const authority_key_t &key,
+                                           const std::string &store_version,
+                                           std::span<const std::byte> target_payload)
+    {
+        static const auto empty_membership_hash = zlink::framework::detail::sha256_hex ("[]");
+        return {{"authorityKey", key.value},
+                {"authorityPayloadSha256",
+                 zlink::framework::detail::encode_hex (runtime::sha256 (target_payload))},
+                {"expectedStoreVersion", store_version},
+                {"membershipMutationSha256", empty_membership_hash},
+                {"ownerTransition", "newOwner"}};
+    }
+
+    static std::string inventory_digest (nlohmann::json entries)
+    {
+        using json_t = nlohmann::json;
+        constexpr std::size_t page_items = 1024;
+        const auto participants = entries.size ();
+        std::sort (entries.begin (), entries.end (), [] (const auto &left, const auto &right) {
+            return left.at ("authorityKey") < right.at ("authorityKey");
+        });
+        for (std::size_t index = 0; index != participants; ++index)
+            entries[index]["index"] = index;
+        for (std::size_t level = 0;; ++level) {
+            auto references = json_t::array ();
+            for (std::size_t first = 0; first < entries.size ();) {
+                auto count = std::min (page_items, entries.size () - first);
+                const auto start_index =
+                  level == 0 ? first : entries[first].at ("startIndex").get<std::size_t> ();
+                for (;;) {
+                    const auto last = first + count;
+                    const auto end_index =
+                      level == 0 ? last
+                                 : entries[last - 1].at ("startIndex").get<std::size_t> ()
+                                     + entries[last - 1].at ("entryCount").get<std::size_t> ();
+                    auto items = json_t::array ();
+                    for (auto index = first; index < last; ++index)
+                        items.push_back (entries[index]);
+                    const json_t page{{"children", level == 0 ? json_t::array () : items},
+                                      {"entries", level == 0 ? items : json_t::array ()},
+                                      {"entryCount", end_index - start_index},
+                                      {"index", references.size ()},
+                                      {"level", level},
+                                      {"startIndex", start_index}};
+                    const auto encoded = page.dump ();
+                    if (encoded.size () <= location_record_payload_limit) {
+                        references.push_back (
+                          {{"entryCount", end_index - start_index},
+                           {"index", references.size ()},
+                           {"level", level},
+                           {"sha256", zlink::framework::detail::sha256_hex (encoded)},
+                           {"startIndex", start_index}});
+                        first = last;
+                        break;
+                    }
+                    if (count == 1)
+                        throw std::length_error ("Relocation inventory entry exceeds page limit");
+                    count /= 2;
+                }
+            }
+            if (references.size () <= page_items) {
+                const json_t root{
+                  {"topLevel", level}, {"topPages", references}, {"totalCount", participants}};
+                return zlink::framework::detail::sha256_hex (root.dump ());
+            }
+            entries = std::move (references);
+        }
+    }
+
     static bool holds_source_fence (const authority_snapshot_t &snapshot,
                                     std::string_view actor_id,
                                     const protocol::relocation_id_t &relocation,
                                     const location_owner_token_t &source_owner,
-                                    std::optional<std::string_view> original_version)
+                                    std::string_view original_version,
+                                    std::span<const std::uint8_t> expected_node = {},
+                                    std::uint64_t expected_node_generation = 0,
+                                    bool require_steady_version = true,
+                                    const relocation_authority_fence_t *active_attempt = nullptr)
     {
         if (source_owner.owner_id.empty () || source_owner.lease_generation <= 0
             || !same_owner (snapshot.owner, source_owner))
             return false;
+        const auto &placement = snapshot.allocation.target;
+        const auto rid = placement.node_rid.value ();
+        const auto rid_bytes = std::as_bytes (std::span{rid.data (), rid.size ()});
+        if ((!expected_node.empty ()
+             && !std::ranges::equal (std::as_bytes (expected_node), rid_bytes))
+            || (expected_node_generation != 0
+                && expected_node_generation != placement.node_lifecycle_generation))
+            return false;
+        const auto lease = static_cast<std::uint64_t> (source_owner.lease_generation);
+        const authority_relocation_fence_t source{zlink::framework::detail::encode_hex (rid_bytes),
+                                                  placement.node_lifecycle_generation,
+                                                  source_owner.owner_id, lease};
+        if (snapshot.aggregate && snapshot.aggregate->relocation) {
+            const auto &record = *snapshot.aggregate->relocation;
+            const bool prepared = active_attempt && record.phase == "prepared";
+            if (prepared) {
+                const auto &target = snapshot.aggregate->encoded.at ("relocation").at ("target");
+                if (authority_aggregate_codec::number (target, "attemptGeneration")
+                      != active_attempt->target_attempt_generation
+                    || authority_aggregate_codec::text (target, "ownerId")
+                         != active_attempt->target_owner.owner_id
+                    || authority_aggregate_codec::number (target, "ownerLeaseGeneration")
+                         != static_cast<std::uint64_t> (
+                           active_attempt->target_owner.lease_generation))
+                    return false;
+            }
+            return (record.phase == "captured" || prepared)
+                   && record.relocation_id
+                        == authority_aggregate_codec::wire_uuid (relocation.high, relocation.low)
+                   && record.source == source && record.coordinator == source
+                   && record.expected_store_version == original_version;
+        }
         runtime::actor_authority_detail::relocation_capture_identity_t identity;
         const auto actor =
           runtime::decode_direct_actor_authority_payload (snapshot.payload, &identity);
         if (!actor || !actor->has_relocation_state)
-            return !original_version || snapshot.store_version == *original_version;
-        if (relocation.high == 0 && relocation.low == 0)
-            return false;
+            return !require_steady_version || snapshot.store_version == original_version;
         return actor->actor_id == actor_id
                && actor->relocation_phase
                     == runtime::actor_authority_detail::captured_relocation_phase
-               && (!original_version
-                   || actor->relocation_expected_store_version == *original_version)
                && identity.high == relocation.high && identity.low == relocation.low
-               && actor->owner_id == source_owner.owner_id
-               && actor->owner_lease_generation
-                    == static_cast<std::uint64_t> (source_owner.lease_generation)
+               && actor->owner_id == source_owner.owner_id && actor->owner_lease_generation == lease
                && identity.source_owner_id == source_owner.owner_id
-               && identity.source_owner_lease_generation
-                    == static_cast<std::uint64_t> (source_owner.lease_generation)
+               && identity.source_owner_lease_generation == lease
                && identity.coordinator_owner_id == source_owner.owner_id
-               && identity.coordinator_lease_generation
-                    == static_cast<std::uint64_t> (source_owner.lease_generation);
+               && identity.coordinator_lease_generation == lease
+               && identity.source_node_rid == placement.node_rid.value ()
+               && identity.source_node_generation == placement.node_lifecycle_generation
+               && identity.coordinator_node_rid == placement.node_rid.value ()
+               && identity.coordinator_node_generation == placement.node_lifecycle_generation
+               && actor->relocation_expected_store_version == original_version;
     }
 
     /* Target-side current-CAS observation (01 §6.1, §10): target-owned means
@@ -532,10 +878,36 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
         // Location runtime §10: Missing has no source fence and ends the expired owner.
         if (snapshot == nullptr)
             return relocation_authority_t::source_lease_expired;
-        if (same_owner (snapshot->owner, fence.target_owner))
-            return relocation_authority_t::target_committed;
+        if (same_owner (snapshot->owner, fence.target_owner)) {
+            if (!snapshot->aggregate || !snapshot->aggregate->relocation)
+                return relocation_authority_t::target_committed;
+            const auto &record = *snapshot->aggregate->relocation;
+            if (record.relocation_id
+                  != authority_aggregate_codec::wire_uuid (fence.relocation.high,
+                                                           fence.relocation.low)
+                || record.expected_store_version != fence.expected_store_version
+                || (record.phase != "committed" && record.phase != "activating"
+                    && record.phase != "activated" && record.phase != "cleaning"
+                    && record.phase != "completed"))
+                return relocation_authority_t::source_preserved;
+            const auto &target = snapshot->aggregate->encoded.at ("relocation").at ("target");
+            const auto &placement = snapshot->allocation.target;
+            const auto rid = placement.node_rid.value ();
+            const authority_relocation_fence_t actual{
+              zlink::framework::detail::encode_hex (
+                std::as_bytes (std::span{rid.data (), rid.size ()})),
+              placement.node_lifecycle_generation, snapshot->owner.owner_id,
+              static_cast<std::uint64_t> (snapshot->owner.lease_generation)};
+            return authority_aggregate_codec::read_fence (target) == actual
+                       && (fence.target_attempt_generation == 0
+                           || authority_aggregate_codec::number (target, "attemptGeneration")
+                                == fence.target_attempt_generation)
+                     ? relocation_authority_t::target_committed
+                     : relocation_authority_t::source_preserved;
+        }
         return holds_source_fence (*snapshot, fence.key, fence.relocation, fence.source_owner,
-                                   fence.expected_store_version)
+                                   fence.expected_store_version, fence.source_node_routing_id,
+                                   fence.source_node_generation, true, &fence)
                  ? relocation_authority_t::unsettled
                  : relocation_authority_t::source_preserved;
     }
@@ -558,7 +930,8 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
             || !same_owner (current->owner, fence.source_owner))
             return {relocation_authority_t::data_lost, {}};
         return {holds_source_fence (*current, fence.key, fence.relocation, fence.source_owner,
-                                    fence.expected_store_version)
+                                    fence.expected_store_version, fence.source_node_routing_id,
+                                    fence.source_node_generation, true, &fence)
                   ? relocation_authority_t::unsettled
                   : relocation_authority_t::source_preserved,
                 {}};
@@ -627,9 +1000,8 @@ class public_aggregate_authority_adapter_t final : public aggregate_authority_po
                 || snapshot->authority_owner_generation != source.authority_owner_generation
                 || !public_authority_store_adapter_t::holds_source_fence (
                   *snapshot, source.key, source_fence.relocation, source_fence.source_owner,
-                  &source == &primary
-                    ? std::optional<std::string_view>{source_fence.expected_store_version}
-                    : std::nullopt))
+                  source_fence.expected_store_version, source_fence.source_node_routing_id,
+                  source_fence.source_node_generation, &source == &primary))
                 return {aggregate_publish_status_t::conflict, {}, {}};
             snapshots.push_back (*snapshot);
             capacity.actor_slots += snapshot->allocation.capacity_bundle.actor_slots;
@@ -669,9 +1041,9 @@ class public_aggregate_authority_adapter_t final : public aggregate_authority_po
         std::vector<aggregate_participant_t> participants;
         participants.reserve (snapshots.size ());
         for (std::size_t index = 0; index != sources.size (); ++index) {
-            auto payload = target_authority_payload (sources[index].kind, snapshots[index].payload,
-                                                     target_node_id, target_owner,
-                                                     target_node->lifecycle_generation);
+            auto payload = public_authority_store_adapter_t::target_authority_payload (
+              sources[index].kind, snapshots[index].payload, target_node_id, target_owner,
+              target_node->lifecycle_generation);
             if (!payload)
                 return {};
             participants.push_back (
@@ -763,37 +1135,6 @@ class public_aggregate_authority_adapter_t final : public aggregate_authority_po
     }
 
   private:
-    static std::optional<std::vector<std::byte>>
-    target_authority_payload (object_kind_t kind,
-                              const std::vector<std::byte> &source_payload,
-                              const std::string &target_node_id,
-                              const location_owner_token_t &target_owner,
-                              std::uint64_t target_node_generation)
-    {
-        const auto owner_lease = static_cast<std::uint64_t> (target_owner.lease_generation);
-        if (kind == object_kind_t::actor) {
-            auto payload = runtime::decode_direct_actor_authority_payload (source_payload);
-            if (!payload)
-                return std::nullopt;
-            payload->owner_id = target_owner.owner_id;
-            payload->owner_lease_generation = owner_lease;
-            payload->node_rid = node_rid_t::from_string (target_node_id);
-            payload->node_generation = target_node_generation;
-            return runtime::encode_actor_authority_payload (*payload);
-        }
-        if (kind == object_kind_t::user_spot) {
-            auto payload = runtime::decode_direct_user_spot_authority_payload (source_payload);
-            if (!payload)
-                return std::nullopt;
-            payload->owner_id = target_owner.owner_id;
-            payload->owner_lease_generation = owner_lease;
-            payload->node_rid = node_rid_t::from_string (target_node_id);
-            payload->node_generation = target_node_generation;
-            return runtime::encode_user_spot_authority_payload (*payload);
-        }
-        return std::nullopt;
-    }
-
     zlink::framework::location_repository_t *_store;
     std::atomic<std::uint64_t> _next_generation{1};
 };
