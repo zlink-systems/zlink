@@ -21,7 +21,7 @@ using Zlink.Framework.Runtime.Timers;
 
 namespace Zlink.Framework.UnitTests;
 
-public sealed class RelocationRuntimeTests
+public sealed partial class RelocationRuntimeTests
 {
     [Fact]
     public void Target_generation_is_the_first_store_publication_result()
@@ -4191,182 +4191,6 @@ public sealed class RelocationRuntimeTests
     }
 
     [Fact]
-    public async Task AggregatePublicationProbeIsBoundedAndParallelForTenThousandParticipants()
-    {
-        var relocation = new RecordingRelocationStore();
-        var authority = new RecordingAuthorityStore
-        {
-            AggregatePrepareResult = new ZLinkAggregatePrepareResult.Conflict(),
-            ReadDelay = TimeSpan.FromMilliseconds(1),
-        };
-        var coordinator = new ZLinkAggregateRelocationCoordinator(
-            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
-            authority,
-            relocation
-        );
-        var envelope = CreateLargeEnvelope(10_000);
-        var request = new ZLinkAggregateRelocationRequest(
-            envelope.AggregateId,
-            envelope.AggregateGeneration,
-            1,
-            envelope
-                .Participants.Select(participant => new ZLinkAggregateRelocationParticipant(
-                    participant,
-                    $"v-{participant.AuthorityKey.Value}",
-                    ZLinkAuthorityGenerationTransition.NewOwner,
-                    ReadOnlyMemory<byte>.Empty,
-                    ReadOnlyMemory<byte>.Empty
-                ))
-                .ToArray(),
-            new ZLinkMeshNodeDescriptorKey("mesh", RoutingId.From("aggregate-target")),
-            1,
-            new ZLinkCapacityVector(10_000, 0, null),
-            new ZLinkLocationOwnerToken("aggregate-target", 17)
-        );
-
-        await Assert.ThrowsAsync<ZLinkRelocationTargetSettledException>(async () =>
-            await coordinator.PublishAsync(request)
-        );
-
-        Assert.InRange(authority.MaximumConcurrentReads, 2, 64);
-        Assert.Contains(authority.Events, static item => item.Name == "abort");
-        Assert.Contains(relocation.Events, static item => item.Name == "delete");
-    }
-
-    [Fact]
-    public async Task AggregatePrepareResponseLossReconcilesPublishedAggregate()
-    {
-        var relocation = new RecordingRelocationStore();
-        var authority = new RecordingAuthorityStore { ThrowAfterPublishingAggregatePrepare = true };
-        var coordinator = new ZLinkAggregateRelocationCoordinator(
-            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
-            authority,
-            relocation
-        );
-        var request = CreateAggregateRelocationRequest(CreateEnvelope());
-
-        var published = await coordinator.PublishAsync(request);
-
-        Assert.Equal(request.AggregateId, published.Fence.AggregateId);
-        Assert.Equal(request.Participants.Count, authority.PublishedCount);
-    }
-
-    [Fact]
-    public async Task ConcurrentCommitDuringPrepareProbeReconcilesPublication()
-    {
-        var relocation = new RecordingRelocationStore();
-        var authority = new RecordingAuthorityStore { ThrowBeforeConcurrentAggregateCommit = true };
-        var coordinator = new ZLinkAggregateRelocationCoordinator(
-            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
-            authority,
-            relocation
-        );
-        var request = CreateAggregateRelocationRequest(CreateEnvelope());
-
-        var published = await coordinator.PublishAsync(request);
-
-        Assert.Equal(request.AggregateId, published.Fence.AggregateId);
-        Assert.Equal(request.Participants.Count, authority.PublishedCount);
-    }
-
-    [Fact]
-    public async Task AggregatePublicationProbeUsesTargetLifetimeCancellationAndPreservesUnknownRoot()
-    {
-        var relocation = new RecordingRelocationStore();
-        var authority = new RecordingAuthorityStore
-        {
-            AggregatePrepareResult = new ZLinkAggregatePrepareResult.Conflict(),
-            ReadDelay = TimeSpan.FromSeconds(30),
-        };
-        var failures = new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter();
-        var coordinator = new ZLinkAggregateRelocationCoordinator(failures, authority, relocation);
-        var envelope = CreateEnvelope();
-        var request = new ZLinkAggregateRelocationRequest(
-            envelope.AggregateId,
-            envelope.AggregateGeneration,
-            1,
-            envelope
-                .Participants.Select(participant => new ZLinkAggregateRelocationParticipant(
-                    participant,
-                    $"v-{participant.AuthorityKey.Value}",
-                    ZLinkAuthorityGenerationTransition.NewOwner,
-                    ReadOnlyMemory<byte>.Empty,
-                    ReadOnlyMemory<byte>.Empty
-                ))
-                .ToArray(),
-            new ZLinkMeshNodeDescriptorKey("mesh", RoutingId.From("aggregate-target")),
-            1,
-            new ZLinkCapacityVector(
-                1,
-                1,
-                new ZLinkSpotTypeCapacityDelta(ZLinkPlacementObjectKind.UserSpot, "room", 1)
-            ),
-            new ZLinkLocationOwnerToken("aggregate-target", 17)
-        );
-
-        using var lifetime = new CancellationTokenSource();
-        var publication = coordinator.PublishAsync(request, lifetime.Token).AsTask();
-        await authority.ReadStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        lifetime.Cancel();
-        await Assert.ThrowsAsync<ZLinkRelocationTargetSettledException>(async () =>
-            await publication.WaitAsync(TimeSpan.FromSeconds(1))
-        );
-
-        Assert.DoesNotContain(authority.Events, static item => item.Name == "abort");
-        Assert.DoesNotContain(relocation.Events, static item => item.Name == "delete");
-        Assert.NotEmpty(relocation.Payloads);
-        Assert.Contains(failures.Failures, static error => error is OperationCanceledException);
-    }
-
-    [Fact]
-    public async Task AggregatePublicationProbeMixedResultPreservesUnknownRoot()
-    {
-        var relocation = new RecordingRelocationStore();
-        var authority = new RecordingAuthorityStore
-        {
-            AggregatePrepareResult = new ZLinkAggregatePrepareResult.Conflict(),
-            PublishFirstParticipantBeforePrepareConflict = true,
-        };
-        var coordinator = new ZLinkAggregateRelocationCoordinator(
-            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
-            authority,
-            relocation
-        );
-        var envelope = CreateEnvelope();
-        var request = new ZLinkAggregateRelocationRequest(
-            envelope.AggregateId,
-            envelope.AggregateGeneration,
-            1,
-            envelope
-                .Participants.Select(participant => new ZLinkAggregateRelocationParticipant(
-                    participant,
-                    $"v-{participant.AuthorityKey.Value}",
-                    ZLinkAuthorityGenerationTransition.NewOwner,
-                    ReadOnlyMemory<byte>.Empty,
-                    ReadOnlyMemory<byte>.Empty
-                ))
-                .ToArray(),
-            new ZLinkMeshNodeDescriptorKey("mesh", RoutingId.From("aggregate-target")),
-            1,
-            new ZLinkCapacityVector(
-                1,
-                1,
-                new ZLinkSpotTypeCapacityDelta(ZLinkPlacementObjectKind.UserSpot, "room", 1)
-            ),
-            new ZLinkLocationOwnerToken("aggregate-target", 17)
-        );
-
-        await Assert.ThrowsAsync<ZLinkRelocationTargetSettledException>(async () =>
-            await coordinator.PublishAsync(request)
-        );
-
-        Assert.Equal(1, authority.PublishedCount);
-        Assert.DoesNotContain(authority.Events, static item => item.Name == "abort");
-        Assert.DoesNotContain(relocation.Events, static item => item.Name == "delete");
-        Assert.NotEmpty(relocation.Payloads);
-    }
-
-    [Fact]
     public async Task AggregateTargetPublishReusesAcceptedOpaqueRoot()
     {
         var relocation = new RecordingRelocationStore();
@@ -4425,53 +4249,6 @@ public sealed class RelocationRuntimeTests
         Assert.Equal(
             putsBeforeTargetPrepare,
             relocation.Events.Count(static item => item.Name == "put")
-        );
-    }
-
-    [Fact]
-    public async Task AggregatePrepareConflictDeletesUnpublishedRoot()
-    {
-        var relocation = new RecordingRelocationStore();
-        var authority = new RecordingAuthorityStore
-        {
-            AggregatePrepareResult = new ZLinkAggregatePrepareResult.Conflict(),
-        };
-        var coordinator = new ZLinkAggregateRelocationCoordinator(
-            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
-            authority,
-            relocation
-        );
-        var envelope = CreateEnvelope();
-        var request = new ZLinkAggregateRelocationRequest(
-            envelope.AggregateId,
-            envelope.AggregateGeneration,
-            1,
-            envelope
-                .Participants.Select(participant => new ZLinkAggregateRelocationParticipant(
-                    participant,
-                    "v1",
-                    ZLinkAuthorityGenerationTransition.NewOwner,
-                    ReadOnlyMemory<byte>.Empty,
-                    ReadOnlyMemory<byte>.Empty
-                ))
-                .ToArray(),
-            new ZLinkMeshNodeDescriptorKey("mesh", RoutingId.From("aggregate-target")),
-            1,
-            new ZLinkCapacityVector(
-                1,
-                1,
-                new ZLinkSpotTypeCapacityDelta(ZLinkPlacementObjectKind.UserSpot, "room", 1)
-            ),
-            new ZLinkLocationOwnerToken("aggregate-target", 17)
-        );
-
-        await Assert.ThrowsAsync<ZLinkRelocationTargetSettledException>(async () =>
-            await coordinator.PublishAsync(request)
-        );
-
-        Assert.DoesNotContain(
-            relocation.Payloads.Values,
-            static payload => payload.Take(4).SequenceEqual("ZLTM"u8.ToArray())
         );
     }
 
@@ -5171,9 +4948,7 @@ public sealed class RelocationRuntimeTests
             _snapshots[key.Value] = snapshot;
 
         internal int PublishedCount => _snapshots.Count;
-        internal TimeSpan ReadDelay { get; init; }
-        internal TaskCompletionSource ReadStarted { get; } =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal Func<CancellationToken, Task>? BeforeRead { get; init; }
         internal int ReadFailuresRemaining { get; set; }
         private int _activeReads;
         private int _maximumConcurrentReads;
@@ -5221,11 +4996,8 @@ public sealed class RelocationRuntimeTests
                     ReadFailuresRemaining--;
                     throw new IOException("The authority read result is indeterminate.");
                 }
-                if (ReadDelay > TimeSpan.Zero)
-                {
-                    ReadStarted.TrySetResult();
-                    await Task.Delay(ReadDelay, cancellationToken);
-                }
+                if (BeforeRead is { } beforeRead)
+                    await beforeRead(cancellationToken);
                 return !_snapshots.TryGetValue(key.Value, out var snapshot)
                     ? new ZLinkAuthorityReadResult.Missing(DateTimeOffset.UtcNow)
                     : new ZLinkAuthorityReadResult.Found(snapshot);

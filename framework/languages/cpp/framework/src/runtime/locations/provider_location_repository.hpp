@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 #pragma once
 
+#include "runtime/locations/authority_aggregate_relocation.hpp"
+
 #include <zlink/framework/detail/binary_text_codec.hpp>
 
 #include <runtime/locations/location_repository.hpp>
@@ -542,6 +544,8 @@ class provider_location_repository_t final : public location_repository_t
                 snapshot.owner = retarget->target.owner;
                 snapshot.allocation.target = retarget->target;
                 snapshot.payload = retarget->payload;
+                if (retarget->replace_aggregate)
+                    snapshot.aggregate = *retarget->replace_aggregate;
                 write_request.conditions = {
                   version_condition (row_key, found->value.version),
                   condition_for (authority_owner_counter_key, owner_generations),
@@ -594,7 +598,10 @@ class provider_location_repository_t final : public location_repository_t
                       store_put_t{authority_owner_counter_key,
                                   to_bytes (std::to_string (owner_generation + 1)), std::nullopt}};
                 } else {
-                    snapshot.payload = std::get<authority_put_t> (mutation).payload;
+                    const auto &replacement = std::get<authority_put_t> (mutation);
+                    snapshot.payload = replacement.payload;
+                    if (replacement.replace_aggregate)
+                        snapshot.aggregate = *replacement.replace_aggregate;
                 }
                 write_request.mutations.push_back (
                   store_put_t{row_key, encode_authority (snapshot), std::nullopt});
@@ -975,7 +982,7 @@ class provider_location_repository_t final : public location_repository_t
             co_return stale_authority_reclaim_result_t::recovery_required;
         // Relocation authority retains its own recovery protocol.
         const auto actor = decode_direct_actor_authority_payload (current.payload);
-        if (!active && actor && actor->has_relocation_state)
+        if (!active && (current.aggregate || (actor && actor->has_relocation_state)))
             co_return stale_authority_reclaim_result_t::recovery_required;
         const auto owner_key = key_owner (current.owner.owner_id);
         auto owner = co_await _store.read (owner_key);
@@ -1001,7 +1008,7 @@ class provider_location_repository_t final : public location_repository_t
               (request ? object_key (request->key)
                        : authority_from_store_key (authority_key)->value),
               &authority_lock_condition.emplace ());
-            if ((actor && actor->has_relocation_state) || mutation_locked)
+            if (current.aggregate || (actor && actor->has_relocation_state) || mutation_locked)
                 throw framework_exception_t (framework_error_kind_t::unavailable,
                                              "Object authority requires relocation recovery");
             if (!discarded
@@ -1051,7 +1058,7 @@ class provider_location_repository_t final : public location_repository_t
                         bool member_unavailable =
                           entry.snapshot.allocation.state != placement_allocation_state_t::active
                           || member->state != actor_authority_state_t::ready
-                          || member->has_relocation_state;
+                          || member->has_relocation_state || entry.snapshot.aggregate;
                         store_condition_t lock_condition;
                         if (!member_unavailable)
                             member_unavailable = co_await authority_mutation_locked_async (
@@ -1988,6 +1995,7 @@ class provider_location_repository_t final : public location_repository_t
                     after.owner = target_owner;
                     after.allocation.target = target;
                     after.payload = participant.authority_payload;
+                    after.aggregate = authority_aggregate_codec::without_capture (before.aggregate);
                     // `after.store_version` is never read back out of this
                     // struct (encode_authority no longer serializes it, and the
                     // committing-page replay branch above re-decodes with the
@@ -3711,7 +3719,7 @@ class provider_location_repository_t final : public location_repository_t
     // the record body.
     static std::vector<std::byte> encode_authority (const authority_snapshot_t &value)
     {
-        return to_bytes (json_t{
+        json_t encoded{
           {location_record_fields::recordVersion, 1},
           {location_record_fields::payload, base64_encode (value.payload)},
           {location_record_fields::objectGeneration, generation_string (value.object_generation)},
@@ -3721,8 +3729,10 @@ class provider_location_repository_t final : public location_repository_t
           {location_record_fields::ownerLeaseGeneration,
            generation_string (value.owner.lease_generation)},
           {location_record_fields::allocation, encode_allocation (value.allocation)},
-          {location_record_fields::pendingCreation, encode_pending (value.pending_creation)}}
-                           .dump ());
+          {location_record_fields::pendingCreation, encode_pending (value.pending_creation)}};
+        if (value.aggregate)
+            encoded["aggregate"] = value.aggregate->encoded;
+        return to_bytes (encoded.dump ());
     }
 
     static authority_snapshot_t decode_authority (const std::vector<std::byte> &bytes,
@@ -3749,7 +3759,10 @@ class provider_location_repository_t final : public location_repository_t
                 owner,
                 store_now,
                 decode_allocation (value.at (location_record_fields::allocation), owner),
-                decode_pending (value.at (location_record_fields::pendingCreation))};
+                decode_pending (value.at (location_record_fields::pendingCreation)),
+                value.contains ("aggregate")
+                  ? authority_aggregate_codec::read (value.at ("aggregate"))
+                  : nullptr};
     }
 
     static authority_snapshot_t decode_authority (const std::vector<std::byte> &bytes,

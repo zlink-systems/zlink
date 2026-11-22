@@ -31,6 +31,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -156,18 +157,7 @@ public final class ZLinkStoreLocationResolvers
                                     meshName, ignored -> new PlacementObservation());
         }
         return listLiveMeshNodes(meshName)
-                .thenApply(
-                        nodes -> {
-                            updatePlacement(
-                                    meshName,
-                                    current ->
-                                            current == readFrom
-                                                    ? new PlacementObservation(
-                                                            List.copyOf(nodes),
-                                                            new CompletableFuture<>())
-                                                    : current);
-                            return nodes;
-                        })
+                .thenApply(nodes -> publishPlacementScan(meshName, readFrom, nodes))
                 .thenApply(
                         nodes ->
                                 nodes.stream()
@@ -209,6 +199,18 @@ public final class ZLinkStoreLocationResolvers
                                                                 node.objectRole(),
                                                                 !node.channelWeights().isEmpty()))
                                         .toList());
+    }
+
+    private List<ZLinkMeshNodeDescriptor> publishPlacementScan(
+            String meshName, PlacementObservation readFrom, List<ZLinkMeshNodeDescriptor> nodes) {
+        updatePlacement(
+                meshName,
+                current ->
+                        current == readFrom
+                                ? new PlacementObservation(
+                                        List.copyOf(nodes), new CompletableFuture<>())
+                                : current);
+        return nodes;
     }
 
     private void updatePlacement(String meshName, UnaryOperator<PlacementObservation> update) {
@@ -260,6 +262,19 @@ public final class ZLinkStoreLocationResolvers
             ZLinkInternalMeshNode source,
             Set<ZLinkMeshNodeDescriptorKey> excluded,
             long deadline) {
+        return selectPlacement(
+                meshName, kind, stableType, newActor, source, excluded, deadline, true);
+    }
+
+    private CompletionStage<ZLinkMeshNodeDescriptor> selectPlacement(
+            String meshName,
+            ZLinkPlacementObjectKind kind,
+            String stableType,
+            boolean newActor,
+            ZLinkInternalMeshNode source,
+            Set<ZLinkMeshNodeDescriptorKey> excluded,
+            long deadline,
+            boolean refreshAvailable) {
         PlacementObservation observation;
         synchronized (placement) {
             if (closed)
@@ -274,12 +289,7 @@ public final class ZLinkStoreLocationResolvers
                             ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
                             "Placement deadline exceeded"));
         }
-        List<ZLinkMeshNodeDescriptor> live =
-                observation.nodes() == null
-                        ? List.of()
-                        : observation.nodes().stream()
-                                .filter(liveRows::hasObservedLiveLease)
-                                .toList();
+        List<ZLinkMeshNodeDescriptor> live = observedLiveNodes(observation);
         PlacementDecision decision =
                 observation.nodes() == null
                         ? new PlacementDecision(List.of(), true)
@@ -290,30 +300,188 @@ public final class ZLinkStoreLocationResolvers
         }
         if (changed)
             return selectPlacement(
-                    meshName, kind, stableType, newActor, source, excluded, deadline);
+                    meshName,
+                    kind,
+                    stableType,
+                    newActor,
+                    source,
+                    excluded,
+                    deadline,
+                    refreshAvailable);
         if (!decision.candidates().isEmpty()) {
-            long total =
-                    decision.candidates().stream()
-                            .mapToLong(ZLinkMeshNodeDescriptor::placementWeight)
-                            .sum();
-            long choice = ThreadLocalRandom.current().nextLong(total);
-            for (var candidate : decision.candidates()) {
-                choice -= candidate.placementWeight();
-                if (choice < 0) return CompletableFuture.completedFuture(candidate);
-            }
+            return CompletableFuture.completedFuture(weightedPlacement(decision.candidates()));
         }
-        if (!decision.waitForDiscovery()) {
+        if (!decision.waitForDiscovery() && !refreshAvailable) {
             return CompletableFuture.failedFuture(
                     new ZLinkFrameworkException(
                             ZLinkFrameworkErrorKind.UNAVAILABLE, "Placement is unavailable"));
         }
-        // A dependent future owns this request's deadline; it must never time out the shared
-        // notification.
-        return observation
-                .changed()
-                .thenApply(ignored -> (Void) null)
+
+        CompletionStage<?> discovery;
+        if (decision.waitForDiscovery()) {
+            discovery = withinPlacementDeadline(observation.changed(), deadline);
+        } else {
+            discovery = refreshPlacement(meshName, observation, OptionalLong.of(deadline));
+        }
+        return discovery.thenCompose(
+                ignored ->
+                        selectPlacement(
+                                meshName,
+                                kind,
+                                stableType,
+                                newActor,
+                                source,
+                                excluded,
+                                deadline,
+                                refreshAvailable && decision.waitForDiscovery()));
+    }
+
+    private CompletionStage<List<ZLinkMeshNodeDescriptor>> refreshPlacement(
+            String meshName, PlacementObservation observation, OptionalLong deadline) {
+        if (placementDeadlineExpired(deadline)) {
+            return CompletableFuture.failedFuture(
+                    new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                            "Placement deadline exceeded"));
+        }
+        var scan = CompletableFuture.completedFuture(meshName).thenCompose(this::listLiveMeshNodes);
+        return (deadline.isPresent() ? withinPlacementDeadline(scan, deadline.getAsLong()) : scan)
+                .thenApply(nodes -> publishPlacementScan(meshName, observation, nodes));
+    }
+
+    private static boolean placementDeadlineExpired(OptionalLong deadline) {
+        return deadline.isPresent() && System.currentTimeMillis() >= deadline.getAsLong();
+    }
+
+    private List<ZLinkMeshNodeDescriptor> observedLiveNodes(PlacementObservation observation) {
+        return observation.nodes() == null
+                ? List.of()
+                : observation.nodes().stream().filter(liveRows::hasObservedLiveLease).toList();
+    }
+
+    private static ZLinkMeshNodeDescriptor weightedPlacement(
+            List<ZLinkMeshNodeDescriptor> candidates) {
+        long total = candidates.stream().mapToLong(ZLinkMeshNodeDescriptor::placementWeight).sum();
+        long choice = ThreadLocalRandom.current().nextLong(total);
+        for (var candidate : candidates) {
+            choice -= candidate.placementWeight();
+            if (choice < 0) return candidate;
+        }
+        return candidates.getLast();
+    }
+
+    public record InstancePlacement(String stableType, ZLinkMeshNodeDescriptor descriptor) {}
+
+    /**
+     * Spot address messaging §4.1: infer types from serving descriptors before applying capacity.
+     */
+    public CompletionStage<InstancePlacement> selectInstancePlacement(
+            String meshName,
+            String requestedType,
+            Set<RoutingId> connected,
+            OptionalLong deadline) {
+        return selectInstancePlacement(meshName, requestedType, connected, deadline, true);
+    }
+
+    private CompletionStage<InstancePlacement> selectInstancePlacement(
+            String meshName,
+            String requestedType,
+            Set<RoutingId> connected,
+            OptionalLong deadline,
+            boolean refreshAvailable) {
+        PlacementObservation observation;
+        synchronized (placement) {
+            if (closed)
+                return CompletableFuture.failedFuture(
+                        new java.util.concurrent.CancellationException("discovery closed"));
+            observation =
+                    placement.computeIfAbsent(meshName, ignored -> new PlacementObservation());
+        }
+        var nodes = observedLiveNodes(observation);
+        var types = instanceTypes(nodes);
+        String stableType = requestedType;
+        if (stableType == null && types.size() > 1) {
+            return CompletableFuture.failedFuture(
+                    new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                            "Instance Spot type is required when multiple types are registered"));
+        }
+        if (stableType == null && !types.isEmpty()) stableType = types.getFirst();
+        boolean supported = stableType != null && types.contains(stableType);
+        String selectedType = stableType;
+        var candidates =
+                supported
+                        ? nodes.stream()
+                                .filter(node -> node.state() == ZLinkFrameworkRuntimeState.SERVING)
+                                .filter(
+                                        node ->
+                                                isPlacementCandidate(
+                                                        node,
+                                                        ZLinkPlacementObjectKind.INSTANCE_SPOT,
+                                                        selectedType,
+                                                        false,
+                                                        Set.of()))
+                                .toList()
+                        : List.<ZLinkMeshNodeDescriptor>of();
+        if (placementDeadlineExpired(deadline)) {
+            return CompletableFuture.failedFuture(
+                    new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                            "Placement deadline exceeded"));
+        }
+        if (!candidates.isEmpty()) {
+            return CompletableFuture.completedFuture(
+                    new InstancePlacement(
+                            stableType,
+                            weightedPlacement(
+                                    preferConnectedInstanceTargets(candidates, connected))));
+        }
+        if (refreshAvailable) {
+            return refreshPlacement(meshName, observation, deadline)
+                    .thenCompose(
+                            ignored ->
+                                    selectInstancePlacement(
+                                            meshName, requestedType, connected, deadline, false));
+        }
+        return CompletableFuture.failedFuture(
+                new ZLinkFrameworkException(
+                        supported
+                                ? ZLinkFrameworkErrorKind.UNAVAILABLE
+                                : ZLinkFrameworkErrorKind.NOT_FOUND,
+                        supported
+                                ? "No Instance Spot placement target is available"
+                                : "No serving Instance Spot node provides the requested type"));
+    }
+
+    public static List<ZLinkMeshNodeDescriptor> preferConnectedInstanceTargets(
+            List<ZLinkMeshNodeDescriptor> candidates, Set<RoutingId> connected) {
+        var ready = candidates.stream().filter(node -> connected.contains(node.rid())).toList();
+        return ready.isEmpty() ? candidates : ready;
+    }
+
+    public static List<String> instanceTypes(List<ZLinkMeshNodeDescriptor> nodes) {
+        return nodes.stream()
+                .filter(
+                        node ->
+                                node.state() == ZLinkFrameworkRuntimeState.SERVING
+                                        && node.objectRole() == ZLinkMeshNodeObjectRole.SERVER)
+                .flatMap(node -> node.objectCapabilities().stream())
+                .filter(
+                        capability ->
+                                capability.objectKind() == ZLinkPlacementObjectKind.INSTANCE_SPOT)
+                .map(ZLinkObjectCapability::stableType)
+                .distinct()
+                .toList();
+    }
+
+    private static <T> CompletionStage<T> withinPlacementDeadline(
+            CompletionStage<T> operation, long deadline) {
+        // Only the dependent future owns this request's deadline.
+        return operation
+                .thenApply(value -> value)
+                .toCompletableFuture()
                 .orTimeout(
-                        Math.max(1L, deadline - System.currentTimeMillis()), TimeUnit.MILLISECONDS)
+                        Math.max(0L, deadline - System.currentTimeMillis()), TimeUnit.MILLISECONDS)
                 .exceptionallyCompose(
                         failure ->
                                 CompletableFuture.failedFuture(
@@ -322,17 +490,7 @@ public final class ZLinkStoreLocationResolvers
                                                         ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
                                                         "Placement deadline exceeded",
                                                         failure)
-                                                : failure))
-                .thenCompose(
-                        ignored ->
-                                selectPlacement(
-                                        meshName,
-                                        kind,
-                                        stableType,
-                                        newActor,
-                                        source,
-                                        excluded,
-                                        deadline));
+                                                : failure));
     }
 
     public record PlacementDecision(
@@ -348,25 +506,34 @@ public final class ZLinkStoreLocationResolvers
         List<ZLinkMeshNodeDescriptor> candidates = new ArrayList<>();
         boolean waiting = false;
         for (var node : nodes) {
-            if (node.objectRole() != ZLinkMeshNodeObjectRole.SERVER
-                    || node.placementWeight() <= 0
-                    || excluded.contains(
-                            new ZLinkMeshNodeDescriptorKey(node.meshName(), node.rid()))
-                    || node.objectCapabilities().stream()
-                            .noneMatch(
-                                    capability ->
-                                            capability.objectKind() == kind
-                                                    && capability.stableType().equals(stableType)
-                                                    && (!newActor || capability.entryAccepted())
-                                                    && ((kind == ZLinkPlacementObjectKind.ACTOR
-                                                                    && !newActor)
-                                                            || hasPlacementCapacity(
-                                                                    node, capability)))) continue;
+            if (!isPlacementCandidate(node, kind, stableType, newActor, excluded)) continue;
             if (node.state() == ZLinkFrameworkRuntimeState.SERVING && exactReady(node, source))
                 candidates.add(node);
             else waiting = true;
         }
         return new PlacementDecision(List.copyOf(candidates), waiting);
+    }
+
+    private static boolean isPlacementCandidate(
+            ZLinkMeshNodeDescriptor node,
+            ZLinkPlacementObjectKind kind,
+            String stableType,
+            boolean newActor,
+            Set<ZLinkMeshNodeDescriptorKey> excluded) {
+        return node.objectRole() == ZLinkMeshNodeObjectRole.SERVER
+                && (node.state() == ZLinkFrameworkRuntimeState.SERVING
+                        || node.state() == ZLinkFrameworkRuntimeState.PREPARING)
+                && node.placementWeight() > 0
+                && !excluded.contains(new ZLinkMeshNodeDescriptorKey(node.meshName(), node.rid()))
+                && node.objectCapabilities().stream()
+                        .anyMatch(
+                                capability ->
+                                        capability.objectKind() == kind
+                                                && capability.stableType().equals(stableType)
+                                                && (!newActor || capability.entryAccepted())
+                                                && ((kind == ZLinkPlacementObjectKind.ACTOR
+                                                                && !newActor)
+                                                        || hasPlacementCapacity(node, capability)));
     }
 
     public static boolean hasPlacementCapacity(

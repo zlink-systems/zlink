@@ -46,7 +46,7 @@ msg::message_parts_t owning_encode (const msg::envelope_header_t &header, zlink:
       detail::stream_codec_from_content_type (header.content_type),
       detail::stream_header_flags_t::none,
       header.kind == msg::message_kind_t::command ? std::nullopt : std::make_optional (1ULL),
-      header.message_name, detail::stream_metadata_t (header.metadata));
+      header.message_name, detail::stream_metadata_t (header.metadata.values ()));
     if (!header.correlation_id.empty ())
         wire.with_correlation_id (header.correlation_id);
     if (header.flow_id && header.flow_origin)

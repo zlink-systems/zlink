@@ -529,44 +529,31 @@ template <typename TResult>
 task_t<zlink::message_t> complete_spot_member_call (TResult &&result,
                                                     serializer_registry_t &serializers)
 {
-    using result_type = std::remove_cvref_t<TResult>;
-    if constexpr (is_task_v<result_type>) {
-        using value_type = typename task_value_type_t<result_type>::type;
-        try {
-            if constexpr (std::is_void_v<value_type>) {
-                co_await result;
-                co_return result_t<zlink::message_t>::success (zlink::message_t{});
-            } else {
-                auto value = co_await result;
-                co_return result_t<zlink::message_t>::success (detail::encoded_payload_to_raw (
-                  serializers.get<value_type> ().serialize (value)));
-            }
+    using value_type = typename task_value_type_t<std::remove_cvref_t<TResult>>::type;
+    try {
+        if constexpr (std::is_void_v<value_type>) {
+            co_await result;
+            co_return result_t<zlink::message_t>::success (zlink::message_t{});
+        } else {
+            auto value = co_await result;
+            co_return result_t<zlink::message_t>::success (
+              encoded_payload_to_raw (serializers.get<value_type> ().serialize (value)));
         }
-        catch (const framework_exception_t &error) {
-            co_return detail::result_access_t::failure<zlink::message_t> (error);
-        }
-        catch (const std::exception &error) {
-            co_return result_t<zlink::message_t>::failure (framework_error_kind_t::internal_failure,
-                                                           error.what ());
-        }
-    } else if constexpr (std::is_void_v<result_type>) {
-        co_return result_t<zlink::message_t>::success (zlink::message_t{});
-    } else {
-        co_return (co_await serialize_handler_result (std::forward<TResult> (result), serializers));
+    }
+    catch (const framework_exception_t &error) {
+        co_return result_access_t::failure<zlink::message_t> (error);
+    }
+    catch (const std::exception &error) {
+        co_return result_t<zlink::message_t>::failure (framework_error_kind_t::internal_failure,
+                                                       error.what ());
     }
 }
 
 template <typename TCall>
 task_t<zlink::message_t> invoke_spot_member (TCall &&call, serializer_registry_t &serializers)
 {
-    using result_type = std::invoke_result_t<TCall>;
     try {
-        if constexpr (std::is_void_v<result_type>) {
-            call ();
-            co_return result_t<zlink::message_t>::success (zlink::message_t{});
-        } else {
-            co_return (co_await complete_spot_member_call (call (), serializers));
-        }
+        co_return (co_await complete_spot_member_call (call (), serializers));
     }
     catch (...) {
         co_return current_exception_result<zlink::message_t> ();
@@ -574,6 +561,7 @@ task_t<zlink::message_t> invoke_spot_member (TCall &&call, serializer_registry_t
 }
 
 template <typename TCall, typename... TKeepAlive>
+    requires is_task_v<std::remove_cvref_t<std::invoke_result_t<TCall &>>>
 task_t<zlink::message_t> invoke_spot_member_keepalive (TCall call,
                                                        serializer_registry_t &serializers,
                                                        TKeepAlive... keep_alive)
@@ -581,6 +569,24 @@ task_t<zlink::message_t> invoke_spot_member_keepalive (TCall call,
     (void) sizeof...(keep_alive);
     auto handler_task = invoke_spot_member (call, serializers);
     co_return co_await handler_task;
+}
+
+template <typename TCall, typename... TKeepAlive>
+task_t<zlink::message_t>
+invoke_spot_member_keepalive (TCall call, serializer_registry_t &serializers, TKeepAlive...)
+{
+    try {
+        if constexpr (std::is_void_v<std::invoke_result_t<TCall &>>) {
+            call ();
+            return task_t<zlink::message_t> (
+              result_t<zlink::message_t>::success (zlink::message_t{}));
+        } else {
+            return serialize_handler_result (call (), serializers);
+        }
+    }
+    catch (...) {
+        return task_t<zlink::message_t> (current_exception_result<zlink::message_t> ());
+    }
 }
 } // namespace detail
 

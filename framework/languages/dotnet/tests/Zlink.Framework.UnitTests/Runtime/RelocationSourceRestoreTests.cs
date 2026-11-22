@@ -421,7 +421,7 @@ public sealed partial class RelocationBehaviorConformanceTests
                     var captured = Assert.IsType<ZLinkAuthoritySnapshot>(store.CapturedSourceAbort);
                     Assert.True(
                         ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                            captured.Payload.Span,
+                            captured,
                             out var projection
                         )
                     );
@@ -448,6 +448,9 @@ public sealed partial class RelocationBehaviorConformanceTests
                                 null,
                                 null
                             )
+                            {
+                                ClearRelocation = true,
+                            }
                         )
                     );
                 }
@@ -520,7 +523,7 @@ public sealed partial class RelocationBehaviorConformanceTests
                 Assert.Equal(captured.OwnerLeaseGeneration, confirmed.OwnerLeaseGeneration);
                 Assert.True(
                     ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                        captured.Payload.Span,
+                        captured,
                         out var capturedProjection
                     )
                 );
@@ -528,12 +531,7 @@ public sealed partial class RelocationBehaviorConformanceTests
                     capturedProjection.SteadyAuthorityPayload.ToArray(),
                     confirmed.Payload.ToArray()
                 );
-                Assert.False(
-                    ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                        confirmed.Payload.Span,
-                        out _
-                    )
-                );
+                Assert.False(ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(confirmed, out _));
                 Assert.True(
                     trace.Events.ToList().IndexOf("sourcePreserveConfirmed")
                         < trace.Events.ToList().IndexOf("completionCallbackStarted")
