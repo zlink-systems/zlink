@@ -483,9 +483,6 @@ class in_memory_location_repository_t : public location_repository_t
         return _lane.run_task ([this, key = std::move (key)] () mutable {
             const auto now = clock_t::now ();
             const auto found = _authorities.find (key.value);
-            retain_reclaim_observation (key.value, found == _authorities.end ()
-                                                     ? std::nullopt
-                                                     : std::optional{found->second.owner});
             if (found == _authorities.end ())
                 return completed (authority_read_result_t{authority_missing_t{now}});
             auto snapshot = found->second;
@@ -516,8 +513,6 @@ class in_memory_location_repository_t : public location_repository_t
             auto found = _authorities.find (key.value);
             if (found == _authorities.end ()
                 || found->second.store_version != expected_store_version) {
-                if (found == _authorities.end ())
-                    retain_reclaim_observation (key.value);
                 authority_read_result_t current =
                   found == _authorities.end () ? authority_read_result_t{authority_missing_t{now}}
                                                : authority_read_result_t{found->second};
@@ -556,7 +551,6 @@ class in_memory_location_repository_t : public location_repository_t
                 const auto store_version = next_store_version ();
                 apply_capacity_bundle (_active_by_placement, found->second.allocation.target,
                                        found->second.allocation.capacity_bundle, false);
-                remove_reclaim_observation (key.value, found->second.owner);
                 _authorities.erase (found);
                 return completed (
                   authority_compare_exchange_result_t{authority_deleted_t{store_version, now}});
@@ -898,9 +892,6 @@ class in_memory_location_repository_t : public location_repository_t
                           object_reserve_conflict_t{authority_missing_t{now}}});
                 }
                 auto authority = _authorities.find (key);
-                retain_reclaim_observation (key, authority != _authorities.end ()
-                                                   ? std::optional{authority->second.owner}
-                                                   : std::nullopt);
                 if (authority != _authorities.end ()
                     && !authority_matches_creation_type (authority->second, request))
                     return completed (
@@ -1429,10 +1420,8 @@ class in_memory_location_repository_t : public location_repository_t
             return false;
         const auto &target = snapshot.allocation.target;
         const bool owner_live = owner_token_is_live (snapshot.owner, now);
-        if (active && owner_live) {
-            reclaim_wait_elapsed (key, snapshot.owner, true);
+        if (active && owner_live)
             return false;
-        }
         std::vector<std::string> members;
         if (authority_mutation_locked_on_lane (key)) {
             if (active)
@@ -1474,7 +1463,7 @@ class in_memory_location_repository_t : public location_repository_t
                                                  "Instance Spot is not steady Ready");
             }
         }
-        const bool wait_elapsed = !active || reclaim_wait_elapsed (key, snapshot.owner, false);
+        const bool wait_elapsed = !active || authority_release_wait_elapsed (snapshot.owner);
         if (!discarded && active
             && snapshot.allocation.object_kind == placement_object_kind_t::user_spot)
             members = ended_spot_members_on_lane (key, snapshot, request->key.global_id, now);
@@ -1499,13 +1488,11 @@ class in_memory_location_repository_t : public location_repository_t
             reservation->second.status = reservation_status_t::aborted;
         }
         _authorities.erase (key);
-        retain_reclaim_observation (key);
         for (const auto &member_key : members) {
             const auto member = _authorities.find (member_key);
             apply_capacity_bundle (_active_by_placement, member->second.allocation.target,
                                    member->second.allocation.capacity_bundle, false);
             _authorities.erase (member);
-            retain_reclaim_observation (member_key);
         }
         return true;
     }
@@ -1540,13 +1527,12 @@ class in_memory_location_repository_t : public location_repository_t
                 throw framework_exception_t (
                   framework_error_kind_t::unavailable,
                   "User Spot still has a relocating or unactivated member");
-            const bool live = owner_token_is_live (authority.owner, now);
-            if (!reclaim_wait_elapsed (member_key, authority.owner, live))
-                wait_elapsed = false;
-            if (live)
+            if (owner_token_is_live (authority.owner, now))
                 throw framework_exception_t (
                   framework_error_kind_t::unavailable,
                   "User Spot still has a member with a live owner lease");
+            if (!authority_release_wait_elapsed (authority.owner))
+                wait_elapsed = false;
             members.push_back (member_key);
             batch_keys.insert ("authority:" + member_key);
             batch_keys.insert ("aggregate-lock:" + member_key);

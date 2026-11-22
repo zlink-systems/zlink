@@ -11,7 +11,8 @@ import {
   ZLinkDispatchMessageKind,
   ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
-import { awaitWithAbort, NORMAL_COMPLETION } from '../abort';
+import { awaitWithAbort, isAbortError, NORMAL_COMPLETION } from '../abort';
+import type { ZLinkRequestSourceResolver } from '../locations/request-source-resolver';
 import type { ZLinkBackendMeshNode } from '../backend/contracts';
 import {
   closeMeshCompletion,
@@ -59,6 +60,8 @@ import type {
 export interface ZLinkHostSpotAddressTransportOptions {
   readonly requests?: RequestRuntime;
   readonly resolver: () => ZLinkSpotRouteResolver | undefined;
+  readonly requestSources?: () => ZLinkRequestSourceResolver | undefined;
+  readonly shutdownSignal?: () => AbortSignal | undefined;
   readonly routed: ZLinkSpotRoutedTransport;
   readonly meshNames: () => readonly string[];
   readonly isMeshConfigured?: (meshName: string) => boolean;
@@ -178,7 +181,16 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
     if (!call.instanceSpot) {
       return { status: ZLinkSubmitStatus.TargetNotFound };
     }
-    const selected = this.selectMissingTarget(spotId, call, resolution);
+    const shutdown = this.options.shutdownSignal?.();
+    let selected: MissingTargetSelection;
+    try {
+      selected = await this.selectMissingTarget(spotId, call, resolution, shutdown);
+    } catch (error) {
+      if (shutdown?.aborted === true && isAbortError(error)) {
+        return { status: ZLinkSubmitStatus.Shutdown };
+      }
+      throw error;
+    }
     if (selected.kind === 'unsupported') {
       this.traceInstanceAddress(
         ZLinkMessageFlowOutcome.Dropped,
@@ -413,7 +425,12 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
         `Spot '${String(spotId)}' has no Ready authority.`
       );
     }
-    const selected = this.selectMissingTarget(spotId, call, current);
+    const selected = await waitRequestReply(
+      this.selectMissingTarget(spotId, call, current, deadline.signal),
+      'Instance Spot placement',
+      deadline.operation,
+      () => deadline.close()
+    );
     if (selected.kind === 'capacity') {
       const error = missingInstancePlacementCapacity(spotId, call.instanceSpotType);
       this.reportInstanceRequestError(
@@ -617,11 +634,12 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
     return { ...call, initialMeshName: route.meshName, instanceSpotType: route.stableType };
   }
 
-  private selectMissingTarget(
+  private async selectMissingTarget(
     spotId: RoutingId,
     call: ZLinkSpotAddressCallOptions,
-    current?: ZLinkSpotRouteTarget | ZLinkInstanceReactivationRoute
-  ): MissingTargetSelection {
+    current: ZLinkSpotRouteTarget | ZLinkInstanceReactivationRoute | undefined,
+    signal?: AbortSignal
+  ): Promise<MissingTargetSelection> {
     const configuredMeshes = this.options.meshNames();
     if (
       call.initialMeshName !== undefined &&
@@ -652,6 +670,36 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
     }
     const meshNames =
       call.initialMeshName === undefined ? configuredMeshes : [call.initialMeshName];
+    const requestSources = this.options.requestSources?.();
+    if (requestSources !== undefined) {
+      const meshName = meshNames[0]!;
+      const node = this.options.meshNode(meshName);
+      if (node === undefined) return { kind: 'unavailable' };
+      const placement = await requestSources.selectInstancePlacement(
+        meshName,
+        call.instanceSpotType,
+        node,
+        signal
+      );
+      if (placement.kind !== 'selected') {
+        return placement.kind === 'unsupported' && current !== undefined
+          ? { kind: 'unavailable' }
+          : placement;
+      }
+      return {
+        kind: 'selected',
+        meshName,
+        node,
+        target: {
+          targetNodeRid: String(placement.descriptor.rid),
+          targetNodeGeneration: placement.descriptor.lifecycleGeneration,
+          descriptorVersion: placement.descriptor.descriptorRevision.toString(),
+          targetMeshName: meshName,
+          targetSpotId: String(spotId),
+          stableType: placement.stableType
+        }
+      };
+    }
     const distinctTypes = [
       ...new Set(
         meshNames.flatMap(

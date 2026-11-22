@@ -6,6 +6,10 @@ import type { ZLinkMeshNodeDescriptor } from '../../contracts/Locations/Rows';
 import type { ZLinkLocationOwnerToken } from './internal-location-contracts';
 import { encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
 import { awaitWithAbort, throwIfAborted } from '../abort';
+import {
+  ZLinkFrameworkInternalErrorKind,
+  createInternalFrameworkException
+} from '../framework-errors-internal';
 
 /** Source request owner values the first accepting owner records (Location runtime §9.3). */
 export interface ZLinkRequestSourceFence {
@@ -27,6 +31,18 @@ export interface ZLinkRequestSourceResolverOptions {
   readonly monotonicNowMs?: () => number;
 }
 
+type PlacementKind = ZLinkMeshNodeDescriptor['objectCapabilities'][number]['objectKind'];
+
+type InstancePlacement =
+  | {
+      readonly kind: 'selected';
+      readonly stableType: string;
+      readonly descriptor: ZLinkMeshNodeDescriptor;
+    }
+  | { readonly kind: 'unsupported' }
+  | { readonly kind: 'capacity' }
+  | { readonly kind: 'unavailable' };
+
 interface PolledSource {
   readonly descriptor: ZLinkMeshNodeDescriptor;
   readonly fence: ZLinkRequestSourceFence;
@@ -39,7 +55,7 @@ interface PolledSource {
  * owner lease passes the Location runtime §4.1 check. Auto-connect polling keeps the live
  * descriptors here with the local lease deadline computed from the same lease read. A sender
  * missing from them is read from the Store once and kept with them. The same observation owns
- * Actor and User Spot placement (MeshNode §5.2); refreshes wake callers without request polling.
+ * placement (MeshNode §5.2) and wakes callers when discovery publishes new descriptors.
  */
 export class ZLinkRequestSourceResolver {
   private readonly polled = new Map<string, Map<string, PolledSource>>();
@@ -50,11 +66,35 @@ export class ZLinkRequestSourceResolver {
     this.monotonicNowMs = options.monotonicNowMs ?? (() => performance.now());
   }
 
+  /** Reads and publishes the live descriptors for both scheduled discovery and placement. */
+  async refreshLiveDescriptors(
+    meshName: string,
+    signal?: AbortSignal
+  ): Promise<readonly ZLinkMeshNodeDescriptor[]> {
+    const observed = this.polled.get(meshName);
+    signal?.throwIfAborted();
+    const descriptors = await awaitWithAbort(
+      this.options.listLiveMeshNodes(meshName, signal),
+      signal
+    );
+    await this.publishLiveDescriptors(meshName, descriptors, signal, observed);
+    return descriptors;
+  }
+
   /** Replaces the polled descriptors of one mesh with a live descriptor listing. */
   async observeLiveDescriptors(
     meshName: string,
     descriptors: readonly ZLinkMeshNodeDescriptor[],
     signal?: AbortSignal
+  ): Promise<void> {
+    await this.publishLiveDescriptors(meshName, descriptors, signal, this.polled.get(meshName));
+  }
+
+  private async publishLiveDescriptors(
+    meshName: string,
+    descriptors: readonly ZLinkMeshNodeDescriptor[],
+    signal: AbortSignal | undefined,
+    observed: ReadonlyMap<string, PolledSource> | undefined
   ): Promise<void> {
     const sources = new Map<string, PolledSource>();
     for (const descriptor of descriptors) {
@@ -62,6 +102,7 @@ export class ZLinkRequestSourceResolver {
       if (source !== undefined) sources.set(encodeRoutingIdStorageHex(descriptor.rid), source);
     }
     signal?.throwIfAborted();
+    if (this.polled.get(meshName) !== observed) return;
     this.polled.set(meshName, sources);
     this.notifyPlacementChange(meshName);
   }
@@ -78,40 +119,23 @@ export class ZLinkRequestSourceResolver {
     // An absent mesh has no discovery observation yet (startup or after clear()).
     // An observed empty snapshot already establishes that no target is available.
     if (!this.polled.has(meshName)) await this.waitForPlacementChange(meshName, signal);
+    let refreshAvailable = true;
     for (;;) {
       signal?.throwIfAborted();
-      const candidates = [...(this.polled.get(meshName)?.values() ?? [])]
-        .filter((source) => this.monotonicNowMs() < source.leaseDeadlineMs)
-        .map((source) => source.descriptor)
-        .filter((descriptor) => {
-          const capability = descriptor.objectCapabilities.find(
-            (value) => value.objectKind === kind && value.stableType === stableType
-          );
-          const capacity =
-            kind === 'actor'
-              ? descriptor.populationCapacity.actors
-              : descriptor.populationCapacity.spots;
-          const typeCapacity =
-            kind === 'actor'
-              ? undefined
-              : descriptor.populationCapacity.spotTypes.find(
-                  (value) => value.objectKind === kind && value.stableType === stableType
-                );
-          return (
-            descriptor.objectRole === 'server' &&
-            descriptor.placementWeight > 0 &&
-            excludedHostRuns?.get(encodeRoutingIdStorageHex(descriptor.rid)) !==
-              descriptor.lifecycleGeneration &&
-            capability !== undefined &&
-            (kind !== 'actor' ||
-              (descriptor.entrySpotId !== undefined && capability.entryAccepted)) &&
-            (capacity.limit === 0 || capacity.active + capacity.reserved < capacity.limit) &&
-            (typeCapacity === undefined ||
-              typeCapacity.limit === 0 ||
-              typeCapacity.active + typeCapacity.reserved < typeCapacity.limit)
-          );
-        });
-      if (candidates.length === 0) return undefined;
+      const observation = this.polled.get(meshName);
+      if (observation === undefined) return undefined;
+      const candidates = this.placementCandidates(
+        this.liveDescriptors(observation),
+        kind,
+        stableType,
+        excludedHostRuns
+      );
+      if (candidates.length === 0) {
+        if (!refreshAvailable) return undefined;
+        refreshAvailable = false;
+        await this.refreshLiveDescriptors(meshName, signal);
+        continue;
+      }
       const status = node?.status();
       const selected = selectLocationPlacementDescriptor(
         candidates.filter(
@@ -125,6 +149,103 @@ export class ZLinkRequestSourceResolver {
       // A refresh cannot publish between the snapshot check and listener registration.
       await this.waitForPlacementChange(meshName, signal);
     }
+  }
+
+  /** Spot address messaging §4.1 uses serving types before testing capacity and route readiness. */
+  async selectInstancePlacement(
+    meshName: string,
+    requestedType: string | undefined,
+    node: ZLinkBackendMeshNode,
+    signal?: AbortSignal
+  ): Promise<InstancePlacement> {
+    let refreshAvailable = true;
+    for (;;) {
+      signal?.throwIfAborted();
+      const serving = this.liveDescriptors(this.polled.get(meshName)).filter(
+        (descriptor) =>
+          descriptor.state === ZLinkFrameworkRuntimeState.Serving &&
+          descriptor.objectRole === 'server'
+      );
+      const types = new Set(
+        serving.flatMap((descriptor) =>
+          descriptor.objectCapabilities
+            .filter((capability) => capability.objectKind === 'instance_spot')
+            .map((capability) => capability.stableType)
+        )
+      );
+      if (requestedType === undefined && types.size > 1) {
+        throw createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.InvalidOperation,
+          'Instance Spot type is required when multiple types are registered.'
+        );
+      }
+      const stableType = requestedType ?? types.values().next().value;
+      if (stableType !== undefined && types.has(stableType)) {
+        const candidates = this.placementCandidates(serving, 'instance_spot', stableType);
+        if (candidates.length !== 0) {
+          const status = node.status();
+          const descriptor = selectLocationPlacementDescriptor(
+            candidates.filter((candidate) => isPlacementTargetReady(node, status, candidate))
+          );
+          return descriptor === undefined
+            ? { kind: 'unavailable' }
+            : { kind: 'selected', stableType, descriptor };
+        }
+      }
+      if (!refreshAvailable) {
+        return {
+          kind: stableType !== undefined && types.has(stableType) ? 'capacity' : 'unsupported'
+        };
+      }
+      refreshAvailable = false;
+      await this.refreshLiveDescriptors(meshName, signal);
+    }
+  }
+
+  private liveDescriptors(
+    observation: ReadonlyMap<string, PolledSource> | undefined
+  ): ZLinkMeshNodeDescriptor[] {
+    const now = this.monotonicNowMs();
+    return [...(observation?.values() ?? [])]
+      .filter((source) => now < source.leaseDeadlineMs)
+      .map((source) => source.descriptor);
+  }
+
+  private placementCandidates(
+    descriptors: readonly ZLinkMeshNodeDescriptor[],
+    kind: PlacementKind,
+    stableType: string,
+    excludedHostRuns?: ReadonlyMap<string, bigint>
+  ): ZLinkMeshNodeDescriptor[] {
+    return descriptors.filter((descriptor) => {
+      const capability = descriptor.objectCapabilities.find(
+        (value) => value.objectKind === kind && value.stableType === stableType
+      );
+      const capacity =
+        kind === 'actor'
+          ? descriptor.populationCapacity.actors
+          : descriptor.populationCapacity.spots;
+      const typeCapacity =
+        kind === 'actor'
+          ? undefined
+          : descriptor.populationCapacity.spotTypes.find(
+              (value) => value.objectKind === kind && value.stableType === stableType
+            );
+      return (
+        descriptor.objectRole === 'server' &&
+        (descriptor.state === ZLinkFrameworkRuntimeState.Serving ||
+          descriptor.state === ZLinkFrameworkRuntimeState.Preparing) &&
+        descriptor.placementWeight > 0 &&
+        excludedHostRuns?.get(encodeRoutingIdStorageHex(descriptor.rid)) !==
+          descriptor.lifecycleGeneration &&
+        capability !== undefined &&
+        (kind !== 'actor' || (descriptor.entrySpotId !== undefined && capability.entryAccepted)) &&
+        (capacity.limit === 0 || capacity.active + capacity.reserved < capacity.limit) &&
+        (typeCapacity === undefined ||
+          typeCapacity.limit === 0 ||
+          typeCapacity.active + typeCapacity.reserved < typeCapacity.limit)
+      );
+    });
   }
 
   clear(): void {

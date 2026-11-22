@@ -378,14 +378,22 @@ export class ServiceRelocationObjectRestoreOwner<
     await this.target.replayQueuedMessage(hidden, message, signal);
   }
 
-  async normalize(
+  normalize(
     staging: ServiceObjectRelocationStaging<THidden>,
     authority: ZLinkAuthoritySnapshot,
     signal?: AbortSignal
   ): Promise<void> {
-    await Promise.all(
-      [...staging.hidden.values()].map((hidden) => this.target.normalize(hidden, authority, signal))
-    );
+    const terminals: Promise<void>[] = [];
+    try {
+      for (const hidden of staging.hidden.values()) {
+        terminals.push(this.target.normalize(hidden, authority, signal));
+      }
+    } catch (error) {
+      // Admission can throw after earlier participants have installed their prefixes.
+      void Promise.allSettled(terminals);
+      throw error;
+    }
+    return Promise.all(terminals).then(() => undefined);
   }
 
   async openAdmission(

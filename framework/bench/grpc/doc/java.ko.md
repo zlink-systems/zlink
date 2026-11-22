@@ -52,7 +52,7 @@ trigger·stats·phase 규칙은 `shared/.../BenchHttpApplication.java`(JDK `Http
 
 | 패턴 | `streams.count` | `streams.inFlightPerStream` | 구현 |
 |---|---:|---:|---|
-| `request-serial` | 1 | 1 | platform submit thread 하나의 순차 `CompletableFuture` |
+| `request-serial` | 1 | 1 | platform submit thread 하나의 순차 `CompletableFuture`. 완료는 별도 completion 스레드가 처리(Framework·binding 동일) |
 | `request-backpressure` | 1 | 없음 | submit thread 하나가 상한 없이 제출하고 completion에 양보 |
 | `send-saturation` | 8 | 1 | submit thread 8개가 각각 완료 통지 뒤 다음 send |
 

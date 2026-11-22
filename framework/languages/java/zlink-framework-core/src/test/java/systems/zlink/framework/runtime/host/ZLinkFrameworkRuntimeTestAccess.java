@@ -21,6 +21,7 @@ import systems.zlink.framework.runtime.locations.ZLinkLocationRuntime;
 import systems.zlink.framework.runtime.locations.ZLinkRegisteredLocationStores;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 
+import java.time.Clock;
 import java.util.List;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
@@ -48,6 +49,7 @@ public final class ZLinkFrameworkRuntimeTestAccess {
         private SpotTransportAddressResolver channelSpotAddressResolver;
         private ZLinkLocationRuntime locationRuntime;
         private ZLinkRegisteredLocationStores locationStores;
+        private Clock spotActivationClock;
         private ScheduledExecutorService spotTimerExecutor;
         private ThreadPoolExecutor spotMulticastExecutor;
         private Executor spotHandlerExecutor;
@@ -84,6 +86,11 @@ public final class ZLinkFrameworkRuntimeTestAccess {
 
         public Construction locationStores(ZLinkRegisteredLocationStores value) {
             locationStores = value;
+            return this;
+        }
+
+        public Construction spotActivationClock(Clock value) {
+            spotActivationClock = value;
             return this;
         }
 
@@ -215,7 +222,8 @@ public final class ZLinkFrameworkRuntimeTestAccess {
                                             timerExecutor,
                                             multicastExecutor,
                                             handlerExecutor,
-                                            timerStateLaneFactory),
+                                            timerStateLaneFactory,
+                                            spotActivationClock),
                     (spots,
                             actors,
                             registrations,

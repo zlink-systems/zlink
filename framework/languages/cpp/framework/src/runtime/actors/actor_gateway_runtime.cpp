@@ -616,7 +616,7 @@ encode_actor_packet (const runtime::messaging::envelope_header_t &header, zlink:
 {
     using runtime::messaging::message_kind_t;
     stream_header_view_t wire{
-      header.metadata,
+      header.metadata.values (),
       header.kind == message_kind_t::command ? stream_message_kind_t::send
                                              : stream_message_kind_t::request,
       stream_codec_from_content_type (header.content_type),
@@ -689,7 +689,7 @@ encode_actor_reply (const runtime::messaging::envelope_header_t &header, zlink::
                           error ? stream_codec_t::json
                                 : stream_codec_from_content_type (header.content_type),
                           stream_header_flags_t::none, actor_wire_request_sequence, "",
-                          stream_metadata_t (header.metadata));
+                          stream_metadata_t (header.metadata.values ()));
     if (error) {
         body = stream_error_payload (
           header.error_code.value_or (stream_error_code (framework_error_kind_t::internal_failure)),

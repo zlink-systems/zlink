@@ -21,6 +21,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -29,15 +30,19 @@ import java.util.concurrent.TimeoutException;
 final class ZLinkPendingStreamAdmissionTerminationTest {
     @RepeatedTest(40)
     void socketCloseTerminatesPendingPush() throws Exception {
-        exercise(true, SubmitResult.TERMINATED);
+        exercise(true, Set.of(SubmitResult.TERMINATED));
     }
 
     @RepeatedTest(40)
     void peerDisconnectTerminatesPendingPush() throws Exception {
-        exercise(false, SubmitResult.NOT_FOUND);
+        // Core's completion table ends a pending send with NOT_FOUND when the RID is removed
+        // and NOT_CONNECTED when the STREAM connection closes; a peer disconnect does both and
+        // the spec orders neither. The Framework maps both to Unavailable (Submit and
+        // completion §7), so either one ends the push; a wait or any other result fails.
+        exercise(false, Set.of(SubmitResult.NOT_FOUND, SubmitResult.NOT_CONNECTED));
     }
 
-    private void exercise(boolean closeSocket, SubmitResult expected) throws Exception {
+    private void exercise(boolean closeSocket, Set<SubmitResult> expected) throws Exception {
         var ready = new CompletableFuture<RoutingId>();
         try (var context = Zlink.createContext()) {
             context.options().autoHwmEnabled(false);
@@ -94,10 +99,10 @@ final class ZLinkPendingStreamAdmissionTerminationTest {
                                             pending.get(
                                                     remainingNanos(deadline),
                                                     TimeUnit.NANOSECONDS));
-                    assertEquals(
-                            expected,
+                    var result =
                             assertInstanceOf(ZlinkSubmitException.class, failure.getCause())
-                                    .getResult());
+                                    .getResult();
+                    assertTrue(expected.contains(result), () -> "unexpected result " + result);
                 } finally {
                     // Release native backpressure even when the operation under test is stuck.
                     if (!pending.isDone()) socket.close();

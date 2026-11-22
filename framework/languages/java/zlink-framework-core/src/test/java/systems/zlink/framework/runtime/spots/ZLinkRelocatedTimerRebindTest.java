@@ -579,6 +579,10 @@ final class ZLinkRelocatedTimerRebindTest {
 
         @Override
         public ScheduledFuture<?> schedule(Runnable command, long delay, TimeUnit unit) {
+            // The tests advance Spot ticks manually and let activation deadlines run normally.
+            if (unit != TimeUnit.NANOSECONDS) {
+                return super.schedule(command, delay, unit);
+            }
             var task = new ManualFuture(command);
             tasks.add(task);
             due.add(task);
