@@ -10,8 +10,9 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'PowerShell 7 or later is required.' }
 $root = $PSScriptRoot
+. (Join-Path $root 'scripts/run-helpers.ps1')
+Assert-PowerShellVersion
 Set-Location $root
 New-Item -ItemType Directory -Force (Join-Path $root '.logs') | Out-Null
 if ($CheckStructure) { $RunnerArguments = @('--check-structure') + $RunnerArguments }
@@ -23,10 +24,11 @@ if ($Attach) {
 }
 if ($Local) {
     if (-not $NoBuild) {
-        & npm ci *> (Join-Path $root '.logs/build.log')
-        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-        & npm run build *>> (Join-Path $root '.logs/build.log')
-        if ($LASTEXITCODE -ne 0) {
+        $buildLog = Join-Path $root '.logs/build.log'
+        $code = Invoke-Logged -Log $buildLog -Command npm -Arguments @('ci')
+        if ($code -ne 0) { exit $code }
+        $code = Invoke-Logged -Log $buildLog -Append -Command npm -Arguments @('run', 'build')
+        if ($code -ne 0) {
             Get-Content (Join-Path $root '.logs/build.log') -Tail 20 | Write-Host
             exit 1
         }
@@ -47,13 +49,14 @@ New-Item -ItemType Directory $logs | Out-Null
 # timestamps would build each other's files. A link with a per-run name gives every build its own
 # transfer.
 $env:MY_GAME_BUILD_CONTEXT = Join-Path $logs $project
-New-Item -ItemType ($IsWindows ? 'Junction' : 'SymbolicLink') -Path $env:MY_GAME_BUILD_CONTEXT -Target $root | Out-Null
+$linkType = if (Test-OnWindows) { 'Junction' } else { 'SymbolicLink' }
+New-Item -ItemType $linkType -Path $env:MY_GAME_BUILD_CONTEXT -Target $root | Out-Null
 $compose = @('compose', '-f', (Join-Path $root 'docker-compose.yml'), '-p', $project, '--profile', 'docker')
 $result = 1
 Write-Host "Docker logs: $logs"
 try {
-    & docker @compose build *> (Join-Path $logs 'build.log')
-    if ($LASTEXITCODE -ne 0) {
+    $code = Invoke-Logged -Log (Join-Path $logs 'build.log') -Command docker -Arguments ($compose + @('build'))
+    if ($code -ne 0) {
         Get-Content (Join-Path $logs 'build.log') -Tail 30 | Write-Host
         throw 'Docker image build failed.'
     }
@@ -67,8 +70,8 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Structure check failed.' }
         if ($CheckStructure) { $result = 0 }
         else {
-            & docker @compose up -d --wait --wait-timeout 30 redis *> (Join-Path $logs 'redis-start.log')
-            if ($LASTEXITCODE -ne 0) { throw 'Redis startup failed.' }
+            $code = Invoke-Logged -Log (Join-Path $logs 'redis-start.log') -Command docker -Arguments ($compose + @('up', '-d', '--wait', '--wait-timeout', '30', 'redis'))
+            if ($code -ne 0) { throw 'Redis startup failed.' }
             & docker @compose run --rm --no-deps -T --name "$project-control" runner @RunnerArguments
             $result = $LASTEXITCODE
         }
@@ -79,18 +82,17 @@ finally {
     $containers = @(& docker ps -aq --filter "label=my-game.e2e=$project")
     if ($LASTEXITCODE -ne 0) { $result = 1 }
     if ($containers.Count -gt 0) {
-        & docker rm -f @containers *> (Join-Path $logs 'containers-stop.log')
-        if ($LASTEXITCODE -ne 0) { $result = 1 }
+        $code = Invoke-Logged -Log (Join-Path $logs 'containers-stop.log') -Command docker -Arguments (@('rm', '-f') + $containers)
+        if ($code -ne 0) { $result = 1 }
     }
-    & docker @compose logs --no-color redis *> (Join-Path $logs 'redis.log')
-    if ($LASTEXITCODE -ne 0) { $result = 1 }
-    & docker @compose down --volumes *> (Join-Path $logs 'cleanup.log')
-    if ($LASTEXITCODE -ne 0) { $result = 1 }
+    $code = Invoke-Logged -Log (Join-Path $logs 'redis.log') -Command docker -Arguments ($compose + @('logs', '--no-color', 'redis'))
+    if ($code -ne 0) { $result = 1 }
+    $code = Invoke-Logged -Log (Join-Path $logs 'cleanup.log') -Command docker -Arguments ($compose + @('down', '--volumes'))
+    if ($code -ne 0) { $result = 1 }
     foreach ($image in @("$project-node", "$project-runner")) {
-        & docker image inspect $image *> $null
-        if ($LASTEXITCODE -eq 0) {
-            & docker image rm $image *>> (Join-Path $logs 'cleanup.log')
-            if ($LASTEXITCODE -ne 0) { $result = 1 }
+        if ((Invoke-Logged -Command docker -Arguments @('image', 'inspect', $image)) -eq 0) {
+            $code = Invoke-Logged -Log (Join-Path $logs 'cleanup.log') -Append -Command docker -Arguments @('image', 'rm', $image)
+            if ($code -ne 0) { $result = 1 }
         }
     }
     [IO.Directory]::Delete($env:MY_GAME_BUILD_CONTEXT)

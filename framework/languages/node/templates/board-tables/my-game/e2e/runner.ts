@@ -42,7 +42,9 @@ async function main(): Promise<void> {
   checkStructure();
   runDomainChecks();
   const host = attach ? undefined : createServerHost(selected.length);
-  const logDir = host?.logDir ?? `${LogFiles.runs}/${LogFiles.runPrefix}${randomUUID()}`;
+  // Each attach run names its own players and tables, so one server can take repeated runs.
+  const attachRunId = randomUUID();
+  const logDir = host?.logDir ?? `${LogFiles.runs}/${LogFiles.runPrefix}${attachRunId}`;
   mkdirSync(logDir, { recursive: true });
   let passed = 0;
   let failed = false;
@@ -51,9 +53,10 @@ async function main(): Promise<void> {
       ? { state: await host.startAll(), control: host.control }
       : attachServer();
     const { scenario } = await import('./client.mjs');
+    const scenarioRunId = host ? state.runId : attachRunId;
     for (const name of selected) {
       try {
-        await scenario(name, state.sessionEndpoint, state.runId, logDir, control);
+        await scenario(name, state.sessionEndpoint, scenarioRunId, logDir, control);
         passed++;
         console.log(`✓ ${name}`);
       } catch (error) {

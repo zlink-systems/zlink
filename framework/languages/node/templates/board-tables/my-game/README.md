@@ -13,7 +13,7 @@ flowchart LR
 
 - Local process debugging: Node.js 22 or later with npm. The supported range of public binding 1.23.0 is `>=22`.
 - Docker Engine with Docker Compose v2, reachable from the current shell.
-- PowerShell 7 on Windows; Bash on Linux and WSL.
+- Windows PowerShell 5.1 or PowerShell 7 on Windows; Bash on Linux and WSL. The examples use `pwsh -NoProfile -File`; in Windows PowerShell 5.1 run the same script with `powershell -NoProfile -ExecutionPolicy Bypass -File`.
 - A Windows x64 or Linux x64 environment supported by the published native binding.
 
 The Framework package is pinned to `0.32.0` and the binding to `1.23.0`. Copy only this directory and install from the public npm registry.
@@ -120,6 +120,8 @@ In the second terminal, attach the e2e runner. Each client message appears on on
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1 -Attach
 ```
+
+Start the server again before another full e2e run: one server start reserves table capacity for one run of every scenario, and the `update` scenario replaces a table node.
 
 Press Ctrl+C in the first terminal to shut down the nodes and remove the Redis container. The console shows each diagnostic record as its time and message; each node also appends the full records to `logs/<node-id>.log` as JSON lines, including when it is started directly with `node`. Set `logDir` in a node's JSON config to use another directory. Docker e2e nodes write that file inside their container; the runner keeps each node's stderr in `.logs/run-<id>/`. The e2e runner and server host also keep per-run logs under `.logs/`.
 

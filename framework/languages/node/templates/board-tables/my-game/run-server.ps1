@@ -1,14 +1,14 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'PowerShell 7 or later is required.' }
+. (Join-Path $PSScriptRoot 'scripts/run-helpers.ps1')
+Assert-PowerShellVersion
 Set-Location $PSScriptRoot
 New-Item -ItemType Directory -Force '.logs' | Out-Null
-& npm ci *> '.logs/build.log'
-if ($LASTEXITCODE -eq 0) {
-    & npm run build *>> '.logs/build.log'
-}
-if ($LASTEXITCODE -ne 0) {
-    Get-Content '.logs/build.log' -Tail 20 | Write-Host
+$buildLog = Join-Path $PSScriptRoot '.logs/build.log'
+$code = Invoke-Logged -Log $buildLog -Command npm -Arguments @('ci')
+if ($code -eq 0) { $code = Invoke-Logged -Log $buildLog -Append -Command npm -Arguments @('run', 'build') }
+if ($code -ne 0) {
+    Get-Content $buildLog -Tail 20 | Write-Host
     exit 1
 }
 & node dist/e2e/server-host.js
