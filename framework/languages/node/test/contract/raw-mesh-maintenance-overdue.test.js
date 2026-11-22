@@ -14,6 +14,8 @@ test('an overdue maintenance deadline runs on the next timer turn without a nega
   const ran = new Promise((resolve) => {
     expired = resolve;
   });
+  // The backend unrefs its maintenance timer when no operation is pending; keep the loop alive.
+  const keepAlive = setInterval(() => {}, 1000);
   let overdue = true;
   f.runtime.nextMaintenanceDeadlineMs = (nowMs) =>
     overdue ? nowMs - 50 : Number.POSITIVE_INFINITY;
@@ -39,6 +41,7 @@ test('an overdue maintenance deadline runs on the next timer turn without a nega
     await ran;
   } finally {
     global.setTimeout = originalSetTimeout;
+    clearInterval(keepAlive);
     await f.backend.close();
   }
 });
