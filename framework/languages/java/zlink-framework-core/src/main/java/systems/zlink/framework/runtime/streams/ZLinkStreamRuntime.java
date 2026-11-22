@@ -72,6 +72,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiFunction;
+import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
@@ -1010,6 +1011,15 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
                             .BoundSessionClose
                     request) {
+        return handleBoundSessionClose(receivingNodeRid, request, () -> true);
+    }
+
+    public CompletionStage<Void> handleBoundSessionClose(
+            RoutingId receivingNodeRid,
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .BoundSessionClose
+                    request,
+            BooleanSupplier requestPending) {
         SessionState state =
                 inStateLane(
                         () ->
@@ -1041,10 +1051,11 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                                                         request.session().sessionRid(),
                                                         request.session()
                                                                 .retiredBindingGeneration())),
-                        () -> {
-                            state.stream().disconnectPeer(state.routingId());
-                            return CompletableFuture.completedFuture(null);
-                        });
+                        requestPending,
+                        (actorSlot, closePending) ->
+                                state.stream()
+                                        .disconnectBoundSessionPeerAsync(
+                                                state.routingId(), actorSlot, closePending));
     }
 
     /**

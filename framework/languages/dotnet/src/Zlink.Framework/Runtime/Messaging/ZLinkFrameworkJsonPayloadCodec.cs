@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 
 namespace Zlink.Framework.Runtime.Messaging;
 
@@ -10,18 +11,17 @@ internal static class ZLinkFrameworkJsonPayloadCodec
 
     internal static T? Deserialize<T>(ReadOnlySpan<byte> payload)
     {
-        ZLinkFrameworkJsonDocument.ValidateDocument(payload);
-        return JsonSerializer.Deserialize<T>(payload, ZLinkJsonSerializerOptions.FrameworkPayload);
+        var type =
+            (JsonTypeInfo<T>)ZLinkJsonSerializerOptions.FrameworkPayload.GetTypeInfo(typeof(T));
+        ZLinkFrameworkJsonDocument.ValidateDocument(payload, type);
+        return JsonSerializer.Deserialize(payload, type);
     }
 
     internal static object? Deserialize(ReadOnlySpan<byte> payload, Type type)
     {
-        ZLinkFrameworkJsonDocument.ValidateDocument(payload);
-        return JsonSerializer.Deserialize(
-            payload,
-            type,
-            ZLinkJsonSerializerOptions.FrameworkPayload
-        );
+        var typeInfo = ZLinkJsonSerializerOptions.FrameworkPayload.GetTypeInfo(type);
+        ZLinkFrameworkJsonDocument.ValidateDocument(payload, typeInfo);
+        return JsonSerializer.Deserialize(payload, typeInfo);
     }
 
     internal static byte[] Serialize<T>(T value) =>
@@ -36,24 +36,38 @@ internal static class ZLinkFrameworkJsonPayloadCodec
 
     internal static Message SerializePart(object? value, Type type)
     {
-        var options = ZLinkJsonSerializerOptions.FrameworkPayload;
-        using var buffer = new PooledJsonBufferWriter();
-        using var writer = new Utf8JsonWriter(
-            buffer,
-            new JsonWriterOptions
-            {
-                Encoder = options.Encoder,
-                Indented = options.WriteIndented,
-                MaxDepth = options.MaxDepth == 0 ? 64 : options.MaxDepth,
-                SkipValidation = true,
-            }
-        );
-        JsonSerializer.Serialize(writer, value, type, options);
-        writer.Flush();
+        using var buffer = SerializePooled(value, type);
         return Message.From(buffer.WrittenSpan);
     }
 
-    private sealed class PooledJsonBufferWriter : IBufferWriter<byte>, IDisposable
+    internal static PooledJsonBufferWriter SerializePooled(object? value, Type type)
+    {
+        var options = ZLinkJsonSerializerOptions.FrameworkPayload;
+        var buffer = new PooledJsonBufferWriter();
+        try
+        {
+            using var writer = new Utf8JsonWriter(
+                buffer,
+                new JsonWriterOptions
+                {
+                    Encoder = options.Encoder,
+                    Indented = options.WriteIndented,
+                    MaxDepth = options.MaxDepth == 0 ? 64 : options.MaxDepth,
+                    SkipValidation = true,
+                }
+            );
+            JsonSerializer.Serialize(writer, value, type, options);
+            writer.Flush();
+            return buffer;
+        }
+        catch
+        {
+            buffer.Dispose();
+            throw;
+        }
+    }
+
+    internal sealed class PooledJsonBufferWriter : IBufferWriter<byte>, IDisposable
     {
         private byte[] _buffer = ArrayPool<byte>.Shared.Rent(256);
         private int _written;
