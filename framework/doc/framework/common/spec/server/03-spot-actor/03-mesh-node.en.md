@@ -257,8 +257,12 @@ Each judgment selects among nodes that meet all of conditions 1-5 (condition 2 i
 validation of [Location runtime §4.1](../05-location-relocation/01-location-runtime.en.md#41-validating-a-target-descriptors-owner-lease)).
 If there is none, but some node with positive placement weight meets conditions 2-4, the create
 operation waits for the existing discovery refresh within its remaining deadline and judges again.
-It doesn't re-read the Store per request. If there is neither, it ends with the `Unavailable` of
-§5.1. When the deadline expires the result is `DeadlineExceeded`.
+It doesn't re-read the Store per request. If there is neither, before ending with `Unavailable` it
+reads that Mesh's discovery from the Store once and judges conditions 1-5 again within the same
+remaining deadline. The fresh read updates the existing discovery observation, so other judgments
+see the same result. This keeps a node that is not yet in the observation, such as a replacement that
+has just become `Serving`, from being missed until the next discovery refresh. If there is still
+neither, it ends with the `Unavailable` of §5.1. When the deadline expires the result is `DeadlineExceeded`.
 
 The framework reserves a slot to place the object on the selected node so it
 doesn't double-use capacity with another creation operation. It doesn't

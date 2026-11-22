@@ -31,8 +31,10 @@ for (let iteration = 1; iteration <= 40; iteration++) {
         objectCapabilities: [{ objectKind: 'actor', stableType: 'room', entryAccepted: true }],
         populationCapacity: { actors: { active: 0, reserved: 0, limit: 1 } }
       };
+      let reads = 0;
       const resolver = new ZLinkRequestSourceResolver({
         async listLiveMeshNodes() {
+          if (reads++ !== 0) return [];
           entered();
           return await read;
         },
@@ -88,6 +90,30 @@ for (let iteration = 1; iteration <= 40; iteration++) {
     assert.equal(await stopped, undefined);
   });
 }
+
+test('cancelled placement refresh cannot publish a descriptor after its request ends', async () => {
+  let complete;
+  const scan = new Promise((resolve) => {
+    complete = resolve;
+  });
+  let reads = 0;
+  const resolver = new ZLinkRequestSourceResolver({
+    async listLiveMeshNodes() {
+      return ++reads === 1 ? await scan : [];
+    },
+    async remainingOwnerTokenLeaseMs() {
+      assert.fail('an aborted refresh cannot validate or publish its rows');
+    }
+  });
+  await resolver.observeLiveDescriptors('play', []);
+  const controller = new AbortController();
+  const selected = resolver.selectPlacement('play', 'actor', 'room', undefined, controller.signal);
+  controller.abort();
+  await assert.rejects(selected, { name: 'AbortError' });
+  complete([{ rid: 'late', ownerId: 'owner', leaseGeneration: 1n, lifecycleGeneration: 1n }]);
+  assert.equal(await resolver.selectPlacement('play', 'actor', 'room'), undefined);
+  assert.equal(reads, 2);
+});
 
 const {
   ZLinkActorPlacementCoordinator

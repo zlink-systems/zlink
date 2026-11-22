@@ -33,7 +33,7 @@ export class ZLinkSpotSerialTurnExecutor {
   static closingAdmissionError(): ZLinkFrameworkException {
     return createInternalFrameworkException(
       ZLinkFrameworkInternalErrorKind.RequestTargetNotFound,
-      'Spot incarnation is closing (committed Close).'
+      'SPOT is closing.'
     );
   }
   private readonly scheduler: ZLinkSerialExecutionQueue;
@@ -111,7 +111,7 @@ export class ZLinkSpotSerialTurnExecutor {
     return instanceIntent
       ? createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.SpotMoving,
-          'The Spot incarnation released its authority before admitting this Instance intent message.'
+          'The Instance Spot incarnation released its authority.'
         )
       : ZLinkSpotSerialTurnExecutor.closingAdmissionError();
   }
