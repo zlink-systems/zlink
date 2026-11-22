@@ -3570,7 +3570,8 @@ bool mesh_node_host_service_t::publish_descriptor_state (framework_runtime_state
     }
 }
 
-bool mesh_node_host_service_t::write_mesh_descriptor_state (framework_runtime_state_t state) noexcept
+bool mesh_node_host_service_t::write_mesh_descriptor_state (
+  framework_runtime_state_t state) noexcept
 {
     try {
         // A setter can record new weights during Store I/O. Keep the mutex
@@ -3682,8 +3683,8 @@ void mesh_node_host_service_t::request_descriptor_publication ()
         deadline = _location_runtime->execution_clock () ()
                    + _location_runtime->options ().owner_lease_renew_timeout;
     }
-    (void) publish_requested_descriptors (
-      location_write_intent_t::renew, _descriptor_stop.get_token (), deadline, true);
+    (void) publish_requested_descriptors (location_write_intent_t::renew,
+                                          _descriptor_stop.get_token (), deadline, true);
 }
 
 task_t<bool> mesh_node_host_service_t::publish_requested_descriptors (
@@ -3708,8 +3709,8 @@ task_t<bool> mesh_node_host_service_t::publish_requested_descriptors (
         // Discovery confirms startup and owner changes. Runtime option changes
         // and their retries are submitted by the setter and lease renew.
         if (all_claimed && (!background || _changed_mesh_descriptors.empty ())
-            && std::all_of (_published_mesh_descriptors.begin (), _published_mesh_descriptors.end (),
-                            [&] (const auto &descriptor) {
+            && std::all_of (_published_mesh_descriptors.begin (),
+                            _published_mesh_descriptors.end (), [&] (const auto &descriptor) {
                                 return descriptor.owner_id == owner->owner_id
                                        && descriptor.lease_generation == owner->lease_generation;
                             }))
@@ -3739,10 +3740,10 @@ task_t<bool> mesh_node_host_service_t::publish_requested_descriptors (
     return publication->task ();
 }
 
-task_t<bool> mesh_node_host_service_t::publish_mesh_descriptors (
-  location_write_intent_t intent,
-  std::stop_token cancellation,
-  std::chrono::steady_clock::time_point deadline)
+task_t<bool>
+mesh_node_host_service_t::publish_mesh_descriptors (location_write_intent_t intent,
+                                                    std::stop_token cancellation,
+                                                    std::chrono::steady_clock::time_point deadline)
 {
     try {
         const auto now = _location_runtime->execution_clock ();
@@ -3842,7 +3843,8 @@ task_t<bool> mesh_node_host_service_t::write_mesh_descriptors (
                       result_t<location_write_result_t>::success (std::move (result)));
                 });
           },
-          _location_runtime->execution_clock (), cancellation, deadline, _descriptor_stop.get_token ());
+          _location_runtime->execution_clock (), cancellation, deadline,
+          _descriptor_stop.get_token ());
         publications.push_back (continue_task<bool> (
           std::move (publication), [this, original, descriptor = std::move (descriptor), key,
                                     first_publication, cancellation] (bool written) mutable {
@@ -3870,7 +3872,7 @@ task_t<bool> mesh_node_host_service_t::write_mesh_descriptors (
     }
     // The callback owns every descriptor continuation, including after a rejection.
     co_return published.value () && !cancellation.stop_requested ()
-              && !_descriptor_stop.stop_requested ();
+      && !_descriptor_stop.stop_requested ();
 }
 
 void mesh_node_host_service_t::stop () noexcept
@@ -3893,8 +3895,9 @@ void mesh_node_host_service_t::stop () noexcept
         _runtime_failures->capture ([&] { node->bind_descriptor_publisher ({}); });
     if (_location_runtime)
         _runtime_failures->capture ([&] {
-            infrastructure_result ([&] { return _location_runtime->set_descriptor_renewal ({}); })
-              .value ();
+            infrastructure_result ([&] {
+                return _location_runtime->set_descriptor_renewal ({});
+            }).value ();
         });
     std::shared_ptr<task_completion_source_t<bool>> publication;
     {

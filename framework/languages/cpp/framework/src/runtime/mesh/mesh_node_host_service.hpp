@@ -204,12 +204,11 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
     task_t<bool> publish_mesh_descriptors (location_write_intent_t intent,
                                            std::stop_token cancellation,
                                            std::chrono::steady_clock::time_point deadline);
-    task_t<bool> write_mesh_descriptors (
-      const std::vector<mesh_node_descriptor_t> &descriptors,
-      const std::set<std::string> &changed,
-      location_write_intent_t intent,
-      std::stop_token cancellation,
-      std::chrono::steady_clock::time_point deadline);
+    task_t<bool> write_mesh_descriptors (const std::vector<mesh_node_descriptor_t> &descriptors,
+                                         const std::set<std::string> &changed,
+                                         location_write_intent_t intent,
+                                         std::stop_token cancellation,
+                                         std::chrono::steady_clock::time_point deadline);
     // Caller holds _descriptor_publish_mutex. Null once a concurrent publication
     // replaced the descriptor copied before a Store write.
     mesh_node_descriptor_t *unchanged_published_descriptor (const mesh_node_descriptor_t &copied);

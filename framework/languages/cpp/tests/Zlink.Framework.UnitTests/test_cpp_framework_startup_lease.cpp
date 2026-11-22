@@ -679,11 +679,12 @@ TEST_P (ChannelWeightPublication, PublishesBeforeNextDiscoveryOrRenewal)
     EXPECT_EQ (77, rows.items.front ().channel_weights.at ("profile"));
 }
 
-INSTANTIATE_TEST_SUITE_P (
-  ZLinkFrameworkStartupLease, ChannelWeightPublication, ::testing::Bool (),
-  [] (const ::testing::TestParamInfo<bool> &info) {
-      return info.param ? "ChangeBeforeNextWait" : "DiscoveryInFlight";
-  });
+INSTANTIATE_TEST_SUITE_P (ZLinkFrameworkStartupLease,
+                          ChannelWeightPublication,
+                          ::testing::Bool (),
+                          [] (const ::testing::TestParamInfo<bool> &info) {
+                              return info.param ? "ChangeBeforeNextWait" : "DiscoveryInFlight";
+                          });
 
 TEST (ZLinkFrameworkStartupLease, ConfirmedDescriptorConflictFailsStartup)
 {
