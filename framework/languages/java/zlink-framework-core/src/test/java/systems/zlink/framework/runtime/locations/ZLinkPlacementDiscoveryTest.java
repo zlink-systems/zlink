@@ -393,9 +393,10 @@ final class ZLinkPlacementDiscoveryTest {
                 kind, assertInstanceOf(ZLinkFrameworkException.class, error.getCause()).kind());
     }
 
-    private static final class Fixture implements AutoCloseable {
+    static final class Fixture implements AutoCloseable {
         final ZLinkPlacementObjectKind kind;
         RoutingId rid = RoutingId.from("local");
+        ZLinkLocationOwnerToken ownerToken = new ZLinkLocationOwnerToken("owner", 1);
         final AtomicInteger lists = new AtomicInteger();
         final AtomicInteger leaseReads = new AtomicInteger();
         final AtomicLong nanos = new AtomicLong();
@@ -438,8 +439,7 @@ final class ZLinkPlacementDiscoveryTest {
                                                     yield CompletableFuture.completedFuture(
                                                             live
                                                                     ? new ZLinkOwnerLeaseFound(
-                                                                            new ZLinkLocationOwnerToken(
-                                                                                    "owner", 1),
+                                                                            ownerToken,
                                                                             Instant.EPOCH
                                                                                     .plusSeconds(
                                                                                             30),
@@ -525,8 +525,8 @@ final class ZLinkPlacementDiscoveryTest {
                     Optional.empty(),
                     state,
                     "security",
-                    "owner",
-                    1,
+                    ownerToken.ownerId(),
+                    ownerToken.leaseGeneration(),
                     Instant.EPOCH);
         }
 

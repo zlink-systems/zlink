@@ -93,7 +93,16 @@ final class InstanceSpotColdActivationTest {
                         "cold", WaitingInstance.class, factory -> factory.disableRelocation());
         try (var runtime =
                 ZLinkFrameworkRuntimeTestAccess.start(
-                        options, new ActivationDeadlineBackend(store))) {
+                        options,
+                        new InstanceActivationObserverBackend(
+                                envelope -> {
+                                    store.envelope = envelope;
+                                    store.validatorEntered.complete(envelope);
+                                    if (store.phase == DeadlinePhase.VALIDATOR
+                                            || store.phase == DeadlinePhase.CALLER_CANCELLATION) {
+                                        store.resume.join();
+                                    }
+                                }))) {
             ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
                     .toCompletableFuture()
                     .get(5, TimeUnit.SECONDS);
@@ -228,84 +237,6 @@ final class InstanceSpotColdActivationTest {
                         });
             }
             return result;
-        }
-    }
-
-    /** Observes existing backend registration without accessing runtime private members. */
-    private static final class ActivationDeadlineBackend implements ZLinkBackendAdapterProvider {
-        private final ZLinkJavaBackendAdapterFactory delegate =
-                new ZLinkJavaBackendAdapterFactory();
-        private final ActivationDeadlineStore store;
-
-        ActivationDeadlineBackend(ActivationDeadlineStore store) {
-            this.store = store;
-        }
-
-        public ZLinkChannelBackendAdapter createChannelAdapter(ZLinkBackendAdapterOptions options) {
-            return delegate.createChannelAdapter(options);
-        }
-
-        public ZLinkSpotBackendAdapter createSpotAdapter(ZLinkBackendAdapterOptions options) {
-            return delegate.createSpotAdapter(options);
-        }
-
-        public ZLinkStreamBackendAdapter createStreamAdapter(ZLinkBackendAdapterOptions options) {
-            return delegate.createStreamAdapter(options);
-        }
-
-        public ZLinkMonitoringBackendAdapter createMonitoringAdapter(
-                ZLinkBackendAdapterOptions options) {
-            return delegate.createMonitoringAdapter(options);
-        }
-
-        @SuppressWarnings("unchecked")
-        public ZLinkMeshBackendAdapter createMeshAdapter(ZLinkBackendAdapterOptions options) {
-            var adapter = delegate.createMeshAdapter(options);
-            return (context, name) -> {
-                var node = adapter.createMeshNode(context, name);
-                return (ZLinkInternalMeshNode)
-                        java.lang.reflect.Proxy.newProxyInstance(
-                                ZLinkInternalMeshNode.class.getClassLoader(),
-                                new Class<?>[] {ZLinkInternalMeshNode.class},
-                                (proxy, method, arguments) -> {
-                                    if (method.getName()
-                                            .equals("setInstanceSpotActivationValidator")) {
-                                        var original =
-                                                (java.util.function.Function<
-                                                                ZLinkInstanceActivationRecoveryCodec
-                                                                        .RecoveryEnvelope,
-                                                                CompletionStage<
-                                                                        ZLinkAuthorityReadResult>>)
-                                                        arguments[0];
-                                        arguments[0] =
-                                                (java.util.function.Function<
-                                                                ZLinkInstanceActivationRecoveryCodec
-                                                                        .RecoveryEnvelope,
-                                                                CompletionStage<
-                                                                        ZLinkAuthorityReadResult>>)
-                                                        envelope -> {
-                                                            store.envelope = envelope;
-                                                            store.validatorEntered.complete(
-                                                                    envelope);
-                                                            if (store.phase
-                                                                            == DeadlinePhase
-                                                                                    .VALIDATOR
-                                                                    || store.phase
-                                                                            == DeadlinePhase
-                                                                                    .CALLER_CANCELLATION) {
-                                                                store.resume.join();
-                                                            }
-                                                            return original.apply(envelope);
-                                                        };
-                                    }
-                                    try {
-                                        // The Method belongs to the existing backend interface.
-                                        return method.invoke(node, arguments);
-                                    } catch (java.lang.reflect.InvocationTargetException failure) {
-                                        throw failure.getCause();
-                                    }
-                                });
-            };
         }
     }
 
