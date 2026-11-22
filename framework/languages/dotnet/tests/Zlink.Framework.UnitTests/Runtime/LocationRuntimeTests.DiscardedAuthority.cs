@@ -346,7 +346,7 @@ public sealed partial class LocationRuntimeTests
         Assert.True(ZLinkActorAuthorityPayloadCodec.TryDecode(old.Payload.Span, out var payload));
         var preparing = await new ZLinkStandaloneActorRelocationPrecommitCoordinator(
             store
-        ).BeginPreparingAsync(old, payload, Guid.NewGuid(), 1, CancellationToken.None);
+        ).BeginPreparingAsync(old, payload, payload, Guid.NewGuid(), 1, CancellationToken.None);
         var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
             store.CleanupDiscardedAuthorityAsync(key, old, host.Locations.OwnerToken).AsTask()
         );
@@ -368,6 +368,9 @@ public sealed partial class LocationRuntimeTests
                 key,
                 preparing.StoreVersion,
                 new ZLinkAuthorityMutation.Restore(old.Payload, host.Locations.OwnerToken)
+                {
+                    ClearRelocation = true,
+                }
             )
         );
         Assert.True(

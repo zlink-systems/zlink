@@ -1783,6 +1783,12 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         var requestRelocationLow = BinaryPrimitives.ReadUInt64BigEndian(
             requestAggregateBytes.AsSpan(8, 8)
         );
+        var coordinator = new ZLinkAuthorityRelocation.Fence(
+            request.SourceNodeRid,
+            request.SourceNodeLifecycleGeneration,
+            request.SourceOwnerId,
+            request.SourceOwnerLeaseGeneration
+        );
         ZLinkAuthoritySnapshot? spotSnapshot = null;
         foreach (var participant in envelope.Participants)
         {
@@ -1800,11 +1806,23 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             )
                 return false;
 
+            if (found.Snapshot.Relocation is { } relocation)
+            {
+                if (
+                    !relocation.HoldsCapturedSource(
+                        request.AggregateId,
+                        found.Snapshot,
+                        coordinator,
+                        request.CoordinatorExpectedAuthorityStoreVersion
+                    )
+                )
+                    return false;
+            }
             // A durable relocation state for the same RelocationId that
             // already names a different target fences this staging request:
             // the contract has no different-target transition, so a second
             // target for the same relocation is always illegitimate.
-            if (
+            else if (
                 ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
                     found.Snapshot.Payload.Span,
                     out var recordedRelocation

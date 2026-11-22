@@ -2,6 +2,8 @@ const assert = require('node:assert/strict');
 const net = require('node:net');
 const { setImmediate: turn } = require('node:timers/promises');
 
+const waitBoundMs = 10_000;
+
 async function routeChangePeers({
   sourceRid = 'a-source',
   targetRid = 'z-target',
@@ -100,7 +102,9 @@ async function routeChangePeers({
     if (record?.requestSeq !== undefined) targetRequests++;
     return record;
   };
-  async function until(predicate, label, deadline = performance.now() + 1000) {
+  // Waits end as soon as the predicate holds; the bound only stops a stuck exchange, so it allows
+  // for a loaded host (#5344).
+  async function until(predicate, label, deadline = performance.now() + waitBoundMs) {
     while (!predicate() && performance.now() < deadline) {
       await source.raw.pumpBatch(true, true);
       await target.raw.pumpBatch(true, true);
@@ -126,7 +130,7 @@ async function routeChangePeers({
     events,
     targetRequests: () => targetRequests,
     async untilTargetOnly(predicate, label) {
-      const deadline = performance.now() + 1000;
+      const deadline = performance.now() + waitBoundMs;
       while (!predicate() && performance.now() < deadline) {
         await target.raw.pumpBatch(true, true);
         await turn();
