@@ -6,10 +6,14 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.function.LongSupplier;
 
-/** Remembers the first monotonic observation of an invalid owner token for each Location row. */
+/**
+ * Remembers the first monotonic observation of an invalid owner token for each authority owner
+ * token.
+ */
 public final class ZLinkOwnerLeaseWaitTracker {
     private final LongSupplier monotonicNanos;
     private final long waitNanos;
+    private final Map<ZLinkLocationOwnerToken, Long> authorityObservations = new HashMap<>();
     private final Map<String, Observation> observations = new HashMap<>();
 
     public ZLinkOwnerLeaseWaitTracker(LongSupplier monotonicNanos, Duration fencingMargin) {
@@ -20,7 +24,14 @@ public final class ZLinkOwnerLeaseWaitTracker {
         this.waitNanos = margin.multipliedBy(3).toNanos();
     }
 
-    /** Returns whether this invalid token is still inside its three-margin wait. */
+    /** The caller has confirmed that this authority owner token is invalid. */
+    public synchronized boolean shouldWait(ZLinkLocationOwnerToken owner) {
+        long now = monotonicNanos.getAsLong();
+        long firstObserved = authorityObservations.computeIfAbsent(owner, ignored -> now);
+        return withinWait(now, firstObserved);
+    }
+
+    /** Tracks the descriptor-scoped wait for a MeshNode RID claim. */
     public synchronized boolean shouldWait(
             String recordKey, ZLinkLocationOwnerToken owner, boolean invalid) {
         Objects.requireNonNull(recordKey, "recordKey");
@@ -35,7 +46,11 @@ public final class ZLinkOwnerLeaseWaitTracker {
             observations.put(recordKey, new Observation(owner, now));
             return waitNanos > 0;
         }
-        return now - current.firstObservedNanos() < waitNanos;
+        return withinWait(now, current.firstObservedNanos());
+    }
+
+    private boolean withinWait(long now, long firstObserved) {
+        return now - firstObserved < waitNanos;
     }
 
     public synchronized Observation snapshot(String recordKey) {
@@ -56,10 +71,6 @@ public final class ZLinkOwnerLeaseWaitTracker {
 
     private void clearIfCurrent(String recordKey, Observation observed) {
         if (observations.get(recordKey) == observed) observations.remove(recordKey);
-    }
-
-    public static String authorityRecordKey(String authorityKey) {
-        return "authority:" + Objects.requireNonNull(authorityKey, "authorityKey");
     }
 
     public static String descriptorRecordKey(String descriptorKey) {
