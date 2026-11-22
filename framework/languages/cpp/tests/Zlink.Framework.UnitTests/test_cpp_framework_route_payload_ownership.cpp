@@ -2510,3 +2510,170 @@ TEST (RouteHandlerBoundary, CsitesPublicMeshRegistrationBindsWithoutLazyCache)
     (void) dynamic.get<int> ();
     EXPECT_TRUE (detail::serializer_registry_test_access_t::has_resolved_serializer<int> (dynamic));
 }
+
+namespace
+{
+struct mesh_request_handler_t
+{
+    int handle (const int &value, const route_message_context_t &)
+    {
+        if (value < 0)
+            throw std::runtime_error ("mesh request handler failure");
+        return value + 1;
+    }
+};
+
+struct mesh_async_request_handler_t
+{
+    explicit mesh_async_request_handler_t (task_completion_source_t<void> &resume) : resume (resume)
+    {
+    }
+
+    task_t<int> handle (const std::shared_ptr<int> &value)
+    {
+        co_await resume.task ();
+        co_return *value + 1;
+    }
+
+    task_completion_source_t<void> &resume;
+};
+
+class MeshTypedRequest : public ::testing::Test
+{
+  protected:
+    MeshTypedRequest ()
+    {
+        auto mesh = builder.add_route_mesh ("mesh");
+        mesh.add_route_request_handler<mesh_request_handler_t, int, int> ("sync")
+          .add_route_send_handler<csites_public_send_codec_handler_t, int> ("send");
+        mesh.channel_name ("channel")
+          .server ()
+          .add_request_handler<mesh_async_request_handler_t, std::shared_ptr<int>, int> ("async");
+        auto &handlers = detail::mesh_node_runtime_t::registrations (builder).front ()->handlers;
+        services.add_singleton<task_completion_source_t<void>> ();
+        serializers.add<int> (
+          [] (int value) {
+              if (value == 3)
+                  throw std::runtime_error ("reply codec failure");
+              return encoded_payload_t::from_string (std::to_string (value));
+          },
+          [] (const encoded_payload_t &payload) { return std::stoi (payload.to_string ()); });
+        serializers.add<std::shared_ptr<int>> (
+          [] (const auto &value) {
+              return encoded_payload_t::from_string (std::to_string (*value));
+          },
+          [this] (const encoded_payload_t &payload) {
+              auto value = std::make_shared<int> (std::stoi (payload.to_string ()));
+              decoded_request = value;
+              return value;
+          },
+          "application/x-mesh-async-test");
+        detail::serializer_registry_access_t::freeze (serializers);
+        handlers.bind_codecs (serializers);
+        context.content_type = "application/octet-stream";
+        sync = handlers.resolve ("mesh", runtime::messaging::message_kind_t::request, "sync");
+        send = handlers.resolve ("mesh", runtime::messaging::message_kind_t::command, "send");
+        async = handlers.resolve ("channel", runtime::messaging::message_kind_t::request, "async");
+    }
+
+    zlink_builder_t builder = test::runtime_failure_builder ();
+    service_collection_t services;
+    serializer_registry_t serializers;
+    route_message_context_t context{{}, zlink::routing_id_t::from ("source")};
+    std::weak_ptr<int> decoded_request;
+    const detail::route_handler_registry_t::entry_t *sync;
+    const detail::route_handler_registry_t::entry_t *send;
+    const detail::route_handler_registry_t::entry_t *async;
+};
+
+TEST_F (MeshTypedRequest, SyncRequestAllocatesNoCoroutineFrameOrCompletionState)
+{
+    ASSERT_NE (nullptr, sync);
+    ASSERT_NE (nullptr, send);
+    auto send_provider = services.build_provider ();
+    auto request_provider = services.build_provider ();
+    const auto message = zlink::message_t::from ("1");
+    const auto codec = serializers.get<int> ();
+    const auto reply_allocations = tests::count_allocations (
+      [&] { (void) detail::encoded_payload_to_raw (codec.serialize (2)); });
+
+    // The synchronous command has the same DI and decode work without a reply.
+    bool sent = false;
+    const auto send_allocations = tests::count_allocations ([&] {
+        sent =
+          send->invoker (send_provider, serializers, message, context, {}).result ().has_value ();
+    });
+    ASSERT_TRUE (sent);
+
+    std::optional<result_t<zlink::message_t>> reply;
+    const auto request_allocations = tests::count_allocations ([&] {
+        reply.emplace (
+          sync->invoker (request_provider, serializers, message, context, {}).result ());
+    });
+    ASSERT_TRUE (*reply);
+    EXPECT_EQ ("2", reply->value ().to_string ());
+    RecordProperty ("command_allocations", static_cast<int> (send_allocations));
+    RecordProperty ("reply_encoding_allocations", static_cast<int> (reply_allocations));
+    RecordProperty ("request_allocations", static_cast<int> (request_allocations));
+    EXPECT_EQ (send_allocations + reply_allocations, request_allocations)
+      << "Only handler construction, decode and reply encoding may allocate";
+}
+
+TEST_F (MeshTypedRequest, AsyncRequestRetainsDecodedValueAcrossSuspension)
+{
+    ASSERT_NE (nullptr, async);
+    auto provider = services.build_provider ();
+    auto &resume = provider.get_required<task_completion_source_t<void>> ();
+    const auto message = zlink::message_t::from ("41");
+    context.content_type = "application/x-mesh-async-test";
+    auto reply = async->invoker (provider, serializers, message, context, {});
+    ASSERT_FALSE (reply.await_ready ());
+    ASSERT_FALSE (decoded_request.expired ());
+    resume.complete (result_t<void>::success ());
+    auto result = reply.result_for (std::chrono::seconds (1));
+    ASSERT_TRUE (result && *result);
+    EXPECT_EQ ("42", result->value ().to_string ());
+    EXPECT_TRUE (decoded_request.expired ());
+}
+
+TEST_F (MeshTypedRequest, SyncRequestPreservesHandlerAndCodecFailures)
+{
+    ASSERT_NE (nullptr, sync);
+    auto provider = services.build_provider ();
+    int handler_entries = 0;
+    const auto before = [&] { ++handler_entries; };
+    auto invoke = [&] (std::string_view wire) {
+        return sync
+          ->invoker (provider, serializers, zlink::message_t::from (std::string (wire)), context,
+                     before)
+          .result ();
+    };
+
+    const auto handler_error = invoke ("-1");
+    ASSERT_FALSE (handler_error);
+    ASSERT_TRUE (handler_error.exception ());
+    try {
+        std::rethrow_exception (handler_error.exception ());
+    }
+    catch (const std::runtime_error &error) {
+        EXPECT_STREQ ("mesh request handler failure", error.what ());
+    }
+    EXPECT_EQ (1, handler_entries);
+
+    const auto decode_error = invoke ("invalid");
+    ASSERT_FALSE (decode_error);
+    ASSERT_NE (nullptr, decode_error.error ());
+    EXPECT_EQ (framework_error_kind_t::protocol_error, decode_error.error_kind ());
+    EXPECT_EQ (detail::failure_origin_t::payload_decode,
+               detail::failure_origin (*decode_error.error ()));
+    EXPECT_EQ (1, handler_entries);
+
+    const auto encode_error = invoke ("2");
+    ASSERT_FALSE (encode_error);
+    ASSERT_NE (nullptr, encode_error.error ());
+    EXPECT_EQ (framework_error_kind_t::protocol_error, encode_error.error_kind ());
+    EXPECT_EQ (detail::failure_origin_t::payload_encode,
+               detail::failure_origin (*encode_error.error ()));
+    EXPECT_EQ (2, handler_entries);
+}
+}
