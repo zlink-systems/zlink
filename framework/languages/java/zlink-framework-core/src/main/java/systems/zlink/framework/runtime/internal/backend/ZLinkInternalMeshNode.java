@@ -27,6 +27,8 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.function.BiFunction;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -565,8 +567,10 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
      * enter the application mailbox.
      */
     default void setBoundSessionCloseHandler(
-            java.util.function.Function<
-                            ZLinkServiceM6BWireCodec.BoundSessionClose, CompletionStage<Void>>
+            BiFunction<
+                            ZLinkServiceM6BWireCodec.BoundSessionClose,
+                            BooleanSupplier,
+                            CompletionStage<Void>>
                     handler) {}
 
     default CompletionStage<Void> requestBoundSessionClose(

@@ -722,10 +722,10 @@ public final class ZLinkStoreLocationResolvers
             long ownerLeaseGeneration,
             String storeVersion,
             SpotRouteRead pending) {
-        return liveRows.ownerLeaseRemaining(ownerId, ownerLeaseGeneration)
+        return liveRows.leaseAdmission(ownerId, ownerLeaseGeneration)
                 .thenCompose(
-                        remaining -> {
-                            if (remaining == null) {
+                        lease -> {
+                            if (lease == null) {
                                 invalidateOwnerLease(ownerId, ownerLeaseGeneration);
                                 return CompletableFuture.failedFuture(
                                         new ZLinkFrameworkException(
@@ -733,6 +733,7 @@ public final class ZLinkStoreLocationResolvers
                                                 "location owner lease is unavailable: " + ownerId));
                             }
                             if (cache != null && !routeCacheMaxAge.isZero()) {
+                                Duration remaining = lease.remaining();
                                 Duration lifetime =
                                         remaining.compareTo(routeCacheMaxAge) < 0
                                                 ? remaining
@@ -743,7 +744,7 @@ public final class ZLinkStoreLocationResolvers
                                                 storeVersion,
                                                 ownerId,
                                                 ownerLeaseGeneration,
-                                                System.nanoTime(),
+                                                lease.sampledAtNanos(),
                                                 boundedNanos(lifetime));
                                 cache.compute(
                                         key,

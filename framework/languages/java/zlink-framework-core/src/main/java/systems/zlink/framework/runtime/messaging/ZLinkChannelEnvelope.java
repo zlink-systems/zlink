@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.messaging;
 
 import com.google.protobuf.ByteString;
 import com.google.protobuf.CodedInputStream;
+import com.google.protobuf.CodedOutputStream;
 import com.google.protobuf.InvalidProtocolBufferException;
 
 import systems.zlink.contracts.messaging.Message;
@@ -15,6 +16,7 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds
 import zlink.framework.channel.v1.ChannelHeaderV1.ChannelHeader;
 import zlink.framework.channel.v1.ChannelHeaderV1.MetadataEntry;
 
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -23,6 +25,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReferenceArray;
 
 /** Generated-protobuf codec and Framework validation for channel envelope headers. */
 public final class ZLinkChannelEnvelope {
@@ -91,26 +94,38 @@ public final class ZLinkChannelEnvelope {
         }
     }
 
-    /** Keeps prepared UTF-8 protobuf values for the channel header writer. */
+    /** Owns the generated protobuf prefix for each registered envelope kind. */
     public static final class PreparedNames {
         private final String channelName;
         private final String messageName;
         private final String contentType;
-        private final ByteString channelNameBytes;
-        private final ByteString messageNameBytes;
-        private final ByteString contentTypeBytes;
+        private final AtomicReferenceArray<Prefix> prefixes =
+                new AtomicReferenceArray<>(KIND_ERROR);
 
         public PreparedNames(String channelName, String messageName, String contentType) {
             this.channelName = channelName;
             this.messageName = messageName;
             this.contentType = contentType;
-            channelNameBytes = encodeString(channelName);
-            messageNameBytes = encodeString(messageName);
-            contentTypeBytes = encodeString(contentType);
         }
 
         public PreparedNames(String messageName, PreparedNames contentNames) {
             this(null, messageName, contentNames.contentType);
+        }
+
+        private ByteString prefix(Header header) {
+            int slot = header.kind() - 1;
+            if (slot < 0 || slot >= prefixes.length()) return ByteString.EMPTY;
+            Prefix current = prefixes.get(slot);
+            if (current != null && current.matches(header)) return current.bytes();
+            var fresh =
+                    new Prefix(
+                            header.channelName(),
+                            header.messageName(),
+                            header.contentType(),
+                            fixedFields(header).build().toByteString());
+            if (prefixes.compareAndSet(slot, current, fresh)) return fresh.bytes();
+            Prefix published = prefixes.get(slot);
+            return published.matches(header) ? published.bytes() : fresh.bytes();
         }
 
         @Override
@@ -124,6 +139,15 @@ public final class ZLinkChannelEnvelope {
         @Override
         public int hashCode() {
             return Objects.hash(channelName, messageName, contentType);
+        }
+    }
+
+    private record Prefix(
+            String channelName, String messageName, String contentType, ByteString bytes) {
+        boolean matches(Header header) {
+            return channelName.equals(header.channelName())
+                    && messageName.equals(header.messageName())
+                    && contentType.equals(header.contentType());
         }
     }
 
@@ -223,43 +247,97 @@ public final class ZLinkChannelEnvelope {
     }
 
     public static byte[] encodeHeaderBytes(Header header) {
-        return encodeHeaderBytesInternal(header, null, null, null);
+        return encodeHeaderBytes(header, null);
     }
 
     public static byte[] encodeHeaderBytes(Header header, PreparedNames names) {
-        return encodeHeaderBytesInternal(header, names, names, names);
-    }
-
-    private static byte[] encodeHeaderBytesInternal(
-            Header header,
-            PreparedNames channelNames,
-            PreparedNames names,
-            PreparedNames contentNames) {
         try {
-            return toProto(header, channelNames, names, contentNames).toByteArray();
+            ByteString prefix = names == null ? ByteString.EMPTY : names.prefix(header);
+            ChannelHeader encoded = toProto(header, prefix.isEmpty());
+            return prefix.isEmpty() ? encoded.toByteArray() : encodePreparedBytes(prefix, encoded);
         } catch (RuntimeException failure) {
             throw protocolError("invalid ZLink envelope header: " + failure.getMessage(), failure);
         }
     }
 
-    private static ChannelHeader toProto(
+    private static byte[] encodePreparedBytes(ByteString prefix, ChannelHeader encoded) {
+        int prefixSize = prefix.size();
+        int encodedSize = encoded.getSerializedSize();
+        byte[] bytes = new byte[prefixSize + encodedSize];
+        prefix.copyTo(bytes, 0);
+        try {
+            var output = CodedOutputStream.newInstance(bytes, prefixSize, encodedSize);
+            encoded.writeTo(output);
+            output.checkNoSpaceLeft();
+            return bytes;
+        } catch (IOException failure) {
+            throw protocolError("could not write ZLink envelope header", failure);
+        }
+    }
+
+    private static HeaderEncoding prepareHeader(
             Header header,
             PreparedNames channelNames,
             PreparedNames names,
             PreparedNames contentNames) {
+        try {
+            PreparedNames owner =
+                    names != null ? names : channelNames != null ? channelNames : contentNames;
+            ByteString prefix = owner == null ? ByteString.EMPTY : owner.prefix(header);
+            return new HeaderEncoding(prefix, toProto(header, prefix.isEmpty()));
+        } catch (RuntimeException failure) {
+            throw protocolError("invalid ZLink envelope header: " + failure.getMessage(), failure);
+        }
+    }
+
+    /** A validated header ready to write into the service frame or a standalone header part. */
+    public static final class HeaderEncoding {
+        private final ByteString prefix;
+        private final ChannelHeader header;
+
+        private HeaderEncoding(ByteString prefix, ChannelHeader header) {
+            this.prefix = prefix;
+            this.header = header;
+        }
+
+        public int size() {
+            return prefix.size() + header.getSerializedSize();
+        }
+
+        public ByteBuffer buffer() {
+            var target = ByteBuffer.allocate(size());
+            writeTo(target);
+            return target.flip();
+        }
+
+        public void writeTo(ByteBuffer target) {
+            try {
+                prefix.copyTo(target);
+                var output = CodedOutputStream.newInstance(target);
+                header.writeTo(output);
+                output.flush();
+            } catch (IOException failure) {
+                throw protocolError("could not write ZLink envelope header", failure);
+            }
+        }
+    }
+
+    private static ChannelHeader.Builder fixedFields(Header header) {
+        requireEncodableString(header.channelName());
+        requireEncodableString(header.messageName());
+        requireEncodableString(header.contentType());
+        return ChannelHeader.newBuilder()
+                .setKindValue(header.kind())
+                .setChannelName(header.channelName())
+                .setMessageName(header.messageName())
+                .setContentType(header.contentType());
+    }
+
+    private static ChannelHeader toProto(Header header, boolean includeFixedFields) {
         validateFlowPair(header.flowId(), header.flowOrigin());
         validateMetadata(header.metadata());
         validateEncodingStrings(header);
-        var builder = ChannelHeader.newBuilder().setKindValue(header.kind());
-        if (channelNames != null && Objects.equals(channelNames.channelName, header.channelName()))
-            builder.setChannelNameBytes(channelNames.channelNameBytes);
-        else builder.setChannelName(header.channelName());
-        if (names != null && Objects.equals(names.messageName, header.messageName()))
-            builder.setMessageNameBytes(names.messageNameBytes);
-        else builder.setMessageName(header.messageName());
-        if (contentNames != null && Objects.equals(contentNames.contentType, header.contentType()))
-            builder.setContentTypeBytes(contentNames.contentTypeBytes);
-        else builder.setContentType(header.contentType());
+        var builder = includeFixedFields ? fixedFields(header) : ChannelHeader.newBuilder();
         if (header.correlationId() != null) builder.setCorrelationId(header.correlationId());
         if (header.deadline() != null) builder.setDeadline(header.deadline());
         if (header.errorCode() != null) builder.setErrorCode(header.errorCode());
@@ -279,8 +357,7 @@ public final class ZLinkChannelEnvelope {
                                 .setKey(entry.getKey())
                                 .setValue(entry.getValue())
                                 .build();
-                metadataBytes +=
-                        com.google.protobuf.CodedOutputStream.computeMessageSize(13, metadata);
+                metadataBytes += CodedOutputStream.computeMessageSize(13, metadata);
                 builder.addMetadata(metadata);
             }
         }
@@ -291,11 +368,11 @@ public final class ZLinkChannelEnvelope {
     }
 
     public static List<Message> encode(Header header, Message body) {
-        return ZLinkFrameworkMultipartView.encoded(encodeHeaderBytes(header), body);
+        return ZLinkFrameworkMultipartView.encoded(prepareHeader(header, null, null, null), body);
     }
 
     public static List<Message> encode(Header header, ZLinkFrameworkMultipartView body) {
-        return ZLinkFrameworkMultipartView.encoded(encodeHeaderBytes(header), body);
+        return ZLinkFrameworkMultipartView.encoded(prepareHeader(header, null, null, null), body);
     }
 
     public static List<Message> encode(
@@ -305,7 +382,7 @@ public final class ZLinkChannelEnvelope {
             PreparedNames names,
             PreparedNames contentNames) {
         return ZLinkFrameworkMultipartView.encoded(
-                encodeHeaderBytesInternal(header, channelNames, names, contentNames), body);
+                prepareHeader(header, channelNames, names, contentNames), body);
     }
 
     public static List<Message> encode(
@@ -315,11 +392,7 @@ public final class ZLinkChannelEnvelope {
             PreparedNames names,
             PreparedNames contentNames) {
         return ZLinkFrameworkMultipartView.encoded(
-                encodeHeaderBytesInternal(header, channelNames, names, contentNames), body);
-    }
-
-    private static ByteString encodeString(String value) {
-        return value == null ? null : ByteString.copyFromUtf8(value);
+                prepareHeader(header, channelNames, names, contentNames), body);
     }
 
     public static Header decodeHeader(Message part, boolean captureFlow) {
@@ -432,9 +505,6 @@ public final class ZLinkChannelEnvelope {
     }
 
     private static void validateEncodingStrings(Header header) {
-        requireEncodableString(header.channelName());
-        requireEncodableString(header.messageName());
-        requireEncodableString(header.contentType());
         requireEncodableString(header.correlationId());
         requireEncodableString(header.deadline());
         requireEncodableString(header.topic());
@@ -497,7 +567,7 @@ public final class ZLinkChannelEnvelope {
     private static int metadataSize(ChannelHeader header) {
         int size = 0;
         for (MetadataEntry entry : header.getMetadataList())
-            size += com.google.protobuf.CodedOutputStream.computeMessageSize(13, entry);
+            size += CodedOutputStream.computeMessageSize(13, entry);
         return size;
     }
 
