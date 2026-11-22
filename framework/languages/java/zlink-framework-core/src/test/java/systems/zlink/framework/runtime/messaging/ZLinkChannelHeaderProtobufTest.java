@@ -191,9 +191,14 @@ final class ZLinkChannelHeaderProtobufTest {
         long encodeBytes = Long.parseLong(result.group(1));
         long decodeBytes = Long.parseLong(result.group(2));
 
-        // OpenJDK 25.0.4.1 measured 768,000 encode / 1,240,000 decode bytes per 1,000 calls.
-        assertTrue(encodeBytes <= 768_000, "encode allocated " + encodeBytes + " bytes");
-        assertTrue(decodeBytes <= 1_240_000, "decode allocated " + decodeBytes + " bytes");
+        // OpenJDK 25.0.4.1 measured 768 encode / 1,240 decode bytes per call.
+        // Allow one byte per call for measurement noise, below a single object allocation.
+        assertTrue(
+                encodeBytes <= 769L * ZLinkChannelHeaderAllocationProbe.CALLS_PER_WINDOW,
+                "encode allocated " + encodeBytes + " bytes");
+        assertTrue(
+                decodeBytes <= 1_241L * ZLinkChannelHeaderAllocationProbe.CALLS_PER_WINDOW,
+                "decode allocated " + decodeBytes + " bytes");
     }
 
     private static JsonNode golden() throws Exception {

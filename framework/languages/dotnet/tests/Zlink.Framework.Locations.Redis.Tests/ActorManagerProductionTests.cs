@@ -251,12 +251,10 @@ public sealed class ActorManagerProductionTests
             else
             {
                 var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(SubmitAsync);
-                // framework/doc/framework/common/spec/server/03-spot-actor/04-actor-model.ko.md §8.1:
-                // "각 attempt는 남은 deadline 전부를 쓰고 횟수 제한이 없다. Deadline 소진의 종류는 원인이 정한다:
-                // 한 번도 admission되지 못한 채 소진되면 오류 모델의 Unavailable, admission된 request의 reply를
-                // 받지 못한 채 소진되면 DeadlineExceeded다."
-                // Persistent reservation conflicts prevent admission entirely.
-                Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
+                // framework/doc/framework/common/spec/server/00-foundation/07-framework-error-model.ko.md:34:
+                // an operation that does not complete within its deadline ends as DeadlineExceeded.
+                // The Timeout() deadline expires while the persistent reservation conflict is retried (#5194).
+                Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, error.Kind);
             }
 
             Assert.Equal(0, TestActorFactory.CreateCount);

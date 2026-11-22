@@ -651,6 +651,14 @@ struct request_task_access_t
         template <typename TValue> struct stage_t final : application_task_shared_state_t<TValue>
         {
             explicit stage_t (receiver_state_t &owner) : owner (owner) {}
+            void complete_from (stage_t &physical, result_t<TValue> result)
+            {
+                if (physical.complete_owned (std::move (result)))
+                    this->complete_borrowed (physical.ready_result ());
+                else
+                    this->complete_owned (std::move (result));
+            }
+
             std::shared_ptr<task_shared_state_t<TValue>> shared_from_this () override
             {
                 return {owner.application_task_shared_state_t<void>::shared_from_this (), this};
@@ -667,8 +675,8 @@ struct request_task_access_t
                 static_cast<receiver_state_t *> (storage)->project.reset ();
             }),
             admitted (this),
-            reply (*this),
             physical (make_physical (*this)),
+            reply (*this),
             project (std::move (project))
         {
         }
@@ -694,11 +702,11 @@ struct request_task_access_t
             }();
             project.reset ();
             if constexpr (Public)
-                physical.complete (projected);
-            reply.complete (std::move (projected));
+                reply.complete_from (physical, std::move (projected));
+            else
+                reply.complete (std::move (projected));
         }
         task_completion_source_t<void> admitted;
-        stage_t<T> reply;
         static auto make_physical (receiver_state_t &owner)
         {
             if constexpr (Public)
@@ -707,6 +715,7 @@ struct request_task_access_t
                 return std::monostate{};
         }
         std::conditional_t<Public, stage_t<T>, std::monostate> physical;
+        stage_t<T> reply;
         std::optional<TProject> project;
     };
 

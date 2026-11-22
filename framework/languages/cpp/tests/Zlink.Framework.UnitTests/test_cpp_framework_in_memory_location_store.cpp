@@ -274,11 +274,11 @@ TEST (ZLinkFrameworkInMemoryLocationStore, ActorCanJoinRelocatedSingleSpot)
     EXPECT_FALSE (relocation.read (source.kind, "missing-spot"));
     auto target = source;
     target.node_id = "node-b";
-    ASSERT_EQ (
-      authority_publish_status_t::published,
-      relocation
-        .publish (source, target, owner_b, target_b, "saved-room", 1, {}, {}, spot.store_version)
-        .status);
+    ASSERT_EQ (authority_publish_status_t::published,
+               relocation
+                 .publish (source, target, owner_b, target_b, "saved-room", 1, {}, {},
+                           spot.store_version, {}, owner_a)
+                 .status);
     actor_authority_payload_t actor{.stable_type = "player",
                                     .actor_id = "fresh",
                                     .current_spot_id = "entry-a",
