@@ -2462,14 +2462,16 @@ internal static class ZLinkAcceptedWorkAdmissionErrors
 {
     // The one mapping from a refused admission to its error kind
     // (spec 06-spot-address-messaging §9, 07-framework-error-model).
+#pragma warning disable CS8524 // Only named admission results are returned by the queue.
     internal static ZLinkFrameworkErrorKind ErrorKind(this ZLinkAcceptedWorkAdmission admission) =>
         admission switch
         {
+            ZLinkAcceptedWorkAdmission.Accepted => ZLinkFrameworkErrorKind.InternalFailure,
             ZLinkAcceptedWorkAdmission.Closed => ZLinkFrameworkErrorKind.ShuttingDown,
             ZLinkAcceptedWorkAdmission.RelocationMoving => ZLinkFrameworkErrorKind.Unavailable,
             ZLinkAcceptedWorkAdmission.Closing => ZLinkFrameworkErrorKind.NotFound,
-            _ => ZLinkFrameworkErrorKind.Rejected,
         };
+#pragma warning restore CS8524
 }
 
 internal enum ZLinkSerialPostAdmission
