@@ -3873,9 +3873,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         for (const [index, participant] of stage.staging.envelope.participants.entries()) {
           const hidden = stage.staging.hidden.get(participant.key);
           if (hidden?.actor === undefined) continue;
-          // With no unfinished captured requests, finalize the target before replay starts.
-          hidden.replayStart =
-            requestDelivery === undefined ? (stage.finalize ?? finalized) : activation;
+          // Replay starts with dispatch opening; finalization runs alongside it (#5378 §4.6).
+          hidden.replayStart = activation;
           hidden.onReplayResult = async (packet, result) => {
             if (!packet.returnResponse || packet.source === undefined) return;
             try {

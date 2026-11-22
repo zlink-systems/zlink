@@ -41,7 +41,7 @@ function deferred() {
 }
 
 for (const [scenario, name] of [
-  ['send', 'a replayed send can defer the next Join after the previous publication is released'],
+  ['send', 'a replayed send runs with dispatch opening and its Join waits for publication release'],
   [
     'outside request',
     'a Join waits for captured request delivery while a replayed send is still running'
@@ -111,6 +111,8 @@ for (const [scenario, name] of [
       },
       async compareExchangeAuthority(_key, expected, mutation) {
         assert.equal(current.storeVersion.value, expected.value);
+        // Replay must not wait for publication release: hold the release until the replayed send runs.
+        if (scenario === 'send' && mutation.relocation === null) await sendStarted.promise;
         current = {
           ...current,
           payload: mutation.payload,
@@ -499,19 +501,24 @@ for (const [scenario, name] of [
           [{ status: 'accepted', kind: undefined }],
           errors.filter(Boolean).join('\n')
         );
-        assert.deepEqual(events, [
-          'committed',
-          'activating',
-          'activated',
-          'open',
-          'cleaning',
-          'completed',
-          'release',
-          'handler',
-          'capture',
-          'preparing',
-          'captured'
-        ]);
+        assert.ok(events.indexOf('open') < events.indexOf('handler'));
+        assert.ok(events.indexOf('handler') < events.indexOf('release'));
+        assert.ok(events.indexOf('release') < events.indexOf('capture'));
+        assert.deepEqual(
+          events.filter((event) => event !== 'handler'),
+          [
+            'committed',
+            'activating',
+            'activated',
+            'open',
+            'cleaning',
+            'completed',
+            'release',
+            'capture',
+            'preparing',
+            'captured'
+          ]
+        );
       }
       if (scenario === 'inside request') finishReplay();
       await stage.terminal;
