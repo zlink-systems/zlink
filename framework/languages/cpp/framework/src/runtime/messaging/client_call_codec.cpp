@@ -111,8 +111,6 @@ envelope_header_t client_call_codec_t::create_envelope (message_kind_t kind,
                                                         std::optional<std::string> source,
                                                         std::string content_type) const
 {
-    // One prvalue: a named local could be moved on return (no NRVO), and a
-    // moved std::map allocates a new head node in MSVC's STL.
     return envelope_header_t{
       .kind = kind,
       .channel_name = std::move (channel_name),

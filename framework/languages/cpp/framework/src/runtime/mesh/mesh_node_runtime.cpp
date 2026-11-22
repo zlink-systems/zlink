@@ -3664,8 +3664,9 @@ request_task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_appli
             const auto follow_target = std::move (*acquired_follow.value ());
             actor_message_follow_lease_t lease (spot_runtime, actor, follow_target.source_fence,
                                                 payload_bytes);
-            auto follow_path = advance_message_follow_path (
-              header.metadata, local_node, follow_target.source_fence.authority_owner_generation);
+            auto follow_path =
+              advance_message_follow_path (header.metadata.values (), local_node,
+                                           follow_target.source_fence.authority_owner_generation);
             if (!follow_path) {
                 co_return detail::propagate_failure<std::optional<zlink::message_t>> (
                   follow_path, "Actor Message Follow loop detection failed");
@@ -3690,7 +3691,7 @@ request_task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_appli
             }
             spot_inbound_message_t metadata{.received_at = received_at};
             metadata.content_type = header.content_type;
-            metadata.values = header.metadata;
+            metadata.values = header.metadata.values ();
             if (header.kind == runtime::messaging::message_kind_t::request
                 && !header.correlation_id.empty ()) {
                 metadata.values.insert_or_assign ("__zlink.actorRequestId", header.correlation_id);

@@ -9828,7 +9828,7 @@ task_t<void> spot_node_runtime_t::seal_actor_application_suffix (const actor_ref
                                       ? std::move (invocation_metadata->content_type)
                                       : std::string (header.value ().content_type);
               packet.metadata = invocation_metadata ? std::move (invocation_metadata->values)
-                                                    : header.value ().metadata;
+                                                    : header.value ().metadata.values ();
               packet.is_request = kind == runtime::protocol::frozen_record_kind_t::actor_request;
           });
         packet.application_record = std::move (record);
@@ -10877,7 +10877,7 @@ task_t<void> spot_node_runtime_t::complete_remote_actor_transfer (
             }
             if (packet.is_request && terminal) {
                 (void) co_await send_handoff_terminal (
-                  _state, handoff_terminal_route (header.metadata), *terminal);
+                  _state, handoff_terminal_route (header.metadata.values ()), *terminal);
             }
         }
         if (replay.completed) {
@@ -15945,8 +15945,9 @@ bool spot_node_runtime_t::dispatch_mesh_record (
 
         if (node_record && record.kind == service::record_kind_t::node_send
             && header.message_name == actor_handoff_terminal_packet) {
-            const auto terminal_route = handoff_terminal_route (header.metadata);
-            const auto success = handoff_u64 (header.metadata, actor_handoff_terminal_success_key);
+            const auto terminal_route = handoff_terminal_route (header.metadata.values ());
+            const auto success =
+              handoff_u64 (header.metadata.values (), actor_handoff_terminal_success_key);
             if (!terminal_route || !success || *success > 1) {
                 if (!terminal_route)
                     report_handoff_terminal_drop (_state, "missing_parking_node");
@@ -16007,8 +16008,8 @@ bool spot_node_runtime_t::dispatch_mesh_record (
                                       framework_error_kind_t::protocol_error,
                                       "Actor handoff terminal body missing");
                 } else {
-                    const auto error_kind_value =
-                      handoff_u64 (header.metadata, actor_handoff_terminal_error_kind_key);
+                    const auto error_kind_value = handoff_u64 (
+                      header.metadata.values (), actor_handoff_terminal_error_kind_key);
                     const auto error_message =
                       header.metadata.find (std::string (actor_handoff_terminal_error_message_key));
                     completed = result_t<zlink::message_t>::failure (
@@ -16258,7 +16259,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (
                       header.message_name, {}, std::type_index (typeid (void)),
                       target->instance.get (), nullptr, services, serializers, body.value (),
                       spot_inbound_message_t{.content_type = header.content_type,
-                                             .values = header.metadata,
+                                             .values = header.metadata.values (),
                                              .received_at = record.received_at},
                       true, {}, {}, {}, spot_handler_registry_t::actor_queue_dispatch_t::acquire,
                       [target] { target->release (); }, record.release_mailbox_reservation,
@@ -16707,7 +16708,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (
         }
         auto relayed = [&] {
             auto relay_metadata = spot_inbound_message_t{.content_type = header.content_type,
-                                                         .values = header.metadata,
+                                                         .values = header.metadata.values (),
                                                          .received_at = record.received_at};
             if (record.kind == service::record_kind_t::actor_request
                 && !header.correlation_id.empty ()) {
