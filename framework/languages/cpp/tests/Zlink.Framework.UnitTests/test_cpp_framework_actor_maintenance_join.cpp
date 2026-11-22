@@ -6119,13 +6119,14 @@ TEST (ActorMaintenanceJoin, SourcePreserveDiscardsRawIdentityPreparedBeforeTarge
       [services, key, payload = original.payload, preserved] () mutable -> fw::task_t<void> {
           const auto current = std::get<fw::authority_snapshot_t> (
             co_await services.get_required<fw::location_repository_t> ().read_authority (key));
-          // The existing source Preserve operation is an unchanged-authority
-          // CAS. Restore the uncaptured payload so this newer Store fence
-          // definitively excludes the pending target CAS (Location §10).
+          // Source Preserve clears the captured attempt in the same CAS
+          // that restores the source payload (Location §10).
+          fw::authority_put_t preserve{payload};
+          preserve.replace_aggregate =
+            fw::runtime::authority_aggregate_codec::without_capture (current.aggregate);
           preserved->set_value (std::holds_alternative<fw::authority_stored_t> (
             co_await services.get_required<fw::location_repository_t> ()
-              .compare_exchange_authority (key, current.store_version,
-                                           fw::authority_put_t{payload})));
+              .compare_exchange_authority (key, current.store_version, std::move (preserve))));
       });
     const auto relocated =
       source.app
@@ -8756,12 +8757,18 @@ class join_settlement_authority_t final : public fw::runtime::stateful::authorit
                        std::vector<std::byte> payload,
                        std::string version,
                        fw::runtime::protocol::relocation_id_t relocation,
-                       fw::location_owner_token_t source_owner) override
+                       fw::location_owner_token_t source_owner,
+                       const fw::runtime::protocol::relocation_prepare_t *prepare) override
     {
         return _inner.publish (source, target, std::move (owner), std::move (placement),
                                std::move (relocation_reference), checksum, inventory,
                                std::move (payload), std::move (version), relocation,
-                               std::move (source_owner));
+                               std::move (source_owner), prepare);
+    }
+    bool finish_relocation (const object &target,
+                            const fw::runtime::protocol::relocation_prepare_t &prepare) override
+    {
+        return _inner.finish_relocation (target, prepare);
     }
     std::optional<reference> read (kind type, const std::string &key) override
     {
