@@ -20,8 +20,8 @@ internal sealed record ZLinkRelocationTreeRead(
 
 /// <summary>
 /// Persists the logical relocation stream as canonical ZLTC chunks and a
-/// canonical ZLTM manifest. A temporary file keeps memory proportional to the
-/// active chunk instead of the complete aggregate.
+/// canonical ZLTM manifest. Single-chunk canonical bytes stay in memory.
+/// Larger streams use a temporary file to bound the working set.
 /// </summary>
 internal static partial class ZLinkRelocationTreeStore
 {
@@ -64,25 +64,32 @@ internal static partial class ZLinkRelocationTreeStore
                 )
                 .ConfigureAwait(false);
 
-        var path = Path.GetTempFileName();
+        var path = envelope.CanonicalLogicalStream.Length is > 0 and <= ChunkBytes
+            ? null
+            : Path.GetTempFileName();
         try
         {
-            await using (
-                var output = new FileStream(
+            await using Stream input = path is null
+                ? new MemoryStream(
+                    ZLinkRelocationEnvelopeCodec.EncodeCanonical(envelope.CanonicalLogicalStream),
+                    writable: false
+                )
+                : new FileStream(
                     path,
                     FileMode.Truncate,
-                    FileAccess.Write,
+                    FileAccess.ReadWrite,
                     FileShare.None,
                     StreamBufferBytes,
                     FileOptions.Asynchronous | FileOptions.SequentialScan
-                )
-            )
+                );
+            if (path is not null)
             {
-                ZLinkRelocationEnvelopeCodec.EncodeTo(output, envelope);
-                await output.FlushAsync(cancellationToken).ConfigureAwait(false);
+                ZLinkRelocationEnvelopeCodec.EncodeTo(input, envelope);
+                await input.FlushAsync(cancellationToken).ConfigureAwait(false);
+                input.Position = 0;
             }
 
-            var logicalLength = new FileInfo(path).Length;
+            var logicalLength = input.Length;
             if (logicalLength <= 0 || (ulong)logicalLength > MaxLogicalBytes)
                 throw new InvalidOperationException(
                     $"Relocation logical stream exceeds its {MaxLogicalBytes} byte bound."
@@ -91,14 +98,6 @@ internal static partial class ZLinkRelocationTreeStore
 
             var chunks = new ChunkEntry[chunkCount];
             var logicalCrcState = uint.MaxValue;
-            await using var input = new FileStream(
-                path,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.Read,
-                StreamBufferBytes,
-                FileOptions.Asynchronous | FileOptions.SequentialScan
-            );
             for (var firstOrder = 0; firstOrder < chunkCount; )
             {
                 var batch = new List<EncodedChunk>(MaxConcurrentComponentIo);
@@ -167,7 +166,8 @@ internal static partial class ZLinkRelocationTreeStore
         }
         finally
         {
-            File.Delete(path);
+            if (path is not null)
+                File.Delete(path);
         }
     }
 
@@ -220,6 +220,17 @@ internal static partial class ZLinkRelocationTreeStore
             return await ReadParticipantComponentsAsync(store, found.Payload, cancellationToken)
                 .ConfigureAwait(false);
         var manifest = DecodeManifest(found.Payload.Span);
+        if (manifest.Chunks.Count == 1)
+        {
+            var entry = manifest.Chunks[0];
+            var chunk = await ReadChunkAsync(store, entry, cancellationToken).ConfigureAwait(false);
+            if (entry.ChecksumCrc32c != manifest.LogicalChecksumCrc32c)
+                throw DataLost("Relocation logical stream checksum is invalid.");
+            return CreateReadResult(
+                manifest,
+                ZLinkRelocationEnvelopeCodec.DecodeOwned(chunk.Data, manifest.InventoryDigest)
+            );
+        }
 
         var path = Path.GetTempFileName();
         try
@@ -279,21 +290,27 @@ internal static partial class ZLinkRelocationTreeStore
                 )
             )
                 envelope = ZLinkRelocationEnvelopeCodec.Decode(input, manifest.InventoryDigest);
-            if (!envelope.InventoryDigest.Span.SequenceEqual(manifest.InventoryDigest.Span))
-                throw DataLost(
-                    "Relocation manifest inventory digest does not match the logical root."
-                );
-            return new ZLinkRelocationTreeRead(
-                envelope,
-                checked((long)manifest.LogicalLength),
-                manifest.LogicalChecksumCrc32c,
-                manifest.Chunks.Count
-            );
+            return CreateReadResult(manifest, envelope);
         }
         finally
         {
             File.Delete(path);
         }
+    }
+
+    private static ZLinkRelocationTreeRead CreateReadResult(
+        Manifest manifest,
+        ZLinkRelocationEnvelope envelope
+    )
+    {
+        if (!envelope.InventoryDigest.Span.SequenceEqual(manifest.InventoryDigest.Span))
+            throw DataLost("Relocation manifest inventory digest does not match the logical root.");
+        return new ZLinkRelocationTreeRead(
+            envelope,
+            checked((long)manifest.LogicalLength),
+            manifest.LogicalChecksumCrc32c,
+            manifest.Chunks.Count
+        );
     }
 
     internal static async ValueTask RenewTreeAsync(

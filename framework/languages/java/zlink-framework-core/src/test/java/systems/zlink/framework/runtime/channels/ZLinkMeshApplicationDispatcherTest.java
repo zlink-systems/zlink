@@ -39,6 +39,7 @@ import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
 import systems.zlink.framework.runtime.messaging.ZLinkStringMessageSerializer;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -1324,6 +1325,33 @@ final class ZLinkMeshApplicationDispatcherTest {
         }
     }
 
+    @Test
+    void routeMeshHandlerContextReceivedAtIsTheDispatchRecordTime() throws Exception {
+        MeshNodeRegistration mesh = new MeshNodeRegistration("game");
+        mesh.listen("inproc://mesh-dispatch-received-at");
+        mesh.addRouteSendHandler(ReceivedAtHandler.class, String.class);
+        ZLinkMeshApplicationDispatcher dispatcher = dispatcher(mesh);
+        ReceivedAtHandler.received = new CompletableFuture<>();
+
+        Instant beforeRecord = Instant.now();
+        var record = record(RecordKind.NODE_SEND, null, "received-at");
+        Instant afterRecord = Instant.now();
+        // The record waits (for the executor queue, in production) before its handler runs.
+        Thread.sleep(300);
+        Instant submitted = Instant.now();
+        dispatcher.accept(record);
+
+        Instant receivedAt = ReceivedAtHandler.received.get(2, TimeUnit.SECONDS);
+        assertFalse(receivedAt.isBefore(beforeRecord), "receivedAt is not earlier than the record");
+        assertFalse(
+                receivedAt.isAfter(afterRecord),
+                "receivedAt is the time the record was received, not the time its handler ran: "
+                        + receivedAt
+                        + " > "
+                        + afterRecord);
+        assertTrue(receivedAt.isBefore(submitted));
+    }
+
     private static ZLinkMeshApplicationDispatcher dispatcher(MeshNodeRegistration mesh) {
         return new ZLinkMeshApplicationDispatcher(
                 mesh,
@@ -1574,6 +1602,16 @@ final class ZLinkMeshApplicationDispatcherTest {
     private record MalformedFlow(String flowId, int flowOrigin, String correlationId) {}
 
     private record ErrorReply(ZLinkFrameworkErrorKind kind, String correlationId) {}
+
+    public static final class ReceivedAtHandler implements ZLinkRouteSendHandler<String> {
+        private static CompletableFuture<Instant> received;
+
+        @Override
+        public CompletionStage<Void> handle(String message, ZLinkRouteMessageContext context) {
+            received.complete(context.receivedAt());
+            return CompletableFuture.completedFuture(null);
+        }
+    }
 
     public static final class NodeHandler implements ZLinkRouteSendHandler<String> {
         private static CompletableFuture<String> received;

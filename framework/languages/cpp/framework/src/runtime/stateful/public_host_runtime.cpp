@@ -9945,40 +9945,18 @@ public_host_runtime_t::decode_operation_record (call_id_t operation,
                                                 foundation::operation_terminal_t terminal,
                                                 const zlink::message_t &payload) const
 {
-    if (terminal == foundation::operation_terminal_t::shutdown)
-        return detail::boundary_failure<receive_record_t> (detail::boundary_error_t::shutdown,
-                                                           "MeshNode operation owner is closed");
+    const auto status =
+      messaging::request_failure_mapper_t{}.operation_reply_status (terminal, payload);
+    if (!status)
+        return detail::result_access_t::failure<receive_record_t> (status.exception ());
     receive_record_t record;
     record.kind = record_kind_t::completion;
     record.domain = ready_domain_t::infrastructure;
     record.operation_id = operation;
     record.operation_kind = kind;
     record.source_node_rid = zlink::routing_id_t::from (_options.mesh.descriptor.node_routing_id);
-    switch (terminal) {
-        case foundation::operation_terminal_t::completed:
-            record.terminal_result = 0;
-            break;
-        case foundation::operation_terminal_t::timed_out:
-            record.terminal_result = static_cast<int> (zlink::request_result_t::timed_out);
-            break;
-        case foundation::operation_terminal_t::route_unavailable:
-            record.terminal_result = static_cast<int> (zlink::request_result_t::not_connected);
-            break;
-        default:
-            record.terminal_result = static_cast<int> (zlink::request_result_t::internal_error);
-            break;
-    }
-    if (record.terminal_result != 0 && !payload.is_empty ()) {
-        try {
-            const auto reply = protocol::decode_reply_header (protocol::message_bytes (payload));
-            record.terminal_result = static_cast<int> (reply.terminal_result);
-            record.failure_errno = static_cast<int> (reply.failure_code);
-        }
-        catch (const protocol::service_wire_error_t &) {
-            record.terminal_result = static_cast<int> (zlink::request_result_t::protocol_error);
-            record.failure_errno = 0;
-        }
-    }
+    record.terminal_result = static_cast<int> (status.value ().terminal_result);
+    record.failure_errno = static_cast<int> (status.value ().failure_code);
     return result_t<receive_record_t>::success (std::move (record));
 }
 

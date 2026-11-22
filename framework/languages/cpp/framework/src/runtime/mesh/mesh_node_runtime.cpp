@@ -4207,23 +4207,27 @@ mesh_node_runtime_t::await_completion (const host::pending_operation_t &operatio
 
 namespace
 {
-std::exception_ptr request_completion_failure (const host::receive_record_t &record,
+std::exception_ptr request_completion_failure (std::uint32_t terminal,
+                                               std::uint32_t failure_code,
                                                std::string_view operation_name)
 {
-    if (record.terminal_result == static_cast<int> (zlink::request_result_t::ok))
+    if (terminal == static_cast<std::uint32_t> (zlink::request_result_t::ok))
         return {};
     return std::make_exception_ptr (
       runtime::messaging::request_failure_mapper_t{}.reply_header_exception (
-        static_cast<std::uint32_t> (record.terminal_result),
-        static_cast<std::uint32_t> (record.failure_errno), std::string (operation_name)));
+        terminal, failure_code, std::string (operation_name)));
 }
 
 std::exception_ptr
 request_completion_failure (const result_t<host::operation_completion_t> &completion,
                             std::string_view operation_name)
 {
-    return completion ? request_completion_failure (completion.value ().record, operation_name)
-                      : completion.exception ();
+    if (!completion)
+        return completion.exception ();
+    const auto &record = completion.value ().record;
+    return request_completion_failure (static_cast<std::uint32_t> (record.terminal_result),
+                                       static_cast<std::uint32_t> (record.failure_errno),
+                                       operation_name);
 }
 
 result_t<result_t<runtime::messaging::message_parts_t>>
@@ -4532,17 +4536,15 @@ void mesh_node_runtime_t::submit_node_request_reply (const zlink::routing_id_t &
              admitted = receiver.admitted] (runtime::foundation::operation_terminal_t terminal,
                                             result_t<zlink::message_t> payload) mutable {
                 try {
-                    if (!payload)
-                        payload.value ();
-                    auto record = host
-                                    ->decode_operation_record ({}, host::operation_kind_t::none,
-                                                               terminal, payload.value ())
-                                    .value ();
-                    if (const auto failure =
-                          request_completion_failure (record, "MeshNode request"))
+                    const auto &message = payload.value ();
+                    const auto status = runtime::messaging::request_failure_mapper_t{}
+                                          .operation_reply_status (terminal, message)
+                                          .value ();
+                    if (const auto failure = request_completion_failure (
+                          status.terminal_result, status.failure_code, "MeshNode request"))
                         std::rethrow_exception (failure);
                     auto views = runtime::protocol::decode_application_part_views (
-                      runtime::protocol::message_bytes (payload.value ()), host->capture_flow (),
+                      runtime::protocol::message_bytes (message), host->capture_flow (),
                       complete.resource ());
                     complete (result_t<node_reply_t>::success (
                       node_reply_t::success (runtime::messaging::message_parts_t::borrow (views))));
