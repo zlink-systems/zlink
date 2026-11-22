@@ -325,6 +325,7 @@ interface LocalStage {
   readonly boundaryRelay: ServiceMaintenanceRelocationData[];
   fallback?: ReturnType<typeof setTimeout>;
   finalize?: Promise<void>;
+  terminal?: Promise<void>;
   /** The Restore's activation admission (MeshNode §5.1); held until target commit or abort. */
   readonly releaseActivation: () => void;
   readonly releaseJoinAdmission: () => void;
@@ -528,6 +529,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         `Actor '${input.state.actorId}' Join target generation changed after admission.`
       );
     }
+    const actorRegistration = this.actorRegistration(
+      input.state.meshName ?? input.meshName,
+      input.state.actorType ?? ''
+    );
     this.reserveExactRelocationId(input.relocationId);
     let resolveReady!: (failure?: ServiceRelocationPostCommitError) => void;
     const ready = new Promise<void>((resolve, reject) => {
@@ -548,8 +553,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       targetSpotId: input.target.spotId,
       targetNodeRid: input.target.targetNodeRid,
       relocationContentType:
-        this.actorRegistration(input.state.meshName ?? input.meshName, input.state.actorType ?? '')
-          .relocation.kind === 'snapshot'
+        actorRegistration.relocation.kind === 'snapshot'
           ? SNAPSHOT_RELOCATION_CONTENT_TYPE
           : RECREATE_RELOCATION_CONTENT_TYPE,
       completionOperationId: input.completionOperationId,
@@ -592,6 +596,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           resolveReady();
           throw error;
         }
+      } finally {
+        this.sourceRelocationIds.delete(input.relocationId);
       }
     })();
     const settledCleanup = Promise.allSettled([cleanup]);
@@ -2152,11 +2158,11 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     if (isRelocationDebugEnabled()) {
       relocationDebug('standalone_actor.begin', { actorId: state.actorId });
     }
-    const authority = await requireAuthority(
-      this.requireLocationStore(),
-      encodeAuthorityKey('actor', state.actorId),
-      signal
-    );
+    const key = encodeAuthorityKey('actor', state.actorId);
+    const current = await requireAuthority(this.requireLocationStore(), key, signal);
+    const authority = retainSourceForActorJoin
+      ? await this.waitForPreviousTarget(key, current, aggregateIdOverride, signal, deadlineAtMs)
+      : current;
     const actorPolicy = this.actorRegistration(
       state.meshName ?? meshName,
       authority.allocation.stableType
@@ -2241,7 +2247,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       );
     } finally {
       this.completeSourceRelocationMetric(relocationMetric);
-      this.sourceRelocationIds.delete(aggregateId);
+      if (aggregateIdOverride === undefined) this.sourceRelocationIds.delete(aggregateId);
       if (interruptionStartedAt !== undefined) {
         this.recordRelocationInterruption(meshName, 'actor', undefined, interruptionStartedAt);
       }
@@ -2534,26 +2540,71 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
   }
 
   private reserveRelocationId(): string {
-    const id = createServiceRelocationId((candidate) => {
-      if (this.sourceRelocationIds.has(candidate)) return true;
-      const wire = relocationWireId(candidate);
-      const prefix = `${wire.high}:${wire.low}:`;
-      return [...this.targetStages.keys()].some((key) => key.startsWith(prefix));
-    });
+    const id = createServiceRelocationId(
+      (candidate) =>
+        this.sourceRelocationIds.has(candidate) || this.findTargetStage(candidate) !== undefined
+    );
     this.sourceRelocationIds.add(id);
     return id;
   }
 
   private reserveExactRelocationId(id: string): void {
-    const wire = relocationWireId(id);
-    const prefix = `${wire.high}:${wire.low}:`;
-    if (
-      this.sourceRelocationIds.has(id) ||
-      [...this.targetStages.keys()].some((key) => key.startsWith(prefix))
-    ) {
+    if (this.sourceRelocationIds.has(id) || this.findTargetStage(id) !== undefined) {
       throw new Error(`Actor Join relocation '${id}' is already active.`);
     }
     this.sourceRelocationIds.add(id);
+  }
+
+  private findTargetStage(relocationId: string): LocalStage | undefined {
+    const wire = relocationWireId(relocationId);
+    const prefix = `${wire.high}:${wire.low}:`;
+    for (const [key, stage] of this.targetStages) {
+      if (key.startsWith(prefix)) return stage;
+    }
+    return undefined;
+  }
+
+  private async waitForPreviousTarget(
+    key: ZLinkAuthorityKey,
+    authority: ZLinkAuthoritySnapshot,
+    relocationId: string | undefined,
+    signal?: AbortSignal,
+    deadlineAtMs?: number
+  ): Promise<ZLinkAuthoritySnapshot> {
+    const previous = authority.relocation;
+    if (previous?.relocationId === relocationId || !isFinishingTargetRelocation(previous)) {
+      return authority;
+    }
+
+    const terminal = this.findTargetStage(previous.relocationId)?.terminal;
+    try {
+      if (terminal !== undefined) {
+        await (signal === undefined ? terminal : raceAbort(terminal, signal));
+      }
+
+      // The target may have finished between the first Store read and the local lookup.
+      signal?.throwIfAborted();
+      const current = await requireAuthority(this.requireLocationStore(), key, signal);
+      signal?.throwIfAborted();
+      requireUnchangedSourceAuthority(current, authority, authority);
+      if (
+        isFinishingTargetRelocation(current.relocation) &&
+        current.relocation.relocationId === previous.relocationId
+      ) {
+        throw new ZLinkFrameworkException(
+          ZLinkFrameworkErrorKind.Unavailable,
+          'The previous relocation still owns capture progress and has no active local target flow.'
+        );
+      }
+      return current;
+    } finally {
+      if (deadlineAtMs !== undefined && performance.now() >= deadlineAtMs) {
+        throw new ZLinkFrameworkException(
+          ZLinkFrameworkErrorKind.DeadlineExceeded,
+          'Actor Join exceeded its deadline waiting for the previous relocation.'
+        );
+      }
+    }
   }
 
   private sourceCaptureOwner(
@@ -2572,14 +2623,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       for (const unit of units) {
         const key = { value: unit.authorityKey } as ZLinkAuthorityKey;
         const current = await requireAuthority(this.requireLocationStore(), key);
-        if (
-          current.objectGeneration !== unit.objectGeneration ||
-          current.authorityOwnerGeneration !== unit.authorityOwnerGeneration ||
-          current.ownerId !== primary.ownerId ||
-          current.ownerLeaseGeneration !== primary.ownerLeaseGeneration
-        ) {
-          throw new Error('Relocation source authority changed before capture publication.');
-        }
+        requireUnchangedSourceAuthority(current, unit, primary);
         if (phase === 'aborted' && current.relocation?.relocationId !== relocationId) continue;
         if (
           (current.relocation !== undefined && current.relocation.relocationId !== relocationId) ||
@@ -3739,6 +3783,12 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       this.finalizeTargetStage(meshName, stagingId, stage, signal)
     );
     stage.finalize = finalize;
+    // Finalization retains its errors for the target owner. A waiting source
+    // only needs the terminal signal and reads the resulting Store authority.
+    stage.terminal = finalize.then(
+      () => undefined,
+      () => undefined
+    );
     return finalize;
   }
 
@@ -5765,6 +5815,36 @@ async function requireAuthority(
   const current = await store.readAuthority(key, signal);
   if (current.kind !== 'snapshot') throw new Error(`Authority '${key.value}' is missing.`);
   return current;
+}
+
+function requireUnchangedSourceAuthority(
+  current: ZLinkAuthoritySnapshot,
+  expectedGenerations: Pick<
+    ZLinkAuthoritySnapshot,
+    'objectGeneration' | 'authorityOwnerGeneration'
+  >,
+  primary: ZLinkAuthoritySnapshot
+): void {
+  if (
+    current.objectGeneration !== expectedGenerations.objectGeneration ||
+    current.authorityOwnerGeneration !== expectedGenerations.authorityOwnerGeneration ||
+    current.ownerId !== primary.ownerId ||
+    current.ownerLeaseGeneration !== primary.ownerLeaseGeneration
+  ) {
+    throw new Error('Relocation source authority changed before capture publication.');
+  }
+}
+
+// Past the owner switch and still published: source cleanup (activated, cleaning) or publication
+// release after completion (completed until clearTargetRelocationPublication), #5371.
+function isFinishingTargetRelocation(
+  relocation: ZLinkAuthoritySnapshot['relocation']
+): relocation is NonNullable<ZLinkAuthoritySnapshot['relocation']> {
+  return (
+    relocation?.phase === 'activated' ||
+    relocation?.phase === 'cleaning' ||
+    relocation?.phase === 'completed'
+  );
 }
 
 function actorMembershipTarget(
