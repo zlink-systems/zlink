@@ -50,7 +50,7 @@ for (const leaseState of ['expired', 'missing', 'replaced', 'live']) {
     const store = ZLinkLocationStoreRepository.prototype;
     const reservations = [];
     const leaseReads = [];
-    t.mock.method(store, 'listMeshNodes', async () => ({ items: [descriptor] }));
+    const lists = t.mock.method(store, 'listMeshNodes', async () => ({ items: [descriptor] }));
     t.mock.method(store, 'readAuthority', async () => ({ kind: 'missing' }));
     // Stop at the public Store reservation boundary: this test checks placement,
     // before factory execution and authority publication begin.
@@ -103,9 +103,12 @@ for (const leaseState of ['expired', 'missing', 'replaced', 'live']) {
           error.message === 'No eligible User Spot placement target is ready.'
       );
       assert.deepEqual(reservations, []);
-      assert.equal(leaseReads.length, 1);
-      assert.equal(leaseReads[0].ownerId, 'owner');
-      assert.ok(leaseReads[0].signal instanceof AbortSignal);
+      assert.equal(lists.mock.callCount(), 2);
+      assert.equal(leaseReads.length, leaseState === 'replaced' ? 1 : 2);
+      for (const { ownerId, signal } of leaseReads) {
+        assert.equal(ownerId, 'owner');
+        assert.ok(signal instanceof AbortSignal);
+      }
     }
   });
 }
@@ -149,7 +152,7 @@ for (const leaseState of ['expired', 'missing', 'replaced', 'live']) {
     const reservations = [];
     const transportCalls = [];
     const leaseReads = [];
-    t.mock.method(store, 'listMeshNodes', async () => ({ items: [descriptor] }));
+    const lists = t.mock.method(store, 'listMeshNodes', async () => ({ items: [descriptor] }));
     t.mock.method(store, 'readAuthority', async () => ({ kind: 'missing' }));
     t.mock.method(store, 'readCreationTerminal', async () => ({ kind: 'missing' }));
     // The test stops at the transport boundary, so no remote factory runs.
@@ -217,9 +220,12 @@ for (const leaseState of ['expired', 'missing', 'replaced', 'live']) {
           error.message === "No eligible Actor placement target is ready for 'room'."
       );
       assert.deepEqual(reservations, []);
-      assert.equal(leaseReads.length, 1);
-      assert.equal(leaseReads[0].ownerId, 'owner');
-      assert.ok(leaseReads[0].signal instanceof AbortSignal);
+      assert.equal(lists.mock.callCount(), 2);
+      assert.equal(leaseReads.length, leaseState === 'replaced' ? 1 : 2);
+      for (const { ownerId, signal } of leaseReads) {
+        assert.equal(ownerId, 'owner');
+        assert.ok(signal instanceof AbortSignal);
+      }
     }
     assert.equal(transportCalls.length, leaseState === 'live' ? 1 : 0);
     if (leaseState === 'live') {

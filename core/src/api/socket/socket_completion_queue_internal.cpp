@@ -327,7 +327,7 @@ void zlink::socket_completion::release (queue_state_t *state_,
 
 namespace
 {
-void append_ready_locked (
+bool append_ready_locked (
   zlink::socket_completion::queue_state_t *state_,
   zlink::socket_completion::reservation_t *reservation_)
 {
@@ -344,6 +344,7 @@ void append_ready_locked (
                                                 std::memory_order_release);
     if (was_empty)
         state_->ready_available.store (true, std::memory_order_release);
+    return was_empty;
 }
 
 bool writable_target_matches (
@@ -361,7 +362,8 @@ bool writable_target_matches (
 }
 
 int enqueue_ready (zlink::socket_completion::queue_state_t *state_,
-                   zlink::socket_completion::reservation_t *reservation_)
+                   zlink::socket_completion::reservation_t *reservation_,
+                   bool *became_ready_out_)
 {
     if (!state_ || !reservation_) {
         errno = EFAULT;
@@ -376,7 +378,9 @@ int enqueue_ready (zlink::socket_completion::queue_state_t *state_,
         errno = EALREADY;
         return -1;
     }
-    append_ready_locked (state_, reservation_);
+    const bool became_ready = append_ready_locked (state_, reservation_);
+    if (became_ready_out_)
+        *became_ready_out_ = became_ready;
     state_->changed.notify_all ();
     errno = 0;
     return 0;
@@ -440,8 +444,11 @@ int zlink::socket_completion::publish_writable_waiters (
 
 int zlink::socket_completion::publish_request (
   queue_state_t *state_, reservation_t *reservation_,
-  zlink_request_result_t result_, zlink_msg_t *parts_, size_t part_count_)
+  zlink_request_result_t result_, zlink_msg_t *parts_, size_t part_count_,
+  bool *became_ready_out_)
 {
+    if (became_ready_out_)
+        *became_ready_out_ = false;
     if (!reservation_ || (!parts_ && part_count_ != 0)) {
         errno = EFAULT;
         return -1;
@@ -449,7 +456,7 @@ int zlink::socket_completion::publish_request (
     reservation_->completion.request_result = result_;
     reservation_->completion.reply_parts = parts_;
     reservation_->completion.reply_part_count = part_count_;
-    return enqueue_ready (state_, reservation_);
+    return enqueue_ready (state_, reservation_, became_ready_out_);
 }
 
 int zlink::socket_completion::recv (queue_state_t *state_,

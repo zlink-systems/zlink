@@ -129,6 +129,7 @@ import {
   decodeMultipartApplicationPayloadView,
   decodeMultipartApplicationParts,
   decodeMultipartParts,
+  borrowPackedMultipartApplicationFrame,
   encodeMultipartApplicationPayload,
   encodeMultipartPayload,
   ServiceWireProtocolError,
@@ -176,6 +177,7 @@ const ACTOR_JOIN_ADVERTISED_RECEIVE_CHUNK_LIMIT_BYTES = 32 * 1024;
  */
 export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   readonly nativeInstance = this;
+  readonly acceptsPackedChannelFrames = true as const;
 
   private readonly channels = new Map<string, number>();
   private readonly peerIntents = new Map<
@@ -601,9 +603,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       ) {
         return id;
       }
-      runtime.disconnectPeerEndpoint(existing.endpoint);
-      this.peerProjection = undefined;
-      this.peerIntents.delete(id);
+      this.removePeerConnection(id);
     }
     if (nodeRoutingId === undefined) {
       runtime.connectPeerEndpoint(options.endpoint);
@@ -664,15 +664,11 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     if (intent === undefined) return;
     this.peerProjection = undefined;
     this.peerIntents.delete(intentId);
-    if (intent.nodeRoutingId === undefined) {
-      this.runtime?.disconnectPeerEndpoint(intent.endpoint);
-    } else {
-      this.runtime?.disconnectPeer(
-        intent.endpoint,
-        intent.nodeRoutingId,
-        intent.lifecycleGeneration
-      );
-    }
+    this.runtime?.disconnectPeerEndpoint(
+      intent.endpoint,
+      intent.nodeRoutingId,
+      intent.lifecycleGeneration
+    );
   }
 
   disconnectPeer(peerRid: unknown, lifecycleGeneration: bigint): void {
@@ -1801,9 +1797,11 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     }
     if (this.maintenanceTimer === undefined || dueMs < this.maintenanceDueMs) {
       if (this.maintenanceTimer !== undefined) clearTimeout(this.maintenanceTimer);
+      // A deadline that has already passed runs on the next timer turn. onMaintenance expires
+      // overdue work within a time budget, so the next deadline can already be past (#5357).
       this.maintenanceTimer = setTimeout(
         this.onMaintenance,
-        Math.min(MESH_BACKEND_MAINTENANCE_MAX_DELAY_MS, Math.ceil(dueMs - nowMs))
+        Math.min(MESH_BACKEND_MAINTENANCE_MAX_DELAY_MS, Math.max(0, Math.ceil(dueMs - nowMs)))
       );
       this.maintenanceDueMs = dueMs;
     }
@@ -3014,10 +3012,13 @@ function encodeMultipart(parts: MessageLike | readonly MessageLike[]) {
 function encodeMultipartApplicationFrame(parts: MessageLike | readonly MessageLike[]): Buffer {
   const values = Array.isArray(parts) ? parts : [parts];
   if (values.length === 0) throw new TypeError('Multipart payload must contain at least one part.');
-  return encodeMultipartApplicationPayload(
-    values.map(messagePayloadView),
-    MULTIPART_PACKET_NAME,
-    MULTIPART_CONTENT_TYPE
+  return (
+    borrowPackedMultipartApplicationFrame(values) ??
+    encodeMultipartApplicationPayload(
+      values.map(messagePayloadView),
+      MULTIPART_PACKET_NAME,
+      MULTIPART_CONTENT_TYPE
+    )
   );
 }
 

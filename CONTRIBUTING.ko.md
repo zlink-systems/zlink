@@ -181,6 +181,15 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
   소유한다.
 - 브랜치·commit·push·merge는 사용자가 명시적으로 요청할 때만 하고, 작업 branch는 Issue 브랜치
   규칙을 따른다(`AGENTS.md` §1).
+- PR을 열기 전에 `scripts/dev/pre-pr.sh`를 실행하고 마지막 `pre-pr:` 요약 줄을 PR
+  본문에 첨부한다. 기본 실행은 최신 `origin/main`을 병합하고 선택된 Linux x64 검사를
+  실행한다. PyYAML을 설치한 Python 3과 실행할 검사의 도구 체계를 준비한다. 언어
+  전체 시험에는 실행 중인 Redis의 `ZLINK_REDIS_TEST_ENDPOINT`(`host:port`)가 필요하다.
+  현재 HEAD를 유지하려면 `--no-merge`를, 검사 대상을 지정하려면 `--only docs,format`처럼
+  구성요소를 나열한다.
+  Node 20 또는 22가 `PATH`에 없으면 해당 버전의 bin 디렉터리를 `PRE_PR_NODE20` 또는
+  `PRE_PR_NODE22`로 지정한다. C++ 빌드 병렬 수의 기본값은 2이며 `BUILD_PARALLEL`로
+  바꿀 수 있다.
 - 커밋 메시지: `<모듈>: <한 줄 요약>` + 본문에 원인·수정·근거 수치·gate 결과. 리팩토링은 항목
   (불필요 코드 제거 / 책임 분리 / 명명)이 diff에서 구분되게 한다.
 - 번호 규칙(Core `MAJOR.MINOR`, binding `CORE_MAJOR.CORE_MINOR.N`, framework `MAJOR.MINOR.HOTFIX`)은

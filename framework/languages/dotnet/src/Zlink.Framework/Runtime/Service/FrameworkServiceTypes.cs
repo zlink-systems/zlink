@@ -854,7 +854,8 @@ internal sealed class MeshClaim(bool singleReceive = false) : IDisposable
 
 internal struct MeshReceiveRecord
 {
-    private readonly Func<IReadOnlyList<Message>, SubmitResult>? _reply;
+    // An application reply has either a local callback or a captured native route.
+    private readonly object? _replyRoute;
     private readonly Func<RequestResult, uint, SubmitResult>? _terminalReply;
     private readonly Func<
         ActorJoinResult,
@@ -891,7 +892,8 @@ internal struct MeshReceiveRecord
         Func<RequestResult, uint, SubmitResult>? terminalReply = null,
         ZLinkMultipartPayloadView? applicationPayloadView = null,
         bool instanceIntent = false,
-        ZlinkSubmitException? submitFailure = null
+        ZlinkSubmitException? submitFailure = null,
+        ZLinkManagedMeshNode.NativeApplicationReply? nativeApplicationReply = null
     )
     {
         Kind = kind;
@@ -910,7 +912,7 @@ internal struct MeshReceiveRecord
         TerminalResult = terminalResult;
         FailureErrno = failureErrno;
         KindData = kindData;
-        _reply = reply;
+        _replyRoute = reply ?? (object?)nativeApplicationReply;
         _terminalReply = terminalReply;
         _joinReply = joinReply;
         TargetNodeGeneration = targetNodeGeneration;
@@ -963,10 +965,24 @@ internal struct MeshReceiveRecord
     public ActorDestroyCompletion? ActorDestroyCompletion => KindData as ActorDestroyCompletion;
     public MeshSendReadyData? SendReady => KindData as MeshSendReadyData;
 
-    internal Func<IReadOnlyList<Message>, SubmitResult>? CaptureReplyRoute() => _reply;
+    internal ZLinkManagedMeshNode.NativeApplicationReply? NativeApplicationReply =>
+        _replyRoute as ZLinkManagedMeshNode.NativeApplicationReply;
+
+    internal Func<IReadOnlyList<Message>, SubmitResult>? CaptureReplyRoute() =>
+        _replyRoute switch
+        {
+            Func<IReadOnlyList<Message>, SubmitResult> callback => callback,
+            ZLinkManagedMeshNode.NativeApplicationReply native => native.SubmitParts,
+            _ => null,
+        };
 
     public SubmitResult Reply(IReadOnlyList<Message> parts) =>
-        _reply?.Invoke(parts) ?? SubmitResult.Terminated;
+        _replyRoute switch
+        {
+            Func<IReadOnlyList<Message>, SubmitResult> callback => callback(parts),
+            ZLinkManagedMeshNode.NativeApplicationReply native => native.SubmitParts(parts),
+            _ => SubmitResult.Terminated,
+        };
 
     public SubmitResult ReplyTerminal(RequestResult result, uint failureCode) =>
         _terminalReply?.Invoke(result, failureCode) ?? SubmitResult.Terminated;

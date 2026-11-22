@@ -13,6 +13,8 @@
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/mesh/service_mailbox.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
+#include "runtime/protocol/service_wire_codec.hpp"
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -178,23 +180,44 @@ TEST (EnvelopeAllocations, ViewDecodeBorrowsHeaderStringsWithoutAllocating)
     header.content_type = "application/" + std::string (128, 't');
     header.correlation_id = std::string (32, 'a');
     header.deadline = std::string (96, 'd');
+    header.error_code = std::string (48, 'e');
+    header.error_message = std::string (96, 'f');
+    header.source = std::string (48, 's');
+    header.topic = std::string (48, 'p');
+    header.flow_id = "0196bc30-dce0-7abc-8def-0123456789ab";
+    header.flow_origin = fw::flow_origin_t::inbound;
     auto wire = codec.encode_header (header);
-    auto decoded = codec.decode_header_view (wire, false);
+    auto decoded = codec.decode_header_view (wire, true);
     ASSERT_TRUE (decoded);
     EXPECT_EQ (decoded.value ().channel_name, header.channel_name);
     EXPECT_EQ (decoded.value ().message_name, header.message_name);
     EXPECT_EQ (decoded.value ().content_type, header.content_type);
     EXPECT_EQ (decoded.value ().correlation_id, header.correlation_id);
     EXPECT_EQ (decoded.value ().deadline, header.deadline);
+    EXPECT_EQ (decoded.value ().error_code, header.error_code);
+    EXPECT_EQ (decoded.value ().error_message, header.error_message);
+    EXPECT_EQ (decoded.value ().source, header.source);
+    EXPECT_EQ (decoded.value ().topic, header.topic);
+    EXPECT_EQ (decoded.value ().flow_id, header.flow_id);
 
     // Mesh receive passes a rejection slot; an accepted header must not be copied into it.
     std::optional<decltype (decoded)> measured;
     std::optional<msg::envelope_header_t> rejected;
     EXPECT_EQ (count_allocations (
-                 [&] { measured.emplace (codec.decode_header_view (wire, false, &rejected)); }),
+                 [&] { measured.emplace (codec.decode_header_view (wire, true, &rejected)); }),
                0u);
     ASSERT_TRUE (*measured);
     EXPECT_FALSE (rejected.has_value ());
+    EXPECT_FALSE (codec.decode_header_view (wire, false).value ().flow_id);
+
+    const auto snapshot = measured->value ();
+    std::memset (wire.bytes ().data (), 0, wire.size ());
+    wire = zlink::message_t{};
+    EXPECT_EQ (snapshot.error_code, header.error_code);
+    EXPECT_EQ (snapshot.error_message, header.error_message);
+    EXPECT_EQ (snapshot.source, header.source);
+    EXPECT_EQ (snapshot.topic, header.topic);
+    EXPECT_EQ (snapshot.flow_id, header.flow_id);
 }
 
 TEST (EnvelopeAllocations, TypedAndErasedEncodingPreservesHeaders)
@@ -369,7 +392,7 @@ TEST (EnvelopeAllocations, HeaderEncodeAndDecodeMessageAllocations)
     });
     std::printf ("header message allocations per 10: encode=%zu decode=%zu\n", encode_allocations,
                  decode_allocations);
-    EXPECT_EQ (encode_allocations, 10u);
+    EXPECT_EQ (encode_allocations, 0u);
     EXPECT_EQ (decode_allocations, 50u);
 }
 
@@ -409,9 +432,7 @@ TEST (EnvelopeHeaderMicro, FixedAndChangingCorrelation)
                  static_cast<unsigned long long> (checksum));
 }
 
-// Container members (std::map metadata) may allocate even when empty, and how
-// many allocations that costs differs by standard library (MSVC allocates a
-// sentinel node). Measure a header whose strings fit inline as the baseline.
+// Measure header construction without heap-backed strings or metadata entries.
 std::size_t header_container_baseline ()
 {
     std::optional<msg::envelope_header_t> header;
@@ -613,6 +634,7 @@ TEST (EnvelopeL2Cost, RequestTargetAndResponseCosts)
                                   .deadline = "2026-11-14T00:00:00Z"};
     auto type = std::make_shared<const fw::detail::request_type_plan_t> (
       fw::detail::request_type_plan_t{header.content_type});
+    (void) codec.encode_header (header);
     auto outbound = header;
     std::optional<msg::message_parts_t> request;
     const auto request_allocations = count_allocations ([&] {
@@ -640,7 +662,7 @@ TEST (EnvelopeL2Cost, RequestTargetAndResponseCosts)
     EXPECT_EQ (decoded_response.value ().correlation_id, "42");
     std::printf ("request-target-response allocations: request=%zu target=%zu response=%zu\n",
                  request_allocations, target_allocations, response_allocations);
-    EXPECT_EQ (request_allocations, 2u);
+    EXPECT_EQ (request_allocations, 1u);
     EXPECT_EQ (target_allocations, 0u);
     EXPECT_EQ (response_allocations, 1u);
 }
@@ -655,30 +677,34 @@ struct protobuf_request_payload_t
 TEST (EnvelopeL2Cost, ProductionNodeRequestKeepsNamesAndCompletes)
 {
     fw::serializer_registry_t serializers;
+    const std::string content_type = "application/" + std::string (117, 'x');
     serializers.add<protobuf_request_payload_t> (
       [] (const protobuf_request_payload_t &) { return fw::encoded_payload_t::from_string ("7"); },
-      [] (const fw::encoded_payload_t &) { return protobuf_request_payload_t{}; },
-      "application/json");
+      [] (const fw::encoded_payload_t &) { return protobuf_request_payload_t{}; }, content_type);
     auto builder = fw::test::runtime_failure_builder ();
     auto runtime = fw::detail::channel_runtime_t::from (builder.message_bus ());
     runtime.bind_serializers (serializers);
     const std::string channel = "protobuf-request-channel-with-a-long-production-name";
     const auto target = zlink::routing_id_t::from ("n");
     unsigned received = 0;
+    std::size_t fixed_text_allocations = 0;
     auto completed =
       [] (msg::message_parts_t parts) -> fw::request_task_t<fw::result_t<msg::message_parts_t>> {
         co_return fw::result_t<msg::message_parts_t>::success (std::move (parts));
     };
     runtime.bind_mesh_node_transport (
       channel, {}, [&] (const auto &, auto parts, auto, auto receiver) {
+          fixed_text_allocations = fw::tests::tracked_allocation_count;
           const auto decoded = msg::envelope_codec_t{}.decode_header_view (parts, false);
           ASSERT_TRUE (decoded);
           EXPECT_EQ (decoded.value ().channel_name, channel);
           EXPECT_EQ (decoded.value ().message_name, protobuf_request_payload_t::packet_name);
-          EXPECT_EQ (decoded.value ().content_type, "application/json");
+          EXPECT_EQ (decoded.value ().content_type, content_type);
           EXPECT_EQ (decoded.value ().kind, msg::message_kind_t::request);
           EXPECT_TRUE (decoded.value ().deadline);
           EXPECT_FALSE (decoded.value ().correlation_id.empty ());
+          const auto canonical = msg::envelope_codec_t{}.encode_header (decoded.value ());
+          EXPECT_TRUE (std::ranges::equal (parts.part_bytes (0), canonical.bytes ()));
           ++received;
           fw::detail::channel_reply_writer_t writer;
           auto reply = writer.reply_raw_envelope (
@@ -687,12 +713,44 @@ TEST (EnvelopeL2Cost, ProductionNodeRequestKeepsNamesAndCompletes)
           receiver.observe (completed (std::move (reply)));
       });
     auto client = builder.route_client (serializers);
-    const auto result = client.request_to_node (channel, target, protobuf_request_payload_t{})
-                          .async<protobuf_request_payload_t> ()
-                          .result ();
-    ASSERT_TRUE (result);
-    EXPECT_EQ (result.value ().value, 7);
-    EXPECT_EQ (received, 1u);
+    const auto request = [&] {
+        auto result = client.request_to_node (channel, target, protobuf_request_payload_t{})
+                        .async<protobuf_request_payload_t> ()
+                        .result ();
+        EXPECT_TRUE (result);
+        if (result)
+            EXPECT_EQ (result.value ().value, 7);
+    };
+    request ();
+    (void) count_allocations (request, content_type.size () + 1);
+    std::printf ("registered request media-type allocations=%zu\n", fixed_text_allocations);
+    EXPECT_EQ (fixed_text_allocations, 0u);
+    EXPECT_EQ (received, 2u);
+}
+
+TEST (EnvelopeL2Cost, DeferredServicePackingDoesNotAllocateAHeaderWriter)
+{
+    msg::client_call_codec_t codec;
+    const auto type = std::make_shared<const fw::detail::request_type_plan_t> (
+      fw::detail::request_type_plan_t{"application/json"});
+    auto header = codec.create_envelope (msg::message_kind_t::request, "mesh", "packet");
+    auto parts = codec.encode_service_payload_parts (
+      std::move (header), fw::encoded_payload_t::from_string ("7"), type);
+    std::optional<msg::message_parts_t> retained;
+    const auto copies = count_allocations ([&] { retained.emplace (parts); });
+    std::printf ("deferred service encoder copy allocations=%zu\n", copies);
+    EXPECT_EQ (copies, 0u);
+    auto application = std::move (parts).take_application_payload ();
+    zlink::message_t frame;
+    const auto allocations = count_allocations (
+      [&] { frame = fw::runtime::protocol::encode_application_payload_message (application); });
+    std::printf ("deferred service packing allocations=%zu\n", allocations);
+    EXPECT_EQ (allocations, 0u);
+    EXPECT_TRUE (frame.valid ());
+    auto retained_application = std::move (*retained).take_application_payload ();
+    auto retained_frame =
+      fw::runtime::protocol::encode_application_payload_message (retained_application);
+    EXPECT_TRUE (std::ranges::equal (frame.bytes (), retained_frame.bytes ()));
 }
 
 TEST (EnvelopeAllocations, ReplyInitializesOnlyItsFinalFields)
@@ -727,9 +785,8 @@ TEST (EnvelopeAllocations, MailboxRecordDoesNotConstructAnUnusedContentType)
     alignas (record_t) std::byte actual_storage[sizeof (record_t)];
     header_t *header = nullptr;
     record_t *actual = nullptr;
-    // The baseline is the record's header member constructed the same way, alone. An empty
-    // std::map allocates its head node on MSVC and not on libstdc++, so the count is the
-    // platform's container cost; a default content type string would add to the record only.
+    // Construct the same header directly to isolate the cost of the mailbox record.
+    // A default content type string would add to the record only.
     const auto container_allocations = count_allocations (
       [&] { header = ::new (static_cast<void *> (header_storage)) header_t{.content_type = {}}; });
     const auto allocations =
@@ -840,6 +897,30 @@ TEST (EnvelopeDeadline, IntegerUtcMatchesCalendarBoundaries)
             }
         }
     }
+}
+
+TEST (EnvelopeDeadline, SameSecondEncodingDoesNotAllocateTemporaryText)
+{
+    using namespace std::chrono;
+    const auto second = sys_days (year (2026) / 11 / 21) + hours (8);
+    auto first = msg::format_utc_deadline (second + milliseconds (1));
+    auto second_text = msg::format_utc_deadline (second + milliseconds (999));
+    EXPECT_EQ (first, second_text);
+    EXPECT_EQ (msg::format_utc_deadline (second + seconds (1)), "2026-11-21T08:00:01Z");
+    msg::envelope_header_t header{
+      .channel_name = "mesh", .message_name = "packet", .correlation_id = "1"};
+    std::array<char, 20> deadline;
+    std::copy (first.begin (), first.end (), deadline.begin ());
+    header.deadline = msg::header_text_t (deadline);
+    const msg::envelope_codec_t codec;
+    (void) codec.encode_header (header);
+    zlink::message_t encoded;
+    const auto allocations = count_allocations ([&] { encoded = codec.encode_header (header); });
+    std::printf ("warmed deadline header allocations=%zu\n", allocations);
+    EXPECT_EQ (allocations, 0u);
+    auto decoded = codec.decode_header (encoded);
+    ASSERT_TRUE (decoded);
+    EXPECT_EQ (decoded.value ().deadline, first);
 }
 
 TEST (EnvelopeAllocations, DecodedHeadersRetainValuesAcrossCopiesAndSuspension)

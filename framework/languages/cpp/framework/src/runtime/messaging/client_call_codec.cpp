@@ -36,6 +36,15 @@ static std::array<char, 20> deadline_bytes (std::chrono::system_clock::time_poin
     using namespace std::chrono;
     // Match the former time_point_cast/to_time_t truncation before splitting UTC fields.
     const auto seconds = time_point_cast<std::chrono::seconds> (deadline);
+    struct deadline_second_t
+    {
+        sys_seconds second = sys_seconds::min ();
+        std::array<char, 20> bytes{};
+    };
+    thread_local deadline_second_t cached;
+    if (seconds == cached.second)
+        return cached.bytes;
+
     const auto day = floor<days> (seconds);
     const year_month_day date (day);
     const hh_mm_ss clock (seconds - day);
@@ -53,7 +62,8 @@ static std::array<char, 20> deadline_bytes (std::chrono::system_clock::time_poin
     write (11, 2, static_cast<unsigned> (clock.hours ().count ()));
     write (14, 2, static_cast<unsigned> (clock.minutes ().count ()));
     write (17, 2, static_cast<unsigned> (clock.seconds ().count ()));
-    return output;
+    cached = {seconds, output};
+    return cached.bytes;
 }
 
 std::string format_utc_deadline (std::chrono::system_clock::time_point deadline)
@@ -70,23 +80,27 @@ message_parts_t client_call_codec_t::encode_payload_parts (const envelope_header
     return message_parts_t (_codec.encode_header (header, content_type), std::move (body));
 }
 
-message_parts_t client_call_codec_t::encode_payload_parts (
-  envelope_header_t &&header,
-  encoded_payload_t payload,
-  std::shared_ptr<const detail::request_type_plan_t> type) const
+message_parts_t
+client_call_codec_t::encode_payload_parts (envelope_header_t &&header,
+                                           encoded_payload_t payload,
+                                           std::shared_ptr<const detail::request_type_plan_t> type,
+                                           std::shared_ptr<const std::string> channel_fields) const
 {
     auto body = detail::encoded_payload_to_raw (std::move (payload));
-    return message_parts_t (_codec.encode_header (header, *type), std::move (body));
+    return message_parts_t (
+      _codec.encode_header (header, *type, channel_fields ? *channel_fields : std::string_view{}),
+      std::move (body));
 }
 
 message_parts_t client_call_codec_t::encode_service_payload_parts (
   envelope_header_t &&header,
   encoded_payload_t payload,
-  std::shared_ptr<const detail::request_type_plan_t> type) const
+  std::shared_ptr<const detail::request_type_plan_t> type,
+  std::shared_ptr<const std::string> channel_fields) const
 {
     auto body = detail::encoded_payload_to_raw (std::move (payload));
-    return message_parts_t::from_envelope_encoder (
-      _codec.prepare_service_payload (std::move (header), std::move (body), std::move (type)));
+    return message_parts_t::from_envelope_encoder (_codec.prepare_service_payload (
+      std::move (header), std::move (body), std::move (type), std::move (channel_fields)));
 }
 
 envelope_header_t client_call_codec_t::create_envelope (message_kind_t kind,
@@ -97,8 +111,6 @@ envelope_header_t client_call_codec_t::create_envelope (message_kind_t kind,
                                                         std::optional<std::string> source,
                                                         std::string content_type) const
 {
-    // One prvalue: a named local could be moved on return (no NRVO), and a
-    // moved std::map allocates a new head node in MSVC's STL.
     return envelope_header_t{
       .kind = kind,
       .channel_name = std::move (channel_name),

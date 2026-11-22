@@ -118,6 +118,62 @@ class Harness {
     );
     this.refresh();
   }
+  async clockVM() {
+    if (!this.clockGuest) {
+      const { ClockVM } = require("./clock-vm.cjs");
+      this.clockGuest = new ClockVM(logRoot, "host-clock");
+      await this.clockGuest.start();
+    }
+    // Each scenario starts at the observer's realtime; no time daemon runs in the guest.
+    await this.clockGuest.observe(Date.now());
+    return this.clockGuest;
+  }
+  guestStore(vm, f) {
+    return this.store(
+      f.namespace,
+      vm.endpoints(this.cluster.endpoints),
+      undefined,
+      `${this.language}-guest`,
+      vm.command(this.adapters[this.language]),
+    );
+  }
+  async guestManager(vm, f) {
+    const file = `/tmp/${f.namespace}.json`;
+    const pid = `/tmp/${f.namespace}.pid`;
+    const options = this.options(
+      f.namespace,
+      vm.endpoints(this.cluster.endpoints),
+    );
+    await vm.exec({
+      command: process.execPath,
+      args: [
+        "-e",
+        "require('node:fs').writeFileSync(process.argv[1], process.argv[2])",
+        file,
+        JSON.stringify(options),
+      ],
+    });
+    const config = vm.command({
+      command: "/bin/sh",
+      args: [
+        "-c",
+        '"$1" "$2" run --config "$3" & child=$!; echo "$child" > "$4"; wait "$child"',
+        "manager",
+        process.execPath,
+        path.join(this.pkg, "dist/admin.js"),
+        file,
+        pid,
+      ],
+    });
+    const task = this.manager(file, `${f.namespace}-guest`, {}, config);
+    task.stop = async () => {
+      await vm.exec({
+        command: "/bin/sh",
+        args: ["-c", 'kill -TERM "$(cat "$1")"', "stop", pid],
+      });
+    };
+    return task;
+  }
   async clusterCommand(action, ...args) {
     const result = await command(
       [this.harness, action, "--run-dir", this.run, ...args],
@@ -133,8 +189,13 @@ class Harness {
   ) {
     return { namespace, endpoints, operationTimeoutMs };
   }
-  store(namespace, endpoints, timeout, language = this.language) {
-    const config = this.adapters[language];
+  store(
+    namespace,
+    endpoints,
+    timeout,
+    language = this.language,
+    config = this.adapters[language],
+  ) {
     if (!config) throw new Error(`unregistered adapter: ${language}`);
     let client = this.clients.find((c) => c.language === language);
     if (!client) {
@@ -218,21 +279,26 @@ class Harness {
       ],
     });
   }
-  manager(file, label, env = {}) {
-    const task = child(
-      process.execPath,
-      [path.join(this.pkg, "dist/admin.js"), "run", "--config", file],
-      {
-        env: { ...process.env, ...env },
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
+  manager(
+    file,
+    label,
+    env = {},
+    config = {
+      command: process.execPath,
+      args: [path.join(this.pkg, "dist/admin.js"), "run", "--config", file],
+    },
+  ) {
+    const task = child(config.command, config.args, {
+      env: { ...process.env, ...env },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     task.label = label;
     this.managers.push(task);
     return task;
   }
   async stopManager(task) {
-    if (task.running.exitCode === null && task.running.signalCode === null)
+    if (task.stop) await task.stop();
+    else if (task.running.exitCode === null && task.running.signalCode === null)
       task.running.kill();
     const result = await task.exited;
     fs.writeFileSync(
@@ -307,6 +373,9 @@ class Harness {
     const failures = [];
     for (const action of [
       () => this.endCase(),
+      async () => {
+        if (this.clockGuest) await this.clockGuest.close();
+      },
       async () => {
         for (const task of [...activeChildren]) {
           task.running.kill();

@@ -240,7 +240,10 @@ Framework는 다음 조건을 사용해 target을 선택한다.
 [Location runtime §4.1](../05-location-relocation/01-location-runtime.ko.md#41-대상-descriptor의-owner-lease-검증)의
 owner lease 검증이다). 없지만 조건 2~4를 만족하고 placement weight가 양수인 node가 있으면 create operation의
 남은 deadline 안에서 기존 discovery 갱신을 기다려 다시 판정한다. 요청마다 Store를 다시 읽는 대기를 두지
-않는다. 둘 다 없으면 §5.1의 `Unavailable`로 끝낸다. Deadline이 끝나면 `DeadlineExceeded`다.
+않는다. 둘 다 없으면 `Unavailable`로 끝내기 전에 그 Mesh의 discovery를 Store에서 한 번
+새로 읽고, 같은 남은 deadline 안에서 조건 1~5를 다시 판정한다. 새로 읽은 결과는 기존 discovery
+관측에 반영해 다른 판정도 같은 결과를 본다. 방금 `Serving`이 된 replacement처럼 다음 discovery 갱신
+전에는 관측에 없는 node를 놓치지 않기 위해서다. 다시 판정해도 둘 다 없으면 §5.1의 `Unavailable`로 끝낸다. Deadline이 끝나면 `DeadlineExceeded`다.
 
 Framework는 선택한 node에 object를 배치할 자리를 예약하여 다른 생성 작업과
 capacity를 중복 사용하지 않게 한다. Application에 target RID나 owner token을

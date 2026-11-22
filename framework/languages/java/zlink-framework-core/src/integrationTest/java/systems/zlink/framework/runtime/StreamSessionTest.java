@@ -41,6 +41,7 @@ import systems.zlink.framework.streams.ZLinkSessionDispatchContext;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
 import systems.zlink.framework.streams.ZLinkStreamError;
 import systems.zlink.framework.streams.ZLinkStreamMessageKind;
+import systems.zlink.framework.testsupport.ZLinkStreamTestFrames;
 import systems.zlink.framework.testsupport.ZLinkTestRedis;
 
 import java.io.InputStream;
@@ -157,13 +158,12 @@ final class StreamSessionTest {
 
             client.getOutputStream().write(frame(requestHeader(11L, "MustFail"), bytes("bad")));
             client.getOutputStream().flush();
-            assertErrorReply(client.getInputStream(), 11L, "internal_failure", "public failure");
+            assertErrorReply(client, 11L, "internal_failure", "public failure");
 
             client.getOutputStream()
                     .write(frame(requestHeader(13L, "MustFailFramework"), bytes("bad")));
             client.getOutputStream().flush();
-            assertErrorReply(
-                    client.getInputStream(), 13L, "unavailable", "application framework failure");
+            assertErrorReply(client, 13L, "unavailable", "application framework failure");
 
             client.getOutputStream().write(frame(requestHeader(12L, "Ping"), bytes("again")));
             client.getOutputStream().flush();
@@ -757,8 +757,7 @@ final class StreamSessionTest {
         options.addLocationStore(new ZLinkInMemoryLocationStore());
         {
             var node = options.addRouteMesh("game");
-            node.listen("inproc://stream-play-" + System.nanoTime())
-                    .setRoutingId(RoutingId.from("play-node"));
+            node.listen("inproc://stream-play-" + System.nanoTime());
             node.objects().server().addEntrySpot(GameEntrySpot.class);
             node.objects()
                     .server()
@@ -774,9 +773,13 @@ final class StreamSessionTest {
             stream.enableActorDispatch();
             stream.registerSession(ActorRelaySession.class);
         }
-        ;
-
-        return RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory());
+        var runtime =
+                RuntimeTestSupport.startFramework(options, new ZLinkJavaBackendAdapterFactory());
+        if (!runtime.isReady()) {
+            runtime.close();
+            throw new AssertionError("Actor relay fixture must start in Serving");
+        }
+        return runtime;
     }
 
     public static final class GameSpot implements ZLinkSpot<ZLinkActor> {
@@ -1219,123 +1222,65 @@ final class StreamSessionTest {
 
     private static void assertReply(Socket client, long requestSeq, String expectedBody)
             throws Exception {
-        InputStream input = client.getInputStream();
-        java.io.OutputStream output = client.getOutputStream();
-        while (true) {
-            byte[] prefix = input.readNBytes(6);
-            assertEquals(6, prefix.length);
-            ByteBuffer prefixBuffer = ByteBuffer.wrap(prefix);
-            int headerSize = Short.toUnsignedInt(prefixBuffer.getShort());
-            int bodySize = prefixBuffer.getInt();
-            byte[] header = readExact(input, headerSize);
-            byte[] body = readExact(input, bodySize);
-
-            ZLinkStreamHeader decoded = ZLinkStreamHeaderCodec.decodeOrPlain(header);
-            if (decoded.kind() == ZLinkStreamMessageKind.CONTROL
-                    && HEARTBEAT_PING_PACKET.equals(decoded.packetName())) {
-                assertEquals(0, body.length);
-                ZLinkStreamHeader pong =
-                        new ZLinkStreamHeader(
-                                ZLinkStreamMessageKind.CONTROL,
-                                ZLinkStreamCodec.RAW,
-                                EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
-                                Optional.empty(),
-                                HEARTBEAT_PONG_PACKET,
-                                Map.of());
-                output.write(frame(ZLinkStreamHeaderCodec.encode(pong), new byte[0]));
-                output.flush();
-                continue;
-            }
-            assertEquals(
-                    3,
-                    Byte.toUnsignedInt(header[1]),
-                    () ->
-                            "unexpected frame kind header="
-                                    + ZLinkStreamHeaderCodec.decodeOrPlain(header)
-                                    + " body="
-                                    + new String(body, StandardCharsets.UTF_8));
-            assertEquals(0xF2, Byte.toUnsignedInt(header[0]));
-            assertEquals(requestSeq, ByteBuffer.wrap(header, 4, Long.BYTES).getLong());
-            assertEquals(expectedBody, new String(body, StandardCharsets.UTF_8));
-            return;
-        }
+        var frame = ZLinkStreamTestFrames.readSkippingHeartbeatPings(client);
+        byte[] header = frame.headerBytes();
+        byte[] body = frame.body();
+        assertEquals(
+                3,
+                Byte.toUnsignedInt(header[1]),
+                () ->
+                        "unexpected frame kind header="
+                                + frame.header()
+                                + " body="
+                                + new String(body, StandardCharsets.UTF_8));
+        assertEquals(0xF2, Byte.toUnsignedInt(header[0]));
+        assertEquals(requestSeq, ByteBuffer.wrap(header, 4, Long.BYTES).getLong());
+        assertEquals(expectedBody, new String(body, StandardCharsets.UTF_8));
     }
 
     private static void assertBoundControl(Socket client, String actorId) throws Exception {
-        InputStream input = client.getInputStream();
-        java.io.OutputStream output = client.getOutputStream();
-        while (true) {
-            byte[] prefix = readExact(input, 6);
-            ByteBuffer sizes = ByteBuffer.wrap(prefix);
-            byte[] headerBytes = readExact(input, Short.toUnsignedInt(sizes.getShort()));
-            byte[] body = readExact(input, sizes.getInt());
-            ZLinkStreamHeader header = ZLinkStreamHeaderCodec.decodeOrPlain(headerBytes);
-            if (header.kind() == ZLinkStreamMessageKind.CONTROL
-                    && HEARTBEAT_PING_PACKET.equals(header.packetName())) {
-                assertEquals(0, body.length);
-                ZLinkStreamHeader pong =
-                        new ZLinkStreamHeader(
-                                ZLinkStreamMessageKind.CONTROL,
-                                ZLinkStreamCodec.RAW,
-                                EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
-                                Optional.empty(),
-                                HEARTBEAT_PONG_PACKET,
-                                Map.of());
-                output.write(frame(ZLinkStreamHeaderCodec.encode(pong), new byte[0]));
-                output.flush();
-                continue;
-            }
-            assertEquals(
-                    ZLinkStreamMessageKind.CONTROL,
-                    header.kind(),
-                    () ->
-                            "unexpected stream frame header="
-                                    + header
-                                    + " bodyUtf8="
-                                    + new String(body, StandardCharsets.UTF_8)
-                                    + " bodyHex="
-                                    + java.util.HexFormat.of().formatHex(body));
-            assertEquals(
-                    "$zlink.actor.bound",
-                    header.packetName(),
-                    () ->
-                            "unexpected control packet header="
-                                    + header
-                                    + " bodyUtf8="
-                                    + new String(body, StandardCharsets.UTF_8)
-                                    + " bodyHex="
-                                    + java.util.HexFormat.of().formatHex(body));
-            ByteBuffer payload = ByteBuffer.wrap(body);
-            assertEquals(1, Byte.toUnsignedInt(payload.get()));
-            assertTrue(Short.toUnsignedInt(payload.getShort()) > 0);
-            int idLength = Byte.toUnsignedInt(payload.get());
-            assertEquals(idLength, payload.remaining());
-            assertEquals(actorId, new String(body, 4, idLength, StandardCharsets.UTF_8));
-            return;
-        }
+        var frame = ZLinkStreamTestFrames.readSkippingHeartbeatPings(client);
+        var header = frame.header();
+        byte[] body = frame.body();
+        assertEquals(
+                ZLinkStreamMessageKind.CONTROL,
+                header.kind(),
+                () ->
+                        "unexpected stream frame header="
+                                + header
+                                + " bodyUtf8="
+                                + new String(body, StandardCharsets.UTF_8)
+                                + " bodyHex="
+                                + java.util.HexFormat.of().formatHex(body));
+        assertEquals(
+                "$zlink.actor.bound",
+                header.packetName(),
+                () ->
+                        "unexpected control packet header="
+                                + header
+                                + " bodyUtf8="
+                                + new String(body, StandardCharsets.UTF_8)
+                                + " bodyHex="
+                                + java.util.HexFormat.of().formatHex(body));
+        ByteBuffer payload = ByteBuffer.wrap(body);
+        assertEquals(1, Byte.toUnsignedInt(payload.get()));
+        assertTrue(Short.toUnsignedInt(payload.getShort()) > 0);
+        int idLength = Byte.toUnsignedInt(payload.get());
+        assertEquals(idLength, payload.remaining());
+        assertEquals(actorId, new String(body, 4, idLength, StandardCharsets.UTF_8));
     }
 
     private static void assertErrorReply(
-            InputStream input, long requestSeq, String expectedCode, String expectedMessage)
+            Socket client, long requestSeq, String expectedCode, String expectedMessage)
             throws Exception {
-        byte[] prefix = input.readNBytes(6);
-        assertEquals(6, prefix.length);
-        ByteBuffer prefixBuffer = ByteBuffer.wrap(prefix);
-        int headerSize = Short.toUnsignedInt(prefixBuffer.getShort());
-        int bodySize = prefixBuffer.getInt();
-        byte[] header = readExact(input, headerSize);
-        byte[] body = readExact(input, bodySize);
-
-        if (Byte.toUnsignedInt(header[1]) == 5) {
-            assertErrorReply(input, requestSeq, expectedCode, expectedMessage);
-            return;
-        }
+        var frame = ZLinkStreamTestFrames.readSkippingHeartbeatPings(client);
+        byte[] header = frame.headerBytes();
         assertEquals(0xF2, Byte.toUnsignedInt(header[0]));
         assertEquals(4, Byte.toUnsignedInt(header[1]));
         assertEquals(1, Byte.toUnsignedInt(header[2]));
         assertEquals(requestSeq, ByteBuffer.wrap(header, 4, Long.BYTES).getLong());
         assertEquals(0, Byte.toUnsignedInt(header[12]));
-        var error = new ObjectMapper().readTree(body);
+        var error = new ObjectMapper().readTree(frame.body());
         assertEquals(expectedCode, error.get("code").asText());
         assertEquals(expectedMessage, error.get("message").asText());
     }

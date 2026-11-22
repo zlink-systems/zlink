@@ -467,16 +467,16 @@ final class ZLinkStreamPhysicalSubmitOwnershipTest {
                                 generation,
                                 sequence,
                                 ignoredHeader,
-                                ignoredPayload) -> {
+                                ignoredPayload,
+                                submitReply) -> {
                             assertEquals(RoutingId.from("actor-node"), sourceNode);
                             assertEquals(SESSION, sourceSession);
                             assertEquals(1L, generation);
                             assertEquals(1L, sequence);
-                            return CompletableFuture.completedFuture(
-                                    Optional.of(
-                                            new ZLinkSessionActorsRuntime.LocalActorReply(
-                                                    Message.from("reply"),
-                                                    ZLinkStreamCodec.PROTOBUF)));
+                            submitReply.accept(
+                                    new ZLinkSessionActorsRuntime.LocalActorReply(
+                                            Message.from("reply"), ZLinkStreamCodec.PROTOBUF));
+                            return CompletableFuture.completedFuture(null);
                         },
                         true,
                         ZLinkStreamCodec.JSON,

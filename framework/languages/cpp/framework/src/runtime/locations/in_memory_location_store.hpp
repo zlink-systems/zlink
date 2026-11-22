@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 #pragma once
 #include "runtime/locations/actor_authority_payload.hpp"
+#include "runtime/locations/authority_aggregate_relocation.hpp"
 #include "runtime/locations/relocation_authority_payload.hpp"
 
 #include "../../../../../../runtime/protocol/generated/cpp/service_wire_constants.hpp"
@@ -483,9 +484,6 @@ class in_memory_location_repository_t : public location_repository_t
         return _lane.run_task ([this, key = std::move (key)] () mutable {
             const auto now = clock_t::now ();
             const auto found = _authorities.find (key.value);
-            retain_reclaim_observation (key.value, found == _authorities.end ()
-                                                     ? std::nullopt
-                                                     : std::optional{found->second.owner});
             if (found == _authorities.end ())
                 return completed (authority_read_result_t{authority_missing_t{now}});
             auto snapshot = found->second;
@@ -516,8 +514,6 @@ class in_memory_location_repository_t : public location_repository_t
             auto found = _authorities.find (key.value);
             if (found == _authorities.end ()
                 || found->second.store_version != expected_store_version) {
-                if (found == _authorities.end ())
-                    retain_reclaim_observation (key.value);
                 authority_read_result_t current =
                   found == _authorities.end () ? authority_read_result_t{authority_missing_t{now}}
                                                : authority_read_result_t{found->second};
@@ -556,7 +552,6 @@ class in_memory_location_repository_t : public location_repository_t
                 const auto store_version = next_store_version ();
                 apply_capacity_bundle (_active_by_placement, found->second.allocation.target,
                                        found->second.allocation.capacity_bundle, false);
-                remove_reclaim_observation (key.value, found->second.owner);
                 _authorities.erase (found);
                 return completed (
                   authority_compare_exchange_result_t{authority_deleted_t{store_version, now}});
@@ -602,6 +597,8 @@ class in_memory_location_repository_t : public location_repository_t
                 auto snapshot = found->second;
                 snapshot.store_version = next_store_version ();
                 snapshot.payload = std::move (retarget->payload);
+                if (retarget->replace_aggregate)
+                    snapshot.aggregate = *retarget->replace_aggregate;
                 snapshot.authority_owner_generation = _authority_owner_generation;
                 snapshot.owner = retarget->target.owner;
                 snapshot.store_now = now;
@@ -660,6 +657,7 @@ class in_memory_location_repository_t : public location_repository_t
                   authority_compare_exchange_result_t{authority_generation_exhausted_t{}});
 
             std::vector<std::byte> payload;
+            auto aggregate = found->second.aggregate;
             if (auto *reincarnate = std::get_if<authority_reincarnate_t> (&mutation)) {
                 if (!issue_generations (
                       {{&_object_generation, 1}, {&_authority_owner_generation, 1}}))
@@ -669,12 +667,15 @@ class in_memory_location_repository_t : public location_repository_t
                 owner_generation = _authority_owner_generation;
                 payload = std::move (reincarnate->payload);
             } else {
-                payload = std::move (std::get<authority_put_t> (mutation).payload);
+                auto &put = std::get<authority_put_t> (mutation);
+                payload = std::move (put.payload);
+                if (put.replace_aggregate)
+                    aggregate = std::move (*put.replace_aggregate);
             }
-            authority_snapshot_t snapshot{next_store_version (), std::move (payload),
-                                          object_generation,     owner_generation,
-                                          std::move (owner),     now,
-                                          std::move (allocation)};
+            authority_snapshot_t snapshot{
+              next_store_version (),  std::move (payload), object_generation,
+              owner_generation,       std::move (owner),   now,
+              std::move (allocation), std::nullopt,        std::move (aggregate)};
             _authorities[key.value] = snapshot;
             return completed (
               authority_compare_exchange_result_t{authority_stored_t{std::move (snapshot)}});
@@ -898,9 +899,6 @@ class in_memory_location_repository_t : public location_repository_t
                           object_reserve_conflict_t{authority_missing_t{now}}});
                 }
                 auto authority = _authorities.find (key);
-                retain_reclaim_observation (key, authority != _authorities.end ()
-                                                   ? std::optional{authority->second.owner}
-                                                   : std::nullopt);
                 if (authority != _authorities.end ()
                     && !authority_matches_creation_type (authority->second, request))
                     return completed (
@@ -1234,6 +1232,8 @@ class in_memory_location_repository_t : public location_repository_t
                   if (participant.owner_transition
                       == authority_generation_transition_t::new_owner) {
                       snapshot.authority_owner_generation = ++next_owner_generation;
+                      snapshot.aggregate =
+                        authority_aggregate_codec::without_capture (snapshot.aggregate);
                       snapshot.owner = aggregate->second.request.target_owner;
                       const auto source_allocation = snapshot.allocation;
                       snapshot.allocation.target = target;
@@ -1429,10 +1429,8 @@ class in_memory_location_repository_t : public location_repository_t
             return false;
         const auto &target = snapshot.allocation.target;
         const bool owner_live = owner_token_is_live (snapshot.owner, now);
-        if (active && owner_live) {
-            reclaim_wait_elapsed (key, snapshot.owner, true);
+        if (active && owner_live)
             return false;
-        }
         std::vector<std::string> members;
         if (authority_mutation_locked_on_lane (key)) {
             if (active)
@@ -1442,7 +1440,7 @@ class in_memory_location_repository_t : public location_repository_t
         }
         if (active) {
             const auto actor = decode_direct_actor_authority_payload (snapshot.payload);
-            if (actor && actor->has_relocation_state)
+            if (snapshot.aggregate || (actor && actor->has_relocation_state))
                 throw framework_exception_t (framework_error_kind_t::unavailable,
                                              "Object authority requires relocation recovery");
             if (!discarded
@@ -1474,7 +1472,7 @@ class in_memory_location_repository_t : public location_repository_t
                                                  "Instance Spot is not steady Ready");
             }
         }
-        const bool wait_elapsed = !active || reclaim_wait_elapsed (key, snapshot.owner, false);
+        const bool wait_elapsed = !active || authority_release_wait_elapsed (snapshot.owner);
         if (!discarded && active
             && snapshot.allocation.object_kind == placement_object_kind_t::user_spot)
             members = ended_spot_members_on_lane (key, snapshot, request->key.global_id, now);
@@ -1499,13 +1497,11 @@ class in_memory_location_repository_t : public location_repository_t
             reservation->second.status = reservation_status_t::aborted;
         }
         _authorities.erase (key);
-        retain_reclaim_observation (key);
         for (const auto &member_key : members) {
             const auto member = _authorities.find (member_key);
             apply_capacity_bundle (_active_by_placement, member->second.allocation.target,
                                    member->second.allocation.capacity_bundle, false);
             _authorities.erase (member);
-            retain_reclaim_observation (member_key);
         }
         return true;
     }
@@ -1536,17 +1532,16 @@ class in_memory_location_repository_t : public location_repository_t
                 continue;
             if (authority.allocation.state != placement_allocation_state_t::active
                 || member->state != actor_authority_state_t::ready || member->has_relocation_state
-                || authority_mutation_locked_on_lane (member_key))
+                || authority.aggregate || authority_mutation_locked_on_lane (member_key))
                 throw framework_exception_t (
                   framework_error_kind_t::unavailable,
                   "User Spot still has a relocating or unactivated member");
-            const bool live = owner_token_is_live (authority.owner, now);
-            if (!reclaim_wait_elapsed (member_key, authority.owner, live))
-                wait_elapsed = false;
-            if (live)
+            if (owner_token_is_live (authority.owner, now))
                 throw framework_exception_t (
                   framework_error_kind_t::unavailable,
                   "User Spot still has a member with a live owner lease");
+            if (!authority_release_wait_elapsed (authority.owner))
+                wait_elapsed = false;
             members.push_back (member_key);
             batch_keys.insert ("authority:" + member_key);
             batch_keys.insert ("aggregate-lock:" + member_key);

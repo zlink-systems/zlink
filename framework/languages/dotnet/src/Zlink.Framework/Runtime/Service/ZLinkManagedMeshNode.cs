@@ -7605,7 +7605,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             _ => throw new InvalidOperationException(),
         };
         var replyHandler = request
-            ? CreateNativeReplyHandler(sourceRid, received.Reply(), application.Correlation)
+            ? new NativeApplicationReply(this, received.Reply(), application.Correlation)
             : null;
         var applicationRecord = new MeshReceiveRecord(
             kind,
@@ -7628,8 +7628,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             0,
             0,
             null,
-            replyHandler,
-            applicationPayloadView: parts
+            applicationPayloadView: parts,
+            nativeApplicationReply: replyHandler
         );
         applicationRecord.ApplicationPayloadBytes = SumParts(parts, 1);
         return EnqueueOwned(
@@ -7641,36 +7641,36 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         );
     }
 
-    // The request's one-shot native reply capability. Its capture lives in
-    // this method, so the send path of ProcessReceived allocates none of it.
-    private Func<IReadOnlyList<Message>, SubmitResult> CreateNativeReplyHandler(
-        RoutingId sourceRid,
-        ReplyOperation nativeReply,
+    internal sealed class NativeApplicationReply(
+        ZLinkManagedMeshNode node,
+        ReplyOperation reply,
         ulong correlation
     )
     {
-        var replied = 0;
-        return replyParts =>
+        private int _replied;
+
+        internal SubmitResult SubmitParts(IReadOnlyList<Message> parts) => Submit(parts, null);
+
+        internal SubmitResult SubmitFrame(Message frame) => Submit(null, frame);
+
+        private SubmitResult Submit(IReadOnlyList<Message>? parts, Message? frame)
         {
-            if (Interlocked.CompareExchange(ref replied, 1, 0) != 0)
+            if (Interlocked.CompareExchange(ref _replied, 1, 0) != 0)
                 return SubmitResult.InvalidState;
-            var (preparedReply, wire) = PrepareNativeTerminalReply(
-                sourceRid,
-                nativeReply,
+
+            using var packed = parts is { Count: > 0 }
+                ? ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage(parts)
+                : null;
+            frame ??= packed;
+            using var head = ZLinkServiceWireCodec.EncodeReplyMessage(
                 correlation,
-                RequestResult.Ok,
-                0,
-                replyParts
+                (int)RequestResult.Ok,
+                0
             );
-            try
-            {
-                return SubmitNativeTerminalReply(preparedReply);
-            }
-            finally
-            {
-                ZLinkMessageParts.DisposeAll(wire);
-            }
-        };
+            return node.SubmitNativeTerminalReply(
+                frame is null ? reply.Message(head) : reply.Messages(new[] { head, frame })
+            );
+        }
     }
 
     private bool ProcessCanonicalActorJoin(
@@ -12569,37 +12569,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             channelName: channelName ?? string.Empty
         );
         return SubmitResult.Ok;
-    }
-
-    private (ReplySubmitOperation Submit, Message[] Wire) PrepareNativeTerminalReply(
-        RoutingId targetRid,
-        ReplyOperation reply,
-        ulong correlation,
-        RequestResult result,
-        uint failureCode,
-        IReadOnlyList<Message> parts
-    )
-    {
-        var wire = new Message[parts.Count == 0 ? 1 : 2];
-        var created = 0;
-        try
-        {
-            wire[created++] = ZLinkServiceWireCodec.EncodeReplyMessage(
-                correlation,
-                (int)result,
-                failureCode
-            );
-            if (parts.Count != 0)
-                wire[created++] =
-                    ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage(parts);
-            return (reply.Messages(wire), wire);
-        }
-        catch
-        {
-            for (var index = 0; index < created; index++)
-                wire[index].Dispose();
-            throw;
-        }
     }
 
     private PendingNativeTerminalReply PrepareNativeReply(

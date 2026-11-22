@@ -819,6 +819,7 @@ public sealed class AutoConnectReconcilerTests
         await fixture.Store.ClaimLiveOwnerAsync("peer-owner-2", TimeSpan.FromMinutes(10));
         var restarted = Descriptor("r1", "tcp://r:1") with
         {
+            LifecycleGeneration = 2,
             OwnerId = "peer-owner-2",
             LeaseGeneration = 3,
         };
@@ -828,6 +829,7 @@ public sealed class AutoConnectReconcilerTests
         Assert.Equal("tcp://r:1", Assert.Single(fixture.Executor.Connected).Endpoint);
         Assert.Empty(fixture.Executor.Disconnected);
         Assert.Equal("peer-owner-2", Assert.Single(fixture.Reconciler.ActiveTargets).OwnerId);
+        Assert.Equal(2UL, Assert.Single(fixture.Executor.Refreshed).LifecycleGeneration);
     }
 
     [Fact]

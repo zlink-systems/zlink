@@ -335,7 +335,7 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
         }
     }
 
-    record Published(
+    public record Published(
             UUID aggregateId,
             long aggregateGeneration,
             long targetAttemptGeneration,
@@ -358,7 +358,7 @@ public final class ZLinkCanonicalRelocationAuthorityStateCodec {
             long applicationVersion,
             int sourceCleanupState,
             byte[] applicationPayload) {
-        Published {
+        public Published {
             applicationPayload = applicationPayload.clone();
         }
 

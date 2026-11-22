@@ -6106,17 +6106,19 @@ class actor_cutover_authority_t final
     using authority_publish_status_t =
       zlink::framework::runtime::stateful::authority_publish_status_t;
 
-    authority_publish_result_t publish (const object_ref_t &source,
-                                        const object_ref_t &target,
-                                        zlink::framework::location_owner_token_t target_owner,
-                                        zlink::framework::object_creation_target_t,
-                                        std::string relocation_reference,
-                                        std::uint32_t checksum_crc32c,
-                                        inventory_digest_t inventory_digest,
-                                        std::vector<std::byte> target_application_payload = {},
-                                        std::string expected_store_version = {},
-                                        zlink::framework::runtime::protocol::relocation_id_t = {},
-                                        zlink::framework::location_owner_token_t = {}) override
+    authority_publish_result_t
+    publish (const object_ref_t &source,
+             const object_ref_t &target,
+             zlink::framework::location_owner_token_t target_owner,
+             zlink::framework::object_creation_target_t,
+             std::string relocation_reference,
+             std::uint32_t checksum_crc32c,
+             inventory_digest_t inventory_digest,
+             std::vector<std::byte> target_application_payload = {},
+             std::string expected_store_version = {},
+             zlink::framework::runtime::protocol::relocation_id_t = {},
+             zlink::framework::location_owner_token_t = {},
+             const zlink::framework::runtime::protocol::relocation_prepare_t * = nullptr) override
     {
         if (on_publish)
             on_publish ();
@@ -7755,21 +7757,29 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
                 return {};
             return delegate.settle_source_relocation (fence, participants, preserve);
         }
-        stateful::authority_publish_result_t publish (const stateful::object_ref_t &source,
-                                                      const stateful::object_ref_t &target,
-                                                      location_owner_token_t owner,
-                                                      object_creation_target_t placement,
-                                                      std::string reference,
-                                                      std::uint32_t checksum,
-                                                      stateful::inventory_digest_t digest,
-                                                      std::vector<std::byte> payload,
-                                                      std::string version,
-                                                      runtime::protocol::relocation_id_t relocation,
-                                                      location_owner_token_t source_owner) override
+        stateful::authority_publish_result_t
+        publish (const stateful::object_ref_t &source,
+                 const stateful::object_ref_t &target,
+                 location_owner_token_t owner,
+                 object_creation_target_t placement,
+                 std::string reference,
+                 std::uint32_t checksum,
+                 stateful::inventory_digest_t digest,
+                 std::vector<std::byte> payload,
+                 std::string version,
+                 runtime::protocol::relocation_id_t relocation,
+                 location_owner_token_t source_owner,
+                 const runtime::protocol::relocation_prepare_t *prepare) override
         {
             return delegate.publish (source, target, std::move (owner), std::move (placement),
                                      std::move (reference), checksum, digest, std::move (payload),
-                                     std::move (version), relocation, std::move (source_owner));
+                                     std::move (version), relocation, std::move (source_owner),
+                                     prepare);
+        }
+        bool finish_relocation (const stateful::object_ref_t &target,
+                                const runtime::protocol::relocation_prepare_t &prepare) override
+        {
+            return delegate.finish_relocation (target, prepare);
         }
         std::optional<stateful::authority_relocation_reference_t>
         read (stateful::object_kind_t kind, const std::string &key) override

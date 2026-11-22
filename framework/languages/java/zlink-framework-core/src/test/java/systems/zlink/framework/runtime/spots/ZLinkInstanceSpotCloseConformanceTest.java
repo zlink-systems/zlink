@@ -672,24 +672,24 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                 store.deleteRequested.get(WAIT.toSeconds(), TimeUnit.SECONDS);
                 AtomicInteger terminalCount = new AtomicInteger();
                 var serializer = new ZLinkJsonMessageSerializer();
-                CompletableFuture<Throwable> terminal;
-                try (Message payload =
-                        Message.from(serializer.serialize(new PendingProbe()).bytes())) {
-                    terminal =
-                            ZLinkJavaReadyRouteTestAccess.rejectReadyRequest(
-                                    backend.mesh,
-                                    route,
-                                    true,
-                                    new ZLinkSpotRouteMessages(serializer)
-                                            .encodeRequest(
-                                                    MESH,
-                                                    Optional.of(PendingProbe.class.getSimpleName()),
-                                                    payload,
-                                                    null,
-                                                    Map.of(),
-                                                    null),
-                                    terminalCount);
-                }
+                // The request parts hold this payload, and raw ingress owns them: its rejection
+                // callback closes them. Closing the payload here as well double-closed the
+                // native handle (INVALID_HANDLE, #5355).
+                Message payload = Message.from(serializer.serialize(new PendingProbe()).bytes());
+                CompletableFuture<Throwable> terminal =
+                        ZLinkJavaReadyRouteTestAccess.rejectReadyRequest(
+                                backend.mesh,
+                                route,
+                                true,
+                                new ZLinkSpotRouteMessages(serializer)
+                                        .encodeRequest(
+                                                MESH,
+                                                Optional.of(PendingProbe.class.getSimpleName()),
+                                                payload,
+                                                null,
+                                                Map.of(),
+                                                null),
+                                terminalCount);
                 long deadline = System.nanoTime() + WAIT.toNanos();
                 while (!terminal.isDone()
                         && activation
@@ -836,6 +836,7 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                         ZLinkFrameworkRuntimeTestAccess.start(
                                 options, new ZLinkJavaBackendAdapterFactory())) {
             try {
+                awaitServing(runtime);
                 if (!host.equals("Serving")) {
                     String holdId = spotId + "-hold";
                     var hold =
@@ -861,7 +862,6 @@ final class ZLinkInstanceSpotCloseConformanceTest {
                                 ? null
                                 : ZLinkFrameworkRuntimeTestAccess.start(
                                         targetOptions, new ZLinkJavaBackendAdapterFactory())) {
-                    awaitServing(runtime);
                     if (host.equals("Relocating")) {
                         observeUntil(
                                         runtime.routeMeshRuntime().observe(MESH, 8),

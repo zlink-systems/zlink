@@ -74,6 +74,11 @@ public final class ZLinkLiveLocationRows {
         return leaseTracker.hasObservedLiveLease(node.ownerId(), node.leaseGeneration());
     }
 
+    CompletionStage<ZLinkOwnerLeaseTracker.LeaseAdmission> leaseAdmission(
+            String ownerId, long ownerLeaseGeneration) {
+        return leaseTracker.leaseAdmission(ownerId, ownerLeaseGeneration);
+    }
+
     Duration routeCacheMaxAge() {
         return routeCacheMaxAge;
     }

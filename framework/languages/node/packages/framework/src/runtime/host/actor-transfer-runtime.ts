@@ -237,7 +237,7 @@ export class ZLinkActorTransferRuntime {
     packets: readonly ZLinkActorHandoffPacket[],
     start: Promise<void>,
     onResult: (packet: ZLinkActorHandoffPacket, result: ZLinkActorHandoffResult) => Promise<void>
-  ): void {
+  ): Promise<void> {
     const manager = this.options.spotManager();
     if (manager === undefined) throw new Error('Relocated Actor has no local FIFO owner.');
     const admitted = this.options.actorHandoff.admitTransferredPrefix(
@@ -248,10 +248,12 @@ export class ZLinkActorTransferRuntime {
       this.options.prepareApplicationJob,
       start,
       (packet, result) => {
-        void this.observeHandoffReplay(onResult(packet, result));
+        const delivery = onResult(packet, result);
+        void this.observeHandoffReplay(delivery);
+        return delivery;
       }
     );
-    void this.observeHandoffReplay(admitted.terminal);
+    return admitted.terminal;
   }
 
   async completeDeferredActorHandoff(
@@ -1078,7 +1080,7 @@ export class ZLinkActorTransferRuntime {
     for (;;) {
       signal?.throwIfAborted();
       try {
-        prepared = await store.prepareAggregate(request, signal);
+        prepared = await store.prepareAggregate(request, signal, BigInt(deadlineUnixMs));
       } catch (error) {
         firstError ??= error;
       }

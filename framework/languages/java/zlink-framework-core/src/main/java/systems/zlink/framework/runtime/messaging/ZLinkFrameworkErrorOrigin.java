@@ -21,7 +21,15 @@ public final class ZLinkFrameworkErrorOrigin {
     private ZLinkFrameworkErrorOrigin() {}
 
     public static ZLinkFrameworkException closingSpot() {
-        return framework(ZLinkFrameworkErrorKind.NOT_FOUND, "Spot incarnation is closing");
+        return closingSpot(ZLinkFrameworkErrorKind.NOT_FOUND);
+    }
+
+    public static ZLinkFrameworkException closingSpot(ZLinkFrameworkErrorKind kind) {
+        return framework(kind, "SPOT is closing.");
+    }
+
+    public static ZLinkFrameworkException closedSpot(ZLinkFrameworkErrorKind kind) {
+        return framework(kind, "SPOT is closed.");
     }
 
     public static Map<String, String> frameworkMetadata() {

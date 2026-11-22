@@ -1,9 +1,11 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
-#include <zlink/detail/json_profile/engine.hpp>
+#include <zlink/json_profile.hpp>
 
 #include <yyjson.h>
 
+#include <array>
 #include <memory>
+#include <memory_resource>
 #include <vector>
 
 namespace zlink::detail::json_profile
@@ -11,85 +13,86 @@ namespace zlink::detail::json_profile
 namespace
 {
 
-// yyjson reads without recursion; flattening keeps that property with an
-// explicit stack so nesting depth never grows the call stack.
 struct open_container
 {
-    std::size_t token_index;
     bool object;
-    yyjson_obj_iter properties;
-    yyjson_arr_iter items;
+    yyjson_obj_iter properties{};
+    yyjson_arr_iter items{};
 };
 
-thread_local std::vector<open_container> open_containers;
-
-void append_token (yyjson_val *value, std::string_view key, token_buffer &output)
+sax_event read_value (yyjson_val *value)
 {
-    const auto index = output.tokens.size ();
-    auto &entry = output.tokens.emplace_back ();
-    if (!key.empty ()) {
-        entry.key_offset = output.strings.size ();
-        entry.key_length = key.size ();
-        output.strings.append (key);
-    }
-    if (yyjson_is_obj (value)) {
-        entry.kind = token_kind::object;
-        auto &container = open_containers.emplace_back ();
-        container.token_index = index;
-        container.object = true;
-        yyjson_obj_iter_init (value, &container.properties);
-    } else if (yyjson_is_arr (value)) {
-        entry.kind = token_kind::array;
-        auto &container = open_containers.emplace_back ();
-        container.token_index = index;
-        container.object = false;
-        yyjson_arr_iter_init (value, &container.items);
-    } else if (yyjson_is_str (value)) {
-        entry.kind = token_kind::string;
-        entry.text_offset = output.strings.size ();
-        entry.text_length = yyjson_get_len (value);
-        output.strings.append (yyjson_get_str (value), entry.text_length);
-    } else if (yyjson_is_uint (value)) {
-        entry.kind = token_kind::unsigned_integer;
-        entry.unsigned_integer = yyjson_get_uint (value);
-    } else if (yyjson_is_sint (value)) {
-        entry.kind = token_kind::integer;
-        entry.integer = yyjson_get_sint (value);
-    } else if (yyjson_is_real (value)) {
-        entry.kind = token_kind::floating;
-        entry.floating = yyjson_get_real (value);
-    } else if (yyjson_is_bool (value)) {
-        entry.kind = token_kind::boolean;
-        entry.boolean = yyjson_get_bool (value);
-    } else {
-        entry.kind = token_kind::null;
+    switch (yyjson_get_tag (value)) {
+        case YYJSON_TYPE_OBJ:
+            return {sax_kind::object};
+        case YYJSON_TYPE_ARR:
+            return {sax_kind::array};
+        case YYJSON_TYPE_STR:
+        case YYJSON_TYPE_STR | YYJSON_SUBTYPE_NOESC:
+            return {
+              sax_kind::string, false, 0, 0, 0, {yyjson_get_str (value), yyjson_get_len (value)}};
+        case YYJSON_TYPE_NUM | YYJSON_SUBTYPE_UINT:
+            return {sax_kind::unsigned_integer, false, 0, yyjson_get_uint (value)};
+        case YYJSON_TYPE_NUM | YYJSON_SUBTYPE_SINT:
+            return {sax_kind::integer, false, yyjson_get_sint (value)};
+        case YYJSON_TYPE_NUM | YYJSON_SUBTYPE_REAL:
+            return {sax_kind::floating, false, 0, 0, yyjson_get_real (value)};
+        case YYJSON_TYPE_BOOL | YYJSON_SUBTYPE_TRUE:
+        case YYJSON_TYPE_BOOL | YYJSON_SUBTYPE_FALSE:
+            return {sax_kind::boolean, yyjson_get_bool (value)};
+        default:
+            return {sax_kind::null};
     }
 }
 
-void flatten (yyjson_val *root, token_buffer &output)
+template <typename Value, typename Key, typename End>
+bool visit_document (std::string_view input, Value value, Key key, End end)
 {
-    open_containers.clear ();
-    append_token (root, {}, output);
-    while (!open_containers.empty ()) {
-        auto &container = open_containers.back ();
-        const auto parent = container.token_index;
-        yyjson_val *child = nullptr;
-        std::string_view key;
-        if (container.object) {
-            yyjson_val *name = yyjson_obj_iter_next (&container.properties);
-            if (name) {
-                key = {yyjson_get_str (name), yyjson_get_len (name)};
-                child = yyjson_obj_iter_get_val (name);
+    const std::unique_ptr<yyjson_doc, decltype (&yyjson_doc_free)> document (
+      yyjson_read (input.data (), input.size (), 0), &yyjson_doc_free);
+    if (!document)
+        return false;
+
+    // Keep nesting off the call stack and permit nested decodes on the same thread.
+    alignas (open_container) std::array<std::byte, 16 * sizeof (open_container)> storage;
+    std::pmr::monotonic_buffer_resource resource (storage.data (), storage.size ());
+    std::pmr::vector<open_container> open (&resource);
+    open.reserve (8);
+
+    auto *current = yyjson_doc_get_root (document.get ());
+    for (;;) {
+        const auto event = read_value (current);
+        if (!value (event))
+            return false;
+
+        if (event.kind == sax_kind::object) {
+            auto &container = open.emplace_back (open_container{true});
+            yyjson_obj_iter_init (current, &container.properties);
+        } else if (event.kind == sax_kind::array) {
+            auto &container = open.emplace_back (open_container{false});
+            yyjson_arr_iter_init (current, &container.items);
+        }
+
+        current = nullptr;
+        while (!open.empty () && !current) {
+            auto &container = open.back ();
+            if (container.object) {
+                if (auto *name = yyjson_obj_iter_next (&container.properties)) {
+                    if (!key ({yyjson_get_str (name), yyjson_get_len (name)}))
+                        return false;
+                    current = yyjson_obj_iter_get_val (name);
+                }
+            } else {
+                current = yyjson_arr_iter_next (&container.items);
             }
-        } else {
-            child = yyjson_arr_iter_next (&container.items);
+            if (!current) {
+                open.pop_back ();
+                if (!end ())
+                    return false;
+            }
         }
-        if (!child) {
-            open_containers.pop_back ();
-            continue;
-        }
-        ++output.tokens[parent].child_count;
-        append_token (child, key, output);
+        if (!current)
+            return true;
     }
 }
 
@@ -100,27 +103,15 @@ namespace ZLINK_JSON_PROFILE_ENGINE_NS
 #if defined(__GNUC__) || defined(__clang__)
 __attribute__ ((visibility ("default")))
 #endif
-token_buffer &
-reusable_tokens ()
+bool read_document (std::string_view input, typed_sax &handler)
 {
-    static thread_local token_buffer buffer;
-    return buffer;
+    input = input.substr (0, input.find ('\0'));
+    return visit_document (
+      input, [&] (const sax_event &event) { return handler.value (event); },
+      [&] (std::string_view key) { return handler.borrowed_key (key); },
+      [&] { return handler.end_container (); });
 }
 
-#if defined(__GNUC__) || defined(__clang__)
-__attribute__ ((visibility ("default")))
-#endif
-bool parse_tokens (std::string_view input, token_buffer &output)
-{
-    output.tokens.clear ();
-    output.strings.clear ();
-    const std::unique_ptr<yyjson_doc, decltype (&yyjson_doc_free)> document (
-      yyjson_read (input.data (), input.size (), 0), &yyjson_doc_free);
-    if (!document)
-        return false;
-    flatten (yyjson_doc_get_root (document.get ()), output);
-    return true;
-}
 } // namespace ZLINK_JSON_PROFILE_ENGINE_NS
 
 } // namespace zlink::detail::json_profile
