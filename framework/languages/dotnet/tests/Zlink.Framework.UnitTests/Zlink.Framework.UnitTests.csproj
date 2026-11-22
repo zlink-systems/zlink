@@ -309,6 +309,7 @@
         <Compile Include="Runtime/RemoteRelayFrameAssemblerTests.cs"/>
         <Compile Include="Runtime/ReconciliationRunnerTests.cs"/>
         <Compile Include="Runtime/RelocationRuntimeTests.cs"/>
+        <Compile Include="Runtime/RelocationRuntimeTests.AggregatePublicationProbe.cs"/>
         <Compile Include="Runtime/AuditRuntimeFailureReporter.cs"/>
         <Compile Include="Runtime/ActorMembershipOwnershipTests.cs"/>
         <Compile Include="Runtime/RelocationBehaviorConformanceTests.cs"/>

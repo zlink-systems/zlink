@@ -176,8 +176,8 @@ public final class ZLinkSpotRuntimeTestAccess {
     }
 
     public static CompletionStage<?> selectInstanceSpotTarget(
-            ZLinkSpotRuntime runtime, String meshName, String stableType) {
-        return runtime.selectInstanceSpotTarget(meshName, stableType);
+            ZLinkSpotRuntime runtime, String meshName, String stableType, long deadline) {
+        return runtime.selectInstanceSpotTarget(meshName, stableType, deadline);
     }
 
     public static Map<String, ZLinkInternalMeshNode> routeMeshNodesByName(

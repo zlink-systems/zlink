@@ -125,6 +125,7 @@ for (let iteration = 1; iteration <= 40; iteration++) {
         assert.equal(settled, false, 'compatible Preparing must remain pending');
         assert.equal(f.reservations.length, 0);
         const reads = f.lists();
+        assert.equal(reads, 0, 'a compatible Preparing candidate waits for publication');
         if (change === 'deadline') t.mock.timers.tick(1000);
         else {
           const next = { ...row, state: change === 'serving' ? 1 : 0 };
@@ -151,7 +152,8 @@ for (let iteration = 1; iteration <= 40; iteration++) {
           );
           assert.equal(f.reservations.length, 0);
         }
-        assert.equal(f.lists(), reads, 'create must not poll the Store');
+        const refreshes = change === 'serving' || change === 'deadline' ? 0 : 1;
+        assert.equal(f.lists(), reads + refreshes);
       });
     }
     for (const input of ['empty', 'incompatible', 'weight', 'serving']) {
@@ -167,7 +169,7 @@ for (let iteration = 1; iteration <= 40; iteration++) {
             : error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
         );
         assert.equal(f.reservations.length, input === 'serving' ? 1 : 0);
-        assert.equal(f.lists(), reads, 'placement uses discovery, not a per-request list');
+        assert.equal(f.lists(), reads + (input === 'serving' ? 0 : 1));
       });
     }
   }
