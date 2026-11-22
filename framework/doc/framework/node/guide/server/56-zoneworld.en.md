@@ -36,6 +36,8 @@ restate them.
 
 ## 1. What This Sample Demonstrates
 
+`Gateway` is the session node that manages game client sessions. `ZoneNode` is the play node that hosts zone Spots.
+
 The world is divided into zones, and each zone is a User Spot with an id. Which ZoneNode owns which
 zone is decided by Location Store placement, not by configuration. A player is an Actor with an id,
 and crossing a zone boundary means joining the neighbouring zone Spot — when the owner differs, the
@@ -54,8 +56,8 @@ each situation, and the code for each surface appears in that order.
 
 | Role | Processes | Owns | Code |
 | --- | ---: | --- | --- |
-| Gateway | 1 | The game STREAM, player Actor binding, relay and pushes | `Server/Gateway` |
-| ZoneNode | 2 | The Entry Spot, zone Spots, player Actors, bot timers, local reports | `Server/ZoneNode` |
+| session node (Gateway) | 1 | The game STREAM, player Actor binding, relay and pushes | `Server/Gateway` |
+| play node (ZoneNode) | 2 | The Entry Spot, zone Spots, player Actors, bot timers, local reports | `Server/ZoneNode` |
 | Ops | 1 | The ops STREAM, runtime event collection, fanout publish, the maintenance store | `Server/Ops` |
 | Client | browser | The game screen and the ops console | `Client` |
 

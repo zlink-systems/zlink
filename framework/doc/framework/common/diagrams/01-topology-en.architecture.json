@@ -3,7 +3,7 @@
   "diagram_type": "architecture",
   "meta": {
     "title": "Overall topology",
-    "subtitle": "API server · session server · domain server · location store",
+    "subtitle": "session node · play node · api node · location store",
     "output": "01-topology-en.html",
     "legend": {
       "mode": "hidden"
@@ -13,229 +13,109 @@
     "mode": "grid",
     "origin": [
       50,
-      160
+      150
     ],
-    "cols": 4,
-    "gapX": 104,
-    "gapY": 78,
+    "cols": 5,
+    "gapX": 60,
+    "gapY": 85,
     "cellW": 132,
-    "cellH": 56
+    "cellH": 60
   },
   "components": [
     {
       "id": "client",
       "type": "external",
-      "label": "Client app",
-      "row": 1,
+      "label": "client",
+      "row": 0,
       "col": 0
+    },
+    {
+      "id": "l4",
+      "type": "external",
+      "label": "L4",
+      "row": 0,
+      "col": 1
+    },
+    {
+      "id": "session",
+      "type": "database",
+      "label": "session node ×N",
+      "row": 0,
+      "col": 2,
+      "sublabel": "STREAM · relay"
+    },
+    {
+      "id": "play",
+      "type": "backend",
+      "label": "play node ×N",
+      "row": 0,
+      "col": 3,
+      "sublabel": "Spot · Actor"
+    },
+    {
+      "id": "api",
+      "type": "frontend",
+      "label": "api node ×N",
+      "row": 0,
+      "col": 4,
+      "sublabel": "HTTP · handler"
     },
     {
       "id": "store",
       "type": "external",
-      "label": "Location store",
-      "row": 3,
-      "col": 0
-    },
-    {
-      "id": "http",
-      "type": "external",
-      "label": "HTTP endpoint",
-      "row": 0,
-      "col": 1,
-      "sublabel": "POST /games"
-    },
-    {
-      "id": "apic",
-      "type": "frontend",
-      "label": "channel client",
-      "row": 1,
-      "col": 1
-    },
-    {
-      "id": "spotc",
-      "type": "frontend",
-      "label": "spot client",
-      "row": 2,
-      "col": 1
-    },
-    {
-      "id": "actorc",
-      "type": "frontend",
-      "label": "actor client",
-      "row": 3,
-      "col": 1
-    },
-    {
-      "id": "streamn",
-      "type": "database",
-      "label": "STREAM node",
-      "row": 4,
-      "col": 1
-    },
-    {
-      "id": "relay",
-      "type": "messagebus",
-      "label": "session relay",
-      "row": 4,
-      "col": 2
-    },
-    {
-      "id": "nodeh",
-      "type": "frontend",
-      "label": "node handler",
-      "row": 0,
-      "col": 3
-    },
-    {
-      "id": "ispot",
-      "type": "backend",
-      "label": "Instance Spot",
+      "label": "Location Store",
       "row": 1,
       "col": 3
-    },
-    {
-      "id": "espot",
-      "type": "backend",
-      "label": "entry spot",
-      "row": 2,
-      "col": 3,
-      "sublabel": "assigns"
-    },
-    {
-      "id": "uspot",
-      "type": "backend",
-      "label": "user spot",
-      "row": 3,
-      "col": 3,
-      "sublabel": "actor"
-    }
-  ],
-  "boundaries": [
-    {
-      "kind": "region",
-      "label": "API server (e.g. Api)",
-      "wraps": [
-        "http",
-        "apic",
-        "spotc",
-        "actorc"
-      ]
-    },
-    {
-      "kind": "region",
-      "label": "Session server (e.g. Session)",
-      "wraps": [
-        "streamn",
-        "relay"
-      ]
-    },
-    {
-      "kind": "region",
-      "label": "Domain server (e.g. Play)",
-      "wraps": [
-        "nodeh",
-        "ispot",
-        "espot",
-        "uspot"
-      ]
     }
   ],
   "connections": [
     {
       "from": "client",
-      "to": "http",
-      "variant": "emphasis",
-      "label": "1 HTTP request"
+      "to": "l4"
     },
     {
-      "from": "http",
-      "to": "apic",
-      "variant": "default"
+      "from": "l4",
+      "to": "session"
     },
     {
-      "from": "apic",
-      "to": "nodeh",
-      "variant": "emphasis",
-      "label": "2a ClientServer channel",
-      "labelDy": -22
+      "from": "session",
+      "to": "play",
+      "label": "RouteMesh"
     },
     {
-      "from": "apic",
-      "to": "ispot",
-      "variant": "emphasis",
-      "label": "2b RouteMesh channel",
-      "labelDy": -22
-    },
-    {
-      "from": "spotc",
-      "to": "espot",
-      "variant": "emphasis",
-      "label": "2c call a Spot by id",
-      "labelDy": -22
-    },
-    {
-      "from": "actorc",
-      "to": "uspot",
-      "variant": "emphasis",
-      "label": "2d call an Actor by id",
-      "labelDy": -22
+      "from": "play",
+      "to": "api",
+      "label": "client/server"
     },
     {
       "from": "client",
-      "to": "streamn",
-      "variant": "emphasis",
-      "label": "3 STREAM connection"
+      "to": "api",
+      "label": "HTTP",
+      "fromSide": "top",
+      "toSide": "top"
     },
     {
-      "from": "streamn",
-      "to": "relay",
-      "variant": "default",
-      "label": "relay"
-    },
-    {
-      "from": "relay",
-      "to": "uspot",
-      "variant": "emphasis",
-      "label": "4 RouteMesh channel",
-      "labelDy": 22
-    },
-    {
-      "from": "apic",
+      "from": "play",
       "to": "store",
-      "variant": "dashed",
-      "label": "address lookup",
-      "labelDy": 22
-    },
-    {
-      "from": "streamn",
-      "to": "store",
-      "variant": "dashed",
-      "label": "register"
+      "variant": "dashed"
     }
   ],
   "cards": [
     {
       "dot": "cyan",
-      "title": "What leaves the API server",
+      "title": "api node",
       "items": [
-        "channel client — calls by name. A ClientServer channel when one handler settles it, a RouteMesh channel when a unit of state must take it",
-        "spot client — calls a Spot by id",
-        "actor client — calls an Actor by id"
+        "The HTTP endpoint (for example, POST /games) receives requests. A channel client calls a node handler over a ClientServer channel or an Instance Spot over a RouteMesh channel.",
+        "Spot and Actor clients address a Spot or Actor by ID.",
+        "The play node is the Client that calls the api node, which is the Server on the ZLink ClientServer Channel."
       ]
     },
     {
-      "dot": "amber",
-      "title": "The session server",
+      "dot": "emerald",
+      "title": "play node",
       "items": [
-        "The STREAM node takes the client connection, relays the session, and passes it to a spot's actor over a RouteMesh channel",
-        "It can live in the domain server, but that is not the usual shape — connection count and state throughput grow separately"
-      ]
-    },
-    {
-      "dot": "slate",
-      "title": "Location store = discovery only",
-      "items": [
-        "It keeps server addresses only. The dashed lines are store lookups that find an endpoint, not a data path"
+        "An Entry Spot assigns participants, and User Spots and Actors handle game messages. A play node can request matchmaking or data reads and writes from an api node.",
+        "The dashed line indicates endpoint lookup through the Location Store."
       ]
     }
   ]
