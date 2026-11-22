@@ -973,8 +973,10 @@ MeshNode lifecycle 재시작에서 바뀌지 않을 수 있기 때문이다. Rec
 않고 기존 조건만 검사한다. 해제자는 해당 authority record에 기록된 owner token이 Store exact
 read에서 무효 — 그 token의 owner lease record가 `Missing`, 다른 `LeaseGeneration`, 또는
 `ExpiresAt ≤ StoreNow`인 만료 record — 인 것을 처음 관찰한 순간을 자기 local monotonic의 `t0`로
-기록한다. User Spot member 해제에도 각 owner token에 같은 규칙을 적용한다. 다른 authority
-token으로 관찰을 넘겨 쓰지 않는다. Authority record 자체가 `Missing`이면 해제할 record가 없으므로
+기록한다. User Spot member 해제에도 각 owner token에 같은 규칙을 적용한다. `t0`는 owner token(owner id와
+`LeaseGeneration`)마다 하나다. 같은 token을 기록한 다른 authority record를 해제할 때는 그 token에
+이미 기록한 `t0`를 그대로 쓴다. 대기는 옛 owner lease의 무효에서 유도되며 record 주소와 관계없기
+때문이다. 다른 authority token으로 관찰을 넘겨 쓰지 않는다. Authority record 자체가 `Missing`이면 해제할 record가 없으므로
 이 대기를 적용하지 않고 §7의 생성 절차를 그대로 따른다.
 
 해제 CAS는 **`t0 + 3·margin`** 이후에만 허용한다. 대기 산식은 보존 활성 시의
@@ -1729,7 +1731,7 @@ Framework는 각 object의 완료 결과를 object 순서로 저장한다. 같�
 
 전달 중 Store 오류나 연결 끊김이 있으면 target은 같은 실행 안에서 `reference`가 가리키는 payload의 `pending` 항목을 현재 route로 다시 보낸다. Target 실행이 끝난 뒤의 처리는 [Host relocation와 shutdown](05-host-relocation-flow.ko.md)의 장애 계약을 따른다. Target 실행이 끝나면 [실패 정책 §5](06-failure-failover-policy.ko.md#5-host-relocation-장애)대로 다른 runtime이 이 relocation을 이어받지 않으며, 저장한 완료 기록은 그 정책이 object를 다시 활성화하는 경우에만 쓰인다. 그때 그 runtime은 활성화 전에 `pending` 항목의 reply bytes만 다시 보내고, handler, Restore, 끝나지 않은 queue와 target 재선택은 다시 하지 않는다.
 
-결과를 더하면 encoded payload가 [Relocation Store](03-relocation-store-redis.ko.md)의 공통 blob 상한을 넘을 때는 그 request의 reply bytes 대신 `InternalFailure`(failure code `requestFailed`, [Framework error model §2](../00-foundation/07-framework-error-model.ko.md)) 실패 reply를 그 항목의 `reply`로 저장한다. Request는 이미 실행됐고 결과 bytes만 보관하지 못한 것이므로 새 error kind를 두지 않는다. 이미 저장한 항목은 바꾸지 않고 relocation도 실패로 바꾸지 않는다.
+**완료 기록의 크기는 마지막에 도달할 수 있는 크기로 판정한다.** 결과를 더할 때 Framework는 encoded payload 크기를 모든 항목의 `delivery`를 가장 긴 값인 `sourceLeaseExpired`로 두고, 아직 결과가 없는 수락 request(`acceptedRequests`에서 이번 결과까지의 항목 수를 뺀 수)마다 아래 실패 reply를 담은 항목 하나를 더한 크기로 계산한다. 이 판정을 통과한 payload에서는 이후의 `delivery` 전이와 남은 결과의 실패 reply가 항상 상한 안에 저장되므로, `pendingDeliveries`를 줄이는 CAS가 크기 때문에 막히지 않는다. 이 크기가 [Relocation Store](03-relocation-store-redis.ko.md)의 공통 blob 상한을 넘을 때는 그 request의 reply bytes 대신 `InternalFailure`(failure code `requestFailed`, [Framework error model §2](../00-foundation/07-framework-error-model.ko.md)) 실패 reply를 그 항목의 `reply`로 저장한다. Request는 이미 실행됐고 결과 bytes만 보관하지 못한 것이므로 새 error kind를 두지 않는다. 이미 저장한 항목은 바꾸지 않고 relocation도 실패로 바꾸지 않는다. Target은 target commit CAS 전에 결과가 하나도 없는 상태로 같은 크기를 계산한다. 이 크기가 상한을 넘으면 commit하지 않고 그 relocation을 `InternalFailure`로 abort한다. 이 상한은 Relocation Store의 제한이며, [Relocation flow §5.3](04-relocation-flow.ko.md#53-relocation-전용-capacity-제한을-두지-않는다)이 유지하는 relocation 밖의 제한이다.
 
 수락한 request 수와 완료 결과 수가 같고 전달 대기 수가 0일 때만 `Completed`를 기록한다.
 다르면 복구 오류다.
@@ -2032,6 +2034,7 @@ provider conformance test가 store record golden fixture로 관찰하는 key·va
 - 완료 결과는 `OperationId`와 `ReplyRouteId`로 구분되고, 저장한 항목 수가 Location Store의
   항목 수와 같아야 하며, 이전 owner를 통한 reply 전달 또는 owner lease 종료 전에는 payload
   사용을 끝내지 않는다(§9.3).
+- 완료 기록 상한 근처의 입력에서 결과 추가와 세 `delivery` 전이가 모두 저장되고 `Completed`에 도달한다. 최종 크기 판정을 넘는 결과는 `InternalFailure` 실패 reply로 저장되고, 결과가 없는 상태에서도 넘는 relocation은 target commit 전에 abort된다(§9.3).
 - Relocation Store에 저장하는 payload는 저장과 확인이 Location Store CAS보다 먼저 관찰되고,
   Location Store의 reference 사용 종료가 payload 삭제보다 먼저 관찰된다(§10).
 - Relocation Store에 저장한 payload가 영구적으로 없거나 checksum이 다르면 `DataLost`가

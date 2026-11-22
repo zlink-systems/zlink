@@ -31,7 +31,7 @@ make_route_message_context (const std::string &router_channel_id,
     base.mesh_name = router_channel_id;
     base.packet_name = header.message_name;
     base.content_type = header.content_type;
-    base.metadata = framework::message_metadata_t (std::move (header.metadata));
+    base.metadata = framework::message_metadata_t (std::move (header.metadata).take_values ());
     if (!header.correlation_id.empty ()) {
         base.correlation_id = header.correlation_id;
     }

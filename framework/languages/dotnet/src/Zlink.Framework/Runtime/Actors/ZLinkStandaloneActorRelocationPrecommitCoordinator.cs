@@ -23,6 +23,7 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
     internal async ValueTask<ZLinkAuthoritySnapshot> BeginPreparingAsync(
         ZLinkAuthoritySnapshot source,
         ZLinkActorAuthorityPayload sourceAuthority,
+        ZLinkActorAuthorityPayload plannedTarget,
         Guid relocationId,
         long applicationVersion,
         CancellationToken cancellationToken
@@ -54,20 +55,28 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
             CoordinatorExpectedAuthorityStoreVersion = source.StoreVersion,
             RelocationReference = DirectTransferReference,
         };
-        var payload = ZLinkCanonicalRelocationAuthorityStateCodec.ReplaceRelocationState(
-            source.Payload.Span,
+        var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(sourceAuthority.ActorId);
+        var relocation = ZLinkAuthorityRelocation.FromState(
+            relocationId,
             state,
-            root: null
+            ZLinkDirectRelocationInventory.Digest(
+                key,
+                source.StoreVersion,
+                ZLinkActorAuthorityPayloadCodec.Encode(plannedTarget)
+            )
         );
         return await StoreAsync(
-                ZLinkActorAuthorityPayloadCodec.AuthorityKey(sourceAuthority.ActorId),
+                key,
                 source,
                 new ZLinkAuthorityMutation.Put(
-                    payload,
+                    source.Payload,
                     ZLinkAuthorityGenerationTransition.Preserve,
                     null,
                     null
-                ),
+                )
+                {
+                    Relocation = relocation,
+                },
                 current =>
                     Matches(current, relocationId, phase: 1, source, target: null, attempt: 0),
                 cancellationToken
@@ -87,20 +96,29 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
             Phase = (byte)ServiceWireCodec.RelocationPhase.Captured,
             AggregateGeneration = root.AggregateGeneration,
         };
-        var payload = ZLinkCanonicalRelocationAuthorityStateCodec.ReplaceRelocationState(
-            preparing.Payload.Span,
-            state,
-            root
-        );
+        var participant = root.Participants.Single();
+        var relocation = preparing.Relocation is { } record
+            ? record with
+            {
+                Phase = ServiceWireCodec.RelocationPhase.Captured,
+            }
+            : ZLinkAuthorityRelocation.FromState(
+                root.AggregateId,
+                state,
+                ReadLegacyCaptureInventory(participant, state)
+            );
         return await StoreAsync(
-                root.Participants.Single().AuthorityKey,
+                participant.AuthorityKey,
                 preparing,
                 new ZLinkAuthorityMutation.Put(
-                    payload,
+                    projection.SteadyAuthorityPayload,
                     ZLinkAuthorityGenerationTransition.Preserve,
                     null,
                     null
-                ),
+                )
+                {
+                    Relocation = relocation,
+                },
                 current =>
                     Matches(
                         current,
@@ -113,6 +131,28 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
                 cancellationToken
             )
             .ConfigureAwait(false);
+    }
+
+    private static string ReadLegacyCaptureInventory(
+        ZLinkRelocationParticipantEnvelope participant,
+        ZLinkCanonicalRelocationAuthorityState state
+    )
+    {
+        var recovery = ZLinkCanonicalParticipantRecoveryCodec.Decode(
+            participant.RecoveryPayload.Span
+        );
+        if (
+            !ZLinkActorRelocationAuthorityPayloadCodec.TryDecode(
+                recovery.AuthorityPayload.Span,
+                out var planned
+            )
+        )
+            throw DataLost("Standalone Actor capture is missing its planned target authority.");
+        return ZLinkDirectRelocationInventory.Digest(
+            participant.AuthorityKey,
+            state.CoordinatorExpectedAuthorityStoreVersion,
+            planned.ApplicationPayload.Span
+        );
     }
 
     internal ValueTask<ZLinkAuthoritySnapshot> CommitTargetAsync(
@@ -186,12 +226,19 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
             TargetOwnerId = targetOwner.OwnerId,
             TargetOwnerLeaseGeneration = checked((ulong)targetOwner.LeaseGeneration),
         };
-        var payload = ZLinkCanonicalRelocationAuthorityStateCodec.ReplaceRelocationState(
-            ZLinkActorAuthorityPayloadCodec.Encode(targetAuthority),
-            state,
-            root
-        );
         var key = root.Participants.Single().AuthorityKey;
+        var payload = ZLinkActorAuthorityPayloadCodec.Encode(targetAuthority);
+        var relocation = ZLinkAuthorityRelocation.FromState(
+            root.AggregateId,
+            state,
+            captured.Relocation?.SourceInventorySha256
+                ?? ZLinkDirectRelocationInventory.Digest(
+                    key,
+                    state.CoordinatorExpectedAuthorityStoreVersion,
+                    payload
+                ),
+            captured.Relocation?.Completion
+        );
         var mutation = new ZLinkAuthorityMutation.Put(
             payload,
             ZLinkAuthorityGenerationTransition.NewOwner,
@@ -205,7 +252,10 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
                 ),
                 DescriptorLifecycleGeneration = prepare.Target.NodeGeneration,
             }
-        );
+        )
+        {
+            Relocation = relocation,
+        };
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -315,10 +365,8 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
     )
     {
         if (
-            !ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                captured.Payload.Span,
-                out var projection
-            ) || !SameRelocation(projection, relocationId)
+            !ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(captured, out var projection)
+            || !SameRelocation(projection, relocationId)
         )
             throw DataLost("Standalone Actor source Preserve lost its captured source attempt.");
         return await TryPreserveSourceCoreAsync(
@@ -346,7 +394,10 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
                     ZLinkAuthorityGenerationTransition.Preserve,
                     null,
                     null
-                ),
+                )
+                {
+                    ClearRelocation = true,
+                },
                 cancellationToken
             )
             .ConfigureAwait(false);
@@ -376,26 +427,12 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
                 );
             if (
                 !ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                    found.Snapshot.Payload.Span,
+                    found.Snapshot,
                     out var projection
                 )
             )
                 return found.Snapshot;
-            if (
-                !SameRelocation(projection, relocationId)
-                || projection.Phase
-                    is not (
-                        (byte)ServiceWireCodec.RelocationPhase.Preparing
-                        or (byte)ServiceWireCodec.RelocationPhase.Captured
-                        or (byte)ServiceWireCodec.RelocationPhase.Aborted
-                    )
-                || !StringComparer.Ordinal.Equals(
-                    found.Snapshot.OwnerId,
-                    projection.State.SourceOwnerId
-                )
-                || found.Snapshot.OwnerLeaseGeneration
-                    != checked((long)projection.State.SourceOwnerLeaseGeneration)
-            )
+            if (!IsSourcePrecommit(found.Snapshot, relocationId, projection))
                 throw DataLost("Standalone Actor precommit abort lost its exact source fence.");
             var preserved = await TryPreserveSourceCoreAsync(
                     key,
@@ -432,7 +469,10 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
                             found.Snapshot.OwnerId,
                             found.Snapshot.OwnerLeaseGeneration
                         )
-                    ),
+                    )
+                    {
+                        ClearRelocation = true,
+                    },
                     cancellationToken
                 )
                 .ConfigureAwait(false);
@@ -465,7 +505,7 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
                 );
             if (
                 !ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                    found.Snapshot.Payload.Span,
+                    found.Snapshot,
                     out var projection
                 )
                 || !SameRelocation(projection, relocationId)
@@ -490,7 +530,10 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
                         ZLinkAuthorityGenerationTransition.Preserve,
                         null,
                         null
-                    ),
+                    )
+                    {
+                        ClearRelocation = true,
+                    },
                     cancellationToken
                 )
                 .ConfigureAwait(false);
@@ -505,7 +548,10 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
                                 found.Snapshot.OwnerId,
                                 found.Snapshot.OwnerLeaseGeneration
                             )
-                        ),
+                        )
+                        {
+                            ClearRelocation = true,
+                        },
                         cancellationToken
                     )
                     .ConfigureAwait(false);
@@ -539,26 +585,24 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
             && payload == expectedPayload;
     }
 
-    internal static bool IsSourcePrecommit(ZLinkAuthoritySnapshot snapshot, Guid relocationId)
-    {
-        if (
-            !ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                snapshot.Payload.Span,
-                out var projection
-            )
-            || !SameRelocation(projection, relocationId)
-            || projection.Phase
-                is not (
-                    (byte)ServiceWireCodec.RelocationPhase.Preparing
-                    or (byte)ServiceWireCodec.RelocationPhase.Captured
-                    or (byte)ServiceWireCodec.RelocationPhase.Aborted
-                )
-        )
-            return false;
-        return StringComparer.Ordinal.Equals(snapshot.OwnerId, projection.State.SourceOwnerId)
-            && snapshot.OwnerLeaseGeneration
-                == checked((long)projection.State.SourceOwnerLeaseGeneration);
-    }
+    internal static bool IsSourcePrecommit(ZLinkAuthoritySnapshot snapshot, Guid relocationId) =>
+        ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(snapshot, out var projection)
+        && IsSourcePrecommit(snapshot, relocationId, projection);
+
+    private static bool IsSourcePrecommit(
+        ZLinkAuthoritySnapshot snapshot,
+        Guid relocationId,
+        ZLinkCanonicalRelocationAuthorityProjection projection
+    ) =>
+        SameRelocation(projection, relocationId)
+        && projection.Phase
+            is (byte)ServiceWireCodec.RelocationPhase.Preparing
+                or (byte)ServiceWireCodec.RelocationPhase.Captured
+                or (byte)ServiceWireCodec.RelocationPhase.Prepared
+                or (byte)ServiceWireCodec.RelocationPhase.Aborted
+        && StringComparer.Ordinal.Equals(snapshot.OwnerId, projection.State.SourceOwnerId)
+        && snapshot.OwnerLeaseGeneration > 0
+        && (ulong)snapshot.OwnerLeaseGeneration == projection.State.SourceOwnerLeaseGeneration;
 
     private async ValueTask<ZLinkAuthoritySnapshot> StoreAsync(
         ZLinkAuthorityKey key,
@@ -634,10 +678,7 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
     )
     {
         if (
-            !ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                snapshot.Payload.Span,
-                out var projection
-            )
+            !ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(snapshot, out var projection)
             || !SameRelocation(projection, relocationId)
             || projection.Phase != phase
         )
@@ -646,23 +687,81 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
     }
 
     /// <summary>
-    /// Location runtime §10: whether <paramref name="current"/> still is the
-    /// source fence the target's NewOwner CAS expects — the captured source
-    /// attempt of this relocation, or the exact Command 40 StoreVersion of a
-    /// foreign steady source.
+    /// Relocation flow §3: binds PREPARE to the current source authority.
+    /// A captured record retains the original coordinator baseline separately
+    /// from the snapshot version used by the target's NewOwner CAS.
     /// </summary>
     internal static bool HoldsTargetCommitFence(
         ZLinkAuthoritySnapshot current,
         ZLinkRelocationEnvelope root,
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare
-    ) =>
-        ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(current.Payload.Span, out var canonical)
-            ? SameRelocation(canonical, root.AggregateId)
-                && canonical.Phase == (byte)ServiceWireCodec.RelocationPhase.Captured
-            : StringComparer.Ordinal.Equals(
-                current.StoreVersion,
+    )
+    {
+        var participant = root.Participants.Single();
+        var (high, low) = RelocationParts(root.AggregateId);
+        if (
+            participant.AuthorityKey
+                != ZLinkActorAuthorityPayloadCodec.AuthorityKey(prepare.Object.ObjectId)
+            || current.Allocation.State != ZLinkPlacementAllocationState.Active
+            || current.Allocation.ObjectKind != participant.ObjectKind
+            || current.OwnerLeaseGeneration <= 0
+            || participant.ObjectGeneration != current.ObjectGeneration
+            || participant.AuthorityOwnerGeneration != current.AuthorityOwnerGeneration
+            || prepare.Object.ObjectGeneration != current.ObjectGeneration
+            || prepare.Object.ExpectedAuthorityOwnerGeneration != current.AuthorityOwnerGeneration
+            || prepare.RelocationId.High != high
+            || prepare.RelocationId.Low != low
+            || !StringComparer.Ordinal.Equals(current.OwnerId, prepare.Coordinator.OwnerId)
+            || checked((ulong)current.OwnerLeaseGeneration) != prepare.Coordinator.LeaseGeneration
+            || prepare.SourceNodeRid != prepare.Coordinator.NodeRid
+            || prepare.SourceNodeGeneration != prepare.Coordinator.NodeGeneration
+            || prepare.SourceNodeRid != current.Allocation.Descriptor.Rid
+            || prepare.SourceNodeGeneration != current.Allocation.DescriptorLifecycleGeneration
+        )
+            return false;
+
+        if (current.Relocation is { } relocation)
+            return relocation.HoldsCapturedSource(
+                root.AggregateId,
+                current,
+                new(
+                    prepare.Coordinator.NodeRid.ToHex(),
+                    prepare.Coordinator.NodeGeneration,
+                    prepare.Coordinator.OwnerId,
+                    prepare.Coordinator.LeaseGeneration
+                ),
                 prepare.Coordinator.ExpectedAuthorityStoreVersion
             );
+
+        var expected = new ZLinkServiceWireCodec.RelocationCoordinatorFence(
+            current.OwnerId,
+            checked((ulong)current.OwnerLeaseGeneration),
+            current.Allocation.Descriptor.Rid,
+            current.Allocation.DescriptorLifecycleGeneration,
+            current.StoreVersion
+        );
+        if (ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(current, out var canonical))
+        {
+            if (
+                !SameRelocation(canonical, root.AggregateId)
+                || canonical.Phase != (byte)ServiceWireCodec.RelocationPhase.Captured
+                || canonical.State.SourceOwnerId != current.OwnerId
+                || canonical.State.SourceOwnerLeaseGeneration != prepare.Coordinator.LeaseGeneration
+                || canonical.State.SourceNodeRid != prepare.SourceNodeRid.ToHex()
+                || canonical.State.SourceNodeGeneration != prepare.SourceNodeGeneration
+                || canonical.AggregateGeneration != root.AggregateGeneration
+            )
+                return false;
+            expected = new ZLinkServiceWireCodec.RelocationCoordinatorFence(
+                canonical.State.CoordinatorOwnerId,
+                canonical.State.CoordinatorLeaseGeneration,
+                RoutingId.FromHex(canonical.State.CoordinatorNodeRid),
+                canonical.State.CoordinatorNodeGeneration,
+                canonical.State.CoordinatorExpectedAuthorityStoreVersion
+            );
+        }
+        return prepare.Coordinator == expected;
+    }
 
     private static ZLinkCanonicalRelocationAuthorityProjection RequireTargetCommitPrecondition(
         ZLinkAuthoritySnapshot captured,
@@ -679,35 +778,14 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
             );
         if (
             ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                captured.Payload.Span,
-                out var canonical
+                captured,
+                out var canonical,
+                root.AggregateGeneration
             )
         )
             return canonical;
 
-        var participant = root.Participants.Single();
-        if (
-            participant.AuthorityKey
-                != ZLinkActorAuthorityPayloadCodec.AuthorityKey(prepare.Object.ObjectId)
-            || participant.ObjectGeneration != captured.ObjectGeneration
-            || participant.AuthorityOwnerGeneration != captured.AuthorityOwnerGeneration
-            || prepare.Object.ObjectGeneration != captured.ObjectGeneration
-            || prepare.Object.ExpectedAuthorityOwnerGeneration != captured.AuthorityOwnerGeneration
-            || !StringComparer.Ordinal.Equals(captured.OwnerId, prepare.Coordinator.OwnerId)
-            || captured.OwnerLeaseGeneration != checked((long)prepare.Coordinator.LeaseGeneration)
-            || captured.Allocation.Descriptor.Rid != prepare.Coordinator.NodeRid
-            || captured.Allocation.DescriptorLifecycleGeneration
-                != prepare.Coordinator.NodeGeneration
-            || prepare.SourceNodeRid != prepare.Coordinator.NodeRid
-            || prepare.SourceNodeGeneration != prepare.Coordinator.NodeGeneration
-        )
-            throw DataLost("Standalone Actor target cutover changed its foreign source fence.");
-
         var (high, low) = RelocationParts(root.AggregateId);
-        if (prepare.RelocationId.High != high || prepare.RelocationId.Low != low)
-            throw DataLost(
-                "Standalone Actor target cutover changed its foreign relocation identity."
-            );
         var state = new ZLinkCanonicalRelocationAuthorityState(
             high,
             low,
@@ -762,10 +840,7 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
     )
     {
         if (
-            !ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                current.Payload.Span,
-                out var projection
-            )
+            !ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(current, out var projection)
             || !SameRelocation(projection, relocationId)
             || projection.Phase != phase
             || projection.TargetAttemptGeneration != attempt
@@ -793,10 +868,21 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
                 source,
                 targetOwner,
                 prepare.TargetAttemptGeneration
-            )
-            || !ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                current.Payload.Span,
-                out var projection
+            ) || !ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(current, out var projection)
+        )
+            return false;
+        if (
+            current.Relocation is { } relocation
+            && (
+                relocation.Coordinator.ExpectedStoreVersion
+                    != prepare.Coordinator.ExpectedAuthorityStoreVersion
+                || relocation.Coordinator.NodeRid != prepare.Coordinator.NodeRid.ToHex()
+                || relocation.Coordinator.NodeGeneration != prepare.Coordinator.NodeGeneration
+                || relocation.Coordinator.OwnerId != prepare.Coordinator.OwnerId
+                || relocation.Coordinator.OwnerLeaseGeneration
+                    != prepare.Coordinator.LeaseGeneration
+                || current.Allocation.Descriptor.Rid != prepare.Target.NodeRid
+                || current.Allocation.DescriptorLifecycleGeneration != prepare.Target.NodeGeneration
             )
         )
             return false;
@@ -818,7 +904,7 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
         return projection.RelocationHigh == high && projection.RelocationLow == low;
     }
 
-    private static (ulong High, ulong Low) RelocationParts(Guid relocationId)
+    internal static (ulong High, ulong Low) RelocationParts(Guid relocationId)
     {
         if (relocationId == Guid.Empty)
             throw new ArgumentOutOfRangeException(nameof(relocationId));

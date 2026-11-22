@@ -469,9 +469,19 @@ export class ZLinkEntrySpotActivation {
     return this.serial.execute(() => this.entrySpot.onDisconnectActor?.(actor));
   }
 
-  async dispatchActorPacket(delivery: ZLinkActorPacketDelivery): Promise<unknown> {
+  async dispatchActorPacket(
+    delivery: ZLinkActorPacketDelivery,
+    preparation?: import('../execution/serial-execution-queue').ZLinkSerialWorkPreparation
+  ): Promise<unknown> {
     return dispatchActorPacketInMailbox(
-      (operation) => this.spotSerialExecutor.executeActor(delivery.actorId, operation),
+      (operation) =>
+        this.spotSerialExecutor.executeActor(
+          delivery.actorId,
+          operation,
+          undefined,
+          undefined,
+          preparation
+        ),
       () =>
         this.actorPacketDispatch.admitDelivery(
           undefined,

@@ -582,9 +582,11 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                         .forEach(
                                 node ->
                                         node.setBoundSessionCloseHandler(
-                                                request ->
+                                                (request, requestPending) ->
                                                         this.streams.handleBoundSessionClose(
-                                                                node.routingId(), request)));
+                                                                node.routingId(),
+                                                                request,
+                                                                requestPending)));
                 this.meshNodes
                         .nodesByName()
                         .values()

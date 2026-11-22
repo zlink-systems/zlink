@@ -8,6 +8,7 @@
 #include <iostream>
 #include <nlohmann/json.hpp>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace
@@ -35,21 +36,16 @@ envelope_header_t expected_header (const json &value)
     header.content_type = value.at ("content_type").get<std::string> ();
     if (value.contains ("correlation_id"))
         header.correlation_id = value.at ("correlation_id").get<std::string> ();
-    if (value.contains ("deadline"))
-        header.deadline = value.at ("deadline").get<std::string> ();
-    for (const auto *name : {"error_code", "error_message", "flow_id", "source", "topic"})
+    constexpr std::pair<const char *, decltype (&envelope_header_t::deadline)> optional_text[] = {
+      {"deadline", &envelope_header_t::deadline},
+      {"error_code", &envelope_header_t::error_code},
+      {"error_message", &envelope_header_t::error_message},
+      {"flow_id", &envelope_header_t::flow_id},
+      {"source", &envelope_header_t::source},
+      {"topic", &envelope_header_t::topic}};
+    for (const auto &[name, field] : optional_text)
         if (value.contains (name))
-            value.at (name).get_to (*([&] () -> std::optional<std::string> * {
-                if (std::string (name) == "error_code")
-                    return &header.error_code;
-                if (std::string (name) == "error_message")
-                    return &header.error_message;
-                if (std::string (name) == "flow_id")
-                    return &header.flow_id;
-                if (std::string (name) == "source")
-                    return &header.source;
-                return &header.topic;
-            }) ());
+            header.*field = value.at (name).get<std::string> ();
     if (value.contains ("flow_origin"))
         header.flow_origin =
           static_cast<zlink::framework::flow_origin_t> (value.at ("flow_origin").get<int> ());

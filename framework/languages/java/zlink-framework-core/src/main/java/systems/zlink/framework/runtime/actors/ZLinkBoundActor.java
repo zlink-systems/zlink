@@ -307,7 +307,10 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                         ? System.nanoTime()
                         : ZLinkRequestMetrics.NO_START;
         ZLinkRequestMetrics.start(metric);
-        CompletionStage<Optional<ZLinkSessionActorsRuntime.LocalActorReply>> request;
+        var submitted =
+                new java.util.concurrent.atomic.AtomicReference<CompletionStage<Void>>(
+                        CompletableFuture.completedFuture(null));
+        CompletionStage<Void> request;
         try {
             request =
                     localActorDispatcher.dispatch(
@@ -317,26 +320,19 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                             bindingGeneration(),
                             sourceSessionSequence,
                             header,
-                            payload);
+                            payload,
+                            reply -> submitted.set(replyLocal(header, reply)));
         } catch (RuntimeException failure) {
             payload.close();
             completeRequest(metric, started, failure);
             throw failure;
         }
-        // The actor request terminal precedes forwarding its independent
-        // serialized reply to the STREAM session.
-        request.whenComplete(
-                (ignored, failure) -> {
-                    payload.close();
-                    completeRequest(metric, started, failure);
-                });
-        return request.thenCompose(
-                reply -> {
-                    if (reply.isEmpty()) {
-                        return CompletableFuture.completedFuture(null);
-                    }
-                    return replyLocal(header, reply.get());
-                });
+        return request.whenComplete(
+                        (ignored, failure) -> {
+                            payload.close();
+                            completeRequest(metric, started, failure);
+                        })
+                .thenCompose(ignored -> submitted.get());
     }
 
     private CompletionStage<Void> replyLocal(

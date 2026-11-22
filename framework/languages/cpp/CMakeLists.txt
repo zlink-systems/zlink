@@ -219,6 +219,7 @@ set(ZLINK_FRAMEWORK_CPP_M6A_RUNTIME_SOURCES
   framework/src/runtime/channels/channel_reply_writer.cpp
   framework/src/runtime/messaging/client_call_codec.cpp
   framework/src/runtime/messaging/envelope_codec.cpp
+  framework/src/runtime/messaging/request_completion_reply_status.cpp
   framework/src/runtime/messaging/request_failure_mapper.cpp
   framework/src/runtime/codecs/serializer.cpp
   framework/src/runtime/diagnostics/flow_context.cpp)
@@ -1887,6 +1888,13 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       TIMEOUT 30)
   endfunction()
 
+  add_zlink_framework_test(test_cpp_framework_spot_admission_rejection
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_spot_admission_rejection.cpp
+    "framework-unit;spot" unit)
+  target_use_zlink_gtest_main(test_cpp_framework_spot_admission_rejection)
+  target_include_directories(test_cpp_framework_spot_admission_rejection PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+
   add_zlink_framework_test(test_cpp_framework_actor_late_result
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_late_result.cpp
     "framework-unit;actor")
@@ -2730,6 +2738,22 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     TIER unit
     TIMEOUT 30)
 
+  add_executable(test_cpp_framework_authority_aggregate_relocation
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_authority_aggregate_relocation.cpp)
+  target_use_zlink_gtest_main(test_cpp_framework_authority_aggregate_relocation)
+  target_link_libraries(test_cpp_framework_authority_aggregate_relocation PRIVATE zlink::framework)
+  target_include_directories(test_cpp_framework_authority_aggregate_relocation PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+  target_compile_definitions(test_cpp_framework_authority_aggregate_relocation PRIVATE
+    ZLINK_AUTHORITY_AGGREGATE_RELOCATION_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/authority-aggregate-relocation-v1.json")
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_authority_aggregate_relocation
+    COMMAND test_cpp_framework_authority_aggregate_relocation
+    LABELS "framework-unit;framework-contract;framework-location"
+    TIER unit
+    TIMEOUT 30)
+
   add_executable(test_cpp_framework_opaque_store_providers
     tests/Zlink.Framework.UnitTests/test_cpp_framework_opaque_store_location_records.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_opaque_store_relocation_blobs.cpp
@@ -2773,7 +2797,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     TIMEOUT 30)
 
   add_executable(test_cpp_framework_discarded_authority
-    tests/Zlink.Framework.UnitTests/test_cpp_framework_discarded_authority.cpp)
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_discarded_authority.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_owner_token_release_wait.cpp)
   target_compile_features(test_cpp_framework_discarded_authority PRIVATE cxx_std_20)
   target_link_zlink_test_harness(test_cpp_framework_discarded_authority)
   target_use_zlink_gtest_main(test_cpp_framework_discarded_authority)

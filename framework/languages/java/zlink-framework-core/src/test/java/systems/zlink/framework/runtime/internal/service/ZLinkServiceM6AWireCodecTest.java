@@ -72,6 +72,27 @@ final class ZLinkServiceM6AWireCodecTest {
     }
 
     @Test
+    void nativeRequestAndReplyHeadersPreserveWireBytes() {
+        long correlation = Long.MIN_VALUE;
+        int flags = ServiceWireConstants.FLAG_METADATA;
+        codec.prepareChannelNames(List.of("한글"));
+        try (Message node = codec.encodeNodeRequestMessage(correlation, flags);
+                Message channel = codec.encodeChannelRequestMessage(correlation, "한글", flags);
+                Message reply = codec.encodeReplyMessage(correlation, 0, 0)) {
+            assertArrayEquals(
+                    codec.encodeNodeRequestHeader(correlation, flags), node.toByteArray());
+            assertArrayEquals(
+                    codec.encodeChannelRequestHeader(correlation, "한글", flags),
+                    channel.toByteArray());
+            assertArrayEquals(codec.encodeReplyHeader(correlation, 0, 0), reply.toByteArray());
+        }
+        assertThrows(
+                IllegalArgumentException.class, () -> codec.encodeNodeRequestMessage(0, flags));
+        assertThrows(
+                IllegalArgumentException.class, () -> codec.encodeReplyMessage(correlation, 0, 1));
+    }
+
+    @Test
     void textDecodeAcceptsCanonicalUnicodeAndRejectsMalformedUtf8() {
         for (String name : List.of("event", "한글", "\uD83D\uDE00", "\uFFFD")) {
             var payload =

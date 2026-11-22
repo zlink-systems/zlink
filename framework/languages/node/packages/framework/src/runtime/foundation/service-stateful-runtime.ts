@@ -6,6 +6,8 @@ import { inspectRuntime } from '../internal-observation';
 import { awaitWithAbort, isAbortError } from '../abort';
 import { decodeChannelHeader } from '../channels/channel-envelope';
 import { ZLinkBufferMessage } from '../backend/runtime-message';
+import { decodeStreamHeader } from '../streams/protocol';
+import { createInboundFlow } from '../diagnostics/flow-context';
 import {
   dispatchErrorDetails,
   dispatchReasonFromError
@@ -66,6 +68,7 @@ import {
   type ActorLocation,
   type ReceiveKindData,
   type ServiceStreamSessionBinding,
+  type ZLinkMessageFollowOrigin,
   type StreamSessionActorAuthorityFence
 } from './service-runtime-contracts';
 import {
@@ -122,7 +125,8 @@ import {
 import {
   SERVICE_WIRE_MAGIC,
   SERVICE_WIRE_MAJOR,
-  SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE
+  SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE,
+  SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME
 } from './service-wire-constants.generated';
 import { copyPayloadBytes } from '../../contracts/Common/payload-slab';
 import {
@@ -131,6 +135,7 @@ import {
   decodeApplicationPayloadView,
   decodeMultipartApplicationParts,
   encodeApplicationPayload,
+  encodeMultipartPayload,
   encodeOwnedApplicationPayload,
   type ServiceApplicationPayload
 } from './service-wire-m6a-codec';
@@ -217,6 +222,20 @@ export interface ServiceStatefulMailboxData {
     tail?: ServiceStatefulReplyTail
   ) => boolean;
 }
+
+type ServiceActorMessage = Extract<
+  ServiceStatefulWireRecord,
+  { kind: 'actorSend' | 'actorRequest' }
+>;
+
+export type ZLinkActorJoinIngressRouter = (
+  origin: import('../application-jobs/contracts').ApplicationJobOrigin,
+  message: ZLinkMessageFollowOrigin & { readonly target: ServiceActorRouteFence },
+  parts: readonly Buffer[],
+  reply: ((parts: readonly Buffer[]) => void) | undefined,
+  reject: (error: unknown) => void,
+  prepareSource: (signal: AbortSignal) => Promise<void>
+) => boolean;
 
 export interface ServiceCanonicalActorJoinCandidate {
   readonly request: ServiceApplicationPayload;
@@ -481,6 +500,7 @@ export class ServiceStatefulRuntime {
   private static readonly detachedIngressScope = AsyncLocalStorage.snapshot();
 
   readonly registry: ServiceStatefulRegistry;
+  private actorJoinIngressRouter?: ZLinkActorJoinIngressRouter;
   private actorMessageFollowResolver?: (fence: ServiceActorRouteFence) => boolean;
 
   readonly operations: ServiceTerminalOperationRegistry<ServiceStatefulResult, bigint>;
@@ -2665,8 +2685,9 @@ export class ServiceStatefulRuntime {
       case 'actorRequest': {
         const actor =
           record.boundSession === undefined
-            ? this.validateActorMessageFence(record.target)
+            ? this.validateActorMessageFence(record.target, ingress, record, payloadFrame)
             : this.validateActorFence(record.target);
+        if (actor === undefined) return 'infrastructure';
         if (record.boundSession !== undefined) {
           const binding = this.registry.validateBoundSession(
             record.target.actor,
@@ -4199,10 +4220,13 @@ export class ServiceStatefulRuntime {
       sessionRid: previous.sessionRid,
       retiredBindingGeneration: previous.bindingGeneration
     });
-    // submitOneWay owns the normal transport admission timeout. A replacement
-    // notice is one-way, so an unsuccessful admission has no caller terminal
-    // to complete and must not delay the already-completed bind.
-    void this.submitOneWay(previous.sessionOwnerNodeRid, [header]).catch(() => {});
+    // The replacement notice is infrastructure. Submit it independently of
+    // the completed bind and use local ingress for a local Session owner.
+    const notice =
+      previous.sessionOwnerNodeRid === this.nodeRid
+        ? this.submitOneWay(this.nodeRid, [header])
+        : this.raw.sendService(previous.sessionOwnerNodeRid, [header]);
+    void notice.catch(() => {});
   }
 
   private enqueueSessionBindingTombstone(
@@ -4973,7 +4997,7 @@ export class ServiceStatefulRuntime {
         //  serial owner nests a turn and is rejected with "cannot
         //  implicitly execute another turn for the same owner". A one-way
         //  submit completes at admission, exactly like the remote path
-        //  (sendService returns once the transport accepts the frame), so
+        //  (sendApplication returns once the transport accepts the frame), so
         //  run the ingress detached like a frame arriving on the receive
         //  pump (spec 26 §2.1 `sent` boundary; spec 33 pre-handler flow).
         void ServiceStatefulRuntime.detachedIngressScope(async () => {
@@ -5014,13 +5038,7 @@ export class ServiceStatefulRuntime {
         applicationJobOwner.close();
       }
     }
-    if (
-      targetNodeGeneration !== undefined &&
-      this.raw.topology.peer(targetNodeRid)?.descriptor.lifecycleGeneration !== targetNodeGeneration
-    ) {
-      return SubmitResult.NotConnected;
-    }
-    return (await this.raw.sendService(targetNodeRid, parts))
+    return (await this.raw.sendApplication(targetNodeRid, parts, targetNodeGeneration))
       ? SubmitResult.Ok
       : SubmitResult.NotConnected;
   }
@@ -5328,8 +5346,15 @@ export class ServiceStatefulRuntime {
     if (decoded.kind === 'actorRequest') {
       const current =
         decoded.boundSession === undefined
-          ? this.validateActorMessageFence(decoded.target)
+          ? this.validateActorMessageFence(
+              decoded.target,
+              ingress,
+              decoded,
+              payloadFrame,
+              localReply
+            )
           : this.validateActorFence(decoded.target);
+      if (current === undefined) return;
       this.enqueueApplicationFrame(
         ingress,
         `actor:${current.ref.actorId}\0${current.ref.generation}`,
@@ -5617,7 +5642,25 @@ export class ServiceStatefulRuntime {
     this.actorMessageFollowResolver = resolver;
   }
 
-  validateActorMessageFence(fence: ServiceActorRouteFence): Pick<ServiceActorState, 'ref'> {
+  setActorJoinIngressRouter(route: ZLinkActorJoinIngressRouter): void {
+    this.actorJoinIngressRouter = route;
+  }
+
+  validateActorMessageFence(fence: ServiceActorRouteFence): Pick<ServiceActorState, 'ref'>;
+  validateActorMessageFence(
+    fence: ServiceActorRouteFence,
+    ingress: RawServiceIngressRecord,
+    record: ServiceActorMessage,
+    payloadFrame: Buffer | undefined,
+    localReply?: ServiceStatefulMailboxData['reply']
+  ): Pick<ServiceActorState, 'ref'> | undefined;
+  validateActorMessageFence(
+    fence: ServiceActorRouteFence,
+    ingress?: RawServiceIngressRecord,
+    record?: ServiceActorMessage,
+    payloadFrame?: Buffer,
+    localReply?: ServiceStatefulMailboxData['reply']
+  ): Pick<ServiceActorState, 'ref'> | undefined {
     if (
       fence.actor.nodeRid !== this.nodeRid ||
       fence.targetNodeGeneration !== this.nodeGeneration
@@ -5640,9 +5683,115 @@ export class ServiceStatefulRuntime {
       actor.ref.generation === fence.actor.generation &&
       actor.authorityOwnerGeneration !== fence.authorityOwnerGeneration
     ) {
+      if (
+        fence.authorityOwnerGeneration > actor.authorityOwnerGeneration &&
+        ingress !== undefined &&
+        record !== undefined
+      ) {
+        this.routeNewerActorMessage(
+          ingress,
+          record,
+          payloadFrame!,
+          actor.authorityOwnerGeneration,
+          localReply
+        );
+        return undefined;
+      }
       throw new ServiceStaleGenerationError('actor', fence.actor.actorId);
     }
     return actor;
+  }
+
+  private routeNewerActorMessage(
+    ingress: RawServiceIngressRecord,
+    record: ServiceActorMessage,
+    payloadFrame: Buffer,
+    localAuthorityOwnerGeneration: bigint,
+    localReply: ServiceStatefulMailboxData['reply']
+  ): void {
+    const fence = record.target;
+    const request = record.kind === 'actorRequest';
+    const parts = decodeMultipartApplicationParts(payloadFrame, copyPayloadBytes);
+    const retainedSource: RawServiceIngressRecord = {
+      command: ingress.command,
+      flags: ingress.flags,
+      sourceRoutingId: ingress.sourceRoutingId,
+      sourceNodeGeneration: ingress.sourceNodeGeneration,
+      sourceRoute: ingress.sourceRoute,
+      requestSequence: ingress.requestSequence,
+      requestSource: ingress.requestSource,
+      reply: ingress.reply,
+      parts: []
+    };
+    const reply = request
+      ? (localReply ?? this.replyPort(retainedSource, record.correlation))
+      : undefined;
+    const reject = (error: unknown): void => {
+      if (reply === undefined) return;
+      const terminal = failure(error);
+      reply(terminal.terminalResult, terminal.failureCode);
+    };
+    if (
+      this.actorJoinIngressRouter?.(
+        ingress.sourceRoutingId === this.nodeRid ? 'local' : 'remote',
+        {
+          get requestSource() {
+            return retainedSource.requestSource;
+          },
+          target: fence,
+          sourceNodeRid: ingress.sourceRoutingId,
+          originalOperation: record.operation,
+          originalReplyRouteId: record.correlation ?? 0n
+        },
+        parts,
+        reply === undefined
+          ? undefined
+          : (replyParts) => {
+              reply(RequestResult.Ok, 0, {
+                packetName: SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME,
+                contentType: SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE,
+                payload: encodeMultipartPayload(replyParts)
+              });
+            },
+        reject,
+        async (signal) => {
+          await this.acceptRequestSource(retainedSource, signal);
+        }
+      ) === true
+    ) {
+      ingress.onAdmitted?.();
+      return;
+    }
+
+    const error = new ZLinkFrameworkException(
+      ZLinkFrameworkErrorKind.InvalidOperation,
+      `Actor '${fence.actor.actorId}' received authority generation ${fence.authorityOwnerGeneration} with local generation ${localAuthorityOwnerGeneration} and no target temporary queue.`
+    );
+    const reporter = this.dispatchErrors;
+    if (reporter?.captureEnabled() === true) {
+      const flowEnabled = reporter.flow.flowCreationEnabled();
+      const headerBytes = parts.at(0);
+      const header =
+        headerBytes === undefined ? undefined : decodeStreamHeader(headerBytes, flowEnabled);
+      const flow = createInboundFlow(header?.flowId, header?.flowOrigin, flowEnabled, undefined);
+      reporter.report({
+        surface: ZLinkDispatchErrorSurface.SpotActor,
+        messageKind: request
+          ? ZLinkDispatchMessageKind.ActorRequest
+          : ZLinkDispatchMessageKind.ActorSend,
+        reason: ZLinkDispatchErrorReason.StaleTarget,
+        action: request ? ZLinkDispatchErrorAction.ReplyError : ZLinkDispatchErrorAction.Drop,
+        meshName: this.dispatchErrorMeshName,
+        sourceRid: ingress.sourceRoutingId,
+        actorId: fence.actor.actorId,
+        packetName: header?.name,
+        correlationId: header?.correlationId ?? record.correlation?.toString(),
+        flowId: flow?.flowId,
+        flowOrigin: flow?.flowOrigin,
+        error
+      });
+    }
+    if (request) throw error;
   }
 
   private validateSpotFence(fence: ServiceSpotRouteFence): ServiceSpotState {

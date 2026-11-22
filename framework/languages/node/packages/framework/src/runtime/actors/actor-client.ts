@@ -816,6 +816,8 @@ function actorTerminalKind(result: number): ZLinkFrameworkInternalErrorKind {
       return ZLinkFrameworkInternalErrorKind.RequestProtocolError;
     case RequestResult.Rejected:
       return ZLinkFrameworkInternalErrorKind.RequestRejected;
+    case RequestResult.InvalidState:
+      return ZLinkFrameworkInternalErrorKind.InvalidOperation;
     case RequestResult.NotConnected:
       return ZLinkFrameworkInternalErrorKind.RouteNotConnected;
     //  A terminal-only conflict/busy on a remote actor reply is the target's

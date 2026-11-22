@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const { ZLinkLocationRole } = require('../../packages/framework/dist/internal');
 const {
   ZLinkNodeRawMeshBackend
 } = require('../../packages/framework/dist/runtime/backend/node/node-raw-mesh-backend');
@@ -10,6 +11,9 @@ const {
   ApplicationJobQueue,
   resolveApplicationJobQueueConfiguration
 } = require('../../packages/framework/dist/runtime/host/application-job-queue');
+const {
+  spotNodeAutoConnectCapability
+} = require('../../packages/framework/dist/runtime/spots/spot-node-autoconnect');
 
 function fixture() {
   const calls = [];
@@ -92,6 +96,64 @@ for (const replacement of [
     }
   });
 }
+
+test('removing an old intent unregisters its endpoint and preserves the replacement expectation', async () => {
+  const { node, calls } = fixture();
+  const endpoint = 'inproc://peer';
+  try {
+    const first = await node.connectPeer({
+      endpoint,
+      expectedRid: 'peer',
+      expectedLifecycleGeneration: 1n
+    });
+    node.expectPeer({ endpoint, nodeRoutingId: 'peer', lifecycleGeneration: 2n });
+    node.removePeerConnection(first);
+
+    assert.deepEqual(calls, [
+      ['connect', endpoint, 'peer'],
+      ['disconnect', endpoint]
+    ]);
+    assert.equal(node.observePeerRoute('peer').expectation.lifecycleGeneration, 2n);
+  } finally {
+    await node.close();
+  }
+});
+
+test('retiring an automatic intent leaves the admitted replacement at the same endpoint', async () => {
+  const bind = 'tcp://127.0.0.1:5001';
+  const target = {
+    targetKey: 'shared:1',
+    nodeRid: 'shared',
+    lifecycleGeneration: 1n,
+    endpoint: 'tcp://127.0.0.1:5002',
+    role: ZLinkLocationRole.Router
+  };
+  const removedIntents = [];
+  const disconnectedLifecycles = [];
+  const { executor } = spotNodeAutoConnectCapability(
+    'mesh',
+    { router: { bind } },
+    {
+      status: () => ({ routingId: 'game', localEndpoint: bind }),
+      connectPeer: async () => 1n,
+      removePeerConnection: (id) => removedIntents.push(id),
+      peers: () => [
+        {
+          routingId: target.nodeRid,
+          endpoint: target.endpoint,
+          lifecycleGeneration: 2n
+        }
+      ],
+      disconnectPeer: (_rid, lifecycle) => disconnectedLifecycles.push(lifecycle)
+    }
+  );
+
+  assert.equal(await executor.connect(target), true);
+  executor.disconnect(target);
+
+  assert.deepEqual(removedIntents, [1n]);
+  assert.deepEqual(disconnectedLifecycles, []);
+});
 
 test('route manual configuration uses one connect per normalized endpoint', async () => {
   const calls = [];

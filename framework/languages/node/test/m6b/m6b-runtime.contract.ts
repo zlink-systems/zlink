@@ -1580,7 +1580,7 @@ test('outbound stateful routes use resolved authority generations and never obje
       return () => {};
     },
     setServiceIngress: () => {},
-    sendService: async (target: string, parts: readonly Buffer[]) => {
+    sendApplication: (target: string, parts: readonly Buffer[]) => {
       sent.push({ target, parts });
       return true;
     }
@@ -1696,7 +1696,8 @@ test('a newer authority generation without its route is NotConnected and makes t
       return () => {};
     },
     setServiceIngress: () => {},
-    sendService: async (target: string, parts: readonly Buffer[]) => {
+    sendApplication: (target: string, parts: readonly Buffer[], generation: bigint) => {
+      if (generation !== 7n) return false;
       sent.push({ target, parts });
       return true;
     }
@@ -3274,7 +3275,7 @@ test('Instance activation encoding distinguishes absent metadata from explicit e
     },
     setServiceIngress: () => {},
     isPeerRouteReady: () => true,
-    sendService: async (target: string, parts: readonly Buffer[]) => {
+    sendApplication: (target: string, parts: readonly Buffer[]) => {
       sent.push({ target, parts });
       return false;
     }
@@ -3313,7 +3314,7 @@ test('Instance activation encoding distinguishes absent metadata from explicit e
   runtime.close();
 });
 
-test('retained peer routes may submit while endpoint convergence reports not ready', async () => {
+test('stateful sends use outbound admission without a separate readiness probe', async () => {
   const sent: Array<{ readonly target: string; readonly parts: readonly Buffer[] }> = [];
   const raw = {
     topology: {
@@ -3326,8 +3327,8 @@ test('retained peer routes may submit while endpoint convergence reports not rea
       return () => {};
     },
     setServiceIngress: () => {},
-    isPeerRouteReady: () => false,
-    sendService: async (target: string, parts: readonly Buffer[]) => {
+    isPeerRouteReady: () => assert.fail('outbound admission owns route readiness'),
+    sendApplication: (target: string, parts: readonly Buffer[]) => {
       sent.push({ target, parts });
       return true;
     }
@@ -6092,7 +6093,7 @@ test('remote Session bind publishes its exact Location fence for the first Actor
         })
       ]);
     },
-    async sendService(_targetNodeRid: string, parts: readonly Buffer[]) {
+    sendApplication(_targetNodeRid: string, parts: readonly Buffer[]) {
       relayHeaders.push(decodeStatefulHeader(parts[0]!));
       return true;
     }

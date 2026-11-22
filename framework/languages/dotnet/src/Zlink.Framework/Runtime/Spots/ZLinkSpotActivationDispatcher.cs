@@ -439,7 +439,8 @@ internal sealed class ZLinkSpotActivationDispatcher
         ZLinkBackendRouteReceived received,
         string channelName,
         ZLinkAcceptedWorkAdmission admission,
-        ZLinkFrameworkRuntime runtime
+        ZLinkFrameworkRuntime runtime,
+        (string SpotId, ZLinkSpotCloseReason Reason)? committedClose = null
     )
     {
         using (received)
@@ -448,36 +449,58 @@ internal sealed class ZLinkSpotActivationDispatcher
                 return;
             try
             {
-                var header = DecodeRejectionHeader(
-                    received,
-                    channelName,
-                    runtime.Flow.CaptureEnabled
-                );
+                var captureFlow = runtime.Flow.CaptureEnabled;
+                var header = DecodeRejectionHeader(received, channelName, captureFlow);
                 if (header is null)
                     return;
+
                 var errorKind = admission.ErrorKind();
-                //  Sealed/rejected admission is framework-generated
-                //  (zlink.origin marker on the error reply).
+#pragma warning disable CS8524 // Only named admission results can reach the rejection path.
+                var message = admission switch
+                {
+                    ZLinkAcceptedWorkAdmission.Accepted =>
+                        "Accepted SPOT work reached the rejection path.",
+                    ZLinkAcceptedWorkAdmission.Closed => "SPOT is closed.",
+                    ZLinkAcceptedWorkAdmission.RelocationMoving => "SPOT is relocating.",
+                    ZLinkAcceptedWorkAdmission.Closing => "SPOT is closing.",
+                };
+#pragma warning restore CS8524
                 var reply = ZLinkSpotReplyEnvelope.EncodeErrorParts(
                     channelName,
                     header.MessageName,
                     header.CorrelationId,
-                    new ZLinkFrameworkException(
-                        errorKind,
-                        admission switch
-                        {
-                            ZLinkAcceptedWorkAdmission.Closed =>
-                                "SPOT application admission is closed.",
-                            ZLinkAcceptedWorkAdmission.RelocationMoving =>
-                                "SPOT application admission is relocating.",
-                            _ => "SPOT application admission was rejected.",
-                        }
-                    )
+                    new ZLinkFrameworkException(errorKind, message)
                     {
                         Origin = ZLinkErrorOrigin.Framework,
                     }
                 );
                 ZLinkSpotReplySubmitter.SubmitAndDispose(received, reply);
+                if (captureFlow && committedClose is { } close)
+                {
+                    using var flow = ZLinkFlowContext.Enter(
+                        header.FlowId,
+                        header.FlowOrigin,
+                        captureFlow,
+                        ZLinkFlowOrigin.Inbound
+                    );
+                    runtime.Flow.TraceDispatchError(
+                        new ZLinkDispatchFailure(
+                            ZLinkDispatchErrorSurface.SpotRoute,
+                            ZLinkDispatchMessageKind.Request,
+                            ZLinkDispatchErrorReason.StaleTarget,
+                            ZLinkDispatchErrorAction.ReplyError,
+                            header.MessageName,
+                            channelName,
+                            SpotId: close.SpotId,
+                            CorrelationId: header.CorrelationId,
+                            Exception: new ZLinkFrameworkException(
+                                errorKind,
+                                $"{message} Close reason: {close.Reason}."
+                            ),
+                            ActivationState: "closing"
+                        )
+                    );
+                }
             }
             catch (Exception exception)
             {
