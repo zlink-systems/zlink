@@ -5,11 +5,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 local_mode=false
 no_build=false
 build_only=false
-attach=false
 arguments=()
 for argument in "$@"; do
   case "$argument" in
-    --attach) attach=true ;;
     --local) local_mode=true ;;
     --no-build) no_build=true ;;
     --build-only) build_only=true ;;
@@ -18,16 +16,15 @@ for argument in "$@"; do
 done
 cd "$ROOT"
 mkdir -p "$ROOT/.logs"
-if $attach; then
-  if $build_only || [[ "${arguments[0]:-}" == "--check-structure" ]]; then
-    echo '--attach requires a scenario run.' >&2
-    exit 1
-  fi
+. "$ROOT/scripts/run-helpers.sh"
+# A scenario run uses the server started by run-server.sh when one is running.
+if ! $local_mode && ! $build_only && [[ "${arguments[0]:-}" != "--check-structure" ]] &&
+  server_running "$ROOT"; then
+  echo 'Using the running server (logs/server.json)'
   exec node dist/e2e/runner.js --attach "${arguments[@]}"
 fi
 if $local_mode; then
   if ! $no_build; then
-    . "$ROOT/scripts/run-helpers.sh"
     assert_no_running_server "$ROOT"
     if ! (npm ci && npm run build) >"$ROOT/.logs/build.log" 2>&1; then
       tail -n 20 "$ROOT/.logs/build.log" >&2

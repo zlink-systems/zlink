@@ -1,7 +1,6 @@
 [CmdletBinding(PositionalBinding = $false)]
 param(
     [switch]$Local,
-    [switch]$Attach,
     [switch]$NoBuild,
     [switch]$BuildOnly,
     [switch]$CheckStructure,
@@ -17,8 +16,9 @@ Set-Location $root
 New-Item -ItemType Directory -Force (Join-Path $root '.logs') | Out-Null
 if ($CheckStructure) { $RunnerArguments = @('--check-structure') + $RunnerArguments }
 elseif ($Scenario) { $RunnerArguments = @('--scenario', $Scenario) + $RunnerArguments }
-if ($Attach) {
-    if ($BuildOnly -or $CheckStructure) { throw '-Attach requires a scenario run.' }
+# A scenario run uses the server started by run-server.ps1 when one is running.
+if (-not $Local -and -not $BuildOnly -and -not $CheckStructure -and (Test-RunningServer -Root $root)) {
+    Write-Host 'Using the running server (logs/server.json)'
     & node dist/e2e/runner.js --attach @RunnerArguments
     exit $LASTEXITCODE
 }

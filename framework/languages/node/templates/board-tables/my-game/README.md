@@ -111,14 +111,14 @@ Open two terminals in the template directory. In the first terminal, start Redis
 pwsh -NoProfile -File ./run-server.ps1
 ```
 
-In the second terminal, attach the e2e runner. Each client message appears on one line with the client name, a send (`→`) or receive (`←`) arrow, the message type, and compact JSON.
+In the second terminal, run the e2e. It finds the server from the first terminal through `logs/server.json` and runs the same scenarios against it; with no server running it starts its own nodes in Docker. Each client message appears on one line with the client name, a send (`→`) or receive (`←`) arrow, the message type, and compact JSON.
 
 ```sh
-./run-e2e.sh --attach
+./run-e2e.sh
 ```
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -Attach
+pwsh -NoProfile -File ./run-e2e.ps1
 ```
 
 Start the server again before another full e2e run: one server start reserves table capacity for one run of every scenario, and the `update` scenario replaces a table node.
