@@ -172,8 +172,13 @@ class ZLinkSpotNodeAutoConnectExecutor implements IZLinkAutoConnectExecutor {
   }
 
   disconnect(target: ZLinkAutoConnectTarget): void {
-    if (!this.connectionIntents.has(connectionKey(target))) return;
-    this.disconnectPeer(target);
+    const key = connectionKey(target);
+    const intent = this.connectionIntents.get(key);
+    if (intent === undefined) return;
+    this.connectionIntents.delete(key);
+    if (intent.connectionIntentId !== undefined) {
+      this.node.removePeerConnection(intent.connectionIntentId);
+    }
   }
 
   isDisconnected(target: ZLinkAutoConnectTarget): boolean {
@@ -259,29 +264,6 @@ class ZLinkSpotNodeAutoConnectExecutor implements IZLinkAutoConnectExecutor {
     });
     if (!accepted) this.node.removePeerConnection(connectionIntentId);
     return accepted;
-  }
-
-  private disconnectPeer(target: ZLinkAutoConnectTarget): void {
-    const key = connectionKey(target);
-    const intent = this.connectionIntents.get(key);
-    if (intent !== undefined) {
-      this.connectionIntents.delete(key);
-      if (intent.connectionIntentId !== undefined) {
-        this.node.removePeerConnection(intent.connectionIntentId);
-      }
-    }
-    for (const peer of this.node.peers()) {
-      if (peer.routingId === null) {
-        continue;
-      }
-      if (peer.endpoint !== target.endpoint) {
-        continue;
-      }
-      if (target.nodeRid !== undefined && !routingIdsEqual(peer.routingId, target.nodeRid)) {
-        continue;
-      }
-      this.node.disconnectPeer(peer.routingId, peer.lifecycleGeneration);
-    }
   }
 }
 

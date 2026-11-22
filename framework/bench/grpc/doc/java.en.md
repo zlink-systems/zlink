@@ -56,7 +56,7 @@ HTTP ports first and then starts the RouteMesh listener. The runner checks LISTE
 
 | Pattern | `streams.count` | `streams.inFlightPerStream` | Implementation |
 |---|---:|---:|---|
-| `request-serial` | 1 | 1 | sequential `CompletableFuture`s on one platform submit thread |
+| `request-serial` | 1 | 1 | sequential `CompletableFuture`s on one platform submit thread; a separate completion thread completes them (Framework and binding alike) |
 | `request-backpressure` | 1 | none | one submit thread submitting without a ceiling and yielding to completions |
 | `send-saturation` | 8 | 1 | eight submit threads, each sending again after its completion notice |
 

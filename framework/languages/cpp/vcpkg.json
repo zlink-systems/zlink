@@ -36,7 +36,8 @@
   "overrides": [
     {
       "name": "abseil",
-      "version": "20260107.1"
+      "version": "20260107.1",
+      "port-version": 3
     },
     {
       "name": "grpc",

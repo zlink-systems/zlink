@@ -592,8 +592,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       ) {
         return id;
       }
-      runtime.disconnectPeerEndpoint(existing.endpoint);
-      this.peerIntents.delete(id);
+      this.removePeerConnection(id);
     }
     if (nodeRoutingId === undefined) {
       runtime.connectPeerEndpoint(options.endpoint);
@@ -652,15 +651,11 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     const intent = this.peerIntents.get(intentId);
     if (intent === undefined) return;
     this.peerIntents.delete(intentId);
-    if (intent.nodeRoutingId === undefined) {
-      this.runtime?.disconnectPeerEndpoint(intent.endpoint);
-    } else {
-      this.runtime?.disconnectPeer(
-        intent.endpoint,
-        intent.nodeRoutingId,
-        intent.lifecycleGeneration
-      );
-    }
+    this.runtime?.disconnectPeerEndpoint(
+      intent.endpoint,
+      intent.nodeRoutingId,
+      intent.lifecycleGeneration
+    );
   }
 
   disconnectPeer(peerRid: unknown, lifecycleGeneration: bigint): void {

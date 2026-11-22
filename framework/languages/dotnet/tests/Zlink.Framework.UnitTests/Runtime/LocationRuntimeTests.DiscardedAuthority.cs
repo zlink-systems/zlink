@@ -89,22 +89,15 @@ public sealed partial class LocationRuntimeTests
         if (expired)
         {
             Assert.IsType<ZLinkAuthorityReadResult.Found>(await store.ReadAuthorityAsync(actorKey));
+            Assert.IsType<ZLinkAuthorityReadResult.Found>(await store.ReadAuthorityAsync(spotKey));
             time.AdvanceMonotonicWithoutTimers(TimeSpan.FromSeconds(15) - TimeSpan.FromTicks(1));
             Assert.True(await locations.RenewOwnerLeaseOnceAsync());
             Assert.IsType<ZLinkAuthorityReadResult.Found>(await store.ReadAuthorityAsync(actorKey));
+            Assert.IsType<ZLinkAuthorityReadResult.Found>(await store.ReadAuthorityAsync(spotKey));
             time.AdvanceMonotonicWithoutTimers(TimeSpan.FromTicks(1));
             Assert.True(await locations.RenewOwnerLeaseOnceAsync());
         }
         Assert.IsType<ZLinkAuthorityReadResult.Missing>(await store.ReadAuthorityAsync(actorKey));
-        if (expired)
-        {
-            Assert.IsType<ZLinkAuthorityReadResult.Found>(await store.ReadAuthorityAsync(spotKey));
-            time.AdvanceMonotonicWithoutTimers(TimeSpan.FromSeconds(15) - TimeSpan.FromTicks(1));
-            Assert.True(await locations.RenewOwnerLeaseOnceAsync());
-            Assert.IsType<ZLinkAuthorityReadResult.Found>(await store.ReadAuthorityAsync(spotKey));
-            time.AdvanceMonotonicWithoutTimers(TimeSpan.FromTicks(1));
-            Assert.True(await locations.RenewOwnerLeaseOnceAsync());
-        }
         Assert.IsType<ZLinkAuthorityReadResult.Missing>(await store.ReadAuthorityAsync(spotKey));
         var capacity = Assert
             .Single(await store.ListAllMeshNodesAsync("discarded-authority"))
