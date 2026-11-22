@@ -170,7 +170,8 @@ export interface ZLinkDomainLocationStore {
 
   prepareAggregate(
     request: ZLinkAggregatePrepareRequest,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    deadlineUnixMs?: bigint
   ): Promise<ZLinkAggregatePrepareResult>;
   commitAggregate(
     fence: ZLinkAggregateFence,

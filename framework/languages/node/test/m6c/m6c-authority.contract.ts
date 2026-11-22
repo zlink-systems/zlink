@@ -1,3 +1,9 @@
+import {
+  createActive,
+  reserveRequest,
+  userSpotCapacity,
+  writeTargetDescriptor
+} from './user-spot-authority-fixture';
 import { LegacyRelocationAuthorityFixture } from './legacy-relocation-authority-fixture';
 import { ZLinkStatefulAuthorityRouteRuntime } from '../../packages/framework/src/runtime/host/stateful-authority-route-runtime';
 import { encodeServiceInstanceAuthorityPayload } from '../../packages/framework/src/runtime/foundation/service-authority-payload-codec';
@@ -14,8 +20,6 @@ import type {
 import {
   ZLinkFrameworkErrorKind,
   ZLinkFrameworkException,
-  ZLinkFrameworkRuntimeState,
-  ZLinkObjectRole,
   ZLinkSpotKind,
   ZLinkSpotCloseReason,
   ZLinkSpotCreateState
@@ -32,10 +36,7 @@ import {
   storeKey
 } from '../../packages/framework/src/runtime/locations/in-memory-provider-location-store';
 import { ZLinkLocationStoreRepository } from '../../packages/framework/src/runtime/locations/location-store-repository';
-import {
-  ownerLeaseReleaseDelayScope,
-  ZLinkOwnerLeaseReleaseDelay
-} from '../../packages/framework/src/runtime/locations/owner-lease-release-delay';
+import { ZLinkOwnerLeaseReleaseDelay } from '../../packages/framework/src/runtime/locations/owner-lease-release-delay';
 import { opaqueRecordPreimage } from '../../packages/framework/src/runtime/locations/opaque-record-key';
 import { encodeAuthorityKey } from '../../packages/framework/src/runtime/locations/authority-key-codec';
 import { ZLinkUserSpotCreationCoordinator } from '../../packages/framework/src/runtime/host/user-spot-creation-coordinator';
@@ -987,7 +988,7 @@ for (const backend of ['provider', 'memory'] as const) {
         assert.equal(recreated.kind, 'reserved');
         if (recreated.kind !== 'reserved') return;
         assert.ok(recreated.creating.objectGeneration > committed.ready.objectGeneration);
-        if (scenario === 'dead') assert.equal(releaseDelayObservationCount(store), 0);
+        if (scenario === 'dead') assert.equal(releaseDelayObservationCount(store), 1);
         assert.ok((await versions()).slice(1).every((version) => version === 'missing'));
         assert.equal(await memberRow(), 'found');
         if (backend === 'provider') {
@@ -1338,7 +1339,7 @@ for (const backend of ['provider', 'memory'] as const) {
   });
 }
 
-test('a Missing authority row clears its previous owner release delay', async (t) => {
+test('a Missing authority row retains the previous owner token release delay', async (t) => {
   let now = new Date(100);
   let monotonicMs = 0;
   t.mock.method(performance, 'now', () => monotonicMs);
@@ -1392,7 +1393,7 @@ test('a Missing authority row clears its previous owner release delay', async (t
     (await store.readAuthority(encodeAuthorityKey('user_spot', 'missing-release'))).kind,
     'missing'
   );
-  assert.equal(releaseDelayObservationCount(store), 0);
+  assert.equal(releaseDelayObservationCount(store), 1);
 
   const replacement = await store.reserve(request);
   assert.equal(replacement.kind, 'reserved');
@@ -1616,22 +1617,7 @@ test('an earlier live lease callback cannot clear a later invalid observation', 
   assert.equal((await store.reserve(request)).kind, 'reserved');
 });
 
-test('Spot member delay scope separates object generations', () => {
-  const delay = new ZLinkOwnerLeaseReleaseDelay(30);
-  const memberOwner = owner('member-owner', 1n);
-  const g1Prefix = ownerLeaseReleaseDelayScope.userSpotMembers('same-spot', 1n);
-  const g1Scope = ownerLeaseReleaseDelayScope.userSpotMember('same-spot', 1n, 'actor:g1');
-  const g2Scope = ownerLeaseReleaseDelayScope.userSpotMember('same-spot', 2n, 'actor:g2');
-  assert.equal(delay.allows(g1Scope, memberOwner, false, 0), false);
-  assert.equal(delay.allows(g2Scope, memberOwner, false, 0), false);
-
-  delay.clearExcept(g1Prefix, new Set());
-
-  assert.equal(delay.allows(g2Scope, memberOwner, false, 29), false);
-  assert.equal(delay.allows(g2Scope, memberOwner, false, 30), true);
-});
-
-test('deferred g1 Spot scan and release write preserve g2 member t0', async () => {
+test('deferred Spot scan and release write preserve a different owner token t0', async () => {
   let now = new Date(100);
   let monotonicMs = 0;
   const marginMs = 10_000;
@@ -1655,7 +1641,7 @@ test('deferred g1 Spot scan and release write preserve g2 member t0', async () =
     nodeLifecycleGeneration: oldDescriptor.lifecycleGeneration,
     owner: owner(oldDescriptor.ownerId, oldDescriptor.leaseGeneration)
   };
-  const ready = await createActive(store, 'same-spot-generation', oldTarget);
+  await createActive(store, 'same-spot-generation', oldTarget);
   const newDescriptor = await writeTargetDescriptor(
     store,
     'generation-new',
@@ -1672,11 +1658,6 @@ test('deferred g1 Spot scan and release write preserve g2 member t0', async () =
     actorRelocationPolicy: 'disabled' as const
   };
   const delay = store.ownerLeaseReleaseDelayForTesting;
-  const g2Scope = ownerLeaseReleaseDelayScope.userSpotMember(
-    'same-spot-generation',
-    ready.objectGeneration + 1n,
-    encodeAuthorityKey('actor', 'future-member').value
-  );
   const g2Owner = owner('future-member-owner', 1n);
   const scanStarted = createDeferred<void>();
   const finishScan = createDeferred<void>();
@@ -1694,7 +1675,7 @@ test('deferred g1 Spot scan and release write preserve g2 member t0', async () =
   now = new Date(201);
   const firstAttempt = store.reserve(request);
   await scanStarted.promise;
-  assert.equal(delay.allows(g2Scope, g2Owner, false, 0), false);
+  assert.equal(delay.allowsAuthority(g2Owner, 0), false);
   monotonicMs = 5_000;
   finishScan.resolve();
   await assert.rejects(
@@ -1702,8 +1683,8 @@ test('deferred g1 Spot scan and release write preserve g2 member t0', async () =
     (error: unknown) =>
       error instanceof ZLinkFrameworkException && error.kind === ZLinkFrameworkErrorKind.Unavailable
   );
-  assert.equal(delay.allows(g2Scope, g2Owner, false, 29_999), false);
-  assert.equal(delay.allows(g2Scope, g2Owner, false, 30_000), true);
+  assert.equal(delay.allowsAuthority(g2Owner, 29_999), false);
+  assert.equal(delay.allowsAuthority(g2Owner, 30_000), true);
 
   const spotRowKey = storeKey(opaqueRecordPreimage('authority', 'spot', 'same-spot-generation'));
   const writeStarted = createDeferred<void>();
@@ -1726,10 +1707,10 @@ test('deferred g1 Spot scan and release write preserve g2 member t0', async () =
   monotonicMs = 30_000;
   const releaseAttempt = store.reserve(request);
   await writeStarted.promise;
-  assert.equal(delay.allows(g2Scope, g2Owner, false, 30_000), true);
+  assert.equal(delay.allowsAuthority(g2Owner, 30_000), true);
   finishWrite.resolve();
   assert.equal((await releaseAttempt).kind, 'reserved');
-  assert.equal(delay.allows(g2Scope, g2Owner, false, 30_000), true);
+  assert.equal(delay.allowsAuthority(g2Owner, 30_000), true);
 });
 
 test('a completed member release preserves a newer token observation made after the batch applies', async () => {
@@ -1758,7 +1739,6 @@ test('a completed member release preserves a newer token observation made after 
   };
   const spotId = 'deferred-member-release';
   const readySpot = await createActive(store, spotId, oldTarget);
-  const memberKey = encodeAuthorityKey('actor', 'member-after-release');
   await createReadyMember(
     store,
     'member-after-release',
@@ -1817,24 +1797,15 @@ test('a completed member release preserves a newer token observation made after 
   await writeApplied.promise;
   const delay = store.ownerLeaseReleaseDelayForTesting;
   const newOwner = owner('member-new-token-owner', 2n);
-  const authorityScope = ownerLeaseReleaseDelayScope.authority(memberKey.value);
-  const memberScope = ownerLeaseReleaseDelayScope.userSpotMember(
-    spotId,
-    readySpot.objectGeneration,
-    memberKey.value
-  );
   monotonicMs = 31_000;
-  assert.equal(delay.allows(authorityScope, newOwner, false), false);
-  assert.equal(delay.allows(memberScope, newOwner, false), false);
+  assert.equal(delay.allowsAuthority(newOwner), false);
   finishWrite.resolve();
   assert.equal((await releaseAttempt).kind, 'reserved');
 
   monotonicMs = 60_999;
-  assert.equal(delay.allows(authorityScope, newOwner, false), false);
-  assert.equal(delay.allows(memberScope, newOwner, false), false);
+  assert.equal(delay.allowsAuthority(newOwner), false);
   monotonicMs = 61_000;
-  assert.equal(delay.allows(authorityScope, newOwner, false), true);
-  assert.equal(delay.allows(memberScope, newOwner, false), true);
+  assert.equal(delay.allowsAuthority(newOwner), true);
 });
 
 test('a delayed Missing authority read preserves a newer token observation', async () => {
@@ -1850,9 +1821,8 @@ test('a delayed Missing authority read preserves a newer token observation', asy
     marginMs
   );
   const key = encodeAuthorityKey('actor', 'delayed-missing-authority');
-  const scope = ownerLeaseReleaseDelayScope.authority(key.value);
   const delay = store.ownerLeaseReleaseDelayForTesting;
-  assert.equal(delay.allows(scope, owner('missing-old-owner', 1n), false), false);
+  assert.equal(delay.allowsAuthority(owner('missing-old-owner', 1n)), false);
 
   const missingReadStarted = createDeferred<void>();
   const finishMissingRead = createDeferred<void>();
@@ -1873,14 +1843,14 @@ test('a delayed Missing authority read preserves a newer token observation', asy
   await missingReadStarted.promise;
   const replacementOwner = owner('missing-new-owner', 2n);
   monotonicMs = 1_000;
-  assert.equal(delay.allows(scope, replacementOwner, false), false);
+  assert.equal(delay.allowsAuthority(replacementOwner), false);
   finishMissingRead.resolve();
   assert.equal((await missingAttempt).kind, 'missing');
 
   monotonicMs = 30_999;
-  assert.equal(delay.allows(scope, replacementOwner, false), false);
+  assert.equal(delay.allowsAuthority(replacementOwner), false);
   monotonicMs = 31_000;
-  assert.equal(delay.allows(scope, replacementOwner, false), true);
+  assert.equal(delay.allowsAuthority(replacementOwner), true);
 });
 
 for (const scenario of ['live', 'expired', 'missingCapacity', 'underflow'] as const) {
@@ -4410,55 +4380,6 @@ for (const boundary of ['attempts', 'elapsed time', 'cancellation', 'target leas
   });
 }
 
-async function writeTargetDescriptor(
-  store: ZLinkInMemoryLocationStore,
-  ownerId: string,
-  nodeRid: string,
-  leaseTtlMs: number
-) {
-  const claimed = await store.claimOwnerLease(ownerId, leaseTtlMs);
-  assert.equal(claimed.kind, 'claimed');
-  if (claimed.kind !== 'claimed') throw new Error('owner lease claim failed');
-  const descriptor = {
-    meshName: 'mesh',
-    rid: nodeRid,
-    lifecycleGeneration: 1n,
-    descriptorRevision: 1n,
-    endpoint: `tcp://${nodeRid}`,
-    objectRole: ZLinkObjectRole.Server,
-    placementWeight: 100,
-    populationCapacity: {
-      actors: { active: 0, reserved: 0, limit: 1 },
-      spots: { active: 0, reserved: 0, limit: 1 },
-      spotTypes: [
-        { objectKind: 'user_spot' as const, stableType: 'room', active: 0, reserved: 0, limit: 1 }
-      ]
-    },
-    activationConcurrency: { active: 0, limit: 1 },
-    channelWeights: {},
-    applicationVersion: 1n,
-    spotTypes: [],
-    objectCapabilities: [
-      {
-        objectKind: 'user_spot' as const,
-        stableType: 'room',
-        policy: 'disabled' as const,
-        hasSnapshotAdapter: false,
-        entryAccepted: false,
-        limit: 0
-      }
-    ],
-    state: ZLinkFrameworkRuntimeState.Serving,
-    securityIdentity: nodeRid,
-    ownerId,
-    leaseGeneration: claimed.token.leaseGeneration,
-    updatedAt: new Date(100)
-  };
-  const stored = await store.updateMeshNode(descriptor, ZLinkLocationWriteIntent.NewClaim);
-  assert.equal(stored.status, ZLinkLocationWriteStatus.Stored);
-  return descriptor;
-}
-
 async function writeActorTargetDescriptor(
   store: ZLinkInMemoryLocationStore,
   ownerId: string,
@@ -4549,62 +4470,6 @@ function target(rid: string, ownerId: string): ZLinkObjectCreationTarget {
     nodeLifecycleGeneration: generation,
     owner: owner(ownerId, generation)
   };
-}
-
-function reserveRequest(globalId: string, placement: ZLinkObjectCreationTarget) {
-  return {
-    key: { kind: 'user_spot' as const, globalId },
-    intent: {
-      stableType: 'room',
-      requestContentReference: `request:${globalId}`,
-      requestSha256: Buffer.alloc(32, 1),
-      requestEncodedSize: 10n
-    },
-    target: placement,
-    creatingPayload: Buffer.from('creating'),
-    capacity: userSpotCapacity('room')
-  };
-}
-
-function userSpotCapacity(stableType: string) {
-  return {
-    actors: 0,
-    spots: 1,
-    spotType: {
-      objectKind: 'user_spot' as const,
-      stableType,
-      count: 1
-    }
-  };
-}
-
-async function createActive(
-  store: Pick<ZLinkInMemoryAuthorityStore, 'reserve' | 'commit'>,
-  globalId: string,
-  placement: ZLinkObjectCreationTarget
-) {
-  const reserved = await store.reserve(reserveRequest(globalId, placement));
-  assert.equal(reserved.kind, 'reserved');
-  if (reserved.kind !== 'reserved') throw new Error('reservation failed');
-  const committed = await store.commit({
-    key: { kind: 'user_spot', globalId },
-    reservationId: reserved.reservationId,
-    expectedStoreVersion: reserved.creating.storeVersion.value,
-    target: placement,
-    readyPayload: encodeServiceUserSpotAuthorityPayload({
-      state: 'ready',
-      stableType: 'room',
-      spotId: globalId,
-      ownerId: placement.owner.ownerId,
-      ownerLeaseGeneration: placement.owner.leaseGeneration,
-      ownerMeshName: placement.meshName,
-      ownerNodeRid: String(placement.nodeRid),
-      ownerNodeGeneration: placement.nodeLifecycleGeneration
-    })
-  });
-  assert.equal(committed.kind, 'committed');
-  if (committed.kind !== 'committed') throw new Error('commit failed');
-  return committed.ready;
 }
 
 async function createReadyMember(

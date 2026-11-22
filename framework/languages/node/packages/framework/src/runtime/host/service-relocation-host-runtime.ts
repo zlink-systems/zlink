@@ -4683,7 +4683,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     return {
       prepared: await new ServiceRelocationAggregateCommitter(this.requireLocationStore()).prepare(
         plan,
-        signal
+        signal,
+        prepare.deadlineUnixMs
       )
     };
   }

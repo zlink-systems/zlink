@@ -245,6 +245,7 @@
         <Compile Include="Runtime/OwnerLeaseTrackerTests.cs"/>
         <Compile Include="Runtime/SpotNodeInitializerTests.cs"/>
         <Compile Include="Runtime/ProviderLocationRepositoryAuthorityTests.cs"/>
+        <Compile Include="Runtime/ProviderLocationRepositoryAuthorityTests.OwnerTokenReleaseWait.cs"/>
         <Compile Include="Runtime/ProviderRelocationRepositoryTests.cs"/>
         <Compile Include="Runtime/MessageFlowTracerTests.cs"/>
         <Compile Include="Runtime/MessageFlowDeliveryTests.cs"/>

@@ -9,10 +9,7 @@ import type {
   ZLinkLocationOwnerToken,
   ZLinkMeshNodeDescriptorKey
 } from '../locations/internal-location-contracts';
-import type {
-  ZLinkAuthorityStore,
-  ZLinkObjectCreationStore
-} from '../locations/internal-store-contracts';
+import type { ZLinkObjectCreationStore } from '../locations/internal-store-contracts';
 import { inventoryDigest, type ServiceRelocationEnvelope } from './service-relocation-runtime';
 
 export interface ServiceRelocationAggregateParticipantPlan {
@@ -38,10 +35,7 @@ export interface ServicePreparedRelocationAggregate {
   readonly plan: ServiceRelocationAggregatePlan;
 }
 
-type AggregateStore = Pick<ZLinkObjectCreationStore, 'prepareAggregate' | 'abortAggregate'> &
-  Pick<ZLinkAuthorityStore, 'readAuthority'>;
-
-const MAX_PREPARE_CONFLICT_ATTEMPTS = 8;
+type AggregateStore = Pick<ZLinkObjectCreationStore, 'prepareAggregate' | 'abortAggregate'>;
 
 /** Prepares and aborts relocation through one Location Store fence. */
 
@@ -50,7 +44,8 @@ export class ServiceRelocationAggregateCommitter {
 
   async prepare(
     plan: ServiceRelocationAggregatePlan,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    deadlineUnixMs?: bigint
   ): Promise<ServicePreparedRelocationAggregate> {
     const participants = validateAndEncodeParticipants(plan);
     const aggregateId = aggregateIdentity(plan.envelope.aggregateId);
@@ -67,20 +62,7 @@ export class ServiceRelocationAggregateCommitter {
       capacity: plan.capacity,
       targetOwner: plan.targetOwner
     };
-    let result = await this.store.prepareAggregate(request, signal);
-    for (
-      let attempt = 1;
-      attempt < MAX_PREPARE_CONFLICT_ATTEMPTS && result.kind === 'conflict';
-      attempt++
-    ) {
-      // The provider CAS also fences auxiliary live-owner and capacity rows.
-      // A heartbeat can change one of those versions while every authority
-      // row remains the exact Store-confirmed value in this plan. Retry only
-      // that coordination loss; a changed authority row leaves immediately.
-      if (!(await this.authorityStoreVersionsUnchanged(plan, signal))) break;
-      signal?.throwIfAborted();
-      result = await this.store.prepareAggregate(request, signal);
-    }
+    const result = await this.store.prepareAggregate(request, signal, deadlineUnixMs);
     if (result.kind !== 'prepared' && result.kind !== 'alreadyPrepared') {
       throw new Error(`Location Store rejected relocation aggregate prepare: ${result.kind}.`);
     }
@@ -91,22 +73,6 @@ export class ServiceRelocationAggregateCommitter {
       throw new Error('Location Store returned a different relocation aggregate fence.');
     }
     return { fence: result.fence, plan };
-  }
-
-  private async authorityStoreVersionsUnchanged(
-    plan: ServiceRelocationAggregatePlan,
-    signal?: AbortSignal
-  ): Promise<boolean> {
-    for (const participant of plan.participants) {
-      const current = await this.store.readAuthority(participant.key, signal);
-      if (
-        current.kind !== 'snapshot' ||
-        current.storeVersion.value !== participant.expected.storeVersion.value
-      ) {
-        return false;
-      }
-    }
-    return true;
   }
 
   async abort(prepared: ServicePreparedRelocationAggregate, signal?: AbortSignal): Promise<void> {
