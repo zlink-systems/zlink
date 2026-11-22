@@ -129,7 +129,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiFunction;
@@ -2932,14 +2931,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                             }
                             requireAcceptingNewState();
                             String meshName = resolveObjectMesh(requestedMesh);
-                            return resolveInstanceType(meshName, requestedType)
-                                    .thenCompose(
-                                            stableType ->
-                                                    coldInstanceActivation(
-                                                            meshName,
-                                                            stableType,
-                                                            spotId,
-                                                            deadline));
+                            return coldInstanceActivation(
+                                    meshName, requestedType, spotId, deadline);
                         });
     }
 
@@ -2954,7 +2947,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     private CompletionStage<InstanceActivation> coldInstanceActivation(
             String meshName, String stableType, String spotId, long deadline) {
         requireAcceptingNewState();
-        return selectInstanceSpotTarget(meshName, stableType)
+        return selectInstanceSpotTarget(meshName, stableType, deadline)
                 .thenApply(
                         target ->
                                 new InstanceActivation(
@@ -3002,34 +2995,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         }
         return userSpotLocationResolvers
                 .listLiveMeshNodes(meshName)
-                .thenApply(
-                        nodes ->
-                                nodes.stream()
-                                        .filter(
-                                                node ->
-                                                        node.state()
-                                                                        == systems.zlink.framework
-                                                                                .runtime.host
-                                                                                .ZLinkFrameworkRuntimeState
-                                                                                .SERVING
-                                                                && node.objectRole()
-                                                                        == systems.zlink.framework
-                                                                                .locations
-                                                                                .ZLinkMeshNodeObjectRole
-                                                                                .SERVER)
-                                        .flatMap(node -> node.objectCapabilities().stream())
-                                        .filter(
-                                                capability ->
-                                                        capability.objectKind()
-                                                                == systems.zlink.framework.locations
-                                                                        .ZLinkPlacementObjectKind
-                                                                        .INSTANCE_SPOT)
-                                        .map(
-                                                systems.zlink.framework.locations
-                                                                .ZLinkObjectCapability
-                                                        ::stableType)
-                                        .distinct()
-                                        .toList())
+                .thenApply(ZLinkStoreLocationResolvers::instanceTypes)
                 .thenApply(
                         types -> {
                             if (types.size() != 1) {
@@ -3046,132 +3012,16 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         });
     }
 
-    CompletionStage<InstanceTarget> selectInstanceSpotTarget(String meshName, String stableType) {
+    CompletionStage<InstanceTarget> selectInstanceSpotTarget(
+            String meshName, String stableType, long deadline) {
         var admissionFailure = spotHostAdmissionFailure(stableType);
         if (admissionFailure != null) {
             return CompletableFuture.failedFuture(admissionFailure);
         }
         return userSpotLocationResolvers
-                .listLiveMeshNodes(meshName)
-                .thenCompose(
-                        nodes -> {
-                            List<
-                                            systems.zlink.framework.runtime.internal.locations
-                                                    .ZLinkMeshNodeDescriptor>
-                                    typed =
-                                            nodes.stream()
-                                                    .filter(
-                                                            node ->
-                                                                    node.state()
-                                                                                    == systems.zlink
-                                                                                            .framework
-                                                                                            .runtime
-                                                                                            .host
-                                                                                            .ZLinkFrameworkRuntimeState
-                                                                                            .SERVING
-                                                                            && node.objectRole()
-                                                                                    == systems.zlink
-                                                                                            .framework
-                                                                                            .locations
-                                                                                            .ZLinkMeshNodeObjectRole
-                                                                                            .SERVER
-                                                                            && node
-                                                                                    .objectCapabilities()
-                                                                                    .stream()
-                                                                                    .anyMatch(
-                                                                                            capability ->
-                                                                                                    capability
-                                                                                                                            .objectKind()
-                                                                                                                    == systems
-                                                                                                                            .zlink
-                                                                                                                            .framework
-                                                                                                                            .locations
-                                                                                                                            .ZLinkPlacementObjectKind
-                                                                                                                            .INSTANCE_SPOT
-                                                                                                            && capability
-                                                                                                                    .stableType()
-                                                                                                                    .equals(
-                                                                                                                            stableType)))
-                                                    .toList();
-                            if (typed.isEmpty())
-                                return CompletableFuture.failedFuture(
-                                        ZLinkFrameworkErrorOrigin.framework(
-                                                ZLinkFrameworkErrorKind.NOT_FOUND,
-                                                "No serving Instance Spot node provides type: "
-                                                        + stableType));
-                            List<
-                                            systems.zlink.framework.runtime.internal.locations
-                                                    .ZLinkMeshNodeDescriptor>
-                                    candidates =
-                                            typed.stream()
-                                                    .filter(
-                                                            node ->
-                                                                    node.placementWeight() > 0
-                                                                            && node
-                                                                                    .objectCapabilities()
-                                                                                    .stream()
-                                                                                    .anyMatch(
-                                                                                            capability ->
-                                                                                                    capability
-                                                                                                                            .objectKind()
-                                                                                                                    == systems
-                                                                                                                            .zlink
-                                                                                                                            .framework
-                                                                                                                            .locations
-                                                                                                                            .ZLinkPlacementObjectKind
-                                                                                                                            .INSTANCE_SPOT
-                                                                                                            && capability
-                                                                                                                    .stableType()
-                                                                                                                    .equals(
-                                                                                                                            stableType)
-                                                                                                            && ZLinkStoreLocationResolvers
-                                                                                                                    .hasPlacementCapacity(
-                                                                                                                            node,
-                                                                                                                            capability)))
-                                                    .toList();
-                            if (candidates.isEmpty()) {
-                                return CompletableFuture.failedFuture(
-                                        ZLinkFrameworkErrorOrigin.framework(
-                                                ZLinkFrameworkErrorKind.UNAVAILABLE,
-                                                "No Instance Spot placement target is available"));
-                            }
-                            Set<RoutingId> connectedTargets = connectedInstanceTargets(meshName);
-                            List<
-                                            systems.zlink.framework.runtime.internal.locations
-                                                    .ZLinkMeshNodeDescriptor>
-                                    readyCandidates =
-                                            preferConnectedInstanceTargets(
-                                                    candidates, connectedTargets);
-                            if (readyCandidates.size() != candidates.size()) {
-                                candidates = readyCandidates;
-                            }
-                            long total =
-                                    candidates.stream()
-                                            .mapToLong(node -> node.placementWeight())
-                                            .sum();
-                            long choice = ThreadLocalRandom.current().nextLong(total);
-                            for (var candidate : candidates) {
-                                choice -= candidate.placementWeight();
-                                if (choice < 0) {
-                                    return CompletableFuture.completedFuture(
-                                            new InstanceTarget(stableType, candidate));
-                                }
-                            }
-                            return CompletableFuture.completedFuture(
-                                    new InstanceTarget(stableType, candidates.getLast()));
-                        });
-    }
-
-    static List<systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor>
-            preferConnectedInstanceTargets(
-                    List<systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor>
-                            candidates,
-                    Set<RoutingId> connectedTargets) {
-        List<systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor> ready =
-                candidates.stream()
-                        .filter(candidate -> connectedTargets.contains(candidate.rid()))
-                        .toList();
-        return ready.isEmpty() ? candidates : ready;
+                .selectInstancePlacement(
+                        meshName, stableType, connectedInstanceTargets(meshName), deadline)
+                .thenApply(target -> new InstanceTarget(target.stableType(), target.descriptor()));
     }
 
     private Set<RoutingId> connectedInstanceTargets(String meshName) {

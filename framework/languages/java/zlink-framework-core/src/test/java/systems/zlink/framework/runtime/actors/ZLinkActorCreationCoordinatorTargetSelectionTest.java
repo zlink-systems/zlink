@@ -53,7 +53,7 @@ final class ZLinkActorCreationCoordinatorTargetSelectionTest {
     private static final Instant NOW = Instant.parse("2026-01-01T00:00:00Z");
 
     @RepeatedTest(40)
-    void emptyDiscoveryIsImmediatelyUnavailable() throws Exception {
+    void emptyStoreRefreshIsImmediatelyUnavailable() throws Exception {
         var reads = new AtomicInteger();
         var fixture =
                 fixture(
@@ -76,7 +76,7 @@ final class ZLinkActorCreationCoordinatorTargetSelectionTest {
         assertEquals(
                 ZLinkFrameworkErrorKind.UNAVAILABLE,
                 ((ZLinkFrameworkException) failure.getCause()).kind());
-        assertEquals(1, reads.get(), "placement must consume discovery without another Store list");
+        assertEquals(2, reads.get(), "empty discovery permits one Store list before Unavailable");
     }
 
     @RepeatedTest(40)
