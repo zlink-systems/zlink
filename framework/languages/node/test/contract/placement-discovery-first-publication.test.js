@@ -40,7 +40,7 @@ function remoteDescriptor(kind) {
 function resolver() {
   return new ZLinkRequestSourceResolver({
     async listLiveMeshNodes() {
-      assert.fail('placement must use discovery publications, not request-scoped Store reads');
+      return [];
     },
     async remainingOwnerTokenLeaseMs() {
       return 30000;
@@ -48,6 +48,70 @@ function resolver() {
   });
 }
 
+test('a drained candidate and an empty Store produce Unavailable after one refresh', async () => {
+  let reads = 0;
+  const sources = new ZLinkRequestSourceResolver({
+    async listLiveMeshNodes() {
+      reads++;
+      return [];
+    },
+    async remainingOwnerTokenLeaseMs() {
+      return 30000;
+    }
+  });
+  await sources.observeLiveDescriptors('play', [{ ...remoteDescriptor('user_spot'), state: 4 }]);
+  assert.equal(await sources.selectPlacement('play', 'user_spot', 'room'), undefined);
+  assert.equal(reads, 1);
+});
+for (let iteration = 1; iteration <= 40; iteration++) {
+  for (const kind of ['actor', 'user_spot']) {
+    test(`${iteration}: ${kind} reads a replacement once and publishes it to subsequent creates`, async () => {
+      const replacement = remoteDescriptor(kind);
+      let reads = 0;
+      const sources = new ZLinkRequestSourceResolver({
+        async listLiveMeshNodes(meshName) {
+          assert.equal(meshName, 'play');
+          reads++;
+          return [replacement];
+        },
+        async remainingOwnerTokenLeaseMs() {
+          return 30000;
+        }
+      });
+      await sources.observeLiveDescriptors('play', [
+        { ...replacement, rid: 'old-node', state: 4, placementWeight: 0 }
+      ]);
+      assert.equal(await sources.selectPlacement('play', kind, 'room'), replacement);
+      assert.equal(reads, 1);
+      assert.equal(await sources.selectPlacement('play', kind, 'room'), replacement);
+      assert.equal(reads, 1);
+    });
+  }
+}
+
+for (let iteration = 1; iteration <= 40; iteration++) {
+  test(`${iteration}: cold Instance Spot placement shares the replacement observation`, async () => {
+    const replacement = remoteDescriptor('instance_spot');
+    let reads = 0;
+    const sources = new ZLinkRequestSourceResolver({
+      async listLiveMeshNodes() {
+        reads++;
+        return [replacement];
+      },
+      async remainingOwnerTokenLeaseMs() {
+        return 30000;
+      }
+    });
+    await sources.observeLiveDescriptors('play', [{ ...replacement, rid: 'old-node', state: 4 }]);
+    const node = { status: () => ({ routingId: replacement.rid, lifecycleGeneration: 1n }) };
+    const signal = new AbortController().signal;
+    for (const type of ['room', undefined]) {
+      const result = await sources.selectInstancePlacement('play', type, node, signal);
+      assert.deepEqual(result, { kind: 'selected', descriptor: replacement, stableType: 'room' });
+      assert.equal(reads, 1);
+    }
+  });
+}
 test('placement excludes only the host generation that rejected the reservation', async () => {
   const sources = resolver();
   const remote = remoteDescriptor('user_spot');

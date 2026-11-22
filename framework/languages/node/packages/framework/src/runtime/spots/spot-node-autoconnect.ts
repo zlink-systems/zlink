@@ -59,7 +59,7 @@ export function createSpotNodeLocationAutoConnectContext(
     stores,
     options,
     leaseTracker,
-    resolver: meshDescriptorPeerResolver(runtime, requestSources),
+    resolver: meshDescriptorPeerResolver(requestSources),
     requestSources,
     events,
     // The opaque provider has no cross-process change notification primitive.
@@ -100,7 +100,6 @@ export function spotNodeAutoConnectCapability(
 }
 
 function meshDescriptorPeerResolver(
-  runtime: ZLinkLocationRuntime,
   requestSources: ZLinkRequestSourceResolver
 ): ZLinkPeerLocationResolver {
   return {
@@ -116,9 +115,7 @@ function meshDescriptorPeerResolver(
       ) {
         return [];
       }
-      const descriptors = await runtime.listLiveMeshNodes(filter.meshName, signal);
-      // The auto-connect poll owns the live descriptors; request acceptance reads them.
-      await requestSources.observeLiveDescriptors(filter.meshName, descriptors, signal);
+      const descriptors = await requestSources.refreshLiveDescriptors(filter.meshName, signal);
       return descriptors
         .map((descriptor): ZLinkPeerLocation => ({
           autoConnectType: ZLinkLocationAutoConnectType.RouteMesh,
