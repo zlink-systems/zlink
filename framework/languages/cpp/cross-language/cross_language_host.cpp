@@ -1735,8 +1735,8 @@ class user_spot_target_service_t final : public fw::hosted_service_t
                              + error_kind_wire_name (reply.error_kind ()));
                 return;
             }
-            sink.append ("entry-join-request-reply|phase=" + phase + "|accepted="
-                         + (reply.value ().accepted ? "true" : "false")
+            sink.append ("entry-join-request-reply|phase=" + phase
+                         + "|accepted=" + (reply.value ().accepted ? "true" : "false")
                          + "|actor=" + reply.value ().actor_id);
         };
         /* want_own: wait until the Actor answers from this node; otherwise
@@ -1754,9 +1754,8 @@ class user_spot_target_service_t final : public fw::hosted_service_t
                     last = reply.value ().node_rid;
                     if ((reply.value ().node_rid == own_node_rid) == want_own) {
                         if (!want_own) {
-                            sink.append ("entry-join-probe|actor=" + id
-                                         + "|nodeRid=" + reply.value ().node_rid
-                                         + "|originRid=" + own_node_rid);
+                            sink.append ("entry-join-probe|actor=" + id + "|nodeRid="
+                                         + reply.value ().node_rid + "|originRid=" + own_node_rid);
                         }
                         return;
                     }
@@ -2012,10 +2011,11 @@ class user_spot_source_service_t final : public fw::hosted_service_t
                 .timeout (std::chrono::seconds (15))
                 .async ()
                 .result ();
-            sink.append (std::string ("entry-join-restart-actor-created|status=")
-                         + (second && std::holds_alternative<fw::actor_create_created_t> (second.value ())
-                              ? "created"
-                              : "other"));
+            sink.append (
+              std::string ("entry-join-restart-actor-created|status=")
+              + (second && std::holds_alternative<fw::actor_create_created_t> (second.value ())
+                   ? "created"
+                   : "other"));
             auto second_reply = actors
                                   .request (fw::actor_id_t (restart_actor_id),
                                             begin_user_spot_join_req_t{_spot_id, "canonical-28"})

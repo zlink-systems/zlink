@@ -467,7 +467,8 @@ internal static class TestHostScenarioConfigurator
             options.ActorId ?? "cross-lang-user-spot-actor",
             options.MeshName ?? "cross.user-spot-join",
             // A .NET source has a framework-assigned routing id, so its peer id is unknown.
-            options.PeerRid ?? "",
+            options.PeerRid
+                ?? "",
             options.PlacementWeight ?? 0,
             options.EntryJoin,
             options.RestartFilePath
