@@ -105,20 +105,19 @@ final class ZLinkBoundActorRouteContractTest {
                                 generation,
                                 sequence,
                                 ignoredHeader,
-                                ignoredPayload) -> {
+                                ignoredPayload,
+                                submitReply) -> {
                             assertEquals(RoutingId.from("actor-node-a"), sourceNode);
                             assertEquals(RoutingId.from("session"), sourceSession);
                             assertEquals(1L, generation);
                             assertEquals(1L, sequence);
-                            return CompletableFuture.completedFuture(
-                                    Optional.of(
-                                            new ZLinkSessionActorsRuntime.LocalActorReply(
-                                                    Message.from(
-                                                            "custom-reply"
-                                                                    .getBytes(
-                                                                            StandardCharsets
-                                                                                    .UTF_8)),
-                                                    ZLinkStreamCodec.PROTOBUF)));
+                            submitReply.accept(
+                                    new ZLinkSessionActorsRuntime.LocalActorReply(
+                                            Message.from(
+                                                    "custom-reply"
+                                                            .getBytes(StandardCharsets.UTF_8)),
+                                            ZLinkStreamCodec.PROTOBUF));
+                            return CompletableFuture.completedFuture(null);
                         },
                         true,
                         ZLinkStreamCodec.JSON,
