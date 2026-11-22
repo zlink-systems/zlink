@@ -13,7 +13,7 @@ test('cold event and request have distinct operation identities on the same sour
       setServiceIngress() {},
       isPeerRouteReady: () => true,
       peerLifecycleGeneration: (rid) => (rid === 'target' ? 7n : undefined),
-      async sendService(target, parts) {
+      async sendApplication(target, parts) {
         records.push(wire.decodeStatefulHeader(parts[0]));
         return true;
       },

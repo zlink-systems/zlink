@@ -55,16 +55,25 @@ for (const instanceIntent of [false, true]) {
 
   test(`Ready send and request retain the source call intent (${instanceIntent})`, async () => {
     const frames = [];
-    const owner = new ServiceStatefulRuntime({ setServiceIngress() {},
-      isPeerRouteReady: () => true,
-      peerLifecycleGeneration: (rid) =>
-        rid === route.targetNodeRid ? route.targetNodeGeneration : undefined,
-      async sendService(target, parts) { frames.push(parts[0]); return true; },
-      async requestService(target, parts) {
-        frames.push(parts[0]);
-        const record = wire.decodeStatefulHeader(parts[0]);
-        return [wire.encodeStatefulReply(record.replyRouteId, 0, 0)];
-      } }, 'source', 1n);
+    const owner = new ServiceStatefulRuntime(
+      {
+        setServiceIngress() {},
+        isPeerRouteReady: () => true,
+        peerLifecycleGeneration: (rid) =>
+          rid === route.targetNodeRid ? route.targetNodeGeneration : undefined,
+        async sendApplication(target, parts) {
+          frames.push(parts[0]);
+          return true;
+        },
+        async requestService(target, parts) {
+          frames.push(parts[0]);
+          const record = wire.decodeStatefulHeader(parts[0]);
+          return [wire.encodeStatefulReply(record.replyRouteId, 0, 0)];
+        }
+      },
+      'source',
+      1n
+    );
     const payload = { packetName: 'Ping', contentType: 'application/json', payload: Buffer.from('{}') };
     await owner.sendToInstanceSpot(route, payload, undefined, undefined, instanceIntent);
     await owner.requestToInstanceSpot(route, payload, 1000, undefined, undefined, instanceIntent).promise;

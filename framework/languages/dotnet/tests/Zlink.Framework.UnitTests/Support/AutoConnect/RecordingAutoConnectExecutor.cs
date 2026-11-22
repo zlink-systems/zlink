@@ -8,6 +8,8 @@ internal sealed class RecordingAutoConnectExecutor : IZLinkAutoConnectExecutor
 
     public List<ZLinkAutoConnectTarget> Disconnected { get; } = [];
 
+    public List<ZLinkAutoConnectTarget> Refreshed { get; } = [];
+
     public bool ConnectSucceeds { get; set; } = true;
 
     public bool DisconnectSucceeds { get; set; } = true;
@@ -29,4 +31,6 @@ internal sealed class RecordingAutoConnectExecutor : IZLinkAutoConnectExecutor
         Disconnected.Add(target);
         return DisconnectSucceeds;
     }
+
+    public void RefreshTarget(ZLinkAutoConnectTarget target) => Refreshed.Add(target);
 }
