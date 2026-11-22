@@ -4,6 +4,13 @@ export const Names = {
   actor: 'Player',
   table: 'Table'
 } as const;
+// Words in server console lines that the run-server console also reads to show server titles.
+export const ServerLog = {
+  connectedTo: 'connected to',
+  disconnectedFrom: 'disconnected from',
+  // A routing ID is "<node id>-<suffix>" (setRoutingIdPrefix).
+  routingIdSeparator: '-'
+} as const;
 export const Game = {
   seats: 4,
   minimumPlayers: 2,
@@ -81,6 +88,8 @@ export const LogFiles = {
   workerConfig: 'my-game.diagnostics',
   // Docker e2e nodes write their file log inside the container; the runner keeps their stderr.
   container: '/tmp/my-game-logs',
+  // Console tag for lines from run-server itself.
+  hostTag: 'host',
   // HH:MM:SS.mmm of an ISO timestamp, for console lines.
   consoleTimeStart: 11,
   consoleTimeEnd: 23
