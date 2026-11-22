@@ -19,6 +19,7 @@ import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartV
 import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
 
 import java.nio.ByteBuffer;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -95,7 +96,7 @@ final class ZLinkChannelHandlerInvoker {
             Map<String, String> metadata,
             String wireContentType) {
         return invokeSendHandler(
-                channelName, registration, payload, metadata, wireContentType, null);
+                channelName, registration, payload, metadata, wireContentType, null, null);
     }
 
     CompletionStage<Void> invokeSendHandler(
@@ -104,6 +105,7 @@ final class ZLinkChannelHandlerInvoker {
             ByteBuffer payload,
             Map<String, String> metadata,
             String wireContentType,
+            Instant receivedAt,
             Runnable beforeHandler) {
         Object message;
         try {
@@ -119,7 +121,8 @@ final class ZLinkChannelHandlerInvoker {
                             channelName,
                             registration.packetName(),
                             contentTypeFor(registration.messageType(), wireContentType),
-                            metadata);
+                            metadata,
+                            receivedAt);
             return invokeWithFilters(
                     ZLinkHandlerDispatchKind.CHANNEL_SEND,
                     context,
@@ -127,7 +130,7 @@ final class ZLinkChannelHandlerInvoker {
                     registration.invocation(),
                     message,
                     beforeHandler,
-                    stage -> stage.thenApply(ignored -> null));
+                    ignored -> null);
         } catch (RuntimeException ex) {
             return CompletableFuture.failedFuture(ex);
         }
@@ -158,7 +161,7 @@ final class ZLinkChannelHandlerInvoker {
             Map<String, String> metadata,
             String wireContentType) {
         return invokeRequestHandler(
-                channelName, registration, payload, metadata, wireContentType, null);
+                channelName, registration, payload, metadata, wireContentType, null, null);
     }
 
     CompletionStage<ZLinkFrameworkMultipartView> invokeRequestHandler(
@@ -167,6 +170,7 @@ final class ZLinkChannelHandlerInvoker {
             ByteBuffer payload,
             Map<String, String> metadata,
             String wireContentType,
+            Instant receivedAt,
             Runnable beforeHandler) {
         Object request;
         try {
@@ -182,15 +186,16 @@ final class ZLinkChannelHandlerInvoker {
                             channelName,
                             registration.packetName(),
                             contentTypeFor(registration.requestType(), wireContentType),
-                            metadata);
-            return invokeWithFilters(
+                            metadata,
+                            receivedAt);
+            return this.<Object>invokeWithFilters(
                             ZLinkHandlerDispatchKind.CHANNEL_REQUEST,
                             context,
                             registration.handlerType(),
                             registration.invocation(),
                             request,
                             beforeHandler,
-                            Function.identity())
+                            null)
                     .thenApply(
                             reply ->
                                     ZLinkMessagePayloads.retained(
@@ -237,7 +242,7 @@ final class ZLinkChannelHandlerInvoker {
                     registration.invocation(),
                     message,
                     null,
-                    stage -> stage.thenApply(ignored -> null));
+                    ignored -> null);
         } catch (RuntimeException ex) {
             return CompletableFuture.failedFuture(ex);
         }
@@ -278,6 +283,7 @@ final class ZLinkChannelHandlerInvoker {
                 payload,
                 metadata,
                 wireContentType,
+                null,
                 null);
     }
 
@@ -289,6 +295,7 @@ final class ZLinkChannelHandlerInvoker {
             ByteBuffer payload,
             Map<String, String> metadata,
             String wireContentType,
+            Instant receivedAt,
             Runnable beforeHandler) {
         Object message;
         try {
@@ -305,7 +312,8 @@ final class ZLinkChannelHandlerInvoker {
                             registration.packetName(),
                             sourceRoutingId,
                             contentTypeFor(registration.messageType(), wireContentType),
-                            metadata);
+                            metadata,
+                            receivedAt);
             return invokeWithFilters(
                     ZLinkHandlerDispatchKind.NODE_DIRECT_SEND,
                     context,
@@ -313,7 +321,7 @@ final class ZLinkChannelHandlerInvoker {
                     registration.invocation(),
                     message,
                     beforeHandler,
-                    stage -> (CompletionStage<Void>) (CompletionStage<?>) stage);
+                    null);
         } catch (RuntimeException ex) {
             return CompletableFuture.failedFuture(ex);
         }
@@ -355,6 +363,7 @@ final class ZLinkChannelHandlerInvoker {
                 payload,
                 metadata,
                 wireContentType,
+                null,
                 null);
     }
 
@@ -365,6 +374,7 @@ final class ZLinkChannelHandlerInvoker {
             ByteBuffer payload,
             Map<String, String> metadata,
             String wireContentType,
+            Instant receivedAt,
             Runnable beforeHandler) {
         Object request;
         try {
@@ -381,7 +391,8 @@ final class ZLinkChannelHandlerInvoker {
                             registration.packetName(),
                             sourceRoutingId,
                             contentTypeFor(registration.requestType(), wireContentType),
-                            metadata);
+                            metadata,
+                            receivedAt);
             return invokeWithFilters(
                     ZLinkHandlerDispatchKind.NODE_DIRECT_REQUEST,
                     context,
@@ -389,11 +400,9 @@ final class ZLinkChannelHandlerInvoker {
                     registration.invocation(),
                     request,
                     beforeHandler,
-                    stage ->
-                            stage.thenApply(
-                                    reply ->
-                                            ZLinkMessagePayloads.retained(
-                                                    serializer, reply, registration.replyType())));
+                    reply ->
+                            ZLinkMessagePayloads.retained(
+                                    serializer, reply, registration.replyType()));
         } catch (RuntimeException ex) {
             return CompletableFuture.failedFuture(ex);
         }
@@ -432,6 +441,7 @@ final class ZLinkChannelHandlerInvoker {
         return meshName == null || meshName.isBlank() ? legacyChannelName : meshName;
     }
 
+    @SuppressWarnings("unchecked")
     private <T> CompletionStage<T> invokeWithFilters(
             ZLinkHandlerDispatchKind dispatchKind,
             ZLinkMessageContext context,
@@ -439,14 +449,13 @@ final class ZLinkChannelHandlerInvoker {
             PreparedMethod invocation,
             Object message,
             Runnable beforeHandler,
-            Function<CompletionStage<Object>, CompletionStage<T>> finish) {
+            Function<Object, T> mapper) {
         if (filterTypes.isEmpty()) {
             var activation = ZLinkHandlerInstanceOwner.openActivation(handlerFactory, handlerType);
             Object handler = ZLinkHandlerInstanceOwner.createSingle(activation, handlerType);
             try {
-                return finish.apply(
-                                invokeHandlerCore(
-                                        handler, invocation, message, context, beforeHandler))
+                return invokeHandlerCore(
+                                handler, invocation, message, context, beforeHandler, mapper)
                         .whenComplete(
                                 (ignored, failure) ->
                                         ZLinkHandlerInstanceOwner.closeSingle(activation, handler));
@@ -458,36 +467,36 @@ final class ZLinkChannelHandlerInvoker {
         return withDispatchHandlers(
                 handlers -> {
                     var filterContext = new DefaultHandlerFilterContext(context, dispatchKind);
-                    return finish.apply(
-                            ZLinkFilterPipeline.invoke(
-                                            filterTypes,
-                                            handlers,
-                                            filterContext,
-                                            () ->
-                                                    invokeHandlerCore(
-                                                            handlerType,
-                                                            invocation,
-                                                            handlers,
-                                                            message,
-                                                            context,
-                                                            beforeHandler))
-                                    .thenApply(
-                                            result -> {
-                                                if (!result.handlerInvoked()
-                                                        && (filterContext.dispatchKind()
-                                                                        == ZLinkHandlerDispatchKind
-                                                                                .CHANNEL_REQUEST
-                                                                || filterContext.dispatchKind()
-                                                                        == ZLinkHandlerDispatchKind
-                                                                                .NODE_DIRECT_REQUEST)) {
-                                                    throw new ZLinkFrameworkException(
-                                                            ZLinkFrameworkErrorKind.REJECTED,
-                                                            "A handler filter rejected '"
-                                                                    + filterContext.packetName()
-                                                                    + "'.");
-                                                }
-                                                return result.value();
-                                            }));
+                    return ZLinkFilterPipeline.invoke(
+                                    filterTypes,
+                                    handlers,
+                                    filterContext,
+                                    () ->
+                                            invokeHandlerCore(
+                                                    handlerType,
+                                                    invocation,
+                                                    handlers,
+                                                    message,
+                                                    context,
+                                                    beforeHandler))
+                            .thenApply(
+                                    result -> {
+                                        if (!result.handlerInvoked()
+                                                && (filterContext.dispatchKind()
+                                                                == ZLinkHandlerDispatchKind
+                                                                        .CHANNEL_REQUEST
+                                                        || filterContext.dispatchKind()
+                                                                == ZLinkHandlerDispatchKind
+                                                                        .NODE_DIRECT_REQUEST)) {
+                                            throw new ZLinkFrameworkException(
+                                                    ZLinkFrameworkErrorKind.REJECTED,
+                                                    "A handler filter rejected '"
+                                                            + filterContext.packetName()
+                                                            + "'.");
+                                        }
+                                        Object value = result.value();
+                                        return mapper == null ? (T) value : mapper.apply(value);
+                                    });
                 });
     }
 
@@ -500,21 +509,27 @@ final class ZLinkChannelHandlerInvoker {
             Runnable beforeHandler) {
         try {
             return invokeHandlerCore(
-                    handlers.instance(handlerType), invocation, message, context, beforeHandler);
+                    handlers.instance(handlerType),
+                    invocation,
+                    message,
+                    context,
+                    beforeHandler,
+                    null);
         } catch (RuntimeException ex) {
             return CompletableFuture.failedFuture(ex);
         }
     }
 
-    private static CompletionStage<Object> invokeHandlerCore(
+    private static <T> CompletionStage<T> invokeHandlerCore(
             Object handler,
             PreparedMethod invocation,
             Object message,
             ZLinkMessageContext context,
-            Runnable beforeHandler) {
+            Runnable beforeHandler,
+            Function<Object, T> mapper) {
         try {
             if (beforeHandler != null) beforeHandler.run();
-            return invocation.invoke(handler, message, context);
+            return invocation.invokeMapped(mapper, handler, message, context);
         } catch (RuntimeException failure) {
             return CompletableFuture.failedFuture(failure);
         }

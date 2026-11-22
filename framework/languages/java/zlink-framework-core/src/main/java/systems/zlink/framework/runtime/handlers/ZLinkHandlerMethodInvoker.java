@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.ServiceLoader;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.function.Function;
 
 public final class ZLinkHandlerMethodInvoker {
     public static final String HANDLER_METHOD_NAME = "handle";
@@ -185,22 +186,23 @@ public final class ZLinkHandlerMethodInvoker {
             return arguments;
         }
 
-        @SuppressWarnings("unchecked")
         public CompletionStage<Object> invoke(Object handler, Object... values) {
+            return invokeMapped(null, handler, values);
+        }
+
+        @SuppressWarnings("unchecked")
+        public <T> CompletionStage<T> invokeMapped(
+                Function<Object, T> mapper, Object handler, Object... values) {
             Object[] arguments = arguments(values);
             ZLinkApplicationJobContext.beforeFirstApplicationInstruction();
             if (suspendInvoker != null) {
-                return suspendInvoker.invoke(handler, method, arguments);
+                CompletionStage<Object> result = suspendInvoker.invoke(handler, method, arguments);
+                return mapper == null ? (CompletionStage<T>) result : result.thenApply(mapper);
             }
+
+            Object result;
             try {
-                Object result = method.invoke(handler, arguments);
-                if (result instanceof CompletionStage<?> stage) {
-                    if (stage instanceof CompletableFuture<?> future && future.isDone()) {
-                        return (CompletionStage<Object>) stage;
-                    }
-                    return stage.thenApply(value -> (Object) value);
-                }
-                return CompletableFuture.completedFuture(result);
+                result = method.invoke(handler, arguments);
             } catch (IllegalAccessException | InvocationTargetException ex) {
                 return CompletableFuture.failedFuture(unwrapReflectionFailure(ex));
             } catch (IllegalArgumentException ex) {
@@ -212,6 +214,20 @@ public final class ZLinkHandlerMethodInvoker {
                                         + method.getName()
                                         + argumentTypesMessage(arguments),
                                 ex));
+            }
+
+            if (result instanceof CompletionStage<?> stage) {
+                if (mapper != null) return stage.thenApply(mapper);
+                if (stage instanceof CompletableFuture<?> future && future.isDone()) {
+                    return (CompletionStage<T>) stage;
+                }
+                return stage.thenApply(value -> (T) value);
+            }
+            try {
+                return CompletableFuture.completedFuture(
+                        mapper == null ? (T) result : mapper.apply(result));
+            } catch (RuntimeException | Error failure) {
+                return CompletableFuture.failedFuture(failure);
             }
         }
     }
