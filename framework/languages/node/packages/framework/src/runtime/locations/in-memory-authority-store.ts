@@ -83,7 +83,6 @@ export interface ZLinkInMemoryAuthorityValidation {
     currentReserved: ZLinkCapacityVector,
     currentActive: ZLinkCapacityVector
   ): boolean;
-  identityClaimed?(authorityKey: string): boolean;
 }
 
 interface AuthorityRow {
@@ -584,9 +583,6 @@ export class ZLinkInMemoryAuthorityStore {
     signal?.throwIfAborted();
     validateReserve(request);
     const key = creationKey(request.key);
-    if (this.validation.identityClaimed?.(key) === true) {
-      return { kind: 'conflict', current: { kind: 'missing', storeNow: this.now() } };
-    }
     const current = this.rows.get(key);
     if (current !== undefined) {
       if (

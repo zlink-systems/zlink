@@ -28,82 +28,77 @@ public sealed class EntrySpotIdentityStoreTests
     }
 
     [Fact]
-    public async Task DescriptorClaim_IsGlobalAndBlocksUserAndInstanceSpotClaims()
+    public async Task DuplicateEntrySpotId_DoesNotBlockDescriptorOrSpotReserve()
     {
         var store = new ZLinkInMemoryLocationStore();
         var ownerA = await ClaimOwnerAsync(store, "owner-a");
         var ownerB = await ClaimOwnerAsync(store, "owner-b");
 
-        var claimed = await store.UpdateMeshNodeAsync(
+        var first = await store.UpdateMeshNodeAsync(
             Descriptor(ownerA, "node-a", EntrySpotId),
             ZLinkLocationWriteIntent.NewClaim
         );
-        Assert.Equal(ZLinkLocationWriteStatus.Stored, claimed.Status);
-
-        Assert.IsType<ZLinkObjectReserveResult.Conflict>(
-            await store.ReserveAsync(UserSpotReservation(ownerB, "node-b"))
-        );
-
-        Assert.IsType<ZLinkObjectReserveResult.Conflict>(
-            await store.ReserveAsync(
-                SpotReservation(ownerB, "node-b", ZLinkPlacementObjectKind.InstanceSpot)
-            )
-        );
-
-        var duplicate = await store.UpdateMeshNodeAsync(
+        var second = await store.UpdateMeshNodeAsync(
             Descriptor(ownerB, "node-b", EntrySpotId),
             ZLinkLocationWriteIntent.NewClaim
         );
-        Assert.Equal(ZLinkLocationWriteStatus.RejectedConflict, duplicate.Status);
-        Assert.Single((await store.ListMeshNodesAsync("play", default)).Items);
+        Assert.Equal(ZLinkLocationWriteStatus.Stored, first.Status);
+        Assert.Equal(ZLinkLocationWriteStatus.Stored, second.Status);
+        Assert.Equal(2, (await store.ListMeshNodesAsync("play", default)).Items.Count);
 
+        Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+            await store.ReserveAsync(
+                SpotReservation(ownerB, "node-b", ZLinkPlacementObjectKind.UserSpot)
+            )
+        );
+        Assert.IsType<ZLinkObjectReserveResult.TypeMismatch>(
+            await store.ReserveAsync(
+                SpotReservation(ownerA, "node-a", ZLinkPlacementObjectKind.InstanceSpot)
+            )
+        );
         Assert.IsType<ZLinkObjectReserveResult.Conflict>(
-            await store.ReserveAsync(UserSpotReservation(ownerB, "node-b"))
+            await store.ReserveAsync(
+                SpotReservation(ownerA, "node-a", ZLinkPlacementObjectKind.UserSpot)
+            )
         );
     }
 
     [Fact]
-    public async Task ExactDescriptorRemove_ReleasesEntrySpotClaim()
+    public async Task DescriptorRemove_RequiresExactOwnerAndLeavesOtherDescriptor()
     {
         var store = new ZLinkInMemoryLocationStore();
         var ownerA = await ClaimOwnerAsync(store, "owner-a");
         var ownerB = await ClaimOwnerAsync(store, "owner-b");
         var descriptor = Descriptor(ownerA, "node-a", EntrySpotId);
-        var claimed = await store.UpdateMeshNodeAsync(
-            descriptor,
-            ZLinkLocationWriteIntent.NewClaim
-        );
-
-        Assert.Equal(
-            ZLinkLocationWriteStatus.IgnoredStale,
-            await store.RemoveMeshNodeAsync(
-                new ZLinkMeshNodeDescriptorKey(descriptor.MeshName, descriptor.Rid),
-                new ZLinkLocationOwnerToken(ownerA.OwnerId, checked(ownerA.LeaseGeneration + 1))
-            )
-        );
-        Assert.IsType<ZLinkObjectReserveResult.Conflict>(
-            await store.ReserveAsync(UserSpotReservation(ownerB, "node-b"))
-        );
-
+        var key = new ZLinkMeshNodeDescriptorKey(descriptor.MeshName, descriptor.Rid);
         Assert.Equal(
             ZLinkLocationWriteStatus.Stored,
-            await store.RemoveMeshNodeAsync(
-                new ZLinkMeshNodeDescriptorKey(descriptor.MeshName, descriptor.Rid),
-                ownerA
-            )
+            (await store.UpdateMeshNodeAsync(descriptor, ZLinkLocationWriteIntent.NewClaim)).Status
         );
         Assert.Equal(
             ZLinkLocationWriteStatus.Stored,
             (
                 await store.UpdateMeshNodeAsync(
-                    Descriptor(ownerB, "node-b", "play-entry-00000000-0000-4000-8000-000000000002"),
+                    Descriptor(ownerB, "node-b", EntrySpotId),
                     ZLinkLocationWriteIntent.NewClaim
                 )
             ).Status
         );
-
+        Assert.Equal(
+            ZLinkLocationWriteStatus.IgnoredStale,
+            await store.RemoveMeshNodeAsync(
+                key,
+                new ZLinkLocationOwnerToken(ownerA.OwnerId, checked(ownerA.LeaseGeneration + 1))
+            )
+        );
+        Assert.Equal(2, (await store.ListMeshNodesAsync("play", default)).Items.Count);
+        Assert.Equal(ZLinkLocationWriteStatus.Stored, await store.RemoveMeshNodeAsync(key, ownerA));
+        var remaining = Assert.Single((await store.ListMeshNodesAsync("play", default)).Items);
+        Assert.Equal(RoutingId.From("node-b"), remaining.Rid);
         Assert.IsType<ZLinkObjectReserveResult.Reserved>(
-            await store.ReserveAsync(UserSpotReservation(ownerB, "node-b"))
+            await store.ReserveAsync(
+                SpotReservation(ownerB, "node-b", ZLinkPlacementObjectKind.InstanceSpot)
+            )
         );
     }
 
@@ -181,11 +176,6 @@ public sealed class EntrySpotIdentityStoreTests
             EntrySpotId = entrySpotId,
             State = ZLinkFrameworkRuntimeState.Serving,
         };
-
-    private static ZLinkObjectReservationRequest UserSpotReservation(
-        ZLinkLocationOwnerToken owner,
-        string nodeRid
-    ) => SpotReservation(owner, nodeRid, ZLinkPlacementObjectKind.UserSpot);
 
     private static ZLinkObjectReservationRequest SpotReservation(
         ZLinkLocationOwnerToken owner,
