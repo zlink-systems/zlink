@@ -31,7 +31,7 @@ import {
 import { Names, Limits, Control, ServerLog } from './constants';
 import { NODE_CONFIG, readConfig, type NodeConfig } from './config';
 interface HostComposition {
-  // Default server name in console lines when the config has no title, e.g. "Play server".
+  // Default server name in console lines when the config has no title, e.g. "Play node".
   title: string;
   providers: Type[];
   listener: { kind: 'stream' | 'routeMesh'; name: string };
@@ -174,7 +174,7 @@ export async function runHost(
     for await (const line of input) {
       if (line === Control.drain) {
         console.log(Control.requested);
-        console.log(`${name} draining: moving its actors to other servers`);
+        console.log(`${name} draining: moving its actors to other play nodes`);
         const result = await runtime.relocate({
           mode: ZLinkFrameworkRelocationMode.PlannedMaintenance,
           deadlineMs: Limits.relocationMs

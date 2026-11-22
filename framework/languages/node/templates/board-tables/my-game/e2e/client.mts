@@ -392,7 +392,7 @@ export async function scenario(
       assert.equal(rebound.objectGeneration, session2.objectGeneration);
       assert.deepEqual((await p2.wait<HandDealt>(PacketNames.handDealt, mark)).cards, h2.cards);
     } else if (name === 'update') {
-      step(`drain ${serverTitle(b1.nodeId)}: expect the table to move to another Play server`);
+      step(`drain ${serverTitle(b1.nodeId)}: expect the table to move to another play node`);
       await control.drain(b1.nodeId);
       const mark1 = p1.messages.length,
         mark2 = p2.messages.length;

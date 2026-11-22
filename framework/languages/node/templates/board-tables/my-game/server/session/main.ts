@@ -10,7 +10,7 @@ runHost((builder, config, mesh) => {
     .bind(config.streamEndpoint)
     .registerSession(SessionFactory);
   return {
-    title: 'Session server',
+    title: 'Session node',
     providers: [SessionFactory],
     listener: { kind: 'stream', name: Names.stream },
     ready: (status) => status.readyPeerCount > 0

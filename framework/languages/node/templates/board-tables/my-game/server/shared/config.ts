@@ -8,7 +8,7 @@ export interface NodeConfig {
   streamEndpoint: string | null;
   tableCapacity?: number;
   logDir?: string;
-  // Server name in console and log lines, e.g. "Play server A".
+  // Server name in console and log lines, e.g. "Play node A".
   title?: string;
 }
 export function readConfig(path: string): NodeConfig {

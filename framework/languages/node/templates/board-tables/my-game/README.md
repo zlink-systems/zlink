@@ -1,11 +1,11 @@
 # MyGame board tables
 
-This project runs a Session server and Play servers that share a Redis Location Store. A TypeScript e2e client uses the public stream connector to verify the game, reconnection, and node replacement. Add game rules at the extension points described in [AGENTS.md](AGENTS.md).
+This project runs a Session node and Play nodes that share a Redis Location Store. A TypeScript e2e client uses the public stream connector to verify the game, reconnection, and node replacement. Add game rules at the extension points described in [AGENTS.md](AGENTS.md).
 
 ```mermaid
 flowchart LR
-    players[Players] -->|STREAM| session[Session server]
-    session -->|relay| table[Play server ×N]
+    players[Players] -->|STREAM| session[Session node]
+    session -->|relay| table[Play node ×N]
     table -->|Location / lease| location[(Location Store)]
 ```
 
@@ -34,7 +34,7 @@ This compiles TypeScript and generates the Framework default typed JSON schema f
 
 ### Endpoint and first packet
 
-Connect game clients to the Session server's `players` STREAM listener. Its default configuration in `server/config/session.json` is `ws://127.0.0.1:0`: WebSocket on loopback, with port `0` asking the OS to assign a free port and no application path (the WebSocket URL uses `/`). The Session process prints `READY {"id":"session","endpoint":"..."}` with the actual listening endpoint; use that endpoint, not port `0`. `e2e/server-host.ts` reads this value and the e2e runner passes it to the client. Table mesh endpoints and Redis are not client endpoints.
+Connect game clients to the Session node's `players` STREAM listener. Its default configuration in `server/config/session.json` is `ws://127.0.0.1:0`: WebSocket on loopback, with port `0` asking the OS to assign a free port and no application path (the WebSocket URL uses `/`). The Session process prints `READY {"id":"session","endpoint":"..."}` with the actual listening endpoint; use that endpoint, not port `0`. `e2e/server-host.ts` reads this value and the e2e runner passes it to the client. Table mesh endpoints and Redis are not client endpoints.
 
 The default listener is reachable from the same host/network namespace. Docker e2e nodes share the runner's network namespace; the runner removes its nodes when it finishes. To connect an external game client, keep a deployment running, configure `streamEndpoint` with a reachable interface and port, and expose that port when using containers. Use the server's reachable host in the client URL. Browsers can use this WebSocket listener; an HTTPS page needs a secure `wss://` deployment, which the default configuration does not provide.
 
@@ -60,7 +60,7 @@ All clients below use the Session WebSocket endpoint and this template's packet 
 
 ### One join and its response
 
-Save this as `e2e/connect-once.mts` in a copy of the template, run `npm run build`, then run `node dist/e2e/connect-once.mjs <actual-session-endpoint>` while the Session server, Play servers, and Redis are running. The e2e command owns a temporary deployment, so run this against a deployment kept running separately. Choose a fresh player/table ID for this example. The JSON codec leaves contract int64 values such as `handNumber`, `pot`, and seat `chips` as decimal strings on receipt; this example reads only `tableId` and `yourSeat`. See `e2e/client.mts` for integer conversion and the complete game flow.
+Save this as `e2e/connect-once.mts` in a copy of the template, run `npm run build`, then run `node dist/e2e/connect-once.mjs <actual-session-endpoint>` while the Session node, Play nodes, and Redis are running. The e2e command owns a temporary deployment, so run this against a deployment kept running separately. Choose a fresh player/table ID for this example. The JSON codec leaves contract int64 values such as `handNumber`, `pot`, and seat `chips` as decimal strings on receipt; this example reads only `tableId` and `yourSeat`. See `e2e/client.mts` for integer conversion and the complete game flow.
 
 ```typescript
 import {
@@ -101,7 +101,7 @@ try {
 
 ## Run the server and the e2e separately
 
-Open two terminals in the template directory. In the first terminal, start Redis and the nodes. Wait for `Server ready:` and the Session endpoint. Each server's console lines start with its ID, such as `[session]` or `[playA]`, and show when it starts (`Session server starting` / `started`), drains and stops. Message flow records stay in the file logs; add `--trace` (`-Trace` in PowerShell) to `run-server` to show them in the console too.
+Open two terminals in the template directory. In the first terminal, start Redis and the nodes. Wait for `Server ready:` and the Session endpoint. Each server's console lines start with its ID, such as `[session]` or `[playA]`, and show when it starts (`Session node starting` / `started`), drains and stops. Message flow records stay in the file logs; add `--trace` (`-Trace` in PowerShell) to `run-server` to show them in the console too.
 
 ```sh
 ./run-server.sh
@@ -111,7 +111,7 @@ Open two terminals in the template directory. In the first terminal, start Redis
 pwsh -NoProfile -File ./run-server.ps1
 ```
 
-In the second terminal, run the e2e. It finds the server from the first terminal through `logs/server.json` and runs the same scenarios against it; with no server running it starts its own nodes in Docker. The console shows each scenario (`━━ update (3/3) ━━`) and its steps (`▶ drain Play server A: …`), and the servers show the matching game events. Each client's packets go to `.logs/run-<id>/<scenario>-<client>.jsonl`, one JSON line per packet with its time, direction (`→` send, `←` receive), message type and payload. A drained server keeps forwarding messages sent to its old routes for the message follow window (30 s) before it is safe to shut down, so the update scenario waits for that before it replaces the server.
+In the second terminal, run the e2e. It finds the server from the first terminal through `logs/server.json` and runs the same scenarios against it; with no server running it starts its own nodes in Docker. The console shows each scenario (`━━ update (3/3) ━━`) and its steps (`▶ drain Play node A: …`), and the servers show the matching game events. Each client's packets go to `.logs/run-<id>/<scenario>-<client>.jsonl`, one JSON line per packet with its time, direction (`→` send, `←` receive), message type and payload. A drained server keeps forwarding messages sent to its old routes for the message follow window (30 s) before it is safe to shut down, so the update scenario waits for that before it replaces the server.
 
 ```sh
 ./run-e2e.sh
@@ -184,7 +184,7 @@ Message Follow is explicitly configured for 30 seconds. The `SAFE_TO_SHUTDOWN` o
 ## Deployment sequence
 
 1. Prepare Redis and set `redisEndpoint` and a deployment-specific unique `keyPrefix` in each node configuration.
-2. Start Play servers A and B with `node dist/server/table/main.js server/config/play-a.json` and `play-b.json`. Set mutually reachable `meshEndpoint` values.
+2. Start Play nodes A and B with `node dist/server/table/main.js server/config/play-a.json` and `play-b.json`. Set mutually reachable `meshEndpoint` values.
 3. Start Session with `node dist/server/session/main.js server/config/session.json`. The external client `streamEndpoint` is a `ws://` endpoint, or a `wss://` endpoint if the public contract supports it.
 4. Confirm `READY` from each process. Operational control uses the standard input commands `drain` and `shutdown`. For a Table drain, confirm `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN` in that order before shutting down.
 

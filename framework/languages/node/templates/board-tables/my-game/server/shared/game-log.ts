@@ -6,10 +6,10 @@ export function shortId(id: string): string {
   return id.replace(runId, '$1');
 }
 
-// "playA" reads as "Play server A".
+// "playA" reads as "Play node A".
 export function serverTitle(nodeId: string): string {
   const play = /^play([A-Z])$/.exec(nodeId);
-  return play ? `Play server ${play[1]}` : nodeId;
+  return play ? `Play node ${play[1]}` : nodeId;
 }
 
 export function tableLog(tableId: string, message: string): void {

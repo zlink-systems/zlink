@@ -66,7 +66,7 @@ class ServerConsole {
   }
   stdout(id: string, line: string): void {
     if (controlEchoes.some((prefix) => line.startsWith(prefix))) return;
-    // "connected to playA" reads as "connected to Play server A".
+    // "connected to playA" reads as "connected to Play node A".
     const text = line.replace(peerLine, (_, verb: string, peer: string) => {
       return `${verb} ${this.titles.get(peer) ?? peer}`;
     });

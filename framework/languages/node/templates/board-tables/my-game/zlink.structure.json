@@ -24,19 +24,19 @@
     {
       "id": "session",
       "role": "session",
-      "title": "Session server",
+      "title": "Session node",
       "config": "server/config/session.json"
     },
     {
       "id": "playA",
       "role": "table",
-      "title": "Play server A",
+      "title": "Play node A",
       "config": "server/config/play-a.json"
     },
     {
       "id": "playB",
       "role": "table",
-      "title": "Play server B",
+      "title": "Play node B",
       "config": "server/config/play-b.json"
     },
     {
