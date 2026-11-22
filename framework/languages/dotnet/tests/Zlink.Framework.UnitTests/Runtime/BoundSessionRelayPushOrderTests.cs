@@ -41,8 +41,7 @@ public sealed class BoundSessionRelayPushOrderTests
             );
         using var owner = builder.Build();
         await owner.StartAsync();
-        using var gateway = BoundSessionDisconnectTests.BuildGateway(owner, locations);
-        await gateway.StartAsync();
+        using var gateway = await BoundSessionDisconnectTests.StartGatewayAsync(owner, locations);
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         try
         {
