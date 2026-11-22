@@ -9,6 +9,11 @@
 #include <optional>
 #include <string>
 
+namespace zlink
+{
+class message_t;
+}
+
 namespace zlink::framework::runtime::messaging
 {
 
@@ -45,6 +50,9 @@ class request_failure_mapper_t
     framework_exception_t error_header_exception (const std::string &error_code,
                                                   const std::string &error_message,
                                                   const std::string &operation_name) const;
+    result_t<request_wire_failure_t>
+    operation_reply_status (foundation::operation_terminal_t terminal,
+                            const zlink::message_t &payload) const;
     framework_exception_t reply_header_exception (std::uint32_t terminal_result,
                                                   std::uint32_t failure_code,
                                                   const std::string &operation_name) const;

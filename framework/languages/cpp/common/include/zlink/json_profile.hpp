@@ -996,36 +996,10 @@ class typed_sax final
     }
     bool complete () const { return healthy && started && frames.empty (); }
     bool syntax_error () { return !healthy ? false : reject ("invalid JSON"); }
-    bool null () { return dispatch ({sax_kind::null}); }
-    bool boolean (bool value)
+    bool value (const sax_event &event)
     {
-        sax_event e{sax_kind::boolean};
-        e.boolean = value;
-        return dispatch (e);
-    }
-    bool number_integer (std::int64_t value)
-    {
-        sax_event e{sax_kind::integer};
-        e.integer = value;
-        return dispatch (e);
-    }
-    bool number_unsigned (std::uint64_t value)
-    {
-        sax_event e{sax_kind::unsigned_integer};
-        e.unsigned_integer = value;
-        return dispatch (e);
-    }
-    bool number_float (double value)
-    {
-        sax_event e{sax_kind::floating};
-        e.floating = value;
-        return dispatch (e);
-    }
-    bool borrowed_string (std::string_view value)
-    {
-        sax_event e{sax_kind::string};
-        e.text = value;
-        return dispatch (e);
+        return (event.kind != sax_kind::floating || std::isfinite (event.floating))
+               && dispatch (event);
     }
     bool borrowed_key (std::string_view value)
     {
@@ -1034,84 +1008,8 @@ class typed_sax final
             return reject ("framework-json-v1 rejects duplicate properties");
         return true;
     }
-    bool start_object () { return dispatch ({sax_kind::object}); }
-    bool end_object () { return end (); }
-    bool start_array () { return dispatch ({sax_kind::array}); }
-    bool end_array () { return end (); }
+    bool end_container () { return end (); }
 };
-// Walk every parsed value, including unknown properties, through typed_sax.
-// Tokens are in document order with child counts, so an explicit stack of
-// open containers replaces recursion and nesting depth never grows the call stack.
-inline bool visit_tokens (token_buffer &buffer, typed_sax &handler)
-{
-    auto &open = buffer.open_containers;
-    open.clear ();
-    std::size_t cursor = 0;
-    do {
-        if (cursor == buffer.tokens.size ())
-            return false;
-        const token &entry = buffer.tokens[cursor++];
-        if (!open.empty ()) {
-            --open.back ().remaining;
-            if (open.back ().object
-                && !handler.borrowed_key (
-                  {buffer.strings.data () + entry.key_offset, entry.key_length}))
-                return false;
-        }
-        bool accepted = false;
-        switch (entry.kind) {
-            case token_kind::null:
-                accepted = handler.null ();
-                break;
-            case token_kind::boolean:
-                accepted = handler.boolean (entry.boolean);
-                break;
-            case token_kind::integer:
-                accepted = handler.number_integer (entry.integer);
-                break;
-            case token_kind::unsigned_integer:
-                accepted = handler.number_unsigned (entry.unsigned_integer);
-                break;
-            case token_kind::floating:
-                accepted = std::isfinite (entry.floating) && handler.number_float (entry.floating);
-                break;
-            case token_kind::string:
-                accepted = handler.borrowed_string (
-                  {buffer.strings.data () + entry.text_offset, entry.text_length});
-                break;
-            case token_kind::object:
-                accepted = handler.start_object ();
-                open.push_back ({entry.child_count, true});
-                break;
-            case token_kind::array:
-                accepted = handler.start_array ();
-                open.push_back ({entry.child_count, false});
-                break;
-            case token_kind::raw_number:
-            case token_kind::raw_json:
-                break;
-        }
-        if (!accepted)
-            return false;
-        while (!open.empty () && open.back ().remaining == 0) {
-            const bool object = open.back ().object;
-            open.pop_back ();
-            if (!(object ? handler.end_object () : handler.end_array ()))
-                return false;
-        }
-    } while (!open.empty ());
-    return cursor == buffer.tokens.size ();
-}
-
-inline bool read_json (std::string_view text, typed_sax &handler)
-{
-    // Preserve the existing reader's NUL-as-EOF behavior.
-    text = text.substr (0, text.find ('\0'));
-    auto &buffer = reusable_tokens ();
-    if (!parse_tokens (text, buffer))
-        return false;
-    return visit_tokens (buffer, handler);
-}
 
 template <typename T>
 std::optional<std::string> try_encode (const T &value, std::string *error = nullptr)
@@ -1141,9 +1039,9 @@ std::optional<T> try_decode (Iterator begin, Iterator end, std::string *error)
     }
     T value{};
     typed_sax handler (value, error);
-    if (!read_json ({reinterpret_cast<const char *> (std::to_address (begin)),
-                     static_cast<std::size_t> (end - begin)},
-                    handler)
+    if (!read_document ({reinterpret_cast<const char *> (std::to_address (begin)),
+                         static_cast<std::size_t> (end - begin)},
+                        handler)
         || !handler.complete ()) {
         handler.syntax_error ();
         return std::nullopt;

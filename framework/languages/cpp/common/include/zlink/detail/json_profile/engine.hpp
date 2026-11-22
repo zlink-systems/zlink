@@ -1,55 +1,10 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #pragma once
 
-#include <cstddef>
-#include <cstdint>
-#include <string>
 #include <string_view>
-#include <vector>
 
 namespace zlink::detail::json_profile
 {
-
-enum class token_kind : std::uint8_t
-{
-    null,
-    boolean,
-    integer,
-    unsigned_integer,
-    floating,
-    raw_number,
-    raw_json,
-    string,
-    object,
-    array
-};
-
-struct token
-{
-    token_kind kind = token_kind::null;
-    bool boolean = false;
-    std::int64_t integer = 0;
-    std::uint64_t unsigned_integer = 0;
-    double floating = 0;
-    std::size_t text_offset = 0;
-    std::size_t text_length = 0;
-    std::size_t key_offset = 0;
-    std::size_t key_length = 0;
-    std::size_t child_count = 0;
-};
-
-struct open_token_container
-{
-    std::size_t remaining;
-    bool object;
-};
-
-struct token_buffer
-{
-    std::vector<token> tokens;
-    std::string strings;
-    std::vector<open_token_container> open_containers;
-};
 
 // Framework and Stream Connector each compile the engine under their own
 // namespace so a consumer of both links two distinct symbols. A target exports
@@ -64,13 +19,12 @@ struct token_buffer
 #endif
 #endif
 
+class typed_sax;
+
 namespace ZLINK_JSON_PROFILE_ENGINE_NS
 {
-// Keep TLS initialization and destruction in the engine's library.
-token_buffer &reusable_tokens ();
-bool parse_tokens (std::string_view input, token_buffer &output);
+bool read_document (std::string_view input, typed_sax &handler);
 }
-using ZLINK_JSON_PROFILE_ENGINE_NS::parse_tokens;
-using ZLINK_JSON_PROFILE_ENGINE_NS::reusable_tokens;
+using ZLINK_JSON_PROFILE_ENGINE_NS::read_document;
 
 } // namespace zlink::detail::json_profile
