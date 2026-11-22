@@ -176,6 +176,10 @@ jobs:
         if: ${{ !inputs.skip_tests && (steps.linux-vcpkg-cache.outputs.cache-hit != 'true') }}
         run: bash scripts/ci/framework-cpp-vcpkg.sh install
 
+      - name: Check vcpkg dependency versions against vcpkg.json
+        if: ${{ !inputs.skip_tests }}
+        run: bash scripts/ci/framework-cpp-vcpkg.sh verify
+
       - name: Build the checkout Core package
         if: ${{ !inputs.skip_tests }}
         run: |
