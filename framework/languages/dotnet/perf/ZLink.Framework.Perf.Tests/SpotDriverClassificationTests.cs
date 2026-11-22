@@ -205,12 +205,13 @@ public sealed class SpotDriverClassificationTests
 
         public IZLinkSpotRequestCall Timeout(TimeSpan timeout) => this;
 
-        public async ValueTask<TReply> Async<TReply>(
-            CancellationToken cancellationToken = default
-        ) => (TReply)(object)await callback();
+        public ZLinkRequest<TReply> Async<TReply>(CancellationToken cancellationToken = default) =>
+            new(ValueTask.CompletedTask, Reply<TReply>());
 
         public ValueTask<TReply> Yield<TReply>(CancellationToken cancellationToken = default) =>
-            Async<TReply>(cancellationToken);
+            Reply<TReply>();
+
+        private async ValueTask<TReply> Reply<TReply>() => (TReply)(object)await callback();
     }
 
     private sealed class FakeSpotClient(PerfDriveReply reply) : IZLinkSpotClient
@@ -236,8 +237,8 @@ public sealed class SpotDriverClassificationTests
 
         public IZLinkSpotRequestCall Timeout(TimeSpan timeout) => this;
 
-        public ValueTask<TReply> Async<TReply>(CancellationToken cancellationToken = default) =>
-            Reply<TReply>();
+        public ZLinkRequest<TReply> Async<TReply>(CancellationToken cancellationToken = default) =>
+            new(ValueTask.CompletedTask, Reply<TReply>());
 
         public ValueTask<TReply> Yield<TReply>(CancellationToken cancellationToken = default) =>
             Reply<TReply>();

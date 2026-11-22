@@ -24,6 +24,20 @@ public record ZLinkStreamHeader(
         Optional<Integer> actorSlot) {
     private static final int MAX_PACKET_NAME_BYTES = 255;
 
+    public static final ZLinkStreamHeader HEARTBEAT_PING = control("$zlink.heartbeat.ping");
+    public static final ZLinkStreamHeader HEARTBEAT_PONG = control("$zlink.heartbeat.pong");
+
+    static ZLinkStreamHeader control(String packetName) {
+        return new ZLinkStreamHeader(
+                ZLinkStreamMessageKind.CONTROL,
+                ZLinkStreamCodec.RAW,
+                null,
+                Optional.empty(),
+                packetName,
+                Map.of(),
+                Optional.empty());
+    }
+
     public ZLinkStreamHeader {
         if (kind == null) {
             throw new IllegalArgumentException("kind is required");
@@ -167,6 +181,23 @@ public record ZLinkStreamHeader(
                 Optional.empty(),
                 Optional.empty(),
                 Optional.empty());
+    }
+
+    @Override
+    public EnumSet<ZLinkStreamHeaderFlag> flags() {
+        return flags.clone();
+    }
+
+    int wireFlags() {
+        int value = 0;
+        for (ZLinkStreamHeaderFlag flag : flags) {
+            value |= flag.value();
+        }
+        return value;
+    }
+
+    boolean hasFlag(ZLinkStreamHeaderFlag flag) {
+        return flags.contains(flag);
     }
 
     public String packetName() {

@@ -1,21 +1,18 @@
 package systems.zlink.framework.runtime.messaging;
 
-import com.sun.management.ThreadMXBean;
+import systems.zlink.framework.testutil.PerCallAllocation;
 
-import java.lang.management.ManagementFactory;
 import java.nio.ByteBuffer;
 import java.util.Map;
 
-/** Runs the allocation window in an isolated JVM with escape analysis disabled. */
+/** Runs the allocation measurements in an isolated JVM with escape analysis disabled. */
 public final class ZLinkChannelHeaderAllocationProbe {
+    static final int CALLS_PER_WINDOW = 1_000;
+    private static final int WARMUP_CALLS = 50_000;
+
     private ZLinkChannelHeaderAllocationProbe() {}
 
     public static void main(String[] args) {
-        ThreadMXBean bean = (ThreadMXBean) ManagementFactory.getThreadMXBean();
-        if (!bean.isThreadAllocatedMemorySupported())
-            throw new IllegalStateException("thread allocated memory is not supported");
-        if (!bean.isThreadAllocatedMemoryEnabled()) bean.setThreadAllocatedMemoryEnabled(true);
-
         var header =
                 new ZLinkChannelEnvelope.Header(
                         ZLinkChannelEnvelope.KIND_COMMAND,
@@ -32,23 +29,16 @@ public final class ZLinkChannelHeaderAllocationProbe {
                         null,
                         null);
         byte[] wire = ZLinkChannelEnvelope.encodeHeaderBytes(header);
-        int checksum = 0;
-        for (int i = 0; i < 50_000; i++) {
-            wire = ZLinkChannelEnvelope.encodeHeaderBytes(header);
-            checksum += ZLinkChannelEnvelope.decodeHeader(ByteBuffer.wrap(wire), false).kind();
-        }
-
-        long threadId = Thread.currentThread().threadId();
-        long beforeEncode = bean.getThreadAllocatedBytes(threadId);
-        for (int i = 0; i < 1_000; i++)
-            checksum += ZLinkChannelEnvelope.encodeHeaderBytes(header).length;
-        long encodeBytes = bean.getThreadAllocatedBytes(threadId) - beforeEncode;
-
-        long beforeDecode = bean.getThreadAllocatedBytes(threadId);
-        for (int i = 0; i < 1_000; i++)
-            checksum += ZLinkChannelEnvelope.decodeHeader(ByteBuffer.wrap(wire), false).kind();
-        long decodeBytes = bean.getThreadAllocatedBytes(threadId) - beforeDecode;
-        if (checksum <= 0) throw new IllegalStateException("allocation probe checksum is invalid");
+        long encodeBytes =
+                PerCallAllocation.minWindow(
+                        () -> ZLinkChannelEnvelope.encodeHeaderBytes(header),
+                        CALLS_PER_WINDOW,
+                        WARMUP_CALLS);
+        long decodeBytes =
+                PerCallAllocation.minWindow(
+                        () -> ZLinkChannelEnvelope.decodeHeader(ByteBuffer.wrap(wire), false),
+                        CALLS_PER_WINDOW,
+                        WARMUP_CALLS);
 
         System.out.println(encodeBytes + " " + decodeBytes);
     }

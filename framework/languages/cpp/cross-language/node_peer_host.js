@@ -53,6 +53,29 @@ function writeReady() {
   }
 }
 
+async function waitForFrameworkServing(runtime, framework) {
+  const serving = framework.ZLinkFrameworkRuntimeState.Serving;
+  const terminal = new Set([
+    framework.ZLinkFrameworkRuntimeState.Error,
+    framework.ZLinkFrameworkRuntimeState.Stopped
+  ]);
+  const controller = new AbortController();
+  try {
+    for await (const observed of runtime.observe(controller.signal)) {
+      const state = observed.status.state;
+      if (state === serving) return;
+      if (terminal.has(state)) {
+        throw new Error(
+          `Framework runtime reached ${framework.ZLinkFrameworkRuntimeState[state]} before Serving`
+        );
+      }
+    }
+  } finally {
+    controller.abort();
+  }
+  throw new Error('Framework runtime observation ended before Serving');
+}
+
 class TestHostProfileRequest {
   constructor(value) {
     this.value = value;
@@ -572,6 +595,8 @@ async function entrySpotRelocate() {
   const app = await NestFactory.createApplicationContext(EntrySpotRelocationModule, {
     logger: false
   });
+  const frameworkRuntime = app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME, { strict: false });
+  await waitForFrameworkServing(frameworkRuntime, framework);
   /* No manual peerConnections().connect() anywhere in this mode (see the
    * comment above), so there is no outbound connection to poll readiness
    * on -- automatic discovery converges through the shared Location Store
@@ -590,7 +615,6 @@ async function entrySpotRelocate() {
     appendEvent(`entry-spot-create|status=${createResult.status}`);
     appendEvent(`entry-spot-owner-before|node=${createResult.actor?.nodeRid}`);
 
-    const frameworkRuntime = app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME, { strict: false });
     /* No manual connect means no readiness signal to wait on before
      * relocating -- give automatic discovery (Location Store polling on
      * both ends) time to converge, retrying relocate() itself a few times
