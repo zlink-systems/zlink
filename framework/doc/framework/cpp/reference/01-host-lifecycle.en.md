@@ -86,6 +86,9 @@ without relocating, call `shutdown` directly. A duplicate call with the same
 `relocation_options_t` joins the in-flight operation; a call with different values completes with
 `blocked/operation_in_progress`.
 
+If a previous relocation still holds publication for a local Actor or User Spot, the
+host relocation completes immediately with `blocked/operation_in_progress`.
+
 ---
 
 ## `shutdown`

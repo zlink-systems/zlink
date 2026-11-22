@@ -3843,6 +3843,30 @@ relocation_topology_preflight_once (detail::app_state_t &state, const relocation
             const auto target_application_version =
               relocation_target_application_version (options, source->application_version);
 
+            if (co_await node->native_node ().has_finishing_relocation_target ())
+                co_return relocation_preflight_t{relocation_reason_t::operation_in_progress,
+                                                 target_application_version,
+                                                 source->application_version};
+            if (auto spots = detail::spot_node_runtime_t::from (state.zlink, node_mesh)) {
+                const auto units = co_await spots->relocation_units ();
+                std::vector<authority_key_t> keys;
+                for (const auto &actor : units.standalone_actors)
+                    keys.push_back (runtime::actor_authority_key (actor.actor_id ().value ()));
+                for (const auto &unit : units.spots) {
+                    keys.push_back (runtime::spot_authority_key (unit.spot_id));
+                    for (const auto &actor : unit.actors)
+                        keys.push_back (runtime::actor_authority_key (actor.actor_id ().value ()));
+                }
+                for (const auto &key : keys) {
+                    const auto read = co_await store.read_authority (key);
+                    const auto *authority = std::get_if<authority_snapshot_t> (&read);
+                    if (authority && runtime::decode_finishing_relocation (authority->payload))
+                        co_return relocation_preflight_t{relocation_reason_t::operation_in_progress,
+                                                         target_application_version,
+                                                         source->application_version};
+                }
+            }
+
             bool replacement = false;
             for (const auto &candidate : descriptors) {
                 if (local_rids.contains (candidate.rid.to_hex ())

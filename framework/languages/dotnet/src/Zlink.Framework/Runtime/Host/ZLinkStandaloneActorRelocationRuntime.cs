@@ -1430,6 +1430,11 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     //  Spec 25 §5: target-local S2 (CAS confirmed) → S3 (dispatch
                     //  open) resume interval for this unit.
                     var resumeStartedTimestamp = Stopwatch.GetTimestamp();
+                    void RecordDispatchOpened() =>
+                        ZLinkRuntimeMetrics.RecordRelocationTargetResume(
+                            Stopwatch.GetElapsedTime(resumeStartedTimestamp),
+                            "actor"
+                        );
                     if (
                         stage.RemoteJoinRequest is { } remoteJoinRequest
                         && stage.RemoteJoinRecovery is { } remoteJoinRecovery
@@ -1456,7 +1461,8 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                                 stage,
                                 remoteJoinRequest,
                                 remoteJoinRecovery,
-                                cancellationToken
+                                cancellationToken,
+                                RecordDispatchOpened
                             )
                             .ConfigureAwait(false);
                     }
@@ -1464,13 +1470,15 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     {
                         await ActivatePublishedTargetCoreAsync(stage, cancellationToken)
                             .ConfigureAwait(false);
-                        await FinishTargetStageAsync(key, lease.Slot, stage, cancellationToken)
+                        await FinishTargetStageAsync(
+                                key,
+                                lease.Slot,
+                                stage,
+                                cancellationToken,
+                                RecordDispatchOpened
+                            )
                             .ConfigureAwait(false);
                     }
-                    ZLinkRuntimeMetrics.RecordRelocationTargetResume(
-                        Stopwatch.GetElapsedTime(resumeStartedTimestamp),
-                        "actor"
-                    );
                 })
                 .ConfigureAwait(false);
         }
@@ -2580,7 +2588,8 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         TargetStage stage,
         ZLinkRemoteActorJoinRequest request,
         ZLinkActorRelocationRecoveryRecord recovery,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        Action dispatchOpened
     )
     {
         await runtime
@@ -2590,8 +2599,10 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 request,
                 recovery,
                 stage.TargetAuthority.MeshName,
-                token => AdvanceDirectRemoteJoinTargetPhaseAsync(stage, token),
+                (clearPublication, token) =>
+                    AdvanceDirectRemoteJoinTargetPhaseAsync(stage, clearPublication, token),
                 cancellationToken,
+                dispatchOpened,
                 () => RemoveTargetStage(key, slot, stage)
             )
             .ConfigureAwait(false);
@@ -2607,6 +2618,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
     //  store-based recovery release.
     private async ValueTask AdvanceDirectRemoteJoinTargetPhaseAsync(
         TargetStage stage,
+        bool clearPublication,
         CancellationToken cancellationToken
     )
     {
@@ -2646,23 +2658,26 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     "Standalone Actor direct target activation lost its exact attempt fence."
                 );
             ReadOnlyMemory<byte> payload;
-            if (canonical.Phase >= (byte)ZLinkStandaloneActorCanonicalPhase.Activated)
+            if (
+                !clearPublication
+                && canonical.Phase >= (byte)ZLinkStandaloneActorCanonicalPhase.Activated
+            )
+                return;
+            if (canonical.Phase == (byte)ZLinkStandaloneActorCanonicalPhase.Completed)
                 payload = canonical.SteadyAuthorityPayload;
             else if (
                 canonical.Phase
                 is (byte)ZLinkStandaloneActorCanonicalPhase.Committed
                     or (byte)ZLinkStandaloneActorCanonicalPhase.Activating
+                    or (byte)ZLinkStandaloneActorCanonicalPhase.Activated
+                    or (byte)ZLinkStandaloneActorCanonicalPhase.Cleaning
             )
             {
-                var next =
-                    canonical.Phase == (byte)ZLinkStandaloneActorCanonicalPhase.Committed
-                        ? ZLinkStandaloneActorCanonicalPhase.Activating
-                        : ZLinkStandaloneActorCanonicalPhase.Activated;
                 payload = ZLinkCanonicalRelocationAuthorityStateCodec.ReplaceRelocationState(
                     found.Snapshot.Payload.Span,
                     canonical.State with
                     {
-                        Phase = (byte)next,
+                        Phase = checked((byte)(canonical.Phase + 1)),
                     },
                     stage.Envelope
                 );
@@ -2684,6 +2699,11 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     cancellationToken
                 )
                 .ConfigureAwait(false);
+            if (
+                exchanged is ZLinkAuthorityCompareExchangeResult.Stored
+                && canonical.Phase == (byte)ZLinkStandaloneActorCanonicalPhase.Completed
+            )
+                return;
             if (
                 exchanged
                 is ZLinkAuthorityCompareExchangeResult.Stored
@@ -2771,7 +2791,8 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         AttemptKey key,
         AttemptSlot slot,
         TargetStage stage,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        Action? dispatchOpened = null
     )
     {
         if (!stage.AuthorityPublished)
@@ -2795,7 +2816,8 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 stage.Envelope,
                 handoffId,
                 cancellationToken,
-                finishTargetStage: () => RemoveTargetStage(key, slot, stage)
+                finishTargetStage: () => RemoveTargetStage(key, slot, stage),
+                dispatchOpened: dispatchOpened
             )
             .ConfigureAwait(false);
     }
@@ -3187,8 +3209,37 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
     {
         if (!slot.TryRemoveStage(stage))
             return;
+        stage.Terminal.TrySetResult();
         stage.Admission.Release();
         CloseTargetAttemptIfEmpty(key, slot);
+    }
+
+    internal Task? FindTargetTerminal(
+        ZLinkCanonicalRelocationAuthorityState previous,
+        ZLinkAuthorityKey key,
+        out bool hasCapturedRequests
+    )
+    {
+        hasCapturedRequests = false;
+        if (
+            !_targetAttempts.TryGetValue(
+                new AttemptKey(
+                    previous.RelocationHigh,
+                    previous.RelocationLow,
+                    previous.TargetAttemptGeneration
+                ),
+                out var slot
+            )
+            || slot.Stage is not { } stage
+            || stage.Participant.AuthorityKey != key
+        )
+            return null;
+        hasCapturedRequests =
+            stage.ActorState.Handoff.CapturedRequestDelivery(
+                stage.Envelope.AggregateId.ToString("N")
+            )
+                is { IsCompletedSuccessfully: false };
+        return stage.Terminal.Task;
     }
 
     // Called only on the attempt lane, before cutover verification. The lane
@@ -3612,6 +3663,8 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
     )
     {
         private readonly ZLinkStateLane _lane = new();
+        internal TaskCompletionSource Terminal { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal ZLinkActivationConcurrencyAdmission.Lease Admission { get; } = admission;
         private readonly List<ZLinkActorHandoffFrame> _acceptedFrames = [.. acceptedFrames];
         private TargetReadySubmissionPhase _readySubmissionPhase;
@@ -4105,7 +4158,8 @@ internal sealed partial class ZLinkFrameworkRuntime
         string handoffId,
         CancellationToken cancellationToken,
         bool normalizeSteady = true,
-        Action? finishTargetStage = null
+        Action? finishTargetStage = null,
+        Action? dispatchOpened = null
     )
     {
         Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
@@ -4141,49 +4195,34 @@ internal sealed partial class ZLinkFrameworkRuntime
                 ZLinkFrameworkErrorKind.DataLost,
                 $"Actor '{actorState.ActorId}' target completion phase is not recoverable."
             );
-        await ZLinkActorTargetActivation
-            .CompleteAsync(
-                async () =>
-                {
-                    // Routed recovery retains publication for its protocol owner;
-                    // it still owns the restored FIFO and Session route completion.
-                    if (!normalizeSteady)
-                        return;
-                    progress = progress with
-                    {
-                        Authority = await coordinator
-                            .NormalizeSteadyAsync(
-                                relocationIdentity,
-                                targetOwner,
-                                cancellationToken
-                            )
-                            .ConfigureAwait(false),
-                    };
-                },
-                () =>
-                    QueueCanonicalStandaloneActorFramesAsync(
-                        actorState,
-                        targetAuthority,
-                        relocationIdentity,
-                        handoffId,
-                        progress
-                    ),
-                static () => ValueTask.CompletedTask,
-                () =>
-                    FinishRelocationTargetAsync(
-                        actorState,
-                        targetAuthority.MeshName,
-                        handoffId,
-                        cancellationToken
-                    ),
-                () =>
-                {
-                    finishTargetStage?.Invoke();
-                    actorState.Handoff.Complete(handoffId);
-                    return ValueTask.CompletedTask;
-                }
-            )
-            .ConfigureAwait(false);
+        if (!actorState.Handoff.IsCanonicalMaintenanceReplayComplete(handoffId))
+        {
+            await QueueCanonicalStandaloneActorFramesAsync(
+                    actorState,
+                    targetAuthority,
+                    relocationIdentity,
+                    handoffId,
+                    progress
+                )
+                .ConfigureAwait(false);
+            await FinishRelocationTargetAsync(
+                    actorState,
+                    targetAuthority.MeshName,
+                    handoffId,
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+            actorState.Handoff.Complete(handoffId);
+            dispatchOpened?.Invoke();
+        }
+        if (actorState.Handoff.CapturedRequestDelivery(handoffId) is { } delivery)
+            await delivery.WaitAsync(cancellationToken).ConfigureAwait(false);
+        // Routed recovery retains publication for its protocol owner.
+        if (normalizeSteady)
+            await coordinator
+                .NormalizeSteadyAsync(relocationIdentity, targetOwner, cancellationToken)
+                .ConfigureAwait(false);
+        finishTargetStage?.Invoke();
     }
 
     private ZLinkStandaloneActorRelocationProgressCoordinator CreateStandaloneActorProgressCoordinator(
@@ -4314,7 +4353,10 @@ internal sealed partial class ZLinkFrameworkRuntime
                         Complete,
                         ShutdownToken
                     );
-            }
+            },
+            frame =>
+                jobs.TryGetValue(checked((ulong)frame.ArrivalIndex), out var job)
+                && job.CanonicalRequest is { ReplyRouteId: not 0 }
         );
         return ValueTask.CompletedTask;
     }

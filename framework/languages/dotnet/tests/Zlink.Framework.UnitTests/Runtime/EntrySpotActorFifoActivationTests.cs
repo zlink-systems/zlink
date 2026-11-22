@@ -396,8 +396,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 var authority = Assert.IsType<ZLinkAuthorityReadResult.Found>(
                     store.ReadAuthorityAsync(key).GetAwaiter().GetResult()
                 );
-                Assert.Equal(
-                    routedJoin,
+                Assert.True(
                     ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
                         authority.Snapshot.Payload.Span,
                         out _
@@ -412,6 +411,16 @@ public sealed partial class EntrySpotActorDispatchTests
             await runtime.StandaloneActorRelocationRuntime.RecoverPublishedAsync(
                 candidate,
                 default
+            );
+            var after = Assert.IsType<ZLinkAuthorityReadResult.Found>(
+                await store.ReadAuthorityAsync(key)
+            );
+            Assert.Equal(
+                routedJoin,
+                ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
+                    after.Snapshot.Payload.Span,
+                    out _
+                )
             );
             var restored = runtime.GetOrCreateActorState(actorRef.ActorId);
             Assert.NotNull(restored.Actor);

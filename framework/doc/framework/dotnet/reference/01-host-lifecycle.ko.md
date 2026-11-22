@@ -86,6 +86,9 @@ host는 `Relocated` 상태가 된다(새 operation은 받지 않지만 infrastru
 직접 호출한다. 같은 `Mode`와 목표 version으로 중복 호출하면 진행 중인 operation에 합류하고, 다른
 값으로 호출하면 `Blocked/OperationInProgress`로 완료한다.
 
+이전 relocation이 이 host의 Actor 또는 User Spot authority publication을 정리 중이면
+Host relocation은 `Blocked/OperationInProgress`로 즉시 완료한다.
+
 ---
 
 ## `ShutdownAsync`

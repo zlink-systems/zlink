@@ -164,6 +164,12 @@ Context
 같은 `ZLinkActorJoinOperationId`를 담은 `OnJoinCompletedAsync(ZLinkActorJoinCompletion, ct)`
 callback으로 비동기 전달된다 — `Accepted`/`Rejected`/`Failed` 중 하나다.
 
+다른 node로 Join할 때 이전 relocation의 target이 아직 authority publication을 정리 중이면,
+Join은 같은 process의 target 완료 신호를 남은 deadline 동안 기다린다. Deadline이 지나면
+`DeadlineExceeded`로 완료한다. Publication이 남아 있고 해당 target 흐름이 없거나, 같은 Actor의
+turn이 끝나야 이전 relocation의 captured request 결과를 전달할 수 있으면 `Unavailable`로
+완료한다. 이전 target에서 application dispatch가 열리는 시점은 이 대기의 영향을 받지 않는다.
+
 **선택 기준.** Actor를 다른 Spot으로 옮기거나 Entry Spot으로 되돌릴 때 사용한다. Entry Spot과
 `PerActor` User Spot의 Actor에서 호출하면 `InvalidOperation`으로 완료한다.
 

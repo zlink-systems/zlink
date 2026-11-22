@@ -134,6 +134,8 @@ inline bool valid_text8 (std::string_view value) noexcept
 
 inline constexpr std::string_view canonical_envelope_magic = "ZLAU";
 inline constexpr std::uint8_t captured_relocation_phase = 2;
+inline constexpr std::uint8_t committed_relocation_phase = 4;
+inline constexpr std::uint8_t completed_relocation_phase = 8;
 
 struct relocation_capture_identity_t
 {
@@ -143,6 +145,7 @@ struct relocation_capture_identity_t
     std::uint64_t source_owner_lease_generation = 0;
     std::string coordinator_owner_id;
     std::uint64_t coordinator_lease_generation = 0;
+    std::uint64_t target_attempt_generation = 0;
 };
 inline constexpr std::size_t canonical_envelope_header_bytes =
   canonical_envelope_magic.size () + sizeof (std::uint8_t) + sizeof (std::uint16_t)
@@ -386,9 +389,10 @@ inline bool read_actor_authority_relocation_state (
         if (relocation_expected_store_version)
             *relocation_expected_store_version = expected_version;
         if (capture_identity)
-            *capture_identity = {relocation_high,      relocation_low,
-                                 source_owner_id,      source_owner_lease_generation,
-                                 coordinator_owner_id, coordinator_lease_generation};
+            *capture_identity = {relocation_high,          relocation_low,
+                                 source_owner_id,          source_owner_lease_generation,
+                                 coordinator_owner_id,     coordinator_lease_generation,
+                                 target_attempt_generation};
     }
     return valid;
 }
@@ -454,6 +458,36 @@ decode_canonical_authority_payload (std::span<const std::byte> encoded)
     catch (...) {
         return std::nullopt;
     }
+}
+
+inline std::optional<actor_authority_detail::relocation_capture_identity_t>
+decode_finishing_relocation (std::span<const std::byte> encoded)
+{
+    using namespace actor_authority_detail;
+    const auto canonical = decode_canonical_authority_payload (encoded);
+    if (!canonical)
+        return std::nullopt;
+    try {
+        reader_t body (canonical->body);
+        (void) body.u8 ();
+        (void) body.u8 ();
+        (void) body.take (body.u16be ());
+        (void) body.text8 ();
+        (void) body.u64be ();
+        (void) body.text8 ();
+        (void) body.take (body.u8 ());
+        (void) body.u64be ();
+        std::uint8_t phase = 0;
+        relocation_capture_identity_t identity;
+        if (read_actor_authority_relocation_state (body, std::nullopt, nullptr, &phase, nullptr,
+                                                   &identity)
+            && phase >= committed_relocation_phase && phase <= completed_relocation_phase)
+            return identity;
+    }
+    catch (const std::exception &) {
+        return std::nullopt;
+    }
+    return std::nullopt;
 }
 
 inline std::vector<std::byte>

@@ -173,6 +173,12 @@ actual result (accepted·rejected·failed) is delivered asynchronously through t
 `OnJoinCompletedAsync(ZLinkActorJoinCompletion, ct)` callback carrying the same
 `ZLinkActorJoinOperationId` — it is one of `Accepted`/`Rejected`/`Failed`.
 
+A cross-node Join waits within its remaining deadline for an earlier relocation's target flow
+to release its authority publication. If the deadline expires, the Join completes with
+`DeadlineExceeded`. It completes with `Unavailable` if the publication has no target flow in this
+process or if delivering a captured request result requires the same Actor's current turn to end.
+The wait leaves application dispatch at the previous target open.
+
 **When to use it.** Use it to move an Actor to a different Spot, or return it to the Entry Spot.
 Calling it from an Entry Spot's Actor or a `PerActor` User Spot's Actor completes with
 `InvalidOperation`.

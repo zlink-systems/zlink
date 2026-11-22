@@ -80,6 +80,9 @@ if (result.outcome == zlink::framework::relocation_outcome_t::relocated) {
 직접 호출한다. 같은 `relocation_options_t`로 중복 호출하면 진행 중인 operation에 합류하고, 다른
 값으로 호출하면 `blocked/operation_in_progress`로 완료한다.
 
+이전 relocation이 이 host의 Actor 또는 User Spot authority publication을 정리 중이면
+Host relocation은 `blocked/operation_in_progress`로 즉시 완료한다.
+
 ---
 
 ## `shutdown`

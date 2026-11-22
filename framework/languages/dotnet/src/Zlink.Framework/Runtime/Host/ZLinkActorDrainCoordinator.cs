@@ -25,6 +25,25 @@ internal sealed class ZLinkActorDrainCoordinator(
 
         try
         {
+            if (registration.Locations.ResolveStore() is { } store)
+            {
+                foreach (var state in states)
+                {
+                    if (state.Actor is null || state.NativeActorRef is not { } actor)
+                        continue;
+                    var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(state.ActorId);
+                    var read = await store
+                        .ReadAuthorityAsync(key, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (
+                        read is ZLinkAuthorityReadResult.Found found
+                        && found.Snapshot.ObjectGeneration == actor.Generation
+                        && found.Snapshot.Allocation.Descriptor.Rid == actor.NodeRid
+                        && ZLinkActorRemoteJoiner.FinishingTarget(found.Snapshot) is not null
+                    )
+                        return ZLinkFrameworkRelocationReason.OperationInProgress;
+                }
+            }
             foreach (
                 var actorType in states
                     .Select(static state => state.ActorType)

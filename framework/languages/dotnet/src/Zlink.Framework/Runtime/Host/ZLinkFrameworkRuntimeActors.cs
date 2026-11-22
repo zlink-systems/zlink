@@ -1116,8 +1116,9 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZLinkRemoteActorJoinRequest request,
         ZLinkActorRelocationRecoveryRecord recovery,
         string targetMeshName,
-        Func<CancellationToken, ValueTask> normalizeDurableAuthority,
+        Func<bool, CancellationToken, ValueTask> progressDurableAuthority,
         CancellationToken cancellationToken,
+        Action dispatchOpened,
         Action finishTargetStage
     )
     {
@@ -1149,11 +1150,16 @@ internal sealed partial class ZLinkFrameworkRuntime
             var target = ResolveActorHandoffTarget(spotId);
             await ZLinkActorTargetActivation
                 .CompleteAsync(
-                    () => normalizeDurableAuthority(cancellationToken),
+                    () => progressDurableAuthority(false, cancellationToken),
                     () =>
                     {
                         actorState.Handoff.PrepareImportedReplay([]);
-                        AdmitTransferredActorPrefix(actorState, request.HandoffId, targetMeshName);
+                        AdmitTransferredActorPrefix(
+                            actorState,
+                            request.HandoffId,
+                            targetMeshName,
+                            isCapturedRequest: static frame => frame.RelocationReplyRouteId != 0
+                        );
                         return ValueTask.CompletedTask;
                     },
                     async () =>
@@ -1215,8 +1221,16 @@ internal sealed partial class ZLinkFrameworkRuntime
                         await _actorHandoffAdmissions
                             .CompleteAsync(request.HandoffId)
                             .ConfigureAwait(false);
-                        finishTargetStage();
                         actorState.Handoff.Complete(request.HandoffId);
+                        dispatchOpened();
+                        if (
+                            actorState.Handoff.CapturedRequestDelivery(request.HandoffId) is
+                            { } delivery
+                        )
+                            await delivery.WaitAsync(cancellationToken).ConfigureAwait(false);
+                        await progressDurableAuthority(true, cancellationToken)
+                            .ConfigureAwait(false);
+                        finishTargetStage();
                     }
                 )
                 .ConfigureAwait(false);
@@ -2943,13 +2957,17 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZLinkActorRuntimeState actorState,
         string handoffId,
         string receiverMeshName,
-        Func<ZLinkActorHandoffFrame, Task>? dispatch = null
+        Func<ZLinkActorHandoffFrame, Task>? dispatch = null,
+        Func<ZLinkActorHandoffFrame, bool>? isCapturedRequest = null,
+        long? acceptedThrough = null
     )
     {
         var start = actorState.Handoff.TargetActivation;
         _ = actorState.Handoff.AdmitDurablePrefix(
             handoffId,
-            frame => AdmitActorHandoffFrame(actorState, frame, start, receiverMeshName, dispatch)
+            frame => AdmitActorHandoffFrame(actorState, frame, start, receiverMeshName, dispatch),
+            isCapturedRequest,
+            acceptedThrough
         );
     }
 

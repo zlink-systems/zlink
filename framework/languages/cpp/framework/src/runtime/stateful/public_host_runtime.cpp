@@ -3526,6 +3526,96 @@ bool public_host_runtime_t::relocation_target_terminal (const relocation_target_
     return attempt.terminal && attempt.terminal->task ().await_ready ();
 }
 
+bool public_host_runtime_t::relocation_target_holds_publication (
+  const relocation_target_attempt_t &attempt)
+{
+    return attempt.authority_committed_at != std::chrono::steady_clock::time_point{}
+           && !relocation_target_terminal (attempt);
+}
+
+task_t<bool> public_host_runtime_t::has_finishing_relocation_target ()
+{
+    co_return co_await _relocation_session_terminal_lane.run_task ([this] {
+        return std::any_of (
+          _relocation_target_attempts.begin (), _relocation_target_attempts.end (),
+          [] (const auto &entry) { return relocation_target_holds_publication (entry.second); });
+    });
+}
+
+task_t<bool> public_host_runtime_t::await_previous_relocation_target (
+  protocol::relocation_id_t relocation,
+  std::uint64_t attempt_generation,
+  const stateful::object_ref_t &object,
+  std::chrono::steady_clock::time_point deadline)
+{
+    const auto terminal = co_await _relocation_session_terminal_lane.run_task ([&] {
+        const bool exact = relocation.high != 0 || relocation.low != 0;
+        const auto found =
+          exact ? _relocation_target_attempts.find (
+                    {relocation.high, relocation.low, attempt_generation})
+                : std::find_if (_relocation_target_attempts.begin (),
+                                _relocation_target_attempts.end (), [&] (const auto &entry) {
+                                    const auto &attempt = entry.second;
+                                    return relocation_target_holds_publication (attempt)
+                                           && std::find (attempt.targets.begin (),
+                                                         attempt.targets.end (), object)
+                                                != attempt.targets.end ();
+                                });
+        if (found == _relocation_target_attempts.end ()
+            || std::find (found->second.targets.begin (), found->second.targets.end (), object)
+                 == found->second.targets.end ())
+            return std::shared_ptr<task_completion_source_t<void>>{};
+        // An Actor Join on this surface was registered in the source Actor's own
+        // handler and runs as its deferred barrier.
+        if (std::any_of (found->second.captured_requests.begin (),
+                         found->second.captured_requests.end (), [&] (const auto &request) {
+                             return request.kind == object.kind && request.key == object.key
+                                    && !request.delivery->task ().await_ready ();
+                         }))
+            throw framework_exception_t (
+              framework_error_kind_t::unavailable,
+              "Actor Join cannot wait for captured request delivery in its own Actor turn");
+        return found->second.terminal;
+    });
+    // The caller rereads a published slot even if publication was cleared before lookup.
+    if (!terminal)
+        co_return false;
+    auto target_terminal = terminal->task ();
+    if (target_terminal.await_ready ())
+        co_return true;
+
+    using foundation::operation_terminal_t;
+    auto completion = std::make_shared<task_completion_source_t<void>> ();
+    auto waiter = completion->task ();
+    const auto transport = _transport;
+    const auto operation = co_await transport->register_local_operation_async (
+      deadline, [completion] (operation_terminal_t result, result_t<zlink::message_t>) {
+          if (result == operation_terminal_t::completed)
+              completion->complete (result_t<void>::success ());
+          else
+              completion->complete (
+                result_t<void>::failure (result == operation_terminal_t::timed_out
+                                           ? framework_error_kind_t::deadline_exceeded
+                                           : framework_error_kind_t::shutting_down,
+                                         "Waiting for the previous relocation target ended"));
+      });
+    if (!operation)
+        throw framework_exception_t (framework_error_kind_t::shutting_down,
+                                     "Relocation wait cannot register on a stopped host");
+    detail::observe_task_completion (
+      target_terminal,
+      [weak = std::weak_ptr (transport), id = *operation] (const result_t<void> &result) {
+          if (const auto owner = weak.lock ()) {
+              if (result)
+                  (void) owner->complete_local_operation (id);
+              else
+                  (void) owner->fail_local_operation (id, operation_terminal_t::shutdown);
+          }
+      });
+    co_await waiter;
+    co_return true;
+}
+
 std::optional<public_host_runtime_t::relocation_target_attempt_t>
 public_host_runtime_t::take_relocation_target_discard (relocation_target_attempt_t &attempt)
 {
@@ -3552,7 +3642,7 @@ task_t<void> public_host_runtime_t::discard_unverified_relocation_targets (
     co_await _relocation_session_terminal_lane.run_task ([&] {
         const auto sealed = _options.mesh.shutdown_admission_seal->load (std::memory_order_acquire);
         for (auto &[key, attempt] : _relocation_target_attempts) {
-            if (attempt.cutover_received)
+            if (attempt.phase != relocation_target_phase_t::waiting_cutover)
                 continue;
             if (sealed || std::find (observed.begin (), observed.end (), key) != observed.end ())
                 if (auto staging = take_relocation_target_discard (attempt))
@@ -3731,7 +3821,9 @@ task_t<void> public_host_runtime_t::poll_relocation_target_attempts ()
             if (relocation_target_terminal (attempt) || !relocation_target_wire_ready (attempt)
                 || attempt.next_finalize_at > now)
                 continue;
-            if (attempt.cutover_received) {
+            if (attempt.phase == relocation_target_phase_t::dispatch_open)
+                continue;
+            if (attempt.phase == relocation_target_phase_t::cutover_received) {
                 pending.push_back (key);
                 continue;
             }
@@ -4204,7 +4296,8 @@ task_t<bool> public_host_runtime_t::try_finalize_relocation_target (relocation_a
             attempt = found->second;
         } else {
             const auto now = std::chrono::steady_clock::now ();
-            if (!found->second.cutover_received || !relocation_target_wire_ready (found->second)
+            if (found->second.phase != relocation_target_phase_t::cutover_received
+                || !relocation_target_wire_ready (found->second)
                 || now < found->second.next_finalize_at)
                 return false;
             attempt = found->second;
@@ -4322,17 +4415,8 @@ task_t<bool> public_host_runtime_t::try_finalize_relocation_target (relocation_a
         (void) _relocation_wire->unregister_target (
           attempt.prepare.relocation, attempt.prepare.target_attempt_generation, object);
 
-    const auto finalized = co_await _relocation_session_terminal_lane.run_task ([&] {
-        const auto found = _relocation_target_attempts.find (key);
-        if (found == _relocation_target_attempts.end ())
-            return std::shared_ptr<task_completion_source_t<void>>{};
-        return found->second.terminal;
-    });
-    if (!finalized)
-        co_return false;
-    /* Metrics 25 §"zlink.relocation": target_resume is the target-local S2
-     * (owner CAS confirmed) -> dispatch-open duration, emitted once on the
-     * tick that completes the target terminal. */
+    /* Metrics 25: target_resume is the target-local S2 (owner CAS) to
+     * dispatch-open duration, independent of captured request delivery. */
     if (_relocation_metrics && !attempt.sources.empty ()
         && attempt.authority_committed_at != std::chrono::steady_clock::time_point{})
         _relocation_metrics->resume (
@@ -4351,7 +4435,12 @@ task_t<bool> public_host_runtime_t::try_finalize_relocation_target (relocation_a
      * returns (Submit and completion §11), so send completion cannot order
      * the Session owner's route commit after the target becomes Ready. */
     start_relocation_session_route_submission (key);
-    finalized->complete (result_t<void>::success ());
+    co_await _relocation_session_terminal_lane.run_task ([&] {
+        const auto found = _relocation_target_attempts.find (key);
+        if (found != _relocation_target_attempts.end ())
+            found->second.phase = relocation_target_phase_t::dispatch_open;
+    });
+    co_await complete_relocation_target_when_delivered (key);
     for (const auto &target : attempt.targets) {
         auto notified = std::make_shared<task_t<bool>> (notify_stateful_owner (target));
         detail::observe_task_completion (
@@ -4360,6 +4449,35 @@ task_t<bool> public_host_runtime_t::try_finalize_relocation_target (relocation_a
           });
     }
     co_return true;
+}
+
+task_t<void>
+public_host_runtime_t::complete_relocation_target_when_delivered (relocation_attempt_key_t key)
+{
+    const auto terminal = co_await _relocation_session_terminal_lane.run_task ([&] {
+        const auto found = _relocation_target_attempts.find (key);
+        if (found == _relocation_target_attempts.end ()
+            || found->second.phase != relocation_target_phase_t::dispatch_open
+            || std::any_of (
+              found->second.captured_requests.begin (), found->second.captured_requests.end (),
+              [] (const auto &request) { return !request.delivery->task ().await_ready (); }))
+            return std::shared_ptr<task_completion_source_t<void>>{};
+        found->second.captured_requests.clear ();
+        return found->second.terminal;
+    });
+    if (terminal)
+        terminal->complete (result_t<void>::success ());
+}
+
+void public_host_runtime_t::record_relocation_reply_delivered (
+  relocation_attempt_key_t key, const std::shared_ptr<task_completion_source_t<void>> &delivery)
+{
+    delivery->complete (result_t<void>::success ());
+    auto settled = complete_relocation_target_when_delivered (key);
+    detail::observe_task_terminal (
+      settled, [self = shared_from_this ()] (const result_t<void> &result) {
+          self->_options.mesh.runtime_failures->capture ([&] { result.value (); });
+      });
 }
 
 void public_host_runtime_t::reply_relocation_assembly_failure (
@@ -5194,7 +5312,7 @@ bool public_host_runtime_t::register_relocation_target_queue (
                    if (found == _relocation_target_attempts.end ()
                        || !relocation_target_wire_ready (found->second))
                        return false;
-                   if (!found->second.cutover_received)
+                   if (found->second.phase == relocation_target_phase_t::waiting_cutover)
                        found->second.boundary_batch.emplace_back (target, data, participant_id);
                    return true;
                });
@@ -5214,11 +5332,20 @@ public_host_runtime_t::stage_relocation_record (const stateful::object_ref_t &ta
 {
     if (!_stateful_dispatch)
         co_return false;
+    const relocation_attempt_key_t key{data.relocation.high, data.relocation.low,
+                                       data.target_attempt_generation};
+    auto delivery =
+      data.record.reply_route_id ? std::make_shared<task_completion_source_t<void>> () : nullptr;
+    const auto delivered = [weak = weak_from_this (), key, delivery] {
+        if (const auto owner = weak.lock ())
+            owner->record_relocation_reply_delivered (key, delivery);
+        return true;
+    };
     const auto staged = co_await _stateful_dispatch->stage_relocated (
       target, {0, protocol::encode_frozen_record (data.record)},
       [this, relocation = data.relocation,
        target_attempt_generation = data.target_attempt_generation, coordinator = data.coordinator,
-       participant_id,
+       participant_id, delivered,
        frozen_record = data.record] (const std::optional<protocol::application_payload_t> &reply) {
           if (!frozen_record.reply_route_id)
               return true;
@@ -5231,9 +5358,17 @@ public_host_runtime_t::stage_relocation_record (const stateful::object_ref_t &ta
                                      : protocol::framework_error_code::requestFailed;
           return _relocation_wire->register_terminal_target (
             {relay, frozen_record.source, reply,
-             [] (protocol::reply_relay_ack_status_t) { return true; }, [] { return true; }});
+             [delivered] (protocol::reply_relay_ack_status_t) { return delivered (); }, delivered});
       });
-    co_return staged == stateful::stateful_error_t::none;
+    if (staged != stateful::stateful_error_t::none)
+        co_return false;
+    if (delivery)
+        co_await _relocation_session_terminal_lane.run_task ([&] {
+            const auto found = _relocation_target_attempts.find (key);
+            if (found != _relocation_target_attempts.end ())
+                found->second.captured_requests.push_back ({target.kind, target.key, delivery});
+        });
+    co_return true;
 }
 
 task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
@@ -6634,7 +6769,7 @@ public_host_runtime_t::dispatch_user_spot_batch (
                         || found->second.prepare.source_node_generation
                              != mailbox_record.source_node_generation
                         || _options.mesh.shutdown_admission_seal->load (std::memory_order_acquire)
-                        || found->second.cutover_received) {
+                        || found->second.phase != relocation_target_phase_t::waiting_cutover) {
                         /* Late or duplicate cutover (28 §4.4): the
                            * boundary already resolved and is never
                            * re-verified or changed. */
@@ -6657,7 +6792,7 @@ public_host_runtime_t::dispatch_user_spot_batch (
                         matches = accumulator.value () == cutover->boundary_checksum_crc32c;
                     }
                     if (matches) {
-                        found->second.cutover_received = true;
+                        found->second.phase = relocation_target_phase_t::cutover_received;
                         lower_relocation_next_due_on_lane (relocation_due_now);
                         verified.emplace (std::make_move_iterator (
                                             batch.end () - static_cast<std::ptrdiff_t> (count)),
@@ -8745,7 +8880,8 @@ void public_host_runtime_t::publish_relocation_next_due_on_lane () const
     for (const auto &[key, assembly] : _relocation_assemblies)
         include (assembly.expires_at);
     for (const auto &[key, attempt] : _relocation_target_attempts) {
-        if (!relocation_target_terminal (attempt) && relocation_target_wire_ready (attempt))
+        if (!relocation_target_terminal (attempt) && relocation_target_wire_ready (attempt)
+            && attempt.phase != relocation_target_phase_t::dispatch_open)
             include (attempt.next_finalize_at);
     }
     for (const auto &[key, seal] : _session_seal_terminals) {

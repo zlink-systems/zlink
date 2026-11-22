@@ -669,6 +669,11 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     node_status_t status () const;
     std::size_t pending_operation_count () const noexcept;
     task_t<void> seal_relocation_targets ();
+    task_t<bool> await_previous_relocation_target (protocol::relocation_id_t relocation,
+                                                   std::uint64_t attempt_generation,
+                                                   const stateful::object_ref_t &object,
+                                                   std::chrono::steady_clock::time_point deadline);
+    task_t<bool> has_finishing_relocation_target ();
     void set_channel_weight (const std::string &channel_name, std::uint32_t weight);
     task_t<void> register_actor_request (pending_operation_t &operation,
                                          std::chrono::milliseconds timeout);
@@ -1204,6 +1209,16 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     using relocation_attempt_key_t = std::tuple<std::uint64_t, std::uint64_t, std::uint64_t>;
     struct relocation_target_attempt_t;
     task_t<bool> try_finalize_relocation_target (relocation_attempt_key_t key);
+    task_t<void> complete_relocation_target_when_delivered (relocation_attempt_key_t key);
+    void record_relocation_reply_delivered (
+      relocation_attempt_key_t key,
+      const std::shared_ptr<task_completion_source_t<void>> &delivery);
+    enum class relocation_target_phase_t
+    {
+        waiting_cutover,
+        cutover_received,
+        dispatch_open
+    };
     /* 28/52: command 44 (session_relocation_route) is submitted one-way
      * exactly once per route after the target CAS commits (S2) -- there is
      * no application reply and no retry loop; a late duplicate could cross
@@ -1263,9 +1278,14 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
         std::vector<protocol::relocation_object_t> wire_objects;
         std::optional<stateful::aggregate_relocation_fence_t> authority_fence;
         std::vector<session_route_state_t> session_routes;
-        /* The only CAS/dispatch gate (28 §4.4-4.5): set once a received
-         * cutover matched the boundary relay batch that preceded it. */
-        bool cutover_received = false;
+        relocation_target_phase_t phase = relocation_target_phase_t::waiting_cutover;
+        struct captured_request_t
+        {
+            stateful::object_kind_t kind;
+            std::string key;
+            std::shared_ptr<task_completion_source_t<void>> delivery;
+        };
+        std::vector<captured_request_t> captured_requests;
         // The next attempt management tick: before cutover the
         // RelocationCutoverWaitTimeout Warning and later authority reads that
         // only end staging; after cutover the next target CAS submission.
@@ -1359,6 +1379,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     task_t<void> poll_relocation_target_attempts ();
     static bool relocation_target_wire_ready (const relocation_target_attempt_t &attempt) noexcept;
     static bool relocation_target_terminal (const relocation_target_attempt_t &attempt);
+    static bool relocation_target_holds_publication (const relocation_target_attempt_t &attempt);
     static std::optional<relocation_target_attempt_t>
     take_relocation_target_discard (relocation_target_attempt_t &attempt);
     task_t<void>

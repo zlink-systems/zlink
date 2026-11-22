@@ -86,6 +86,9 @@ relocating, call `ShutdownAsync` directly. A repeated call with the same `Mode` 
 version joins the operation already in progress; a call with different values completes with
 `Blocked/OperationInProgress`.
 
+If a previous relocation still holds publication for a local Actor or User Spot, the
+host relocation completes immediately with `Blocked/OperationInProgress`.
+
 ---
 
 ## `ShutdownAsync`

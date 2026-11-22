@@ -2678,72 +2678,91 @@ internal abstract partial class ZLinkSpotActivation
         return ValueTask.CompletedTask;
     }
 
-    internal async ValueTask ReplayAcceptedJobsAsync(
-        IReadOnlyList<ZLinkRelocationQueuedJob> jobs,
+    internal Task? AdmitAcceptedReplayJob(
+        ZLinkRelocationQueuedJob job,
         string sourceMeshName,
-        ZLinkSpotRelocationSeal admissionSeal,
-        int completedCount,
-        Func<
-            ZLinkRelocationQueuedJob,
-            ZLinkSpotAcceptedJournalRecord,
-            byte[][]?,
-            CancellationToken,
-            ValueTask
-        > replayCompleted,
-        CancellationToken cancellationToken
+        Func<byte[][]?, CancellationToken, ValueTask> completeRequest
     )
     {
-        ArgumentNullException.ThrowIfNull(admissionSeal);
-        ArgumentNullException.ThrowIfNull(replayCompleted);
-        var ordered = jobs.OrderBy(static job => job.AcceptedSequence).ToArray();
-        if (completedCount < 0 || completedCount > ordered.Length)
-            throw new ArgumentOutOfRangeException(nameof(completedCount));
-        foreach (var job in ordered.Skip(completedCount))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var journal = DecodeRelocationReplayRecord(job, sourceMeshName);
-            var parts = ZLinkRawRouterServicePort.CreateMessages(journal.Parts);
-            byte[][]? capturedReply = null;
-            Func<IReadOnlyList<Message>, SubmitResult>? reply = null;
-            if (journal.ReplyRouteId != 0 && journal.SourceNodeRid is { } sourceNodeRid)
-            {
-                reply = replyParts =>
-                {
-                    capturedReply = replyParts.Select(static part => part.ToArray()).ToArray();
-                    return SubmitResult.Ok;
-                };
-            }
-            var received = new ZLinkBackendRouteReceived(
-                parts,
-                journal.SourceNodeRid,
-                journal.SpotId,
-                journal.RequestSequence,
-                reply,
-                metadata: journal.Metadata,
-                operationId: journal.OperationId,
-                targetNodeGeneration: journal.TargetNodeGeneration,
-                authorityOwnerGeneration: journal.AuthorityOwnerGeneration,
-                ownerLeaseGeneration: journal.OwnerLeaseGeneration,
-                messageFollowHopCount: journal.MessageFollowHopCount,
-                sourceNodeGeneration: journal.SourceNodeGeneration,
-                instanceIntent: journal.InstanceIntent
+        var journal = DecodeRelocationReplayRecord(job, sourceMeshName);
+        if (journal.ReplyRouteId != 0 && job.CanonicalRequest is null)
+            throw new ZLinkRelocationDataLostException(
+                "A legacy relocation reply has no exact request-source fence for service-wire relay."
             );
-            try
+
+        var parts = ZLinkRawRouterServicePort.CreateMessages(journal.Parts);
+        byte[][]? capturedReply = null;
+        Func<IReadOnlyList<Message>, SubmitResult>? reply = null;
+        if (journal.ReplyRouteId != 0)
+        {
+            reply = replyParts =>
             {
-                await _serial
-                    .ExecuteSealedRelocationAsync(
-                        admissionSeal.QueueSeal,
-                        (activation, ct) => activation._dispatcher.DispatchRouteAsync(received, ct),
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
-                await replayCompleted(job, journal, capturedReply, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            finally
-            {
-                received.Dispose();
-            }
+                capturedReply = replyParts.Select(static part => part.ToArray()).ToArray();
+                return SubmitResult.Ok;
+            };
+        }
+        var received = new ZLinkBackendRouteReceived(
+            parts,
+            journal.SourceNodeRid,
+            journal.SpotId,
+            journal.RequestSequence,
+            reply,
+            metadata: journal.Metadata,
+            operationId: journal.OperationId,
+            targetNodeGeneration: journal.TargetNodeGeneration,
+            authorityOwnerGeneration: journal.AuthorityOwnerGeneration,
+            ownerLeaseGeneration: journal.OwnerLeaseGeneration,
+            messageFollowHopCount: journal.MessageFollowHopCount,
+            sourceNodeGeneration: journal.SourceNodeGeneration,
+            instanceIntent: journal.InstanceIntent
+        );
+        Task terminal;
+        try
+        {
+            var payload = job.CanonicalRequest is null
+                ? job.Payload
+                : ZLinkSpotAcceptedJournal.Encode(
+                    received,
+                    journal.ReplyRouteId,
+                    journal.RequestSource
+                );
+            var admission = _serial.QueueAccepted(
+                payload,
+                async (activation, ct) =>
+                {
+                    try
+                    {
+                        await activation
+                            ._dispatcher.DispatchRouteAsync(received, ct)
+                            .ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        received.Dispose();
+                    }
+                },
+                received.Dispose,
+                previousOwnerMessageFollow: true,
+                out terminal
+            );
+            if (admission != ZLinkAcceptedWorkAdmission.Accepted)
+                throw new ZLinkFrameworkException(
+                    admission.ErrorKind(),
+                    "Spot replay queue admission failed."
+                );
+        }
+        catch
+        {
+            received.Dispose();
+            throw;
+        }
+
+        return journal.ReplyRouteId == 0 ? null : DeliverCapturedRequestAsync();
+
+        async Task DeliverCapturedRequestAsync()
+        {
+            await terminal.ConfigureAwait(false);
+            await completeRequest(capturedReply, _runtime.ShutdownToken).ConfigureAwait(false);
         }
     }
 

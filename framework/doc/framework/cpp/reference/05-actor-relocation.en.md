@@ -177,6 +177,12 @@ discarded. The actual result (accepted/rejected/failed) is delivered asynchronou
 `std::variant` alternatives `actor_join_accepted_t`/`actor_join_rejected_t`/
 `actor_join_failed_t`.
 
+A cross-node Join waits within its remaining deadline for an earlier relocation's target flow
+to release its authority publication. If the deadline expires, the Join completes with
+`deadline_exceeded`. It completes with `unavailable` if the publication has no target flow in this
+process or if delivering a captured request result requires the same Actor's current turn to end.
+The wait leaves application dispatch at the previous target open.
+
 **When to use.** Use this to move an Actor to a different Spot, or return it to an Entry Spot.
 Calling it from an Actor in an Entry Spot or a `per_actor` User Spot completes with
 `invalid_operation`.
