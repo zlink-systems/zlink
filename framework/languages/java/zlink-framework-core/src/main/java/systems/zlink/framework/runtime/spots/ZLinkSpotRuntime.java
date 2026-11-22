@@ -118,6 +118,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -2604,7 +2605,13 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                     long deadline,
                     systems.zlink.framework.runtime.internal.spots.SpotTransportAddress
                             readyRoute) {
-                return resolveInstanceSpotRoute(spotId, stableType, meshName, deadline, readyRoute)
+                return resolveInstanceSpotRoute(
+                                spotId,
+                                stableType,
+                                meshName,
+                                deadline,
+                                OptionalLong.empty(),
+                                readyRoute)
                         .thenCompose(
                                 activation -> {
                                     List<Message> parts =
@@ -2706,7 +2713,12 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 return resolver.observeTerminal(
                                 spotId,
                                 resolveInstanceSpotRoute(
-                                                spotId, stableType, meshName, deadline, readyRoute)
+                                                spotId,
+                                                stableType,
+                                                meshName,
+                                                deadline,
+                                                OptionalLong.of(deadline),
+                                                readyRoute)
                                         .thenCompose(
                                                 activation -> {
                                                     long remainingMillis =
@@ -2845,7 +2857,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             String spotId,
             String requestedType,
             String requestedMesh,
-            long deadline,
+            long activationDeadline,
+            OptionalLong requestDeadline,
             systems.zlink.framework.runtime.internal.spots.SpotTransportAddress readyRoute) {
         systems.zlink.framework.runtime.internal.spots.ZLinkSpotIdValidator.requireCallerAssignable(
                 spotId);
@@ -2915,24 +2928,31 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                             authority.meshName(),
                                                                             authority.stableType(),
                                                                             spotId,
-                                                                            deadline)
+                                                                            activationDeadline,
+                                                                            requestDeadline)
                                                                     : resolveInstanceSpotRoute(
                                                                             spotId,
                                                                             requestedType,
                                                                             requestedMesh,
-                                                                            deadline,
+                                                                            activationDeadline,
+                                                                            requestDeadline,
                                                                             route));
                                 }
                                 return coldInstanceActivation(
                                         authority.meshName(),
                                         authority.stableType(),
                                         spotId,
-                                        deadline);
+                                        activationDeadline,
+                                        requestDeadline);
                             }
                             requireAcceptingNewState();
                             String meshName = resolveObjectMesh(requestedMesh);
                             return coldInstanceActivation(
-                                    meshName, requestedType, spotId, deadline);
+                                    meshName,
+                                    requestedType,
+                                    spotId,
+                                    activationDeadline,
+                                    requestDeadline);
                         });
     }
 
@@ -2945,9 +2965,13 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     }
 
     private CompletionStage<InstanceActivation> coldInstanceActivation(
-            String meshName, String stableType, String spotId, long deadline) {
+            String meshName,
+            String stableType,
+            String spotId,
+            long activationDeadline,
+            OptionalLong requestDeadline) {
         requireAcceptingNewState();
-        return selectInstanceSpotTarget(meshName, stableType, deadline)
+        return selectInstanceSpotTarget(meshName, stableType, requestDeadline)
                 .thenApply(
                         target ->
                                 new InstanceActivation(
@@ -2961,7 +2985,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                 target.stableType(),
                                                 Long.toString(
                                                         target.descriptor().descriptorRevision()),
-                                                deadline),
+                                                activationDeadline),
                                         target.stableType()));
     }
 
@@ -3013,14 +3037,14 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     }
 
     CompletionStage<InstanceTarget> selectInstanceSpotTarget(
-            String meshName, String stableType, long deadline) {
+            String meshName, String stableType, OptionalLong requestDeadline) {
         var admissionFailure = spotHostAdmissionFailure(stableType);
         if (admissionFailure != null) {
             return CompletableFuture.failedFuture(admissionFailure);
         }
         return userSpotLocationResolvers
                 .selectInstancePlacement(
-                        meshName, stableType, connectedInstanceTargets(meshName), deadline)
+                        meshName, stableType, connectedInstanceTargets(meshName), requestDeadline)
                 .thenApply(target -> new InstanceTarget(target.stableType(), target.descriptor()));
     }
 

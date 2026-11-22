@@ -24,6 +24,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
@@ -177,7 +178,7 @@ public final class ZLinkSpotRuntimeTestAccess {
 
     public static CompletionStage<?> selectInstanceSpotTarget(
             ZLinkSpotRuntime runtime, String meshName, String stableType, long deadline) {
-        return runtime.selectInstanceSpotTarget(meshName, stableType, deadline);
+        return runtime.selectInstanceSpotTarget(meshName, stableType, OptionalLong.of(deadline));
     }
 
     public static Map<String, ZLinkInternalMeshNode> routeMeshNodesByName(
