@@ -4,6 +4,7 @@ import {
 } from '../../contracts/Locations/Options';
 import type { RoutingId } from '../../contracts/Common';
 import {
+  ZLinkLocationAutoConnectType,
   ZLinkLocationWriteIntent,
   ZLinkLocationWriteStatus,
   type ZLinkPeerLocationResolver,
@@ -151,13 +152,14 @@ export class ZLinkAutoConnectReconciler {
       });
     }
 
+    const meshMemberRidHexes = new Set(
+      rows
+        .map((row) => row.nodeRid)
+        .filter((nodeRid): nodeRid is RoutingId => nodeRid !== undefined)
+        .map((nodeRid) => encodeRoutingIdHex(nodeRid))
+    );
     await this.lane.run(() => {
-      this.meshMemberRidHexes = new Set(
-        rows
-          .map((row) => row.nodeRid)
-          .filter((nodeRid): nodeRid is RoutingId => nodeRid !== undefined)
-          .map((nodeRid) => encodeRoutingIdHex(nodeRid))
-      );
+      this.meshMemberRidHexes = meshMemberRidHexes;
     });
     const previous = ZLinkAutoConnectPlanner.computeCandidates(this.local, this.lastPeers);
     if (this.monotonicNowMs() < (await this.lane.run(() => this.recoveryDeferUntilMs))) {
@@ -165,7 +167,15 @@ export class ZLinkAutoConnectReconciler {
       rows = [
         ...this.lastPeers.filter((row) => {
           const key = ZLinkAutoConnectPlanner.targetKeyOf(row);
-          return previous.has(key) && !candidates.has(key);
+          // A live RouteMesh descriptor replaces the prior lifecycle for its RID.
+          // Recovery defers removal only when the peer was absent from the scan.
+          return (
+            previous.has(key) &&
+            (row.autoConnectType === ZLinkLocationAutoConnectType.RouteMesh &&
+            row.nodeRid !== undefined
+              ? !meshMemberRidHexes.has(encodeRoutingIdHex(row.nodeRid))
+              : !candidates.has(key))
+          );
         }),
         ...rows
       ];

@@ -4559,7 +4559,7 @@ test('production command 36 is sent by binding identity after owner lifecycle fi
     setServiceIngress(handler) {
       serviceIngress = handler;
     },
-    async sendService(targetNodeRid, parts) {
+    async sendApplication(targetNodeRid, parts) {
       assert.equal(targetNodeRid, 'session-owner');
       wireHeaders.push(serviceStatefulWire.decodeStatefulHeader(parts[0]));
       const result = await serviceIngress({

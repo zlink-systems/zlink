@@ -1080,7 +1080,7 @@ export class ZLinkActorTransferRuntime {
     for (;;) {
       signal?.throwIfAborted();
       try {
-        prepared = await store.prepareAggregate(request, signal);
+        prepared = await store.prepareAggregate(request, signal, BigInt(deadlineUnixMs));
       } catch (error) {
         firstError ??= error;
       }

@@ -17,6 +17,8 @@ internal interface IZLinkAutoConnectExecutor
     bool Connect(ZLinkAutoConnectTarget target);
 
     bool Disconnect(ZLinkAutoConnectTarget target);
+
+    void RefreshTarget(ZLinkAutoConnectTarget target) { }
 }
 
 /// <summary>
@@ -621,8 +623,9 @@ internal sealed class ZLinkAutoConnectReconciler
                 );
                 await acceptance.ConfigureAwait(false);
             }
-            else if (OwnerChanged(current, target) || current.Draining != target.Draining)
+            else if (RequiresTargetRefresh(current, target))
             {
+                _executor.RefreshTarget(target);
                 await _lane.RunAsync(() => _active[key] = target).ConfigureAwait(false);
                 ZLinkFrameworkDebugLog.SpotDiscovery(
                     $"autoconnect_refresh local={ZLinkFrameworkDebugLog.OrAbsent(_local.NodeRid)} target={target.NodeRid} endpoint={target.Endpoint} owner_changed={OwnerChanged(current, target)} draining={target.Draining}"
