@@ -399,11 +399,7 @@ export class RawServiceMeshRuntime {
     const expected = this.expectedPeers.get(nodeRoutingId);
     if (
       lifecycleGeneration !== undefined &&
-      // Discovery has already fenced this RID to a replacement process.
-      // The old auto-connect intent must not use disconnectRid here: that
-      // is RID-wide and can close the provisional replacement before its
-      // Hello/admission promotes it. admitPeer owns exact old-pair teardown
-      // after the replacement descriptor is accepted.
+      // RID-wide shutdown applies only to the requested lifecycle.
       ((expected?.lifecycleGeneration !== undefined &&
         expected.lifecycleGeneration !== lifecycleGeneration) ||
         (current !== undefined && current.descriptor.lifecycleGeneration !== lifecycleGeneration) ||
@@ -425,18 +421,17 @@ export class RawServiceMeshRuntime {
     } finally {
       if (current !== undefined) this.removePeer(current);
       this.topology.forgetNotRequired(nodeRoutingId);
-      if (
-        lifecycleGeneration === undefined ||
-        expected?.lifecycleGeneration === undefined ||
-        expected.lifecycleGeneration === lifecycleGeneration
-      ) {
-        this.expectedPeers.delete(nodeRoutingId);
-      }
+      this.expectedPeers.delete(nodeRoutingId);
       this.notifyPeerConnectionIntentRemoved(nodeRoutingId);
     }
   }
 
-  disconnectPeerEndpoint(endpoint: string): void {
+  disconnectPeerEndpoint(endpoint: string, intentRid?: string, intentLifecycle?: bigint): void {
+    // The intent owns the outbound registration. Discovery may already have
+    // published a different lifecycle at this endpoint (MeshNode §7.1).
+    const matchesIntent = (rid: string, lifecycle: bigint | undefined): boolean =>
+      (intentRid === undefined || rid === intentRid) &&
+      (intentLifecycle === undefined || lifecycle === intentLifecycle);
     try {
       this.requireStarted().disconnect(endpoint);
     } catch (error) {
@@ -445,16 +440,32 @@ export class RawServiceMeshRuntime {
       this.endpointOnlyPeers.delete(endpoint);
       const removed = new Set<string>();
       for (const [nodeRoutingId, expected] of this.expectedPeers) {
-        if (expected.endpoint === endpoint) {
+        if (
+          expected.endpoint === endpoint &&
+          matchesIntent(nodeRoutingId, expected.lifecycleGeneration)
+        ) {
           this.expectedPeers.delete(nodeRoutingId);
           removed.add(nodeRoutingId);
         }
       }
       for (const peer of this.topology.peers()) {
-        if (peer.descriptor.advertisedEndpoint === endpoint) {
+        if (
+          peer.descriptor.advertisedEndpoint === endpoint &&
+          matchesIntent(peer.descriptor.nodeRoutingId, peer.descriptor.lifecycleGeneration)
+        ) {
           this.removePeer(peer);
           removed.add(peer.descriptor.nodeRoutingId);
         }
+      }
+      if (intentRid !== undefined) {
+        const admission = this.topology.routeAdmission(intentRid)?.descriptor;
+        if (
+          admission?.advertisedEndpoint === endpoint &&
+          matchesIntent(intentRid, admission.lifecycleGeneration)
+        ) {
+          this.topology.forgetNotRequired(intentRid);
+        }
+        removed.add(intentRid);
       }
       for (const nodeRoutingId of removed) this.notifyPeerConnectionIntentRemoved(nodeRoutingId);
     }
