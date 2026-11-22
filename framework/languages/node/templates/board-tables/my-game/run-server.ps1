@@ -1,3 +1,4 @@
+param([switch]$Trace)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'scripts/run-helpers.ps1')
@@ -11,5 +12,7 @@ if ($code -ne 0) {
     Get-Content $buildLog -Tail 20 | Write-Host
     exit 1
 }
-& node dist/e2e/server-host.js
+$hostArguments = @()
+if ($Trace) { $hostArguments += '--trace' }
+& node dist/e2e/server-host.js @hostArguments
 exit $LASTEXITCODE

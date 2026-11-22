@@ -24,20 +24,20 @@
     {
       "id": "session",
       "role": "session",
-      "title": "Session node",
+      "title": "Session server",
       "config": "server/config/session.json"
     },
     {
-      "id": "tableA",
+      "id": "playA",
       "role": "table",
-      "title": "Table node A",
-      "config": "server/config/table-a.json"
+      "title": "Play server A",
+      "config": "server/config/play-a.json"
     },
     {
-      "id": "tableB",
+      "id": "playB",
       "role": "table",
-      "title": "Table node B",
-      "config": "server/config/table-b.json"
+      "title": "Play server B",
+      "config": "server/config/play-b.json"
     },
     {
       "id": "location",
@@ -52,19 +52,19 @@
       "id": "table-entry-a",
       "kind": "entry",
       "type": null,
-      "owner": "tableA"
+      "owner": "playA"
     },
     {
       "id": "table-entry-b",
       "kind": "entry",
       "type": null,
-      "owner": "tableB"
+      "owner": "playB"
     },
     {
       "id": "table",
       "kind": "user",
       "type": "Table",
-      "owner": "tableA",
+      "owner": "playA",
       "dynamic": true
     }
   ],
@@ -75,7 +75,7 @@
       "from": "players"
     },
     {
-      "to": "tableA",
+      "to": "playA",
       "label": "relay",
       "from": "session"
     },
@@ -83,7 +83,7 @@
       "to": "location",
       "label": "Location / lease",
       "semantic": "location-authority",
-      "from": "tableA"
+      "from": "playA"
     }
   ]
 }

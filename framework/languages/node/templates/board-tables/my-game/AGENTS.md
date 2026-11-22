@@ -23,7 +23,7 @@ Details: [Stateful game nodes and the HTTP lobby](https://docs.zlink.systems/nod
 
 ## Project overview
 
-This Node.js 22 (TypeScript, NestJS) project is a board-table game server example in which players take seats, play hands, and reconnect to the same seat. It runs a Session gateway for connections, Table nodes A and B that host Table Spots, and Redis for location and relocation state. `package.json` pins the ZLink Framework and connector packages to `0.32.0`.
+This Node.js 22 (TypeScript, NestJS) project is a board-table game server example in which players take seats, play hands, and reconnect to the same seat. It runs a Session gateway for connections, Play servers A and B that host Table Spots (the game logic), and Redis for location and relocation state. `package.json` pins the ZLink Framework and connector packages to `0.32.0`.
 
 The project layout and feature procedure below describe where to add gameplay. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 
@@ -107,7 +107,7 @@ Relocation changes an object's execution host; drain moves a host's workload els
 
 Requests in the example game follow this path. Reading the code along this path before adding or transferring a feature locates the places to change.
 
-1. The client connects to the Session node over STREAM and sends the first packet, `JoinTableRequest`. `Session` checks the first packet name, calls `getOrCreate` for the Player Actor by `playerId`, binds it to the Session, and relays the original packet.
+1. The client connects to the Session server over STREAM and sends the first packet, `JoinTableRequest`. `Session` checks the first packet name, calls `getOrCreate` for the Player Actor by `playerId`, binds it to the Session, and relays the original packet.
 2. A new Actor starts in the Entry Spot `Entry`. The `EntryJoin` handler checks the identity, calls `getOrCreate` for the Table by `tableId`, and requests `joinSpot(...).defer()`.
 3. `Table.onActorJoin` seats the player through `TableState.admit`. When the table is full, `Player.onJoinCompleted` sends `ActionRejected` through the bound Session. After admission, `Table.onJoinedActor` publishes `TableView` to every seat by player ID, and the `Deliver` handler forwards it through each bound Session.
 4. `Start` and `Bet` call `TableState.start` and `TableState.bet`. A valid action publishes `TableView`, `HandDealt`, or `HandResult` to the seats; an invalid action sends `ActionRejected` to the requester through its bound Session.
@@ -153,7 +153,7 @@ Investigate Framework failures using actual replies, events, and lifecycle resul
 
 Preserve the first failing run and read its logs before deciding whether to run it again. An intermittent failure is an observed defect; a subsequent pass does not invalidate it. `.logs/run-<id>/` contains effective settings written by `e2e/runner.ts` at node startup and logs for each node.
 
-Settings files are `session.json`, `tableA.json`, and `tableB.json`. `NodeProcess` in `e2e/server-host.ts` records diagnostic stderr in `<node>-<n>.err.log` and readiness/control stdout in `<node>-<n>.out.log`, where `<n>` counts the processes started in the run; a replaced node has a second pair with a later `<n>`. The client packets each scenario received are in `<scenario>-<suffix>.jsonl`. Docker command logs of the run are `docker-<label>.log`, and local build output is in `.logs/build.log`. The shell runner writes Docker build, Redis, and outer cleanup logs to `.logs/docker-<project>/`. The `.out.log` file also contains `ZLINK_E2E_DIAG` JSON lines with ISO UTC timestamps for process spawn, READY wait start, READY receipt, and READY timeout; timeout records include the last received line and its timestamp.
+Settings files are `session.json`, `playA.json`, and `playB.json`. `NodeProcess` in `e2e/server-host.ts` records diagnostic stderr in `<node>-<n>.err.log` and readiness/control stdout in `<node>-<n>.out.log`, where `<n>` counts the processes started in the run; a replaced node has a second pair with a later `<n>`. The client packets each scenario received are in `<scenario>-<suffix>.jsonl`. Docker command logs of the run are `docker-<label>.log`, and local build output is in `.logs/build.log`. The shell runner writes Docker build, Redis, and outer cleanup logs to `.logs/docker-<project>/`. The `.out.log` file also contains `ZLINK_E2E_DIAG` JSON lines with ISO UTC timestamps for process spawn, READY wait start, READY receipt, and READY timeout; timeout records include the last received line and its timestamp.
 
 ### Diagnostic levels
 

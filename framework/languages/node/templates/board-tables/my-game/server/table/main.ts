@@ -14,6 +14,7 @@ runHost((_builder, config, mesh) => {
     f.preserveStateWith(TableRelocation);
   });
   return {
+    title: 'Play server',
     providers: [
       Entry,
       Table,

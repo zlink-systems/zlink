@@ -30,6 +30,8 @@ import {
 import { Names, Limits, Control } from './constants';
 import { NODE_CONFIG, readConfig, type NodeConfig } from './config';
 interface HostComposition {
+  // Default server name in console lines when the config has no title, e.g. "Play server".
+  title: string;
   providers: Type[];
   listener: { kind: 'stream' | 'routeMesh'; name: string };
   ready: (status: ZLinkRouteMeshStatus) => boolean;
@@ -65,6 +67,8 @@ export async function runHost(
     .setRoutingIdPrefix(config.id)
     .listen(config.meshEndpoint);
   const composition = configure(builder, config, mesh);
+  const name = config.title ?? `${composition.title} ${config.id}`;
+  console.log(`${name} starting`);
   zlinkModule({
     providerDiscovery: [],
     imports: [Configuration, ZLinkModule.forRoot(builder.build())],
@@ -132,10 +136,17 @@ export async function runHost(
       composition.listener.kind,
       composition.listener.name
     );
+    const meshListener = runtime.getListenerStatus('routeMesh', Names.mesh);
+    console.log(
+      composition.listener.kind === 'stream'
+        ? `${name} started: clients ${listener.endpoint}, mesh ${meshListener.endpoint}`
+        : `${name} started: mesh ${meshListener.endpoint}`
+    );
     console.log(Control.ready + JSON.stringify({ id: config.id, endpoint: listener.endpoint }));
     for await (const line of input) {
       if (line === Control.drain) {
         console.log(Control.requested);
+        console.log(`${name} draining: moving its actors to other servers`);
         const result = await runtime.relocate({
           mode: ZLinkFrameworkRelocationMode.PlannedMaintenance,
           deadlineMs: Limits.relocationMs
@@ -143,8 +154,10 @@ export async function runHost(
         if (result.outcome !== ZLinkFrameworkRelocationOutcome.Relocated)
           throw new Error(`Relocation blocked: ${result.reason}`);
         console.log(Control.relocated);
+        console.log(`${name} drained: actors moved`);
         await waitSafe();
         console.log(Control.safe);
+        console.log(`${name} safe to shut down`);
       } else if (line === Control.shutdown) break;
       else throw new Error(`Unknown control command: ${line}`);
     }
@@ -153,6 +166,7 @@ export async function runHost(
     console.error('Node operation failed', error);
   } finally {
     input.close();
+    console.log(`${name} stopping`);
     const cleanup = [
       async (): Promise<void> => {
         const result = await runtime.shutdown({ deadlineMs: Limits.shutdownMs });
@@ -178,6 +192,7 @@ export async function runHost(
     }
   }
   if (failures.length) throw new AggregateError(failures, 'Node operation or cleanup failed');
+  console.log(`${name} stopped`);
 }
 export function failHost(error: unknown): void {
   console.error(error);

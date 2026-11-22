@@ -110,8 +110,8 @@ export function checkStructure(path: string = LocalHost.structureFile): void {
   );
   const requiredEdges = [
     { from: 'players', to: 'session', label: 'STREAM' },
-    { from: 'session', to: 'tableA', label: 'relay' },
-    { from: 'tableA', to: 'location', label: 'Location / lease', semantic: 'location-authority' }
+    { from: 'session', to: 'playA', label: 'relay' },
+    { from: 'playA', to: 'location', label: 'Location / lease', semantic: 'location-authority' }
   ];
   const edges = array(s.edges).map(object);
   for (const required of requiredEdges)

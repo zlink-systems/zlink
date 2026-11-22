@@ -98,5 +98,6 @@ export const LocalHost = {
   keyPrefix: 'my-game:',
   projectPrefix: 'my-game-',
   structureFile: 'zlink.structure.json',
-  ready: 'Server ready:'
+  ready: 'Server ready:',
+  traceFlag: '--trace'
 } as const;

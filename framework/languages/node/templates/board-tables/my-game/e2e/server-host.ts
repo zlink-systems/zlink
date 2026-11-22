@@ -18,16 +18,38 @@ import {
 import { checkStructure } from './structure';
 import { publishServer, type NodeControl, type ServerState } from './server-control';
 
-// The console shows a diagnostic record as its time and message; the node's file log keeps the JSON.
-function consoleLine(line: string): string {
+// What a standalone server prints for its nodes. Server lines, warnings and errors always appear;
+// diagnostic records (message flow) appear only with trace, as time and message. Every record stays
+// in the node's file log as JSON.
+export interface ConsoleOptions {
+  trace: boolean;
+}
+function now(): string {
+  return new Date().toISOString().slice(LogFiles.consoleTimeStart, LogFiles.consoleTimeEnd);
+}
+function consoleLine(line: string, options: ConsoleOptions): string | undefined {
+  let record: { time?: unknown; body?: unknown } | undefined;
   try {
-    const record = JSON.parse(line) as { time?: unknown; body?: unknown };
-    if (typeof record.time === 'string' && typeof record.body === 'string')
-      return `${record.time.slice(LogFiles.consoleTimeStart, LogFiles.consoleTimeEnd)} ${record.body}`;
+    record = JSON.parse(line) as { time?: unknown; body?: unknown };
   } catch {
     // Not a diagnostic record: print it as written.
   }
-  return line;
+  if (record && typeof record.time === 'string' && typeof record.body === 'string')
+    return options.trace
+      ? `${record.time.slice(LogFiles.consoleTimeStart, LogFiles.consoleTimeEnd)} ${record.body}`
+      : undefined;
+  return `${now()} ${line}`;
+}
+// Control lines are for the host; the node prints a readable server line for each.
+const controlEchoes = [
+  Control.ready,
+  Control.stopped,
+  Control.requested,
+  Control.relocated,
+  Control.safe
+] as const;
+function isControlEcho(line: string): boolean {
+  return controlEchoes.some((prefix) => line.startsWith(prefix));
 }
 class NodeProcess {
   readonly child: ChildProcess;
@@ -44,12 +66,12 @@ class NodeProcess {
     args: string[],
     logDir: string,
     sequence: number,
-    streamLogs: boolean
+    consoleOptions: ConsoleOptions | undefined
   ) {
     this.out = createWriteStream(`${logDir}/${config.id}-${sequence}.out.log`);
     const err = createWriteStream(`${logDir}/${config.id}-${sequence}.err.log`);
     this.child = spawn(command, args, {
-      detached: streamLogs,
+      detached: consoleOptions !== undefined,
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe']
     });
@@ -59,14 +81,15 @@ class NodeProcess {
     this.child.once('spawn', () => this.logDiagnostic('process-spawn'));
     this.child.stdout!.pipe(this.out);
     this.child.stderr!.pipe(err);
-    if (streamLogs) {
+    if (consoleOptions) {
       createInterface({ input: this.child.stderr! }).on('line', (line) => {
-        console.error(`[${config.id}] ${consoleLine(line)}`);
+        const text = consoleLine(line, consoleOptions);
+        if (text !== undefined) console.error(`[${config.id}] ${text}`);
       });
     }
     const reader = createInterface({ input: this.child.stdout! });
     reader.on('line', (line) => {
-      if (streamLogs) console.log(`[${config.id}] ${line}`);
+      if (consoleOptions && !isControlEcho(line)) console.log(`[${config.id}] ${now()} ${line}`);
       const at = new Date().toISOString();
       this.lines.push(line);
       this.lastLine = { at, line };
@@ -164,7 +187,7 @@ class NodeProcess {
     }
   }
 }
-export function createServerHost(tableCapacity: number, streamLogs = false) {
+export function createServerHost(tableCapacity: number, consoleOptions?: ConsoleOptions) {
   const runId = randomUUID();
   const keyPrefix = `${LocalHost.keyPrefix}${runId}:`;
   const logDir = `${LogFiles.runs}/${LogFiles.runPrefix}${runId}`;
@@ -240,7 +263,7 @@ export function createServerHost(tableCapacity: number, streamLogs = false) {
       command = 'docker';
       args = ['start', '-a', '-i', container];
     }
-    const node = new NodeProcess(config, role, command, args, logDir, all.length, streamLogs);
+    const node = new NodeProcess(config, role, command, args, logDir, all.length, consoleOptions);
     all.push(node);
     nodes.set(config.id, node);
     return node;
@@ -266,6 +289,7 @@ export function createServerHost(tableCapacity: number, streamLogs = false) {
     const redis = dockerProject
       ? LocalHost.dockerRedis
       : await compose(['port', 'redis', LocalHost.redisPort], 'port', signal);
+    if (consoleOptions) console.log(`${now()} Redis started: ${redis}`);
     const structure = JSON.parse(readFileSync(LocalHost.structureFile, 'utf8')) as {
       nodes: { role: string; config: string | null }[];
     };
@@ -309,6 +333,7 @@ export function createServerHost(tableCapacity: number, streamLogs = false) {
     }
     try {
       if (!dockerProject) await compose(['down', '--volumes', '--remove-orphans'], 'down');
+      if (consoleOptions && !dockerProject) console.log(`${now()} Redis stopped`);
     } catch (error) {
       failed = true;
       console.error('Redis cleanup failed', error);
@@ -324,15 +349,19 @@ async function main(): Promise<void> {
   const stop = (): void => stopping.abort();
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
+  const options: ConsoleOptions = { trace: process.argv.includes(LocalHost.traceFlag) };
   checkStructure();
-  const host = createServerHost(Scenarios.length, true);
+  const host = createServerHost(Scenarios.length, options);
   try {
     const state = await host.startAll(stopping.signal);
     if (stopping.signal.aborted) return;
     const unpublish = await publishServer(state, host.control);
     try {
-      console.log(`${LocalHost.ready} ${state.sessionEndpoint}`);
-      console.log(`Logs: ${host.logDir}`);
+      console.log(`${now()} ${LocalHost.ready} ${state.sessionEndpoint}`);
+      console.log(
+        `${now()} Logs: ${LogFiles.directory}/<server>.log` +
+          (options.trace ? '' : ` (message flow: add ${LocalHost.traceFlag} to show it here)`)
+      );
       if (!stopping.signal.aborted) {
         await new Promise<void>((resolve) => {
           stopping.signal.addEventListener('abort', () => resolve(), { once: true });
@@ -344,6 +373,7 @@ async function main(): Promise<void> {
   } catch (error) {
     if (!stopping.signal.aborted || error !== stopping.signal.reason) throw error;
   } finally {
+    console.log(`${now()} Stopping servers`);
     if (!(await host.stopAll())) process.exitCode = 1;
     process.off('SIGINT', stop);
     process.off('SIGTERM', stop);

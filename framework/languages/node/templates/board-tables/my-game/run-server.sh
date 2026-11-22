@@ -8,4 +8,4 @@ if ! (npm ci && npm run build) >.logs/build.log 2>&1; then
   tail -n 20 .logs/build.log >&2
   exit 1
 fi
-exec node dist/e2e/server-host.js
+exec node dist/e2e/server-host.js "$@"
