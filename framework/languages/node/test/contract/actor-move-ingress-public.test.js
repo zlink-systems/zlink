@@ -6,6 +6,9 @@ const { Injectable, Module, Scope } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
 const framework = require('../../packages/framework/dist');
 const nest = require('../../packages/nestjs/dist');
+const {
+  ReceiveKind
+} = require('../../packages/framework/dist/runtime/foundation/service-runtime-contracts');
 const telemetry = require('./helpers/telemetry-log-capture');
 
 function deferred() {
@@ -37,11 +40,14 @@ class Missing {}
 async function fixture() {
   const calls = [];
   const joins = [];
+  const rooms = new Map();
   const notices = new Map();
   let completion;
   let handlerPause;
   let joinedPause;
   let pingPause;
+  let leavePause;
+  let client;
   class Player {
     constructor(context) {
       this.context = context;
@@ -71,6 +77,7 @@ async function fixture() {
       calls.push({
         kind: 'ping',
         surface: spot.surface,
+        spotId: spot.context.spotId,
         token: message.token,
         sequence: message.sequence,
         correlation: context.correlationId
@@ -86,6 +93,17 @@ async function fixture() {
     async handle(spot, _actor, _context, message) {
       calls.push({ kind: 'notice', surface: spot.surface, sequence: message.sequence });
       notices.get(message.sequence)?.resolve();
+    }
+  }
+  class Probe {
+    constructor(actorId, token) {
+      this.actorId = actorId;
+      this.token = token;
+    }
+  }
+  class ProbeHandler {
+    handle(_spot, message) {
+      return client.requestToActor(message.actorId, new Ping(message.token)).yield();
     }
   }
   function configure() {
@@ -105,14 +123,24 @@ async function fixture() {
   }
   class Room {
     surface = 'user';
-    configure = configure;
+    configure() {
+      configure.call(this);
+      this.context.handlers.addPacket(ProbeHandler);
+      rooms.set(this.context.spotId, this);
+    }
     onJoinedActor = joined;
     async onActorJoin() {
       return { accepted: true };
     }
-    async onLeaveActor() {}
+    async onLeaveActor() {
+      if (leavePause?.source === this.context.spotId) {
+        leavePause.entered.resolve();
+        await leavePause.release.promise;
+      }
+    }
   }
-  for (const Type of [Factory, Entry, MoveHandler, PingHandler, NoticeHandler]) Injectable()(Type);
+  for (const Type of [Factory, Entry, MoveHandler, PingHandler, NoticeHandler, ProbeHandler])
+    Injectable()(Type);
   Injectable({ scope: Scope.TRANSIENT })(Room);
   framework.ZLinkSpotActorSend('Move')(
     MoveHandler.prototype,
@@ -129,6 +157,7 @@ async function fixture() {
     'handle',
     Object.getOwnPropertyDescriptor(NoticeHandler.prototype, 'handle')
   );
+  framework.ZLinkPacket('Probe')(ProbeHandler);
   const builder = nest.zlinkFramework();
   builder.configureDispatch().messageFlow('normal');
   builder
@@ -145,23 +174,21 @@ async function fixture() {
     imports: [
       nest.ZLinkModule.forRoot({ ...builder.build(), locations: { useInMemoryStores: true } })
     ],
-    providers: [Factory, Entry, Room, MoveHandler, PingHandler, NoticeHandler]
+    providers: [Factory, Entry, Room, MoveHandler, PingHandler, NoticeHandler, ProbeHandler]
   })(AppModule);
   const app = await NestFactory.createApplicationContext(AppModule, {
     logger: false,
     abortOnError: false
   });
   try {
-    const client = app.get(nest.ZLINK_ACTOR_CLIENT);
+    client = app.get(nest.ZLINK_ACTOR_CLIENT);
     const actors = app.get(nest.ZLINK_ACTOR_MANAGER);
-    await app
-      .get(nest.ZLINK_ACTOR_MANAGER)
-      .getOrCreate('player', 'player')
-      .inMesh('move-ingress')
-      .submit();
-    const roomId = (
-      await app.get(nest.ZLINK_SPOT_MANAGER).create('room').inMesh('move-ingress').submit()
-    ).spot.spotId;
+    const spots = app.get(nest.ZLINK_SPOT_MANAGER);
+    const outbound = app.get(nest.ZLINK_SPOT_OUTBOUND);
+    const createRoom = async () =>
+      (await spots.create('room').inMesh('move-ingress').submit()).spot.spotId;
+    await actors.getOrCreate('player', 'player').inMesh('move-ingress').submit();
+    const roomId = await createRoom();
     await telemetry.observed();
     return {
       app,
@@ -170,6 +197,21 @@ async function fixture() {
       roomId,
       calls,
       joins,
+      createRoom,
+      closeRoom(id) {
+        const room = rooms.get(id);
+        return room.context.close().then((closed) => {
+          if (closed) rooms.delete(id);
+          return closed;
+        });
+      },
+      probe(id, actorId, token) {
+        return outbound.requestToSpot(id, new Probe(actorId, token)).submit();
+      },
+      pauseSourceLeave(source) {
+        leavePause = { source, entered: deferred(), release: deferred() };
+        return leavePause;
+      },
       move(target, actorId = 'player') {
         completion = deferred();
         return {
@@ -205,8 +247,8 @@ async function fixture() {
   }
 }
 
-async function completeMove(f, target) {
-  const move = f.move(target);
+async function completeMove(f, target, actorId) {
+  const move = f.move(target, actorId);
   await move.submitted;
   assert.equal((await move.completed).status, 'accepted');
 }
@@ -387,3 +429,146 @@ test(
     }
   }
 );
+
+async function exerciseMoveWhileClosingSource(t, targetSurface, reuseActor = false) {
+  const f = await fixture();
+  try {
+    const target = targetSurface === 'user' ? await f.createRoom() : undefined;
+    const requester = await f.createRoom();
+    const runtime = f.app.get(nest.ZLINK_FRAMEWORK_RUNTIME);
+    const lifecycle = runtime.locationOwner.currentLifecycle;
+    const commit = lifecycle.commitActorMembership.bind(lifecycle);
+    let publicationPause;
+    t.mock.method(lifecycle, 'commitActorMembership', async (...args) => {
+      const pause = publicationPause;
+      await commit(...args);
+      if (pause !== undefined) {
+        pause.entered.resolve();
+        await pause.release.promise;
+      }
+    });
+    const mailbox = runtime.spotNodeRuntime.meshNode('move-ingress').runtime.mailbox;
+    const enqueue = mailbox.tryEnqueue.bind(mailbox);
+    let requestEnqueued;
+    let actorId;
+    t.mock.method(mailbox, 'tryEnqueue', (record) => {
+      const accepted = enqueue(record);
+      if (
+        accepted &&
+        record.stateful?.receiveKind === ReceiveKind.ActorRequest &&
+        record.stateful.targetActor?.actorId === actorId
+      ) {
+        requestEnqueued?.resolve();
+      }
+      return accepted;
+    });
+    const iterations = reuseActor ? 41 : 40;
+    for (let iteration = 0; iteration < iterations; iteration++) {
+      await t.test(`move ${iteration + 1}`, async () => {
+        actorId = reuseActor ? 'player' : `player-${iteration}`;
+        if (!reuseActor) {
+          await f.actors.getOrCreate(actorId, 'player').inMesh('move-ingress').submit();
+        }
+        const source = iteration === 0 ? f.roomId : await f.createRoom();
+        await completeMove(f, source, actorId);
+        const leave = f.pauseSourceLeave(source);
+        const beforePublication = { entered: deferred(), release: deferred() };
+        publicationPause = beforePublication;
+        const held = f.pausePing(`close-${iteration}`);
+        const requests = [];
+        const probe = (token) => {
+          const request = f.probe(requester, actorId, token);
+          const terminal = request.then(
+            (reply) => ({ reply }),
+            (error) => ({ error })
+          );
+          requests.push({ token, terminal });
+          return request;
+        };
+        const enqueueProbe = async (token) => {
+          requestEnqueued = deferred();
+          await Promise.race([
+            requestEnqueued.promise,
+            probe(token).then(() => assert.fail('probe replied before mailbox admission'))
+          ]);
+        };
+        const move = f.move(target, actorId);
+        try {
+          await move.submitted;
+          await Promise.race([
+            beforePublication.entered.promise,
+            leave.entered.promise.then(() => assert.fail('source left before target publication'))
+          ]);
+          await enqueueProbe(`publication-${iteration}`);
+          beforePublication.release.resolve();
+
+          await leave.entered.promise;
+          await enqueueProbe(`leave-${iteration}`);
+          leave.release.resolve();
+          assert.equal((await move.completed).status, 'accepted');
+
+          const closingRequest = probe(`close-${iteration}`);
+          await Promise.race([
+            held.entered.promise,
+            closingRequest.then(() => assert.fail('probe replied before the close boundary'))
+          ]);
+          assert.equal(await f.closeRoom(source), true);
+          held.release.resolve();
+          probe(`closed-${iteration}`);
+
+          for (const { token, terminal } of requests) {
+            const result = await terminal;
+            if ('error' in result) throw result.error;
+            assert.deepEqual(result.reply, { token, surface: targetSurface, actorId });
+            const executions = f.calls.filter((call) => call.token === token);
+            assert.equal(executions.length, 1);
+            if (target !== undefined) assert.equal(executions[0].spotId, target);
+          }
+        } finally {
+          publicationPause = undefined;
+          beforePublication.release.resolve();
+          leave.release.resolve();
+          held.release.resolve();
+          await Promise.all(requests.map(({ terminal }) => terminal));
+        }
+      });
+    }
+  } finally {
+    await telemetry.observed();
+    await f.app.close();
+  }
+}
+
+for (const [surface, label] of [
+  ['user', 'User Spot B'],
+  ['entry', 'Entry Spot B']
+]) {
+  test(
+    `#5351 Spot C requests reach ${label} while Spot A leaves and closes`,
+    { timeout: 60000 },
+    (t) => exerciseMoveWhileClosingSource(t, surface)
+  );
+}
+
+test(
+  '#5351 the same Actor can join another Spot after its former Spot closes',
+  { timeout: 60000 },
+  (t) => exerciseMoveWhileClosingSource(t, 'entry', true)
+);
+
+test('an Entry Actor mailbox does not inherit the submitting Spot turn', async () => {
+  const {
+    ZLinkActorSerialExecutor,
+    ZLinkSpotSerialTurnExecutor
+  } = require('../../packages/framework/dist/internal');
+  const { captureZLinkSpotSerialTurn } = require('../../packages/framework/dist/runtime/execution');
+  const formerSpot = new ZLinkSpotSerialTurnExecutor(true, 'former');
+  const entryMailbox = new ZLinkActorSerialExecutor('player', 'entry');
+  const closed = deferred();
+  const { dispatch } = await formerSpot.execute(() => ({
+    dispatch: closed.promise.then(() => entryMailbox.execute(captureZLinkSpotSerialTurn))
+  }));
+  formerSpot.closeAdmission();
+  closed.resolve();
+  assert.equal(await dispatch, undefined);
+});
