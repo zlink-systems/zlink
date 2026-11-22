@@ -105,7 +105,15 @@ test('cross-node Join receives one original 106/15 reply when both routes are ad
       storeVersion: 'target-v1'
     });
     let outcome;
-    const join = stateful.joinActor(actor.ref, 'z-target', spot, spot.generation, undefined, 1000);
+    const join = stateful.joinActor(
+      actor.ref,
+      'z-target',
+      spot,
+      spot.generation,
+      undefined,
+      // The reply is checked, not its latency: a loaded host can take over a second to pump it (#5344).
+      10_000
+    );
     const finished = join.promise.then(
       (value) => {
         outcome = value;
