@@ -1081,7 +1081,7 @@ final class ChannelMessagingTest {
             }
             ;
 
-            try (ZLinkFrameworkRuntime ignoredSubscriber =
+            try (ZLinkFrameworkRuntime subscriber =
                     RuntimeTestSupport.startFramework(
                             subscriberOptions, new ZLinkJavaBackendAdapterFactory())) {
                 String reply =
@@ -1098,8 +1098,14 @@ final class ChannelMessagingTest {
                 assertEquals("ManualRegisteredCommand", MANUAL_REG_SEND_PACKET.get());
                 assertEquals("manual-reg", MANUAL_REG_SEND_CHANNEL.get());
 
-                publishManualRegistrationUntilDelivered(
-                        publisher, "ManualRegisteredEvent", "published");
+                ZLinkChannelRuntimeTestAccess.awaitManualFanoutPublisher(
+                        ZLinkFrameworkRuntimeTestAccess.channels(subscriber), "manual-events");
+                publisher
+                        .fanout()
+                        .publish("manual-events", "manual", new ManualEvent("published"))
+                        .submit()
+                        .toCompletableFuture()
+                        .join();
                 assertTrue(
                         publishLatch.await(1, TimeUnit.SECONDS),
                         "manual publish was not delivered");
@@ -1985,21 +1991,6 @@ final class ChannelMessagingTest {
             }
         }
         return null;
-    }
-
-    private static void publishManualRegistrationUntilDelivered(
-            ZLinkFrameworkRuntime publisher, String packetName, String value)
-            throws InterruptedException {
-        long deadline = System.nanoTime() + Duration.ofSeconds(3).toNanos();
-        while (System.nanoTime() < deadline && MANUAL_REG_PUBLISH_LATCH.get().getCount() > 0) {
-            publisher
-                    .fanout()
-                    .publish("manual-events", "manual", new ManualEvent(value))
-                    .submit()
-                    .toCompletableFuture()
-                    .join();
-            MANUAL_REG_PUBLISH_LATCH.get().await(25, TimeUnit.MILLISECONDS);
-        }
     }
 
     private static void publishManualRegistrationUntilObserved(

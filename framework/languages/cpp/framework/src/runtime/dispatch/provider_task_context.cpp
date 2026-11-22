@@ -169,13 +169,14 @@ bool can_reuse_completion_turn (bool known_runtime_worker,
            && !current_wait_owner_token.stop_possible ();
 }
 
-void dispatch_completion (std::function<void ()> work,
-                          bool inline_allowed,
-                          const void *owner,
-                          completion_dispatcher_borrow_t dispatcher)
+namespace
 {
-    if (!work)
-        return;
+template <typename Work>
+void dispatch_completion_work (Work work,
+                               bool inline_allowed,
+                               const void *owner,
+                               completion_dispatcher_borrow_t dispatcher)
+{
     if (inline_allowed || (owner == nullptr && can_reuse_completion_turn ())) {
         work ();
         return;
@@ -187,6 +188,29 @@ void dispatch_completion (std::function<void ()> work,
                                             dispatcher};
         work ();
     });
+}
+} // namespace
+
+void dispatch_completion (std::function<void ()> work,
+                          bool inline_allowed,
+                          const void *owner,
+                          completion_dispatcher_borrow_t dispatcher)
+{
+    if (work)
+        dispatch_completion_work (std::move (work), inline_allowed, owner, std::move (dispatcher));
+}
+
+void dispatch_completion (const std::shared_ptr<task_wait_registration_t> &waiter,
+                          std::shared_ptr<void> lifetime,
+                          bool inline_allowed,
+                          completion_dispatcher_borrow_t dispatcher)
+{
+    dispatch_completion_work (
+      [waiter, lifetime = std::move (lifetime)] {
+          (void) lifetime; // Keep the terminal result alive through delivery.
+          waiter->resume (false);
+      },
+      inline_allowed, nullptr, std::move (dispatcher));
 }
 
 std::size_t completion_dispatcher_worker_count () noexcept

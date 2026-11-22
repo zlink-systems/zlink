@@ -83,14 +83,14 @@ esac
 if [[ "$cache_root" != /* ]]; then
   cache_root="$repo_root/$cache_root"
 fi
-# GNU realpath -m is not available on macOS; python3 is on every GitHub runner.
+# GNU realpath -m is not available on macOS; Node is already required.
 normalize_path() {
   if command -v cygpath >/dev/null 2>&1; then
     cygpath -u "$(realpath -m "$1")"
   elif realpath -m / >/dev/null 2>&1; then
     realpath -m "$1"
   else
-    python3 -c 'import os,sys; print(os.path.abspath(sys.argv[1]))' "$1"
+    node -e 'console.log(require("node:path").resolve(process.argv[1]))' "$1"
   fi
 }
 sha256_of() {
@@ -101,7 +101,7 @@ sha256_of() {
   fi
 }
 cache_root="$(normalize_path "$cache_root")"
-prefix="$cache_root/$version/$platform"
+prefix="$cache_root/release/$version/$platform"
 case "$prefix" in
   "$cache_root"/*) ;;
   *) echo "Core release prefix escaped cache root: $prefix" >&2; exit 2 ;;
@@ -114,8 +114,11 @@ command -v node >/dev/null 2>&1 || {
   exit 1
 }
 
-manifest="$prefix/share/zlink/core-package-provenance.json"
-if [[ "$force" -eq 0 && -f "$manifest" ]]; then
+# Only immutable entries are returned. Legacy mutable prefixes are not reused.
+for candidate in "$prefix"/*; do
+  [[ "$force" -eq 0 ]] || break
+  manifest="$candidate/share/zlink/core-package-provenance.json"
+  [[ -f "$manifest" ]] || continue
   # Prints the recorded checksums digest only for a clean release package of this version.
   manifest_checksums_sha="$(node -e '
 const [path, version, tag] = process.argv.slice(1);
@@ -127,13 +130,13 @@ try {
       /^[0-9a-f]{64}$/.test(sha)) process.stdout.write(sha);
 } catch {}
 ' "$manifest" "$version" "$release_tag")"
-  release_checksums="$prefix/share/zlink/$release_checksums_name"
+  release_checksums="$candidate/share/zlink/$release_checksums_name"
   if [[ -n "$manifest_checksums_sha" && -f "$release_checksums" &&
         "$(sha256_of "$release_checksums")" = "$manifest_checksums_sha" ]]; then
-    printf '%s\n' "$prefix"
+    printf '%s\n' "$candidate"
     exit 0
   fi
-fi
+done
 
 command -v curl >/dev/null 2>&1 || {
   echo "curl is required to download the Core release" >&2
@@ -223,7 +226,8 @@ if [[ "$binary_archive_name" == *.zip ]]; then
   elif command -v 7z >/dev/null 2>&1; then
     7z x -y -o"$binary_root" "$binary_archive" >/dev/null
   else
-    python3 -c 'import sys,zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' "$binary_archive" "$binary_root"
+    echo "unzip or 7z is required to extract the Windows Core release" >&2
+    exit 1
   fi
 else
   tar -xzf "$binary_archive" -C "$binary_root"
@@ -408,7 +412,6 @@ if [[ "$platform" == linux-* ]]; then
   PREFIX="$stage" bash "$script_dir/verify-package.sh" "${verify_args[@]}" >/dev/null
 fi
 
-rm -rf "$prefix"
-mv "$stage" "$prefix"
+prefix="$(node "$script_dir/publish-prefix.cjs" "$stage" "$prefix")"
 echo "Core release installed: version=$version platform=$platform prefix=$prefix" >&2
 printf '%s\n' "$prefix"

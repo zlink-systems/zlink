@@ -233,10 +233,11 @@ public final class ZLinkServiceM6AWireCodec {
     }
 
     public byte[] encodeNodeRequestHeader(long correlation, int flags) {
-        requireCorrelation(correlation);
-        return prefix(ServiceWireConstants.COMMAND_NODE_REQUEST, flags, Long.BYTES)
-                .putLong(correlation)
-                .array();
+        return encodeRequestHeader(correlation, null, flags);
+    }
+
+    public Message encodeNodeRequestMessage(long correlation, int flags) {
+        return encodeRequestMessage(correlation, null, flags);
     }
 
     public long decodeNodeRequestHeader(byte[] frame) {
@@ -279,16 +280,57 @@ public final class ZLinkServiceM6AWireCodec {
     }
 
     public byte[] encodeChannelRequestHeader(long correlation, String channelName, int flags) {
+        return encodeRequestHeader(correlation, channelNameBytes(channelName), flags);
+    }
+
+    public Message encodeChannelRequestMessage(long correlation, String channelName, int flags) {
+        return encodeRequestMessage(correlation, channelNameBytes(channelName), flags);
+    }
+
+    private static byte[] encodeRequestHeader(long correlation, byte[] channel, int flags) {
         requireCorrelation(correlation);
-        byte[] channel = channelNameBytes(channelName);
-        return prefix(
-                        ServiceWireConstants.COMMAND_CHANNEL_REQUEST,
-                        flags,
-                        Long.BYTES + Byte.BYTES + channel.length)
-                .putLong(correlation)
-                .put((byte) channel.length)
-                .put(channel)
-                .array();
+        validateFlags(flags);
+        ByteBuffer target =
+                ByteBuffer.allocate(ZLinkServiceWireCodec.PREFIX_BYTES + requestBodySize(channel));
+        writeRequestHeader(target, correlation, channel, flags);
+        return target.array();
+    }
+
+    private static Message encodeRequestMessage(long correlation, byte[] channel, int flags) {
+        requireCorrelation(correlation);
+        validateFlags(flags);
+        Message frame =
+                Message.allocate(ZLinkServiceWireCodec.PREFIX_BYTES + requestBodySize(channel));
+        try {
+            writePrefix(frame, requestCommand(channel), flags);
+            frame.writeLongLe(ZLinkServiceWireCodec.PREFIX_BYTES, Long.reverseBytes(correlation));
+            if (channel != null) {
+                int offset = ZLinkServiceWireCodec.PREFIX_BYTES + Long.BYTES;
+                frame.writeByte(offset, (byte) channel.length);
+                frame.copyFrom(channel, 0, offset + Byte.BYTES, channel.length);
+            }
+            return frame;
+        } catch (RuntimeException | Error failure) {
+            frame.close();
+            throw failure;
+        }
+    }
+
+    private static int requestBodySize(byte[] channel) {
+        return Long.BYTES + (channel == null ? 0 : Byte.BYTES + channel.length);
+    }
+
+    private static void writeRequestHeader(
+            ByteBuffer target, long correlation, byte[] channel, int flags) {
+        writePrefix(target, requestCommand(channel), flags);
+        target.putLong(correlation);
+        if (channel != null) target.put((byte) channel.length).put(channel);
+    }
+
+    private static int requestCommand(byte[] channel) {
+        return channel == null
+                ? ServiceWireConstants.COMMAND_NODE_REQUEST
+                : ServiceWireConstants.COMMAND_CHANNEL_REQUEST;
     }
 
     public ChannelRequest decodeChannelRequestHeader(byte[] frame) {
@@ -303,13 +345,36 @@ public final class ZLinkServiceM6AWireCodec {
         return new ChannelRequest(correlation, channelName);
     }
 
+    private static final int REPLY_HEADER_BYTES =
+            ZLinkServiceWireCodec.PREFIX_BYTES + Long.BYTES + 2 * Integer.BYTES;
+
     public byte[] encodeReplyHeader(long correlation, int terminalResult, int failureCode) {
         validateReply(correlation, terminalResult, failureCode);
-        return prefix(ServiceWireConstants.COMMAND_REPLY, 0, Long.BYTES + 2 * Integer.BYTES)
-                .putLong(correlation)
-                .putInt(terminalResult)
-                .putInt(failureCode)
-                .array();
+        ByteBuffer target = ByteBuffer.allocate(REPLY_HEADER_BYTES);
+        writeReplyHeader(target, correlation, terminalResult, failureCode);
+        return target.array();
+    }
+
+    public Message encodeReplyMessage(long correlation, int terminalResult, int failureCode) {
+        validateReply(correlation, terminalResult, failureCode);
+        Message frame = Message.allocate(REPLY_HEADER_BYTES);
+        try {
+            writePrefix(frame, ServiceWireConstants.COMMAND_REPLY, 0);
+            int offset = ZLinkServiceWireCodec.PREFIX_BYTES;
+            frame.writeLongLe(offset, Long.reverseBytes(correlation));
+            frame.writeIntBe(offset + Long.BYTES, terminalResult);
+            frame.writeIntBe(offset + Long.BYTES + Integer.BYTES, failureCode);
+            return frame;
+        } catch (RuntimeException | Error failure) {
+            frame.close();
+            throw failure;
+        }
+    }
+
+    private static void writeReplyHeader(
+            ByteBuffer target, long correlation, int terminalResult, int failureCode) {
+        writePrefix(target, ServiceWireConstants.COMMAND_REPLY, 0);
+        target.putLong(correlation).putInt(terminalResult).putInt(failureCode);
     }
 
     public Reply decodeReplyHeader(byte[] frame) {
@@ -643,16 +708,37 @@ public final class ZLinkServiceM6AWireCodec {
     }
 
     private static byte[] prefixBytes(int command, int flags, int bodySize) {
+        validateFlags(flags);
+        byte[] bytes = new byte[ZLinkServiceWireCodec.PREFIX_BYTES + bodySize];
+        int prefix = prefixWord(command);
+        bytes[0] = (byte) (prefix >>> 24);
+        bytes[1] = (byte) (prefix >>> 16);
+        bytes[2] = (byte) (prefix >>> 8);
+        bytes[3] = (byte) prefix;
+        bytes[4] = (byte) flags;
+        return bytes;
+    }
+
+    private static void writePrefix(ByteBuffer target, int command, int flags) {
+        target.order(ByteOrder.BIG_ENDIAN).putInt(prefixWord(command)).put((byte) flags);
+    }
+
+    private static void writePrefix(Message frame, int command, int flags) {
+        frame.writeIntBe(0, prefixWord(command));
+        frame.writeByte(Integer.BYTES, (byte) flags);
+    }
+
+    private static int prefixWord(int command) {
+        return (ServiceWireConstants.MAGIC_0 << 24)
+                | (ServiceWireConstants.MAGIC_1 << 16)
+                | (ServiceWireConstants.WIRE_MAJOR << 8)
+                | (command & 0xff);
+    }
+
+    private static void validateFlags(int flags) {
         if ((flags & ~ServiceWireConstants.FLAG_METADATA) != 0) {
             throw protocol("M6A application header contains an unknown flag");
         }
-        byte[] bytes = new byte[ZLinkServiceWireCodec.PREFIX_BYTES + bodySize];
-        bytes[0] = (byte) ServiceWireConstants.MAGIC_0;
-        bytes[1] = (byte) ServiceWireConstants.MAGIC_1;
-        bytes[2] = (byte) ServiceWireConstants.WIRE_MAJOR;
-        bytes[3] = (byte) command;
-        bytes[4] = (byte) flags;
-        return bytes;
     }
 
     private static void validateReply(long correlation, int terminal, int failure) {
