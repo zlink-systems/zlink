@@ -90,7 +90,11 @@ final class ZLinkPendingStreamAdmissionTerminationTest {
                     try {
                         terminated.get(remainingNanos(deadline), TimeUnit.NANOSECONDS);
                     } catch (TimeoutException timeout) {
-                        fail("termination waited for a pending STREAM push", timeout);
+                        // #4889: show whether close() waits on the state lane or in socket close.
+                        fail(
+                                "termination waited for a pending STREAM push\n"
+                                        + threadStacks(termination),
+                                timeout);
                     }
                     var failure =
                             assertThrows(
@@ -134,5 +138,19 @@ final class ZLinkPendingStreamAdmissionTerminationTest {
             }
         }
         return fail("unread STREAM peer did not cause pending admission");
+    }
+
+    /** The terminating virtual thread first, then every platform thread, with full stacks. */
+    private static String threadStacks(Thread termination) {
+        var dump = new StringBuilder();
+        append(dump, termination, termination.getStackTrace());
+        Thread.getAllStackTraces().forEach((thread, stack) -> append(dump, thread, stack));
+        return dump.toString();
+    }
+
+    private static void append(StringBuilder dump, Thread thread, StackTraceElement[] stack) {
+        dump.append('"').append(thread.getName()).append("\" ").append(thread.getState());
+        dump.append(thread.isVirtual() ? " virtual\n" : "\n");
+        for (var frame : stack) dump.append("    at ").append(frame).append('\n');
     }
 }
