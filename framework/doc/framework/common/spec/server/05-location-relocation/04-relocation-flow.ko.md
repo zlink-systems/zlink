@@ -560,6 +560,7 @@ Session owner가 검증하는 값, seal과 route 전환의 정확한 시점·tim
 | CAS 성공 뒤 target process 종료 | Target authority를 유지하지만 object는 unavailable | Source로 rollback하거나 다른 target에서 자동 재개하지 않는다. |
 | `SessionRelocationSealTimeout` 안에 route update가 없음 | Target owner, Session connection 종료 | Session owner는 physical connection을 종료하고 binding, held message와 seal을 정리한다. 늦은 update는 Warning만 기록하고 무시한다. |
 | Caller cancellation | Shared relocation은 현재 phase 규칙을 계속 따름 | 해당 waiter만 끝낸다. Source 복원 여부는 cutover submit 또는 cancellation이 아니라 [Location runtime §6.1·§10](01-location-runtime.ko.md#61-read와-cas)의 authority settlement가 정한다. |
+| 같은 object의 이전 relocation이 owner 전환(`activated`) 뒤 아직 `completed`·`aborted`가 아님(source 정리·publication 해제 진행 중) | 이전 relocation의 target owner | 새 cross-node Actor Join과 User Spot authority 이전은 실패하지 않고 시작 API의 남은 deadline 안에서 이전 relocation의 terminal phase를 기다린 뒤 capture를 시작한다. 새 timer나 재시도 횟수를 두지 않으며 이전 relocation의 Store 기록 변경을 깨우는 신호로 쓴다. Deadline까지 끝나지 않으면 `DeadlineExceeded`다. 이 대기는 target의 application dispatch 개방(§4.6)을 늦추지 않는다. Host `Relocate`는 기다리지 않는 [Host relocation 흐름](05-host-relocation-flow.ko.md)의 `Blocked/OperationInProgress` 규칙을 따른다. |
 | Source shutdown과 경쟁 | 먼저 seal한 operation | Relocation이 owner 전환 뒤라면 Message Follow 정리만 수행한다. Shutdown이 먼저면 새 relocation을 시작하지 않는다. |
 | Cutover submit 결과를 알 수 없음 | Store authority 확인 | Source와 target은 [§4.4](#44-ordered-relay와-one-way-cutover)의 승인 결과가 확인될 때까지 dispatch를 열지 않는다. |
 
