@@ -79,6 +79,11 @@ public final class ZLinkStateLane {
         this(executor, null);
     }
 
+    /** Creates an independent FIFO that uses this lane's executor. */
+    public ZLinkStateLane newSiblingLane() {
+        return new ZLinkStateLane(executor);
+    }
+
     ZLinkStateLane(ConcurrentLinkedQueue<WorkItem> mailbox) {
         this(DEFAULT_EXECUTOR, mailbox);
     }
