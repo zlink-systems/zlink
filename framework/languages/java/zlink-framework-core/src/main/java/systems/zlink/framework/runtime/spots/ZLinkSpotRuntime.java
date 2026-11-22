@@ -6724,11 +6724,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             ZLinkFrameworkErrorKind releaseFailure =
                     received.activationMessage().isPresent() ? instanceCloseReleaseFailure() : null;
             ZLinkFrameworkException failure =
-                    ZLinkFrameworkErrorOrigin.framework(
+                    ZLinkFrameworkErrorOrigin.closedSpot(
                             releaseFailure == null
                                     ? ZLinkFrameworkErrorKind.NOT_FOUND
-                                    : releaseFailure,
-                            "Spot incarnation was closed");
+                                    : releaseFailure);
             received.close();
             return CompletableFuture.failedFuture(failure);
         }
