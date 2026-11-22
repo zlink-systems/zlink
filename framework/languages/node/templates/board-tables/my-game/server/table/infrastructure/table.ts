@@ -10,6 +10,7 @@ import type {
   ZLinkSpotRelocationAdapter
 } from '@zlink-systems/framework';
 import { NODE_CONFIG, type NodeConfig } from '../../shared/config';
+import { shortId, tableLog } from '../../shared/game-log';
 import { TableView, HandDealt, JoinTableRequest, type HandResult } from '../../shared/messages';
 import { TableState } from '../domain/table-state';
 import { Player } from './player';
@@ -35,8 +36,13 @@ export class Table implements ZLinkSpot<Player> {
       throw new Error('Join identity mismatch');
     return { accepted: this.state.admit(actorId) };
   }
-  async onJoinedActor(_actor: Player): Promise<void> {
+  async onJoinedActor(actor: Player): Promise<void> {
+    const playerId = actor.context.actorId;
+    tableLog(this.tableId, `${shortId(playerId)} joined (seat ${this.state.seatOf(playerId)})`);
     await this.publish();
+  }
+  get tableId(): string {
+    return String(this.context.spotId);
   }
   async onLeaveActor(_actor: Player): Promise<void> {}
   async onDisconnectActor(_actor: Player): Promise<void> {}
@@ -56,9 +62,7 @@ export class Table implements ZLinkSpot<Player> {
   async respond(actor: Player): Promise<void> {
     const playerId = actor.context.actorId;
     await actor.context.boundSession.send(this.view(playerId)).submit();
-    await actor.context.boundSession
-      .send(this.handFor(playerId))
-      .submit();
+    await actor.context.boundSession.send(this.handFor(playerId)).submit();
   }
   private handFor(playerId: string): HandDealt {
     return new HandDealt(this.state.snapshot.handNumber, this.state.cards(playerId));
@@ -72,9 +76,7 @@ export class Table implements ZLinkSpot<Player> {
   async deal(): Promise<void> {
     await this.publish();
     for (const seat of this.state.snapshot.seats)
-      await this.actors
-        .sendToActor(seat.playerId, this.handFor(seat.playerId))
-        .submit();
+      await this.actors.sendToActor(seat.playerId, this.handFor(seat.playerId)).submit();
   }
 }
 @Injectable()
@@ -84,5 +86,7 @@ export class TableRelocation implements ZLinkSpotRelocationAdapter<Table> {
   }
   async restore(spot: Table, payload: Uint8Array): Promise<void> {
     spot.state.snapshot = deserializeTableSnapshot(payload);
+    const { inHand, handNumber } = spot.state.snapshot;
+    tableLog(spot.tableId, `moved in${inHand ? ` (hand ${handNumber} in progress)` : ''}`);
   }
 }

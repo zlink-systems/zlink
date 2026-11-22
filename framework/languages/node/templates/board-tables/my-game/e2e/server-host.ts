@@ -309,11 +309,13 @@ export function createServerHost(tableCapacity: number, consoleOptions?: Console
     async drain(id) {
       const node = nodes.get(id);
       assert(node, `Unknown host ${id}`);
+      serverConsole?.host(`e2e request: drain ${node.config.title ?? id}`);
       await node.drain();
     },
     async replace(id) {
       const node = nodes.get(id);
       assert(node, `Unknown host ${id}`);
+      serverConsole?.host(`e2e request: replace ${node.config.title ?? id}`);
       await node.stop();
       const replacement = await start(node.config, node.role);
       await replacement.ready();

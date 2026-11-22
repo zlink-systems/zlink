@@ -54,7 +54,8 @@ async function main(): Promise<void> {
       : attachServer();
     const { scenario } = await import('./client.mjs');
     const scenarioRunId = host ? state.runId : attachRunId;
-    for (const name of selected) {
+    for (const [index, name] of selected.entries()) {
+      console.log(`━━ ${name} (${index + 1}/${selected.length}) ━━`);
       try {
         await scenario(name, state.sessionEndpoint, scenarioRunId, logDir, control);
         passed++;
