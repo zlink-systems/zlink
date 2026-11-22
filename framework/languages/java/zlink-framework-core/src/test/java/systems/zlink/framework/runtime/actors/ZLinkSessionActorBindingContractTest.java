@@ -248,8 +248,8 @@ final class ZLinkSessionActorBindingContractTest {
         var transport = new CompletableFuture<Void>();
         var closes = new java.util.concurrent.atomic.AtomicInteger();
         var closeStarted = new CompletableFuture<Void>();
-        java.util.function.Supplier<CompletionStage<Void>> close =
-                () -> {
+        java.util.function.IntFunction<CompletionStage<Void>> close =
+                actorSlot -> {
                     closes.incrementAndGet();
                     closeStarted.complete(null);
                     return transport;
