@@ -66,8 +66,7 @@ public sealed class BoundSessionDisconnectTests
                 .Async();
             if (remote)
             {
-                gateway = BuildGateway(app, locations);
-                await gateway.StartAsync();
+                gateway = await StartGatewayAsync(app, locations);
             }
             var endpoint = (gateway ?? app)
                 .Services.GetRequiredService<IZLinkFrameworkRuntime>()
@@ -122,7 +121,29 @@ public sealed class BoundSessionDisconnectTests
         }
     }
 
-    internal static IHost BuildGateway(IHost owner, ZLinkInMemoryProviderLocationStore locations)
+    /// <summary>
+    /// Starts the gateway and waits until its route to the owner is ready, so a bind sent
+    /// by a client never races the RouteMesh connection.
+    /// </summary>
+    internal static async Task<IHost> StartGatewayAsync(
+        IHost owner,
+        ZLinkInMemoryProviderLocationStore locations
+    )
+    {
+        var gateway = BuildGateway(owner, locations);
+        await gateway.StartAsync();
+        using var ready = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await foreach (
+            var observed in gateway
+                .Services.GetRequiredService<IZLinkRouteMeshRuntime>()
+                .ObserveAsync("disconnect", ready.Token)
+        )
+            if (observed.Status.ReadyPeerCount >= 1)
+                break;
+        return gateway;
+    }
+
+    private static IHost BuildGateway(IHost owner, ZLinkInMemoryProviderLocationStore locations)
     {
         var peer = owner
             .Services.GetRequiredService<IZLinkFrameworkRuntime>()

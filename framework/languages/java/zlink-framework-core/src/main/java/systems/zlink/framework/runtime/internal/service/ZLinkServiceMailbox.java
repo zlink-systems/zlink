@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.internal.service;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -78,7 +79,11 @@ public final class ZLinkServiceMailbox implements AutoCloseable {
                 records.add(next);
             }
             return Optional.of(
-                    new Claim(owner, domainValue, queue.claimSerial, List.copyOf(records)));
+                    new Claim(
+                            owner,
+                            domainValue,
+                            queue.claimSerial,
+                            Collections.unmodifiableList(records)));
         }
         return Optional.empty();
     }

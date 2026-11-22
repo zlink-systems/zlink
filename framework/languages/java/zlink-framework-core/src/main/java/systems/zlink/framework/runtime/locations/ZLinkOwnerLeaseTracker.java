@@ -34,22 +34,27 @@ final class ZLinkOwnerLeaseTracker {
     }
 
     CompletionStage<Duration> remainingAdmissionLifetime(String ownerId, long expectedGeneration) {
+        return admittedLease(ownerId, expectedGeneration, (remaining, sampledAtNanos) -> remaining);
+    }
+
+    CompletionStage<LeaseAdmission> leaseAdmission(String ownerId, long expectedGeneration) {
+        return admittedLease(ownerId, expectedGeneration, LeaseAdmission::new);
+    }
+
+    private <T> CompletionStage<T> admittedLease(
+            String ownerId, long expectedGeneration, LeaseProjection<T> projection) {
         ObservedLease current = observed.get(ownerId);
         long now = nanoTime.getAsLong();
         if (current != null
                 && Duration.ofNanos(now - current.fetchedAtNanos).compareTo(pollingInterval) < 0) {
-            Duration remaining = current.remaining(now);
             return CompletableFuture.completedFuture(
-                    current.matches(ownerId, expectedGeneration)
-                                    && remaining.compareTo(Duration.ZERO) > 0
-                            ? remaining
-                            : null);
+                    current.admit(ownerId, expectedGeneration, now, projection));
         }
         return store.readOwnerLease(ownerId)
                 .thenApply(
                         result -> {
-                            long fetchedAt = nanoTime.getAsLong();
                             if (result instanceof ZLinkOwnerLeaseFound found) {
+                                long fetchedAt = nanoTime.getAsLong();
                                 ObservedLease refreshed =
                                         new ObservedLease(
                                                 found.token(),
@@ -57,15 +62,18 @@ final class ZLinkOwnerLeaseTracker {
                                                         found.storeNow(), found.leaseExpiresAt()),
                                                 fetchedAt);
                                 observed.put(ownerId, refreshed);
-                                Duration remaining = refreshed.remaining(fetchedAt);
-                                return refreshed.matches(ownerId, expectedGeneration)
-                                                && remaining.compareTo(Duration.ZERO) > 0
-                                        ? remaining
-                                        : null;
+                                return refreshed.admit(
+                                        ownerId, expectedGeneration, fetchedAt, projection);
                             }
                             observed.remove(ownerId);
                             return null;
                         });
+    }
+
+    record LeaseAdmission(Duration remaining, long sampledAtNanos) {}
+
+    private interface LeaseProjection<T> {
+        T project(Duration remaining, long sampledAtNanos);
     }
 
     boolean hasObservedLiveLease(String ownerId, long expectedGeneration) {
@@ -87,6 +95,15 @@ final class ZLinkOwnerLeaseTracker {
         private boolean matches(String ownerId, long expectedGeneration) {
             return token.ownerId().equals(ownerId)
                     && (expectedGeneration == 0L || token.leaseGeneration() == expectedGeneration);
+        }
+
+        private <T> T admit(
+                String ownerId, long generation, long nowNanos, LeaseProjection<T> projection) {
+            if (!matches(ownerId, generation)) return null;
+            Duration remaining = remaining(nowNanos);
+            return remaining.compareTo(Duration.ZERO) > 0
+                    ? projection.project(remaining, nowNanos)
+                    : null;
         }
 
         private Duration remaining(long nowNanos) {

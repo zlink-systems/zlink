@@ -149,7 +149,7 @@ public final class ZLinkStreamHeaderCodec {
         return encode(
                 effective.kind().value(),
                 effective.codec().value(),
-                flagsValue(effective.flags()),
+                effective.wireFlags(),
                 effective.packetName(),
                 effective.requestSequence(),
                 effective.metadata(),
@@ -308,14 +308,6 @@ public final class ZLinkStreamHeaderCodec {
             throw new IllegalArgumentException("STREAM header contains unknown flags");
         }
         return flags;
-    }
-
-    private static int flagsValue(EnumSet<ZLinkStreamHeaderFlag> flags) {
-        int value = 0;
-        for (ZLinkStreamHeaderFlag flag : flags) {
-            value |= flag.value();
-        }
-        return value;
     }
 
     private static byte[] encodeMetadata(Map<String, String> metadata) {
