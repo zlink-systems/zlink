@@ -57,8 +57,8 @@ for (const [changedVersion, departed] of [
         }
       },
       leaseTracker: {
-        async remainingOwnerTokenLeaseMs() {
-          return 60_000;
+        async ownerTokenLeaseDeadlineMs() {
+          return performance.now() + 60_000;
         }
       }
     });
@@ -204,7 +204,6 @@ for (const [changedVersion, departed] of [
       createLocationSpotRouteResolver: () => undefined,
       boundSessionRelay: {},
       spotNodeRuntime: () => ({
-        entrySpotIdForMesh: () => undefined,
         meshNode: () => ({ status: () => ({ routingId: 'target', lifecycleGeneration: 1n }) })
       }),
       dispatchErrorReporter: () => undefined

@@ -60,6 +60,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescripto
 import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey;
 import systems.zlink.framework.runtime.internal.locations.ZLinkObjectAlreadyExists;
 import systems.zlink.framework.runtime.internal.locations.ZLinkObjectConflict;
+import systems.zlink.framework.runtime.internal.locations.ZLinkObjectCreationDeadline;
 import systems.zlink.framework.runtime.internal.locations.ZLinkObjectReservationRequest;
 import systems.zlink.framework.runtime.internal.locations.ZLinkObjectReserved;
 import systems.zlink.framework.runtime.internal.locations.ZLinkObjectTypeMismatch;
@@ -1434,16 +1435,18 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         }
         Duration effectiveTimeout = timeout == null ? defaultRequestTimeout : timeout;
         long deadline = System.currentTimeMillis() + effectiveTimeout.toMillis();
-        return placeUserSpot(
-                locations,
-                selectedMesh,
-                spotId,
-                stableType,
-                envelope,
-                deadline,
-                effectiveTimeout,
-                getOrCreate,
-                Set.of());
+        return ZLinkObjectCreationDeadline.classify(
+                placeUserSpot(
+                        locations,
+                        selectedMesh,
+                        spotId,
+                        stableType,
+                        envelope,
+                        deadline,
+                        effectiveTimeout,
+                        getOrCreate,
+                        Set.of()),
+                deadline);
     }
 
     private CompletionStage<ZLinkSpotCreateResult> placeUserSpot(
@@ -1672,10 +1675,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             boolean getOrCreate,
             Set<ZLinkMeshNodeDescriptorKey> excludedTargets) {
         if (System.currentTimeMillis() >= deadline) {
-            return CompletableFuture.failedFuture(
-                    new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
-                            "Timed out waiting for User Spot authority"));
+            return CompletableFuture.failedFuture(ZLinkObjectCreationDeadline.exceeded(null));
         }
         return CompletableFuture.supplyAsync(
                         () -> null, CompletableFuture.delayedExecutor(10, TimeUnit.MILLISECONDS))
@@ -1690,23 +1690,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                         deadline,
                                         timeout,
                                         getOrCreate,
-                                        excludedTargets))
-                .exceptionallyCompose(
-                        failure -> {
-                            Throwable cause = unwrapCompletion(failure);
-                            if (System.currentTimeMillis() >= deadline
-                                    && (cause instanceof java.util.concurrent.CancellationException
-                                            || cause
-                                                    instanceof
-                                                    java.util.concurrent.TimeoutException)) {
-                                return CompletableFuture.failedFuture(
-                                        new ZLinkFrameworkException(
-                                                ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
-                                                "Timed out waiting for User Spot authority",
-                                                cause));
-                            }
-                            return CompletableFuture.failedFuture(cause);
-                        });
+                                        excludedTargets));
     }
 
     private CompletionStage<ZLinkSpotCreateResult> reserveAndCreate(
@@ -4270,6 +4254,49 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                 header,
                                 payload);
         return dispatchLocalSessionActor(actorRef, acceptedRecord, header, payload, Instant.now());
+    }
+
+    public CompletionStage<Void> dispatchLocalSessionActor(
+            ZLinkBackendActorRef actorRef,
+            RoutingId sourceNodeRid,
+            RoutingId sourceSessionRid,
+            long bindingGeneration,
+            long acceptedSessionSequence,
+            ZLinkStreamHeader header,
+            Message payload,
+            java.util.function.Consumer<LocalActorReply> submitReply) {
+        byte[] acceptedRecord =
+                actorSessions
+                        .runtime()
+                        .encodeLocalSessionActorAccepted(
+                                actorRef,
+                                sourceNodeRid,
+                                sourceSessionRid,
+                                bindingGeneration,
+                                acceptedSessionSequence,
+                                header,
+                                payload);
+        Instant receivedAt = Instant.now();
+        return actorSessions
+                .dispatchLocalSession(
+                        actorRef,
+                        acceptedRecord,
+                        header,
+                        payload,
+                        spotId -> spotSurfaceFor(spotId) != null,
+                        local ->
+                                dispatchLocalSessionActor(
+                                                actorRef, header, payload, local, receivedAt)
+                                        .thenApply(
+                                                reply -> {
+                                                    // Register the reply before the Actor turn
+                                                    // releases its gate.
+                                                    // The relay observes transport completion
+                                                    // outside this turn.
+                                                    reply.ifPresent(submitReply);
+                                                    return Optional.empty();
+                                                }))
+                .thenAccept(reply -> reply.ifPresent(submitReply));
     }
 
     private CompletionStage<Optional<LocalActorReply>> dispatchLocalSessionActor(

@@ -3192,7 +3192,8 @@ bool serial_execution_queue_t::enqueue_locked (std::unique_lock<std::mutex> &pro
                 if (released.first)
                     record->admission.retain_initial (std::move (released.first));
                 record->transferred = std::move (released.second);
-                released = {};
+                released.first = runtime::handler_entry_t{};
+                released.second = nullptr;
             };
             try {
                 accepted =

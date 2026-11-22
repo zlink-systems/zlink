@@ -40,3 +40,38 @@ test('strings after the first backslash still walk their escapes', () => {
   );
   assert.throws(() => frameworkJson.parseFrameworkJsonV1('{"a":"x","b":"\\u"}'), SyntaxError);
 });
+
+test('schema-known properties use no duplicate-name Set, including escaped names', (t) => {
+  const schema = {
+    type: 'object',
+    required: ['items'],
+    properties: {
+      items: {
+        type: 'array',
+        items: {
+          type: 'nullable',
+          value: { type: 'object', required: ['id'], properties: { id: { type: 'int32' } } }
+        }
+      }
+    }
+  };
+  const OriginalSet = Set;
+  let allocations = 0;
+  t.mock.method(globalThis, 'Set', class extends OriginalSet {
+    constructor(...args) {
+      super(...args);
+      allocations++;
+    }
+  });
+  const value = frameworkJson.parseFrameworkJsonV1('{"items":[{"\\u0069d":1},null,{"id":2}]}', {}, schema);
+  assert.equal(allocations, 0);
+  assert.deepEqual(value, { items: [{ id: 1 }, null, { id: 2 }] });
+  assert.throws(
+    () => frameworkJson.parseFrameworkJsonV1('{"items":[{"id":1,"\\u0069d":2}]}', {}, schema),
+    /duplicate property 'id'/
+  );
+  assert.throws(
+    () => frameworkJson.parseFrameworkJsonV1('{"items":[{"id":1,"x":1,"\\u0078":2}]}', {}, schema),
+    /duplicate property 'x'/
+  );
+});

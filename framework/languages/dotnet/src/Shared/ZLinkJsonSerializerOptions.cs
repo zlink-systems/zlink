@@ -51,6 +51,7 @@ internal static class ZLinkJsonSerializerOptions
         var resolver = new DefaultJsonTypeInfoResolver();
         resolver.Modifiers.Add(ApplyApplicationDtoMetadata);
         options.TypeInfoResolver = resolver;
+        options.MakeReadOnly();
         return options;
     }
 

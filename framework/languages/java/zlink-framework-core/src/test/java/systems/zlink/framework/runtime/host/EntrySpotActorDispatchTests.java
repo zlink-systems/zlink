@@ -128,7 +128,8 @@ final class EntrySpotActorDispatchTests {
                                 var identity = incoming.sessionBindingIdentity();
                                 var sessionRid = incoming.sessionRid();
                                 java.util.function.Function<
-                                                ZLinkInternalSpotNode.RemoteSessionBindingTransition,
+                                                ZLinkInternalSpotNode
+                                                        .RemoteSessionBindingTransition,
                                                 CompletionStage<Boolean>>
                                         decide =
                                                 selected -> {
@@ -147,7 +148,7 @@ final class EntrySpotActorDispatchTests {
                                                                 return selected.commit(
                                                                         () -> {
                                                                             backend.node
-                                                                                    .canonicalBoundSessionRoute =
+                                                                                            .canonicalBoundSessionRoute =
                                                                                     Optional.of(
                                                                                             incoming);
                                                                             return CompletableFuture
@@ -159,7 +160,9 @@ final class EntrySpotActorDispatchTests {
                                 return actors.applyRemoteSessionBindingAsync(
                                         backend.node,
                                         ref,
-                                        applied -> applied.acceptBinding(identity, sessionRid, decide));
+                                        applied ->
+                                                applied.acceptBinding(
+                                                        identity, sessionRid, decide));
                             };
             var firstBind = bind.apply(first).toCompletableFuture();
             CompletableFuture<Boolean> secondBind;

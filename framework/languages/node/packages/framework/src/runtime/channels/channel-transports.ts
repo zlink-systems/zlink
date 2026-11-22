@@ -33,8 +33,7 @@ import { isRemoteChannelErrorReply, requestTerminalResult } from './channel-outb
 import { ServiceStaleGenerationError } from '../foundation/service-stateful-registry';
 import type {
   ServiceDirectSpotRouteFence,
-  ServiceInstanceRouteFence,
-  ServiceSpotRouteFence
+  ServiceInstanceRouteFence
 } from '../foundation/service-stateful-wire-codec';
 import {
   type ZLinkFrameworkInternalErrorKind as ZLinkFrameworkInternalErrorKindType,
@@ -392,17 +391,20 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
     ) {
       return { status: ZLinkSubmitStatus.TargetNotFound };
     }
+    const sourceNodeRid =
+      node.routingId ?? (node.status().routingId as unknown as import('../../contracts').RoutingId);
+    const local = routingIdsEqual(sourceNodeRid, targetNodeRid);
     const parts = this.encodeMessage(
       ZLinkChannelMessageKind.Command,
       meshName,
       packetName,
       message,
       undefined,
-      metadata
+      metadata,
+      undefined,
+      !local && node.acceptsPackedChannelFrames === true
     );
-    const sourceNodeRid =
-      node.routingId ?? (node.status().routingId as unknown as import('../../contracts').RoutingId);
-    if (routingIdsEqual(sourceNodeRid, targetNodeRid)) {
+    if (local) {
       return this.submitLocalNode(meshName, String(sourceNodeRid), parts);
     }
     if (
@@ -549,7 +551,8 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
             request,
             timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
             metadata,
-            correlationId
+            correlationId,
+            node.acceptsPackedChannelFrames === true
           );
         } catch (error) {
           requestOperation.fail(error);
@@ -623,19 +626,19 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
     packetName: string | undefined,
     message: unknown,
     metadata?: ReadonlyMap<string, string>
-  ): Promise<ZLinkSubmitResult> {
+  ): ZLinkSubmitResult | Promise<ZLinkSubmitResult> {
     return runWithOutboundFlow(this.flowCreationEnabled(), () =>
       this.submitToChannelScoped(meshName, channelName, packetName, message, metadata)
     );
   }
 
-  private async submitToChannelScoped(
+  private submitToChannelScoped(
     meshName: string,
     channelName: string,
     packetName: string | undefined,
     message: unknown,
     metadata?: ReadonlyMap<string, string>
-  ): Promise<ZLinkSubmitResult> {
+  ): ZLinkSubmitResult | Promise<ZLinkSubmitResult> {
     const node = this.requireMeshNode(meshName);
     const parts = this.encodeMessage(
       ZLinkChannelMessageKind.Command,
@@ -643,20 +646,37 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
       packetName,
       message,
       undefined,
-      metadata
+      metadata,
+      undefined,
+      node.acceptsPackedChannelFrames === true
     );
     const operation = `MeshNode '${meshName}' send to channel '${channelName}'`;
     try {
-      const result = mapMeshSubmitResult(
-        await node.sendToChannel(channelName, parts, NON_BLOCKING_SEND_OPTIONS)
-      );
-      if (result.status === ZLinkSubmitStatus.TargetNotFound) {
-        this.metrics?.recordChannelSelectionFailure(meshName, channelName, 'no_ready_target');
+      const submitted = node.sendToChannel(channelName, parts, NON_BLOCKING_SEND_OPTIONS);
+      if (submitted instanceof Promise) {
+        return submitted.then(
+          (result) => this.completeChannelSend(meshName, channelName, result),
+          (error) => {
+            throw mapMeshSubmissionError(error, operation);
+          }
+        );
       }
-      return result;
+      return this.completeChannelSend(meshName, channelName, submitted);
     } catch (error) {
       throw mapMeshSubmissionError(error, operation);
     }
+  }
+
+  private completeChannelSend(
+    meshName: string,
+    channelName: string,
+    submitted: number
+  ): ZLinkSubmitResult {
+    const result = mapMeshSubmitResult(submitted);
+    if (result.status === ZLinkSubmitStatus.TargetNotFound) {
+      this.metrics?.recordChannelSelectionFailure(meshName, channelName, 'no_ready_target');
+    }
+    return result;
   }
 
   requestToChannel<TReply>(
@@ -739,7 +759,9 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
             packetName,
             request,
             timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-            metadata
+            metadata,
+            undefined,
+            node.acceptsPackedChannelFrames === true
           );
         } catch (error) {
           requestOperation.fail(error);
@@ -1182,7 +1204,8 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
     message: unknown,
     timeoutMs?: number,
     metadata?: ReadonlyMap<string, string>,
-    correlationId?: string
+    correlationId?: string,
+    forService = false
   ): readonly MessageLike[] {
     return encodeChannelEnvelopeParts(
       kind,
@@ -1194,7 +1217,8 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
       this.codecs,
       correlationId,
       this.flowCreationEnabled(),
-      metadata
+      metadata,
+      forService
     );
   }
 
@@ -1212,29 +1236,12 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
 
 function directSpotRouteFence(
   target: ZLinkSpotRouteTarget
-): ServiceDirectSpotRouteFence | ServiceSpotRouteFence | undefined {
+): ServiceDirectSpotRouteFence | undefined {
+  // Entry Spots are addressed by their owning MeshNode. They have no
+  // Location Store authority row, so only User and Instance Spots carry the
+  // exact Ready authority fence required by direct Spot submission.
   if (target.spotKind === ZLinkSpotKind.Entry) {
-    if (
-      target.targetSpotGeneration === undefined ||
-      target.targetNodeGeneration === undefined ||
-      target.authorityOwnerGeneration === undefined ||
-      target.ownerLeaseGeneration === undefined
-    ) {
-      throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.RouteNotConnected,
-        `Entry Spot '${String(target.spotId)}' has no complete selected route fence.`
-      );
-    }
-    return {
-      spot: {
-        spotId: String(target.spotId),
-        generation: target.targetSpotGeneration
-      },
-      targetNodeRid: String(target.targetNodeRid),
-      targetNodeGeneration: target.targetNodeGeneration,
-      authorityOwnerGeneration: target.authorityOwnerGeneration,
-      ownerLeaseGeneration: target.ownerLeaseGeneration
-    };
+    return undefined;
   }
   if (
     target.targetSpotGeneration === undefined ||

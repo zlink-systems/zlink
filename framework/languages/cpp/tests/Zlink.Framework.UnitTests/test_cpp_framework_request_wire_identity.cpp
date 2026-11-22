@@ -7,6 +7,7 @@
 #include <zlink/framework/detail/binary_text_codec.hpp>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <memory>
 #include <string>
 
@@ -51,12 +52,15 @@ fw::encoded_payload_t request_payload ()
 messaging::message_parts_t encode_request (messaging::envelope_header_t header, bool service)
 {
     auto type = std::make_shared<const fw::detail::request_type_plan_t> (
-      fw::detail::request_type_plan_t{header.content_type});
+      fw::detail::make_request_type_plan (header.message_name, header.content_type));
+    auto channel_fields = std::make_shared<const std::string> (
+      messaging::encode_request_channel_header_fields (header.channel_name));
     messaging::client_call_codec_t codec;
-    return service ? codec.encode_service_payload_parts (std::move (header), request_payload (),
-                                                         std::move (type))
-                   : codec.encode_payload_parts (std::move (header), request_payload (),
-                                                 std::move (type));
+    return service
+             ? codec.encode_service_payload_parts (std::move (header), request_payload (),
+                                                   std::move (type), std::move (channel_fields))
+             : codec.encode_payload_parts (std::move (header), request_payload (), std::move (type),
+                                           std::move (channel_fields));
 }
 
 class RequestWireIdentity : public testing::TestWithParam<int>
@@ -67,6 +71,7 @@ TEST_P (RequestWireIdentity, ServiceAndRoutePreserveHeaderAndBody)
 {
     const auto scenario = GetParam ();
     const auto expected_header = request_header (scenario);
+    const auto canonical = messaging::envelope_codec_t{}.encode_header (expected_header);
     SCOPED_TRACE (scenario);
     for (const bool service : {false, true}) {
         SCOPED_TRACE (service ? "MeshNode" : "RouteChannel");
@@ -77,6 +82,7 @@ TEST_P (RequestWireIdentity, ServiceAndRoutePreserveHeaderAndBody)
           protocol::decode_application_payload (protocol::message_bytes (frame));
         const auto decoded_parts = protocol::decode_application_parts (decoded_application);
         ASSERT_EQ (decoded_parts.size (), 2u);
+        EXPECT_TRUE (std::ranges::equal (decoded_parts[0].bytes (), canonical.bytes ()));
         const auto decoded_header = messaging::envelope_codec_t{}.decode_header (decoded_parts[0]);
         ASSERT_TRUE (decoded_header);
         EXPECT_EQ (decoded_header.value ().kind, expected_header.kind);
@@ -168,14 +174,11 @@ TEST (RequestWireIdentity, CopiesCanMaterializePartsAndReleaseWithoutEncoding)
     EXPECT_EQ (application_copy, materialized);
     EXPECT_EQ (application, application_copy);
 
-    unsigned encoded = 0;
-    auto discarded =
-      protocol::application_payload_t::from_envelope_encoder ([&] (const auto &, auto) {
-          ++encoded;
-          return zlink::message_t::from ("discarded");
-      });
-    discarded.release_body ();
-    EXPECT_EQ (encoded, 0u);
+    auto discarded = encode_request (request_header (0), true).take_application_payload ();
+    discarded.flow_id = "invalid";
+    EXPECT_THROW (protocol::encode_application_payload_message (discarded),
+                  protocol::service_wire_error_t);
+    EXPECT_NO_THROW (discarded.release_body ());
     ASSERT_NE (discarded.parts (), nullptr);
     EXPECT_TRUE (discarded.parts ()->empty ());
 }

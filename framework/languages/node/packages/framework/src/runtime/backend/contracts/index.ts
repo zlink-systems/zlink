@@ -42,7 +42,6 @@ import type {
   ServiceDirectSpotRouteFence,
   ServiceInstanceRouteFence,
   ServiceInstanceColdActivationTarget,
-  ServiceSpotRouteFence,
   ServiceUserSpotCloseRecord,
   ServiceUserSpotCreateRecord
 } from '../../foundation/service-stateful-wire-codec';
@@ -75,6 +74,13 @@ export type ZLinkBackendRequestSourceAcceptance = (
   | Promise<import('../../locations/request-source-resolver').ZLinkRequestSourceFence | undefined>;
 
 export interface ZLinkBackendMeshNode {
+  /**
+   * True when this node's channel send/request encoders accept the channel
+   * envelope already packed into one service multipart frame
+   * (`encodeChannelMultipartApplicationPayload`). Other nodes receive the
+   * header and payload as separate parts.
+   */
+  readonly acceptsPackedChannelFrames?: true;
   setRequestRuntime?(requests: RequestRuntime): void;
   acceptRelocatedActorTerminal?(
     operation: { readonly high: bigint; readonly low: bigint },
@@ -397,13 +403,13 @@ export interface ZLinkBackendMeshNode {
   ): MeshOperationId;
   joinActorEntrySpot(
     actor: ZLinkBackendActorRef,
-    target: ServiceSpotRouteFence,
+    targetNodeRid: unknown,
     request: ServiceApplicationPayload,
     timeoutMs?: number
   ): MeshOperationId;
   joinActorEntrySpotCanonical(
     actor: ZLinkBackendActorRef,
-    target: ServiceSpotRouteFence,
+    targetNodeRid: unknown,
     request: ServiceApplicationPayload,
     actorFence: {
       readonly targetNodeGeneration: bigint;
@@ -883,7 +889,6 @@ export interface ZLinkMeshBackendAdapter {
       readonly applicationJobReceiveFlowFailureSink?: (error: unknown) => void;
       readonly infrastructureTaskRunner?: import('../../spots/spot-actor-join-dispatch').ZLinkDetachedTaskRunner;
       readonly peerAdmissionSealed?: () => boolean;
-      readonly entrySpotId?: string;
     }
   ): ZLinkBackendMeshNode;
 }

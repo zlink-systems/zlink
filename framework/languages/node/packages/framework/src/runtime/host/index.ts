@@ -198,7 +198,7 @@ import {
   type ZLinkDetachedTaskRunner,
   type ZLinkSpotManagerOptions
 } from '../spots';
-import { entrySpotRouteTarget, type ZLinkSpotRouteResolver } from '../spots/spot-routing-internal';
+import type { ZLinkSpotRouteResolver } from '../spots/spot-routing-internal';
 import {
   DefaultZLinkBoundSessionFactory,
   ZLinkStreamBindingRuntime,
@@ -2481,7 +2481,7 @@ export class ZLinkFrameworkRuntimeHost
           message.close();
         }
       },
-      target: async (requestedMesh, stableType, signal, excludedNodeRids) => {
+      target: async (requestedMesh, stableType, signal, excludedHostRuns) => {
         const clientMeshes = [...this.options.registration.spotNodes]
           .filter(([, node]) => hasObjectClientCapability(node.objectRole))
           .map(([meshName]) => meshName);
@@ -2513,7 +2513,7 @@ export class ZLinkFrameworkRuntimeHost
             stableType,
             meshNode,
             signal,
-            excludedNodeRids
+            excludedHostRuns
           );
         if (selected === undefined) return undefined;
         const localStatus = meshNode?.status();
@@ -2614,7 +2614,7 @@ export class ZLinkFrameworkRuntimeHost
           message.close();
         }
       },
-      target: async (request, signal, excludedNodeRids) => {
+      target: async (request, signal, excludedHostRuns) => {
         const meshName = selectUserSpotMesh(request.meshName);
         const meshNode = this.spotNodeRuntime?.meshNode(meshName);
         const selected =
@@ -2624,7 +2624,7 @@ export class ZLinkFrameworkRuntimeHost
             request.stableType,
             meshNode,
             signal,
-            excludedNodeRids
+            excludedHostRuns
           );
         if (selected === undefined) return undefined;
         const localStatus = meshNode?.status();
@@ -2939,20 +2939,6 @@ export class ZLinkFrameworkRuntimeHost
       actorMeshName: (actorType) => this.meshRouters.actorMeshName(actorType),
       createLocationSpotRouteResolver: () => this.createLocationSpotRouteResolver(),
       createActorLocationResolver: () => this.createActorLocationResolver(),
-      entrySpotTargetSelector: async (meshName, stableType, signal) => {
-        const resolvedMeshName = meshName ?? this.meshRouters.primaryMeshName();
-        if (resolvedMeshName === undefined || stableType === undefined) return undefined;
-        const meshNode = this.spotNodeRuntime?.meshNode(resolvedMeshName);
-        const target =
-          await this.spotNodeRuntime?.locationAutoConnect?.requestSources.selectPlacement(
-            resolvedMeshName,
-            'actor',
-            stableType,
-            meshNode,
-            signal
-          );
-        return target === undefined ? undefined : entrySpotRouteTarget(resolvedMeshName, target);
-      },
       forgetDestroyedActorRef: (actorId) => this.destroyedActorRefs.delete(actorId),
       rememberDestroyedActorRef: (actorId, actorRef) =>
         this.destroyedActorRefs.set(actorId, actorRef),

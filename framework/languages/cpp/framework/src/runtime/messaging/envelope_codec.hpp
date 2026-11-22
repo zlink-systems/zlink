@@ -163,6 +163,8 @@ struct envelope_header_t
     envelope_header_storage_t retained_header;
 };
 
+std::string encode_request_channel_header_fields (std::string_view channel_name);
+
 class message_parts_t
 {
   public:
@@ -253,13 +255,16 @@ class envelope_codec_t
   private:
     friend class client_call_codec_t;
     zlink::message_t encode_header (const envelope_header_t &header,
-                                    std::string_view content_type) const;
+                                    std::string_view content_type,
+                                    std::array<std::string_view, 2> fixed_fields = {}) const;
     zlink::message_t encode_header (const envelope_header_t &header,
-                                    const detail::request_type_plan_t &type) const;
+                                    const detail::request_type_plan_t &type,
+                                    std::string_view channel_fields) const;
     protocol::application_envelope_encoder_t
     prepare_service_payload (envelope_header_t &&header,
                              zlink::message_t body,
-                             std::shared_ptr<const detail::request_type_plan_t> type) const;
+                             std::shared_ptr<const detail::request_type_plan_t> type,
+                             std::shared_ptr<const std::string> channel_fields) const;
 };
 
 } // namespace zlink::framework::runtime::messaging
