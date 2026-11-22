@@ -324,9 +324,10 @@ Spot의 관계를 판정하는 근거로 사용하지 않는다. Full Entry Spot
 prefix를 생략하면 MeshNode automatic RID에 사용한 기본 diagnostic prefix를 함께 사용한다. 같은 MeshNode
 lifecycle에서는 같은 Entry Spot ID를 유지하고 replacement lifecycle에서는 새 UUID 기반 Spot ID를 발급한다.
 
-- **Location Store에서 [global Spot ID authority의 active conflict](../00-foundation/02-glossary.ko.md#spot-id-conflict)가 확인되면 새 UUID를
-  만들거나 reservation을 다시 시도하지 않고 startup configuration error로 즉시
-  끝낸다.** MeshNode descriptor는 lifecycle generation과 그 Entry Spot ID의
+- **Entry Spot ID의 유일성은 Location Store에 따로 기록하지 않는다.** Framework만 발급하고 매 lifecycle마다
+  새 UUID v4를 쓰며, caller가 User·Instance Spot ID로 아래 예약 형식을 쓰면 Store 전에 거부하므로 다른 Spot과
+  겹치지 않는다. Store authority record와 MeshNode descriptor 쓰기는 Entry Spot ID 충돌을 판정하지 않으며,
+  in-memory provider와 Redis provider가 같은 판정을 한다(#4046). MeshNode descriptor는 lifecycle generation과 그 Entry Spot ID의
   mapping을 게시한다. Actor placement, Entry Spot join과 relocation은 이 mapping을
   사용하며 Spot ID 문자열을 분석하지 않는다.
 
@@ -379,8 +380,8 @@ endpoint, 그리고 RID·Spot ID 발급 결과만으로 다음을 확인한다.
 - Entry Spot ID가 같은 diagnostic prefix와 별도로 생성한 UUID v4를 사용한다.
 - Replacement MeshNode lifecycle이 새 Entry Spot ID를 발급하고 descriptor가 그
   mapping을 게시한다.
-- Entry Spot ID 충돌에서 두 번째 reservation을 시도하지 않고, 예약 형식의
-  caller-provided Spot ID를 Store 접근 전에 거부한다.
+- 예약 형식의 caller-provided Spot ID를 Store 접근 전에 거부하고, in-memory와 Redis provider가
+  MeshNode descriptor 쓰기에서 Entry Spot ID 충돌을 판정하지 않는다.
 
 **Kubernetes 배포**
 

@@ -547,8 +547,8 @@ runtime snapshot and event).
 - The Entry Spot ID uses the same diagnostic prefix as the MeshNode and a
   separately generated UUID v4, and the descriptor publishes the
   lifecycle mapping.
-- A replacement lifecycle issues a new Entry Spot ID and fails immediately on
-  an Entry Spot authority conflict.
+- A replacement lifecycle issues a new Entry Spot ID, and the in-memory and Redis
+  providers treat Entry Spot ID conflicts on descriptor writes the same way (not judged).
 - Duplicate stable type and an omitted relocation policy fail at startup.
 - Placement weight allows `0`, default `100`, and the upper bound `10000`,
   and rejects `-1` and `10001` in both startup config and runtime change.
