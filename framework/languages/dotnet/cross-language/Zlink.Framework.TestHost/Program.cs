@@ -695,7 +695,14 @@ internal sealed class UserSpotTargetHostedService(
         using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
         {
             deadline.CancelAfter(TimeSpan.FromSeconds(180));
-            while (!File.Exists(restartFilePath ?? throw new InvalidOperationException("--entry-join requires --restart-file.")))
+            while (
+                !File.Exists(
+                    restartFilePath
+                        ?? throw new InvalidOperationException(
+                            "--entry-join requires --restart-file."
+                        )
+                )
+            )
                 await Task.Delay(10, deadline.Token);
         }
         await BeginEntryJoinAsync(restartActorId, "restart", cancellationToken);
