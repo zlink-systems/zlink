@@ -371,6 +371,7 @@ final class ZLinkChannelRouteDispatcher {
                                                             packet.payloadIndex()),
                                                     packet.header().metadata(),
                                                     contentType,
+                                                    null,
                                                     flow.enabled(ZLinkMessageFlowOutcome.DISPATCHED)
                                                             ? () ->
                                                                     traceFlow(
@@ -484,6 +485,7 @@ final class ZLinkChannelRouteDispatcher {
                                                                         payload.dataBuffer(),
                                                                         packet.header().metadata(),
                                                                         contentType,
+                                                                        null,
                                                                         flow.enabled(
                                                                                         ZLinkMessageFlowOutcome
                                                                                                 .DISPATCHED)
