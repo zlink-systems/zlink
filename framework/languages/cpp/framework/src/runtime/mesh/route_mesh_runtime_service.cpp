@@ -29,6 +29,23 @@ build_snapshot_async (std::shared_ptr<route_mesh_runtime_service_t::state_t> sta
 namespace
 {
 
+using monitoring_topology_t = mesh::service_topology_registry_t::monitoring_topology_t;
+using location_descriptors_t = std::vector<mesh_node_descriptor_t>;
+
+struct topology_projection_t
+{
+    std::shared_ptr<const monitoring_topology_t> topology;
+    std::shared_ptr<const location_descriptors_t> locations;
+    std::vector<std::string> channel_names;
+    bool location_is_healthy;
+    object_role_t local_role;
+    std::vector<mesh_peer_snapshot_t> peers;
+    std::vector<mesh_channel_snapshot_t> channels;
+    const mesh_node_descriptor_t *local_location = nullptr;
+    std::uint32_t ready_peer_count = 0;
+    bool required_peer_unavailable = false;
+};
+
 topology_state_t map_state (mesh::service_node_state_t state)
 {
     switch (state) {
@@ -108,7 +125,9 @@ struct route_mesh_runtime_service_t::state_t
         std::vector<std::weak_ptr<observer_t>> observers;
         std::optional<mesh_node_snapshot_t> last_snapshot;
         bool location_store_healthy = false;
-        std::vector<mesh_node_descriptor_t> location_descriptors;
+        std::shared_ptr<const location_descriptors_t> location_descriptors =
+          std::make_shared<const location_descriptors_t> ();
+        std::shared_ptr<const topology_projection_t> topology_projection;
         std::atomic_bool stopped{false};
         std::thread pump;
     };
@@ -259,8 +278,9 @@ struct route_mesh_runtime_service_t::state_t
             return;
         }
 
+        auto snapshot = std::make_shared<const location_descriptors_t> (std::move (descriptors));
         std::lock_guard lock (hub.mutex);
-        hub.location_descriptors = std::move (descriptors);
+        hub.location_descriptors = std::move (snapshot);
     }
 };
 
@@ -406,47 +426,37 @@ void route_mesh_runtime_service_t::stop () noexcept
     }
 }
 
-mesh_node_snapshot_t
-project_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &state,
-                  std::string mesh_name,
-                  const mesh::service_node_descriptor_t &descriptor,
-                  const std::vector<mesh::admitted_peer_t> &peers,
-                  const std::vector<mesh::service_node_descriptor_t> &not_required_peers,
-                  const std::vector<std::string> &channel_names,
-                  std::int32_t actor_limit,
-                  std::int32_t spot_limit,
-                  std::size_t active_actor_count,
-                  std::size_t active_spot_count,
-                  std::uint64_t sequence)
+static std::shared_ptr<const topology_projection_t> project_topology (
+  const std::shared_ptr<route_mesh_runtime_service_t::state_t> &state,
+  route_mesh_runtime_service_t::state_t::hub_t &hub,
+  const std::shared_ptr<const monitoring_topology_t> &topology,
+  const std::vector<std::string> &channel_names)
 {
-    const auto hub = state->require_hub (mesh_name);
-    const auto node_rid = zlink::routing_id_t::from (descriptor.node_routing_id);
-    const auto transport_state = map_state (descriptor.state);
-
-    std::vector<mesh_node_descriptor_t> location_descriptors;
+    std::shared_ptr<const location_descriptors_t> locations;
+    bool location_is_healthy;
     {
-        std::lock_guard lock (hub->mutex);
-        location_descriptors = hub->location_descriptors;
+        std::lock_guard lock (hub.mutex);
+        locations = hub.location_descriptors;
+        location_is_healthy = state->location_runtime == nullptr || hub.location_store_healthy;
+        const auto &cached = hub.topology_projection;
+        if (cached && cached->topology == topology && cached->locations == locations
+            && cached->location_is_healthy == location_is_healthy
+            && cached->channel_names == channel_names)
+            return cached;
     }
 
+    const auto &[descriptor, peers, not_required_peers] = *topology;
+    const auto node_rid = zlink::routing_id_t::from (descriptor.node_routing_id);
+    const auto &location_descriptors = *locations;
     std::vector<mesh_peer_snapshot_t> peer_snapshots;
     std::map<std::string, std::uint64_t> ready_remote_members;
     std::set<std::string> classified_peer_ids;
     std::map<std::string, const mesh_node_descriptor_t *> location_by_rid;
     for (const auto &location : location_descriptors)
         location_by_rid.emplace (location.rid.to_hex (), &location);
-    bool location_is_healthy = false;
-    {
-        std::lock_guard lock (hub->mutex);
-        // A runtime query is optional for the in-process projection. When no
-        // query service is wired, the caller supplied location descriptors are
-        // the complete source and must not be downgraded to degraded merely
-        // because the optional health cache has no entry.
-        location_is_healthy = state->location_runtime == nullptr || hub->location_store_healthy;
-    }
     peer_snapshots.reserve (peers.size () + not_required_peers.size ()
                             + location_descriptors.size ());
-    for (const auto &peer : peers) {
+    for (const auto &[_, peer] : peers) {
         const auto peer_rid = zlink::routing_id_t::from (peer.descriptor.node_routing_id);
         const auto location = location_by_rid.find (peer_rid.to_hex ());
         if (location_is_healthy && location != location_by_rid.end ()
@@ -483,7 +493,7 @@ project_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &
         }
         peer_snapshots.push_back (std::move (projected));
     }
-    for (const auto &peer : not_required_peers) {
+    for (const auto &[_, peer] : not_required_peers) {
         const auto rid = zlink::routing_id_t::from (peer.node_routing_id);
         if (!classified_peer_ids.insert (rid.to_hex ()).second)
             continue;
@@ -498,10 +508,6 @@ project_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &
                         return candidate.rid == node_rid
                                && candidate.lifecycle_generation == descriptor.lifecycle_generation;
                     });
-    const auto mapped_state =
-      hub->stopped.load (std::memory_order_acquire) ? topology_state_t::stopped
-      : state->host_state ? detail::topology_state_for_host (state->host_state (), transport_state)
-                          : transport_state;
     const auto local_role =
       descriptor.object_role == mesh::service_object_role_t::client   ? object_role_t::client
       : descriptor.object_role == mesh::service_object_role_t::server ? object_role_t::server
@@ -518,10 +524,6 @@ project_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &
         const auto not_required = mesh::route_mesh_connection_not_required (
           local_role, !local_channels.empty (), remote.object_role,
           !remote.channel_weights.empty ());
-        std::vector<std::string> channel_names;
-        channel_names.reserve (remote.channel_weights.size ());
-        for (const auto &[channel_name, _] : remote.channel_weights)
-            channel_names.push_back (channel_name);
         peer_snapshots.push_back (mesh_peer_snapshot_t{
           .node_rid = remote.rid,
           .state = not_required ? peer_state_t::not_required
@@ -548,34 +550,69 @@ project_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &
                                   .ready_target_count = static_cast<std::uint32_t> (ready)});
     }
 
+    const auto ready_peer_count = static_cast<std::uint32_t> (std::count_if (
+      peer_snapshots.begin (), peer_snapshots.end (),
+      [] (const mesh_peer_snapshot_t &peer) { return peer.state == peer_state_t::ready; }));
+    const bool required_peer_unavailable = std::any_of (
+      peer_snapshots.begin (), peer_snapshots.end (), [] (const mesh_peer_snapshot_t &peer) {
+          return peer.state == peer_state_t::connecting
+                 || peer.state == peer_state_t::not_connected;
+      });
+    auto projection = std::make_shared<const topology_projection_t> (topology_projection_t{
+      topology, locations, channel_names, location_is_healthy, local_role, std::move (peer_snapshots),
+      std::move (channels),
+      local_location == location_descriptors.end () ? nullptr : &*local_location,
+      ready_peer_count, required_peer_unavailable});
+    {
+        std::lock_guard lock (hub.mutex);
+        hub.topology_projection = projection;
+    }
+    return projection;
+}
+
+static mesh_node_snapshot_t project_snapshot (
+  const std::shared_ptr<route_mesh_runtime_service_t::state_t> &state,
+  std::string mesh_name,
+  const std::shared_ptr<const monitoring_topology_t> &topology,
+  const std::vector<std::string> &channel_names,
+  std::int32_t actor_limit,
+  std::int32_t spot_limit,
+  std::size_t active_actor_count,
+  std::size_t active_spot_count,
+  std::uint64_t sequence)
+{
+    const auto hub = state->require_hub (mesh_name);
+    const auto graph = project_topology (state, *hub, topology, channel_names);
+    const auto &descriptor = topology->local;
+    const auto transport_state = map_state (descriptor.state);
+    const auto mapped_state =
+      hub->stopped.load (std::memory_order_acquire) ? topology_state_t::stopped
+      : state->host_state ? detail::topology_state_for_host (state->host_state (), transport_state)
+                          : transport_state;
     mesh_node_descriptor_t placement;
-    placement.object_role = local_role;
+    placement.object_role = graph->local_role;
     placement.placement_weight = descriptor.placement_weight;
     placement.capacity.actors.limit = actor_limit;
     placement.capacity.spots.limit = spot_limit;
     // Local descriptor values belong to the runtime. Store observations only
     // contribute the capacity reservation projection (MeshNode §5.1).
-    if (local_location != location_descriptors.end ())
-        placement.capacity = local_location->capacity;
+    if (graph->local_location != nullptr)
+        placement.capacity = graph->local_location->capacity;
     // Runtime monitoring §5: report this MeshNode's local activation records.
     placement.capacity.actors.active = active_actor_count;
     placement.capacity.spots.active = active_spot_count;
-    const bool location_unavailable = state->location_store != nullptr && !location_is_healthy;
+    const bool location_unavailable = state->location_store != nullptr && !graph->location_is_healthy;
     const bool placement_available =
       placement.object_role == object_role_t::server && mapped_state == topology_state_t::ready
       && !location_unavailable && placement.placement_weight > 0
       && placement_capacity_available (placement,
                                        hub->node->activation_admission ().has_headroom ());
 
-    const bool required_peer_unavailable = std::any_of (
-      peer_snapshots.begin (), peer_snapshots.end (), [] (const mesh_peer_snapshot_t &peer) {
-          return peer.state == peer_state_t::connecting
-                 || peer.state == peer_state_t::not_connected;
-      });
     const auto public_state =
-      mapped_state == topology_state_t::ready && (required_peer_unavailable || location_unavailable)
+      mapped_state == topology_state_t::ready && (graph->required_peer_unavailable || location_unavailable)
         ? topology_state_t::degraded
         : mapped_state;
+    auto channels = graph->channels;
     if (public_state != topology_state_t::ready) {
         for (auto &channel : channels)
             channel.is_ready = false;
@@ -585,11 +622,9 @@ project_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &
       .mesh_name = std::move (mesh_name),
       .state = public_state,
       .is_ready = public_state == topology_state_t::ready,
-      .ready_peer_count = static_cast<std::uint32_t> (std::count_if (
-        peer_snapshots.begin (), peer_snapshots.end (),
-        [] (const mesh_peer_snapshot_t &peer) { return peer.state == peer_state_t::ready; })),
+      .ready_peer_count = graph->ready_peer_count,
       .channels = std::move (channels),
-      .peers = std::move (peer_snapshots),
+      .peers = graph->peers,
       .placement =
         mesh_placement_snapshot_t{
           .is_available = placement_available,
@@ -653,16 +688,13 @@ build_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &st
     }
     if (auto snapshot = project_host_snapshot (state, mesh_name, sequence))
         return std::move (*snapshot);
-    auto &topology = hub->node->native_node ().transport ().topology ();
-    const auto descriptor = topology.local_descriptor ();
-    const auto peers = topology.peers ();
-    const auto not_required = topology.not_required_peers ();
+    const auto topology = hub->node->native_node ().transport ().topology ().monitoring_snapshot ();
     const auto names = hub->node->channel_names ();
     const auto actor_limit = hub->node->actor_limit ();
     const auto spot_limit = hub->node->spot_limit ();
     const auto actor_count = hub->node->active_actor_count ();
     const auto spot_count = hub->node->active_spot_count ();
-    return project_snapshot (state, std::move (mesh_name), descriptor, peers, not_required, names,
+    return project_snapshot (state, std::move (mesh_name), topology, names,
                              actor_limit, spot_limit, actor_count, spot_count, sequence);
 }
 
@@ -674,12 +706,11 @@ build_snapshot_async (std::shared_ptr<route_mesh_runtime_service_t::state_t> sta
     const auto hub = state->require_hub (mesh_name);
     if (auto snapshot = project_host_snapshot (state, mesh_name, sequence))
         co_return std::move (*snapshot);
-    auto &topology = hub->node->native_node ().transport ().topology ();
-    auto [descriptor, peers, not_required] = co_await topology.monitoring_snapshot_async ();
+    const auto topology = hub->node->native_node ().transport ().topology ().monitoring_snapshot ();
     auto [names, actor_limit, spot_limit] = co_await hub->node->monitoring_configuration_async ();
     auto [actor_count, spot_count] = co_await hub->node->monitoring_counts_async ();
-    co_return project_snapshot (state, std::move (mesh_name), descriptor, peers, not_required,
-                                names, actor_limit, spot_limit, actor_count, spot_count, sequence);
+    co_return project_snapshot (state, std::move (mesh_name), topology, names, actor_limit,
+                                spot_limit, actor_count, spot_count, sequence);
 }
 
 mesh_node_snapshot_t route_mesh_runtime_service_t::snapshot (std::string mesh_name) const

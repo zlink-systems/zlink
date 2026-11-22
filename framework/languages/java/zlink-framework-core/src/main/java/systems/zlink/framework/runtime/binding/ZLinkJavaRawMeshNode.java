@@ -203,22 +203,33 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     // the pump runs.
     volatile Map<RoutingId, Long> selectedRoutes = Map.of();
 
+    private static final PeerChannels EMPTY_PEER_CHANNELS = new PeerChannels(List.of(), List.of());
+
+    private record PeerProjection(
+            PeerObservationRoot observation, long intentRevision, List<MeshPeerEntry> peers) {}
+
+    private final AtomicLong peerIntentRevision = new AtomicLong();
+    private volatile PeerProjection peerProjection;
+
     private record PeerObservationRoot(
             ZLinkServiceNodeDescriptor local,
             Map<RoutingId, ZLinkServiceTopologyRegistry.Peer> peers,
             Set<RoutingId> ready,
             Map<RoutingId, Long> selectedRoutes,
             Map<String, Long> readyChannelCounts,
+            Map<RoutingId, PeerChannels> peerChannels,
             Map<RoutingId, PeerAdmissionExpectation> expectations) {}
 
     private volatile PeerObservationRoot peerObservation =
-            new PeerObservationRoot(null, Map.of(), Set.of(), Map.of(), null, Map.of());
+            new PeerObservationRoot(null, Map.of(), Set.of(), Map.of(), null, Map.of(), Map.of());
 
     /** Publishes the single observation of committed topology and selected-route facts. */
     void publishPeerObservation() {
+        var previous = peerObservation;
         Map<RoutingId, ZLinkServiceTopologyRegistry.Peer> peers = new java.util.LinkedHashMap<>();
         Set<RoutingId> ready = new java.util.HashSet<>();
         Map<String, Long> counts = new HashMap<>();
+        Map<RoutingId, PeerChannels> channels = new HashMap<>();
         var current = topology;
         if (current != null) {
             for (var peer : current.peers()) {
@@ -228,6 +239,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                         new ZLinkServiceTopologyRegistry.Peer(
                                 peer.descriptor(), peer.connectionId()));
                 if (current.isReady(peer)) ready.add(rid);
+                var prior = previous.peers().get(rid);
+                channels.put(
+                        rid,
+                        prior != null && prior.descriptor() == peer.descriptor()
+                                ? previous.peerChannels().get(rid)
+                                : projectPeerChannels(peer.descriptor()));
                 for (var channel : peer.descriptor().channels()) {
                     counts.computeIfAbsent(channel.name(), current::readyChannelMemberCount);
                 }
@@ -241,6 +258,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                         Set.copyOf(ready),
                         selectedRoutes,
                         current == null ? null : Map.copyOf(counts),
+                        Map.copyOf(channels),
                         Map.copyOf(peerAdmissionExpectations));
     }
 
@@ -581,6 +599,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                             Set.of(),
                             this.selectedRoutes,
                             null,
+                            Map.of(),
                             Map.of());
         }
         this.spotNode =
@@ -1323,6 +1342,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         if (expectedRoutingId != null) {
             rejectedPeers.remove(expectedRoutingId);
         }
+        peerIntentRevision.incrementAndGet();
         try {
             // Publish the intent and its admission fence before native
             // connect can deliver an inproc HELLO/ADMIT. Registering after
@@ -1334,6 +1354,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             closedPeerIntents.remove(intent);
             closeRequestedPeerIntents.remove(intent);
             peerIntentRoutingIds.remove(intent);
+            peerIntentRevision.incrementAndGet();
             signalStateChanged(expectedRoutingId);
             throw failure;
         }
@@ -1498,6 +1519,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             notRequiredPeers.remove(target);
             rejectedPeers.remove(target);
         }
+        peerIntentRevision.incrementAndGet();
         if (router != null && disconnectEndpoint) {
             router.disconnect(removed.endpoint());
         }
@@ -1811,8 +1833,20 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
 
     @Override
     public List<MeshPeerEntry> peers() {
-        List<MeshPeerEntry> peers = new ArrayList<>();
+        long revision = peerIntentRevision.get();
         PeerObservationRoot observation = peerObservation;
+        PeerProjection cached = peerProjection;
+        if (cached != null && cached.observation() == observation
+                && cached.intentRevision() == revision) {
+            return cached.peers();
+        }
+        List<MeshPeerEntry> peers = projectPeers(observation);
+        peerProjection = new PeerProjection(observation, revision, peers);
+        return peers;
+    }
+
+    private List<MeshPeerEntry> projectPeers(PeerObservationRoot observation) {
+        List<MeshPeerEntry> peers = new ArrayList<>();
         var observed = observation.peers().values();
         for (var peer : observed) {
             var descriptor = peer.descriptor();
@@ -1842,10 +1876,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 .forEach(
                         entry -> {
                             RoutingId rid = entry.getValue().expectedRoutingId();
-                            if (observed.stream()
-                                    .anyMatch(
-                                            peer -> peer.descriptor().nodeRoutingId().equals(rid)))
-                                return;
+                            if (observation.peers().containsKey(rid)) return;
                             // CLOSED records intent closure (mesh-node §7.1), not route absence.
                             peers.add(
                                     new MeshPeerEntry(
@@ -1949,28 +1980,27 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 peerRid,
                 new AutomaticNotRequiredPeer(
                         endpoint, lifecycleGeneration, currentTimeMillis.getAsLong()));
+        peerIntentRevision.incrementAndGet();
         signalStateChanged(peerRid);
     }
 
     @Override
     public void clearPeerConnectionNotRequired(RoutingId peerRid) {
-        automaticNotRequiredPeers.remove(peerRid);
+        if (automaticNotRequiredPeers.remove(peerRid) != null) {
+            peerIntentRevision.incrementAndGet();
+        }
         signalStateChanged(peerRid);
     }
 
     @Override
     public PeerChannels peerChannels(RoutingId peerRid, long lifecycleGeneration) {
-        PeerObservationRoot observation = peerObservation;
-        var peer = observation.peers().get(peerRid);
-        List<ZLinkServiceNodeDescriptor.Channel> ordered =
-                (peer == null
-                                ? List.<ZLinkServiceNodeDescriptor.Channel>of()
-                                : peer.descriptor().channels())
-                        .stream()
-                                .sorted(
-                                        Comparator.comparing(
-                                                ZLinkServiceNodeDescriptor.Channel::name))
-                                .toList();
+        return peerObservation.peerChannels().getOrDefault(peerRid, EMPTY_PEER_CHANNELS);
+    }
+
+    private static PeerChannels projectPeerChannels(ZLinkServiceNodeDescriptor descriptor) {
+        var ordered = descriptor.channels().stream()
+                .sorted(Comparator.comparing(ZLinkServiceNodeDescriptor.Channel::name))
+                .toList();
         return new PeerChannels(
                 ordered.stream().map(ZLinkServiceNodeDescriptor.Channel::name).toList(),
                 ordered.stream().map(ZLinkServiceNodeDescriptor.Channel::weight).toList());
@@ -8322,7 +8352,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             } catch (IllegalArgumentException invalid) {
                 return () -> {};
             }
-            rejectedPeers.remove(sourceRid);
+            if (rejectedPeers.remove(sourceRid)) peerIntentRevision.incrementAndGet();
             boolean disconnected =
                     disconnectAdmitted(sourceRid, routeConnectionId(inbound.routeGeneration()));
             refreshAdmissionPending(nanoTime.getAsLong());
@@ -8397,6 +8427,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                             + " advertisedEndpoint="
                             + descriptor.advertisedEndpoint();
             boolean newlyRejected = rejectedPeers.add(sourceRid);
+            if (newlyRejected) peerIntentRevision.incrementAndGet();
             byte[] reject =
                     wire.encodeReject(ZLinkServiceM6AWireCodec.IDENTITY_MISMATCH_REJECT_REASON);
             return () -> {
@@ -8409,6 +8440,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         if (routeMeshConnectionNotRequired(localDescriptor, descriptor)) {
             boolean disconnected = disconnectAdmitted(sourceRid, admittedConnectionId(sourceRid));
             boolean becameNotRequired = notRequiredPeers.add(sourceRid);
+            if (becameNotRequired) peerIntentRevision.incrementAndGet();
             return () -> {
                 finishSelectedRouteObservation(routeChanges);
                 if (command == ServiceWireConstants.COMMAND_HELLO)
@@ -8418,7 +8450,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 if (disconnected || becameNotRequired) signalStateChanged(sourceRid);
             };
         }
-        notRequiredPeers.remove(sourceRid);
+        if (notRequiredPeers.remove(sourceRid)) peerIntentRevision.incrementAndGet();
         // The record passed the selected-route fence, so its route
         // generation is the route Core selected for this RID (Core
         // ROUTER §10.1). That route is the admission's connection.
@@ -8434,6 +8466,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         if (admitted != ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED) {
             boolean newlyRejected =
                     topology.peerFromOwner(sourceRid).isEmpty() && rejectedPeers.add(sourceRid);
+            if (newlyRejected) peerIntentRevision.incrementAndGet();
             byte[] reject =
                     wire.encodeReject(ZLinkServiceM6AWireCodec.IDENTITY_MISMATCH_REJECT_REASON);
             return () -> {
@@ -8442,7 +8475,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 trySendAdmissionControl(sourceRid, List.of(reject));
             };
         }
-        rejectedPeers.remove(sourceRid);
+        if (rejectedPeers.remove(sourceRid)) peerIntentRevision.incrementAndGet();
         knownPeerChannels.put(
                 sourceRid,
                 descriptor.channels().stream()
@@ -8759,7 +8792,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         // Publishing closed releases replacePeerConnection on the caller
         // thread. Finish endpoint retirement first, so this close cannot
         // disconnect the replacement intent that publication permits.
-        closedPeerIntents.add(intentId);
+        if (closedPeerIntents.add(intentId)) peerIntentRevision.incrementAndGet();
         closeRequestedPeerIntents.remove(intentId);
         signalStateChanged(intent.expectedRoutingId());
     }

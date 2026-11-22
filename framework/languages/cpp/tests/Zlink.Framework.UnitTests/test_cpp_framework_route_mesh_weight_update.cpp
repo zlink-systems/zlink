@@ -113,6 +113,27 @@ TEST (CppFrameworkRawMeshStarted, ResourceQueryDoesNotWaitForPeerControlOwner)
     EXPECT_TRUE (observed);
 }
 
+TEST (CppFrameworkTopologyNotifications, UnchangedMonitoringSnapshotReusesPeerStorage)
+{
+    mesh::service_node_descriptor_t local{
+      "monitoring-reuse", {'s'}, 1, 1, "inproc://monitoring-reuse", {{"X", 100}}};
+    zlink::framework::runtime::state_lane_t lane;
+    mesh::service_topology_registry_t topology (lane, local);
+    auto peer = local;
+    peer.node_routing_id = {'p'};
+    peer.advertised_endpoint = "inproc://monitoring-reuse-peer";
+    ASSERT_EQ (mesh::peer_admission_result_t::admitted,
+               topology.admit (peer, {1}, mesh::service_liveness_registry_t::clock_t::now ()));
+    const auto first = topology.monitoring_snapshot ();
+    const auto second = topology.monitoring_snapshot ();
+    ASSERT_EQ (1u, first->peers.size ());
+    ASSERT_EQ (1u, second->peers.size ());
+    EXPECT_EQ (&first->peers.begin ()->second, &second->peers.begin ()->second);
+    ASSERT_TRUE (topology.disconnect (peer.node_routing_id, {1}));
+    EXPECT_TRUE (topology.monitoring_snapshot ()->peers.empty ());
+    EXPECT_EQ (1u, first->peers.size ());
+}
+
 TEST (CppFrameworkTopologyNotifications, RawPublicationCanReadCommittedMonitoringSnapshot)
 {
     mesh::service_node_descriptor_t descriptor{"notification-snapshot",          {'s'},       1, 1,
@@ -127,10 +148,9 @@ TEST (CppFrameworkTopologyNotifications, RawPublicationCanReadCommittedMonitorin
     source.topology ().set_change_handler ([&] {
         ++calls;
         on_lane = zlink::framework::runtime::state_lane_t::current () != nullptr;
-        auto snapshot = source.topology ().monitoring_snapshot_async ();
-        const auto &actual = snapshot.result ().value ();
-        observed = std::get<0> (actual);
-        peer_count = std::get<1> (actual).size ();
+        const auto snapshot = source.topology ().monitoring_snapshot ();
+        observed = snapshot->local;
+        peer_count = snapshot->peers.size ();
     });
     const auto committed =
       source.publish_descriptor_update ([] (auto &value) { ++value.descriptor_revision; });
@@ -158,8 +178,7 @@ TEST (CppFrameworkTopologyNotifications, StandalonePublicationKeepsOutsideOwnerS
     topology.set_change_handler ([&] {
         ++calls;
         on_lane = zlink::framework::runtime::state_lane_t::current () != nullptr;
-        auto snapshot = topology.monitoring_snapshot_async ();
-        observed = std::get<0> (snapshot.result ().value ());
+        observed = topology.monitoring_snapshot ()->local;
     });
     ++descriptor.descriptor_revision;
     topology.publish_local (descriptor);
@@ -202,11 +221,10 @@ TEST (CppFrameworkTopologyNotifications, CommittedBatchDeliversEverySignalDespit
     bool same_peer_state = true;
     source.topology ().set_change_handler ([&] {
         on_lane += zlink::framework::runtime::state_lane_t::current () != nullptr;
-        auto snapshot = source.topology ().monitoring_snapshot_async ();
-        const auto &actual = snapshot.result ().value ();
+        const auto snapshot = source.topology ().monitoring_snapshot ();
         same_peer_state =
-          same_peer_state && std::get<0> (actual) == source.topology ().local_descriptor ();
-        for (const auto &peer : std::get<1> (actual)) {
+          same_peer_state && snapshot->local == source.topology ().local_descriptor ();
+        for (const auto &[_, peer] : snapshot->peers) {
             const auto published = source.topology ().peer (peer.descriptor.node_routing_id);
             same_peer_state =
               same_peer_state && published && published->descriptor == peer.descriptor
@@ -214,7 +232,7 @@ TEST (CppFrameworkTopologyNotifications, CommittedBatchDeliversEverySignalDespit
               && published->admission_epoch == peer.admission_epoch
               && published->ready == peer.ready && published->liveness == peer.liveness;
         }
-        observed_peers.push_back (std::get<1> (actual).size ());
+        observed_peers.push_back (snapshot->peers.size ());
         std::rethrow_exception (injected);
     });
     const auto before_first = source.topology ().observe_peer (first.node_routing_id) ();
@@ -291,8 +309,7 @@ TEST (CppFrameworkTopologyNotifications, DisconnectSurfacesKeepTheirCallbackFail
         source.topology ().set_change_handler ([&] {
             ++calls;
             on_lane = zlink::framework::runtime::state_lane_t::current () != nullptr;
-            auto snapshot = source.topology ().monitoring_snapshot_async ();
-            peers = std::get<1> (snapshot.result ().value ()).size ();
+            peers = source.topology ().monitoring_snapshot ()->peers.size ();
             throw std::runtime_error ("contained notification failure");
         });
         bool retained = true;

@@ -291,11 +291,11 @@ export interface ZLinkBackendMeshNode {
     completion?: import('../mesh-completion-table').ZLinkMeshCompletionHandler
   ): MeshOperationId;
   status(): MeshNodeStatus;
-  peers(): MeshPeerEntry[];
+  peers(): readonly MeshPeerEntry[];
   peerChannels(
     peerRid: unknown,
     lifecycleGeneration: bigint
-  ): { readonly names: string[]; readonly weights: number[] };
+  ): { readonly names: readonly string[]; readonly weights: readonly number[] };
   createPublisher(): MeshPublisher;
   createSpot(): ServiceSpot;
   entrySpot(): ServiceSpot;

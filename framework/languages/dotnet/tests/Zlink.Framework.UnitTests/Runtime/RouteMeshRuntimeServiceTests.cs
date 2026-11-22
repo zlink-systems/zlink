@@ -321,6 +321,45 @@ public sealed class RouteMeshRuntimeServiceTests(Xunit.Abstractions.ITestOutputH
     }
 
     [Fact]
+    public async Task UnchangedPhysicalTopologyReusesProjection()
+    {
+        await using var target = await RuntimeFixture.StartAsync(
+            ZLinkMeshNodeObjectRole.Server,
+            listenEndpoint: "tcp://127.0.0.1:0",
+            registerServerChannel: true
+        );
+        await using var source = await RuntimeFixture.StartManualAsync(
+            ZLinkMeshNodeObjectRole.Server,
+            target.LocalNodeRid,
+            target.ListenEndpoint
+        );
+        var initial = await WaitForStatusAsync(
+            source.Runtime,
+            status => status.Peers.Any(peer =>
+                peer.NodeRid == target.LocalNodeRid && peer.State == ZLinkPeerState.Ready
+            ) && status.Channels.Any(channel => channel.ReadyTargetCount == 1)
+        );
+
+        var node = source.FrameworkRuntime.GetMeshNodeRuntime(RuntimeFixture.MeshName).Node;
+        var topology = node.MeshTopology();
+        Assert.NotEmpty(topology.Peers);
+        Assert.Same(topology.Peers, node.MeshTopology().Peers);
+        Assert.Same(initial, source.Runtime.GetStatus(RuntimeFixture.MeshName));
+
+        target.RuntimeOptions.Channel(RuntimeFixture.MeshName).Weight = 0;
+        var updated = await WaitForStatusAsync(
+            source.Runtime,
+            status => status.Channels.Any(channel =>
+                channel.ChannelName == RuntimeFixture.MeshName && channel.ReadyTargetCount == 0
+            )
+        );
+        Assert.True(updated.Sequence > initial.Sequence);
+        Assert.Same(initial.Peers, updated.Peers);
+        Assert.NotSame(topology.Peers, node.MeshTopology().Peers);
+        Assert.Same(updated, source.Runtime.GetStatus(RuntimeFixture.MeshName));
+    }
+
+    [Fact]
     public async Task UnchangedStatusQueriesReuseGraphWithBoundedAllocation()
     {
         await using var fixture = await RuntimeFixture.StartAsync(ZLinkMeshNodeObjectRole.Server);

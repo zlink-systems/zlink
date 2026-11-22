@@ -77,6 +77,22 @@ interface ServiceSelectionCacheEntry {
 /** Owns immutable peer snapshots and fences late physical-connection events. */
 export class ServiceTopologyRegistry {
   private local: ServiceNodeDescriptor;
+  private observationVersion = 0;
+
+  get monitoringVersion(): number {
+    return this.observationVersion;
+  }
+
+  monitoringStatus() {
+    let admitted = 0;
+    let draining = 0;
+    for (const peer of this.peersByRid.values()) {
+      if (this.readyPeer(peer.descriptor.nodeRoutingId) === undefined) continue;
+      admitted++;
+      if (peer.descriptor.state === 'draining') draining++;
+    }
+    return { descriptor: this.local, admitted, draining };
+  }
   private readonly peersByRid = new Map<string, AdmittedServicePeer>();
   private readonly notRequiredByRid = new Map<string, ServiceRouteAdmission>();
   private readonly knownByRid = new Map<string, ServiceNodeDescriptor>();
@@ -286,7 +302,7 @@ export class ServiceTopologyRegistry {
     return descriptor?.objectRole === 'client';
   }
 
-  private knownPeerDescriptor(nodeRoutingId: string): ServiceNodeDescriptor | undefined {
+  knownPeerDescriptor(nodeRoutingId: string): ServiceNodeDescriptor | undefined {
     const admitted = this.peersByRid.get(nodeRoutingId)?.descriptor;
     return (
       admitted ??
@@ -487,6 +503,7 @@ export class ServiceTopologyRegistry {
   }
 
   private rebuildSelections(): void {
+    this.observationVersion++;
     for (const entry of this.selections.values()) entry.selection.rebuild();
   }
 }

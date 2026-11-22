@@ -978,8 +978,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper
     public (
         MeshNodeState State,
         RoutingId RoutingId,
-        IReadOnlyList<MeshNodePeer> Peers,
-        IReadOnlyList<MeshPeerChannel>[] PeerChannels
+        MeshTopologyPeer[] Peers
     ) MeshTopology() => _node.MeshTopology();
 
     public MeshNodeStatus MeshStatus()

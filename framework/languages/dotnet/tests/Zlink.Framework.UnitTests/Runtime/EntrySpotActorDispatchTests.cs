@@ -16841,9 +16841,8 @@ public sealed partial class EntrySpotActorDispatchTests
         public (
             MeshNodeState State,
             RoutingId RoutingId,
-            IReadOnlyList<MeshNodePeer> Peers,
-            IReadOnlyList<MeshPeerChannel>[] PeerChannels
-        ) MeshTopology() => (MeshNodeState.Ready, RoutingId, MeshPeers(), []);
+            MeshTopologyPeer[] Peers
+        ) MeshTopology() => (MeshNodeState.Ready, RoutingId, []);
 
         public MeshNodeStatus MeshStatus() =>
             new(

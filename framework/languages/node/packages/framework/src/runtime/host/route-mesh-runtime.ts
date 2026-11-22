@@ -86,6 +86,8 @@ export interface ZLinkLocalPlacementCounts {
   readonly activeSpotCount: number;
 }
 
+const EMPTY_BACKEND_PEERS = [] as const;
+
 interface ZLinkMeshDrainState {
   state: ZLinkTopologyState;
   deadline?: Date;
@@ -94,6 +96,7 @@ interface ZLinkMeshDrainState {
   readonly waiters: Array<(result: ZLinkMeshDrainResult) => void>;
   readonly observers: Set<RuntimeEventQueue<ZLinkRouteMeshStatus>>;
   lastSnapshot?: ZLinkRouteMeshStatus;
+  topologyProjection?: ReturnType<typeof projectTopology>;
 }
 
 export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
@@ -147,57 +150,38 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
               active: localPlacementCounts?.activeSpotCount ?? 0
             }
           };
-    const backendPeers = node?.peers() ?? [];
-    const peerChannels = backendPeers.map((peer) =>
-      peer.routingId === null
-        ? { names: [] as readonly string[], weights: [] as readonly number[] }
-        : node!.peerChannels(peer.routingId, peer.lifecycleGeneration)
-    );
-    const peers = backendPeers.map((peer) => {
-      const state = peerState(peer.state);
-      return {
-        nodeRid: (peer.routingId === null ? '' : String(peer.routingId)) as RoutingId,
-        state,
-        unavailableReason: peerUnavailableReason(state)
-      };
-    });
-    const channels = Object.entries(this.options.meshOptions.get(meshName)?.meshChannels ?? {}).map(
-      ([channelName, channel]) => {
-        const readyMemberCount = BigInt(
-          peerChannels.filter(
-            (entry, index) =>
-              peers[index]?.state === ZLinkPeerState.Ready &&
-              entry.names.some(
-                (name, channelIndex) =>
-                  name === channelName && (entry.weights[channelIndex] ?? 0) > 0
-              )
-          ).length
-        );
-        const localWeight =
-          descriptor?.channelWeights[channelName] ?? channel.weight ?? ZLINK_DEFAULT_PUBLIC_WEIGHT;
-        const readyTargetCount =
-          Number(readyMemberCount) +
-          (node !== undefined && channel.server === true && localWeight > 0 ? 1 : 0);
-        return { channelName, isReady: readyTargetCount > 0, readyTargetCount };
-      }
-    );
+    const hostState = this.options.hostState?.() ?? ZLinkFrameworkRuntimeState.Serving;
+    const hostReady = runtimeStateIsReady(hostState);
+    const backendPeers = node?.peers() ?? EMPTY_BACKEND_PEERS;
+    const channelWeights = descriptor?.channelWeights;
+    let topology = drain.topologyProjection;
+    if (
+      topology === undefined ||
+      topology.backendPeers !== backendPeers ||
+      topology.node !== node ||
+      topology.channelWeights !== channelWeights ||
+      topology.hostReady !== hostReady
+    ) {
+      topology = projectTopology(
+        node,
+        backendPeers,
+        channelWeights,
+        this.options.meshOptions.get(meshName),
+        hostReady
+      );
+      drain.topologyProjection = topology;
+    }
     const backendTopologyState =
       status === undefined ? ZLinkTopologyState.Starting : backendState(status.state);
-    const hasUnavailableRequiredPeer = peers.some(
-      (peer) =>
-        peer.state === ZLinkPeerState.Connecting || peer.state === ZLinkPeerState.NotConnected
-    );
     const localTopologyState =
       drain.state === ZLinkTopologyState.Ready ? backendTopologyState : drain.state;
-    const hostState = this.options.hostState?.() ?? ZLinkFrameworkRuntimeState.Serving;
     const hostTopologyState = topologyStateForHost(hostState, localTopologyState);
     const locationStoreHealthy = this.options.isLocationStoreHealthy?.() ?? true;
     const state =
       hostTopologyState === ZLinkTopologyState.Ready &&
-      (hasUnavailableRequiredPeer || !locationStoreHealthy)
+      (topology.hasUnavailableRequiredPeer || !locationStoreHealthy)
         ? ZLinkTopologyState.Degraded
         : hostTopologyState;
-    const hostReady = runtimeStateIsReady(hostState);
     const objectRole = descriptor?.objectRole ?? ZLinkObjectRole.None;
     const placementWeight = descriptor?.placementWeight ?? 0;
     const capacityAvailable =
@@ -217,9 +201,9 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
       meshName,
       state,
       isReady: topologyRuntimeIsReady(hostState, state === ZLinkTopologyState.Ready ? 1 : 0),
-      readyPeerCount: peers.filter((peer) => peer.state === ZLinkPeerState.Ready).length,
-      channels: hostReady ? channels : channels.map((channel) => ({ ...channel, isReady: false })),
-      peers,
+      readyPeerCount: topology.readyPeerCount,
+      channels: topology.channels,
+      peers: topology.peers,
       placement: {
         isAvailable: placementAvailable,
         activeActorCount: populationCapacity?.actors.active ?? 0,
@@ -707,6 +691,60 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
   }
 }
 
+function projectTopology(
+  node: ZLinkBackendMeshNode | undefined,
+  backendPeers: ReturnType<ZLinkBackendMeshNode['peers']>,
+  channelWeights: ZLinkMeshNodeDescriptor['channelWeights'] | undefined,
+  options: ZLinkSpotNodeOptions | undefined,
+  hostReady: boolean
+) {
+  const readyRemoteMembers = new Map<string, number>();
+  let readyPeerCount = 0;
+  let hasUnavailableRequiredPeer = false;
+  const peers = backendPeers.map((peer) => {
+    const state = peerState(peer.state);
+    if (state === ZLinkPeerState.Ready) {
+      readyPeerCount++;
+      if (peer.routingId !== null) {
+        const channels = node!.peerChannels(peer.routingId, peer.lifecycleGeneration);
+        const readyNames = new Set<string>();
+        for (let index = 0; index < channels.names.length; index++) {
+          const name = channels.names[index]!;
+          if ((channels.weights[index] ?? 0) <= 0 || readyNames.has(name)) continue;
+          readyNames.add(name);
+          readyRemoteMembers.set(name, (readyRemoteMembers.get(name) ?? 0) + 1);
+        }
+      }
+    }
+    if (state === ZLinkPeerState.Connecting || state === ZLinkPeerState.NotConnected) {
+      hasUnavailableRequiredPeer = true;
+    }
+    return {
+      nodeRid: (peer.routingId === null ? '' : String(peer.routingId)) as RoutingId,
+      state,
+      unavailableReason: peerUnavailableReason(state)
+    };
+  });
+  const channels = Object.entries(options?.meshChannels ?? {}).map(([channelName, channel]) => {
+    const localWeight =
+      channelWeights?.[channelName] ?? channel.weight ?? ZLINK_DEFAULT_PUBLIC_WEIGHT;
+    const readyTargetCount =
+      (readyRemoteMembers.get(channelName) ?? 0) +
+      (node !== undefined && channel.server === true && localWeight > 0 ? 1 : 0);
+    return { channelName, isReady: hostReady && readyTargetCount > 0, readyTargetCount };
+  });
+  return {
+    backendPeers,
+    node,
+    channelWeights,
+    hostReady,
+    peers,
+    channels,
+    readyPeerCount,
+    hasUnavailableRequiredPeer
+  };
+}
+
 function terminalSnapshot(
   current: ZLinkRouteMeshStatus,
   state: ZLinkTopologyState
@@ -738,23 +776,25 @@ function samePublicRouteMeshStatus(
     left.placement.activeSpotCount === right.placement.activeSpotCount &&
     left.placement.unavailableReason === right.placement.unavailableReason &&
     left.channels.length === right.channels.length &&
-    left.channels.every((channel, index) => {
-      const other = right.channels[index]!;
-      return (
-        channel.channelName === other.channelName &&
-        channel.isReady === other.isReady &&
-        channel.readyTargetCount === other.readyTargetCount
-      );
-    }) &&
+    (left.channels === right.channels ||
+      left.channels.every((channel, index) => {
+        const other = right.channels[index]!;
+        return (
+          channel.channelName === other.channelName &&
+          channel.isReady === other.isReady &&
+          channel.readyTargetCount === other.readyTargetCount
+        );
+      })) &&
     left.peers.length === right.peers.length &&
-    left.peers.every((peer, index) => {
-      const other = right.peers[index]!;
-      return (
-        peer.nodeRid === other.nodeRid &&
-        peer.state === other.state &&
-        peer.unavailableReason === other.unavailableReason
-      );
-    })
+    (left.peers === right.peers ||
+      left.peers.every((peer, index) => {
+        const other = right.peers[index]!;
+        return (
+          peer.nodeRid === other.nodeRid &&
+          peer.state === other.state &&
+          peer.unavailableReason === other.unavailableReason
+        );
+      }))
   );
 }
 

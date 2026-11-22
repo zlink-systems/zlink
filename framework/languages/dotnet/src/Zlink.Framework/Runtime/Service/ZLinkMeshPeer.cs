@@ -13,6 +13,7 @@ internal sealed class ZLinkMeshConnectionIntent(
     internal RoutingId? ExpectedRid { get; } = expectedRid;
     internal string ExpectedSecurityIdentity { get; } = expectedSecurityIdentity;
     internal RoutingId ResolvedRid { get; set; }
+    internal RoutingId RoutingId => ResolvedRid.IsEmpty ? ExpectedRid ?? default : ResolvedRid;
     internal ulong LastChangedMs { get; set; } = checked((ulong)Environment.TickCount64);
 
     internal bool IsBoundTo(ZLinkMeshPeer? peer) =>
@@ -35,7 +36,7 @@ internal sealed class ZLinkMeshConnectionIntent(
             Id,
             MeshPeerSource.Manual,
             bound ? peer!.State : MeshPeerState.Connecting,
-            ResolvedRid.IsEmpty ? ExpectedRid ?? default : ResolvedRid,
+            RoutingId,
             bound ? peer!.LifecycleGeneration : 0,
             bound ? peer!.DescriptorRevision : 0,
             Endpoint,

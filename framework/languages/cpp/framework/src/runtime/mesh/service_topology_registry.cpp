@@ -110,7 +110,8 @@ service_topology_registry_t::service_topology_registry_t (
     _lane (lane),
     _metric_provider (provider),
     _topology (std::make_shared<std::shared_ptr<const topology_state_t>> (
-      std::make_shared<const topology_state_t> (std::move (local)))),
+      std::make_shared<const topology_state_t> (
+        monitoring_topology_t{std::move (local), {}, {}}))),
     _liveness_owner (liveness_owner),
     _metric_channel_names (std::move (metric_channel_names))
 {
@@ -183,9 +184,9 @@ service_topology_registry_t::publish_local_on_lane (service_node_descriptor_t de
     }
     auto topology = std::make_shared<topology_state_t> (*current);
     topology->local = std::move (descriptor);
-    for (auto it = _not_required_peers.begin (); it != _not_required_peers.end ();) {
+    for (auto it = topology->not_required_peers.begin (); it != topology->not_required_peers.end ();) {
         if (!route_mesh_connection_not_required (topology->local, it->second))
-            it = _not_required_peers.erase (it);
+            it = topology->not_required_peers.erase (it);
         else
             ++it;
     }
@@ -346,16 +347,10 @@ service_node_descriptor_t service_topology_registry_t::local_descriptor () const
     return std::atomic_load_explicit (_topology.get (), std::memory_order_acquire)->local;
 }
 
-task_t<std::tuple<service_node_descriptor_t,
-                  std::vector<admitted_peer_t>,
-                  std::vector<service_node_descriptor_t>>>
-service_topology_registry_t::monitoring_snapshot_async () const
+std::shared_ptr<const service_topology_registry_t::monitoring_topology_t>
+service_topology_registry_t::monitoring_snapshot () const
 {
-    return _lane.run_task ([this] {
-        return std::tuple{
-          std::atomic_load_explicit (_topology.get (), std::memory_order_acquire)->local,
-          peers_on_lane (), not_required_peers_on_lane ()};
-    });
+    return std::atomic_load_explicit (_topology.get (), std::memory_order_acquire);
 }
 
 peer_admission_result_t
@@ -421,9 +416,9 @@ service_topology_registry_t::admit_on_lane (service_node_descriptor_t descriptor
         return std::pair{peer_admission_result_t::stale_descriptor, std::function<void ()>{}};
     }
     const auto admitted = topology->peers.find (descriptor.node_routing_id);
-    const auto not_required = _not_required_peers.find (descriptor.node_routing_id);
+    const auto not_required = topology->not_required_peers.find (descriptor.node_routing_id);
     const auto *current = admitted != topology->peers.end () ? &admitted->second.descriptor
-                          : not_required != _not_required_peers.end () ? &not_required->second
+                          : not_required != topology->not_required_peers.end () ? &not_required->second
                                                                        : nullptr;
     if ((current == nullptr || descriptor.lifecycle_generation != current->lifecycle_generation)
         && (command == protocol::command::update
@@ -443,7 +438,7 @@ service_topology_registry_t::admit_on_lane (service_node_descriptor_t descriptor
         auto next = std::make_shared<topology_state_t> (*topology);
         auto key = descriptor.node_routing_id;
         next->peers.erase (key);
-        _not_required_peers.insert_or_assign (std::move (key), std::move (descriptor));
+        next->not_required_peers.insert_or_assign (std::move (key), std::move (descriptor));
         ++_topology_version;
         auto changed = publish_topology (std::move (next), _change_handler);
         rebuild_channel_selections ();
@@ -472,7 +467,7 @@ service_topology_registry_t::admit_on_lane (service_node_descriptor_t descriptor
     }
 
     auto next = std::make_shared<topology_state_t> (*topology);
-    _not_required_peers.erase (descriptor.node_routing_id);
+    next->not_required_peers.erase (descriptor.node_routing_id);
     auto key = descriptor.node_routing_id;
     ++_topology_version;
     const auto admission_epoch =
@@ -541,8 +536,9 @@ std::vector<service_node_descriptor_t>
 service_topology_registry_t::not_required_peers_on_lane () const
 {
     std::vector<service_node_descriptor_t> result;
-    result.reserve (_not_required_peers.size ());
-    for (const auto &[_, descriptor] : _not_required_peers)
+    const auto topology = monitoring_snapshot ();
+    result.reserve (topology->not_required_peers.size ());
+    for (const auto &[_, descriptor] : topology->not_required_peers)
         result.push_back (descriptor);
     return result;
 }

@@ -48,6 +48,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private static readonly TimeSpan RelocationAckRetryInterval = TimeSpan.FromMilliseconds(100);
 
+    private MeshTopologyPeer[] _topologyPeers = [];
     private readonly IContext _context;
     private readonly string _meshName;
     private readonly TimeSpan _remoteUserSpotTerminalRetention;
@@ -2765,29 +2766,58 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     internal ulong LifecycleGeneration => _lifecycleGeneration;
 
-    internal (
-        MeshNodeState State,
-        RoutingId RoutingId,
-        IReadOnlyList<MeshNodePeer> Peers,
-        IReadOnlyList<MeshPeerChannel>[] PeerChannels
-    ) MeshTopology() =>
-        RunState(() =>
+    internal (MeshNodeState State, RoutingId RoutingId, MeshTopologyPeer[] Peers) MeshTopology() =>
+        AwaitStateLane(_lane.RunAsync(static node => node.MeshTopologyOnLane(), this));
+
+    private (MeshNodeState State, RoutingId RoutingId, MeshTopologyPeer[] Peers) MeshTopologyOnLane()
+    {
+        var previous = _topologyPeers;
+        List<MeshTopologyPeer>? changed = null;
+        var index = 0;
+
+        foreach (var intent in _peersByIntent.Values)
         {
-            var peers = PeersOnLane();
-            var channels =
-                peers.Length == 0
-                    ? Array.Empty<IReadOnlyList<MeshPeerChannel>>()
-                    : new IReadOnlyList<MeshPeerChannel>[peers.Length];
-            for (var index = 0; index < peers.Length; index++)
-                channels[index] =
-                    peers[index].State == MeshPeerState.Closed || peers[index].RoutingId.IsEmpty
-                        ? []
-                        : PeerChannelsOnLane(
-                            peers[index].RoutingId,
-                            peers[index].LifecycleGeneration
-                        );
-            return (_state, _routingId, (IReadOnlyList<MeshNodePeer>)peers, channels);
-        });
+            var rid = intent.RoutingId;
+            var peer = _peersByRid.GetValueOrDefault(rid);
+            var bound = intent.IsBoundTo(peer);
+            var state = bound ? peer!.State : MeshPeerState.Connecting;
+            var generation = bound ? peer!.LifecycleGeneration : 0;
+            AddPeer(new(
+                rid,
+                state,
+                !rid.IsEmpty && state != MeshPeerState.Closed && peer?.LifecycleGeneration == generation
+                    ? peer.Channels
+                    : null
+            ));
+        }
+        foreach (var peer in _peersByRid.Values)
+            if (IsVisibleInboundPeer(peer))
+                AddPeer(new(
+                    peer.RoutingId,
+                    peer.State,
+                    !peer.RoutingId.IsEmpty && peer.State != MeshPeerState.Closed
+                        ? peer.Channels
+                        : null
+                ));
+
+        if (changed is not null)
+            _topologyPeers = changed.ToArray();
+        else if (index != previous.Length)
+            _topologyPeers = previous.AsSpan(0, index).ToArray();
+        return (_state, _routingId, _topologyPeers);
+
+        void AddPeer(MeshTopologyPeer peer)
+        {
+            if (changed is null && (index == previous.Length || previous[index] != peer))
+            {
+                changed = new List<MeshTopologyPeer>(_peersByIntent.Count + _peersByRid.Count);
+                for (var prefix = 0; prefix < index; prefix++)
+                    changed.Add(previous[prefix]);
+            }
+            changed?.Add(peer);
+            index++;
+        }
+    }
 
     public MeshNodePeer[] Peers() => RunState(PeersOnLane);
 
@@ -2800,9 +2830,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             peers.Add(
                 intent.Snapshot(
                     _peersByRid.GetValueOrDefault(
-                        intent.ResolvedRid.IsEmpty
-                            ? intent.ExpectedRid ?? default
-                            : intent.ResolvedRid
+                        intent.RoutingId
                     )
                 )
             );
@@ -2814,26 +2842,23 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private IEnumerable<Peer> VisibleInboundPeersUnderLock()
     {
         foreach (var peer in _peersByRid.Values)
-        {
-            var bound = false;
-            foreach (var intent in _peersByIntent.Values)
-            {
-                if (
-                    intent.IsBoundTo(peer)
-                    || peer.RouteGeneration == 0
-                        && (
-                            intent.ResolvedRid == peer.RoutingId
-                            || intent.ExpectedRid == peer.RoutingId
-                        )
-                )
-                {
-                    bound = true;
-                    break;
-                }
-            }
-            if (!bound)
+            if (IsVisibleInboundPeer(peer))
                 yield return peer;
-        }
+    }
+
+    private bool IsVisibleInboundPeer(Peer peer)
+    {
+        foreach (var intent in _peersByIntent.Values)
+            if (
+                intent.IsBoundTo(peer)
+                || peer.RouteGeneration == 0
+                    && (
+                        intent.ResolvedRid == peer.RoutingId
+                        || intent.ExpectedRid == peer.RoutingId
+                    )
+            )
+                return false;
+        return true;
     }
 
     public MeshPeerChannel[] PeerChannels(RoutingId peerRid, ulong lifecycleGeneration) =>

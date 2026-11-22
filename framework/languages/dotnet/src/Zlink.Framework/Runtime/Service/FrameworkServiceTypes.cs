@@ -80,6 +80,12 @@ internal sealed record MeshNodePeer(
     internal bool IsAdmitted => State is MeshPeerState.Admitted or MeshPeerState.Draining;
 }
 
+internal readonly record struct MeshTopologyPeer(
+    RoutingId RoutingId,
+    MeshPeerState State,
+    IReadOnlyDictionary<string, uint>? Channels
+);
+
 internal sealed record MeshPeerChannel(string Name, uint Weight);
 
 internal readonly record struct MeshOperationId(ulong High, ulong Low);

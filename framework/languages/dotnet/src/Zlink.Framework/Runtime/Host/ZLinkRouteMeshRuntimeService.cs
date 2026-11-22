@@ -71,7 +71,6 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
     {
         var status = nodeRuntime.Node.MeshTopology();
         var physicalPeers = status.Peers;
-        var peerChannels = status.PeerChannels;
         var placement = hub.LocalDescriptor(status.RoutingId);
         var capacity = placement?.Capacity;
         var activeActors = _runtime.GetActiveActorCount(meshName);
@@ -84,50 +83,13 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
             && hostState == ZLinkFrameworkRuntimeState.Serving
             && !locationUnavailable;
         var previous = hub.LastStatus;
-        var peers = ProjectPeers(nodeRuntime, hub, status.RoutingId, physicalPeers);
-        var projectedPeers = previous?.Peers;
-        var samePeers = SamePeers(
-            projectedPeers,
-            peers,
-            physicalPeers,
-            out var readyPeerCount,
-            out var requiredPeerUnavailable
-        );
+        var (projectedPeers, readyPeerCount, requiredPeerUnavailable) =
+            hub.ProjectPeers(nodeRuntime, status.RoutingId, physicalPeers);
         if (state == ZLinkTopologyState.Ready && (locationUnavailable || requiredPeerUnavailable))
             state = ZLinkTopologyState.Degraded;
         var isReady =
             state == ZLinkTopologyState.Ready && hostState == ZLinkFrameworkRuntimeState.Serving;
-        if (projectedPeers is null || !samePeers)
-        {
-            var changedPeers = peers.ToList();
-            changedPeers.Sort(
-                static (left, right) => ZLinkRoutingIdOrder.Instance.Compare(left.Rid, right.Rid)
-            );
-            var rebuiltPeers = changedPeers
-                .Select(static peer => new ZLinkPeerStatus(
-                    peer.Rid,
-                    peer.State,
-                    MapPeerReason(peer.State)
-                ))
-                .ToArray();
-            projectedPeers =
-                projectedPeers is not null && projectedPeers.SequenceEqual(rebuiltPeers)
-                    ? projectedPeers
-                    : rebuiltPeers;
-        }
-        var projectedChannels = previous?.Channels;
-        var channelNames = ChannelNames(nodeRuntime, peerChannels);
-        if (
-            projectedChannels is null
-            || !SameChannels(projectedChannels, channelNames, physicalPeers, peerChannels, isReady)
-        )
-            projectedChannels = ChannelReadyCounts(nodeRuntime, physicalPeers, peerChannels)
-                .Select(channel => new ZLinkChannelStatus(
-                    channel.Name,
-                    isReady && channel.ReadyMembers > 0,
-                    channel.ReadyMembers
-                ))
-                .ToArray();
+        var projectedChannels = hub.ProjectChannels(nodeRuntime, physicalPeers, isReady);
         var placementAvailable =
             localPlacementReady
             && nodeRuntime.Registration.ObjectRole == ZLinkMeshNodeObjectRole.Server
@@ -275,7 +237,6 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
                 var nodeRuntime = _runtime.GetMeshNodeRuntime(meshName);
                 var topology = nodeRuntime.Node.MeshTopology();
                 var peers = topology.Peers;
-                var peerChannels = topology.PeerChannels;
                 var source = DescriptorSources(nodeRuntime).FirstOrDefault() ?? "manual";
                 var capacity = _runtime.ConfirmedCapacity(
                     new(meshName, nodeRuntime.Node.RoutingId),
@@ -284,7 +245,7 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
                 return new ZLinkRuntimeMetricMeshSnapshot(
                     meshName,
                     source,
-                    peers.Count,
+                    peers.Length,
                     peers.Count(static peer =>
                         peer.State
                             is MeshPeerState.Connecting
@@ -292,10 +253,10 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
                                 or MeshPeerState.Draining
                     ),
                     peers.Count(static peer => peer.State == MeshPeerState.Admitted),
-                    ChannelReadyCounts(nodeRuntime, peers, peerChannels)
+                    ChannelReadyCounts(nodeRuntime, peers)
                         .Select(static channel => new ZLinkRuntimeMetricChannel(
-                            channel.Name,
-                            channel.ReadyMembers
+                            channel.Key,
+                            channel.Value
                         ))
                         .ToArray(),
                     capacity is null
@@ -344,7 +305,10 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
     {
         if (_lane.IsOnLane)
             return GetOrCreateHubOnLane(meshName);
-        return AwaitStateLane(_lane.RunAsync(() => GetOrCreateHubOnLane(meshName)));
+        return AwaitStateLane(_lane.RunAsync(
+            static input => input.Service.GetOrCreateHubOnLane(input.MeshName),
+            (Service: this, MeshName: meshName)
+        ));
     }
 
     private MonitorHub GetOrCreateHubOnLane(string meshName)
@@ -501,182 +465,25 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
         };
     }
 
-    private static IEnumerable<(string Name, int ReadyMembers)> ChannelReadyCounts(
+    private static SortedDictionary<string, int> ChannelReadyCounts(
         ZLinkSpotNodeRuntime nodeRuntime,
-        IReadOnlyList<MeshNodePeer> peers,
-        IReadOnlyList<MeshPeerChannel>[] peerChannels
+        MeshTopologyPeer[] peers
     )
     {
-        foreach (
-            var channelName in ChannelNames(nodeRuntime, peerChannels)
-                .Distinct(StringComparer.Ordinal)
-                .Order(StringComparer.Ordinal)
-        )
-            yield return (channelName, ReadyMembers(channelName, peers, peerChannels));
-    }
-
-    private static IEnumerable<string> ChannelNames(
-        ZLinkSpotNodeRuntime nodeRuntime,
-        IReadOnlyList<MeshPeerChannel>[] peerChannels
-    )
-    {
+        var counts = new SortedDictionary<string, int>(StringComparer.Ordinal);
         foreach (var membership in nodeRuntime.Registration.ChannelMemberships)
-            yield return membership.ChannelName;
-        foreach (var channels in peerChannels)
-        foreach (var channel in channels)
-            yield return channel.Name;
-    }
-
-    private static int ReadyMembers(
-        string channelName,
-        IReadOnlyList<MeshNodePeer> peers,
-        IReadOnlyList<MeshPeerChannel>[] peerChannels
-    )
-    {
-        // The local membership is published to remote callers; it is not a peer target.
-        var readyMembers = 0;
-        for (var index = 0; index < peers.Count; index++)
-        {
-            if (peers[index].State != MeshPeerState.Admitted)
-                continue;
-            foreach (var channel in peerChannels[index])
-            {
-                if (
-                    channel.Weight > 0
-                    && string.Equals(channel.Name, channelName, StringComparison.Ordinal)
-                )
-                {
-                    readyMembers++;
-                    break;
-                }
-            }
-        }
-        return readyMembers;
-    }
-
-    private static bool SameChannels(
-        IReadOnlyList<ZLinkChannelStatus> previous,
-        IEnumerable<string> names,
-        IReadOnlyList<MeshNodePeer> peers,
-        IReadOnlyList<MeshPeerChannel>[] peerChannels,
-        bool isReady
-    )
-    {
-        foreach (var name in names)
-        {
-            var found = false;
-            for (var index = 0; index < previous.Count; index++)
-                if (string.Equals(previous[index].ChannelName, name, StringComparison.Ordinal))
-                {
-                    found = true;
-                    break;
-                }
-            if (!found)
-                return false;
-        }
-        foreach (var channel in previous)
-        {
-            if (!names.Contains(channel.ChannelName, StringComparer.Ordinal))
-                return false;
-            var count = ReadyMembers(channel.ChannelName, peers, peerChannels);
-            if (channel.ReadyTargetCount != count || channel.IsReady != (isReady && count > 0))
-                return false;
-        }
-        return true;
-    }
-
-    private static IEnumerable<(RoutingId Rid, ZLinkPeerState State)> ProjectPeers(
-        ZLinkSpotNodeRuntime nodeRuntime,
-        MonitorHub hub,
-        RoutingId localRid,
-        IReadOnlyList<MeshNodePeer> physicalPeers
-    )
-    {
-        foreach (var peer in physicalPeers)
-            yield return (peer.RoutingId, MapPeerState(peer.State));
-        var localHasServerChannel = nodeRuntime.Registration.ChannelMemberships.Any(
-            static membership => membership.IsServer
-        );
-        foreach (var descriptor in hub.Descriptors())
-        {
-            if (descriptor.Rid == localRid)
-                continue;
-            var physical = false;
-            for (var index = 0; index < physicalPeers.Count; index++)
-                if (physicalPeers[index].RoutingId == descriptor.Rid)
-                {
-                    physical = true;
-                    break;
-                }
-            if (physical)
-                continue;
-            var notRequired = ZLinkRouteMeshConnectionPolicy.IsNotRequired(
-                nodeRuntime.Registration.ObjectRole,
-                localHasServerChannel,
-                descriptor.ObjectRole,
-                descriptor.ChannelWeights.Count != 0
-            );
-            yield return (
-                descriptor.Rid,
-                notRequired ? ZLinkPeerState.NotRequired : ZLinkPeerState.NotConnected
-            );
-        }
-    }
-
-    private static bool SamePeers(
-        IReadOnlyList<ZLinkPeerStatus>? previous,
-        IEnumerable<(RoutingId Rid, ZLinkPeerState State)> peers,
-        IReadOnlyList<MeshNodePeer> physicalPeers,
-        out int readyPeerCount,
-        out bool requiredPeerUnavailable
-    )
-    {
-        readyPeerCount = 0;
-        requiredPeerUnavailable = false;
-        var same = previous is not null;
-        // Multiple physical intents can project the same RID. Rebuild those
-        // inputs with the existing sort before comparing their ordered values.
-        for (var index = 0; same && index < physicalPeers.Count; index++)
-        for (var other = 0; same && other < index; other++)
-            if (physicalPeers[index].RoutingId == physicalPeers[other].RoutingId)
-                same = false;
-        var count = 0;
+            counts.TryAdd(membership.ChannelName, 0);
         foreach (var peer in peers)
         {
-            count++;
-            if (peer.State == ZLinkPeerState.Ready)
-                readyPeerCount++;
-            if (peer.State is ZLinkPeerState.Connecting or ZLinkPeerState.NotConnected)
-                requiredPeerUnavailable = true;
-            if (!same || previous is null)
+            if (peer.Channels is not { } channels)
                 continue;
-            var low = 0;
-            var high = previous.Count - 1;
-            while (low <= high)
+            foreach (var (name, weight) in channels)
             {
-                var middle = low + (high - low) / 2;
-                var comparison = ZLinkRoutingIdOrder.Instance.Compare(
-                    previous[middle].NodeRid,
-                    peer.Rid
-                );
-                if (comparison < 0)
-                    low = middle + 1;
-                else if (comparison > 0)
-                    high = middle - 1;
-                else
-                {
-                    low = middle;
-                    break;
-                }
+                counts.TryGetValue(name, out var count);
+                counts[name] = count + (peer.State == MeshPeerState.Admitted && weight > 0 ? 1 : 0);
             }
-            if (
-                low >= previous.Count
-                || previous[low].NodeRid != peer.Rid
-                || previous[low].State != peer.State
-            )
-                same = false;
         }
-        return same && count == previous!.Count;
+        return counts;
     }
 
     private static ZLinkTopologyState MapTopologyState(MeshNodeState state) =>
@@ -751,13 +558,125 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
         public ZLinkMeshNodeDescriptor? LocalDescriptor(RoutingId rid) =>
             _descriptors.GetValueOrDefault(rid);
 
-        public Dictionary<RoutingId, ZLinkMeshNodeDescriptor>.ValueCollection Descriptors() =>
-            _descriptors.Values;
+        private MeshTopologyPeer[]? _peerProjectionInput;
+        private (IReadOnlyList<ZLinkPeerStatus> Peers, int ReadyCount, bool RequiredUnavailable)
+            _peerProjection;
+        private MeshTopologyPeer[]? _channelProjectionInput;
+        private KeyValuePair<string, int>[] _channelCounts = [];
+        private bool _channelProjectionReady;
+        private IReadOnlyList<ZLinkChannelStatus>? _channelProjection;
+
+        public (IReadOnlyList<ZLinkPeerStatus>, int, bool) ProjectPeers(
+            ZLinkSpotNodeRuntime nodeRuntime,
+            RoutingId localRid,
+            MeshTopologyPeer[] physicalPeers
+        )
+        {
+            if (ReferenceEquals(_peerProjectionInput, physicalPeers))
+                return _peerProjection;
+
+            var peers = new List<ZLinkPeerStatus>(physicalPeers.Length);
+            var physicalIds = new HashSet<RoutingId>();
+            foreach (var peer in physicalPeers)
+            {
+                physicalIds.Add(peer.RoutingId);
+                var state = MapPeerState(peer.State);
+                peers.Add(new(peer.RoutingId, state, MapPeerReason(state)));
+            }
+
+            var localHasServerChannel = nodeRuntime.Registration.ChannelMemberships.Any(
+                static membership => membership.IsServer
+            );
+            foreach (var descriptor in _descriptors.Values)
+            {
+                if (descriptor.Rid == localRid || physicalIds.Contains(descriptor.Rid))
+                    continue;
+                var notRequired = ZLinkRouteMeshConnectionPolicy.IsNotRequired(
+                    nodeRuntime.Registration.ObjectRole,
+                    localHasServerChannel,
+                    descriptor.ObjectRole,
+                    descriptor.ChannelWeights.Count != 0
+                );
+                var state = notRequired ? ZLinkPeerState.NotRequired : ZLinkPeerState.NotConnected;
+                peers.Add(new(descriptor.Rid, state, MapPeerReason(state)));
+            }
+
+            peers.Sort(static (left, right) =>
+                ZLinkRoutingIdOrder.Instance.Compare(left.NodeRid, right.NodeRid)
+            );
+            var projected =
+                _lastStatus is { } previous && previous.Peers.SequenceEqual(peers)
+                    ? previous.Peers
+                    : peers.ToArray();
+            _peerProjection = (
+                projected,
+                peers.Count(static peer => peer.State == ZLinkPeerState.Ready),
+                peers.Exists(static peer =>
+                    peer.State is ZLinkPeerState.Connecting or ZLinkPeerState.NotConnected
+                )
+            );
+            _peerProjectionInput = physicalPeers;
+            return _peerProjection;
+        }
+
+        public IReadOnlyList<ZLinkChannelStatus> ProjectChannels(
+            ZLinkSpotNodeRuntime nodeRuntime,
+            MeshTopologyPeer[] physicalPeers,
+            bool isReady
+        )
+        {
+            if (!ReferenceEquals(_channelProjectionInput, physicalPeers))
+            {
+                _channelCounts = ChannelReadyCounts(nodeRuntime, physicalPeers).ToArray();
+                _channelProjectionInput = physicalPeers;
+            }
+            else if (_channelProjection is { } cached && _channelProjectionReady == isReady)
+            {
+                return cached;
+            }
+
+            _channelProjectionReady = isReady;
+            if (_lastStatus is { Channels: var previous } && SameChannels(previous, isReady))
+                return _channelProjection = previous;
+            return _channelProjection = Array.ConvertAll(
+                _channelCounts,
+                channel => new ZLinkChannelStatus(channel.Key, isReady && channel.Value > 0, channel.Value)
+            );
+        }
+
+        private bool SameChannels(IReadOnlyList<ZLinkChannelStatus> previous, bool isReady)
+        {
+            if (previous.Count != _channelCounts.Length)
+                return false;
+            for (var index = 0; index < previous.Count; index++)
+            {
+                var channel = previous[index];
+                var (name, count) = _channelCounts[index];
+                if (
+                    channel.ChannelName != name
+                    || channel.ReadyTargetCount != count
+                    || channel.IsReady != (isReady && count > 0)
+                )
+                    return false;
+            }
+            return true;
+        }
+
+        private void SetDescriptorOnLane(ZLinkMeshNodeDescriptor descriptor)
+        {
+            if (
+                !_descriptors.TryGetValue(descriptor.Rid, out var previous)
+                || previous.ObjectRole != descriptor.ObjectRole
+                || (previous.ChannelWeights.Count == 0) != (descriptor.ChannelWeights.Count == 0)
+            )
+                _peerProjectionInput = null;
+            _descriptors[descriptor.Rid] = descriptor;
+        }
 
         public ZLinkRouteMeshStatus? LastStatus => _lastStatus;
 
         public ZLinkRouteMeshStatus GetStatus() =>
-            AwaitStateLane(_lane.RunAsync(PublishCurrentStatusOnLane));
+            AwaitStateLane(_lane.RunAsync(static hub => hub.PublishCurrentStatusOnLane(), this));
 
         public ZLinkObservationQueue<ZLinkRouteMeshStatus> Subscribe()
         {
@@ -915,7 +834,7 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
                     .RunAsync(() =>
                     {
                         foreach (var descriptor in current.Items)
-                            _descriptors[descriptor.Rid] = descriptor;
+                            SetDescriptorOnLane(descriptor);
                     })
                     .ConfigureAwait(false);
                 PublishCurrentStatus();
@@ -935,7 +854,7 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
                 if (previous is null)
                 {
                     await _lane
-                        .RunAsync(() => _descriptors[descriptor.Rid] = descriptor)
+                        .RunAsync(() => SetDescriptorOnLane(descriptor))
                         .ConfigureAwait(false);
                     if (descriptor.Rid != sourceRid)
                         PublishCurrentStatus();
@@ -949,7 +868,7 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
                     || previous.PlacementWeight != descriptor.PlacementWeight
                     || previous.ObjectRole != descriptor.ObjectRole;
                 await _lane
-                    .RunAsync(() => _descriptors[descriptor.Rid] = descriptor)
+                    .RunAsync(() => SetDescriptorOnLane(descriptor))
                     .ConfigureAwait(false);
                 var channelsChanged =
                     previous.ChannelWeights.Count != descriptor.ChannelWeights.Count
@@ -973,6 +892,8 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
                         .ToArray();
                     foreach (var descriptor in removed)
                         _descriptors.Remove(descriptor);
+                    if (removed.Length != 0)
+                        _peerProjectionInput = null;
                     return removed;
                 })
                 .ConfigureAwait(false);
@@ -992,7 +913,7 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
         {
             _ = _lane.IsOnLane
                 ? PublishCurrentStatusOnLane()
-                : AwaitStateLane(_lane.RunAsync(PublishCurrentStatusOnLane));
+                : AwaitStateLane(_lane.RunAsync(static hub => hub.PublishCurrentStatusOnLane(), this));
         }
 
         private ZLinkRouteMeshStatus PublishCurrentStatusOnLane()

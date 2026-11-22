@@ -65,6 +65,9 @@ class ZLinkJavaRawMeshNodePeerProjectionTest {
             var peers = source.peers();
             assertEquals(1, peers.size(), "one admitted peer must have one projection");
             var peer = peers.getFirst();
+            var channels = source.peerChannels(targetRid, peer.lifecycleGeneration());
+            assertSame(peers, source.peers());
+            assertSame(channels, source.peerChannels(targetRid, peer.lifecycleGeneration()));
             assertAll(
                     () -> assertEquals(MeshPeerState.ADMITTED, peer.state()),
                     () -> assertNotEquals(0, observed.lifecycleGeneration()),

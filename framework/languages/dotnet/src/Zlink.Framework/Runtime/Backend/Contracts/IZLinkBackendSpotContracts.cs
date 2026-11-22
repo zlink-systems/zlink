@@ -130,8 +130,7 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
     (
         MeshNodeState State,
         RoutingId RoutingId,
-        IReadOnlyList<MeshNodePeer> Peers,
-        IReadOnlyList<MeshPeerChannel>[] PeerChannels
+        MeshTopologyPeer[] Peers
     ) MeshTopology();
 
     MeshNodeStatus MeshStatus();

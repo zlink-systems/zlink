@@ -145,10 +145,14 @@ class service_topology_registry_t
     std::vector<admitted_peer_t> publish_local_snapshot (service_node_descriptor_t descriptor);
     std::pair<service_node_descriptor_t, std::vector<admitted_peer_t>> publish_draining_snapshot ();
     service_node_descriptor_t local_descriptor () const;
-    task_t<std::tuple<service_node_descriptor_t,
-                      std::vector<admitted_peer_t>,
-                      std::vector<service_node_descriptor_t>>>
-    monitoring_snapshot_async () const;
+    struct monitoring_topology_t
+    {
+        service_node_descriptor_t local;
+        std::map<std::vector<std::uint8_t>, admitted_peer_t, raw_mesh_byte_vector_less_t> peers;
+        std::map<std::vector<std::uint8_t>, service_node_descriptor_t, raw_mesh_byte_vector_less_t>
+          not_required_peers;
+    };
+    std::shared_ptr<const monitoring_topology_t> monitoring_snapshot () const;
     void set_change_handler (std::function<void ()> handler);
 
     struct peer_observation_t
@@ -225,13 +229,11 @@ class service_topology_registry_t
                                              std::function<void ()> handler);
 
     runtime::state_lane_t &_lane;
-    struct topology_state_t
+    struct topology_state_t : monitoring_topology_t
     {
-        service_node_descriptor_t local;
         std::vector<zlink::connection_attempt_t> attempts;
         std::shared_ptr<task_completion_source_t<void>> changed =
           std::make_shared<task_completion_source_t<void>> ();
-        std::map<std::vector<std::uint8_t>, admitted_peer_t, raw_mesh_byte_vector_less_t> peers;
         expected_peers_t expected_peers;
     };
 
@@ -240,8 +242,6 @@ class service_topology_registry_t
     metric_provider_t _metric_provider;
     std::shared_ptr<std::shared_ptr<const topology_state_t>> _topology;
     service_liveness_registry_t *const _liveness_owner;
-    std::map<std::vector<std::uint8_t>, service_node_descriptor_t, raw_mesh_byte_vector_less_t>
-      _not_required_peers;
     struct selection_state_t
     {
         const char *unavailable_reason = "not_ready";

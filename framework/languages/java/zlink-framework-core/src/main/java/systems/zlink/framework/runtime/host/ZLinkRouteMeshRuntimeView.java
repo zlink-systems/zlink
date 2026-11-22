@@ -26,6 +26,8 @@ import systems.zlink.framework.runtime.internal.monitoring.ZLinkTopologyRuntimeP
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkTopologyStatusSource;
 
 import java.time.Instant;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -41,6 +43,17 @@ final class ZLinkRouteMeshRuntimeView
     private static final long LOCATION_HEALTH_QUERY_TIMEOUT_MILLIS = 500;
     private final ZLinkFrameworkRuntime runtime;
     private final ZLinkTopologyStatusSource<ZLinkMeshNodeSnapshot> statuses;
+    private record TopologyProjection(
+            ZLinkInternalMeshNode node,
+            List<MeshPeerEntry> input,
+            boolean hostServing,
+            List<ZLinkMeshChannelSnapshot> channels,
+            List<ZLinkMeshPeerSnapshot> peers,
+            int readyPeerCount,
+            boolean requiredPeerUnavailable) {}
+
+    private final ConcurrentHashMap<String, TopologyProjection> topologyProjections =
+            new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, SignalHub> signalHubs = new ConcurrentHashMap<>();
 
     ZLinkRouteMeshRuntimeView(ZLinkFrameworkRuntime runtime) {
@@ -117,7 +130,14 @@ final class ZLinkRouteMeshRuntimeView
         }
         ZLinkInternalMeshNode node = requireNode(meshName);
         var nativeStatus = node.status();
-        List<MeshPeerEntry> nativePeers = List.copyOf(node.peers());
+        List<MeshPeerEntry> nativePeers = node.peers();
+        boolean hostServing = hostState == ZLinkFrameworkRuntimeState.SERVING;
+        TopologyProjection topology = topologyProjections.get(meshName);
+        if (topology == null || topology.node() != node || topology.input() != nativePeers
+                || topology.hostServing() != hostServing) {
+            topology = projectTopology(meshName, node, nativePeers, hostServing);
+            topologyProjections.put(meshName, topology);
+        }
         ZLinkTopologyState state = topologyState(nativeStatus.state());
         boolean locationStoreHealthy = locationStoreHealthy();
         if (hostState != ZLinkFrameworkRuntimeState.SERVING) {
@@ -134,66 +154,16 @@ final class ZLinkRouteMeshRuntimeView
                         && placement.placementWeight() > 0
                         && hasActivationCapacity(placement)
                         && hasAvailableObjectCapacity(placement);
-        if (state == ZLinkTopologyState.READY
-                && nativePeers.stream()
-                        .anyMatch(ZLinkRouteMeshRuntimeView::requiredPeerUnavailable)) {
+        if (state == ZLinkTopologyState.READY && topology.requiredPeerUnavailable()) {
             state = ZLinkTopologyState.DEGRADED;
         }
-        List<ZLinkMeshChannelSnapshot> channels =
-                runtime.monitoringMeshNodeChannelNames(meshName).stream()
-                        .distinct()
-                        .sorted()
-                        .map(
-                                channelName -> {
-                                    long readyTargets =
-                                            nativePeers.stream()
-                                                    .filter(
-                                                            peer ->
-                                                                    peer.state()
-                                                                            == systems.zlink
-                                                                                    .framework
-                                                                                    .runtime
-                                                                                    .internal
-                                                                                    .binding.spot
-                                                                                    .MeshPeerState
-                                                                                    .ADMITTED)
-                                                    .map(peer -> peerChannels(node, peer))
-                                                    .filter(
-                                                            peerChannels -> {
-                                                                int index =
-                                                                        peerChannels
-                                                                                .names()
-                                                                                .indexOf(
-                                                                                        channelName);
-                                                                return index >= 0
-                                                                        && peerChannels
-                                                                                        .weights()
-                                                                                        .get(index)
-                                                                                > 0;
-                                                            })
-                                                    .count();
-                                    return new ZLinkMeshChannelSnapshot(
-                                            channelName,
-                                            hostState == ZLinkFrameworkRuntimeState.SERVING
-                                                    && readyTargets > 0,
-                                            Math.toIntExact(readyTargets));
-                                })
-                        .toList();
         return new ZLinkMeshNodeSnapshot(
                 meshName,
                 state,
                 state == ZLinkTopologyState.READY,
-                Math.toIntExact(
-                        nativePeers.stream()
-                                .filter(
-                                        peer ->
-                                                peer.state()
-                                                        == systems.zlink.framework.runtime.internal
-                                                                .binding.spot.MeshPeerState
-                                                                .ADMITTED)
-                                .count()),
-                channels,
-                nativePeers.stream().map(ZLinkRouteMeshRuntimeView::peer).toList(),
+                topology.readyPeerCount(),
+                topology.channels(),
+                topology.peers(),
                 new ZLinkPlacementSnapshot(
                         placementAvailable,
                         runtime.activeActorCount(meshName),
@@ -205,6 +175,39 @@ final class ZLinkRouteMeshRuntimeView
                                                 hostState, locationStoreHealthy))),
                 0,
                 Instant.now());
+    }
+
+    private TopologyProjection projectTopology(
+            String meshName, ZLinkInternalMeshNode node, List<MeshPeerEntry> peers, boolean hostServing) {
+        var readyTargets = new HashMap<String, Integer>();
+        int readyPeerCount = 0;
+        boolean requiredUnavailable = false;
+        for (MeshPeerEntry peer : peers) {
+            if (peer.state() == MeshPeerState.ADMITTED) {
+                readyPeerCount++;
+                var channels = peerChannels(node, peer);
+                var seen = new HashSet<String>();
+                for (int index = 0; index < channels.names().size(); index++) {
+                    String name = channels.names().get(index);
+                    if (seen.add(name) && channels.weights().get(index) > 0) {
+                        readyTargets.merge(name, 1, Integer::sum);
+                    }
+                }
+            }
+            requiredUnavailable |= requiredPeerUnavailable(peer);
+        }
+        var channels = runtime.monitoringMeshNodeChannelNames(meshName).stream()
+                .distinct()
+                .sorted()
+                .map(name -> {
+                    int count = readyTargets.getOrDefault(name, 0);
+                    return new ZLinkMeshChannelSnapshot(name, hostServing && count > 0, count);
+                })
+                .toList();
+        return new TopologyProjection(
+                node, peers, hostServing, channels,
+                peers.stream().map(ZLinkRouteMeshRuntimeView::peer).toList(),
+                readyPeerCount, requiredUnavailable);
     }
 
     @Override

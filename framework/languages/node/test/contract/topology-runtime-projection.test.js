@@ -15,6 +15,44 @@ const framework = require('../../packages/framework/dist');
 const internal = require('../../packages/framework/dist/internal');
 const nestjs = require('../../packages/nestjs/dist');
 
+test('unchanged RouteMesh queries reuse the backend peer projection', async (t) => {
+  const meshName = 'snapshot-projection';
+  const { host } = createTopologyHost({
+    registration: internal.createFrameworkRegistrationWithBuilder((builder) => {
+      builder
+        .addRouteMesh(meshName)
+        .listen(`inproc://snapshot-projection-${process.pid}`)
+        .routingId('local')
+        .channel('orders')
+        .server();
+    })
+  });
+  await host.start();
+  const backend = host.spotNodeRuntime.meshNode(meshName);
+  const peers = t.mock.method(backend, 'peers');
+  const runtime = host.routeMeshRuntime;
+  const initial = runtime.snapshot(meshName);
+  const firstProjection = peers.mock.calls[0].result;
+  for (let query = 0; query < 32; query++) {
+    assert.equal(runtime.snapshot(meshName), initial);
+  }
+  for (const call of peers.mock.calls) assert.equal(call.result, firstProjection);
+  const intent = await backend.connectPeer({
+    endpoint: `inproc://snapshot-projection-peer-${process.pid}`,
+    expectedRid: 'peer'
+  });
+  const updated = runtime.snapshot(meshName);
+  assert.equal(updated.peers.length, 1);
+  assert.equal(updated.peers[0].state, framework.ZLinkPeerState.Connecting);
+  assert.ok(updated.sequence > initial.sequence);
+  assert.equal(runtime.snapshot(meshName), updated);
+  assert.deepEqual(initial.peers, []);
+  backend.removePeerConnection(intent);
+  const disconnected = runtime.snapshot(meshName);
+  assert.deepEqual(disconnected.peers, []);
+  assert.ok(disconnected.sequence > updated.sequence);
+});
+
 test('RuntimeEventQueue retains the newest terminal status and reports the discarded oldest one', async () => {
   const queue = new internal.RuntimeEventQueue(1);
   queue.seal({ sequence: 1 });

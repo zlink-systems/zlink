@@ -156,6 +156,7 @@ const UNSTARTED_DIAGNOSTIC_ENDPOINT = 'inproc://not-started';
 const MULTIPART_PACKET_NAME = SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME;
 const MULTIPART_CONTENT_TYPE = SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE;
 const MAX_DRAIN_RECORDS = 64;
+const EMPTY_PEER_CHANNELS = { names: [], weights: [] } as const;
 /** The longest single timer delay Node accepts. */
 const MESH_BACKEND_MAINTENANCE_MAX_DELAY_MS = 2 ** 31 - 1;
 // Spec 08 §4.2 bounds the combined turn. Raw gets one equal share; stateful
@@ -185,6 +186,15 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       readonly lifecycleGeneration?: bigint;
       readonly securityIdentity?: string;
     }
+  >();
+  private peerProjection?: {
+    readonly runtime: RawServiceMeshRuntime | undefined;
+    readonly version: number | undefined;
+    readonly peers: readonly MeshPeerEntry[];
+  };
+  private readonly channelProjections = new WeakMap<
+    ServiceNodeDescriptor,
+    { readonly names: readonly string[]; readonly weights: readonly number[] }
   >();
   private completionHandler?: ZLinkMeshCompletionHandler;
   readonly routingId: string;
@@ -453,6 +463,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
             (peer.nodeRoutingId === undefined || peer.nodeRoutingId === nodeRoutingId) &&
             peer.endpoint === endpoint
           ) {
+            this.peerProjection = undefined;
             this.peerIntents.delete(intent);
           }
         }
@@ -591,6 +602,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
         return id;
       }
       runtime.disconnectPeerEndpoint(existing.endpoint);
+      this.peerProjection = undefined;
       this.peerIntents.delete(id);
     }
     if (nodeRoutingId === undefined) {
@@ -604,6 +616,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       );
     }
     const intent = this.nextPeerIntent++;
+    this.peerProjection = undefined;
     this.peerIntents.set(intent, {
       endpoint: options.endpoint,
       securityIdentity,
@@ -649,6 +662,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   removePeerConnection(intentId: bigint): void {
     const intent = this.peerIntents.get(intentId);
     if (intent === undefined) return;
+    this.peerProjection = undefined;
     this.peerIntents.delete(intentId);
     if (intent.nodeRoutingId === undefined) {
       this.runtime?.disconnectPeerEndpoint(intent.endpoint);
@@ -903,10 +917,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   }
 
   status() {
-    const descriptor = this.runtime?.topology.localDescriptor() ?? this.createDescriptor();
-    const peers = (this.runtime?.topology.peers() ?? []).filter(
-      (peer) => this.runtime?.isPeerRouteReady(peer.descriptor.nodeRoutingId) === true
-    );
+    const topology = this.runtime?.topology.monitoringStatus();
+    const descriptor = topology?.descriptor ?? this.createDescriptor();
     return {
       state: stateCode(descriptor.state),
       routingId: descriptor.nodeRoutingId as RoutingId,
@@ -916,8 +928,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       descriptorRevision: descriptor.descriptorRevision,
       channelCount: descriptor.channels.length,
       configuredPeerCount: this.peerIntents.size,
-      admittedPeerCount: peers.length,
-      drainingPeerCount: peers.filter((peer) => peer.descriptor.state === 'draining').length,
+      admittedPeerCount: topology?.admitted ?? 0,
+      drainingPeerCount: topology?.draining ?? 0,
       pendingApplicationMessages: BigInt(this.runtime?.mailbox.pendingMessages('application') ?? 0),
       pendingInfrastructureMessages: BigInt(
         this.runtime?.mailbox.pendingMessages('infrastructure') ?? 0
@@ -931,7 +943,18 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     };
   }
 
-  peers(): MeshPeerEntry[] {
+  peers(): readonly MeshPeerEntry[] {
+    const version = this.runtime?.topology.monitoringVersion;
+    const cached = this.peerProjection;
+    if (cached !== undefined && cached.runtime === this.runtime && cached.version === version) {
+      return cached.peers;
+    }
+    const peers = this.projectPeers();
+    this.peerProjection = { runtime: this.runtime, version, peers };
+    return peers;
+  }
+
+  private projectPeers(): MeshPeerEntry[] {
     const intents = [...this.peerIntents.entries()].map(([id, intent]) => ({
       id,
       ...intent
@@ -1000,14 +1023,19 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   }
 
   peerChannels(peerRid: unknown, lifecycleGeneration: bigint) {
-    const descriptor = this.runtime?.topology.knownDescriptor(String(peerRid));
+    const descriptor = this.runtime?.topology.knownPeerDescriptor(String(peerRid));
     if (descriptor === undefined || descriptor.lifecycleGeneration !== lifecycleGeneration) {
-      return { names: [], weights: [] };
+      return EMPTY_PEER_CHANNELS;
     }
-    return {
-      names: descriptor.channels.map((channel) => channel.name),
-      weights: descriptor.channels.map((channel) => channel.weight)
-    };
+    let channels = this.channelProjections.get(descriptor);
+    if (channels === undefined) {
+      channels = {
+        names: descriptor.channels.map((channel) => channel.name),
+        weights: descriptor.channels.map((channel) => channel.weight)
+      };
+      this.channelProjections.set(descriptor, channels);
+    }
+    return channels;
   }
 
   createPublisher(): MeshPublisher {
