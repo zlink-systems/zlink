@@ -1178,6 +1178,12 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     });
   }
 
+  setActorJoinIngressRouter(
+    route: import('../../foundation/service-stateful-runtime').ZLinkActorJoinIngressRouter
+  ): void {
+    this.requireStateful().setActorJoinIngressRouter(route);
+  }
+
   setActorMessageFollowResolver(
     resolver: (
       fence: import('../../foundation/service-stateful-wire-codec').ServiceActorRouteFence
