@@ -580,13 +580,11 @@ public final class ZLinkSerialExecutionQueue {
             if (retainedMessage) {
                 return CompletableFuture.failedFuture(
                         ZLinkFrameworkErrorOrigin.ownerFenceRefusal(
-                                "Spot incarnation released its authority"));
+                                "The Instance Spot incarnation released its authority."));
             }
             return CompletableFuture.failedFuture(
-                    closing
-                            ? ZLinkFrameworkErrorOrigin.closingSpot()
-                            : ZLinkFrameworkErrorOrigin.framework(
-                                    sealedKind, "Spot incarnation is closing"));
+                    ZLinkFrameworkErrorOrigin.closingSpot(
+                            closing ? ZLinkFrameworkErrorKind.NOT_FOUND : sealedKind));
         }
         return relocated ? CompletableFuture.failedFuture(new RelocatedOwnerException()) : null;
     }
@@ -725,9 +723,8 @@ public final class ZLinkSerialExecutionQueue {
                 entry.relocationRelease.run();
                 if (entry.message != null || entry.hasRelocationRecord()) {
                     entry.result.completeExceptionally(
-                            ZLinkFrameworkErrorOrigin.framework(
-                                    ZLinkFrameworkErrorKind.NOT_FOUND,
-                                    "Spot incarnation was closed"));
+                            ZLinkFrameworkErrorOrigin.closedSpot(
+                                    ZLinkFrameworkErrorKind.NOT_FOUND));
                 } else entry.result.complete(null);
             }
         }
@@ -737,9 +734,7 @@ public final class ZLinkSerialExecutionQueue {
             entry.relocationRelease.run();
             return entry.hasRelocationRecord()
                     ? CompletableFuture.failedFuture(
-                            ZLinkFrameworkErrorOrigin.framework(
-                                    ZLinkFrameworkErrorKind.NOT_FOUND,
-                                    "Spot incarnation was closed"))
+                            ZLinkFrameworkErrorOrigin.closedSpot(ZLinkFrameworkErrorKind.NOT_FOUND))
                     : CompletableFuture.completedFuture(null);
         }
     }
