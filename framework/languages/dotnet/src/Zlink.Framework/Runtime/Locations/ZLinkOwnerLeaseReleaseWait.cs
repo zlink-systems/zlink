@@ -3,8 +3,8 @@ using System.Collections.Concurrent;
 namespace Zlink.Framework.Runtime.Locations;
 
 /// <summary>
-/// Remembers the first local monotonic observation of an invalid owner token
-/// for one Location record. The observation is process-local by design.
+/// Remembers the first local monotonic observation of an invalid authority owner token.
+/// Fixed RID claims keep a separate descriptor-scoped observation.
 /// </summary>
 internal sealed class ZLinkOwnerLeaseReleaseWait(TimeProvider timeProvider)
 {
@@ -12,7 +12,22 @@ internal sealed class ZLinkOwnerLeaseReleaseWait(TimeProvider timeProvider)
         StringComparer.Ordinal
     );
 
-    internal int Count => _observations.Count;
+    private readonly ConcurrentDictionary<ZLinkLocationOwnerToken, long> _authorityObservations =
+        new();
+
+    internal int Count => _observations.Count + _authorityObservations.Count;
+
+    internal bool HasElapsed(ZLinkLocationOwnerToken owner, TimeSpan fencingMargin) =>
+        fencingMargin <= TimeSpan.Zero || HasElapsedSince(ObserveAuthority(owner), fencingMargin);
+
+    internal void Observe(ZLinkLocationOwnerToken owner) => _ = ObserveAuthority(owner);
+
+    private long ObserveAuthority(ZLinkLocationOwnerToken owner) =>
+        _authorityObservations.GetOrAdd(
+            owner,
+            static (_, time) => time.GetTimestamp(),
+            timeProvider
+        );
 
     internal bool HasElapsed(
         string recordKey,
@@ -24,17 +39,15 @@ internal sealed class ZLinkOwnerLeaseReleaseWait(TimeProvider timeProvider)
         if (fencingMargin <= TimeSpan.Zero)
             return true;
 
-        var observed = ObserveCore(recordKey, owner);
-        var elapsed = timeProvider.GetElapsedTime(observed.Timestamp, timeProvider.GetTimestamp());
+        return HasElapsedSince(ObserveCore(recordKey, owner).Timestamp, fencingMargin);
+    }
+
+    private bool HasElapsedSince(long firstObserved, TimeSpan fencingMargin)
+    {
+        var elapsed = timeProvider.GetElapsedTime(firstObserved, timeProvider.GetTimestamp());
         return elapsed >= fencingMargin
             && elapsed - fencingMargin >= fencingMargin
             && elapsed - fencingMargin - fencingMargin >= fencingMargin;
-    }
-
-    internal void Observe(string recordKey, ZLinkLocationOwnerToken? owner)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(recordKey);
-        _ = ObserveCore(recordKey, owner);
     }
 
     internal void ForgetIfTokenMatches(string recordKey, ZLinkLocationOwnerToken? owner)
@@ -47,15 +60,6 @@ internal sealed class ZLinkOwnerLeaseReleaseWait(TimeProvider timeProvider)
     {
         if (_observations.TryGetValue(recordKey, out var observed) && observed.Owner != owner)
             _observations.TryRemove(new KeyValuePair<string, Observation>(recordKey, observed));
-    }
-
-    internal Observation? Capture(string recordKey) =>
-        _observations.TryGetValue(recordKey, out var observed) ? observed : null;
-
-    internal void ForgetIfUnchanged(string recordKey, Observation? observation)
-    {
-        if (observation is not null)
-            _observations.TryRemove(new KeyValuePair<string, Observation>(recordKey, observation));
     }
 
     private Observation ObserveCore(string recordKey, ZLinkLocationOwnerToken? owner)
@@ -79,7 +83,7 @@ internal sealed class ZLinkOwnerLeaseReleaseWait(TimeProvider timeProvider)
         }
     }
 
-    internal sealed class Observation(ZLinkLocationOwnerToken? owner, long timestamp)
+    private sealed class Observation(ZLinkLocationOwnerToken? owner, long timestamp)
     {
         internal ZLinkLocationOwnerToken? Owner { get; } = owner;
 
