@@ -591,6 +591,14 @@ per adapter.
 | `SpotWide` User Spot | Changes Spot and cutover-time member Actor owner/membership in one conditional batch. | With `ApplicationSignaled`, runs the relocation-ready completion callback before opening the target queue. |
 | Instance Spot | Moves Spot owner, state, queue, and timers. Has no Actor or Session stage. | Opens the queue after target Restore and applies `OnClosing(RelocationOut)` to the source. |
 
+**A callback that runs after the owner commit does not change the relocation result.** The Join lifecycle
+callback of a cross-node Actor Join runs after the owner and membership commit, so if the callback ends with
+an exception or an application send inside it (such as a bound session push) fails, the Join result, target
+publication, and dispatch opening proceed unchanged. The Framework reports that exception once as a runtime
+task exception. The commit cannot be undone at that point, so turning the result into a failure would leave the
+caller's result and the Store owner disagreeing. The bind callback in [Session and Actor binding §6](../04-session/02-session-actor-binding.en.md)
+follows the same principle.
+
 Each API's target selection, membership callback, and completion payload are defined by
 the Spot document and the document covering how an Actor belongs to a Spot; host
 operation mode and final result are
@@ -740,6 +748,7 @@ test.
 
 **Normal handoff and chunk transfer**
 
+- If the Join lifecycle callback of a cross-node Actor Join ends with an exception or a bound session push inside it fails, the Join result is still success, the target processes messages as the new owner, and the exception is reported once as a runtime task exception.
 - Actor, `PerActor`/`SpotWide` User Spot, and Instance Spot use the same target-only CAS
   boundary.
 - The source keeps relaying old-address messages to the target without waiting for the
