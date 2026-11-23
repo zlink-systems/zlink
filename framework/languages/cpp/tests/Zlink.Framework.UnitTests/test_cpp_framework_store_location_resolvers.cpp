@@ -2832,8 +2832,9 @@ TEST (ZLinkFrameworkStoreLocationResolvers, SessionBindUsesCallerRefAfterRelocat
     EXPECT_TRUE (resolvers.resolve_actor_session_binding_address (exact_mesh).result ().value ());
     const auto missing_actor =
       detail::actor_ref_access_t::make (new_actor.node_rid (), "player", "missing-actor", 7);
-    EXPECT_FALSE (
-      resolvers.resolve_actor_session_binding_address (missing_actor).result ().value ());
+    const auto missing = resolvers.resolve_actor_session_binding_address (missing_actor).result ();
+    ASSERT_FALSE (missing.has_value ());
+    EXPECT_EQ (framework_error_kind_t::not_found, missing.error_kind ());
 }
 
 TEST (ZLinkFrameworkStoreLocationResolvers, SessionBindRefreshesAuthorityAfterReturningToSameNode)

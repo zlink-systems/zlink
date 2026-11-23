@@ -2036,6 +2036,101 @@ test('initial managed stream remote bind deadline failure does not leave a provi
   assert.deepEqual(operations, ['bind:actor-relay-fail', 'unbind:actor-relay-fail']);
 });
 
+for (const [state, expected] of [
+  ['missing', framework.ZLinkFrameworkErrorKind.NotFound],
+  ['reserved', framework.ZLinkFrameworkErrorKind.Unavailable]
+]) {
+  test(`runtime host STREAM bind classifies ${state} Store authority`, async () => {
+    const { host } = createMeshHost({ registration: framework.createFrameworkRegistration() });
+    let reads = 0;
+    const store = {
+      async readAuthority() {
+        reads++;
+        return state === 'missing'
+          ? { kind: 'missing', storeNow: new Date(0) }
+          : { kind: 'snapshot', allocation: { state } };
+      }
+    };
+    const resolvers = new framework.ZLinkStoreLocationResolvers({
+      stores: { authorityStore: store }
+    });
+    host.createActorLocationResolver = () => resolvers;
+    const stream = new framework.ZLinkManagedStream({
+      async bindActor() {
+        throw new framework.ZLinkFrameworkException(
+          framework.ZLinkFrameworkErrorKind.Unavailable,
+          'The Actor route is unavailable.'
+        );
+      }
+    }, 'session-owner');
+    const context = host.streamBindingRuntime.createSessionContext(stream);
+
+    await assert.rejects(
+      context.actors.bind({
+        actorId: 'bind-target',
+        objectGeneration: 7n,
+        meshName: 'play',
+        nodeRid: 'actor-owner'
+      }),
+      { kind: expected }
+    );
+    assert.equal(reads, 1);
+    assert.equal(await context.actors.find('bind-target'), undefined);
+  });
+}
+
+test('runtime host bindOrGet preserves the Store error and previous binding', async (t) => {
+  const { host } = createMeshHost({ registration: framework.createFrameworkRegistration() });
+  const actor = {
+    actorId: 'bind-target',
+    objectGeneration: 7n,
+    meshName: 'play',
+    nodeRid: 'actor-owner'
+  };
+  const snapshot = {
+    kind: 'snapshot',
+    objectGeneration: actor.objectGeneration,
+    authorityOwnerGeneration: 1n,
+    ownerLeaseGeneration: 1n,
+    ownerId: 'owner',
+    storeVersion: { value: 'v1' },
+    payload: Buffer.alloc(0),
+    allocation: {
+      state: 'active',
+      objectKind: 'actor',
+      stableType: 'player',
+      descriptor: { meshName: actor.meshName, rid: actor.nodeRid },
+      descriptorLifecycleGeneration: 1n
+    }
+  };
+  let authority = snapshot;
+  host.createActorLocationResolver = () => resolver;
+  const resolver = new framework.ZLinkStoreLocationResolvers({
+    stores: { authorityStore: { readAuthority: async () => authority } },
+    leaseTracker: { ownerTokenLeaseDeadlineMs: async () => 1000 },
+    monotonicNowMs: () => 0
+  });
+  const stream = new framework.ZLinkManagedStream({ async bindActor() {} }, 'session-owner');
+  const context = host.streamBindingRuntime.createSessionContext(stream);
+  const bound = await context.actors.bind(actor);
+
+  await t.test('different ObjectGeneration', async () => {
+    await assert.rejects(
+      context.actors.bindOrGet({ ...actor, objectGeneration: 8n }),
+      { kind: framework.ZLinkFrameworkErrorKind.InvalidOperation }
+    );
+    assert.equal(await context.actors.find(actor.actorId), bound);
+  });
+  await t.test('missing authority', async () => {
+    authority = { kind: 'missing', storeNow: new Date(0) };
+    await assert.rejects(
+      context.actors.bindOrGet({ ...actor, nodeRid: 'new-owner' }),
+      { kind: framework.ZLinkFrameworkErrorKind.NotFound }
+    );
+    assert.equal(await context.actors.find(actor.actorId), bound);
+  });
+});
+
 test('runtime host bound session uses local stream route before native SessionRelay', async () => {
   const actorRef = { nodeRid: 'node-a', actorId: 'actor-native', generation: 7n };
   const nativeSends = [];

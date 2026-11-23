@@ -5,6 +5,7 @@ import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteIntent;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteStatus;
 import systems.zlink.framework.runtime.locations.ZLinkLocationLifecycle;
@@ -140,6 +141,15 @@ final class ZLinkActorLocationCoordinator {
                     new IllegalStateException("Location Store resolver is unavailable"));
         }
         return resolvers.readActor(actorId);
+    }
+
+    CompletionStage<ZLinkStoreLocationResolvers.ActorRoute> resolveSessionBindingRoute(
+            ZLinkBackendActorRef actor) {
+        if (resolvers == null) {
+            return CompletableFuture.failedFuture(
+                    new IllegalStateException("Location Store resolver is unavailable"));
+        }
+        return resolvers.readActorSessionBindingRoute(actor);
     }
 
     CompletionStage<Optional<ActorRef>> findStoredActorRefExact(String actorId) {
