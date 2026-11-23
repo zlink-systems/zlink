@@ -256,6 +256,14 @@ connector owns a per-connector-instance typed codec option
 | Handshake failure | A failure before the session was built, so there's no target for a session callback. It is recorded only in runtime monitoring. |
 | A socket/node-level error | Can't be attributed to a single specific session, so a session callback isn't run — it's recorded in runtime monitoring. |
 | An application handler exception | Not a transport error, so the session error callback isn't run — the handler exception-handling path is used instead. |
+| Session object creation failure (the registered session type's factory or DI ends with an exception) | Follows the "Session creation failure" rule below. There is no session, so the session error callback isn't run. |
+
+**Session creation failure.** When the framework can't build the session object for one connection (at connection setup or at the first packet), it does the following exactly once at that connection's session admission boundary — once even if connection setup and the first packet both see the same failure.
+
+- It records the original exception in runtime monitoring at Error level, regardless of debug settings.
+- If a packet triggered the creation, it doesn't deliver that packet to a handler and ends that packet's message flow as failed. A `Request` ends with an `Error` reply (`InternalFailure`) carrying the same sequence. With connection setup only and no packet, there is no message, so no message-flow record is made.
+- It closes that connection with the `session-closing` control packet's close reason `TransportError`, and the diagnostic text states that session creation failed. No new close reason is added — the close reason is the closed set of [Stream Connector §6.2](../../stream-connector/32-stream-connector.en.md#62-close-reason), and the client treats this connection like a transport failure in which the server couldn't open a session. `ProtocolError` means a client violation and isn't used.
+- A creation failure of one connection doesn't end the process or any other connection.
 
 The session error callback is limited to surfacing a monitor-observable
 transport error at the session level. When a connection ends with Core monitor's `DISCONNECTED`
@@ -399,6 +407,7 @@ and the inter-node wire records. Each item leads to one contract test.
   client matches by request sequence alone to complete normally.
 - Handshake failure and socket-level errors don't run the session error
   callback and are only recorded in runtime monitoring.
+- When the session factory throws, at connection setup and at the first packet alike the original exception is recorded once at Error and the client observes the disconnect with close reason `TransportError`. If the first packet is a `Request`, it receives an `Error(InternalFailure)` reply. Other connections on the same host keep working.
 - In the error callback of a session that ended with Core's `DISCONNECTED` event, the event's
   `zlink_disconnect_reason_t` value can be read, and it equals the value Core reported.
 

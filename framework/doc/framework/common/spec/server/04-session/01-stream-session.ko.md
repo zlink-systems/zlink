@@ -221,6 +221,14 @@ connector는 connector instance별 typed codec option
 | Handshake 실패 | Session이 만들어지기 전의 실패이므로 session callback을 실행할 대상이 없다. Runtime monitoring에만 기록한다. |
 | Socket·node 단위 오류 | 특정 session 하나의 오류로 확정할 수 없으므로 session callback을 실행하지 않고 Runtime monitoring에 기록한다. |
 | Application handler 예외 | Transport 오류가 아니므로 session 오류 callback을 실행하지 않고 handler 예외 처리 경로를 사용한다. |
+| Session 객체 생성 실패(등록한 session type의 factory·DI가 예외로 끝남) | 아래 "Session 생성 실패" 규칙을 따른다. Session이 없으므로 session 오류 callback을 실행하지 않는다. |
+
+**Session 생성 실패.** Framework가 연결 하나의 session 객체를 만들지 못하면(연결 수립 시점이든 첫 packet 시점이든) 그 연결의 session admission 경계 한 곳에서 다음을 정확히 한 번 한다. 같은 실패를 연결 수립과 첫 packet이 함께 보아도 한 번이다.
+
+- 원래 예외를 Runtime monitoring에 Error 수준으로 기록한다. Debug 설정과 무관하게 기록한다.
+- 생성을 일으킨 packet이 있으면 그 packet을 handler에 전달하지 않고 그 packet의 message-flow를 실패로 끝낸다. `Request`는 같은 sequence의 `Error` reply(`InternalFailure`)로 끝낸다. 연결 수립만 있고 packet이 없으면 message가 없으므로 message-flow 기록을 만들지 않는다.
+- 그 연결을 `session-closing` control packet의 종료 사유 `TransportError`로 닫는다. 진단 문자열에는 session 생성 실패임을 적는다. 새 종료 사유를 만들지 않는다 — 종료 사유는 [Stream Connector §6.2](../../stream-connector/32-stream-connector.ko.md#62-종료-사유)의 닫힌 집합이고, client 쪽에서 이 연결은 서버가 session을 열지 못한 transport 실패와 같게 다룬다. `ProtocolError`는 client의 위반을 뜻하므로 쓰지 않는다.
+- 연결 하나의 생성 실패로 process나 다른 연결을 끝내지 않는다.
 
 Session 오류 callback은 monitor에서 관찰 가능한 transport 오류를 session 단위로 다시
 올려주는 축으로만 제한한다. Core monitor의 `DISCONNECTED` event로 연결이 끝나면 Framework는 네 언어 모두
@@ -342,6 +350,7 @@ STREAM packet과 cross-node Session record가 공유하는 host permit 규칙은
   매칭해 정상 완료한다.
 - Handshake 실패와 socket 단위 오류는 session 오류 callback을 실행하지 않고 runtime monitoring에만
   기록된다.
+- Session factory가 예외를 던지면, 연결 수립 시점과 첫 packet 시점 각각에서 원래 예외가 Error로 한 번 기록되고 client는 `TransportError` 종료 사유로 끊김을 관찰한다. 첫 packet이 `Request`면 `Error(InternalFailure)` reply를 받는다. 같은 host의 다른 연결은 계속 동작한다.
 - Core `DISCONNECTED` event로 끝난 session의 오류 callback에서 그 event의 `zlink_disconnect_reason_t`
   값을 읽을 수 있고, 값은 Core가 알린 값과 같다.
 
