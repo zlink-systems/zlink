@@ -145,6 +145,8 @@ public final class Nodes implements AutoCloseable {
     }
 
     private static final class Node {
+        private static final long DOCKER_CLEANUP_SECONDS = 120;
+
         private final String id;
         private final Process process;
         private final String container;
@@ -252,21 +254,30 @@ public final class Nodes implements AutoCloseable {
         void stop() throws Exception {
             Structure.require(process.isAlive(), id + " exited unexpectedly");
             command(Control.SHUTDOWN);
-            waitFor(Control.STOPPED);
-            boolean exited = process.waitFor(Control.PROCESS_SECONDS, TimeUnit.SECONDS);
-            if (!exited) dumpThreads();
-            Structure.require(
-                    exited, id + " failed to exit; thread dump is in " + id + "-stdout.log");
+            String stopped = waitFor(Control.STOPPED);
+            if (container != null) {
+                Structure.require(
+                        stopped.equals(Control.STOPPED), id + " shutdown failed: " + stopped);
+                if (!process.waitFor(DOCKER_CLEANUP_SECONDS, TimeUnit.SECONDS)) {
+                    System.err.println(
+                            "infra cleanup delay: " + id + " " + DOCKER_CLEANUP_SECONDS + "s");
+                    process.destroyForcibly().waitFor();
+                    return;
+                }
+            } else if (!process.waitFor(Control.PROCESS_SECONDS, TimeUnit.SECONDS)) {
+                dumpThreads();
+                throw new IllegalStateException(
+                        id + " failed to exit; thread dump is in " + id + "-stdout.log");
+            }
             Structure.require(
                     process.exitValue() == 0, id + " shutdown exit: " + process.exitValue());
             if (container != null) docker("rm", container);
         }
 
-        // SIGQUIT makes HotSpot print a thread dump to stdout, which the output thread keeps copying.
+        // SIGQUIT makes HotSpot print a thread dump to stdout.
         private void dumpThreads() throws InterruptedException {
             try {
-                if (container != null) docker("kill", "--signal=QUIT", container);
-                else if (!windows())
+                if (!windows())
                     new ProcessBuilder("kill", "-3", Long.toString(process.pid()))
                             .start()
                             .waitFor(Control.THREAD_DUMP_SECONDS, TimeUnit.SECONDS);
