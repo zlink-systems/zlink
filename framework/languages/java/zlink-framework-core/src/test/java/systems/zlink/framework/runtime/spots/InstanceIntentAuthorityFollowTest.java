@@ -9,6 +9,7 @@ import org.junit.jupiter.api.*;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.errors.*;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
@@ -62,8 +63,11 @@ final class InstanceIntentAuthorityFollowTest {
             return;
         }
         String spotId = "follow-" + UUID.randomUUID();
-        var backend = new Backend(scenario);
+        boolean traceStaleRetry = scenario.path("name").asText().equals("node-generation-stale");
         var options = new DefaultZLinkFrameworkOptions();
+        if (traceStaleRetry) {
+            options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+        }
         options.addLocationStore(new ZLinkInMemoryLocationStore());
         options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         options.addRelocationStore(new InMemoryRelocationStore());
@@ -73,7 +77,10 @@ final class InstanceIntentAuthorityFollowTest {
                 .objects()
                 .server()
                 .addInstanceSpotFactory("room", Room.class, factory -> factory.disableRelocation());
-        try (var runtime = ZLinkFrameworkRuntimeTestAccess.start(options, backend);
+        var trace = traceStaleRetry ? new InstanceIntentAuthorityFollowTrace(spotId) : null;
+        var backend = new Backend(scenario, trace);
+        try (trace;
+                var runtime = ZLinkFrameworkRuntimeTestAccess.start(options, backend);
                 var payload =
                         Message.from(
                                 new ZLinkJsonMessageSerializer()
@@ -124,6 +131,7 @@ final class InstanceIntentAuthorityFollowTest {
                                             "authority is resolved by Instance call runtime");
                                 }
                             };
+                    if (trace != null) trace.beginRequest();
                     pending =
                             (systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess
                                             .spots(runtime))
@@ -141,7 +149,9 @@ final class InstanceIntentAuthorityFollowTest {
                                                     : Duration.ofSeconds(2),
                                             stale,
                                             resolver,
-                                            new CompletableFuture<>())
+                                            trace == null
+                                                    ? new CompletableFuture<>()
+                                                    : trace.admissionSignal())
                                     .toCompletableFuture();
                 }
             } else {
@@ -153,7 +163,16 @@ final class InstanceIntentAuthorityFollowTest {
                                 .toCompletableFuture();
             }
             if (scenario.path("terminal").asText().equals("reply")) {
-                Object reply = pending.get(5, TimeUnit.SECONDS);
+                Object reply;
+                try {
+                    reply = pending.get(5, TimeUnit.SECONDS);
+                } catch (ExecutionException | TimeoutException failure) {
+                    if (trace != null) {
+                        trace.record("caller observed " + failure);
+                        trace.attachTo(failure);
+                    }
+                    throw failure;
+                }
                 assertInstanceOf(List.class, reply);
                 @SuppressWarnings("unchecked")
                 List<Message> parts = (List<Message>) reply;
@@ -285,12 +304,14 @@ final class InstanceIntentAuthorityFollowTest {
         final JsonNode scenario;
         final AtomicInteger attempts = new AtomicInteger();
         volatile boolean enabled;
+        final InstanceIntentAuthorityFollowTrace trace;
         Object originalParts;
         Object originalAdmission;
         Duration previousTimeout;
 
-        Backend(JsonNode scenario) {
+        Backend(JsonNode scenario, InstanceIntentAuthorityFollowTrace trace) {
             this.scenario = scenario;
+            this.trace = trace;
         }
 
         public ZLinkChannelBackendAdapter createChannelAdapter(ZLinkBackendAdapterOptions options) {
@@ -343,8 +364,19 @@ final class InstanceIntentAuthorityFollowTest {
                                                     ((ZLinkServiceM6BWireCodec.InstanceRoute)
                                                                     args[0])
                                                             .targetNodeRid());
+                                        if (trace != null) {
+                                            trace.record(
+                                                    "attempt "
+                                                            + attempt
+                                                            + " with "
+                                                            + timeout.toMillis()
+                                                            + " ms remaining");
+                                        }
                                         if (scenario.path("refusals").asInt() < 0
                                                 || attempt <= scenario.path("refusals").asInt()) {
+                                            if (trace != null)
+                                                trace.record(
+                                                        "attempt " + attempt + " stale refusal");
                                             ((CompletableFuture<?>) args[6]).complete(null);
                                             return CompletableFuture.failedFuture(
                                                     ZLinkRequestFailureMapping.receivedFailure(
@@ -358,9 +390,14 @@ final class InstanceIntentAuthorityFollowTest {
                                                             scenario.path("failureCode").asInt(34),
                                                             Map.of("zlink.origin", "framework")));
                                         }
+                                        if (trace != null) {
+                                            return trace.observeSubmission(
+                                                    attempt,
+                                                    (CompletionStage<?>)
+                                                            invoke(node, method, args));
+                                        }
                                     }
-                                    Object result = invoke(node, method, args);
-                                    return result;
+                                    return invoke(node, method, args);
                                 });
             };
         }
