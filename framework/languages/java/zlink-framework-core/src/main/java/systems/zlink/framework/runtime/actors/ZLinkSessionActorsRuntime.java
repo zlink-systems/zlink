@@ -919,7 +919,15 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                         cleanup ->
                                 cleanup == null
                                         ? CompletableFuture.<Void>completedFuture(null)
-                                        : finishRemoval(actor, cleanup));
+                                        : finishRemoval(actor, cleanup))
+                .whenComplete(
+                        (ignored, failure) -> {
+                            // Callers no longer wait for the cleanup, so report it here.
+                            if (failure != null) {
+                                LOGGER.log(
+                                        Level.WARNING, "Actor binding cleanup failed", failure);
+                            }
+                        });
     }
 
     private CompletionStage<Void> finishRemoval(ZLinkSessionActor actor, BindingCleanup cleanup) {
