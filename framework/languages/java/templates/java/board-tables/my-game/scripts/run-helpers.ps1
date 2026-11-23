@@ -2,6 +2,8 @@ $e2eClasspath = 'e2e/build/install/e2e/lib/*'
 
 function Assert-PowerShellVersion {
     if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'PowerShell 7 or later is required.' }
+    # Java node output is UTF-8; consoles with a legacy code page (for example 949) would garble its symbols.
+    if ($IsWindows) { [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false) }
 }
 
 function Build-Local {

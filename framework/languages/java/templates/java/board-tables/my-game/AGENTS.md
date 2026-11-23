@@ -35,15 +35,15 @@ The project layout below describes where to add gameplay, and "Extend this templ
 
 ## Development commands
 
-Run `./run-server.sh` or `pwsh -NoProfile -ExecutionPolicy Bypass -File ./run-server.ps1` with JDK 25 and Docker Compose v2 to start a local server. Keep the process in the foreground and use its printed Session STREAM address for clients. From a second terminal, select `match` to exercise the live server. Use Ctrl+C in the server terminal to clean it up.
+Run `./run-server.sh` or `.\run-server.cmd` with JDK 25 and Docker Compose v2 to start a local server. Keep the process in the foreground and use its printed Session STREAM address for clients. From a second terminal, select `match` to exercise the live server. Use Ctrl+C in the server terminal to clean it up.
 
 Default builds and isolated e2e run nodes and the client in Docker. Run these commands from this directory.
 
 ```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File ./run-e2e.ps1 -BuildOnly
-pwsh -NoProfile -ExecutionPolicy Bypass -File ./run-e2e.ps1
-pwsh -NoProfile -ExecutionPolicy Bypass -File ./run-e2e.ps1 -Scenario table,reconnect,match,match-cancel,update
-pwsh -NoProfile -ExecutionPolicy Bypass -File ./run-e2e.ps1 -CheckStructure
+.\run-e2e.cmd -BuildOnly
+.\run-e2e.cmd
+.\run-e2e.cmd -Scenario table,reconnect,match,match-cancel,update
+.\run-e2e.cmd -CheckStructure
 ```
 
 Bash provides the same workflow:

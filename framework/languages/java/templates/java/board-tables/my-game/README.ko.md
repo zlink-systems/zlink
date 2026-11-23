@@ -19,7 +19,7 @@ flowchart LR
 - Maven Central과 Redis 컨테이너 레지스트리에 대한 네트워크 접근.
 - 게시된 ZLink Framework 0.33.0, STREAM connector 0.33.0, binding 1.26.0. 버전은 `build.gradle.kts`에서 관리합니다.
 
-Gradle wrapper와 모든 서버 모듈이 포함되어 있습니다. 이 디렉터리를 복사해 독립적으로 빌드할 수 있습니다. Windows에서는 PowerShell 7에서 명령을 실행합니다. 실행 스크립트는 Gradle이 선택한 JDK를 사용하고 native access를 활성화합니다. Windows는 기본 실행 정책에서 내려받은 ZIP의 스크립트를 막으므로, 명령에 그 프로세스에만 적용되는 `-ExecutionPolicy Bypass`를 붙입니다.
+Gradle wrapper와 모든 서버 모듈이 포함되어 있습니다. 이 디렉터리를 복사해 독립적으로 빌드할 수 있습니다. Windows에서는 PowerShell 7에서 명령을 실행합니다. 실행 스크립트는 Gradle이 선택한 JDK를 사용하고 native access를 활성화합니다. Windows에서는 `run-server.cmd`와 `run-e2e.cmd`를 사용합니다. Windows는 기본 실행 정책에서 내려받은 ZIP의 스크립트를 막으므로, 이 파일들이 그 프로세스에만 `-ExecutionPolicy Bypass`를 적용해 PowerShell 스크립트를 실행하고 실행 동안 콘솔을 UTF-8로 바꿉니다.
 
 ## 빌드
 
@@ -32,7 +32,7 @@ Linux 또는 WSL:
 Windows:
 
 ```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File ./run-e2e.ps1 -BuildOnly
+.\run-e2e.cmd -BuildOnly
 ```
 
 빌드는 공유 node 이미지와 Java e2e runner 이미지를 만듭니다.
@@ -46,12 +46,12 @@ JDK 25를 설치하고 Docker를 시작합니다. 전용 터미널에서 서버�
 ```
 
 ```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File ./run-server.ps1
+.\run-server.cmd
 ```
 
 실행 스크립트는 Redis, Play node A와 B, Matchmaker, Session을 시작합니다. 모든 node가 준비되면 콘솔에 `Server ready: ws://127.0.0.1:<port>`가 출력됩니다. 클라이언트가 연결된 동안 터미널을 열어 둡니다. Ctrl+C를 누르면 node를 중지하고 이번 실행의 Redis Compose 프로젝트를 삭제합니다.
 
-다른 터미널에서 `./run-e2e.sh` 또는 `pwsh -NoProfile -ExecutionPolicy Bypass -File ./run-e2e.ps1`을 실행합니다. `run-server`로 시작한 서버가 실행 중이면 e2e 실행은 해당 서버에 대해 테스트 클라이언트만 실행하고 서버를 유지합니다. 이때 `table`, `reconnect`, `match`, `match-cancel`을 실행합니다. `--scenario match` 또는 `-Scenario match`로 시나리오를 선택합니다. `--attach` 또는 `-Attach`를 추가하면 기존 서버가 반드시 있어야 합니다. `update`는 node를 교체하므로 서버가 실행 중이지 않고 e2e 실행이 자체 서버를 시작할 때만 실행됩니다.
+다른 터미널에서 `./run-e2e.sh` 또는 `.\run-e2e.cmd`을 실행합니다. `run-server`로 시작한 서버가 실행 중이면 e2e 실행은 해당 서버에 대해 테스트 클라이언트만 실행하고 서버를 유지합니다. 이때 `table`, `reconnect`, `match`, `match-cancel`을 실행합니다. `--scenario match` 또는 `-Scenario match`로 시나리오를 선택합니다. `--attach` 또는 `-Attach`를 추가하면 기존 서버가 반드시 있어야 합니다. `update`는 node를 교체하므로 서버가 실행 중이지 않고 e2e 실행이 자체 서버를 시작할 때만 실행됩니다.
 
 ## 클라이언트 연결
 
@@ -142,7 +142,7 @@ Matchmaker는 SpotWide Pool `pool-board`를 실행합니다. `FindMatch`는 `Mat
 
 Docker는 Java e2e runner와 모든 node 역할을 컨테이너에서 실행합니다. node는 runner의 네트워크 네임스페이스를 공유하고 기존 stdin/stdout 제어 프로토콜을 유지합니다. Docker 소켓은 runner만 마운트합니다. 각 실행은 자신의 컨테이너, 네트워크와 이미지 태그를 삭제하며 로그는 `.logs/` 아래에 남습니다.
 
-로컬 프로세스 디버깅에는 JDK 25를 설치하고 `./run-e2e.sh --local` 또는 `pwsh -NoProfile -ExecutionPolicy Bypass -File ./run-e2e.ps1 -Local`을 사용합니다. `--no-build` 또는 `-NoBuild`를 추가하면 로컬 빌드를 재사용합니다. Docker는 이미지 레이어 캐시를 사용합니다.
+로컬 프로세스 디버깅에는 JDK 25를 설치하고 `./run-e2e.sh --local` 또는 `.\run-e2e.cmd -Local`을 사용합니다. `--no-build` 또는 `-NoBuild`를 추가하면 로컬 빌드를 재사용합니다. Docker는 이미지 레이어 캐시를 사용합니다.
 
 > **Base 이미지.** Dockerfile ARG 기본값은 Eclipse Temurin JDK/JRE 25.0.2+10과 Docker CLI 28.5.1로 고정되어 있습니다. 배포용 base 이미지를 도입할 때 이 기본값을 교체합니다.
 
@@ -156,8 +156,8 @@ Linux 또는 WSL:
 Windows:
 
 ```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File ./run-e2e.ps1
-pwsh -NoProfile -ExecutionPolicy Bypass -File ./run-e2e.ps1 -Scenario table,reconnect,match,match-cancel,update
+.\run-e2e.cmd
+.\run-e2e.cmd -Scenario table,reconnect,match,match-cancel,update
 ```
 
 runner는 `zlink.structure.json`을 검증하고 격리된 배포가 필요하면 로컬 서버와 같은 Java server host를 사용합니다. 격리된 각 실행은 OS가 할당한 포트와 고유한 Redis 키 접두사를 사용합니다. server host는 적용된 설정과 각 node의 stdout, stderr, Framework message-flow 파일(`<node>.flow.log`)을 `.logs/run-<id>/` 아래에 보관합니다. 독립 실행 콘솔에는 서버와 게임 이벤트가 표시됩니다. 정리에 실패하면 종료 코드가 1이 됩니다.
@@ -170,7 +170,7 @@ runner는 `zlink.structure.json`을 검증하고 격리된 배포가 필요하�
 | `match-cancel` | 대기열에 등록된 클라이언트가 ticket을 취소합니다. 이후 두 클라이언트가 매칭되어 한 판을 완료합니다. |
 | `update` | drain, 다른 node에서의 정산, 원본 교체와 새 게임을 거치는 동안 Table 상태와 클라이언트 연결이 유지됩니다. 정산은 모든 패를 비우며 이후 비공개 패 조회는 빈 목록을 반환합니다. |
 
-`./run-e2e.sh --check-structure` 또는 `pwsh -NoProfile -ExecutionPolicy Bypass -File ./run-e2e.ps1 -CheckStructure`로 Redis나 node를 시작하지 않고 실제 구조 파일을 검증할 수 있습니다.
+`./run-e2e.sh --check-structure` 또는 `.\run-e2e.cmd -CheckStructure`로 Redis나 node를 시작하지 않고 실제 구조 파일을 검증할 수 있습니다.
 
 시나리오 실행 전에 runner는 server table의 `--check-domain` 모드를 실행합니다. 일곱 개의 도메인 경계를 확인하고 `Domain checks: 7/7 passed`를 보고한 뒤 `ActionRejected` JSON 계약을 검증합니다. `retryAfterMs`는 속성 이름이 lower camel case인 부호 있는 32비트 JSON 정수입니다. 칩, pot과 hand 번호는 64비트 정수로 유지됩니다.
 
