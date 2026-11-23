@@ -2564,6 +2564,14 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     this.sourceRelocationIds.add(id);
   }
 
+  async awaitPreviousActorRelocation(actorId: string, signal?: AbortSignal): Promise<void> {
+    // A same-node Join commits on this node, so only a target flow here can still write the row.
+    if (this.targetStages.size === 0) return;
+    const key = encodeAuthorityKey('actor', actorId);
+    const current = await requireAuthority(this.requireLocationStore(), key, signal);
+    await this.waitForPreviousTarget(actorId, key, current, undefined, signal);
+  }
+
   private findTargetStage(relocationId: string): LocalStage | undefined {
     const wire = relocationWireId(relocationId);
     const prefix = `${wire.high}:${wire.low}:`;
