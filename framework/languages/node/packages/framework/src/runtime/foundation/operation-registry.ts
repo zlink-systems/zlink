@@ -20,7 +20,19 @@ export class OperationCancelledError extends Error {
   }
 }
 
-export interface OperationHandle<T> {
+// Snapshot fields on the existing pending entry, populated only for Node direct debug.
+export interface NodeRequestProgress {
+  nodeRequestStartedMs?: number;
+  routeSelectedMs?: number;
+  routeGeneration?: bigint;
+  peerAdmittedMs?: number;
+  bindingSubmittedMs?: number;
+  bindingAdmittedMs?: number;
+  replyReceivedMs?: number;
+  localDispatchMs?: number;
+}
+
+export interface OperationHandle<T> extends NodeRequestProgress {
   readonly id: bigint;
   readonly deadlineMs: number | undefined;
   readonly signal: AbortSignal;
@@ -58,6 +70,14 @@ export interface OperationObserver<T, Context> {
 
 class RegistryOperation<T, Context> implements OperationHandle<T>, OperationObserver<T, Context> {
   declare deadlinePosition?: number;
+  declare nodeRequestStartedMs?: number;
+  declare routeSelectedMs?: number;
+  declare routeGeneration?: bigint;
+  declare peerAdmittedMs?: number;
+  declare bindingSubmittedMs?: number;
+  declare bindingAdmittedMs?: number;
+  declare replyReceivedMs?: number;
+  declare localDispatchMs?: number;
   promise?: Promise<T>;
   resolve?: (value: T | PromiseLike<T>) => void;
   reject?: (reason: unknown) => void;
