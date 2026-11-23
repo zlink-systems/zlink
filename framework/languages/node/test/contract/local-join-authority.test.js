@@ -278,6 +278,7 @@ for (const variant of [
   'same-node',
   'cross-node',
   'relocated Entry',
+  'relocated Table with a cached source route',
   'safe status',
   'Spot generation',
   'target shutdown',
@@ -291,6 +292,8 @@ for (const variant of [
       const hostClock = fixedRidHostClock(t);
       const provider = new ZLinkInMemoryProviderLocationStore();
       const restored = [];
+      const cachedSourceRoute = variant === 'relocated Table with a cached source route';
+      let acceptTableJoin = !cachedSourceRoute;
       const blobs = new Map();
       const relocationStore = {
         async put(reference, bytes, retentionMs) {
@@ -358,7 +361,7 @@ for (const variant of [
         }
         configure() {}
         async onActorJoin() {
-          return { accepted: true };
+          return { accepted: acceptTableJoin };
         }
         async onJoinedActor() {}
         async onLeaveActor() {}
@@ -408,7 +411,7 @@ for (const variant of [
         const locations = builder
           .configureLocations()
           .pollingIntervalMs(OBSERVATION_INTERVAL_MS)
-          .routeCacheMaxAgeMs(0)
+          .routeCacheMaxAgeMs(cachedSourceRoute ? 15_000 : 0)
           .ownerLeaseFencingMarginMs(1);
         if (variant === 'safe status') locations.messageFollowDurationMs(SOURCE_FOLLOW_DURATION_MS);
         const mesh = builder.addRouteMesh('play').listen('tcp://127.0.0.1:0').routingId(node);
@@ -453,7 +456,7 @@ for (const variant of [
         const source = await start('source');
         const actors = source.get(nestjs.ZLINK_ACTOR_MANAGER);
         const query = source.get(nestjs.ZLINK_LOCATION_RUNTIME_QUERY);
-        await actors.create('player', 'Player').inMesh('play').submit();
+        if (!cachedSourceRoute) await actors.create('player', 'Player').inMesh('play').submit();
         let table;
         if (localTable)
           table = await source
@@ -473,6 +476,37 @@ for (const variant of [
         ) {
           assert.ok(Date.now() < deadline, 'placement publication and public peer readiness');
           await new Promise((resolve) => setTimeout(resolve, OBSERVATION_INTERVAL_MS));
+        }
+        if (cachedSourceRoute) {
+          const targetActors = target.get(nestjs.ZLINK_ACTOR_MANAGER);
+          const targetClient = target.get(nestjs.ZLINK_ACTOR_CLIENT);
+          await targetActors.create('probe', 'Player').inMesh('play').submit();
+          const warmingJoin = new Promise((resolve) => {
+            complete = resolve;
+          });
+          await targetClient.sendToActor('probe', new Move('table')).submit();
+          assert.equal((await warmingJoin).status, 'rejected');
+          acceptTableJoin = true;
+          const terminal = await source.get(nestjs.ZLINK_FRAMEWORK_RUNTIME).relocate({
+            mode: framework.ZLinkFrameworkRelocationMode.PlannedMaintenance,
+            deadlineMs: PUBLIC_OPERATION_TIMEOUT_MS
+          });
+          assert.equal(terminal.outcome, framework.ZLinkFrameworkRelocationOutcome.Relocated);
+          assert.ok(restored.includes('Table:table'));
+          await targetActors.create('player', 'Player').inMesh('play').submit();
+          const relocatedJoin = new Promise((resolve) => {
+            complete = resolve;
+          });
+          await targetClient.sendToActor('player', new Move('table')).submit();
+          const result = await relocatedJoin;
+          assert.equal(
+            result.status,
+            'accepted',
+            `Join on target returned ${result.status} (kind ${result.kind})`
+          );
+          assert.equal(String((await targetActors.find('player')).nodeRid), 'target');
+          assert.equal(String((await targetActors.findSpot('player')).spotId), 'table');
+          return;
         }
         let owner = source;
         if (variant === 'relocated Entry') {

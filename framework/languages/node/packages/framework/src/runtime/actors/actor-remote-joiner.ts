@@ -50,6 +50,8 @@ export class ZLinkActorNativeJoinCoordinator implements ZLinkActorJoinCoordinato
   constructor(private readonly options: ZLinkActorNativeJoinCoordinatorOptions) {
     this.localJoin = new ZLinkLocalNativeActorJoin({
       locationLifecycle: options.locationLifecycle,
+      invalidateSpotRouteIfMatches: (used) =>
+        options.spotRouteResolver?.invalidateIfMatches?.(used),
       localSpotJoin: options.localSpotJoin,
       localEntryJoin: options.localEntryJoin,
       localSourceLeave: options.localSourceLeave,
