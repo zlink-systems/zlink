@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 #include "mailbox_claim_fixture.hpp"
 #include "../support/telemetry_observation.hpp"
+#include "../support/scope_exit.hpp"
+#include "../support/stateful_object_lane_test_access.hpp"
 #include "../support/stateful_object_sync.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 #include "../support/exception_payload.hpp"
@@ -43,22 +45,12 @@ using zlink::framework::test::begin_reserved_object;
 
 namespace zlink::framework::runtime::stateful
 {
-struct stateful_object_runtime_test_access_t
+struct raw_stateful_dispatch_test_access_t
 {
-    // Holds the object state lane in one turn until the returned promise is set.
-    static std::promise<void> hold_lane (stateful_object_runtime_t &objects)
+    static bool mutex_available (raw_stateful_dispatch_t &dispatch)
     {
-        std::promise<void> release;
-        std::promise<void> entered;
-        auto held = release.get_future ().share ();
-        auto running = entered.get_future ();
-        if (!objects._lane.try_post ([held, &entered] {
-                entered.set_value ();
-                held.wait ();
-            }))
-            throw std::runtime_error ("object lane is closed");
-        running.wait ();
-        return release;
+        const std::unique_lock lock (dispatch._mutex, std::try_to_lock);
+        return lock.owns_lock ();
     }
 };
 } // namespace zlink::framework::runtime::stateful
@@ -173,15 +165,15 @@ TEST (FrameworkRelocationSealContract, raw_dispatch_waits_for_state_lane_outside
                 return dispatch.ingest_claimed (object, *slot, retained).result ().value ();
             return dispatch.try_claim (object).first;
         });
-        // The waiting call has reached the held lane.
-        std::this_thread::sleep_for (100ms);
+        zlink::framework::test::scope_exit_t release_lane ([&] { release.set_value (); });
+        while (!access_t::pending_work (objects))
+            ASSERT_EQ (waiting.wait_for (1ms), std::future_status::timeout);
+
+        ASSERT_TRUE (stateful::raw_stateful_dispatch_test_access_t::mutex_available (dispatch));
         const stateful::object_ref_t other{
           stateful::object_kind_t::actor, "other-owner", 1, 1, "mesh", "source"};
-        auto unrelated =
-          std::async (std::launch::async, [&] { dispatch.release_relocated_payloads (other, {}); });
-        EXPECT_EQ (unrelated.wait_for (2s), std::future_status::ready);
-        release.set_value ();
-        unrelated.get ();
+        dispatch.release_relocated_payloads (other, {});
+        release_lane.run ();
         EXPECT_EQ (waiting.get (), stateful::stateful_error_t::none);
         host->close ();
     }

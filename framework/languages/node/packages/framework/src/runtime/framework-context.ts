@@ -4,6 +4,14 @@ type FrameworkContext = Readonly<Record<symbol, unknown>>;
 
 const storage = new AsyncLocalStorage<FrameworkContext | undefined>();
 
+/** Schedules an independent Framework owner from an empty context. */
+export function runOutsideFrameworkContext<TResult, TArg>(
+  callback: (arg: TArg) => TResult,
+  arg: TArg
+): TResult {
+  return storage.run(undefined, callback, arg);
+}
+
 /**
  * A module owns its field; only the immutable carrier is shared. Values retain
  * their owner's lifetime semantics (for example, a terminal Actor claim).
