@@ -39,4 +39,9 @@ export interface ZLinkActorJoinRelocation {
     readonly membershipEpoch: bigint;
     readonly spotGeneration: bigint;
   }>;
+  /**
+   * A same-node Join commits only after the Actor's previous relocation target flow ends,
+   * under the same rule as a cross-node Join (Relocation Flow §9).
+   */
+  awaitPreviousActorRelocation?(actorId: string, signal?: AbortSignal): Promise<void>;
 }
