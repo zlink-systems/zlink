@@ -1573,7 +1573,7 @@ final class ZLinkSessionActorBindingContractTest {
         }
     }
 
-    private static ZLinkSessionActorsRuntime runtime(FakeStream stream) {
+    static ZLinkSessionActorsRuntime runtime(FakeStream stream) {
         ZLinkSessionActorsRuntime runtime =
                 new ZLinkSessionActorsRuntime(
                         authoritySpotNode(Map.of()),
@@ -1796,7 +1796,7 @@ final class ZLinkSessionActorBindingContractTest {
         }
     }
 
-    private static final class FakeStream implements ZLinkBackendStreamSocket {
+    static final class FakeStream implements ZLinkBackendStreamSocket {
         private final CompletableFuture<Duration> bindSubmitted = new CompletableFuture<>();
         private long nativeBindingGeneration = BINDING_GENERATION;
         private String disconnectPacketName;
@@ -1814,7 +1814,8 @@ final class ZLinkSessionActorBindingContractTest {
         private byte[] disconnectBody;
         private final List<String> binds = new ArrayList<>();
         private final List<String> bindingEvents = new ArrayList<>();
-        private final List<ControlFrame> controls = new ArrayList<>();
+        private final List<ControlFrame> controls =
+                java.util.Collections.synchronizedList(new ArrayList<>());
         //  `unbindActor` is submitted from a pool thread (ZLinkBoundActor
         //  hops off the completing thread on purpose), so the recording list
         //  is read by the test thread while a pool thread appends to it.
@@ -1829,8 +1830,7 @@ final class ZLinkSessionActorBindingContractTest {
         private boolean deferUnbind;
         private SubmitResult relayFailure;
         private CompletableFuture<List<Message>> pendingBoundRequest;
-        private CompletionStage<Void> bindingAcknowledgement =
-                CompletableFuture.completedFuture(null);
+        CompletionStage<Void> bindingAcknowledgement = CompletableFuture.completedFuture(null);
         private CompletableFuture<List<Message>> pendingDisconnectNotification;
         private CountDownLatch blockRelayEntered;
         private CountDownLatch blockRelayRelease;
@@ -1970,11 +1970,13 @@ final class ZLinkSessionActorBindingContractTest {
             return true;
         }
 
-        private List<String> controlNames() {
-            return controls.stream().map(ControlFrame::name).toList();
+        List<String> controlNames() {
+            synchronized (controls) {
+                return controls.stream().map(ControlFrame::name).toList();
+            }
         }
 
-        private int controlSlot(int index) {
+        int controlSlot(int index) {
             byte[] payload = controls.get(index).payload();
             return Short.toUnsignedInt(ByteBuffer.wrap(payload, 1, Short.BYTES).getShort());
         }

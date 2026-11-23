@@ -115,7 +115,7 @@ Server public contract의 단일 규범 원천은 `framework/doc/framework/commo
 - **게이트 명령**: C++ `ctest`(빌드 디렉터리 재사용, `-L framework-unit`); .NET
   `dotnet test tests/Zlink.Framework.UnitTests/...`(전체 solution 빌드 금지 — e2e 프로젝트에 사전
   존재 빌드 이슈); Java/Kotlin `./gradlew --no-daemon :zlink-framework-core:test`; Node
-  `npm test`(빌드→typecheck→lint→per-file `node --test`; lint에 기존 baseline 오류가 있으면 런타임
+  `npm test`(빌드→typecheck→lint→파일마다 별도 process로 직접 실행(`node --test-reporter=tap <file>`, `--test` runner 없이); lint에 기존 baseline 오류가 있으면 런타임
   테스트가 그 전에 멈출 수 있음).
 - **크로스랭 하니스**(`framework/languages/cpp/cross-language/run_cross_language_smoke.sh`):
   run별 독립 redis + ephemeral 포트라 동시 실행이 서로 충돌하지 않는다. **단 java 호스트는

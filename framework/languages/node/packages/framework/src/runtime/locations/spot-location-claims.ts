@@ -33,7 +33,8 @@ export class ZLinkSpotLocationClaims {
   constructor(
     private readonly runtime: IZLinkLocationLifecycleRuntime,
     private readonly authorityStore?: ZLinkAuthorityStore,
-    private readonly invalidateSpotRoute?: (spotId: RoutingId) => void
+    private readonly invalidateSpotRoute?: (spotId: RoutingId) => void,
+    private readonly observeSpotAuthorityVersion?: (spotId: RoutingId, storeVersion: string) => void
   ) {}
 
   async claim(
@@ -87,6 +88,7 @@ export class ZLinkSpotLocationClaims {
       }),
       { kind: 'authority', ...input }
     );
+    this.observeSpotAuthorityVersion?.(input.spotId, input.storeVersion);
   }
 
   async release(
@@ -223,17 +225,17 @@ export class ZLinkSpotLocationClaims {
     const tracked = this.spots.get(ZLinkLocationKeyCodec.encodeSpotKey({ meshName, spotId }));
     if (tracked?.kind === 'legacy') {
       if (
-        expectedStoreVersion === undefined ||
-        tracked.authority?.storeVersion.value === expectedStoreVersion
+        expectedStoreVersion !== undefined &&
+        tracked.authority?.storeVersion.value !== expectedStoreVersion
       )
-        tracked.authority = authority;
-    } else if (
-      tracked?.kind === 'authority' &&
-      (expectedStoreVersion === undefined || tracked.storeVersion === expectedStoreVersion)
-    ) {
+        return;
+      tracked.authority = authority;
+    } else if (tracked?.kind === 'authority') {
+      if (expectedStoreVersion !== undefined && tracked.storeVersion !== expectedStoreVersion)
+        return;
       tracked.storeVersion = authority.storeVersion.value;
       tracked.ownerLeaseGeneration = authority.ownerLeaseGeneration;
-    } else if (tracked === undefined && expectedStoreVersion === undefined) {
+    } else if (expectedStoreVersion === undefined) {
       const spot = decodeServiceReadySpotAuthority(authority.payload);
       if (spot === undefined || spot.kind !== 'user_spot') return;
       this.spots.set(ZLinkLocationKeyCodec.encodeSpotKey({ meshName, spotId }), {
@@ -253,7 +255,10 @@ export class ZLinkSpotLocationClaims {
           updatedAt: authority.storeNow
         }
       });
+    } else {
+      return;
     }
+    this.observeSpotAuthorityVersion?.(spotId, authority.storeVersion.value);
   }
 
   recoveryAuthority(owner: object):

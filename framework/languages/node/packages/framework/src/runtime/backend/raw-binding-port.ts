@@ -1,5 +1,5 @@
 import type { ConnectionAttempt } from '@zlink-systems/zlink';
-import type { OperationHandle } from '../foundation/operation-registry';
+import type { NodeRequestProgress, OperationHandle } from '../foundation/operation-registry';
 import type { SubmitResult } from './runtime-values';
 
 export interface ZLinkRawSendSubmission {
@@ -58,6 +58,9 @@ export interface ZLinkRawRouterRoute {
   readonly routeGeneration: bigint;
 }
 
+export type ZLinkRawRequestOperation = Pick<OperationHandle<unknown>, 'id' | 'deadlineMs'> &
+  NodeRequestProgress;
+
 export interface ZLinkRawRouterPort extends ZLinkRawSocketPort {
   setReceiveFlowState(state: 'running' | 'paused'): void;
   /** Reports Core submit synchronously; admitted observes only pending admission. */
@@ -75,7 +78,7 @@ export interface ZLinkRawRouterPort extends ZLinkRawSocketPort {
     onFailed: (error: unknown) => T,
     recordReceived?: () => void,
     onAdmitted?: () => void,
-    existing?: Pick<OperationHandle<unknown>, 'id' | 'deadlineMs'>
+    existing?: ZLinkRawRequestOperation
   ): Promise<T>;
   receive(dontWait?: boolean): ZLinkRawReceivedRecord | undefined;
   /** The selected route of every RID. The socket's one route observer calls it. */
