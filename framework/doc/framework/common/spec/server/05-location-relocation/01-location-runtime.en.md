@@ -1037,6 +1037,27 @@ retention does not shorten §6.1's release wait.
   or release, or a confirmed change to another owner or incarnation. Never reopen the discarded
   incarnation's gate or delete another owner's or incarnation's record.
 
+**Owner lease reclaim by the same process.** When the host confirms that its owner lease expired
+normally, the same process may request a new claim with the same `OwnerId`, whether or not it is
+recovering from a Store outage. After the new claim succeeds, the host follows the order of the recovery
+rule above. It receives a new `LeaseGeneration`, recomputes the admission deadline, republishes the
+descriptor that records that `LeaseGeneration` under the §5 publication rule (`Renew` intent), and then
+submits the per-object token replacement CAS. The targets and deadline of the replacement CAS follow the
+retention rule above; an object that is not retained or has passed `T` follows the existing discard and
+cleanup rule. Without a new claim the host has no way to regain that owner role, so the reclaim path is
+not limited to outage recovery.
+
+- **The new token and admission deadline stay provisional until confirmed.** The host accepts the
+  ordinary new work in the §5 blocking table only after it confirms that the republished descriptor is
+  reflected in the Store. Each object reopens its gate only after it receives both its own replacement
+  CAS success and that confirmation. Opening host or object admission on claim success alone would start
+  work under the new token while other hosts still read the old descriptor.
+- **Reclaim does not wait for old handlers and timers to finish.** On confirming normal expiry the host
+  first closes the existing gates and fences and then requests the new claim. A callback that already
+  started can run to completion within the limit below; the Store changes it makes carry the old token,
+  so a CAS that validates the new token rejects them. Making completion a precondition of the claim would
+  let one long-running callback block the whole host from rejoining.
+
 A resumed process performs the same checks at the next turn gate. However, a monotonic clock that
 stops during host suspend cannot reveal actual elapsed time. Nor can the gate prevent a process
 paused for a long time inside a callback from resuming at the next instruction of that callback.
@@ -2145,6 +2166,12 @@ store record golden fixture. Each item maps to one test.
   `StoreOutageRetention` defaults to `false`; `T` is not an independent setting. Domain-wide
   margin equality is an operational prerequisite, not a Framework validation item. With the same
   margin, different host TTLs must not permit release before the old owner's `T`.
+- A host whose owner lease expired normally without an outage claims again with the same `OwnerId` and
+  republishes a descriptor with the new `LeaseGeneration`. Until that publication is reflected in the
+  Store, new Actor and Spot creation and message admission are rejected, and each object processes its
+  next message only after confirming both its replacement CAS and the publication.
+- A Store change that a callback running at reclaim time submits with the old token after it finishes is
+  rejected, and the reclaim proceeds without waiting for that callback to finish.
 - Recovery before expiry reopens the gate with the same token after validation and renewal;
   replacement CAS is only for normal expiry. Its request start plus renew timeout must not
   exceed the original `T`. A new claim recomputes the admission deadline. Gate reopening requires
