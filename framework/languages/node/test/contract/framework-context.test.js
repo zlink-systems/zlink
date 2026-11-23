@@ -11,6 +11,9 @@ const permit = require('../../packages/framework/dist/runtime/application-jobs/a
 const flow = require('../../packages/framework/dist/runtime/diagnostics/flow-context');
 const execution = require('../../packages/framework/dist/runtime/execution');
 const {
+  ZLinkSerialExecutionQueue
+} = require('../../packages/framework/dist/runtime/execution/serial-execution-queue');
+const {
   ZLinkStateLane,
   startOutsideStateLane
 } = require('../../packages/framework/dist/runtime/execution/state-lane');
@@ -234,6 +237,42 @@ test('disabled flow tracing never enters the carrier', () => {
   } finally {
     AsyncLocalStorage.prototype.run = originalRun;
   }
+});
+
+test('serial work carries its own flow and only its explicitly admitted permit', async () => {
+  const queue = new ZLinkSerialExecutionQueue(async (record) => {
+    try {
+      record.resolve(await record.operation());
+    } catch (error) {
+      record.reject(error);
+    } finally {
+      record.release();
+    }
+  });
+  const firstFlow = { flowId: 'first', flowOrigin: 'Inbound' };
+  const secondFlow = { flowId: 'second', flowOrigin: 'Inbound' };
+  const reservation = {
+    origin: 'inbound',
+    detachedForHandlerTurn: false,
+    releaseAfterInternalProcessing() {}
+  };
+  const readContext = () => ({
+    flow: flow.currentFlowContext(),
+    permit: permit.currentApplicationJobPermit(),
+    area: execution.currentZLinkExecutionArea()
+  });
+  const first = execution.runZLinkExecutionArea('application', () =>
+    permit.runWithApplicationJobPermit(reservation, () =>
+      flow.runWithFlow(firstFlow, () => queue.submitPreAdmitted(readContext))
+    )
+  );
+  const second = flow.runWithFlow(secondFlow, () => queue.submit(readContext));
+  const third = queue.submit(readContext);
+  assert.deepEqual(await Promise.all([first, second, third]), [
+    { flow: firstFlow, permit: reservation, area: undefined },
+    { flow: secondFlow, permit: undefined, area: undefined },
+    { flow: undefined, permit: undefined, area: undefined }
+  ]);
 });
 
 test('leaving a job permit restores the existing carrier without allocating a clear value', (t) => {
