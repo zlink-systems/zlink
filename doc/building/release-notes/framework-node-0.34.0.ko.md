@@ -18,6 +18,7 @@ Framework 0.34.0은 Node.js binding 1.26.0과 Core 1.26.0을 사용합니다.
 
 ## 결함 수정
 
+- Session에 bind된 Actor를 다른 노드의 Spot으로 Join시키면 relocation target이 옮겨 온 Session binding을 send 경로에 설치합니다. 이전에는 target의 Join completion callback에서 보낸 push가 "Bound session send target was not found"로 실패해 relocation 게시가 멈추고 Session이 끊겼습니다(0.34.0 개발 중 생긴 회귀). `OnJoinedActor`·Join completion callback의 예외는 이제 `Accepted`와 relocation 게시를 바꾸지 않고 runtime task 예외로 보고됩니다. (#5442, #5446)
 - Entry Spot handler의 `context.outbound`가 Spot ID 주소로 `requestToSpot`·`sendToSpot`을 보낼 수 있습니다. 이전에는 항상 "Spot address outbound runtime is not started"로 실패했습니다. (#5425, #5436)
 - 기한이 지난 mesh maintenance를 다음 timer 차례에 실행해 음수 timeout 경고를 없앴습니다. (#5357, #5363)
 - 늦게 완료된 Yield가 다른 활성 turn을 해제하지 않습니다. (#5093, #5110)

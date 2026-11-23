@@ -18,6 +18,7 @@ Framework 0.34.0 uses the Node.js binding 1.26.0 and Core 1.26.0.
 
 ## Defect Fixes
 
+- When a Session-bound Actor joins a Spot on another node, the relocation target installs the carried Session binding on the send path. Before, a push from the target's Join completion callback failed with "Bound session send target was not found", relocation publication stopped, and the Session was disconnected (a regression introduced during 0.34.0 development). An exception from `OnJoinedActor` or the Join completion callback now leaves `Accepted` and relocation publication unchanged and is reported as a runtime task exception. (#5442, #5446)
 - Entry Spot handler `context.outbound` can send `requestToSpot` and `sendToSpot` to a Spot ID address. Before, these always failed with "Spot address outbound runtime is not started". (#5425, #5436)
 - Overdue mesh maintenance runs on the next timer turn without a negative timeout warning. (#5357, #5363)
 - A late Yield completion no longer releases another active turn. (#5093, #5110)
