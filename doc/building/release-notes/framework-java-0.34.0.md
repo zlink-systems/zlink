@@ -17,6 +17,7 @@ Framework 0.34.0 uses the Java binding 1.26.0 and Core 1.26.0.
 
 ## Defect Fixes
 
+- When the same Actor ID is bound again to a new slot on the same STREAM connection, the old slot's `unbound` is sent before the new `bound`. Before, if the old binding still had queued messages, the new `bound` could go first and the Stream Connector closed the connection (a regression introduced during 0.34.0 development). (#5428, #5437)
 - Mesh catch-up UPDATE follows acceptance of ADMIT, and the connector prepares the shared Netty event loop before the connect deadline starts. (#5203, #5215)
 - A yielded turn delivers its terminal result on its own gate turn even when queue sequence admission fails. (#5093, #5159)
 - STREAM bind returns InvalidOperation when the Actor ID matches but its ObjectGeneration differs. A missing or stale route remains Unavailable. (#4774, #5003)

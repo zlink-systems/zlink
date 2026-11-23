@@ -17,6 +17,7 @@ Framework 0.34.0은 Java binding 1.26.0과 Core 1.26.0을 사용합니다.
 
 ## 결함 수정
 
+- 같은 STREAM 연결에서 같은 Actor ID를 새 slot으로 다시 bind할 때 옛 slot의 `unbound`를 보낸 뒤 새 `bound`를 보냅니다. 이전에는 옛 binding에 내보낼 메시지가 남아 있으면 새 `bound`가 먼저 나가 Stream Connector가 연결을 닫았습니다(0.34.0 개발 중 생긴 회귀). (#5428, #5437)
 - mesh catch-up UPDATE를 ADMIT 수락 뒤에 보내고 connector의 공유 Netty event loop를 connect deadline 전에 준비합니다. (#5203, #5215)
 - queue sequence admission이 실패해도 Yield한 turn의 terminal 결과를 해당 gate turn에서 전달합니다. (#5093, #5159)
 - STREAM bind에서 Actor ID는 같지만 ObjectGeneration이 다르면 InvalidOperation을 반환합니다. route가 없거나 오래된 경우에는 Unavailable을 반환합니다. (#4774, #5003)
