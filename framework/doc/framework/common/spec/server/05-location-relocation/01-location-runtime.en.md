@@ -1151,16 +1151,21 @@ lease is valid and the descriptor is the same lifecycle, the reservation isn't r
 operation that creates a new incarnation of the same ID is an Actor `Create` or `GetOrCreate`, a User
 Spot `GetOrCreate`, or a new message with [Instance intent](../00-foundation/02-glossary.en.md#instance-intent). When such an operation reads a
 steady `Ready` record whose owner lease is missing, has a different `LeaseGeneration`, or has
-expired, and the relocation policy registered for that type on the node that `Reserve`s the new
-incarnation is `Disabled`, the Location repository releases that record. A User Spot's `Closing` and
+expired, and the relocation policy registered for that type on the node that will run the new
+incarnation's factory is `Disabled`, the Location repository releases that record. A User Spot's `Closing` and
 an incomplete initial activation aren't eligible merely because their allocation is `Active`; they
 follow their own lifecycle or recovery procedures. An Actor's `Closing` is a state in which the destroy
 has already closed admission, so if its owner lease is missing, has a different `LeaseGeneration`, or
 has expired, it's released by the same conditional batch. In that case the relocation policy condition
 doesn't apply, and both a creating operation and a call that destroys the same generation start this
-release. The node that `Reserve`s is the node that requested
-creation for an Actor or User Spot, and the target that received the activation envelope for an
-Instance Spot. If the type isn't registered on that node, the policy isn't treated as `Disabled`. A
+release. The node that runs the factory is the placement target the create operation selected for an Actor
+or User Spot, and the target that received the activation envelope for an Instance Spot. The node
+that requested creation doesn't need to register the type — in a deployment that splits session
+nodes from play nodes, the requesting node has no factory. The policy is read from the `policy` of
+the `objectCapabilities` element ([§3.4](#34-how-different-languages-read-and-write-the-same-redis-record)) with the same `objectKind` and `stableType` in the MeshNode
+descriptor that target published; when the requesting node is the target, this equals its own
+registration. Only `disabled` counts as `Disabled`; a missing element or any other value doesn't.
+The release batch also conditions on the state of the target descriptor record used for this check. A
 User Spot is released only when every Actor membership remaining for that SpotId and
 `ObjectGeneration` belongs to an **ended-owner member**; no membership at all satisfies this. An
 ended-owner member is an Actor whose authority is a steady `Ready` record pointing at the same
@@ -2239,7 +2244,9 @@ store record golden fixture. Each item maps to one test.
   member whose owner lease is valid or that is moving, members exceeding the provider's single-batch bound, a recovery pointer, a User Spot's `Closing`, an Actor `Closing` with a valid owner lease, aggregate or relocation progress, an ordinary
   message or `Find`) verify that authority, membership, capacity, and factory execution count don't
   change. Inputs whose registered policies differ between the requesting node and the factory
-  target (for an Instance, the source and the receiving target) verify the policy source. Releasing a User
+  target (for an Instance, the source and the receiving target) verify that the policy comes from the
+  factory target, including a split deployment where the requesting node doesn't register the type
+  and the target's `disabled` policy releases the record. Releasing a User
   Spot with only ended-owner members verifies that those member Actor authorities and capacity are released in the same
   batch and that a later creation of the same ActorId starts a new incarnation.
 - A scan with a member after the first page, snapshot expiry, and Store failure aren't treated as
