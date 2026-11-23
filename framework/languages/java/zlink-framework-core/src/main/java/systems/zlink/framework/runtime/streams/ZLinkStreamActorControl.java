@@ -32,4 +32,19 @@ public final class ZLinkStreamActorControl {
                 .putShort((short) actorSlot)
                 .array();
     }
+
+    /** Reads the Actor slot of a {@link #bound} or {@link #unbound} payload without consuming it. */
+    public static int actorSlot(ByteBuffer payload) {
+        int at = payload.position() + 1;
+        return (Byte.toUnsignedInt(payload.get(at)) << Byte.SIZE)
+                | Byte.toUnsignedInt(payload.get(at + 1));
+    }
+
+    /** Reads the ActorId of a {@link #bound} payload without consuming it. */
+    public static String boundActorId(ByteBuffer payload) {
+        int at = payload.position() + 1 + Short.BYTES;
+        byte[] id = new byte[Byte.toUnsignedInt(payload.get(at))];
+        payload.get(at + 1, id);
+        return new String(id, StandardCharsets.UTF_8);
+    }
 }

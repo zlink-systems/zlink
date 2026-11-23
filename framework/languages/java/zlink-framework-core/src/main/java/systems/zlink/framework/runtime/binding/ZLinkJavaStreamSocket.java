@@ -23,11 +23,13 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamSocket
 import systems.zlink.framework.runtime.internal.backend.ZLinkSocketMonitorDrainLoop;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
+import systems.zlink.framework.runtime.streams.ZLinkStreamActorControl;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
 import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 import systems.zlink.runtime.framework.FrameworkStreamOperations;
 
+import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -425,7 +427,13 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
     public CompletionStage<Void> admitSessionControl(
             RoutingId routingId, ZLinkStreamHeader header, List<Message> parts) {
         Message frame;
+        BindingEgressKey binding;
         try {
+            binding =
+                    header.kind() == ZLinkStreamMessageKind.CONTROL
+                                    && ZLinkStreamActorControl.BOUND.equals(header.name())
+                            ? boundEgressKey(routingId, parts.getFirst().dataBuffer())
+                            : null;
             frame = ZLinkJavaStreamFraming.frame(header, parts);
         } catch (RuntimeException failure) {
             return CompletableFuture.failedFuture(failure);
@@ -433,16 +441,52 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
         try {
             return inStateLane(
                     () -> {
-                        try {
-                            return streamAdmission.send(socket, routingId, List.of(frame), null);
-                        } finally {
-                            frame.close();
+                        if (binding != null) {
+                            ZLinkStateLane previous = previousBindingEgressLane(binding);
+                            ZLinkStateLane lane =
+                                    bindingEgressLanes.computeIfAbsent(
+                                            binding, ignored -> newBindingEgressLane());
+                            if (previous != null) {
+                                CompletionStage<Void> drained = previous.closeAsync();
+                                return enqueueBindingEgress(
+                                        lane,
+                                        () ->
+                                                drained.thenCompose(
+                                                        ignored ->
+                                                                submitOnSocketLane(
+                                                                        routingId, frame)),
+                                        frame::close);
+                            }
                         }
+                        return submitOnSocket(routingId, frame);
                     });
         } catch (RuntimeException | Error failure) {
             frame.close();
             throw failure;
         }
+    }
+
+    private static BindingEgressKey boundEgressKey(RoutingId routingId, ByteBuffer payload) {
+        return new BindingEgressKey(
+                routingId,
+                ZLinkStreamActorControl.actorSlot(payload),
+                ZLinkStreamActorControl.boundActorId(payload));
+    }
+
+    private ZLinkStateLane previousBindingEgressLane(BindingEgressKey binding) {
+        int previousSlot = 0;
+        ZLinkStateLane previousLane = null;
+        for (var entry : bindingEgressLanes.entrySet()) {
+            BindingEgressKey candidate = entry.getKey();
+            if (candidate.actorSlot() > previousSlot
+                    && candidate.actorSlot() < binding.actorSlot()
+                    && candidate.sessionRid().equals(binding.sessionRid())
+                    && binding.actorId().equals(candidate.actorId())) {
+                previousSlot = candidate.actorSlot();
+                previousLane = entry.getValue();
+            }
+        }
+        return previousLane;
     }
 
     @Override
@@ -479,12 +523,21 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
     private CompletionStage<Void> submitStreamFrameAsync(
             RoutingId routingId, ZLinkStreamHeader header, List<Message> parts) {
         Message frame;
+        int actorSlot;
+        boolean unbound =
+                header.kind() == ZLinkStreamMessageKind.CONTROL
+                        && ZLinkStreamActorControl.UNBOUND.equals(header.name());
         try {
+            actorSlot =
+                    unbound
+                            ? ZLinkStreamActorControl.actorSlot(parts.getFirst().dataBuffer())
+                            : header.actorSlot().orElse(0);
             frame = ZLinkJavaStreamFraming.frame(header, parts);
         } catch (RuntimeException failure) {
             return CompletableFuture.failedFuture(failure);
         }
-        return submitOwnedStreamFrameAsync(routingId, header.actorSlot().orElse(0), frame);
+        BindingEgressKey key = new BindingEgressKey(routingId, actorSlot);
+        return submitOwnedStreamFrameAsync(key, frame, unbound);
     }
 
     private CompletionStage<Void> submitOwnedStreamFrameAsync(RoutingId routingId, Message frame) {
@@ -493,37 +546,47 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
 
     private CompletionStage<Void> submitOwnedStreamFrameAsync(
             RoutingId routingId, int actorSlot, Message frame) {
+        return submitOwnedStreamFrameAsync(
+                new BindingEgressKey(routingId, actorSlot), frame, false);
+    }
+
+    private CompletionStage<Void> submitOwnedStreamFrameAsync(
+            BindingEgressKey key, Message frame, boolean retire) {
         try {
             stateLane.throwIfReentrant();
         } catch (RuntimeException | Error failure) {
             frame.close();
             throw failure;
         }
-        BindingEgressKey key = new BindingEgressKey(routingId, actorSlot);
         ZLinkStateLane lane =
                 bindingEgressLanes.computeIfAbsent(key, ignored -> newBindingEgressLane());
-        return enqueueBindingEgress(
-                lane,
-                () -> {
-                    try {
-                        // Start under socket-state ownership, then await only on this binding lane.
-                        return stateLane
-                                .<CompletionStage<Void>>runAsync(
-                                        () -> {
-                                            try {
-                                                return streamAdmission.send(
-                                                        socket, routingId, List.of(frame), null);
-                                            } finally {
-                                                frame.close();
-                                            }
-                                        })
-                                .thenCompose(submission -> submission);
-                    } catch (RuntimeException | Error failure) {
-                        frame.close();
-                        throw failure;
-                    }
-                },
-                frame::close);
+        CompletionStage<Void> submitted =
+                enqueueBindingEgress(
+                        lane, () -> submitOnSocketLane(key.sessionRid(), frame), frame::close);
+        if (retire) {
+            retireBindingEgressLane(key, lane);
+        }
+        return submitted;
+    }
+
+    private CompletionStage<Void> submitOnSocketLane(RoutingId routingId, Message frame) {
+        try {
+            // Start under socket-state ownership, then await only on this binding lane.
+            return stateLane
+                    .runAsync(() -> submitOnSocket(routingId, frame))
+                    .thenCompose(submission -> submission);
+        } catch (RuntimeException | Error failure) {
+            frame.close();
+            throw failure;
+        }
+    }
+
+    private CompletionStage<Void> submitOnSocket(RoutingId routingId, Message frame) {
+        try {
+            return streamAdmission.send(socket, routingId, List.of(frame), null);
+        } finally {
+            frame.close();
+        }
     }
 
     private CompletionStage<Void> enqueueBindingEgress(
@@ -576,15 +639,6 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
                 });
     }
 
-    private void retireBindingEgressLane(RoutingId sessionRid, int actorSlot) {
-        BindingEgressKey key = new BindingEgressKey(sessionRid, actorSlot);
-        ZLinkStateLane lane = bindingEgressLanes.get(key);
-        if (lane == null) {
-            return;
-        }
-        retireBindingEgressLane(key, lane);
-    }
-
     private void retireBindingEgressLane(BindingEgressKey key, ZLinkStateLane lane) {
         lane.closeAsync().whenComplete((ignored, failure) -> bindingEgressLanes.remove(key, lane));
     }
@@ -625,11 +679,7 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
             BindingKey key = new BindingKey(sessionRid, actorId);
             SessionBinding binding = requireBinding(sessionRid, actorId);
             CompletionStage<Void> unbound = unbindBinding(sessionRid, binding, timeout);
-            return unbound.whenComplete(
-                    (ignored, failure) -> {
-                        bindings.remove(key, binding);
-                        retireBindingEgressLane(sessionRid, binding.actorSlot());
-                    });
+            return unbound.whenComplete((ignored, failure) -> bindings.remove(key, binding));
         };
     }
 
@@ -995,7 +1045,25 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
 
     private record BindingKey(RoutingId sessionRid, String actorId) {}
 
-    private record BindingEgressKey(RoutingId sessionRid, int actorSlot) {}
+    private record BindingEgressKey(RoutingId sessionRid, int actorSlot, String actorId) {
+        BindingEgressKey(RoutingId sessionRid, int actorSlot) {
+            this(sessionRid, actorSlot, null);
+        }
+
+        // ActorId identifies the predecessor during control admission. Data addresses the lane by
+        // slot.
+        @Override
+        public boolean equals(Object other) {
+            return other instanceof BindingEgressKey key
+                    && sessionRid.equals(key.sessionRid)
+                    && actorSlot == key.actorSlot;
+        }
+
+        @Override
+        public int hashCode() {
+            return 31 * sessionRid.hashCode() + actorSlot;
+        }
+    }
 
     private record SessionBinding(
             ZLinkBackendActorRef actor,
