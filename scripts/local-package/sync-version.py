@@ -1012,6 +1012,9 @@ TEMPLATE_TRANSITIVE_BINDING = (
 # Node templates whose lock root declarations follow TEMPLATE_VERSIONS.
 TEMPLATE_NODE_LOCKS = (
     "framework/languages/node/templates/board-tables",
+    "framework/languages/node/templates/match-entry-lobby",
+    "framework/languages/node/templates/match-http-lobby",
+    "framework/languages/node/templates/starter",
 )
 
 TEMPLATE_ROOTS = {

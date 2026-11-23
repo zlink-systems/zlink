@@ -94,7 +94,7 @@ class TemplateVersionTests(unittest.TestCase):
             for template, counts in sync_version.TEMPLATE_DOCUMENT_MENTIONS.items()
             for document, count in zip(sync_version.TEMPLATE_DOCUMENTS, counts) if sum(count)
         }
-        # Every configuration file (60 manifests and one lockfile) and every document
+        # Every configuration file (60 manifests and 4 Node lockfiles) and every document
         # that names a pin moved.
         self.assertEqual(changed, sorted({path for path in managed if Path(path).name in CONFIG_FILES} | mentioned))
 
