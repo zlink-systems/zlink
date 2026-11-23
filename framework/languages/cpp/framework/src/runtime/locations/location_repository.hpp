@@ -14,6 +14,7 @@
 #include <zlink/framework/contracts/spots/spot_identity.hpp>
 #include <zlink/framework/contracts/spots/spot.hpp>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <memory>
@@ -314,6 +315,7 @@ struct object_reserve_request_t
     std::vector<std::byte> creating_payload;
     placement_capacity_bundle_t capacity_bundle;
     std::chrono::system_clock::time_point operation_deadline{};
+    // Instance activation supplies the policy of the factory receiving the envelope.
     std::optional<detail::factory_relocation_kind_t> relocation_policy;
 };
 inline bool authority_matches_creation_type (const authority_snapshot_t &authority,
@@ -871,6 +873,42 @@ class location_repository_t
     }
 
   protected:
+    static bool descriptor_matches_target (const mesh_node_descriptor_t &descriptor,
+                                           const object_creation_target_t &target)
+    {
+        return descriptor.lifecycle_generation == target.node_lifecycle_generation
+               && descriptor.owner_id == target.owner.owner_id
+               && descriptor.lease_generation == target.owner.lease_generation;
+    }
+
+    static const object_capability_t *find_capability (const mesh_node_descriptor_t &descriptor,
+                                                       placement_object_kind_t kind,
+                                                       const std::string &stable_type)
+    {
+        const auto found = std::find_if (
+          descriptor.object_capabilities.begin (), descriptor.object_capabilities.end (),
+          [&] (const object_capability_t &capability) {
+              return capability.object_kind == kind && capability.stable_type == stable_type;
+          });
+        return found == descriptor.object_capabilities.end () ? nullptr : &*found;
+    }
+
+    // Location runtime §6.1: the factory target supplies the policy for steady Ready release.
+    static void require_disabled_reclaim_policy (const object_reserve_request_t &request,
+                                                 const mesh_node_descriptor_t *descriptor)
+    {
+        const auto *capability =
+          descriptor ? find_capability (*descriptor, request.key.kind, request.intent.stable_type)
+                     : nullptr;
+        const bool disabled =
+          request.key.kind == placement_object_kind_t::instance_spot
+            ? request.relocation_policy == detail::factory_relocation_kind_t::disabled
+            : capability && capability->policy == maintenance_policy_kind_t::disabled;
+        if (!disabled)
+            throw framework_exception_t (framework_error_kind_t::unavailable,
+                                         "Object owner lease is unavailable");
+    }
+
     // An invalid authority owner token keeps its first observation for this repository.
     bool authority_release_wait_elapsed (const location_owner_token_t &owner)
     {

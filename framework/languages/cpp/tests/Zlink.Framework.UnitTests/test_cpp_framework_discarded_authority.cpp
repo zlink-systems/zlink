@@ -340,12 +340,18 @@ TEST_P (DiscardedAuthority, CreationStillRequiresDisabledPolicyAfterCleanupObser
     EXPECT_FALSE (repository->cleanup_discarded (key, before, next).result ().value ());
     clock.advance (15s);
     auto r = request ("actor");
+    r.target.owner = next;
     const auto refused =
       repository->release_ended_reservation (key, before.store_version, {}, r).result ();
     EXPECT_FALSE (refused.has_value ());
     EXPECT_EQ (refused.error_kind (), framework_error_kind_t::unavailable);
     EXPECT_EQ (read (key).store_version, before.store_version);
-    r.relocation_policy = detail::factory_relocation_kind_t::disabled;
+    descriptor.rid = zlink::routing_id_t::from ("disabled-target");
+    descriptor.security_identity = "disabled-target";
+    descriptor.entry_spot_id = "disabled-entry";
+    descriptor.object_capabilities.front ().policy = maintenance_policy_kind_t::disabled;
+    publish ();
+    r.target.node_rid = node_rid_t::from_string ("disabled-target");
     EXPECT_TRUE (
       repository->release_ended_reservation (key, before.store_version, {}, r).result ().value ());
 }

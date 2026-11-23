@@ -1443,10 +1443,14 @@ class in_memory_location_repository_t : public location_repository_t
             if (snapshot.aggregate || (actor && actor->has_relocation_state))
                 throw framework_exception_t (framework_error_kind_t::unavailable,
                                              "Object authority requires relocation recovery");
-            if (!discarded
-                && request->relocation_policy != detail::factory_relocation_kind_t::disabled)
-                throw framework_exception_t (framework_error_kind_t::unavailable,
-                                             "Object owner lease is unavailable");
+            if (!discarded) {
+                // Policy and deletion observe the descriptor in the same lane turn.
+                const auto *policy_descriptor =
+                  request->key.kind == placement_object_kind_t::instance_spot
+                    ? nullptr
+                    : find_target_descriptor (request->target);
+                require_disabled_reclaim_policy (*request, policy_descriptor);
+            }
             if (!discarded && snapshot.allocation.object_kind == placement_object_kind_t::actor
                 && (!actor || actor->state != actor_authority_state_t::ready
                     || actor->actor_id != request->key.global_id
@@ -1567,6 +1571,16 @@ class in_memory_location_repository_t : public location_repository_t
                && generation->second == token.lease_generation;
     }
 
+    const mesh_node_descriptor_t *
+    find_target_descriptor (const object_creation_target_t &target) const
+    {
+        const auto found = _mesh_nodes.find (
+          mesh_node_key (target.mesh_name, std::string (target.node_rid.value ())));
+        return found != _mesh_nodes.end () && descriptor_matches_target (found->second, target)
+                 ? &found->second
+                 : nullptr;
+    }
+
     // MeshNode §5.1: placement weight 0 excludes the node only from a new target selection
     // (a new reservation or a new-owner aggregate); it does not cancel a reservation or an
     // authority the node already holds.
@@ -1576,35 +1590,14 @@ class in_memory_location_repository_t : public location_repository_t
                                                           clock_t::time_point now,
                                                           bool new_target_selection) const
     {
-        const auto found = _mesh_nodes.find (
-          mesh_node_key (target.mesh_name, std::string (target.node_rid.value ())));
-        if (found == _mesh_nodes.end ())
+        const auto *descriptor = find_target_descriptor (target);
+        if (!descriptor || descriptor->state != framework_runtime_state_t::serving
+            || descriptor->object_role != object_role_t::server
+            || (new_target_selection && descriptor->placement_weight == 0)
+            || !owner_token_is_live (target.owner, now)
+            || !find_capability (*descriptor, kind, stable_type))
             return nullptr;
-        const auto &descriptor = found->second;
-        if (descriptor.lifecycle_generation != target.node_lifecycle_generation
-            || descriptor.owner_id != target.owner.owner_id
-            || descriptor.lease_generation != target.owner.lease_generation
-            || descriptor.state != framework_runtime_state_t::serving
-            || descriptor.object_role != object_role_t::server
-            || (new_target_selection && descriptor.placement_weight == 0)
-            || !owner_token_is_live (target.owner, now))
-            return nullptr;
-        const auto capability = find_capability (descriptor, kind, stable_type);
-        if (!capability)
-            return nullptr;
-        return &descriptor;
-    }
-
-    static const object_capability_t *find_capability (const mesh_node_descriptor_t &descriptor,
-                                                       placement_object_kind_t kind,
-                                                       const std::string &stable_type)
-    {
-        const auto found = std::find_if (
-          descriptor.object_capabilities.begin (), descriptor.object_capabilities.end (),
-          [&] (const object_capability_t &capability) {
-              return capability.object_kind == kind && capability.stable_type == stable_type;
-          });
-        return found == descriptor.object_capabilities.end () ? nullptr : &*found;
+        return descriptor;
     }
 
     static bool valid_mesh_node_descriptor (const mesh_node_descriptor_t &descriptor)

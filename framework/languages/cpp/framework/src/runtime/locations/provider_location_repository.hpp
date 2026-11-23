@@ -507,9 +507,9 @@ class provider_location_repository_t final : public location_repository_t
                     co_return co_await authority_conflict (std::move (current));
                 auto target_descriptor = co_await read_target_descriptor_async (retarget->target);
                 if (!target_descriptor
-                    || !target_accepts (target_descriptor->descriptor,
-                                        snapshot.allocation.object_kind,
-                                        snapshot.allocation.stable_type))
+                    || !find_capability (target_descriptor->descriptor,
+                                         snapshot.allocation.object_kind,
+                                         snapshot.allocation.stable_type))
                     co_return co_await authority_conflict (std::move (current));
                 const auto same_allocation_target =
                   same_target (snapshot.allocation.target, retarget->target);
@@ -882,8 +882,8 @@ class provider_location_repository_t final : public location_repository_t
             // before classifying the candidate as unavailable.
             auto refreshed = co_await read_target_descriptor_async (creation_target, true, false);
             if (refreshed
-                && target_accepts (refreshed->descriptor, request.key.kind,
-                                   request.intent.stable_type)) {
+                && find_capability (refreshed->descriptor, request.key.kind,
+                                    request.intent.stable_type)) {
                 creation_target.node_lifecycle_generation =
                   refreshed->descriptor.lifecycle_generation;
                 creation_target.owner = {refreshed->descriptor.owner_id,
@@ -893,7 +893,7 @@ class provider_location_repository_t final : public location_repository_t
         }
         bool target_available =
           target
-          && target_accepts (target->descriptor, request.key.kind, request.intent.stable_type);
+          && find_capability (target->descriptor, request.key.kind, request.intent.stable_type);
         if (target_available)
             target_available = co_await owner_is_live_async (creation_target.owner);
         if (!target_available)
@@ -1001,6 +1001,7 @@ class provider_location_repository_t final : public location_repository_t
         std::vector<authority_entry_t> members;
         std::optional<store_condition_t> authority_lock_condition;
         std::vector<store_condition_t> member_lock_conditions;
+        std::optional<store_version_condition_t> policy_condition;
         if (active) {
             if (owner_live)
                 co_return stale_authority_reclaim_result_t::owner_live;
@@ -1011,10 +1012,17 @@ class provider_location_repository_t final : public location_repository_t
             if (current.aggregate || (actor && actor->has_relocation_state) || mutation_locked)
                 throw framework_exception_t (framework_error_kind_t::unavailable,
                                              "Object authority requires relocation recovery");
-            if (!discarded
-                && request->relocation_policy != detail::factory_relocation_kind_t::disabled)
-                throw framework_exception_t (framework_error_kind_t::unavailable,
-                                             "Object owner lease is unavailable");
+            if (!discarded) {
+                std::optional<stored_target_t> policy_target;
+                if (request->key.kind != placement_object_kind_t::instance_spot)
+                    policy_target = co_await read_target_descriptor_async (request->target, false);
+                require_disabled_reclaim_policy (
+                  *request, policy_target ? &policy_target->descriptor : nullptr);
+                if (policy_target)
+                    policy_condition =
+                      store_version_condition_t{std::move (policy_target->key),
+                                                {std::move (policy_target->provider_version)}};
+            }
             if (!discarded && current.allocation.object_kind == placement_object_kind_t::actor
                 && (!actor || actor->state != actor_authority_state_t::ready
                     || actor->actor_id != request->key.global_id
@@ -1114,6 +1122,14 @@ class provider_location_repository_t final : public location_repository_t
           {version_condition (authority_key, stored_authority.value.version),
            std::move (stale_owner_condition), std::move (descriptor_condition)},
           {store_delete_t{authority_key}}};
+        if (policy_condition) {
+            // An old owner and its replacement can use the same descriptor row.
+            if (policy_condition->key.value != descriptor_key.value) {
+                write_request.conditions.push_back (std::move (*policy_condition));
+            } else if (!matches_store_version (descriptor_read, policy_condition->expected)) {
+                co_return stale_authority_reclaim_result_t::conflict;
+            }
+        }
         if (authority_lock_condition)
             write_request.conditions.push_back (std::move (*authority_lock_condition));
         for (auto &condition : member_lock_conditions)
@@ -3987,10 +4003,7 @@ class provider_location_repository_t final : public location_repository_t
             co_return std::nullopt;
         const auto record = parse_canonical_record (found->value.bytes, "MeshNode descriptor");
         auto descriptor = decode_mesh_descriptor (record.at (location_record_fields::descriptor));
-        if ((require_identity
-             && (descriptor.lifecycle_generation != target.node_lifecycle_generation
-                 || descriptor.owner_id != target.owner.owner_id
-                 || descriptor.lease_generation != target.owner.lease_generation))
+        if ((require_identity && !descriptor_matches_target (descriptor, target))
             || (require_live && descriptor.state != framework_runtime_state_t::serving))
             co_return std::nullopt;
         const auto owner_id = require_identity ? target.owner.owner_id : descriptor.owner_id;
@@ -4001,17 +4014,6 @@ class provider_location_repository_t final : public location_repository_t
             co_return std::nullopt;
         co_return stored_target_t{row_key, found->value.version.value, live != nullptr,
                                   std::move (descriptor), record};
-    }
-
-    static bool target_accepts (const mesh_node_descriptor_t &descriptor,
-                                placement_object_kind_t kind,
-                                const std::string &stable_type)
-    {
-        return std::any_of (
-          descriptor.object_capabilities.begin (), descriptor.object_capabilities.end (),
-          [&] (const object_capability_t &capability) {
-              return capability.object_kind == kind && capability.stable_type == stable_type;
-          });
     }
 
     static bool bundle_matches (const placement_capacity_bundle_t &bundle,

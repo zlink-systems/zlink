@@ -93,7 +93,6 @@ TEST (ZLinkFrameworkOpaqueStoreProviders,
     request.creating_payload = bytes ("creating");
     request.capacity_bundle = {
       0, 1, spot_type_capacity_delta_t{placement_object_kind_t::user_spot, "room", 1}};
-    request.relocation_policy = detail::factory_relocation_kind_t::disabled;
     const auto reserved =
       std::get<object_reserved_t> (repository.reserve (request).result ().value ());
     const auto ready = encode_user_spot_authority_payload (user_spot_authority_payload_t{
@@ -117,6 +116,14 @@ TEST (ZLinkFrameworkOpaqueStoreProviders,
                              repository.claim_owner_lease (owner.owner_id, 60s).result ().value ())
                              .token;
     ASSERT_NE (successor.lease_generation, owner.lease_generation);
+    descriptor.lease_generation = successor.lease_generation;
+    ++descriptor.descriptor_revision;
+    ASSERT_EQ (repository.update_mesh_node (descriptor, location_write_intent_t::new_claim)
+                 .result ()
+                 .value ()
+                 .status,
+               location_write_status_t::stored);
+    request.target.owner = successor;
     ASSERT_EQ (capacity_record (store, descriptor).at ("active").at ("spots"), 1);
     const auto writes_before_wait = store.creation_writes.size ();
     const auto waiting =

@@ -1545,7 +1545,6 @@ void user_spot_authority_qualification (user_spot_authority_case_t scenario)
                       owner};
     request.capacity_bundle = {
       0, 1, fw::spot_type_capacity_delta_t{fw::placement_object_kind_t::user_spot, room_type, 1}};
-    request.relocation_policy = fw::detail::factory_relocation_kind_t::disabled;
     const auto reservation = original.reserve (request).result ();
     ASSERT_TRUE (reservation);
     const auto *reserved = std::get_if<fw::object_reserved_t> (&reservation.value ());

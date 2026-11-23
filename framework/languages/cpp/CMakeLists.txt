@@ -2810,6 +2810,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
 
   add_executable(test_cpp_framework_discarded_authority
     tests/Zlink.Framework.UnitTests/test_cpp_framework_discarded_authority.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_creation_reclaim_target_policy.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_owner_token_release_wait.cpp)
   target_compile_features(test_cpp_framework_discarded_authority PRIVATE cxx_std_20)
   target_link_zlink_test_harness(test_cpp_framework_discarded_authority)
