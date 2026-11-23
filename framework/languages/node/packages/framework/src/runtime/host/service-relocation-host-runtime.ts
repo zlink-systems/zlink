@@ -2709,7 +2709,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
   private async targetProgress(
     stage: LocalStage,
     authority: ZLinkAuthoritySnapshot,
-    phase: 'activating' | 'activated' | 'cleaning' | 'completed',
+    phase: 'committed' | 'activating' | 'activated' | 'cleaning' | 'completed',
     signal?: AbortSignal
   ): Promise<ZLinkAuthoritySnapshot> {
     // Legacy inputs stay on the compatibility reader path; phase writes never backfill them.
@@ -3870,10 +3870,11 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       let activation!: Promise<void>;
       let finalized!: Promise<void>;
       activation = (async () => {
+        authority = await this.targetProgress(stage, authority!, 'committed', signal);
         stage.releaseActivation();
         resumeStartedAt = performance.now();
         stage.phase = 'committed';
-        authority = await this.targetProgress(stage, authority!, 'activating', signal);
+        authority = await this.targetProgress(stage, authority, 'activating', signal);
         await stage.owner.publish(stage.staging, authority, signal);
         authority = await this.targetProgress(stage, authority, 'activated', signal);
         const replayAuthority = authority;

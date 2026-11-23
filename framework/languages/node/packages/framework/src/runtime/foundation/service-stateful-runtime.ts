@@ -3985,6 +3985,15 @@ export class ServiceStatefulRuntime {
           ingress.sourceRoutingId,
           this.ingressSourceGeneration(ingress)
         );
+        // Session-Actor binding §12: a record of this ActorId with another ObjectGeneration is
+        // InvalidOperation; every other fence mismatch stays ActorLocationStale (Unavailable).
+        const current = this.registry.actor(record.actor.actor.actorId);
+        if (current !== undefined && current.ref.generation !== record.actor.actor.generation) {
+          throw new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.InvalidOperation,
+            `Actor '${record.actor.actor.actorId}' binding ObjectGeneration differs from the current Actor.`
+          );
+        }
         const actor = this.validateActorFence(record.actor);
         const binding = sessionBindingFromWire(
           actor.ref,
