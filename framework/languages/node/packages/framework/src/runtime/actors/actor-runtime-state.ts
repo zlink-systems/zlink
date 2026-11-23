@@ -189,7 +189,11 @@ export class ZLinkActorRuntimeState {
   constructor(
     readonly actorId: string,
     private readonly onLocationOwned?: () => void,
-    private readonly onLocationReleased?: () => void
+    private readonly onLocationReleased?: () => void,
+    private readonly projectBoundSession?: (
+      actor: ZLinkBackendActorRef,
+      meshName: string | undefined
+    ) => ZLinkRemoteBoundSessionTarget | null | undefined
   ) {
     if (isStructuralGuardEnabled()) {
       guardBoundSessionTargetWrites(this);
@@ -244,7 +248,7 @@ export class ZLinkActorRuntimeState {
   }
 
   get boundSessionBindingGeneration(): bigint {
-    return this.boundSessionValue?.bindingGeneration ?? 0n;
+    return this.boundSession?.bindingGeneration ?? 0n;
   }
 
   get entryNodeRid(): RoutingId | undefined {
@@ -253,7 +257,10 @@ export class ZLinkActorRuntimeState {
 
   /** The one current Session binding of this Actor (Session–Actor binding §6). */
   get boundSession(): ZLinkRemoteBoundSessionTarget | undefined {
-    return this.boundSessionValue;
+    const actorRef = this.nativeActorRefValue;
+    const projected =
+      actorRef === undefined ? undefined : this.projectBoundSession?.(actorRef, this.meshName);
+    return projected === undefined ? this.boundSessionValue : (projected ?? undefined);
   }
 
   /**
@@ -262,7 +269,7 @@ export class ZLinkActorRuntimeState {
    * no target for it.
    */
   get remoteBoundSessionTarget(): ZLinkRemoteBoundSessionTarget | undefined {
-    const binding = this.boundSessionValue;
+    const binding = this.boundSession;
     const actorNodeRid = this.nativeActorRefValue?.nodeRid;
     return binding?.sessionNodeRid !== undefined &&
       actorNodeRid !== undefined &&
