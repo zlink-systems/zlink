@@ -1,12 +1,22 @@
+require('reflect-metadata');
+
 const { createRelayHost, createRelayMeshHost } = require('./fixtures/relay-host');
 const assert = require('node:assert/strict');
+const { Module } = require('@nestjs/common');
+const { NestFactory } = require('@nestjs/core');
 const test = require('node:test');
 
 const zlink = require('@zlink-systems/zlink');
+const nestjs = require('../../packages/nestjs/dist');
+const publicFramework = require('../../packages/framework/dist');
 const { encodeChannelHeader } = require('./helpers/protobuf-channel-header');
 const framework = require('../../packages/framework/dist/internal');
 const spots = require('../../packages/framework/dist/runtime/spots');
 const protocol = require('../../packages/framework/dist/runtime/streams/protocol');
+const {
+  ZLinkInMemoryProviderLocationStore
+} = require('../../packages/framework/dist/runtime/locations/in-memory-provider-location-store');
+const { fixedRidHostClock, finishFixedRidHostStartup } = require('../helpers/fixed-rid-host-clock');
 const {
   ZLinkRuntimeTaskErrorSink,
   ZLinkRuntimeTaskRunner
@@ -533,6 +543,150 @@ test('Entry Spot routed bound session command decodes registered channel seriali
   header.close();
   payload.close();
 });
+
+test(
+  'Entry Spot handler sends and requests a User Spot by string ID through address outbound',
+  { timeout: 30000 },
+  async (t) => {
+    const hostClock = fixedRidHostClock(t);
+    const meshName = `entry-address-${process.pid}-${Date.now()}`;
+    const notices = [];
+
+    class ForwardToRoom {
+      constructor(spotId, value) {
+        this.spotId = spotId;
+        this.value = value;
+      }
+    }
+    class RoomQuery {
+      constructor(value) {
+        this.value = value;
+      }
+    }
+    class RoomNotice {
+      constructor(value) {
+        this.value = value;
+      }
+    }
+    publicFramework.ZLinkPacket('entry.forward-to-room')(ForwardToRoom);
+    publicFramework.ZLinkPacket('room.query')(RoomQuery);
+    publicFramework.ZLinkPacket('room.notice')(RoomNotice);
+
+    class Player {
+      constructor(context) {
+        this.actorId = context.actorId;
+        this.context = context;
+      }
+    }
+    class PlayerFactory {
+      async create(context) {
+        return new Player(context);
+      }
+    }
+    class EntryOutboundHandler {
+      async handle(entrySpot, _actor, _context, request) {
+        const reply = await entrySpot.context.outbound
+          .requestToSpot(request.spotId, new RoomQuery(request.value))
+          .timeout(5000)
+          .submit();
+        await entrySpot.context.outbound
+          .sendToSpot(request.spotId, new RoomNotice(request.value))
+          .submit();
+        return reply;
+      }
+    }
+    class EntrySpot {
+      async onCreateActor() {
+        return { accepted: true };
+      }
+    }
+    class RoomQueryHandler {
+      handle(_spot, request) {
+        return { value: `reply:${request.value}` };
+      }
+    }
+    class RoomNoticeHandler {
+      handle(_spot, message) {
+        notices.push(message.value);
+      }
+    }
+    class RoomSpot {
+      async onActorJoin() {
+        return { accepted: true };
+      }
+    }
+
+    nestjs.zlinkEntrySpotActorRequestHandler({
+      entrySpot: EntrySpot,
+      actor: Player,
+      packetName: 'entry.forward-to-room'
+    })(EntryOutboundHandler);
+    nestjs.zlinkSpotPacketHandler({ spot: RoomSpot, packetName: 'room.query' })(RoomQueryHandler);
+    nestjs.zlinkSpotPacketHandler({ spot: RoomSpot, packetName: 'room.notice' })(RoomNoticeHandler);
+
+    const builder = nestjs
+      .zlinkFramework()
+      .addLocationStore(new ZLinkInMemoryProviderLocationStore());
+    builder.configureLocations().ownerLeaseFencingMarginMs(1);
+    builder
+      .addRouteMesh(meshName)
+      .listen('tcp://127.0.0.1:0')
+      .objects()
+      .server()
+      .addEntrySpot(EntrySpot, 'Player')
+      .addSpotFactory('Room', RoomSpot, (factory) => factory.disableRelocation())
+      .addActorFactory('Player', PlayerFactory, (factory) => factory.disableRelocation());
+
+    class App {}
+    Module({
+      imports: [nestjs.ZLinkModule.forRoot(builder.build())],
+      providers: [
+        EntrySpot,
+        EntryOutboundHandler,
+        RoomSpot,
+        RoomQueryHandler,
+        RoomNoticeHandler,
+        PlayerFactory
+      ]
+    })(App);
+
+    let app;
+    try {
+      app = await NestFactory.createApplicationContext(App, {
+        logger: false,
+        abortOnError: false
+      });
+      await finishFixedRidHostStartup(
+        app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME),
+        hostClock,
+        publicFramework.ZLinkFrameworkRuntimeState.Preparing
+      );
+
+      await app
+        .get(nestjs.ZLINK_SPOT_MANAGER)
+        .getOrCreate('target-room', 'Room')
+        .inMesh(meshName)
+        .timeout(5000)
+        .submit();
+      await app
+        .get(nestjs.ZLINK_ACTOR_MANAGER)
+        .getOrCreate('entry-actor', 'Player')
+        .inMesh(meshName)
+        .timeout(5000)
+        .submit();
+
+      const reply = await app
+        .get(nestjs.ZLINK_ACTOR_CLIENT)
+        .requestToActor('entry-actor', new ForwardToRoom('target-room', 'ping'))
+        .submit();
+      assert.deepEqual(reply, { value: 'reply:ping' });
+      await waitFor(() => notices.length === 1, 'Entry Spot User Spot send delivery', 5000);
+      assert.deepEqual(notices, ['ping']);
+    } finally {
+      if (app !== undefined) await app.close();
+    }
+  }
+);
 
 test('runtime host reports joined Spot route before stale remote actor packet target', () => {
   const { host: runtime, relay: runtimeRelay } = createRelayHost({
