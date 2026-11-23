@@ -18,6 +18,7 @@ Framework 0.34.0은 Node.js binding 1.26.0과 Core 1.26.0을 사용합니다.
 
 ## 결함 수정
 
+- Entry Spot handler의 `context.outbound`가 Spot ID 주소로 `requestToSpot`·`sendToSpot`을 보낼 수 있습니다. 이전에는 항상 "Spot address outbound runtime is not started"로 실패했습니다. (#5425, #5436)
 - 기한이 지난 mesh maintenance를 다음 timer 차례에 실행해 음수 timeout 경고를 없앴습니다. (#5357, #5363)
 - 늦게 완료된 Yield가 다른 활성 turn을 해제하지 않습니다. (#5093, #5110)
 - relocation target ingress는 Restore 시점부터 도착한 메시지를 dispatch 준비까지 보관합니다. (#5084, #5191)

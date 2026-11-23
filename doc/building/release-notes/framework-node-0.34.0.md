@@ -18,6 +18,7 @@ Framework 0.34.0 uses the Node.js binding 1.26.0 and Core 1.26.0.
 
 ## Defect Fixes
 
+- Entry Spot handler `context.outbound` can send `requestToSpot` and `sendToSpot` to a Spot ID address. Before, these always failed with "Spot address outbound runtime is not started". (#5425, #5436)
 - Overdue mesh maintenance runs on the next timer turn without a negative timeout warning. (#5357, #5363)
 - A late Yield completion no longer releases another active turn. (#5093, #5110)
 - Relocation target ingress holds arriving messages from Restore until dispatch is ready. (#5084, #5191)
