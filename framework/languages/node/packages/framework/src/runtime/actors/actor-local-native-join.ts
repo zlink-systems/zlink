@@ -188,6 +188,12 @@ export class ZLinkLocalNativeActorJoin {
     request: Message,
     signal: AbortSignal | undefined
   ): Promise<ZLinkActorJoinRuntimeResult<Message>> {
+    // The previous relocation's target flow may still write this Actor's authority row and
+    // location (Relocation Flow §9); commit only after it ends, as a cross-node Join does.
+    await this.options.actorJoinRelocation?.awaitPreviousActorRelocation?.(
+      actor.context.actorId,
+      signal
+    );
     const location = node.actorLookup(actor.context.actorId);
     const meshName = runtimeActorMeshName(actor, state, target.routerChannelId);
     if (routingIdsEqual(toFrameworkRoutingId(location.spotId), target.spotId)) {
