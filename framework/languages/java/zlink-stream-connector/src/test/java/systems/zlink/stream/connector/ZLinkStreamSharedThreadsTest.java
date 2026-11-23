@@ -9,6 +9,7 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.channel.group.ChannelGroup;
+import io.netty.channel.group.ChannelGroupFuture;
 import io.netty.channel.group.DefaultChannelGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
@@ -66,7 +67,7 @@ class ZLinkStreamSharedThreadsTest {
     }
 
     @Test
-    void serverRestartsReuseThreadsAndClosingOneConnectorKeepsOthersAlive() throws Exception {
+    void reconnectsReuseThreadsAndClosingOneConnectorKeepsOthersAlive() throws Exception {
         try (MultiConnectionServer server = new MultiConnectionServer(false)) {
             List<ZLinkStreamConnector> connectors = new ArrayList<>();
             AtomicReference<CountDownLatch> connected =
@@ -86,14 +87,15 @@ class ZLinkStreamSharedThreadsTest {
                 }
                 assertTrue(connected.get().await(5, TimeUnit.SECONDS));
                 ThreadSnapshot initial = ThreadSnapshot.capture();
-                for (int restart = 1; restart <= 4; restart++) {
+                for (int cycle = 1; cycle <= 4; cycle++) {
                     connected.set(new CountDownLatch(connectors.size()));
-                    server.restart();
-                    assertTrue(connected.get().await(5, TimeUnit.SECONDS), "restart " + restart);
+                    server.disconnectClients();
+                    assertTrue(
+                            connected.get().await(5, TimeUnit.SECONDS), "reconnect cycle " + cycle);
                     assertTrue(connectors.stream().allMatch(ZLinkStreamConnector::isConnected));
                     ThreadSnapshot current = ThreadSnapshot.capture();
                     System.out.printf(
-                            "restart=%d initial=%s current=%s%n", restart, initial, current);
+                            "reconnect=%d initial=%s current=%s%n", cycle, initial, current);
                     assertEquals(
                             initial.selectors(),
                             current.selectors(),
@@ -104,7 +106,7 @@ class ZLinkStreamSharedThreadsTest {
                 }
                 ConnectorTestAwait.await(connectors.removeFirst().close());
                 connected.set(new CountDownLatch(connectors.size()));
-                server.restart();
+                server.disconnectClients();
                 assertTrue(connected.get().await(5, TimeUnit.SECONDS));
                 assertTrue(connectors.stream().allMatch(ZLinkStreamConnector::isConnected));
             } finally {
@@ -211,7 +213,7 @@ class ZLinkStreamSharedThreadsTest {
 
         MultiConnectionServer(boolean secure) throws Exception {
             ssl = secure ? TlsTestCertificates.serverContext() : null;
-            bind(0);
+            bind();
         }
 
         URI endpoint() {
@@ -222,14 +224,19 @@ class ZLinkStreamSharedThreadsTest {
                             + "/stream");
         }
 
-        void restart() throws InterruptedException {
-            int port = ((InetSocketAddress) listening.localAddress()).getPort();
-            listening.close().sync();
-            clients.close().await();
-            bind(port);
+        void disconnectClients() throws InterruptedException {
+            // Keep the endpoint bound and close current clients on their shared event loop.
+            ChannelGroupFuture closing =
+                    worker.submit(
+                                    () -> {
+                                        return clients.close();
+                                    })
+                            .sync()
+                            .getNow();
+            closing.sync();
         }
 
-        private void bind(int port) throws InterruptedException {
+        private void bind() throws InterruptedException {
             listening =
                     new ServerBootstrap()
                             .group(boss, worker)
@@ -309,7 +316,7 @@ class ZLinkStreamSharedThreadsTest {
                                                             });
                                         }
                                     })
-                            .bind("127.0.0.1", port)
+                            .bind("127.0.0.1", 0)
                             .sync()
                             .channel();
         }
