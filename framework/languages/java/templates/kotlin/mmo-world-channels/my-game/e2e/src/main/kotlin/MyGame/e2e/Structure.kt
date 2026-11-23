@@ -95,7 +95,7 @@ object Structure {
         val logical = mutableListOf<String>()
         spots.forEach { spot ->
             val id = owner(spot, roles)
-            check(roles[id] == Roles.CHANNEL) { "Zone Spot owner must be a channel node" }
+            check(roles[id] == Roles.CHANNEL) { "Zone Spot owner must be a play node (channel)" }
             when (text(spot, "kind")) {
                 "entry" ->
                     check(
@@ -130,7 +130,7 @@ object Structure {
                 val config = configs.getValue(text(node, "id"))
                 val owned = spots.filter { it.path("owner").asText() == config.id }
                 check(owned.count { it.path("kind").asText() == "entry" } == 1) {
-                    "Channel node requires one Entry Spot"
+                    "play node (channel) requires one Entry Spot"
                 }
                 val actual =
                     owned

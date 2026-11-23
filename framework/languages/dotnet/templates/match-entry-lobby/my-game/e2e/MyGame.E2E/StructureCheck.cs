@@ -157,7 +157,7 @@ internal static class StructureCheck
             var owner = Text(spot, "owner");
             Require(
                 settings.ContainsKey(owner) && roles[owner] == "match",
-                "Spot owner must reference a match node."
+                "Spot owner must reference a play node (match)."
             );
             var kind = Text(spot, "kind");
             if (kind == "entry")
@@ -208,7 +208,7 @@ internal static class StructureCheck
             .ToHashSet(StringComparer.Ordinal);
         Require(
             matchOwners.Count > 0 && entryOwners.SetEquals(matchOwners),
-            "Match nodes must each declare one Entry."
+            "play nodes (match) must each declare one Entry."
         );
         Require(hasRoom, "Missing dynamic Room family.");
         Require(

@@ -165,7 +165,7 @@ export async function scenario(
       const fresh = await enter(create('p4'), Test.freshRegion);
       assert(
         fresh.nodeId === before.nodeId,
-        'New region was not accepted by the replacement Region node'
+        'New region was not accepted by the replacement play node (region)'
       );
       assert.deepEqual(await a.sessionInfo(), identity);
       assert.deepEqual(await b.sessionInfo(), otherIdentity);

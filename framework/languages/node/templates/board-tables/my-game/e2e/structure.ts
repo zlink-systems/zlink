@@ -101,7 +101,7 @@ export function checkStructure(path: string = LocalHost.structureFile): void {
   for (const node of nodes.filter((node) => node.role === 'table')) {
     assert(
       spots.filter((spot) => spot.kind === 'entry' && spot.owner === node.id).length === 1,
-      `Table node must declare exactly one application Entry Spot: ${node.id}`
+      `play node (table) must declare exactly one application Entry Spot: ${node.id}`
     );
   }
   assert(

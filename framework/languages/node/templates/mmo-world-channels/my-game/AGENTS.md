@@ -4,12 +4,12 @@
 
 Every server process in this project is a stateful ZLink node. Before writing code, decide which kind you are editing.
 
-- A game node is not a REST server. A player's state is owned by one session-bound Actor (or the Spot that owns a shared value). Load it once on connect; do not read the database while handling a request.
+- A play node hosts Spots. A session-bound Actor owns the player's state, and a Spot owns shared state. Load it once on connect; do not read the database while handling a request.
 - Write only results to the database, one transaction per round. Check duplicate requests in Actor or Spot memory.
 - While a game is running, a Spot handler never awaits a remote request or a database reply: the await holds the Spot's turn and stops every message and timer in it. When a round ends, the Spot writes the results of all its Actors in one transaction, then tells each Actor after the commit.
 - Values many players see live in node memory or one owning Spot; values many requests update are applied by that one owning Spot. A process that does not own a value sends a request to its owner instead of writing it.
 - Spots and Actors already process one message at a time. Do not guard their state with locks, semaphores or process-wide static stores, and do not update memory from database commit hooks; the writer updates its owner's memory after commit, others send a message to the owner.
-- Split roles so the game can scale out from day one: game nodes host lobby and room Spots and player Actors and are the only processes you add; a shared node hosts only game-wide Instance Spots (matchmaking, game-wide values), and game nodes do not register those factories. Send and request by Spot ID only; placement is configuration. Keep shared-Spot values recoverable from room resends or a database read at startup.
+- Split roles so the game can scale out from day one: play nodes host lobby and room Spots and player Actors and are the only processes you add; a dedicated play node hosts only game-wide Instance Spots (matchmaking, game-wide values), and the lobby and room hosts omit those factories. Send and request by Spot ID only; placement is configuration. Keep shared-Spot values recoverable from room resends or a database read at startup.
 - Never have two Actors or Spots wait on requests to each other inside a turn; notify with send and let the state owner decide.
 - Actors move between nodes when they join a Spot or relocate. Keep all mutable Actor fields in one state record, register stateful Actors with the state-preserving relocation policy, and test that save and restore preserve every field.
 - Player data reaches a Spot with the Actor that joins it; do not request it per player at Spot entry. If a Spot truly needs extra data, fetch it for all players in one request before the game starts.
@@ -19,11 +19,11 @@ Every server process in this project is a stateful ZLink node. Before writing co
 - Send money or reward results only after the database commit.
 - One decision has one owner; find the existing one before adding another. Take test expectations from the spec, not from the implementation.
 
-Details: [Stateful game nodes and the HTTP lobby](https://docs.zlink.systems/node/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
+Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/node/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
 
 ## Project overview
 
-This Node.js 22 (TypeScript, NestJS) project is an MMO server example with isolated worlds, each with its own Session endpoint, mesh, Redis database, and Player Actors. Players earn persistent gold and switch between the fixed channel Zones of a world without replacing their connected Session. It runs an Accounts node that publishes the world list over HTTP, Session nodes A and B, Channel nodes A1, A2, and B, and a separate Redis per world. `package.json` pins the ZLink Framework and connector packages to `0.32.0`.
+This Node.js 22 (TypeScript, NestJS) project is an MMO server example with isolated worlds, each with its own Session endpoint, mesh, Redis database, and Player Actors. Players earn persistent gold and switch between the fixed channel Zones of a world without replacing their connected Session. It runs an accounts API node that publishes the world list over HTTP, Session nodes A and B, play nodes A1, A2, and B (channel), and a separate Redis per world. `package.json` pins the ZLink Framework and connector packages to `0.32.0`.
 
 The project layout and feature procedure below describe where to add gameplay. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 
@@ -101,7 +101,7 @@ Relocation changes an object's execution host; drain moves a host's workload so 
 
 Requests in the example game follow this path. Reading the code along this path before adding or transferring a feature locates the places to change.
 
-1. The client reads the world list from Accounts with `GET /worlds`, connects to the Session endpoint of the chosen world over STREAM, and sends the first packet, `EnterWorldRequest`. `Session` checks the first packet name, calls `getOrCreate` for the Player Actor by `playerId`, binds it to the Session, and relays the original packet.
+1. The client reads the world list from the accounts API node with `GET /worlds`, connects to the Session endpoint of the chosen world over STREAM, and sends the first packet, `EnterWorldRequest`. `Session` checks the first packet name, calls `getOrCreate` for the Player Actor by `playerId`, binds it to the Session, and relays the original packet.
 2. A new Actor starts in the Entry Spot `Entry`. `PlayerFactory` loads the player's gold from the world's Redis. The `EnterPlayer` handler checks the identity and requests `joinSpot(zoneId(Game.firstChannel), ...).defer()`. `Zone.onJoinedActor` pushes `PlayerView` with the world, channel, node, and gold.
 3. `EarnGold` asks `GoldBalance` to decide the fixed reward and cooldown. It rejects early and over-limit requests without changing state, and saves accepted gold before updating the Actor. `ViewPlayer` resends the view through the bound Session.
 4. `ChangeChannel` requests admission to another Zone with `joinSpot(zoneId(channel), ...).defer()`. The client connection and the bound Session do not change, even when that Zone is on another node. After a reconnect, `EnterZone` checks the identity and resends the view.

@@ -28,37 +28,37 @@
     {
       "id": "accounts",
       "role": "accounts",
-      "title": "accounts",
+      "title": "API node (accounts)",
       "config": "server/config/accounts.json"
     },
     {
       "id": "sessionA",
       "role": "session",
-      "title": "sessionA",
+      "title": "Session node A",
       "config": "server/config/sessionA.json"
     },
     {
       "id": "sessionB",
       "role": "session",
-      "title": "sessionB",
+      "title": "Session node B",
       "config": "server/config/sessionB.json"
     },
     {
       "id": "channelA1",
       "role": "channel",
-      "title": "channelA1",
+      "title": "Play node A1 (channel)",
       "config": "server/config/channelA1.json"
     },
     {
       "id": "channelA2",
       "role": "channel",
-      "title": "channelA2",
+      "title": "Play node A2 (channel)",
       "config": "server/config/channelA2.json"
     },
     {
       "id": "channelB",
       "role": "channel",
-      "title": "channelB",
+      "title": "Play node B (channel)",
       "config": "server/config/channelB.json"
     },
     {

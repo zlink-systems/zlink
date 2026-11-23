@@ -40,13 +40,13 @@
     {
       "id": "matchA",
       "role": "match",
-      "title": "Match node A",
+      "title": "Play node A (match)",
       "config": "server/config/match-a.json"
     },
     {
       "id": "matchB",
       "role": "match",
-      "title": "Match node B",
+      "title": "Play node B (match)",
       "config": "server/config/match-b.json"
     },
     {
