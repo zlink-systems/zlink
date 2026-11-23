@@ -123,6 +123,7 @@ import {
   flowIfEnabled,
   messageFlowTracingEnabled,
   runWithFlow,
+  traceHostShutdown,
   traceShutdownStep,
   isRelocationDebugEnabled,
   relocationDebug,
@@ -1244,83 +1245,90 @@ export class ZLinkFrameworkRuntimeHost
     return await this.runWithShutdownDeadline(deadlineMs, async () => {
       const deadlineAtMs = performance.now() + deadlineMs;
       const shutdownSignal = this.shutdownDeadline!.signal;
-      try {
-        let drain: Awaited<ReturnType<ZLinkRouteMeshRuntimeCoordinator['shutdownHost']>> = {
-          kind: 'drained'
-        };
+      return traceHostShutdown(deadlineAtMs, shutdownSignal, async (step) => {
         try {
-          this.admission.close();
-          if (this.runtimeState === ZLinkFrameworkRuntimeState.Preparing) {
-            this.executionState?.abortController.abort();
-          }
-          this.setRuntimeState(ZLinkFrameworkRuntimeState.Draining);
-          if (teardown === undefined) {
-            if (
-              this.relocationOperation !== undefined &&
-              this.relocationStopStarting?.signal.aborted === true
-            ) {
-              await this.relocationOperation;
+          let drain: Awaited<ReturnType<ZLinkRouteMeshRuntimeCoordinator['shutdownHost']>> = {
+            kind: 'drained'
+          };
+          try {
+            this.admission.close();
+            if (this.runtimeState === ZLinkFrameworkRuntimeState.Preparing) {
+              this.executionState?.abortController.abort();
             }
-            // Seal application admission before the public status reports that the
-            // host no longer accepts work. This prevents status polling from racing
-            // with the coordinator's synchronous seal step.
-            const unscopedStreamDrain = this.streamRuntime?.notifyUnscopedServerDrain();
-            drain = await this.routeMeshCoordinator.shutdownHost(
-              this.runtimeDeadline!,
-              shutdownSignal
-            );
-            await unscopedStreamDrain;
-            if (drain.kind === 'forceStopped' && drain.error !== undefined) {
-              this.runtimeOrPreStartErrorSink.reportRuntimeTaskException(
-                'host shutdown',
-                drain.error
+            this.setRuntimeState(ZLinkFrameworkRuntimeState.Draining);
+            if (teardown === undefined) {
+              if (
+                this.relocationOperation !== undefined &&
+                this.relocationStopStarting?.signal.aborted === true
+              ) {
+                await step('host.await_relocation', () => this.relocationOperation!);
+              }
+              // Seal application admission before the public status reports that the
+              // host no longer accepts work. This prevents status polling from racing
+              // with the coordinator's synchronous seal step.
+              const streams = this.streamRuntime;
+              const unscopedStreamDrain =
+                streams === undefined
+                  ? undefined
+                  : step('host.unscoped_stream_drain', () => streams.notifyUnscopedServerDrain());
+              drain = await step('host.route_mesh_drain', () =>
+                this.routeMeshCoordinator.shutdownHost(this.runtimeDeadline!, shutdownSignal)
               );
+              await unscopedStreamDrain;
+              if (drain.kind === 'forceStopped' && drain.error !== undefined) {
+                this.runtimeOrPreStartErrorSink.reportRuntimeTaskException(
+                  'host shutdown',
+                  drain.error
+                );
+              }
             }
+          } finally {
+            this.setRuntimeState(ZLinkFrameworkRuntimeState.Draining);
+            await step('host.teardown', () =>
+              (teardown ?? this.teardownRuntime()).catch(async (error: unknown) => {
+                // A failed cleanup gets one more attempt before the result is final.
+                // Only a cleanup that still failed leaves shutdown open to a retry.
+                if (
+                  !(await this.teardownRuntime().then(
+                    () => true,
+                    () => false
+                  ))
+                ) {
+                  this.shutdownOperation = undefined;
+                }
+                throw error;
+              })
+            );
           }
-        } finally {
-          this.setRuntimeState(ZLinkFrameworkRuntimeState.Draining);
-          await (teardown ?? this.teardownRuntime()).catch(async (error: unknown) => {
-            // A failed cleanup gets one more attempt before the result is final.
-            // Only a cleanup that still failed leaves shutdown open to a retry.
-            if (
-              !(await this.teardownRuntime().then(
-                () => true,
-                () => false
-              ))
-            ) {
-              this.shutdownOperation = undefined;
-            }
-            throw error;
+          if (shutdownSignal.aborted || performance.now() >= deadlineAtMs) {
+            throw createDeadlineExceededError('Shutdown resource cleanup exceeded its deadline.');
+          }
+          if (drain.kind === 'forceStopped') {
+            return this.completeTermination({
+              outcome: ZLinkFrameworkTerminationOutcome.ForceStopped,
+              reason:
+                drain.reason === 'deadline_exceeded'
+                  ? ZLinkFrameworkTerminationReason.DeadlineExceeded
+                  : ZLinkFrameworkTerminationReason.TeardownFailed
+            });
+          }
+          return this.completeTermination({
+            outcome: ZLinkFrameworkTerminationOutcome.Stopped,
+            reason: ZLinkFrameworkTerminationReason.None
           });
-        }
-        if (shutdownSignal.aborted || performance.now() >= deadlineAtMs) {
-          throw createDeadlineExceededError('Shutdown resource cleanup exceeded its deadline.');
-        }
-        if (drain.kind === 'forceStopped') {
+        } catch (error) {
           return this.completeTermination({
             outcome: ZLinkFrameworkTerminationOutcome.ForceStopped,
+            // A stop()-owned deadline controller can be replaced by the retry, so the
+            // absolute shutdown deadline also decides the reason.
             reason:
-              drain.reason === 'deadline_exceeded'
+              isDeadlineExceededError(shutdownSignal.reason ?? error) ||
+              performance.now() >= deadlineAtMs
                 ? ZLinkFrameworkTerminationReason.DeadlineExceeded
                 : ZLinkFrameworkTerminationReason.TeardownFailed
           });
         }
-        return this.completeTermination({
-          outcome: ZLinkFrameworkTerminationOutcome.Stopped,
-          reason: ZLinkFrameworkTerminationReason.None
-        });
-      } catch (error) {
-        return this.completeTermination({
-          outcome: ZLinkFrameworkTerminationOutcome.ForceStopped,
-          // A stop()-owned deadline controller can be replaced by the retry, so the
-          // absolute shutdown deadline also decides the reason.
-          reason:
-            isDeadlineExceededError(shutdownSignal.reason ?? error) ||
-            performance.now() >= deadlineAtMs
-              ? ZLinkFrameworkTerminationReason.DeadlineExceeded
-              : ZLinkFrameworkTerminationReason.TeardownFailed
-        });
-      }
+      });
     });
   }
 
