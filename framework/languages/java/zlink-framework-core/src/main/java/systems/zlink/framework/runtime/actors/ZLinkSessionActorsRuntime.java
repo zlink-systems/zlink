@@ -693,6 +693,10 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                 (ignored, current) -> current.toNativeTarget(targetActor)));
     }
 
+    boolean hasBindingTransition(String actorId) {
+        return bindingTransitions.containsKey(actorId);
+    }
+
     private CompletionStage<ZLinkBoundActor> replaceBinding(
             String actorId, Supplier<CompletionStage<ZLinkBoundActor>> createBinding) {
         CompletableFuture<Void> tail = new CompletableFuture<>();
@@ -738,15 +742,25 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         }
         return created.thenCompose(
                 actor -> {
-                    previous.forEach(this::removeBinding);
-                    return stateLane
-                            .runNowOrQueue(
-                                    () -> {
-                                        BindingCleanup cleanup = installBindingOnLane(actor);
-                                        CompletionStage<Void> physical = announceBound(actor);
-                                        stream.publishBoundActor(sessionRid, actor.actorId());
-                                        return new BindingPublication(cleanup, physical);
-                                    })
+                    CompletableFuture<?>[] removals =
+                            previous.stream()
+                                    .map(this::removeBinding)
+                                    .map(CompletionStage::toCompletableFuture)
+                                    .toArray(CompletableFuture<?>[]::new);
+                    return CompletableFuture.allOf(removals)
+                            .thenCompose(
+                                    ignored ->
+                                            stateLane.runNowOrQueue(
+                                                    () -> {
+                                                        BindingCleanup cleanup =
+                                                                installBindingOnLane(actor);
+                                                        CompletionStage<Void> physical =
+                                                                announceBound(actor);
+                                                        stream.publishBoundActor(
+                                                                sessionRid, actor.actorId());
+                                                        return new BindingPublication(
+                                                                cleanup, physical);
+                                                    }))
                             .thenCompose(
                                     publication -> {
                                         finishBindingInstall(actor, publication.cleanup());
@@ -879,8 +893,8 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         }
     }
 
-    private void removeBinding(ZLinkSessionActor actor) {
-        stateLane
+    private CompletionStage<Void> removeBinding(ZLinkSessionActor actor) {
+        return stateLane
                 .runNowOrQueue(
                         () -> {
                             if (!bound.remove(actor)) {
@@ -922,7 +936,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                         : finishRemoval(actor, cleanup))
                 .whenComplete(
                         (ignored, failure) -> {
-                            // Callers no longer wait for the cleanup, so report it here.
+                            // Callers may discard the stage, so report failures here.
                             if (failure != null) {
                                 LOGGER.log(Level.WARNING, "Actor binding cleanup failed", failure);
                             }
