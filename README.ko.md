@@ -70,6 +70,12 @@ handler와 client를 작성하고, Framework는 transport 연결, peer discovery
 서비스에 적합합니다. room, zone, match와 actor 기반 토폴로지는 동일한 RouteMesh,
 Spot, Actor와 STREAM 조합으로 구성합니다.
 
+session node는 클라이언트 세션을 관리하는 node입니다. play node는 Spot이 있는 node입니다.
+Spot은 zone, dungeon instance, table, match 등을 맡습니다. api node는 일반 HTTP 서버처럼
+요청을 받아 처리하는 node입니다. 매치메이킹 요청과 Actor 정보 DB 저장·조회가 이에 해당합니다.
+
+실시간 게임 서버의 배치 예시는 `client → L4 → session node ×N → play node ×N → api node ×N`입니다.
+
 ## 코드로 보기
 
 `greeting` 채널을 소유하는 서버 — 등록, 그리고 handler입니다.

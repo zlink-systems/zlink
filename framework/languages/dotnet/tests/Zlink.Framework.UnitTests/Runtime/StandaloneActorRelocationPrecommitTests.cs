@@ -59,6 +59,7 @@ public sealed class StandaloneActorRelocationPrecommitTests
         var preparing = await coordinator.BeginPreparingAsync(
             ready.Snapshot,
             sourceAuthority,
+            sourceAuthority,
             Guid.NewGuid(),
             applicationVersion: 1,
             CancellationToken.None
@@ -122,6 +123,7 @@ public sealed class StandaloneActorRelocationPrecommitTests
         var preparing = await coordinator.BeginPreparingAsync(
             ready.Snapshot,
             sourceAuthority,
+            sourceAuthority,
             relocationId,
             applicationVersion: 1,
             CancellationToken.None
@@ -141,13 +143,12 @@ public sealed class StandaloneActorRelocationPrecommitTests
             relocationId,
             CancellationToken.None
         );
-        Assert.False(
-            ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(abandoned.Payload.Span, out _)
-        );
+        Assert.False(ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(abandoned, out _));
 
         lossyStore.LoseNextResponse();
         preparing = await coordinator.BeginPreparingAsync(
             abandoned,
+            sourceAuthority,
             sourceAuthority,
             relocationId,
             applicationVersion: 1,
@@ -171,7 +172,7 @@ public sealed class StandaloneActorRelocationPrecommitTests
         var capturedState = Projection(captured);
         Assert.Equal(2, capturedState.Phase);
         Assert.Equal("pending", capturedState.RelocationReference);
-        Assert.Equal(envelope.AggregateGeneration, capturedState.AggregateGeneration);
+        Assert.Equal(0UL, capturedState.AggregateGeneration);
         Assert.Equal(0UL, capturedState.TargetAttemptGeneration);
 
         var prepare = ZLinkStandaloneActorRelocationRuntime.CreatePrepare(
@@ -290,6 +291,7 @@ public sealed class StandaloneActorRelocationPrecommitTests
         var coordinator = new ZLinkStandaloneActorRelocationPrecommitCoordinator(store);
         var preparing = await coordinator.BeginPreparingAsync(
             v0,
+            sourceAuthority,
             sourceAuthority,
             relocationId,
             applicationVersion: 1,
@@ -448,6 +450,7 @@ public sealed class StandaloneActorRelocationPrecommitTests
         var observed = await Assert.ThrowsAsync<ArgumentException>(async () =>
             await new ZLinkStandaloneActorRelocationPrecommitCoordinator(store).BeginPreparingAsync(
                 foreign.Steady,
+                sourceAuthority,
                 sourceAuthority,
                 Guid.NewGuid(),
                 applicationVersion: 1,
@@ -717,10 +720,7 @@ public sealed class StandaloneActorRelocationPrecommitTests
         Assert.NotEqual(source.Captured.StoreVersion, preserved.Snapshot.StoreVersion);
         Assert.Equal(source.Steady.OwnerId, preserved.Snapshot.OwnerId);
         Assert.False(
-            ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                preserved.Snapshot.Payload.Span,
-                out _
-            )
+            ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(preserved.Snapshot, out _)
         );
         //  Location runtime §10: the Preserve fence settles the target too.
         await Assert.ThrowsAsync<ZLinkRelocationTargetSettledException>(async () =>
@@ -846,6 +846,7 @@ public sealed class StandaloneActorRelocationPrecommitTests
         _ = await coordinator.BeginPreparingAsync(
             committed,
             source.TargetAuthority,
+            source.TargetAuthority,
             Guid.NewGuid(),
             applicationVersion: 1,
             CancellationToken.None
@@ -937,6 +938,7 @@ public sealed class StandaloneActorRelocationPrecommitTests
             var nextId = Guid.NewGuid();
             var preparing = await coordinator.BeginPreparingAsync(
                 steady,
+                source.TargetAuthority,
                 source.TargetAuthority,
                 nextId,
                 1,
@@ -1380,6 +1382,7 @@ public sealed class StandaloneActorRelocationPrecommitTests
         var preparing = await coordinator.BeginPreparingAsync(
             foreign.Steady,
             sourceAuthority,
+            sourceAuthority,
             relocationId,
             applicationVersion: 1,
             CancellationToken.None
@@ -1444,9 +1447,7 @@ public sealed class StandaloneActorRelocationPrecommitTests
         Assert.Equal(source.Steady.OwnerId, restored.OwnerId);
         Assert.Equal(conflicts + 1, store.CompareExchangeCount);
         Assert.Equal(1, observed);
-        Assert.False(
-            ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(restored.Payload.Span, out _)
-        );
+        Assert.False(ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(restored, out _));
         _ = await new ZLinkStandaloneActorRelocationPrecommitCoordinator(store).AbortSourceAsync(
             source.Key,
             source.RelocationId,
@@ -1581,6 +1582,7 @@ public sealed class StandaloneActorRelocationPrecommitTests
         _ = await coordinator.BeginPreparingAsync(
             ready.Snapshot,
             sourceAuthority,
+            sourceAuthority,
             relocationId,
             applicationVersion: 1,
             CancellationToken.None
@@ -1593,9 +1595,7 @@ public sealed class StandaloneActorRelocationPrecommitTests
             CancellationToken.None
         );
 
-        Assert.False(
-            ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(recovered.Payload.Span, out _)
-        );
+        Assert.False(ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(recovered, out _));
         Assert.Equal(sourceOwner.OwnerId, recovered.OwnerId);
         Assert.Equal(sourceOwner.LeaseGeneration, recovered.OwnerLeaseGeneration);
         Assert.Equal(ready.Snapshot.ObjectGeneration, recovered.ObjectGeneration);
@@ -1647,15 +1647,12 @@ public sealed class StandaloneActorRelocationPrecommitTests
     )
     {
         Assert.True(
-            ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                snapshot.Payload.Span,
-                out var projection
-            )
+            ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(snapshot, out var projection)
         );
         return projection;
     }
 
-    private static ZLinkActorAuthorityPayload Authority(
+    internal static ZLinkActorAuthorityPayload Authority(
         string actorId,
         ZLinkMeshNodeDescriptor descriptor,
         ZLinkLocationOwnerToken owner
@@ -1674,7 +1671,7 @@ public sealed class StandaloneActorRelocationPrecommitTests
             descriptor.LifecycleGeneration
         );
 
-    private static ZLinkMeshNodeDescriptor Descriptor(
+    internal static ZLinkMeshNodeDescriptor Descriptor(
         RoutingId rid,
         ZLinkLocationOwnerToken owner
     ) =>

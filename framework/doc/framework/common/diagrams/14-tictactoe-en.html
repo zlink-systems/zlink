@@ -5005,7 +5005,7 @@
     <!-- Main Diagram -->
     <div class="diagram-container" data-detail-level="read"
          data-preset-badge-editorial-plate="ARCHIFY / PLATE 04">
-      <svg viewBox="-71 88 1010 496" role="img" lang="en" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="standard" data-quality-gates="advisory">
+      <svg viewBox="-132 78 1010 308" role="img" lang="en" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="standard" data-quality-gates="advisory">
         <title id="archify-diagram-title">TicTacToe — the smallest real-time game server</title>
         <desc id="archify-diagram-description">manual peer connection · client STREAMs directly to Play</desc>
         <!-- Definitions -->
@@ -5034,108 +5034,77 @@
 
 
         <!-- Connection paths (before components for correct z-order) -->
-        <path data-edge-from="C" data-edge-to="A1" data-edge-label="HTTP create room" data-edge-key="0" data-composition-points="170,339;218,339;218,190;266,190" d="M 170 339 L 210 339 Q 218 339 218 331 L 218 198 Q 218 190 226 190 L 266 190" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="C" data-edge-to="A2" data-edge-key="1" data-composition-points="170,353;218,353;218,502;266,502" d="M 170 353 L 210 353 Q 218 353 218 361 L 218 494 Q 218 502 226 502 L 266 502" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
-        <path data-edge-from="A1" data-edge-to="P1" data-edge-label="create room Spot" data-edge-key="2" data-composition-points="386,190;482,190" d="M 386 190 L 482 190" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="A2" data-edge-to="P2" data-edge-key="3" data-composition-points="386,502;482,502" d="M 386 502 L 482 502" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
-        <path data-edge-from="C" data-edge-to="P1" data-edge-label="STREAM direct connect" data-edge-key="4" data-composition-points="110,316;110,136;542,136;542,160" d="M 110 316 L 110 144 Q 110 136 118 136 L 534 136 Q 542 136 542 144 L 542 160" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="C" data-edge-to="P2" data-edge-key="5" data-composition-points="110,376;110,556;542,556;542,532" d="M 110 376 L 110 548 Q 110 556 118 556 L 534 556 Q 542 556 542 548 L 542 532" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="P1" data-edge-to="P2" data-edge-label="manual peer · milestone LM" data-edge-key="6" data-composition-points="542,220;542,472" d="M 542 220 L 542 472" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="P1" data-edge-to="LS" data-edge-label="location lookup" data-edge-key="7" data-composition-points="602,190;650,190;650,339;698,339" d="M 602 190 L 642 190 Q 650 190 650 198 L 650 331 Q 650 339 658 339 L 698 339" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
-        <path data-edge-from="P2" data-edge-to="LS" data-edge-key="8" data-composition-points="602,502;650,502;650,353;698,353" d="M 602 502 L 642 502 Q 650 502 650 494 L 650 361 Q 650 353 658 353 L 698 353" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="C" data-edge-to="A" data-edge-label="HTTP" data-edge-key="0" data-composition-points="170,180;302,180" d="M 170 180 L 302 180" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="A" data-edge-to="P" data-edge-label="RouteMesh" data-edge-key="1" data-composition-points="422,180;554,180" d="M 422 180 L 554 180" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="C" data-edge-to="P" data-edge-label="STREAM" data-edge-key="2" data-composition-points="110,150;110,126;614,126;614,150" d="M 110 150 L 110 134 Q 110 126 118 126 L 606 126 Q 614 126 614 134 L 614 150" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="P" data-edge-to="A" data-edge-label="client/server" data-edge-key="3" data-composition-points="607,210;607,234;362,234;362,210" d="M 607 210 L 607 226 Q 607 234 599 234 L 370 234 Q 362 234 362 226 L 362 210" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="P" data-edge-to="LS" data-edge-key="4" data-composition-points="621,210;621,298" d="M 621 210 L 621 298" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
 
         <!-- Components -->
-        <g id="node-C" data-node-id="C" data-node-label="client" tabindex="0" role="button" aria-label="Focus client, Architecture component" aria-pressed="false" data-node-kind="frontend" data-node-context="Architecture component">
-          <title>client · Architecture component</title>
-          <rect x="50" y="316" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="50" y="316" width="120" height="60" rx="6" class="c-frontend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(56 322) scale(0.6875)">
+        <g id="node-C" data-node-id="C" data-node-label="client" tabindex="0" role="button" aria-label="Focus client, host · guest · observer, Architecture component" aria-pressed="false" data-node-kind="external" data-node-sublabel="host · guest · observer" data-node-context="Architecture component">
+          <title>client · host · guest · observer · Architecture component</title>
+          <rect x="50" y="150" width="120" height="60" rx="6" class="c-mask"/>
+          <rect x="50" y="150" width="120" height="60" rx="6" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(56 156) scale(0.6875)">
+            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
+            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="110" y="178" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">client</text>
+        <text data-detail="context" x="110" y="194" class="t-muted" font-size="8.1" text-anchor="middle">host · guest · observer</text>
+        </g>
+
+        <g id="node-A" data-node-id="A" data-node-label="api node ×2" tabindex="0" role="button" aria-label="Focus api node ×2, Api A/B, Architecture component" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="Api A/B" data-node-context="Architecture component"><rect x="324" y="172" width="120" height="60" rx="6" class="c-frontend" style="fill:none" stroke-width="2.2"/><rect x="313" y="161" width="120" height="60" rx="6" class="c-frontend" style="fill:none" stroke-width="2.2"/>
+          <title>api node ×2 · Api A/B · Architecture component</title>
+          <rect x="302" y="150" width="120" height="60" rx="6" class="c-mask"/>
+          <rect x="302" y="150" width="120" height="60" rx="6" class="c-frontend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(308 156) scale(0.6875)">
             <rect x="2" y="3" width="12" height="10" rx="2"/>
             <path d="M2 6.5h12"/>
             <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
             <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
           </g>
-          <text data-node-label="" x="110" y="350" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">client</text>
+          <text data-node-label="" data-detail-anchor="" x="362" y="178" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">api node ×2</text>
+        <text data-detail="context" x="362" y="194" class="t-muted" font-size="9" text-anchor="middle">Api A/B</text>
         </g>
 
-        <g id="node-A1" data-node-id="A1" data-node-label="Api A" tabindex="0" role="button" aria-label="Focus Api A, Architecture component" aria-pressed="false" data-node-kind="external" data-node-context="Architecture component">
-          <title>Api A · Architecture component</title>
-          <rect x="266" y="160" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="266" y="160" width="120" height="60" rx="6" class="c-external" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(272 166) scale(0.6875)">
-            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
-            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
-          </g>
-          <text data-node-label="" x="326" y="194" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Api A</text>
-        </g>
-
-        <g id="node-A2" data-node-id="A2" data-node-label="Api B" tabindex="0" role="button" aria-label="Focus Api B, Architecture component" aria-pressed="false" data-node-kind="external" data-node-context="Architecture component">
-          <title>Api B · Architecture component</title>
-          <rect x="266" y="472" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="266" y="472" width="120" height="60" rx="6" class="c-external" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(272 478) scale(0.6875)">
-            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
-            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
-          </g>
-          <text data-node-label="" x="326" y="506" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Api B</text>
-        </g>
-
-        <g id="node-P1" data-node-id="P1" data-node-label="Play A" tabindex="0" role="button" aria-label="Focus Play A, session · actor · room, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="session · actor · room" data-node-context="Architecture component">
-          <title>Play A · session · actor · room · Architecture component</title>
-          <rect x="482" y="160" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="482" y="160" width="120" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(488 166) scale(0.6875)">
+        <g id="node-P" data-node-id="P" data-node-label="play node ×2" tabindex="0" role="button" aria-label="Focus play node ×2, Play A/B · room, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="Play A/B · room" data-node-context="Architecture component"><rect x="576" y="172" width="120" height="60" rx="6" class="c-backend" style="fill:none" stroke-width="2.2"/><rect x="565" y="161" width="120" height="60" rx="6" class="c-backend" style="fill:none" stroke-width="2.2"/>
+          <title>play node ×2 · Play A/B · room · Architecture component</title>
+          <rect x="554" y="150" width="120" height="60" rx="6" class="c-mask"/>
+          <rect x="554" y="150" width="120" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(560 156) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="542" y="188" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Play A</text>
-        <text data-detail="context" x="542" y="204" class="t-muted" font-size="8.4" text-anchor="middle">session · actor · room</text>
-        </g>
-
-        <g id="node-P2" data-node-id="P2" data-node-label="Play B" tabindex="0" role="button" aria-label="Focus Play B, session · actor · room, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="session · actor · room" data-node-context="Architecture component">
-          <title>Play B · session · actor · room · Architecture component</title>
-          <rect x="482" y="472" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="482" y="472" width="120" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(488 478) scale(0.6875)">
-            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
-          </g>
-          <text data-node-label="" data-detail-anchor="" x="542" y="500" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Play B</text>
-        <text data-detail="context" x="542" y="516" class="t-muted" font-size="8.4" text-anchor="middle">session · actor · room</text>
+          <text data-node-label="" data-detail-anchor="" x="614" y="178" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">play node ×2</text>
+        <text data-detail="context" x="614" y="194" class="t-muted" font-size="9" text-anchor="middle">Play A/B · room</text>
         </g>
 
         <g id="node-LS" data-node-id="LS" data-node-label="Location Store" tabindex="0" role="button" aria-label="Focus Location Store, Architecture component" aria-pressed="false" data-node-kind="external" data-node-context="Architecture component">
           <title>Location Store · Architecture component</title>
-          <rect x="698" y="316" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="698" y="316" width="120" height="60" rx="6" class="c-external" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(704 322) scale(0.6875)">
+          <rect x="554" y="298" width="120" height="60" rx="6" class="c-mask"/>
+          <rect x="554" y="298" width="120" height="60" rx="6" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(560 304) scale(0.6875)">
             <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
             <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
-          <text data-node-label="" x="758" y="350" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Location Store</text>
+          <text data-node-label="" x="614" y="332" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Location Store</text>
         </g>
 
         <!-- Connection labels -->
-        <g data-detail="context" data-edge-from="C" data-edge-to="A1" data-edge-label="HTTP create room" data-edge-key="0">
-          <rect x="174.6" y="244.5" width="86.8" height="14" rx="3" class="c-mask"/>
-          <text x="218" y="254.5" class="t-muted" font-size="8" text-anchor="middle">HTTP create room</text>
+        <g data-detail="context" data-edge-from="C" data-edge-to="A" data-edge-label="HTTP" data-edge-key="0">
+          <rect x="221" y="160" width="30" height="14" rx="3" class="c-mask"/>
+          <text x="236" y="170" class="t-muted" font-size="8" text-anchor="middle">HTTP</text>
         </g>
-
-        <g data-detail="context" data-edge-from="A1" data-edge-to="P1" data-edge-label="create room Spot" data-edge-key="2">
-          <rect x="390.6" y="170" width="86.8" height="14" rx="3" class="c-mask"/>
-          <text x="434" y="180" class="t-muted" font-size="8" text-anchor="middle">create room Spot</text>
+        <g data-detail="context" data-edge-from="A" data-edge-to="P" data-edge-label="RouteMesh" data-edge-key="1">
+          <rect x="461.4" y="160" width="53.199999999999996" height="14" rx="3" class="c-mask"/>
+          <text x="488" y="170" class="t-muted" font-size="8" text-anchor="middle">RouteMesh</text>
         </g>
-
-        <g data-detail="context" data-edge-from="C" data-edge-to="P1" data-edge-label="STREAM direct connect" data-edge-key="4">
-          <rect x="270.6" y="116" width="110.8" height="14" rx="3" class="c-mask"/>
-          <text x="326" y="126" class="t-backend" font-size="8" text-anchor="middle">STREAM direct connect</text>
+        <g data-detail="context" data-edge-from="C" data-edge-to="P" data-edge-label="STREAM" data-edge-key="2">
+          <rect x="342.6" y="106" width="38.8" height="14" rx="3" class="c-mask"/>
+          <text x="362" y="116" class="t-muted" font-size="8" text-anchor="middle">STREAM</text>
         </g>
-
-        <g data-detail="context" data-edge-from="P1" data-edge-to="P2" data-edge-label="manual peer · milestone LM" data-edge-key="6">
-          <rect x="474.6" y="240" width="134.8" height="14" rx="3" class="c-mask"/>
-          <text x="542" y="250" class="t-muted" font-size="8" text-anchor="middle">manual peer · milestone LM</text>
-        </g>
-        <g data-detail="context" data-edge-from="P1" data-edge-to="LS" data-edge-label="location lookup" data-edge-key="7">
-          <rect x="609" y="244.5" width="82" height="14" rx="3" class="c-mask"/>
-          <text x="650" y="254.5" class="t-messagebus" font-size="8" text-anchor="middle">location lookup</text>
+        <g data-detail="context" data-edge-from="P" data-edge-to="A" data-edge-label="client/server" data-edge-key="3">
+          <rect x="448.3" y="214" width="72.4" height="14" rx="3" class="c-mask"/>
+          <text x="484.5" y="224" class="t-messagebus" font-size="8" text-anchor="middle">client/server</text>
         </g>
 
 
@@ -5332,25 +5301,14 @@
     <div class="cards">
       <div class="card">
         <div class="card-header">
-          <div class="card-dot cyan"></div>
-          <h3>Connection flow</h3>
+          <div class="card-dot emerald"></div>
+          <h3>Sample connections and roles</h3>
         </div>
         <ul>
-          <li>&bull; With no separate Session server, each Play owns the stream session · actor · Entry Spot · room Spot together</li>
-          <li>&bull; client creates a room over HTTP via Api → Api creates a room User Spot on Play</li>
-          <li>&bull; client connects directly to each Play by STREAM using the Play endpoints it got from Api (emphasis)</li>
-          <li>&bull; the dashed path to Api B / Play B is the alternate route · the second player&#39;s share</li>
-        </ul>
-      </div>
-
-      <div class="card">
-        <div class="card-header">
-          <div class="card-dot slate"></div>
-          <h3>peer · location</h3>
-        </div>
-        <ul>
-          <li>&bull; Play A ↔ Play B is a manual peer connection (bidirectional) — publishes the win-count milestone by Logical Multicast</li>
-          <li>&bull; room·actor location is resolved by Location Store lookup (dashed) — only the connection between nodes is manual, object location is resolved by the store</li>
+          <li>&bull; The host uses HTTP on Api A and STREAM on Play A. The guest and observer connect to Api B and Play B.</li>
+          <li>&bull; Play A/B also act as session nodes. They are manual RouteMesh peers and use the separate tictactoe.api ClientServer channel to request authentication.</li>
+          <li>&bull; The Location Store records the current owner for RoomId and ActorId.</li>
+          <li>&bull; The play node is the Client that requests authentication from the api node, the Server on the tictactoe.api ClientServer Channel.</li>
         </ul>
       </div>
     </div>

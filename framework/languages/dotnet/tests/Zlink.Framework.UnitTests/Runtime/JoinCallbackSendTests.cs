@@ -329,7 +329,7 @@ public sealed class JoinCallbackSendTests
                 );
                 Assert.True(
                     ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                        authority.Snapshot.Payload.Span,
+                        authority.Snapshot,
                         out var publication
                     )
                 );

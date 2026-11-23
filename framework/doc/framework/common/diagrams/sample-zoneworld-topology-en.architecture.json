@@ -5,50 +5,95 @@
     "title": "System configuration and topology",
     "subtitle": "Game/Ops browsers · Gateway/Ops · two ZoneNodes on zoneworld.mesh RouteMesh + broadcast fanout",
     "output": "sample-zoneworld-topology-en.html",
-    "legend": { "mode": "hidden" }
+    "legend": {
+      "mode": "hidden"
+    }
   },
-  "layout": { "mode": "grid", "origin": [50, 150], "cols": 4, "gapX": 96, "gapY": 92, "cellW": 120, "cellH": 60 },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 3,
+    "gapX": 103,
+    "gapY": 88,
+    "cellW": 132,
+    "cellH": 60
+  },
   "components": [
-    { "id": "G", "type": "frontend", "label": "Game Browser", "row": 0, "col": 0 },
-    { "id": "GW", "type": "external", "label": "Gateway", "row": 0, "col": 2 },
-    { "id": "Z1", "type": "backend", "label": "ZoneNode A", "row": 1, "col": 1 },
-    { "id": "Z2", "type": "backend", "label": "ZoneNode B", "row": 1, "col": 3 },
-    { "id": "O", "type": "frontend", "label": "Ops Browser", "row": 2, "col": 0 },
-    { "id": "OPS", "type": "external", "label": "Ops", "row": 2, "col": 2 }
-  ],
-  "boundaries": [
-    { "kind": "region", "label": "Clients", "wraps": ["G", "O"] },
-    { "kind": "region", "label": "Servers", "wraps": ["GW", "Z1", "Z2", "OPS"] }
+    {
+      "id": "BG",
+      "type": "external",
+      "label": "Game client",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "GW",
+      "type": "database",
+      "label": "session node",
+      "row": 0,
+      "col": 1,
+      "sublabel": "Gateway"
+    },
+    {
+      "id": "PL",
+      "type": "backend",
+      "label": "play node ×2",
+      "row": 0,
+      "col": 2,
+      "sublabel": "zone · player Actor"
+    },
+    {
+      "id": "BO",
+      "type": "external",
+      "label": "Ops client",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "OPS",
+      "type": "frontend",
+      "label": "Ops",
+      "row": 1,
+      "col": 1,
+      "sublabel": "control STREAM"
+    }
   ],
   "connections": [
-    { "from": "G", "to": "GW", "label": "STREAM WS", "variant": "default" },
-    { "from": "O", "to": "OPS", "label": "STREAM WS", "variant": "default" },
-    { "from": "GW", "to": "Z1", "label": "mesh RouteMesh", "variant": "default" },
-    { "from": "GW", "to": "Z2", "label": "mesh RouteMesh", "variant": "default" },
-    { "from": "OPS", "to": "Z1", "label": "mesh RouteMesh", "variant": "default" },
-    { "from": "OPS", "to": "Z2", "label": "mesh RouteMesh", "variant": "default" },
-    { "from": "Z1", "to": "Z2", "label": "mesh RouteMesh", "variant": "default" },
-    { "from": "OPS", "to": "Z1", "label": "broadcast fanout", "variant": "default" },
-    { "from": "OPS", "to": "Z2", "label": "broadcast fanout", "variant": "default" }
+    {
+      "from": "BG",
+      "to": "GW",
+      "label": "STREAM"
+    },
+    {
+      "from": "GW",
+      "to": "PL",
+      "label": "actor relay"
+    },
+    {
+      "from": "BO",
+      "to": "OPS",
+      "label": "STREAM"
+    },
+    {
+      "from": "OPS",
+      "to": "PL",
+      "fromSide": "right",
+      "toSide": "bottom",
+      "label": "fanout"
+    }
   ],
   "cards": [
     {
-      "dot": "cyan",
-      "title": "Full channel names (mermaid edge labels)",
+      "dot": "emerald",
+      "title": "ZoneWorld connections and roles",
       "items": [
-        "\"mesh RouteMesh\" on the diagram is the full mermaid label \"zoneworld.mesh RouteMesh\" — carries the ChannelName, Spot/Actor direct messages, and Logical Multicast.",
-        "\"broadcast fanout\" is the full mermaid label \"zoneworld.broadcast fanout\" — a classic fanout publisher/subscriber connection independent of the mesh.",
-        "Only Gateway provides the player-facing game STREAM, and only Ops provides the control STREAM."
-      ]
-    },
-    {
-      "dot": "slate",
-      "title": "ZoneNode roles",
-      "items": [
-        "ZoneNode A/B run with the same executable capability, registering the Zone Spot factory (stable type zoneworld.zone, four Spot instances by ZoneId), the Player Actor factory (stable type zoneworld.player), the zone Channel, and the report channel.",
-        "Zone Spot capacity and readiness follow §3 of the ZoneWorld sample contract.",
-        "NodeId and the transport RID are separate domains.",
-        "Only the Gateway and Ops endpoints are exposed to the Client; the ZoneNode endpoint isn't exposed."
+        "Gateway manages game sessions and relays player messages to two ZoneNode processes.",
+        "The play nodes synchronize zone boundaries over the zoneworld.mesh RouteMesh. Actor relocation across a boundary keeps the client session open.",
+        "Ops receives announcements and maintenance commands over a separate control STREAM, fans them out over zoneworld.broadcast, and collects zone Spot events.",
+        "Both processes register the same zone Spot and player Actor factories. Each process owns a subset of the zones according to Location Store placement."
       ]
     }
   ]

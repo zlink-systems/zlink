@@ -815,10 +815,7 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
         targetNodeRid = default;
         if (
             snapshot.OwnerLeaseGeneration <= 0
-            || !ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                snapshot.Payload.Span,
-                out canonical
-            )
+            || !ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(snapshot, out canonical)
             || canonical.Phase is < 4 or > 8
             || canonical.TargetOwnerId != snapshot.OwnerId
         )

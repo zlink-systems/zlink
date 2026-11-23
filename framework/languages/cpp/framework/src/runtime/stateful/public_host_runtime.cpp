@@ -3542,6 +3542,33 @@ task_t<bool> public_host_runtime_t::has_finishing_relocation_target ()
     });
 }
 
+bool public_host_runtime_t::has_pending_relocation_requests (const actor_ref_t &actor)
+{
+    using stateful::object_kind_t;
+    return _relocation_session_terminal_lane.run_sync ([&] {
+        return std::any_of (
+          _relocation_target_attempts.begin (), _relocation_target_attempts.end (),
+          [&] (const auto &entry) {
+              const auto &attempt = entry.second;
+              return relocation_target_holds_publication (attempt)
+                     && std::any_of (attempt.targets.begin (), attempt.targets.end (),
+                                     [&] (const auto &target) {
+                                         return target.kind == object_kind_t::actor
+                                                && target.key == actor.actor_id ().value ()
+                                                && target.object_generation
+                                                     == actor.object_generation ()
+                                                && target.node_id == actor.node_rid ().value ();
+                                     })
+                     && std::any_of (attempt.captured_requests.begin (),
+                                     attempt.captured_requests.end (), [&] (const auto &request) {
+                                         return request.kind == object_kind_t::actor
+                                                && request.key == actor.actor_id ().value ()
+                                                && !request.delivery->task ().await_ready ();
+                                     });
+          });
+    });
+}
+
 task_t<bool> public_host_runtime_t::await_previous_relocation_target (
   protocol::relocation_id_t relocation,
   std::uint64_t attempt_generation,
@@ -3565,16 +3592,6 @@ task_t<bool> public_host_runtime_t::await_previous_relocation_target (
             || std::find (found->second.targets.begin (), found->second.targets.end (), object)
                  == found->second.targets.end ())
             return std::shared_ptr<task_completion_source_t<void>>{};
-        // An Actor Join on this surface was registered in the source Actor's own
-        // handler and runs as its deferred barrier.
-        if (std::any_of (found->second.captured_requests.begin (),
-                         found->second.captured_requests.end (), [&] (const auto &request) {
-                             return request.kind == object.kind && request.key == object.key
-                                    && !request.delivery->task ().await_ready ();
-                         }))
-            throw framework_exception_t (
-              framework_error_kind_t::unavailable,
-              "Actor Join cannot wait for captured request delivery in its own Actor turn");
         return found->second.terminal;
     });
     // The caller rereads a published slot even if publication was cleared before lookup.
@@ -3602,16 +3619,11 @@ task_t<bool> public_host_runtime_t::await_previous_relocation_target (
     if (!operation)
         throw framework_exception_t (framework_error_kind_t::shutting_down,
                                      "Relocation wait cannot register on a stopped host");
-    detail::observe_task_completion (
-      target_terminal,
-      [weak = std::weak_ptr (transport), id = *operation] (const result_t<void> &result) {
-          if (const auto owner = weak.lock ()) {
-              if (result)
-                  (void) owner->complete_local_operation (id);
-              else
-                  (void) owner->fail_local_operation (id, operation_terminal_t::shutdown);
-          }
-      });
+    detail::observe_task_completion (target_terminal, [weak = std::weak_ptr (transport),
+                                                       id = *operation] (const result_t<void> &) {
+        if (const auto owner = weak.lock ())
+            (void) owner->complete_local_operation (id);
+    });
     co_await waiter;
     co_return true;
 }
@@ -3774,7 +3786,10 @@ public_host_runtime_t::relocation_target_fence (const relocation_target_attempt_
             {coordinator.owner_id, static_cast<std::int64_t> (coordinator.lease_generation)},
             {attempt.prepare.target.target_owner_id,
              static_cast<std::int64_t> (attempt.prepare.target.target_owner_lease_generation)},
-            attempt.prepare.relocation};
+            attempt.prepare.relocation,
+            coordinator.node_routing_id,
+            coordinator.node_generation,
+            attempt.prepare.target_attempt_generation};
 }
 
 public_host_runtime_t::relocation_target_settlement_t
@@ -3821,7 +3836,7 @@ task_t<void> public_host_runtime_t::poll_relocation_target_attempts ()
             if (relocation_target_terminal (attempt) || !relocation_target_wire_ready (attempt)
                 || attempt.next_finalize_at > now)
                 continue;
-            if (attempt.phase == relocation_target_phase_t::dispatch_open)
+            if (attempt.phase >= relocation_target_phase_t::dispatch_open)
                 continue;
             if (attempt.phase == relocation_target_phase_t::cutover_received) {
                 pending.push_back (key);
@@ -4145,7 +4160,8 @@ bool public_host_runtime_t::submit_relocation_target_authority (
               attempt.prepare.coordinator.expected_authority_store_version,
               attempt.prepare.relocation,
               {attempt.prepare.coordinator.owner_id,
-               static_cast<std::int64_t> (attempt.prepare.coordinator.lease_generation)});
+               static_cast<std::int64_t> (attempt.prepare.coordinator.lease_generation)},
+              &attempt.prepare);
             if (published.status != stateful::authority_publish_status_t::published
                 || !published.current || published.current->source != attempt.sources.front ())
                 return adopt_store_fences ();
@@ -4454,6 +4470,8 @@ task_t<bool> public_host_runtime_t::try_finalize_relocation_target (relocation_a
 task_t<void>
 public_host_runtime_t::complete_relocation_target_when_delivered (relocation_attempt_key_t key)
 {
+    using publication_t = std::pair<stateful::object_ref_t, protocol::relocation_prepare_t>;
+    std::optional<publication_t> publication;
     const auto terminal = co_await _relocation_session_terminal_lane.run_task ([&] {
         const auto found = _relocation_target_attempts.find (key);
         if (found == _relocation_target_attempts.end ()
@@ -4462,11 +4480,29 @@ public_host_runtime_t::complete_relocation_target_when_delivered (relocation_att
               found->second.captured_requests.begin (), found->second.captured_requests.end (),
               [] (const auto &request) { return !request.delivery->task ().await_ready (); }))
             return std::shared_ptr<task_completion_source_t<void>>{};
-        found->second.captured_requests.clear ();
-        return found->second.terminal;
+        auto &attempt = found->second;
+        if (_relocation_authority && attempt.targets.size () == 1
+            && attempt.targets.front ().kind == stateful::object_kind_t::actor)
+            publication.emplace (attempt.targets.front (), attempt.prepare);
+        attempt.phase = relocation_target_phase_t::releasing_publication;
+        attempt.captured_requests.clear ();
+        return attempt.terminal;
     });
-    if (terminal)
+    if (!terminal)
+        co_return;
+
+    try {
+        if (publication
+            && !_relocation_authority->finish_relocation (publication->first, publication->second))
+            throw framework_exception_t (framework_error_kind_t::unavailable,
+                                         "Relocation target lost its authority publication fence");
         terminal->complete (result_t<void>::success ());
+    }
+    catch (...) {
+        terminal->complete (result_t<void>::failure (
+          framework_error_kind_t::unavailable, "Relocation target could not release publication"));
+        throw;
+    }
 }
 
 void public_host_runtime_t::record_relocation_reply_delivered (
@@ -8881,7 +8917,7 @@ void public_host_runtime_t::publish_relocation_next_due_on_lane () const
         include (assembly.expires_at);
     for (const auto &[key, attempt] : _relocation_target_attempts) {
         if (!relocation_target_terminal (attempt) && relocation_target_wire_ready (attempt)
-            && attempt.phase != relocation_target_phase_t::dispatch_open)
+            && attempt.phase < relocation_target_phase_t::dispatch_open)
             include (attempt.next_finalize_at);
     }
     for (const auto &[key, seal] : _session_seal_terminals) {

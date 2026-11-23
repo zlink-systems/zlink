@@ -5,6 +5,7 @@
 #include "runtime/timers/async_delay.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
+#include "runtime/locations/authority_aggregate_relocation.hpp"
 #include "runtime/locations/live_location_reader.hpp"
 #include <zlink/framework/contracts/configuration/detail/framework_options_state.hpp>
 #include <runtime/locations/location_repository.hpp>
@@ -3095,6 +3096,11 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
 
 task_t<void> mesh_node_runtime_t::await_actor_join_capture (const remote_actor_join_state_t &state)
 {
+    if (spot_node_runtime_t (_state->spot_state)
+          .reserved_with_pending_relocation_request (state.actor))
+        throw framework_exception_t (
+          framework_error_kind_t::unavailable,
+          "Actor Join cannot wait for captured request delivery in its own Actor turn");
     if (!_user_spot_store)
         throw framework_exception_t (framework_error_kind_t::unavailable,
                                      "Actor relocation authority is unavailable");
@@ -3102,15 +3108,15 @@ task_t<void> mesh_node_runtime_t::await_actor_join_capture (const remote_actor_j
     const auto key = runtime::actor_authority_key (state.actor.actor_id ().value ());
     const auto read = co_await _user_spot_store->read_authority (key);
     if (const auto *published = std::get_if<authority_snapshot_t> (&read)) {
-        const auto previous = runtime::decode_finishing_relocation (published->payload);
+        const auto previous = runtime::finishing_relocation (*published);
         const bool waited = co_await _node->await_previous_relocation_target (
-          previous ? runtime::protocol::relocation_id_t{previous->high, previous->low}
+          previous ? runtime::protocol::actor_join_relocation_id (previous->id)
                    : runtime::protocol::relocation_id_t{},
-          previous ? previous->target_attempt_generation : 0, state.source_actor, state.deadline);
+          previous ? previous->attempt_generation : 0, state.source_actor, state.deadline);
         if (previous || waited) {
             const auto current = co_await _user_spot_store->read_authority (key);
             if (const auto *snapshot = std::get_if<authority_snapshot_t> (&current);
-                !snapshot || runtime::decode_finishing_relocation (snapshot->payload))
+                !snapshot || runtime::finishing_relocation (*snapshot))
                 throw framework_exception_t (
                   framework_error_kind_t::unavailable,
                   "The previous relocation still holds the Actor authority publication");
@@ -3141,7 +3147,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::seal_remote_application_actor_jo
         const auto status = _node->status ();
         if (!authority || authority->allocation.state != placement_allocation_state_t::active
             || authority->allocation.object_kind != placement_object_kind_t::actor
-            || runtime::decode_finishing_relocation (authority->payload)
+            || runtime::finishing_relocation (*authority)
             || authority->object_generation != s->actor.object_generation ()
             || authority->authority_owner_generation != s->actor_authority_owner_generation
             || authority->allocation.target.node_rid.value () != s->source_actor.node_id
@@ -3567,7 +3573,8 @@ mesh_node_runtime_t::reserve_application_actor_join_barrier (const actor_ref_t &
         return result_t<std::shared_ptr<deferred_barrier_t>>::failure (
           framework_error_kind_t::not_found, "Deferred Actor join source runtime was not found");
     }
-    return spot_runtime.reserve_actor_join_barrier (actor);
+    return spot_runtime.reserve_actor_join_barrier (actor,
+                                                    _node->has_pending_relocation_requests (actor));
 }
 
 result_t<actor_join_reply_t> mesh_node_runtime_t::actor_join_reply_from_completion (

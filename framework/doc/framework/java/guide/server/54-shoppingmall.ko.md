@@ -31,6 +31,9 @@ ShoppingMall 샘플의 역할과 코드 위치, 주요 메시지 흐름, 실행 
 
 ## 1. 이 샘플이 보여 주는 것
 
+`CommerceApi`는 일반 HTTP 서버처럼 주문·조회 요청을 받아 처리하는 api node입니다.
+`OrderWorkflow`는 주문의 Instance Spot이 있는 play node입니다.
+
 주문 하나는 `OrderId`를 id로 하는 Instance Spot이 소유한다. API는 HTTP를 종단하고 주문 상태를
 직접 바꾸지 않으며, 같은 id로 요청을 보내기만 한다. Spot 안의 코드는 event stream을 다시 읽어
 현재 단계를 알아내고 다음 단계 하나를 실행한 뒤 event를 기록한다 — 조율 상태, 스케줄러, outbox
@@ -47,8 +50,8 @@ event sourcing은 framework 기능이 아니라 이 샘플이 Spot 위에 둔 ap
 
 | 역할 | process 수 | 소유하는 것 | 코드 위치 |
 | --- | ---: | --- | --- |
-| CommerceApi | 2 | HTTP 입력 검증, idempotency mapping, workflow 요청, read model 조회 | `Server/CommerceApi` |
-| OrderWorkflow | 2 | order workflow Instance Spot, replay·다음 단계·event 기록, 외부 module adapter | `Server/OrderWorkflow` |
+| api node (CommerceApi) | 2 | HTTP 입력 검증, idempotency mapping, workflow 요청, read model 조회 | `Server/CommerceApi` |
+| play node (OrderWorkflow) | 2 | order workflow Instance Spot, replay·다음 단계·event 기록, 외부 module adapter | `Server/OrderWorkflow` |
 | Client | 1 | 주문 시작, polling, 중복·실패·재개·rebuild assertion | `Client` |
 
 상태 전이, event 생성과 보상 규칙은 `Server/OrderWorkflow/Domain`에 있고 framework type을 참조하지

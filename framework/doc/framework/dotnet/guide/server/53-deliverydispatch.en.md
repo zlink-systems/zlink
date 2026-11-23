@@ -34,6 +34,10 @@ for requirements, message contracts, and verification criteria.
 
 ## 1. What This Sample Demonstrates
 
+`CourierSession` and `CustomerGateway` are session nodes that manage courier and customer sessions.
+`CourierActorNode` is a play node that hosts the courier Entry Spot. `Dispatch` is the api node that handles dispatch requests like an ordinary HTTP server.
+The play node `CourierActorNode` calls the api node `Dispatch` as the Client on the `deliverydispatch.dispatch` [ClientServer Channel](../../../common/spec/server/02-channel-transport/03-client-server-channel.en.md).
+
 The customer creates a delivery over HTTP and receives its status over STREAM. The courier receives
 offers over STREAM and sends decisions. The servers in between keep no session map and no socket
 registry — the courier and the customer are each an Actor with an id, and offers and statuses are
@@ -50,11 +54,11 @@ push and the decision → reassignment on timeout → status recording and the c
 
 | Role | Processes | Owns | Code |
 | --- | ---: | --- | --- |
-| Dispatch | 1 | HTTP intake, candidate selection, offer records and deadlines, reassignment | `Server/Dispatch` |
-| CourierSession | 1 | Courier STREAM, courier Actor binding and relay | `Server/CourierSession` |
-| CourierActorNode | 2 | Courier Entry Spot and courier Actors | `Server/CourierActorNode` |
+| api node (Dispatch) | 1 | HTTP intake, candidate selection, offer records and deadlines, reassignment | `Server/Dispatch` |
+| session node (CourierSession) | 1 | Courier STREAM, courier Actor binding and relay | `Server/CourierSession` |
+| play node (CourierActorNode) | 2 | Courier Entry Spot and courier Actors | `Server/CourierActorNode` |
 | Tracking | 1 | Status event recording, forwarding to the customer Actor | `Server/Tracking` |
-| CustomerGateway | 1 | Customer STREAM, customer Actor binding and pushes | `Server/CustomerGateway` |
+| session node (CustomerGateway) | 1 | Customer STREAM, customer Actor binding and pushes | `Server/CustomerGateway` |
 | Client | 1 | The customer and courier scenarios with self-checks | `Client` |
 
 Candidate order, deadlines and attempt validation belong to Dispatch's Application, and the status

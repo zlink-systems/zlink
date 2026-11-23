@@ -249,6 +249,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 .BeginPreparingAsync(
                     found.Snapshot,
                     sourceAuthority,
+                    PlanTargetAuthority(sourceAuthority, destination),
                     relocationId,
                     registration.ApplicationVersion,
                     cancellationToken
@@ -846,18 +847,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         )
             throw new ArgumentOutOfRangeException(nameof(relocationId));
 
-        var targetAuthority = sourceAuthority with
-        {
-            State = ZLinkActorAuthorityState.Ready,
-            CurrentSpotId = destination.SpotId,
-            CurrentSpotGeneration = destination.SpotObjectGeneration,
-            CurrentSpotKind = destination.SpotKind,
-            OwnerId = destination.Owner.OwnerId,
-            OwnerLeaseGeneration = checked((ulong)destination.Owner.LeaseGeneration),
-            MeshName = destination.MeshName,
-            NodeRid = destination.NodeRid,
-            NodeGeneration = destination.NodeLifecycleGeneration,
-        };
+        var targetAuthority = PlanTargetAuthority(sourceAuthority, destination);
         var relocatingAuthority = ZLinkActorRelocationAuthorityPayloadCodec.Encode(
             new ZLinkActorRelocationAuthorityPayload(
                 relocationId,
@@ -955,6 +945,23 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             ),
         };
     }
+
+    internal static ZLinkActorAuthorityPayload PlanTargetAuthority(
+        ZLinkActorAuthorityPayload sourceAuthority,
+        ZLinkStandaloneActorRelocationDestination destination
+    ) =>
+        sourceAuthority with
+        {
+            State = ZLinkActorAuthorityState.Ready,
+            CurrentSpotId = destination.SpotId,
+            CurrentSpotGeneration = destination.SpotObjectGeneration,
+            CurrentSpotKind = destination.SpotKind,
+            OwnerId = destination.Owner.OwnerId,
+            OwnerLeaseGeneration = checked((ulong)destination.Owner.LeaseGeneration),
+            MeshName = destination.MeshName,
+            NodeRid = destination.NodeRid,
+            NodeGeneration = destination.NodeLifecycleGeneration,
+        };
 
     private static ZLinkStandaloneActorRelocationDestination ResolveDestination(
         ZLinkSpotActivation? sourceActivation,
@@ -2637,7 +2644,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 );
             if (
                 !ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                    found.Snapshot.Payload.Span,
+                    found.Snapshot,
                     out var canonical
                 )
             )
@@ -2657,52 +2664,65 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 throw DataLost(
                     "Standalone Actor direct target activation lost its exact attempt fence."
                 );
-            ReadOnlyMemory<byte> payload;
             if (
                 !clearPublication
-                && canonical.Phase >= (byte)ZLinkStandaloneActorCanonicalPhase.Activated
+                && canonical.Phase
+                    is (byte)ZLinkStandaloneActorCanonicalPhase.Activated
+                        or (byte)ZLinkStandaloneActorCanonicalPhase.Cleaning
+                        or (byte)ZLinkStandaloneActorCanonicalPhase.Completed
             )
                 return;
-            if (canonical.Phase == (byte)ZLinkStandaloneActorCanonicalPhase.Completed)
-                payload = canonical.SteadyAuthorityPayload;
-            else if (
-                canonical.Phase
-                is (byte)ZLinkStandaloneActorCanonicalPhase.Committed
-                    or (byte)ZLinkStandaloneActorCanonicalPhase.Activating
-                    or (byte)ZLinkStandaloneActorCanonicalPhase.Activated
-                    or (byte)ZLinkStandaloneActorCanonicalPhase.Cleaning
+            var remove = canonical.Phase == (byte)ZLinkStandaloneActorCanonicalPhase.Completed;
+            if (
+                !remove
+                && canonical.Phase
+                    is not (
+                        (byte)ZLinkStandaloneActorCanonicalPhase.Committed
+                        or (byte)ZLinkStandaloneActorCanonicalPhase.Activating
+                        or (byte)ZLinkStandaloneActorCanonicalPhase.Activated
+                        or (byte)ZLinkStandaloneActorCanonicalPhase.Cleaning
+                    )
             )
-            {
-                payload = ZLinkCanonicalRelocationAuthorityStateCodec.ReplaceRelocationState(
-                    found.Snapshot.Payload.Span,
-                    canonical.State with
-                    {
-                        Phase = checked((byte)(canonical.Phase + 1)),
-                    },
-                    stage.Envelope
-                );
-            }
-            else
                 throw DataLost(
                     $"Standalone Actor direct target activation phase is '{canonical.Phase}'."
+                );
+            var next =
+                remove ? null
+                : found.Snapshot.Relocation is { } record
+                    ? record with
+                    {
+                        Phase = (ServiceWireCodec.RelocationPhase)(canonical.Phase + 1),
+                    }
+                : ZLinkAuthorityRelocation.FromState(
+                    stage.Envelope.AggregateId,
+                    canonical.State with
+                    {
+                        Phase = (byte)(canonical.Phase + 1),
+                    },
+                    ZLinkDirectRelocationInventory.Digest(
+                        stage.Participant.AuthorityKey,
+                        canonical.State.CoordinatorExpectedAuthorityStoreVersion,
+                        canonical.SteadyAuthorityPayload.Span
+                    )
                 );
             var exchanged = await store
                 .CompareExchangeAuthorityAsync(
                     stage.Participant.AuthorityKey,
                     found.Snapshot.StoreVersion,
                     new ZLinkAuthorityMutation.Put(
-                        payload,
+                        canonical.SteadyAuthorityPayload,
                         ZLinkAuthorityGenerationTransition.Preserve,
                         null,
                         null
-                    ),
+                    )
+                    {
+                        Relocation = next,
+                        ClearRelocation = remove,
+                    },
                     cancellationToken
                 )
                 .ConfigureAwait(false);
-            if (
-                exchanged is ZLinkAuthorityCompareExchangeResult.Stored
-                && canonical.Phase == (byte)ZLinkStandaloneActorCanonicalPhase.Completed
-            )
+            if (exchanged is ZLinkAuthorityCompareExchangeResult.Stored && remove)
                 return;
             if (
                 exchanged
@@ -2884,7 +2904,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                         )
                         || publication.AggregateId != stage.Envelope.AggregateId
                         || !ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                            found.Snapshot.Payload.Span,
+                            found.Snapshot,
                             out var canonical
                         )
                         || !ZLinkActorRelocationAuthorityPayloadCodec.TryDecode(

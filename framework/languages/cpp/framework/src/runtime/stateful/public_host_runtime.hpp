@@ -674,6 +674,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                                                    const stateful::object_ref_t &object,
                                                    std::chrono::steady_clock::time_point deadline);
     task_t<bool> has_finishing_relocation_target ();
+    bool has_pending_relocation_requests (const actor_ref_t &actor);
     void set_channel_weight (const std::string &channel_name, std::uint32_t weight);
     task_t<void> register_actor_request (pending_operation_t &operation,
                                          std::chrono::milliseconds timeout);
@@ -1217,7 +1218,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     {
         waiting_cutover,
         cutover_received,
-        dispatch_open
+        dispatch_open,
+        releasing_publication
     };
     /* 28/52: command 44 (session_relocation_route) is submitted one-way
      * exactly once per route after the target CAS commits (S2) -- there is

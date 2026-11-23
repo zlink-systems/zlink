@@ -9738,7 +9738,8 @@ spot_node_runtime_t::actor_join_operation_id (std::string_view transfer_id) cons
 }
 
 result_t<std::shared_ptr<deferred_barrier_t>>
-spot_node_runtime_t::reserve_actor_join_barrier (const actor_ref_t &actor_ref)
+spot_node_runtime_t::reserve_actor_join_barrier (const actor_ref_t &actor_ref,
+                                                 bool pending_relocation_request)
 {
     if (::zlink::framework::detail::actor_ref_access_t::empty (actor_ref)) {
         return result_t<std::shared_ptr<deferred_barrier_t>>::failure (
@@ -9747,8 +9748,8 @@ spot_node_runtime_t::reserve_actor_join_barrier (const actor_ref_t &actor_ref)
 
     const auto key = actor_key (actor_ref);
     const auto reservation_id = next_actor_transfer_id ();
-    const auto claimed =
-      _state->actor_transfer_coordinator->try_reserve_source (key, reservation_id);
+    const auto claimed = _state->actor_transfer_coordinator->try_reserve_source (
+      key, reservation_id, pending_relocation_request);
     if (!claimed)
         return detail::propagate_failure<std::shared_ptr<deferred_barrier_t>> (
           claimed, "Actor join reservation failed");
@@ -9792,6 +9793,13 @@ spot_node_runtime_t::reserve_actor_join_barrier (const actor_ref_t &actor_ref)
     }
     return executor->queue ()->reserve_deferred_barrier_next (
       "actor-join", std::move (cancel_reservation), std::move (settle_reservation));
+}
+
+bool spot_node_runtime_t::reserved_with_pending_relocation_request (
+  const actor_ref_t &actor_ref) const
+{
+    return _state->actor_transfer_coordinator->reserved_with_pending_relocation_request (
+      actor_key (actor_ref));
 }
 
 void spot_node_runtime_t::cancel_local_actor_handoff (const actor_ref_t &actor_ref)

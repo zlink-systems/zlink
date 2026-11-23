@@ -173,12 +173,14 @@ struct public_host_runtime_test_access_t
         return host._relocation_session_terminal_lane.run_sync ([&] {
             auto &attempt = host._relocation_target_attempts[{31, 7, 1}];
             attempt.targets = {object};
-            if (pending_request)
-                attempt.captured_requests.push_back (
-                  {object.kind, object.key, std::make_shared<task_completion_source_t<void>> ()});
+            std::shared_ptr<task_completion_source_t<void>> delivery;
+            if (pending_request) {
+                delivery = std::make_shared<task_completion_source_t<void>> ();
+                attempt.captured_requests.push_back ({object.kind, object.key, delivery});
+            }
             attempt.authority_committed_at = std::chrono::steady_clock::now ();
             attempt.terminal = std::make_shared<task_completion_source_t<void>> ();
-            return attempt.terminal;
+            return std::pair{attempt.terminal, delivery};
         });
     }
 
@@ -504,6 +506,7 @@ struct observations_t
     std::optional<joined_admission_batch_t> joined_admission_completion;
     fw::task_completion_source_t<void> release_leave;
     bool hold_join_admission = false;
+    std::function<void ()> after_move_deferred;
     std::optional<std::chrono::milliseconds> join_timeout;
     fw::task_completion_source_t<void> join_admission_entered;
     fw::task_completion_source_t<void> release_join_admission;
@@ -768,6 +771,8 @@ class entry_t final : public fw::entry_spot_t<actor_t>
             if (observations->join_timeout)
                 join.timeout (*observations->join_timeout);
             join.defer ();
+            if (observations->after_move_deferred)
+                observations->after_move_deferred ();
         }
     }
     fw::task_t<fw::actor_create_response_t> on_create_actor (actor_t &,
@@ -6001,7 +6006,7 @@ enum class previous_target_case_t
 };
 void join_during_previous_publication (previous_target_case_t scenario)
 {
-    namespace authority = fw::runtime::actor_authority_detail;
+    namespace aggregate = fw::runtime::authority_aggregate_codec;
     auto evidence = std::make_shared<observations_t> ();
     if (scenario == previous_target_case_t::deadline
         || scenario == previous_target_case_t::captured_request)
@@ -6034,36 +6039,35 @@ void join_during_previous_publication (previous_target_case_t scenario)
     const auto key = fw::runtime::actor_authority_key (actor_id);
     const auto original =
       std::get<fw::authority_snapshot_t> (repository.read_authority (key).result ().value ());
-    std::vector<std::byte> slot;
-    for (auto value : {31u, 7u, 1u, 1u})
-        authority::append_u64be (slot, value);
-    authority::append_text16be (slot, "pending");
-    authority::append_u32be (slot, 0);
-    authority::append_text8 (slot, "previous-source");
-    authority::append_u64be (slot, 1);
-    authority::append_text8 (slot, "previous-owner");
-    authority::append_u64be (slot, 1);
-    authority::append_text8 (slot, first_rid);
-    authority::append_u64be (slot, original.allocation.target.node_lifecycle_generation);
-    authority::append_text8 (slot, original.owner.owner_id);
-    authority::append_u64be (slot, original.owner.lease_generation);
-    authority::append_text8 (slot, "previous-owner");
-    authority::append_u64be (slot, 1);
-    authority::append_text8 (slot, "previous-source");
-    authority::append_u64be (slot, 1);
-    authority::append_text8 (slot, "previous-source-version");
-    const std::uint8_t phase = scenario == previous_target_case_t::absent ? 6 : 7;
-    authority::append_u8 (slot, phase);
-    authority::append_u64be (slot, 1);
-    authority::append_u8 (slot, 0);
-    const auto payload = fw::tests::with_relocation_slot (original.payload, slot);
-    const auto projection = fw::runtime::decode_direct_actor_authority_payload (payload);
-    ASSERT_TRUE (projection && projection->has_relocation_state);
-    ASSERT_EQ (projection->relocation_phase, phase);
+    const aggregate::json_t source_fence{
+      {"nodeRid", zlink::routing_id_t::from ("previous-source").to_hex ()},
+      {"nodeGeneration", "1"},
+      {"ownerId", "previous-owner"},
+      {"ownerLeaseGeneration", "1"}};
+    auto coordinator = source_fence;
+    coordinator["expectedStoreVersion"] = "previous-source-version";
+    const auto previous_publication = aggregate::replace (
+      original.aggregate,
+      {{"relocationId", aggregate::wire_uuid (31, 7)},
+       {"phase", scenario == previous_target_case_t::absent ? "activated" : "cleaning"},
+       {"source", source_fence},
+       {"coordinator", coordinator},
+       {"target",
+        {{"nodeRid",
+          zlink::routing_id_t::from (std::string (original.allocation.target.node_rid.value ()))
+            .to_hex ()},
+         {"nodeGeneration", std::to_string (original.allocation.target.node_lifecycle_generation)},
+         {"ownerId", original.owner.owner_id},
+         {"ownerLeaseGeneration", std::to_string (original.owner.lease_generation)},
+         {"attemptGeneration", "1"}}},
+       {"sourceInventorySha256", std::string (64, 'a')},
+       {"applicationVersion", "1"}});
     const auto published =
       std::get<fw::authority_stored_t> (
         repository
-          .compare_exchange_authority (key, original.store_version, fw::authority_put_t{payload})
+          .compare_exchange_authority (
+            key, original.store_version,
+            fw::authority_put_t{original.payload, {}, {}, previous_publication})
           .result ()
           .value ())
         .snapshot;
@@ -6071,6 +6075,7 @@ void join_during_previous_publication (previous_target_case_t scenario)
     struct target_terminal_guard_t
     {
         std::shared_ptr<fw::task_completion_source_t<void>> terminal;
+        std::shared_ptr<fw::task_completion_source_t<void>> delivery;
         ~target_terminal_guard_t ()
         {
             if (terminal)
@@ -6085,9 +6090,15 @@ void join_during_previous_publication (previous_target_case_t scenario)
         const auto object =
           native->objects ().find (fw::runtime::stateful::object_kind_t::actor, actor_id);
         ASSERT_TRUE (object);
-        previous.terminal =
+        auto [terminal, delivery] =
           fw::runtime::host::public_host_runtime_test_access_t::track_previous_target (
             *native, *object, scenario == previous_target_case_t::captured_request);
+        previous.terminal = std::move (terminal);
+        previous.delivery = delivery;
+        if (delivery)
+            evidence->after_move_deferred = [delivery] {
+                delivery->complete (fw::result_t<void>::success ());
+            };
     }
 
     auto &client = services.get_required<fw::actor_client_t> ();
@@ -6114,8 +6125,9 @@ void join_during_previous_publication (previous_target_case_t scenario)
               lock, 150ms, [&] { return !evidence->completions.empty (); }));
         }
         const auto release = repository
-                               .compare_exchange_authority (key, published.store_version,
-                                                            fw::authority_put_t{original.payload})
+                               .compare_exchange_authority (
+                                 key, published.store_version,
+                                 fw::authority_put_t{original.payload, {}, {}, original.aggregate})
                                .result ();
         ASSERT_TRUE (release);
         ASSERT_TRUE (std::holds_alternative<fw::authority_stored_t> (release.value ()));
@@ -6133,8 +6145,11 @@ void join_during_previous_publication (previous_target_case_t scenario)
         ASSERT_EQ (evidence->completions.size (), 1u);
         const auto *failed = std::get_if<fw::actor_join_failed_t> (&evidence->completions.front ());
         ASSERT_NE (failed, nullptr);
-        if (scenario == previous_target_case_t::captured_request)
+        if (scenario == previous_target_case_t::captured_request) {
+            ASSERT_TRUE (previous.delivery);
+            EXPECT_TRUE (previous.delivery->task ().await_ready ());
             EXPECT_FALSE (evidence->join_admission_entered.task ().await_ready ());
+        }
         EXPECT_EQ (failed->error_kind, scenario == previous_target_case_t::deadline
                                          ? fw::framework_error_kind_t::deadline_exceeded
                                          : fw::framework_error_kind_t::unavailable);
@@ -6373,13 +6388,14 @@ TEST (ActorMaintenanceJoin, SourcePreserveDiscardsRawIdentityPreparedBeforeTarge
       [services, key, payload = original.payload, preserved] () mutable -> fw::task_t<void> {
           const auto current = std::get<fw::authority_snapshot_t> (
             co_await services.get_required<fw::location_repository_t> ().read_authority (key));
-          // The existing source Preserve operation is an unchanged-authority
-          // CAS. Restore the uncaptured payload so this newer Store fence
-          // definitively excludes the pending target CAS (Location §10).
+          // Source Preserve clears the captured attempt in the same CAS
+          // that restores the source payload (Location §10).
+          fw::authority_put_t preserve{payload};
+          preserve.replace_aggregate =
+            fw::runtime::authority_aggregate_codec::without_capture (current.aggregate);
           preserved->set_value (std::holds_alternative<fw::authority_stored_t> (
             co_await services.get_required<fw::location_repository_t> ()
-              .compare_exchange_authority (key, current.store_version,
-                                           fw::authority_put_t{payload})));
+              .compare_exchange_authority (key, current.store_version, std::move (preserve))));
       });
     const auto relocated =
       source.app
@@ -9010,12 +9026,18 @@ class join_settlement_authority_t final : public fw::runtime::stateful::authorit
                        std::vector<std::byte> payload,
                        std::string version,
                        fw::runtime::protocol::relocation_id_t relocation,
-                       fw::location_owner_token_t source_owner) override
+                       fw::location_owner_token_t source_owner,
+                       const fw::runtime::protocol::relocation_prepare_t *prepare) override
     {
         return _inner.publish (source, target, std::move (owner), std::move (placement),
                                std::move (relocation_reference), checksum, inventory,
                                std::move (payload), std::move (version), relocation,
-                               std::move (source_owner));
+                               std::move (source_owner), prepare);
+    }
+    bool finish_relocation (const object &target,
+                            const fw::runtime::protocol::relocation_prepare_t &prepare) override
+    {
+        return _inner.finish_relocation (target, prepare);
     }
     std::optional<reference> read (kind type, const std::string &key) override
     {

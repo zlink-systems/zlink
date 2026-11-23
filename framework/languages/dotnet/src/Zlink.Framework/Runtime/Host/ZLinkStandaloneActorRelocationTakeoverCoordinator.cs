@@ -71,12 +71,7 @@ internal sealed class ZLinkStandaloneActorRelocationTakeoverCoordinator(
         ZLinkActorAuthorityPayload targetAuthority
     )
     {
-        if (
-            !ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                snapshot.Payload.Span,
-                out var current
-            )
-        )
+        if (!ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(snapshot, out var current))
             return false;
         Span<byte> id = stackalloc byte[16];
         relocationId.TryWriteBytes(id, bigEndian: true, out _);

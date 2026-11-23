@@ -1854,9 +1854,14 @@ class public_memory_authority_store_t final
             observed_target_placement = retarget->target;
             snapshot->authority_owner_generation += retarget_authority_generation_advance;
             snapshot->owner = retarget->target.owner;
+            snapshot->allocation.target = retarget->target;
             snapshot->payload = retarget->payload;
+            if (retarget->replace_aggregate)
+                snapshot->aggregate = *retarget->replace_aggregate;
         } else {
             snapshot->payload = put->payload;
+            if (put->replace_aggregate)
+                snapshot->aggregate = *put->replace_aggregate;
         }
         snapshot->store_version = std::to_string (std::stoull (snapshot->store_version) + 1);
         snapshot->store_now = std::chrono::system_clock::now ();
@@ -2030,17 +2035,19 @@ class memory_authority_store_t final : public authority_relocation_port_t
         return settled;
     }
 
-    authority_publish_result_t publish (const object_ref_t &source,
-                                        const object_ref_t &target,
-                                        zlink::framework::location_owner_token_t target_owner,
-                                        zlink::framework::object_creation_target_t,
-                                        std::string relocation_reference,
-                                        std::uint32_t checksum_crc32c,
-                                        inventory_digest_t inventory_digest,
-                                        std::vector<std::byte> target_application_payload = {},
-                                        std::string = {},
-                                        zlink::framework::runtime::protocol::relocation_id_t = {},
-                                        zlink::framework::location_owner_token_t = {}) override
+    authority_publish_result_t
+    publish (const object_ref_t &source,
+             const object_ref_t &target,
+             zlink::framework::location_owner_token_t target_owner,
+             zlink::framework::object_creation_target_t,
+             std::string relocation_reference,
+             std::uint32_t checksum_crc32c,
+             inventory_digest_t inventory_digest,
+             std::vector<std::byte> target_application_payload = {},
+             std::string = {},
+             zlink::framework::runtime::protocol::relocation_id_t = {},
+             zlink::framework::location_owner_token_t = {},
+             const zlink::framework::runtime::protocol::relocation_prepare_t * = nullptr) override
     {
         std::lock_guard lock (mutex);
         log.push_back ("publish");
@@ -3297,6 +3304,9 @@ void test_public_authority_store_adapter (test_context_t &test)
     public_memory_authority_store_t captured_store;
     captured_store.snapshot = store.snapshot;
     captured_store.snapshot->store_version = "2";
+    captured_store.snapshot->allocation.target = {source.mesh_name, source_projection->node_rid,
+                                                  source_projection->node_generation,
+                                                  captured_store.snapshot->owner};
     captured_store.snapshot->payload =
       zlink::framework::runtime::encode_canonical_authority_payload (*captured_payload);
     const auto captured_projection =
@@ -3971,6 +3981,33 @@ void test_relocation_target_cutover_and_authority_settlement (test_context_t &te
     target.stop ();
 }
 
+zlink::framework::authority_snapshot_t source_relocation_authority (
+  const object_ref_t &actor, std::string mesh, std::chrono::system_clock::time_point now)
+{
+    namespace fw = zlink::framework;
+    const fw::object_creation_target_t placement{
+      std::move (mesh), fw::node_rid_t::from_string ("s"), 1, {"source-owner", 1}};
+    auto payload = fw::runtime::encode_actor_authority_payload (
+      {.stable_type = "player",
+       .actor_id = actor.key,
+       .current_spot_id = "source-entry",
+       .current_spot_generation = 1,
+       .current_spot_kind = fw::runtime::actor_authority_spot_kind_t::entry,
+       .owner_id = placement.owner.owner_id,
+       .owner_lease_generation = static_cast<std::uint64_t> (placement.owner.lease_generation),
+       .mesh_name = placement.mesh_name,
+       .node_rid = placement.node_rid,
+       .node_generation = placement.node_lifecycle_generation});
+    fw::authority_snapshot_t snapshot{"1",
+                                      std::move (payload),
+                                      actor.object_generation,
+                                      actor.authority_owner_generation,
+                                      placement.owner,
+                                      now};
+    snapshot.allocation.target = placement;
+    return snapshot;
+}
+
 void test_source_relocation_metric_outcomes (test_context_t &test)
 {
     namespace fw = zlink::framework;
@@ -3992,12 +4029,7 @@ void test_source_relocation_metric_outcomes (test_context_t &test)
         const auto actor = create_actor (objects, "metric-actor");
         public_memory_authority_store_t store;
         const auto store_now = std::chrono::system_clock::time_point{std::chrono::seconds{100}};
-        store.snapshot = fw::authority_snapshot_t{"1",
-                                                  {},
-                                                  actor.object_generation,
-                                                  actor.authority_owner_generation,
-                                                  {"source-owner", 1},
-                                                  store_now};
+        store.snapshot = source_relocation_authority (actor, "outcome-contract", store_now);
         store.owner_lease_read = fw::owner_lease_found_t{
           {"source-owner", 1}, store_now + std::chrono::seconds{1}, store_now};
         auto authority = std::make_shared<public_authority_store_adapter_t> (store);
@@ -4022,9 +4054,17 @@ void test_source_relocation_metric_outcomes (test_context_t &test)
           .target_node_routing_id = {'t'},
           .target_node_generation = 1,
           .application_version = 1,
-          .prepare_target = [] (const std::vector<frozen_object_state_t> &,
-                                const relocation_payload_manifest_t &)
-            -> fw::task_t<relocation_reason_t> { co_return relocation_reason_t::none; },
+          .prepare_target =
+            [&] (const std::vector<frozen_object_state_t> &,
+                 const relocation_payload_manifest_t &) -> fw::task_t<relocation_reason_t> {
+              const auto &aggregate = store.snapshot->aggregate;
+              test.require (
+                aggregate && aggregate->relocation && aggregate->relocation->phase == "captured"
+                  && aggregate->relocation->expected_store_version == "1"
+                  && store.snapshot->store_version != "1",
+                "source must publish Captured against the original fence before PREPARE");
+              co_return relocation_reason_t::none;
+          },
           .send_state_chunk = [] (const protocol::relocation_state_t &) -> fw::task_t<bool> {
               co_return true;
           },
@@ -4410,12 +4450,8 @@ void test_source_settlement_after_subsequent_moves (test_context_t &test)
               std::stop_token) -> zlink::framework::task_t<bool> { co_return true; });
         const auto actor = create_actor (objects, "chain-actor");
         public_memory_authority_store_t store;
-        store.snapshot = framework::authority_snapshot_t{"1",
-                                                         {},
-                                                         actor.object_generation,
-                                                         actor.authority_owner_generation,
-                                                         {"source-owner", 1},
-                                                         std::chrono::system_clock::now ()};
+        store.snapshot = source_relocation_authority (actor, "settlement-metric-mesh",
+                                                      std::chrono::system_clock::now ());
         store.retarget_authority_generation_advance = 9;
         auto authority = std::make_shared<public_authority_store_adapter_t> (store);
         auto roots = std::make_shared<memory_relocation_repository_t> ();
@@ -4595,17 +4631,19 @@ class settlement_authority_t final : public authority_relocation_port_t
         return settled;
     }
 
-    authority_publish_result_t publish (const object_ref_t &,
-                                        const object_ref_t &,
-                                        zlink::framework::location_owner_token_t,
-                                        zlink::framework::object_creation_target_t,
-                                        std::string,
-                                        std::uint32_t,
-                                        inventory_digest_t,
-                                        std::vector<std::byte> = {},
-                                        std::string = {},
-                                        zlink::framework::runtime::protocol::relocation_id_t = {},
-                                        zlink::framework::location_owner_token_t = {}) override
+    authority_publish_result_t
+    publish (const object_ref_t &,
+             const object_ref_t &,
+             zlink::framework::location_owner_token_t,
+             zlink::framework::object_creation_target_t,
+             std::string,
+             std::uint32_t,
+             inventory_digest_t,
+             std::vector<std::byte> = {},
+             std::string = {},
+             zlink::framework::runtime::protocol::relocation_id_t = {},
+             zlink::framework::location_owner_token_t = {},
+             const zlink::framework::runtime::protocol::relocation_prepare_t * = nullptr) override
     {
         return {};
     }

@@ -226,6 +226,7 @@ public sealed partial class RelocationBehaviorConformanceTests
                     .Snapshot;
                 Assert.Equal(previous.StoreVersion, current.StoreVersion);
                 Assert.Equal(previous.Payload.ToArray(), current.Payload.ToArray());
+                Assert.Equal(previous.Relocation, current.Relocation);
             }
             else
             {
@@ -337,27 +338,24 @@ public sealed partial class RelocationBehaviorConformanceTests
             RelocationReference =
                 ZLinkStandaloneActorRelocationPrecommitCoordinator.DirectTransferReference,
         };
-        var payload = ZLinkCanonicalRelocationAuthorityStateCodec.ReplaceRelocationState(
-            current.Payload.Span,
-            publication,
-            new ZLinkRelocationEnvelope(
-                Guid.Parse("00000000-0000-001f-0000-000000000007"),
-                publication.AggregateGeneration,
-                new byte[32],
-                []
-            )
-        );
         var published = Assert
             .IsType<ZLinkAuthorityCompareExchangeResult.Stored>(
                 await repository.CompareExchangeAuthorityAsync(
                     key,
                     current.StoreVersion,
                     new ZLinkAuthorityMutation.Put(
-                        payload,
+                        current.Payload,
                         ZLinkAuthorityGenerationTransition.Preserve,
                         null,
                         null
                     )
+                    {
+                        Relocation = ZLinkAuthorityRelocation.FromState(
+                            Guid.Parse("00000000-0000-001f-0000-000000000007"),
+                            publication,
+                            new string('a', 64)
+                        ),
+                    }
                 )
             )
             .Snapshot;
@@ -378,6 +376,7 @@ public sealed partial class RelocationBehaviorConformanceTests
             .Snapshot;
         Assert.Equal(published.StoreVersion, after.StoreVersion);
         Assert.Equal(published.Payload.ToArray(), after.Payload.ToArray());
+        Assert.Equal(published.Relocation, after.Relocation);
     }
 
     [Theory]
@@ -2994,10 +2993,7 @@ public sealed partial class RelocationBehaviorConformanceTests
         var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId);
         return WaitUntilAsync(async () =>
             await repository.ReadAuthorityAsync(key) is ZLinkAuthorityReadResult.Found found
-            && !ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                found.Snapshot.Payload.Span,
-                out _
-            )
+            && !ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(found.Snapshot, out _)
         );
     }
 
@@ -3298,12 +3294,12 @@ internal sealed class RecordingLocationStore(
             {
                 using var incoming = JsonDocument.Parse(put.Bytes);
                 if (
-                    ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                        incoming.RootElement.GetProperty("payload").GetBytesFromBase64(),
-                        out var publication
-                    )
-                    && publication.Phase == (byte)ServiceWireCodec.RelocationPhase.Completed
-                    && RoutingId.FromHex(publication.State.TargetNodeRid) == trace.TargetNodeRid
+                    incoming.RootElement.TryGetProperty("aggregate", out var aggregate)
+                    && aggregate.TryGetProperty("relocation", out var relocation)
+                    && relocation.GetProperty("phase").GetString() == "completed"
+                    && RoutingId.FromHex(
+                        relocation.GetProperty("target").GetProperty("nodeRid").GetString()!
+                    ) == trace.TargetNodeRid
                 )
                 {
                     TargetCleaningStarted.TrySetResult();
@@ -3328,14 +3324,18 @@ internal sealed class RecordingLocationStore(
                     relocationId
                 )
                 && ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                    current.Snapshot.Payload.Span,
+                    current.Snapshot,
                     out var projection
                 )
             )
             {
                 using var incoming = JsonDocument.Parse(put.Bytes);
                 if (
-                    incoming
+                    (
+                        !incoming.RootElement.TryGetProperty("aggregate", out var aggregate)
+                        || !aggregate.TryGetProperty("relocation", out _)
+                    )
+                    && incoming
                         .RootElement.GetProperty("payload")
                         .GetBytesFromBase64()
                         .AsSpan()

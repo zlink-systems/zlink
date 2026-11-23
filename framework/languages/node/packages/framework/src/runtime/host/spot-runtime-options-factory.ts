@@ -113,7 +113,8 @@ export class ZLinkSpotRuntimeOptionsFactory {
         remoteBoundSessionTarget,
         fallbackActorRef,
         requestTerminal,
-        messageFollowOrigin
+        messageFollowOrigin,
+        preparation
       ) => {
         const runtime = this.options.spotNodeRuntime();
         if (runtime === undefined) {
@@ -129,7 +130,8 @@ export class ZLinkSpotRuntimeOptionsFactory {
           remoteBoundSessionTarget,
           fallbackActorRef,
           requestTerminal,
-          messageFollowOrigin
+          messageFollowOrigin,
+          preparation
         );
       },
       dispatchEntryActorJoin: async (meshName, actor, handoffBacklog) => {

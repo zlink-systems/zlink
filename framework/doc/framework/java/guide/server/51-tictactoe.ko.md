@@ -31,7 +31,11 @@ title: "TicTacToe 따라 읽기 · Java"
 
 ## 1. 이 샘플이 보여 주는 것
 
-별도 Session 서버가 없다. `Play`가 STREAM 연결, player Actor, Entry Spot과 room Spot을 함께
+`Play`는 room Spot이 있는 play node이며 클라이언트 세션을 관리하는 session node 역할도 맡습니다.
+`Api`는 일반 HTTP 서버처럼 방 생성과 인증 요청을 받아 처리하는 api node입니다.
+play node인 `Play`는 `tictactoe.api` [ClientServer Channel](../../../common/spec/server/02-channel-transport/03-client-server-channel.ko.md)의 Client로 api node인 `Api`를 호출합니다.
+
+`Play`가 STREAM 연결, player Actor, Entry Spot과 room Spot을 함께
 소유하고, `Api`는 HTTP room 생성과 인증만 맡는다. 서버 사이의 연결은 Location Store로 자동
 해석하지 않고 runner가 준 endpoint로 코드에서 직접 연결한다. handler도 scan에 맡기지 않고 등록
 코드에 하나씩 적는다.
@@ -48,8 +52,8 @@ Actor가 만들어진 node가 다른 경우가 한 판 안에서 반드시 생�
 
 | 역할 | process 수 | 소유하는 것 | 코드 위치 |
 | --- | ---: | --- | --- |
-| Api | 2 | HTTP room 생성, token 검증 | `Server/Api` |
-| Play | 2 | STREAM session, Entry Spot, player Actor, room Spot, milestone publish | `Server/Play/Infrastructure` |
+| api node (Api) | 2 | HTTP room 생성, token 검증 | `Server/Api` |
+| play node (Play) | 2 | STREAM session, Entry Spot, player Actor, room Spot, milestone publish | `Server/Play/Infrastructure` |
 | Client | 3 | host·guest·observer 시나리오와 self-check | `Client` |
 
 board, turn, 승·무 판정은 `Server/Play/Domain`에 있고 framework type을 참조하지 않는다. 메시지는
@@ -277,7 +281,7 @@ assertion으로 확인한다. runner는 서버 로그에서 각 Actor의 room le
 
 - 다른 샘플과의 비교와 선택 기준: [샘플 고르기](14-samples.ko.md)
 - 요구사항, 메시지 계약과 완료 기준: [TicTacToe 시나리오](../../../common/sample/tictactoe/README.ko.md)
-- 같은 게임을 자동 연결·자동 등록과 별도 Session 서버로 만든 구성: [Bingo 따라 읽기](50-bingo.ko.md)
+- 같은 게임을 자동 연결·자동 등록과 별도 session node로 만든 구성: [Bingo 따라 읽기](50-bingo.ko.md)
 
 <script>
 (function(){function s(f){try{var d=f.contentDocument;var h=d.body?d.body.scrollHeight:0;if(h>40)f.style.height=h+"px";}catch(e){}}document.querySelectorAll("iframe.zlink-diagram").forEach(function(f){f.addEventListener("load",function(){setTimeout(function(){s(f);},250);});});[400,1000,2000].forEach(function(t){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},t);});window.addEventListener("resize",function(){setTimeout(function(){document.querySelectorAll("iframe.zlink-diagram").forEach(s);},150);});})();

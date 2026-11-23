@@ -132,10 +132,11 @@ export class ZLinkSerialExecutionQueue {
     operation: () => Promise<T> | T,
     options?: ZLinkSerialWorkOptions,
     context?: unknown,
-    packetAdmission?: () => Promise<T> | T
+    packetAdmission?: () => Promise<T> | T,
+    preparation?: ZLinkSerialWorkPreparation
   ): Promise<T> {
     try {
-      return this.admit(operation, options, context, undefined, false, packetAdmission);
+      return this.admit(operation, options, context, preparation, false, packetAdmission);
     } catch (error) {
       return Promise.reject(error);
     }
@@ -192,13 +193,14 @@ export class ZLinkSerialExecutionQueue {
     operation: () => Promise<T> | T,
     options?: ZLinkSerialWorkOptions,
     context?: unknown,
-    packetAdmission?: () => Promise<T> | T
+    packetAdmission?: () => Promise<T> | T,
+    preparation?: ZLinkSerialWorkPreparation
   ): Promise<T> {
     return this.admit(
       operation,
       options,
       context,
-      undefined,
+      preparation,
       false,
       packetAdmission,
       currentApplicationJobPermit()

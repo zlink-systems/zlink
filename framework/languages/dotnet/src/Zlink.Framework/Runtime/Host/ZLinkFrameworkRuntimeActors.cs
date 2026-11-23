@@ -1054,12 +1054,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                 ZLinkFrameworkErrorKind.ProtocolError,
                 $"Actor '{message.ActorId}' source leave target fence is stale."
             );
-        if (
-            ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                found.Snapshot.Payload.Span,
-                out var canonical
-            )
-        )
+        if (ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(found.Snapshot, out var canonical))
         {
             if (
                 canonical.RelocationHigh == 0
@@ -1646,10 +1641,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZLinkAuthoritySnapshot snapshot,
         string expectedReference
     ) =>
-        ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-            snapshot.Payload.Span,
-            out var publication
-        )
+        ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(snapshot, out var publication)
         && publication.Phase
             is >= (byte)ZLinkStandaloneActorCanonicalPhase.Activated
                 and <= (byte)ZLinkStandaloneActorCanonicalPhase.Completed
