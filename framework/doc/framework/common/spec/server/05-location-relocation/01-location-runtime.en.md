@@ -564,7 +564,7 @@ separate lock record; whether one is in progress and the pre-commit values are d
 
 The `aggregate` field holds the aggregate marker fields and an optional `relocation` field. In a relocation whose aggregate marker has not been materialized yet, `aggregate` may hold only `relocation`; that shape does not mean an aggregate transaction marker is prepared. When `aggregate` is present, the marker fields are either all present or all absent, and an empty object is invalid. An authority change that materializes or updates the aggregate marker preserves the existing `aggregate.relocation`, and meanwhile `visibleStoreVersion` keeps the public StoreVersion from before aggregate preparation. Relocation progress is removed by the existing terminal cleanup's conditional authority change; if no marker remains after removal, the `aggregate` field is omitted.
 
-`aggregate.relocation` owns this record's durable relocation phase and the source, target, and coordinator fences. The same facts are not also recorded in `payload` or `visibleStoreVersion`; `payload` stays application-defined opaque bytes. The aggregate generation is owned only by the same record's aggregate marker (`aggregate.aggregateGeneration`), with no copy in `aggregate.relocation`. A Direct Join whose marker doesn't exist yet (a move of one Actor) uses that move's `RelocationId` as the `aggregateId` of the §8.3 keys, written in lowercase canonical UUID form (its 16 bytes as 8-4-4-4-12 hex), and fixes `aggregateGeneration` at `1`. Because a new `RelocationId` is issued for every move and the source seals the move's inventory only once in `preparing`, the same key is never rewritten with different content. Neither value travels separately on the wire; the target builds the same key from the Restore request's `RelocationId`. Source cleanup progress is represented by the single phase `cleaning`, with no separate cleanup-state field. Earlier language-specific relocation encodings are read only as compatibility input, and new writers write this one representation. The field is an optional extension of `recordVersion` 1. Existing records without it are read as is, but its absence is not taken to mean there is no relocation. Finish in-flight relocations before upgrading to a runtime that writes this field, and do not roll back to an earlier version while records still carry it.
+`aggregate.relocation` owns this record's durable relocation phase and the source, target, and coordinator fences. The same facts are not also recorded in `payload` or `visibleStoreVersion`; `payload` stays application-defined opaque bytes. The aggregate generation is owned only by the same record's aggregate marker (`aggregate.aggregateGeneration`), with no copy in `aggregate.relocation`. The key values used by a Direct Join whose marker doesn't exist yet are defined by [§8.3](#83-storage-format-of-aggregate-records-and-the-participant-inventory). Source cleanup progress is represented by the single phase `cleaning`, with no separate cleanup-state field. Earlier language-specific relocation encodings are read only as compatibility input, and new writers write this one representation. The field is an optional extension of `recordVersion` 1. Existing records without it are read as is, but its absence is not taken to mean there is no relocation. Finish in-flight relocations before upgrading to a runtime that writes this field, and do not roll back to an earlier version while records still carry it.
 
 Payloads the Relocation Store holds (the cold-activation envelope, completion records)
 don't use this opaque record. A separately versioned key space and raw-bytes storage
@@ -1783,6 +1783,17 @@ JCS bytes, the same content gives the same check value whichever language wrote 
   `preparing`. A move of a single Actor with no aggregate record uses the root `digestSha256` of an
   inventory whose only entry is that Actor.
 
+**A Direct Join whose marker doesn't exist yet builds its keys from the `RelocationId`.** It is a move of one
+Actor with no aggregate record. The `aggregateId` of the keys
+above is that move's `RelocationId` written as its 16 bytes in lowercase 8-4-4-4-12 hex, and
+`aggregateGeneration` is `1`. Neither value travels separately on the wire; the target builds the same keys
+from the Restore request's `RelocationId`. A retry of the same move's target preparation reuses the same
+`RelocationId` and the inventory already sealed. If the move needs a different inventory, it does not raise
+`aggregateGeneration`; it starts a new move with a new `RelocationId`, so the "new `aggregateGeneration`" rule
+below is met by the new keys. Language-specific values (attempt generation, lifecycle generation) would leave a
+target in another language unable to find the sealed inventory, so this value is not left to implementation
+discretion.
+
 The inventory root, pages, and participant change records aren't modified once written. Records
 of the same `(aggregateId, aggregateGeneration)` aren't rewritten with different content; different
 content uses a new `aggregateGeneration`. Cleaning up these records after commit or abort is done
@@ -2269,7 +2280,7 @@ store record golden fixture. Each item maps to one test.
 
 **Relocation Space And Stages**
 
-- Moving one Actor without an aggregate marker seals the inventory root and pages under keys whose `aggregateId` is that move's `RelocationId` (lowercase UUID form) and whose `aggregateGeneration` is `1`, and a target in another language reads the inventory from the same keys and completes the move.
+- Moving one Actor with a Direct Join that has no marker seals the inventory root and pages under keys whose `aggregateId` is that move's `RelocationId` (lowercase UUID form) and whose `aggregateGeneration` is `1`, and a target in another language reads the inventory from the same keys and completes the move.
 - Even if the source descriptor is missing or its owner lease has expired, recovery is
   possible using the Location Store's current owner and space in use. A target whose
   owner lease has expired is rejected without changing the Store.

@@ -515,7 +515,7 @@ field는 다른 record의 generation field와 마찬가지로 JSON number가 아
 
 `aggregate` field는 aggregate marker field와 선택적인 `relocation` field를 담는다. Aggregate marker가 아직 materialize되지 않은 relocation에서는 `aggregate`에 `relocation`만 기록할 수 있으며, 이 형태는 aggregate transaction marker가 준비되었음을 뜻하지 않는다. `aggregate`가 있으면 marker field는 전부 있거나 전부 없어야 하고, 빈 object는 유효하지 않다. Aggregate marker를 materialize하거나 갱신하는 authority 변경은 기존 `aggregate.relocation`을 보존하며, 그동안 `visibleStoreVersion`은 aggregate 준비 전 공개 StoreVersion을 유지한다. Relocation 진행 정보는 기존 terminal cleanup의 조건부 authority 변경에서 제거하고, 제거 뒤 marker도 없으면 `aggregate` field를 쓰지 않는다.
 
-`aggregate.relocation`은 이 record의 durable relocation phase와 source·target·coordinator fence를 소유한다. 같은 사실을 `payload`나 `visibleStoreVersion`에 중복 기록하지 않으며, `payload`는 application 정의 opaque bytes로 유지한다. Aggregate generation은 같은 record의 aggregate marker(`aggregate.aggregateGeneration`)만 소유하고 `aggregate.relocation`에 사본을 두지 않는다. Marker가 아직 없는 Direct Join(Actor 하나의 이동)은 §8.3 key의 `aggregateId`로 그 이동의 `RelocationId`를 lowercase canonical UUID 형식(16 bytes를 8-4-4-4-12 hex로 쓴 값)으로 쓰고, `aggregateGeneration`은 `1`로 고정한다. `RelocationId`는 이동마다 새로 발급하고 source는 한 이동의 목록을 `preparing`에서 한 번만 seal하므로, 같은 key를 다른 내용으로 다시 쓰는 경우가 생기지 않는다. 이 두 값은 wire로 따로 전달하지 않으며, target은 Restore 요청의 `RelocationId`로 같은 key를 만든다. Source 정리의 진행은 phase `cleaning` 하나로 나타내며 별도 정리 상태 field를 두지 않는다. 이전 언어별 relocation 표현은 호환 reader의 입력으로만 읽고 새 writer는 이 표현 하나만 쓴다. 이 field는 `recordVersion` 1의 선택적 확장이다. Field가 없는 기존 record는 그대로 읽되 그 부재로 relocation이 없다고 추측하지 않는다. 이 field를 쓰는 runtime으로 올리기 전에 진행 중인 relocation을 끝내고, 이 field가 남은 record가 있으면 이전 버전으로 되돌리지 않는다.
+`aggregate.relocation`은 이 record의 durable relocation phase와 source·target·coordinator fence를 소유한다. 같은 사실을 `payload`나 `visibleStoreVersion`에 중복 기록하지 않으며, `payload`는 application 정의 opaque bytes로 유지한다. Aggregate generation은 같은 record의 aggregate marker(`aggregate.aggregateGeneration`)만 소유하고 `aggregate.relocation`에 사본을 두지 않는다. Marker가 아직 없는 Direct Join이 쓰는 key 값은 [§8.3](#83-aggregate-기록과-이동-대상-목록의-저장-형식)이 정한다. Source 정리의 진행은 phase `cleaning` 하나로 나타내며 별도 정리 상태 field를 두지 않는다. 이전 언어별 relocation 표현은 호환 reader의 입력으로만 읽고 새 writer는 이 표현 하나만 쓴다. 이 field는 `recordVersion` 1의 선택적 확장이다. Field가 없는 기존 record는 그대로 읽되 그 부재로 relocation이 없다고 추측하지 않는다. 이 field를 쓰는 runtime으로 올리기 전에 진행 중인 relocation을 끝내고, 이 field가 남은 record가 있으면 이전 버전으로 되돌리지 않는다.
 
 Relocation Store가 보관하는 payload(cold activation envelope, 완료 기록)는 이 opaque
 record를 사용하지 않는다. 별도로 버전을 매긴 key 공간과 raw bytes 저장 형식을
@@ -1594,6 +1594,15 @@ Page 분할은 저장 bytes만으로 정해서, 같은 목록은 어느 언어�
   뒤에 바뀌지 않는다. Aggregate 기록이 없는 Actor 하나의 이동은 그 Actor 하나를 항목으로 가진 목록의
   root `digestSha256`을 쓴다.
 
+**Marker가 아직 없는 Direct Join은 `RelocationId`로 key를 만든다.** Aggregate 기록이 없는 Actor 하나의
+이동이다. 위 key의 `aggregateId`는 그 이동의 `RelocationId` 16 bytes를
+lowercase 8-4-4-4-12 hex로 쓴 값이고 `aggregateGeneration`은 `1`이다. 두 값은 wire로 따로 전달하지 않으며,
+target은 Restore 요청의 `RelocationId`로 같은 key를 만든다. 같은 이동의 target 준비를 다시 시도할 때는 같은
+`RelocationId`와 이미 seal한 목록을 그대로 쓴다. 이 이동에 다른 목록이 필요하면 `aggregateGeneration`을 올리지
+않고 새 `RelocationId`로 새 이동을 시작한다. 그래서 아래 규칙의 "새 `aggregateGeneration`"은 이 경우 새 key로
+충족된다. 언어마다 다른 값(attempt generation, lifecycle generation)을 쓰면 다른 언어의 target이 seal한 목록을
+찾지 못하므로 이 값을 구현별 재량으로 두지 않는다.
+
 목록 root, page와 participant 변경 bytes record는 한 번 쓰면 바꾸지 않는다. 같은
 `(aggregateId, aggregateGeneration)`의 record를 다른 내용으로 다시 쓰지 않으며, 다른 내용이 필요하면
 새 `aggregateGeneration`을 쓴다. Commit 또는 abort 뒤 이 record들의 정리는 §8.1의 진행 정보
@@ -2010,7 +2019,7 @@ provider conformance test가 store record golden fixture로 관찰하는 key·va
 
 **Relocation 공간과 단계**
 
-- Aggregate marker 없이 Actor 하나를 옮기면 source가 seal한 목록 root와 page key의 `aggregateId`는 그 이동의 `RelocationId`(lowercase UUID 형식)이고 `aggregateGeneration`은 `1`이며, 다른 언어의 target이 같은 key에서 목록을 읽어 이동을 완료한다.
+- Marker 없는 Direct Join으로 Actor 하나를 옮기면 source가 seal한 목록 root와 page key의 `aggregateId`는 그 이동의 `RelocationId`(lowercase UUID 형식)이고 `aggregateGeneration`은 `1`이며, 다른 언어의 target이 같은 key에서 목록을 읽어 이동을 완료한다.
 - Source descriptor가 없거나 그 owner lease가 만료돼도 Location Store의 정확한 owner와 사용
   중인 공간으로 복구할 수 있다. Owner lease가 만료된 target은 Store를 변경하지 않고 거부한다.
 - User Spot 전체 이동에서 owner를 바꿀 때는 새 owner가 사용할 공간만 확보하고, 완료 정보를
