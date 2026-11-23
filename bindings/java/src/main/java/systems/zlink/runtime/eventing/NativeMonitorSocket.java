@@ -7,10 +7,11 @@ import systems.zlink.contracts.eventing.MonitorEventType;
 import systems.zlink.contracts.eventing.SocketMonitor;
 import systems.zlink.contracts.eventing.MonitorStatus;
 
+import systems.zlink.contracts.errors.CloseResult;
+import systems.zlink.contracts.errors.ZlinkCloseException;
 import systems.zlink.contracts.errors.ZlinkRecvException;
 import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.sockets.RecvResult;
-import systems.zlink.contracts.errors.ZlinkException;
 import systems.zlink.runtime.nativeapi.InternalAccess;
 import systems.zlink.runtime.nativeapi.Native;
 import systems.zlink.runtime.nativeapi.NativeLayouts;
@@ -92,7 +93,9 @@ public final class NativeMonitorSocket implements SocketMonitor {
             if (current == null || current.address() == 0)
                 return;
             if (own) {
-                Native.monitorClose(current);
+                int result = Native.monitorClose(current);
+                if (result != 0)
+                    throw new ZlinkCloseException(CloseResult.fromValue(result), Native.errno());
             }
             handle = MemorySegment.NULL;
         }

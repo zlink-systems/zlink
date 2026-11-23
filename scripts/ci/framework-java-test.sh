@@ -6,6 +6,7 @@ if [[ "${ZLINK_SINGLE_WORKER}" == "true" ]]; then
 fi
 dump_dir="${RUNNER_TEMP}/framework-java-thread-dumps/${1}"
 mkdir -p "${dump_dir}"
+export ZLINK_JAVA_WATCHDOG_DUMP_DIR="${dump_dir}"
 bash "${GITHUB_WORKSPACE}/scripts/ci/gradle-test-watchdog.sh" 3600 600 "${dump_dir}" &
 watchdog_pid=$!
 stop_watchdog() {

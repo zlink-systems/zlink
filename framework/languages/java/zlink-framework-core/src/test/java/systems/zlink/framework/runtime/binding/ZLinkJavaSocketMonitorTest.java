@@ -21,6 +21,13 @@ final class ZLinkJavaSocketMonitorTest {
     }
 
     @Test
+    void closeWakesOneThousandMonitorWaits() throws Exception {
+        for (int iteration = 0; iteration < 1_000; iteration++) {
+            verifyCloseWakesWait(false);
+        }
+    }
+
+    @Test
     void closeRestoresInterruptionAfterNativeWaitCompletes() throws Exception {
         verifyCloseWakesWait(true);
     }
