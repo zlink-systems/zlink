@@ -2822,8 +2822,15 @@ TEST (ZLinkFrameworkStoreLocationResolvers, SessionBindUsesCallerRefAfterRelocat
     EXPECT_FALSE (resolvers.resolve_actor_session_binding_address (old_actor).result ().value ());
     const auto other_incarnation =
       detail::actor_ref_access_t::make (new_actor.node_rid (), "player", "bind-actor", 8);
-    EXPECT_FALSE (
-      resolvers.resolve_actor_session_binding_address (other_incarnation).result ().value ());
+    try {
+        (void) resolvers.resolve_actor_session_binding_address (other_incarnation)
+          .result ()
+          .value ();
+        FAIL () << "a different ObjectGeneration must end InvalidOperation";
+    }
+    catch (const framework_exception_t &error) {
+        EXPECT_EQ (framework_error_kind_t::invalid_operation, error.kind ());
+    }
     const auto other_mesh = detail::actor_ref_access_t::make (new_actor.node_rid (), "player",
                                                               "bind-actor", 7, "other-mesh");
     EXPECT_FALSE (resolvers.resolve_actor_session_binding_address (other_mesh).result ().value ());

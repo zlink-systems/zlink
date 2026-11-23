@@ -135,6 +135,7 @@ export interface ZLinkActorHandoffPrefixAdmission {
 export interface ZLinkActorHandoffPrefixRecord {
   readonly onWithdrawable?: (withdraw: () => boolean) => void;
   readonly drain: (dispatch: ZLinkActorHandoffDispatch) => Promise<void>;
+  readonly reject: (error: unknown) => void;
   readonly preparation?: {
     prepare(signal: AbortSignal): Promise<void>;
     cancel(): void;
@@ -678,6 +679,7 @@ export class ZLinkActorHandoffCoordinator {
         pending.withdraw = withdraw;
       },
       payloadBytes: packetBytes(pending.packet),
+      reject: (error) => this.failReleasedPending(pending, error),
       preparation: {
         prepare: async (signal) => {
           try {

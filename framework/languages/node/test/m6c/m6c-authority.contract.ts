@@ -4637,7 +4637,7 @@ for (const outcome of ['abort', 'commit'] as const) {
       owner: owner(source.ownerId, source.leaseGeneration)
     });
     const fence = {
-      nodeRid: Buffer.from(String(source.rid)).toString('hex'),
+      nodeRid: String(source.rid),
       nodeGeneration: source.lifecycleGeneration,
       ownerId: source.ownerId,
       ownerLeaseGeneration: source.leaseGeneration

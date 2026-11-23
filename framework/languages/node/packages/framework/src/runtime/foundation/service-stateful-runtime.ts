@@ -722,11 +722,19 @@ export class ServiceStatefulRuntime {
     this.registry.destroyActor(actor);
   }
 
+  actorSessionBinding(actor: ServiceActorRef): ServiceSessionBinding | undefined {
+    return this.registry.binding(actor);
+  }
+
   restoreActorSessionBinding(
     actorRef: ServiceActorRef,
     sessionNodeRid: string,
     sessionRid: string,
-    bindingGeneration: bigint
+    bindingGeneration: bigint,
+    sessionOwner?: Pick<
+      ServiceSessionBinding,
+      'sessionOwnerNodeGeneration' | 'sessionOwnerId' | 'sessionOwnerLeaseGeneration'
+    >
   ): void {
     this.requireOpen();
     const actor = this.registry.actor(actorRef.actorId);
@@ -750,6 +758,9 @@ export class ServiceStatefulRuntime {
       sessionRid,
       sessionOwnerNodeRid: sessionNodeRid,
       bindingGeneration,
+      sessionOwnerNodeGeneration: sessionOwner?.sessionOwnerNodeGeneration,
+      sessionOwnerId: sessionOwner?.sessionOwnerId,
+      sessionOwnerLeaseGeneration: sessionOwner?.sessionOwnerLeaseGeneration,
       membershipEpoch: actor.membershipEpoch
     });
   }
@@ -3985,6 +3996,15 @@ export class ServiceStatefulRuntime {
           ingress.sourceRoutingId,
           this.ingressSourceGeneration(ingress)
         );
+        // Session-Actor binding §12: a record of this ActorId with another ObjectGeneration is
+        // InvalidOperation; every other fence mismatch stays ActorLocationStale (Unavailable).
+        const current = this.registry.actor(record.actor.actor.actorId);
+        if (current !== undefined && current.ref.generation !== record.actor.actor.generation) {
+          throw new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.InvalidOperation,
+            `Actor '${record.actor.actor.actorId}' binding ObjectGeneration differs from the current Actor.`
+          );
+        }
         const actor = this.validateActorFence(record.actor);
         const binding = sessionBindingFromWire(
           actor.ref,

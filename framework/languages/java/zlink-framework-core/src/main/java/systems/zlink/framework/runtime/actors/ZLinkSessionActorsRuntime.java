@@ -104,18 +104,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     private boolean relocationFailed;
 
     private <T> T inStateLane(Supplier<T> work) {
-        try {
-            return stateLane.runAsync(work).toCompletableFuture().join();
-        } catch (CompletionException failure) {
-            Throwable cause = failure.getCause();
-            if (cause instanceof RuntimeException runtimeFailure) {
-                throw runtimeFailure;
-            }
-            if (cause instanceof Error error) {
-                throw error;
-            }
-            throw failure;
-        }
+        return stateLane.awaitResult(work);
     }
 
     private <T> CompletionStage<T> onStateLane(Supplier<T> work) {
@@ -704,6 +693,10 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                 (ignored, current) -> current.toNativeTarget(targetActor)));
     }
 
+    boolean hasBindingTransition(String actorId) {
+        return bindingTransitions.containsKey(actorId);
+    }
+
     private CompletionStage<ZLinkBoundActor> replaceBinding(
             String actorId, Supplier<CompletionStage<ZLinkBoundActor>> createBinding) {
         CompletableFuture<Void> tail = new CompletableFuture<>();
@@ -726,11 +719,10 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                     tail.completeAsync(() -> null)
                             .whenComplete(
                                     (completed, ignoredError) ->
-                                            inStateLane(
-                                                    () -> {
-                                                        bindingTransitions.remove(actorId, tail);
-                                                        return null;
-                                                    }));
+                                            stateLane.runNowOrQueue(
+                                                    () ->
+                                                            bindingTransitions.remove(
+                                                                    actorId, tail)));
                 });
         return installation;
     }
@@ -750,17 +742,30 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         }
         return created.thenCompose(
                 actor -> {
-                    previous.forEach(this::removeBinding);
-                    BindingPublication publication =
-                            inStateLane(
-                                    () -> {
-                                        BindingCleanup cleanup = installBindingOnLane(actor);
-                                        CompletionStage<Void> physical = announceBound(actor);
-                                        stream.publishBoundActor(sessionRid, actor.actorId());
-                                        return new BindingPublication(cleanup, physical);
+                    CompletableFuture<?>[] removals =
+                            previous.stream()
+                                    .map(this::removeBinding)
+                                    .map(CompletionStage::toCompletableFuture)
+                                    .toArray(CompletableFuture<?>[]::new);
+                    return CompletableFuture.allOf(removals)
+                            .thenCompose(
+                                    ignored ->
+                                            stateLane.runNowOrQueue(
+                                                    () -> {
+                                                        BindingCleanup cleanup =
+                                                                installBindingOnLane(actor);
+                                                        CompletionStage<Void> physical =
+                                                                announceBound(actor);
+                                                        stream.publishBoundActor(
+                                                                sessionRid, actor.actorId());
+                                                        return new BindingPublication(
+                                                                cleanup, physical);
+                                                    }))
+                            .thenCompose(
+                                    publication -> {
+                                        finishBindingInstall(actor, publication.cleanup());
+                                        return publication.physical().thenApply(ignored -> actor);
                                     });
-                    finishBindingInstall(actor, publication.cleanup());
-                    return publication.physical().thenApply(ignored -> actor);
                 });
     }
 
@@ -888,9 +893,9 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         }
     }
 
-    private void removeBinding(ZLinkSessionActor actor) {
-        BindingCleanup cleanup =
-                inStateLane(
+    private CompletionStage<Void> removeBinding(ZLinkSessionActor actor) {
+        return stateLane
+                .runNowOrQueue(
                         () -> {
                             if (!bound.remove(actor)) {
                                 return null;
@@ -923,24 +928,44 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                 removeSealRecords(actor.actorId());
                             }
                             return new BindingCleanup(abandoned, abandonedSeal);
+                        })
+                .thenCompose(
+                        cleanup ->
+                                cleanup == null
+                                        ? CompletableFuture.<Void>completedFuture(null)
+                                        : finishRemoval(actor, cleanup))
+                .whenComplete(
+                        (ignored, failure) -> {
+                            // Callers may discard the stage, so report failures here.
+                            if (failure != null) {
+                                LOGGER.log(Level.WARNING, "Actor binding cleanup failed", failure);
+                            }
                         });
-        if (cleanup != null) {
-            if (!inStateLane(() -> relocationStopped)) {
-                announceUnbound((ZLinkBoundActor) actor);
-            }
-            failHeld(
-                    cleanup.held(),
-                    new ZLinkConfigurationException(
-                            "bound Actor was removed while relocation ingress was held: "
-                                    + actor.actorId()));
-            if (cleanup.seal() != null) {
-                cleanup.seal()
-                        .fail(
-                                new ZLinkConfigurationException(
-                                        "bound Actor was removed before relocation seal drained: "
-                                                + actor.actorId()));
-            }
-        }
+    }
+
+    private CompletionStage<Void> finishRemoval(ZLinkSessionActor actor, BindingCleanup cleanup) {
+        return stateLane
+                .runNowOrQueue(() -> relocationStopped)
+                .thenAccept(
+                        stopped -> {
+                            if (!stopped) {
+                                announceUnbound((ZLinkBoundActor) actor);
+                            }
+                            failHeld(
+                                    cleanup.held(),
+                                    new ZLinkConfigurationException(
+                                            "bound Actor was removed while relocation ingress was"
+                                                    + " held: "
+                                                    + actor.actorId()));
+                            if (cleanup.seal() != null) {
+                                cleanup.seal()
+                                        .fail(
+                                                new ZLinkConfigurationException(
+                                                        "bound Actor was removed before relocation"
+                                                                + " seal drained: "
+                                                                + actor.actorId()));
+                            }
+                        });
     }
 
     private record BindingCleanup(List<HeldIngress> held, SealTerminal seal) {}

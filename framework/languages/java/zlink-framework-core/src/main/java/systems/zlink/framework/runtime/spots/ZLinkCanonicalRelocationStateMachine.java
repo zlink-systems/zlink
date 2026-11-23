@@ -2278,18 +2278,7 @@ final class ZLinkCanonicalRelocationStateMachine
     private static <T> T awaitStateLane(
             ZLinkStateLane stateLane, java.util.function.Supplier<T> work) {
         if (stateLane.isOnLane()) return work.get();
-        try {
-            return stateLane.runAsync(work).toCompletableFuture().join();
-        } catch (CompletionException failure) {
-            Throwable cause = failure.getCause();
-            if (cause instanceof RuntimeException runtimeFailure) {
-                throw runtimeFailure;
-            }
-            if (cause instanceof Error error) {
-                throw error;
-            }
-            throw failure;
-        }
+        return stateLane.awaitResult(work);
     }
 
     private <T> T inStateLane(java.util.function.Supplier<T> work) {

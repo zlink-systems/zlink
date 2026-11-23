@@ -7,7 +7,6 @@ import static org.junit.jupiter.api.Assertions.fail;
 
 import org.junit.jupiter.api.Test;
 
-import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locationprovider.ZLinkLocationStore;
@@ -133,11 +132,9 @@ final class ZLinkUserSpotCloseClassificationTest {
             store = new RewritingStore(inner, spotId);
             repository = new ZLinkProviderLocationRepository(store);
             DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
-            options.configureLocations().setOwnerLeaseFencingMargin(java.time.Duration.ofNanos(1));
             options.addLocationStore(store);
             var node = options.addRouteMesh("classify-mesh");
-            node.listen("inproc://spot-close-classify-" + UUID.randomUUID())
-                    .setRoutingId(RoutingId.from("spot-close-classify-" + UUID.randomUUID()));
+            node.listen("inproc://spot-close-classify-" + UUID.randomUUID());
             node.objects()
                     .server()
                     .addSpotFactory(

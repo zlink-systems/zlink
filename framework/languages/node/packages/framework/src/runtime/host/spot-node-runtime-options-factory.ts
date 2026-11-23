@@ -15,6 +15,7 @@ import type { ZLinkBackendAdapterFactory, ZLinkBackendContext } from '../backend
 import type {
   ZLinkSpotNodeRuntimeManagerOptions,
   ZLinkDetachedTaskRunner,
+  ZLinkSpotAddressTransport,
   ZLinkSpotRoutedTransport
 } from '../spots';
 import type {
@@ -33,6 +34,7 @@ export interface ZLinkSpotNodeRuntimeOptionsFactoryOptions {
   readonly context: ZLinkBackendContext;
   readonly channelTransport: ZLinkChannelClientTransportSource;
   readonly routeTransport: ZLinkRouteClientTransport & ZLinkSpotRoutedTransport;
+  readonly addressTransport: ZLinkSpotAddressTransport;
   readonly spotPublisherTransport: ZLinkSpotPublisherClientTransport;
   readonly meshRouters: MeshRouterResolver;
   readonly providerResolver?: ZLinkProviderResolver;
@@ -73,6 +75,7 @@ export class ZLinkSpotNodeRuntimeOptionsFactory {
         this.options.spotPublisherTransport
       ),
       routedTransport: this.options.routeTransport,
+      addressTransport: this.options.addressTransport,
       spotRouterChannelIdForMesh,
       providerResolver: this.options.providerResolver,
       dispatchErrors: this.options.dispatchErrors,

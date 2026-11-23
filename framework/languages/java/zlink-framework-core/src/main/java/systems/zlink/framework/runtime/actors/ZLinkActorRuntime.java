@@ -328,18 +328,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
     }
 
     private <T> T inStateLane(Supplier<T> work) {
-        try {
-            return stateLane.runAsync(work).toCompletableFuture().join();
-        } catch (CompletionException failure) {
-            Throwable cause = failure.getCause();
-            if (cause instanceof RuntimeException runtimeFailure) {
-                throw runtimeFailure;
-            }
-            if (cause instanceof Error error) {
-                throw error;
-            }
-            throw failure;
-        }
+        return stateLane.awaitResult(work);
     }
 
     public void beginDrain() {
@@ -2497,19 +2486,26 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 .resolveStoredActorRoute(actor.actorId())
                 .thenAccept(
                         route -> {
+                            // Session-Actor binding §12: a row of this ActorId with another
+                            // ObjectGeneration is InvalidOperation; every other mismatch has no
+                            // route and ends Unavailable.
+                            if (route != null
+                                    && route.actorRef() != null
+                                    && route.actorRef().objectGeneration() != actor.generation()) {
+                                throw new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                                        "Actor session binding ObjectGeneration differs from the"
+                                                + " current Actor: "
+                                                + actor.actorId());
+                            }
                             if (route == null
                                     || route.actorRef() == null
                                     || !route.actorRef().nodeRid().equals(actor.nodeRid())
-                                    || route.actorRef().objectGeneration() != actor.generation()
                                     || route.authorityOwnerGeneration() <= 0) {
                                 throw new ZLinkFrameworkException(
-                                        route != null
-                                                        && route.actorRef() != null
-                                                        && route.actorRef().objectGeneration()
-                                                                != actor.generation()
-                                                ? ZLinkFrameworkErrorKind.INVALID_OPERATION
-                                                : ZLinkFrameworkErrorKind.UNAVAILABLE,
-                                        "Actor authority changed before Session binding");
+                                        ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                        "Actor session binding route is unavailable: "
+                                                + actor.actorId());
                             }
                             spotNode.observeActorAuthority(
                                     actor,
@@ -4906,18 +4902,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         private final ZLinkStateLane stateLane = new ZLinkStateLane();
 
         private <T> T inStateLane(Supplier<T> work) {
-            try {
-                return stateLane.runAsync(work).toCompletableFuture().join();
-            } catch (CompletionException failure) {
-                Throwable cause = failure.getCause();
-                if (cause instanceof RuntimeException runtimeFailure) {
-                    throw runtimeFailure;
-                }
-                if (cause instanceof Error error) {
-                    throw error;
-                }
-                throw failure;
-            }
+            return stateLane.awaitResult(work);
         }
 
         void register(
