@@ -11,7 +11,7 @@ Store. The global ActorId determines current authority and Mesh.
 
 Session bind takes an `ActorRef` once. There's no bind overload
 taking only a local Actor instance or ActorId. If there's no current
-mapping at bind, `NotFound`; if the generation differs, `InvalidOperation`;
+mapping at bind, `Unavailable`; if the generation differs, `InvalidOperation`;
 if in the pre-commit seal window, `Unavailable`. The framework doesn't
 perform hidden retry or a local fallback.
 

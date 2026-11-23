@@ -13,6 +13,9 @@ GameQuest 샘플의 역할과 코드 위치, 주요 메시지 흐름, 실행 검
 
 ## 1. 이 샘플이 보여 주는 것
 
+`GameApi`는 클라이언트 세션을 관리하는 session node입니다.
+`QuestMission`은 퀘스트 Instance Spot이 있는 play node입니다.
+
 client의 action은 GameApi가 검증해 gameplay event로 만들고, 같은 `PlayerId`의 event는 QuestMission의
 owner Spot 하나가 순서대로 판정한다. 판정 결과는 event stream에 기록되고, 진행과 완료는 player의
 session Actor를 거쳐 연결로 push된다. ShoppingMall과 같은 owner Spot·event sourcing 구성이지만,
@@ -28,8 +31,8 @@ session Actor를 거쳐 연결로 push된다. ShoppingMall과 같은 owner Spot�
 
 | 역할 | process 수 | 소유하는 것 | 코드 위치 |
 | --- | ---: | --- | --- |
-| GameApi | 2 | STREAM session, session Actor, action 검증과 gameplay event, owner 호출 | `Server/GameApi` |
-| QuestMission | 2 | player quest Instance Spot, replay·판정·append·projection, notify | `Server/QuestMission` |
+| session node (GameApi) | 2 | STREAM session, session Actor, action 검증과 gameplay event, owner 호출 | `Server/GameApi` |
+| play node (QuestMission) | 2 | player quest Instance Spot, replay·판정·append·projection, notify | `Server/QuestMission` |
 | Client | 1 | join, action, reconnect, reconcile assertion | `Client` |
 
 quest 조건, aggregate fold와 완료 규칙은 `Server/QuestMission/Domain`에 있고 framework type을

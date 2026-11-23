@@ -6331,9 +6331,9 @@ function requestScaleoutProbe(client, requestId) {
     (signal) =>
       client
         .requestToChannel('scaleout-api', typedPacket('ScaleoutProbe', { requestId }))
-        .timeout(1000)
+        .timeout(10_000)
         .submit(signal),
-    1500,
+    15_000,
     `scaleout probe ${requestId}`
   );
 }

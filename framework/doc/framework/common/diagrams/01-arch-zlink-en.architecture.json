@@ -13,225 +13,82 @@
     "mode": "grid",
     "origin": [
       50,
-      170
+      150
     ],
-    "cols": 4,
-    "gapX": 70,
-    "gapY": 78,
-    "cellW": 120,
-    "cellH": 58
+    "cols": 5,
+    "gapX": 62,
+    "gapY": 104,
+    "cellW": 132,
+    "cellH": 60
   },
   "components": [
     {
-      "id": "zc1",
+      "id": "client0",
       "type": "external",
       "label": "client",
       "row": 0,
       "col": 0
     },
     {
-      "id": "zgw1",
-      "type": "frontend",
-      "label": "API server",
-      "sublabel": "route client",
+      "id": "l40",
+      "type": "external",
+      "label": "L4",
       "row": 0,
       "col": 1
     },
     {
-      "id": "zrm1",
-      "type": "backend",
-      "label": "zone server A",
-      "sublabel": "RouteMesh node",
+      "id": "session0",
+      "type": "database",
+      "label": "session node ×N",
       "row": 0,
       "col": 2
     },
     {
-      "id": "zrm2",
+      "id": "play0",
       "type": "backend",
-      "label": "zone server B",
-      "sublabel": "RouteMesh node",
-      "row": 1,
-      "col": 2
+      "label": "play node ×N",
+      "row": 0,
+      "col": 3,
+      "sublabel": "zone · table · match"
     },
     {
-      "id": "zc2",
-      "type": "external",
-      "label": "client",
-      "row": 2,
-      "col": 0
-    },
-    {
-      "id": "zes",
+      "id": "api0",
       "type": "frontend",
-      "label": "Entry Spot",
-      "sublabel": "entry · matching",
-      "row": 2,
-      "col": 1
-    },
-    {
-      "id": "zrs",
-      "type": "backend",
-      "label": "room spot",
-      "sublabel": "GetOrCreate",
-      "row": 2,
-      "col": 2
-    },
-    {
-      "id": "zc3",
-      "type": "external",
-      "label": "client",
-      "row": 3,
-      "col": 0
-    },
-    {
-      "id": "zmm",
-      "type": "frontend",
-      "label": "channel handler",
-      "sublabel": "matching",
-      "row": 3,
-      "col": 1
-    },
-    {
-      "id": "zrs2",
-      "type": "backend",
-      "label": "room spot",
-      "sublabel": "GetOrCreate",
-      "row": 3,
-      "col": 2
-    },
-    {
-      "id": "zc4",
-      "type": "external",
-      "label": "client",
-      "row": 4,
-      "col": 0
-    },
-    {
-      "id": "zapi4",
-      "type": "frontend",
-      "label": "API server",
-      "row": 4,
-      "col": 1
-    },
-    {
-      "id": "zis",
-      "type": "backend",
-      "label": "Instance Spot",
-      "sublabel": "entity id · cold activation",
-      "row": 4,
-      "col": 2
-    }
-  ],
-  "boundaries": [
-    {
-      "kind": "region",
-      "label": "① Zone-sharding — ZLink",
-      "wraps": [
-        "zc1",
-        "zgw1",
-        "zrm1",
-        "zrm2"
-      ]
-    },
-    {
-      "kind": "region",
-      "label": "② Lobby + room — ZLink",
-      "wraps": [
-        "zc2",
-        "zes",
-        "zrs"
-      ]
-    },
-    {
-      "kind": "region",
-      "label": "③ Matchmaker + dedicated — ZLink",
-      "wraps": [
-        "zc3",
-        "zmm",
-        "zrs2"
-      ]
-    },
-    {
-      "kind": "region",
-      "label": "④ Actor service — ZLink",
-      "wraps": [
-        "zc4",
-        "zapi4",
-        "zis"
-      ]
+      "label": "api node ×N",
+      "row": 0,
+      "col": 4,
+      "sublabel": "matchmaking · Actor DB"
     }
   ],
   "connections": [
     {
-      "from": "zc1",
-      "to": "zgw1",
-      "variant": "default"
+      "from": "client0",
+      "to": "l40"
     },
     {
-      "from": "zgw1",
-      "to": "zrm1",
-      "variant": "default"
+      "from": "l40",
+      "to": "session0"
     },
     {
-      "from": "zgw1",
-      "to": "zrm2",
-      "variant": "default",
-      "fromSide": "bottom",
-      "toSide": "left"
+      "from": "session0",
+      "to": "play0"
     },
     {
-      "from": "zrm1",
-      "to": "zrm2",
-      "variant": "dashed"
-    },
-    {
-      "from": "zc2",
-      "to": "zes",
-      "variant": "default"
-    },
-    {
-      "from": "zes",
-      "to": "zrs",
-      "variant": "default"
-    },
-    {
-      "from": "zc3",
-      "to": "zmm",
-      "variant": "default"
-    },
-    {
-      "from": "zmm",
-      "to": "zrs2",
-      "variant": "default"
-    },
-    {
-      "from": "zc3",
-      "to": "zrs2",
-      "label": "STREAM direct",
-      "variant": "dashed",
-      "fromSide": "bottom",
-      "toSide": "bottom"
-    },
-    {
-      "from": "zc4",
-      "to": "zapi4",
-      "variant": "default"
-    },
-    {
-      "from": "zapi4",
-      "to": "zis",
-      "variant": "default"
+      "from": "play0",
+      "to": "api0",
+      "label": "client/server"
     }
   ],
   "cards": [
     {
       "dot": "emerald",
-      "title": "ZLink primitives — the state unit is a Spot/actor",
+      "title": "Spot behavior by pattern",
       "items": [
-        "① On a boundary cross, the actor is relocated cross-node (RouteMesh)",
-        "②③ A room spot is GetOrCreate (attach if present, create if not)",
-        "③ After matching, the client connects directly to the room spot over STREAM",
-        "④ Instance Spot: cold-activated by entity id"
+        "① Actors that cross a zone boundary relocate to another play node via RouteMesh.",
+        "② An Entry Spot handles entry. GetOrCreate obtains or creates the room Spot.",
+        "③ The api node handles matchmaking requests. The session node relays game messages to the prepared room Spot.",
+        "④ In an HTTP Actor service, the client calls the api node. A request by entity ID activates an Instance Spot on a play node.",
+        "The play node is the Client that calls the api node, which is the Server on the ZLink ClientServer Channel."
       ]
     }
   ]

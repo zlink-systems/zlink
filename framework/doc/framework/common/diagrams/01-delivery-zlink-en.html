@@ -4957,7 +4957,7 @@
         <div class="pulse-dot"></div>
         <h1>ZLink approach — web service + real-time</h1>
       </div>
-      <p class="subtitle">Server-to-server goes direct over channel · the overhead collapses to one location store</p>
+      <p class="subtitle">HTTP orders and live delivery status</p>
     </div>
 
     <script id="archify-guided-views-data" type="application/json">[]</script>
@@ -5005,9 +5005,9 @@
     <!-- Main Diagram -->
     <div class="diagram-container" data-detail-level="read"
          data-preset-badge-editorial-plate="ARCHIFY / PLATE 04">
-      <svg viewBox="-234 122 1010 614" role="img" lang="en" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="standard" data-quality-gates="advisory">
+      <svg viewBox="-59 122 1010 300" role="img" lang="en" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="standard" data-quality-gates="advisory">
         <title id="archify-diagram-title">ZLink approach — web service + real-time</title>
-        <desc id="archify-diagram-description">Server-to-server goes direct over channel · the overhead collapses to one location store</desc>
+        <desc id="archify-diagram-description">HTTP orders and live delivery status</desc>
         <!-- Definitions -->
         <defs>
           <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
@@ -5034,12 +5034,15 @@
 
 
         <!-- Connection paths (before components for correct z-order) -->
-        <path data-edge-from="client" data-edge-to="lb" data-edge-label="HTTP" data-edge-key="0" data-composition-points="110,210;110,316" d="M 110 210 L 110 316" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="lb" data-edge-to="api" data-edge-key="1" data-composition-points="110,376;110,482" d="M 110 376 L 110 482" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="api" data-edge-to="dom" data-edge-label="channel (direct)" data-edge-key="2" data-composition-points="170,512;350,512" d="M 170 512 L 350 512" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="client" data-edge-to="dom" data-edge-label="STREAM" data-edge-key="3" data-composition-points="170,180;260,180;260,498;350,498" d="M 170 180 L 252 180 Q 260 180 260 188 L 260 490 Q 260 498 268 498 L 350 498" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="api" data-edge-to="store" data-edge-label="address resolution" data-edge-key="4" data-composition-points="110,542;110,648" d="M 110 542 L 110 648" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
-        <path data-edge-from="dom" data-edge-to="store" data-edge-label="registration" data-edge-key="5" data-composition-points="350,526;260,526;260,678;170,678" d="M 350 526 L 268 526 Q 260 526 260 534 L 260 670 Q 260 678 252 678 L 170 678" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="client" data-edge-to="l4" data-edge-key="0" data-composition-points="170,180;254,180" d="M 170 180 L 254 180" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="l4" data-edge-to="session" data-edge-key="1" data-composition-points="374,180;458,180" d="M 374 180 L 458 180" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="session" data-edge-to="play" data-edge-label="relay · push" data-edge-key="2" data-composition-points="578,180;662,180" d="M 578 180 L 662 180" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="client" data-edge-to="l7" data-edge-key="3" data-composition-points="110,210;110,310" d="M 110 210 L 110 310" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="l7" data-edge-to="api" data-edge-key="4" data-composition-points="110,370;110,394;722,394;722,370" d="M 110 370 L 110 386 Q 110 394 118 394 L 714 394 Q 722 394 722 386 L 722 370" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="api" data-edge-to="play" data-edge-key="5" data-composition-points="722,310;722,210" d="M 722 310 L 722 210" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="play" data-edge-to="api" data-edge-label="client/server" data-edge-key="6" data-composition-points="782,180;806,180;806,340;782,340" d="M 782 180 L 798 180 Q 806 180 806 188 L 806 332 Q 806 340 798 340 L 782 340" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="session" data-edge-to="store" data-edge-key="7" data-composition-points="518,210;518,310" d="M 518 210 L 518 310" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="api" data-edge-to="store" data-edge-key="8" data-composition-points="662,340;578,340" d="M 662 340 L 578 340" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
 
         <!-- Components -->
         <g id="node-client" data-node-id="client" data-node-label="Client app" tabindex="0" role="button" aria-label="Focus Client app, Architecture component" aria-pressed="false" data-node-kind="external" data-node-context="Architecture component">
@@ -5053,77 +5056,93 @@
           <text data-node-label="" x="110" y="184" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Client app</text>
         </g>
 
-        <g id="node-lb" data-node-id="lb" data-node-label="L7 LB / gateway" tabindex="0" role="button" aria-label="Focus L7 LB / gateway, HTTP unchanged, Architecture component" aria-pressed="false" data-node-kind="external" data-node-sublabel="HTTP unchanged" data-node-context="Architecture component">
-          <title>L7 LB / gateway · HTTP unchanged · Architecture component</title>
-          <rect x="50" y="316" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="50" y="316" width="120" height="60" rx="6" class="c-external" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(56 322) scale(0.6875)">
+        <g id="node-l4" data-node-id="l4" data-node-label="L4" tabindex="0" role="button" aria-label="Focus L4, Architecture component" aria-pressed="false" data-node-kind="external" data-node-context="Architecture component">
+          <title>L4 · Architecture component</title>
+          <rect x="254" y="150" width="120" height="60" rx="6" class="c-mask"/>
+          <rect x="254" y="150" width="120" height="60" rx="6" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(260 156) scale(0.6875)">
             <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
             <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="110" y="344" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">L7 LB / gateway</text>
-        <text data-detail="context" x="110" y="360" class="t-muted" font-size="9" text-anchor="middle">HTTP unchanged</text>
+          <text data-node-label="" x="314" y="184" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">L4</text>
         </g>
 
-        <g id="node-api" data-node-id="api" data-node-label="API servers ×N" tabindex="0" role="button" aria-label="Focus API servers ×N, API + ZLink · route client, Architecture component" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="API + ZLink · route client" data-node-context="Architecture component"><rect x="72" y="504" width="120" height="60" rx="6" class="c-frontend" style="fill:none" stroke-width="2.2"/><rect x="61" y="493" width="120" height="60" rx="6" class="c-frontend" style="fill:none" stroke-width="2.2"/>
-          <title>API servers ×N · API + ZLink · route client · Architecture component</title>
-          <rect x="50" y="482" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="50" y="482" width="120" height="60" rx="6" class="c-frontend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(56 488) scale(0.6875)">
+        <g id="node-session" data-node-id="session" data-node-label="session node ×N" tabindex="0" role="button" aria-label="Focus session node ×N, WebSocket, Architecture component" aria-pressed="false" data-node-kind="database" data-node-sublabel="WebSocket" data-node-context="Architecture component"><rect x="480" y="172" width="120" height="60" rx="6" class="c-database" style="fill:none" stroke-width="2.2"/><rect x="469" y="161" width="120" height="60" rx="6" class="c-database" style="fill:none" stroke-width="2.2"/>
+          <title>session node ×N · WebSocket · Architecture component</title>
+          <rect x="458" y="150" width="120" height="60" rx="6" class="c-mask"/>
+          <rect x="458" y="150" width="120" height="60" rx="6" class="c-database" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(464 156) scale(0.6875)">
+            <ellipse cx="8" cy="4" rx="5" ry="2"/>
+            <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="518" y="178" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">session node ×N</text>
+        <text data-detail="context" x="518" y="194" class="t-muted" font-size="9" text-anchor="middle">WebSocket</text>
+        </g>
+
+        <g id="node-play" data-node-id="play" data-node-label="play node ×N" tabindex="0" role="button" aria-label="Focus play node ×N, Instance Spot, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="Instance Spot" data-node-context="Architecture component"><rect x="684" y="172" width="120" height="60" rx="6" class="c-backend" style="fill:none" stroke-width="2.2"/><rect x="673" y="161" width="120" height="60" rx="6" class="c-backend" style="fill:none" stroke-width="2.2"/>
+          <title>play node ×N · Instance Spot · Architecture component</title>
+          <rect x="662" y="150" width="120" height="60" rx="6" class="c-mask"/>
+          <rect x="662" y="150" width="120" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(668 156) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="722" y="178" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">play node ×N</text>
+        <text data-detail="context" x="722" y="194" class="t-muted" font-size="9" text-anchor="middle">Instance Spot</text>
+        </g>
+
+        <g id="node-l7" data-node-id="l7" data-node-label="L7 LB" tabindex="0" role="button" aria-label="Focus L7 LB, HTTP, Architecture component" aria-pressed="false" data-node-kind="external" data-node-sublabel="HTTP" data-node-context="Architecture component">
+          <title>L7 LB · HTTP · Architecture component</title>
+          <rect x="50" y="310" width="120" height="60" rx="6" class="c-mask"/>
+          <rect x="50" y="310" width="120" height="60" rx="6" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(56 316) scale(0.6875)">
+            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
+            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="110" y="338" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">L7 LB</text>
+        <text data-detail="context" x="110" y="354" class="t-muted" font-size="9" text-anchor="middle">HTTP</text>
+        </g>
+
+        <g id="node-api" data-node-id="api" data-node-label="api node ×N" tabindex="0" role="button" aria-label="Focus api node ×N, orders · reads, Architecture component" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="orders · reads" data-node-context="Architecture component"><rect x="684" y="332" width="120" height="60" rx="6" class="c-frontend" style="fill:none" stroke-width="2.2"/><rect x="673" y="321" width="120" height="60" rx="6" class="c-frontend" style="fill:none" stroke-width="2.2"/>
+          <title>api node ×N · orders · reads · Architecture component</title>
+          <rect x="662" y="310" width="120" height="60" rx="6" class="c-mask"/>
+          <rect x="662" y="310" width="120" height="60" rx="6" class="c-frontend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(668 316) scale(0.6875)">
             <rect x="2" y="3" width="12" height="10" rx="2"/>
             <path d="M2 6.5h12"/>
             <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
             <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="110" y="510" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">API servers ×N</text>
-        <text data-detail="context" x="110" y="526" class="t-muted" font-size="7.1" text-anchor="middle">API + ZLink · route client</text>
+          <text data-node-label="" data-detail-anchor="" x="722" y="338" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">api node ×N</text>
+        <text data-detail="context" x="722" y="354" class="t-muted" font-size="9" text-anchor="middle">orders · reads</text>
         </g>
 
-        <g id="node-dom" data-node-id="dom" data-node-label="Domain ×N" tabindex="0" role="button" aria-label="Focus Domain ×N, SPOT(order/conv) · STREAM, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="SPOT(order/conv) · STREAM" data-node-context="Architecture component"><rect x="372" y="504" width="120" height="60" rx="6" class="c-backend" style="fill:none" stroke-width="2.2"/><rect x="361" y="493" width="120" height="60" rx="6" class="c-backend" style="fill:none" stroke-width="2.2"/>
-          <title>Domain ×N · SPOT(order/conv) · STREAM · Architecture component</title>
-          <rect x="350" y="482" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="350" y="482" width="120" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(356 488) scale(0.6875)">
-            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
-          </g>
-          <text data-node-label="" data-detail-anchor="" x="410" y="510" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Domain ×N</text>
-        <text data-detail="context" x="410" y="526" class="t-muted" font-size="7.4" text-anchor="middle">SPOT(order/conv) · STREAM</text>
-        </g>
-
-        <g id="node-store" data-node-id="store" data-node-label="location store" tabindex="0" role="button" aria-label="Focus location store, descriptor rows, Architecture component" aria-pressed="false" data-node-kind="external" data-node-sublabel="descriptor rows" data-node-context="Architecture component">
-          <title>location store · descriptor rows · Architecture component</title>
-          <rect x="50" y="648" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="50" y="648" width="120" height="60" rx="6" class="c-external" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(56 654) scale(0.6875)">
+        <g id="node-store" data-node-id="store" data-node-label="location store" tabindex="0" role="button" aria-label="Focus location store, Architecture component" aria-pressed="false" data-node-kind="external" data-node-context="Architecture component">
+          <title>location store · Architecture component</title>
+          <rect x="458" y="310" width="120" height="60" rx="6" class="c-mask"/>
+          <rect x="458" y="310" width="120" height="60" rx="6" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(464 316) scale(0.6875)">
             <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
             <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="110" y="676" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">location store</text>
-        <text data-detail="context" x="110" y="692" class="t-muted" font-size="9" text-anchor="middle">descriptor rows</text>
+          <text data-node-label="" x="518" y="344" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">location store</text>
         </g>
 
         <!-- Connection labels -->
-        <g data-detail="context" data-edge-from="client" data-edge-to="lb" data-edge-label="HTTP" data-edge-key="0">
-          <rect x="95" y="214" width="30" height="14" rx="3" class="c-mask"/>
-          <text x="110" y="224" class="t-backend" font-size="8" text-anchor="middle">HTTP</text>
+
+
+        <g data-detail="context" data-edge-from="session" data-edge-to="play" data-edge-label="relay · push" data-edge-key="2">
+          <rect x="586.2" y="160" width="67.6" height="14" rx="3" class="c-mask"/>
+          <text x="620" y="170" class="t-muted" font-size="8" text-anchor="middle">relay · push</text>
         </g>
 
-        <g data-detail="context" data-edge-from="api" data-edge-to="dom" data-edge-label="channel (direct)" data-edge-key="2">
-          <rect x="216.6" y="492" width="86.8" height="14" rx="3" class="c-mask"/>
-          <text x="260" y="502" class="t-backend" font-size="8" text-anchor="middle">channel (direct)</text>
+
+
+        <g data-detail="context" data-edge-from="play" data-edge-to="api" data-edge-label="client/server" data-edge-key="6">
+          <rect x="769.8" y="240" width="72.4" height="14" rx="3" class="c-mask"/>
+          <text x="806" y="250" class="t-muted" font-size="8" text-anchor="middle">client/server</text>
         </g>
-        <g data-detail="context" data-edge-from="client" data-edge-to="dom" data-edge-label="STREAM" data-edge-key="3">
-          <rect x="240.6" y="319" width="38.8" height="14" rx="3" class="c-mask"/>
-          <text x="260" y="329" class="t-backend" font-size="8" text-anchor="middle">STREAM</text>
-        </g>
-        <g data-detail="context" data-edge-from="api" data-edge-to="store" data-edge-label="address resolution" data-edge-key="4">
-          <rect x="61.800000000000004" y="566" width="96.39999999999999" height="14" rx="3" class="c-mask"/>
-          <text x="110" y="576" class="t-messagebus" font-size="8" text-anchor="middle">address resolution</text>
-        </g>
-        <g data-detail="context" data-edge-from="dom" data-edge-to="store" data-edge-label="registration" data-edge-key="5">
-          <rect x="226.2" y="582" width="67.6" height="14" rx="3" class="c-mask"/>
-          <text x="260" y="592" class="t-messagebus" font-size="8" text-anchor="middle">registration</text>
-        </g>
+
+
 
         <!-- Boundary labels (foreground masks keep routes out of titles) -->
 
@@ -5319,24 +5338,13 @@
       <div class="card">
         <div class="card-header">
           <div class="card-dot emerald"></div>
-          <h3>Server-to-server over channel (the core)</h3>
+          <h3>Delivery requests and status updates</h3>
         </div>
         <ul>
-          <li>&bull; API servers ↔ Domain servers: channel request/send goes direct (no broker, no sticky LB)</li>
-          <li>&bull; Client connects directly to a Domain server over STREAM (direct STREAM connect)</li>
-          <li>&bull; Domain server = the SPOT owner for one order/conversation (serial, no distributed lock) + STREAM host</li>
-          <li>&bull; Both are ASP.NET Core + ZLink; the API server routes the client</li>
-        </ul>
-      </div>
-
-      <div class="card">
-        <div class="card-header">
-          <div class="card-dot slate"></div>
-          <h3>location store = discovery only</h3>
-        </div>
-        <ul>
-          <li>&bull; Holds descriptor rows — address resolution (API) and registration (Domain) only, not a data/message path</li>
-          <li>&bull; That&#39;s why its links are dotted (control plane)</li>
+          <li>&bull; HTTP order and read requests reach the api node through L7. The Instance Spot that owns order state runs on a play node.</li>
+          <li>&bull; WebSocket connections reach a session node through L4. The session node delivers status changes from the play node to its clients.</li>
+          <li>&bull; The play node can request reads and writes from the api node. The location store resolves server addresses.</li>
+          <li>&bull; The play node is the Client that calls the api node, which is the Server on the ZLink ClientServer Channel.</li>
         </ul>
       </div>
     </div>

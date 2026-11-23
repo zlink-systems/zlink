@@ -12,10 +12,6 @@ const {
   SERVICE_WIRE_REQUIRED_CAPABILITY
 } = require('../../packages/framework/dist/runtime/foundation/service-wire-constants.generated');
 const meshWire = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
-const {
-  internalFrameworkWireReply,
-  ZLinkFrameworkInternalErrorKind
-} = require('../../packages/framework/dist/runtime/framework-errors-internal');
 const { withTestSessionOwners } = require('./fixtures/session-owner-descriptors');
 const { RequestResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
 const {
@@ -28,6 +24,7 @@ const {
   ServiceStatefulRuntime
 } = require('../../packages/framework/dist/runtime/foundation/service-stateful-runtime');
 const {
+  M6bServiceWireCommand,
   decodeStatefulHeader,
   encodeStatefulReply
 } = require('../../packages/framework/dist/runtime/foundation/service-stateful-wire-codec');
@@ -59,6 +56,49 @@ function descriptorFixture(t) {
   const attempts = [];
   const incoming = [];
   const routes = new Map();
+  // The Actor owner's real session-bind decision: a bind whose ObjectGeneration differs is
+  // answered by this stateful runtime, not by a reply the fixture makes up.
+  const targetReplies = [];
+  let targetIngress;
+  const targetRaw = {
+    topology: { peer: () => ({ descriptor: { lifecycleGeneration: 3n } }) },
+    mailbox: { tryEnqueue: () => true },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
+    observePeerConnectionIntentRemoved: () => () => {},
+    setServiceIngress(handler) {
+      targetIngress = handler;
+    },
+    replyService(_record, parts) {
+      targetReplies.push([...parts]);
+    }
+  };
+  const targetRuntime = withTestSessionOwners(
+    new ServiceStatefulRuntime(targetRaw, actor.nodeRid, 3n)
+  );
+  targetRuntime.restoreUserSpotAuthority('actor-spot', 'user', 2n, 1n);
+  targetRuntime.restoreActorAuthority(
+    actor.actorId,
+    'actor',
+    actor.generation,
+    9n,
+    'actor-spot',
+    2n,
+    1n
+  );
+  const targetDecision = async (parts) => {
+    targetReplies.length = 0;
+    await targetIngress({
+      command: M6bServiceWireCommand.boundSessionBind,
+      flags: 0,
+      sourceRoutingId: 'session-node',
+      sourceNodeGeneration: 3n,
+      requestSequence: 1n,
+      parts
+    });
+    assert.equal(targetReplies.length, 1);
+    return targetReplies[0][0];
+  };
   const router = {
     setRoutingId() {},
     setReceiveFlowState() {},
@@ -79,9 +119,6 @@ function descriptorFixture(t) {
       attempts.push(record);
       const actorGenerationMismatch =
         record.kind === 'boundSessionBind' && record.actor.actor.generation !== actor.generation;
-      const mismatch = actorGenerationMismatch
-        ? internalFrameworkWireReply(ZLinkFrameworkInternalErrorKind.ActorLocationStale)
-        : undefined;
       const tail =
         record.kind === 'actorLookup'
           ? {
@@ -95,14 +132,13 @@ function descriptorFixture(t) {
             ? { kind: 'streamBind', bindingGeneration: 11n, authorityOwnerGeneration: 9n }
             : undefined;
       onAdmitted?.();
-      return Promise.resolve([
-        encodeStatefulReply(
-          record.correlation,
-          mismatch?.terminalResult ?? RequestResult.Ok,
-          mismatch?.failureCode ?? 0,
-          tail
-        )
-      ]).then(onReply, onFailed);
+      return (
+        actorGenerationMismatch
+          ? targetDecision(parts)
+          : Promise.resolve(encodeStatefulReply(record.correlation, RequestResult.Ok, 0, tail))
+      )
+        .then((reply) => [reply])
+        .then(onReply, onFailed);
     }
   };
   const raw = new RawServiceMeshRuntime({
@@ -270,9 +306,8 @@ test('STREAM bind rejects an ActorRef with a different authority ObjectGeneratio
     assert.equal(result.accepted, false);
     assert.deepEqual(fixture.attempts.map((record) => record.kind), ['boundSessionBind']);
     assert.deepEqual(fixture.service.bindings('session-rid'), []);
-    // The spec's InvalidOperation kind (02-session-actor-binding:870) is not yet produced by
-    // any language; #4774 aligns all four and narrows this assertion to that kind.
-    assert.ok(Object.values(framework.ZLinkFrameworkErrorKind).includes(result.error.kind));
+    // Session-Actor binding §12: the Actor owner's own decision ends InvalidOperation.
+    assert.equal(result.error.kind, framework.ZLinkFrameworkErrorKind.InvalidOperation);
   } finally {
     fixture.close();
   }

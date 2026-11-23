@@ -2685,6 +2685,18 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_include_directories(test_cpp_framework_shared_serial_turn PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
+    test_cpp_framework_yield_terminal
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_yield_terminal.cpp
+    "framework-unit;framework-contract;framework-regression;execution" contract)
+  target_use_zlink_gtest_main(test_cpp_framework_yield_terminal)
+  add_zlink_framework_test(
+    test_cpp_framework_yield_resume_admission
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_yield_resume_admission.cpp
+    "framework-unit;framework-contract;framework-regression;execution" contract)
+  target_use_zlink_gtest_main(test_cpp_framework_yield_resume_admission)
+  target_include_directories(test_cpp_framework_yield_resume_admission PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
     test_cpp_framework_serializer_registry
     tests/Zlink.Framework.UnitTests/test_cpp_framework_serializer_registry.cpp
     "framework-unit;serializer")
@@ -3124,6 +3136,18 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_remote_duplicate_bind_replacement
     COMMAND test_cpp_framework_same_node_duplicate_bind remote
+    LABELS "framework-integration;framework-contract;stream;stream-session"
+    TIER contract
+    TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_bind_generation_mismatch
+    COMMAND test_cpp_framework_same_node_duplicate_bind generation-mismatch
+    LABELS "framework-integration;framework-contract;stream;stream-session"
+    TIER contract
+    TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_bind_stale_location
+    COMMAND test_cpp_framework_same_node_duplicate_bind stale-location
     LABELS "framework-integration;framework-contract;stream;stream-session"
     TIER contract
     TIMEOUT 30)
