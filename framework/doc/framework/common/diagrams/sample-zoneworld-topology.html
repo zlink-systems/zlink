@@ -5005,7 +5005,7 @@
     <!-- Main Diagram -->
     <div class="diagram-container" data-detail-level="read"
          data-preset-badge-editorial-plate="ARCHIFY / PLATE 04">
-      <svg viewBox="-165 92 1010 790" role="img" lang="en" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="standard" data-quality-gates="advisory">
+      <svg viewBox="-149 122 1010 264" role="img" lang="en" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="standard" data-quality-gates="advisory">
         <title id="archify-diagram-title">ZoneWorld topology — Client · Server 배치와 연결</title>
         <desc id="archify-diagram-description">Gateway는 game STREAM, Ops는 control STREAM만 종단하며 ZoneNode A/B는 zoneworld.mesh와 broadcast fanout으로 이어진다</desc>
         <!-- Definitions -->
@@ -5031,138 +5031,94 @@
         <rect width="100%" height="100%" fill="url(#grid)" />
 
         <!-- Boundaries (behind everything) -->
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="0" data-composition-frame-label="Clients" x="20" y="120" width="640" height="110" rx="12" class="c-region" stroke-width="1"/>
 
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="1" data-composition-frame-label="Servers" x="20" y="432" width="640" height="422" rx="12" class="c-region" stroke-width="1"/>
 
         <!-- Connection paths (before components for correct z-order) -->
-        <path data-edge-from="g" data-edge-to="gw" data-edge-label="STREAM WS" data-edge-key="0" data-composition-points="110,210;110,618" d="M 110 210 L 110 618" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="o" data-edge-to="ops" data-edge-label="STREAM WS" data-edge-key="1" data-composition-points="570,210;570,618" d="M 570 210 L 570 618" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="gw" data-edge-to="z1" data-edge-label="mesh RouteMesh" data-edge-key="2" data-composition-points="170,641;225,641;225,492;280,492" d="M 170 641 L 217 641 Q 225 641 225 633 L 225 500 Q 225 492 233 492 L 280 492" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="gw" data-edge-to="z2" data-edge-label="mesh RouteMesh" data-edge-key="3" data-composition-points="170,655;225,655;225,804;280,804" d="M 170 655 L 217 655 Q 225 655 225 663 L 225 796 Q 225 804 233 804 L 280 804" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="ops" data-edge-to="z1" data-edge-label="mesh RouteMesh" data-edge-key="4" data-composition-points="510,643.3333333333334;455,643.3333333333334;455,499;400,499" d="M 510 643.3333333333334 L 463 643.3333333333334 Q 455 643.3333333333334 455 635.3333333333334 L 455 507 Q 455 499 447 499 L 400 499" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="ops" data-edge-to="z2" data-edge-label="mesh RouteMesh" data-edge-key="5" data-composition-points="510,662;455,662;455,811;400,811" d="M 510 662 L 463 662 Q 455 662 455 670 L 455 803 Q 455 811 447 811 L 400 811" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="z1" data-edge-to="z2" data-edge-label="mesh RouteMesh" data-edge-key="6" data-composition-points="340,522;340,774" d="M 340 522 L 340 774" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="ops" data-edge-to="z1" data-edge-label="broadcast fanout" data-edge-key="7" data-composition-points="510,634;455,634;455,485;400,485" d="M 510 634 L 463 634 Q 455 634 455 626 L 455 493 Q 455 485 447 485 L 400 485" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="ops" data-edge-to="z2" data-edge-label="broadcast fanout" data-edge-key="8" data-composition-points="510,652.6666666666666;455,652.6666666666666;455,797;400,797" d="M 510 652.6666666666666 L 463 652.6666666666666 Q 455 652.6666666666666 455 660.6666666666666 L 455 789 Q 455 797 447 797 L 400 797" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="BG" data-edge-to="GW" data-edge-label="STREAM" data-edge-key="0" data-composition-points="170,180;285,180" d="M 170 180 L 285 180" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="GW" data-edge-to="PL" data-edge-label="actor relay" data-edge-key="1" data-composition-points="405,180;520,180" d="M 405 180 L 520 180" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="BO" data-edge-to="OPS" data-edge-label="STREAM" data-edge-key="2" data-composition-points="170,328;285,328" d="M 170 328 L 285 328" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="OPS" data-edge-to="PL" data-edge-label="fanout" data-edge-key="3" data-composition-points="405,328;580,328;580,210" d="M 405 328 L 572 328 Q 580 328 580 320 L 580 210" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
 
         <!-- Components -->
-        <g id="node-g" data-node-id="g" data-node-label="Game Browser" tabindex="0" role="button" aria-label="Focus Game Browser, Clients" aria-pressed="false" data-node-kind="frontend" data-node-context="Clients">
-          <title>Game Browser · Clients</title>
+        <g id="node-BG" data-node-id="BG" data-node-label="게임 client" tabindex="0" role="button" aria-label="Focus 게임 client, Architecture component" aria-pressed="false" data-node-kind="external" data-node-context="Architecture component">
+          <title>게임 client · Architecture component</title>
           <rect x="50" y="150" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="50" y="150" width="120" height="60" rx="6" class="c-frontend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(56 156) scale(0.6875)">
+          <rect x="50" y="150" width="120" height="60" rx="6" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(56 156) scale(0.6875)">
+            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
+            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
+          </g>
+          <text data-node-label="" x="110" y="184" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">게임 client</text>
+        </g>
+
+        <g id="node-GW" data-node-id="GW" data-node-label="session node" tabindex="0" role="button" aria-label="Focus session node, Gateway, Architecture component" aria-pressed="false" data-node-kind="database" data-node-sublabel="Gateway" data-node-context="Architecture component">
+          <title>session node · Gateway · Architecture component</title>
+          <rect x="285" y="150" width="120" height="60" rx="6" class="c-mask"/>
+          <rect x="285" y="150" width="120" height="60" rx="6" class="c-database" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(291 156) scale(0.6875)">
+            <ellipse cx="8" cy="4" rx="5" ry="2"/>
+            <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="345" y="178" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">session node</text>
+        <text data-detail="context" x="345" y="194" class="t-muted" font-size="9" text-anchor="middle">Gateway</text>
+        </g>
+
+        <g id="node-PL" data-node-id="PL" data-node-label="play node ×2" tabindex="0" role="button" aria-label="Focus play node ×2, zone · player Actor, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="zone · player Actor" data-node-context="Architecture component"><rect x="542" y="172" width="120" height="60" rx="6" class="c-backend" style="fill:none" stroke-width="2.2"/><rect x="531" y="161" width="120" height="60" rx="6" class="c-backend" style="fill:none" stroke-width="2.2"/>
+          <title>play node ×2 · zone · player Actor · Architecture component</title>
+          <rect x="520" y="150" width="120" height="60" rx="6" class="c-mask"/>
+          <rect x="520" y="150" width="120" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(526 156) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="580" y="178" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">play node ×2</text>
+        <text data-detail="context" x="580" y="194" class="t-muted" font-size="9" text-anchor="middle">zone · player Actor</text>
+        </g>
+
+        <g id="node-BO" data-node-id="BO" data-node-label="관제 client" tabindex="0" role="button" aria-label="Focus 관제 client, Architecture component" aria-pressed="false" data-node-kind="external" data-node-context="Architecture component">
+          <title>관제 client · Architecture component</title>
+          <rect x="50" y="298" width="120" height="60" rx="6" class="c-mask"/>
+          <rect x="50" y="298" width="120" height="60" rx="6" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(56 304) scale(0.6875)">
+            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
+            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
+          </g>
+          <text data-node-label="" x="110" y="332" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">관제 client</text>
+        </g>
+
+        <g id="node-OPS" data-node-id="OPS" data-node-label="Ops" tabindex="0" role="button" aria-label="Focus Ops, 관제 STREAM, Architecture component" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="관제 STREAM" data-node-context="Architecture component">
+          <title>Ops · 관제 STREAM · Architecture component</title>
+          <rect x="285" y="298" width="120" height="60" rx="6" class="c-mask"/>
+          <rect x="285" y="298" width="120" height="60" rx="6" class="c-frontend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(291 304) scale(0.6875)">
             <rect x="2" y="3" width="12" height="10" rx="2"/>
             <path d="M2 6.5h12"/>
             <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
             <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
           </g>
-          <text data-node-label="" x="110" y="184" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Game Browser</text>
-        </g>
-
-        <g id="node-o" data-node-id="o" data-node-label="Ops Browser" tabindex="0" role="button" aria-label="Focus Ops Browser, Clients" aria-pressed="false" data-node-kind="frontend" data-node-context="Clients">
-          <title>Ops Browser · Clients</title>
-          <rect x="510" y="150" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="510" y="150" width="120" height="60" rx="6" class="c-frontend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(516 156) scale(0.6875)">
-            <rect x="2" y="3" width="12" height="10" rx="2"/>
-            <path d="M2 6.5h12"/>
-            <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
-            <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
-          </g>
-          <text data-node-label="" x="570" y="184" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Ops Browser</text>
-        </g>
-
-        <g id="node-z1" data-node-id="z1" data-node-label="ZoneNode A" tabindex="0" role="button" aria-label="Focus ZoneNode A, Servers" aria-pressed="false" data-node-kind="backend" data-node-context="Servers">
-          <title>ZoneNode A · Servers</title>
-          <rect x="280" y="462" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="280" y="462" width="120" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(286 468) scale(0.6875)">
-            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
-          </g>
-          <text data-node-label="" x="340" y="496" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">ZoneNode A</text>
-        </g>
-
-        <g id="node-gw" data-node-id="gw" data-node-label="Gateway" tabindex="0" role="button" aria-label="Focus Gateway, Servers" aria-pressed="false" data-node-kind="external" data-node-context="Servers">
-          <title>Gateway · Servers</title>
-          <rect x="50" y="618" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="50" y="618" width="120" height="60" rx="6" class="c-external" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(56 624) scale(0.6875)">
-            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
-            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
-          </g>
-          <text data-node-label="" x="110" y="652" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Gateway</text>
-        </g>
-
-        <g id="node-ops" data-node-id="ops" data-node-label="Ops" tabindex="0" role="button" aria-label="Focus Ops, Servers" aria-pressed="false" data-node-kind="external" data-node-context="Servers">
-          <title>Ops · Servers</title>
-          <rect x="510" y="618" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="510" y="618" width="120" height="60" rx="6" class="c-external" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(516 624) scale(0.6875)">
-            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
-            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
-          </g>
-          <text data-node-label="" x="570" y="652" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Ops</text>
-        </g>
-
-        <g id="node-z2" data-node-id="z2" data-node-label="ZoneNode B" tabindex="0" role="button" aria-label="Focus ZoneNode B, Servers" aria-pressed="false" data-node-kind="backend" data-node-context="Servers">
-          <title>ZoneNode B · Servers</title>
-          <rect x="280" y="774" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="280" y="774" width="120" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(286 780) scale(0.6875)">
-            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
-          </g>
-          <text data-node-label="" x="340" y="808" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">ZoneNode B</text>
+          <text data-node-label="" data-detail-anchor="" x="345" y="326" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Ops</text>
+        <text data-detail="context" x="345" y="342" class="t-muted" font-size="9" text-anchor="middle">관제 STREAM</text>
         </g>
 
         <!-- Connection labels -->
-        <g data-detail="context" data-edge-from="g" data-edge-to="gw" data-edge-label="STREAM WS" data-edge-key="0">
-          <rect x="83.4" y="230" width="53.199999999999996" height="14" rx="3" class="c-mask"/>
-          <text x="110" y="240" class="t-muted" font-size="8" text-anchor="middle">STREAM WS</text>
+        <g data-detail="context" data-edge-from="BG" data-edge-to="GW" data-edge-label="STREAM" data-edge-key="0">
+          <rect x="208.1" y="160" width="38.8" height="14" rx="3" class="c-mask"/>
+          <text x="227.5" y="170" class="t-muted" font-size="8" text-anchor="middle">STREAM</text>
         </g>
-        <g data-detail="context" data-edge-from="o" data-edge-to="ops" data-edge-label="STREAM WS" data-edge-key="1">
-          <rect x="543.4" y="230" width="53.199999999999996" height="14" rx="3" class="c-mask"/>
-          <text x="570" y="240" class="t-muted" font-size="8" text-anchor="middle">STREAM WS</text>
+        <g data-detail="context" data-edge-from="GW" data-edge-to="PL" data-edge-label="actor relay" data-edge-key="1">
+          <rect x="431.1" y="160" width="62.8" height="14" rx="3" class="c-mask"/>
+          <text x="462.5" y="170" class="t-muted" font-size="8" text-anchor="middle">actor relay</text>
         </g>
-        <g data-detail="context" data-edge-from="gw" data-edge-to="z1" data-edge-label="mesh RouteMesh" data-edge-key="2">
-          <rect x="186.4" y="546.5" width="77.2" height="14" rx="3" class="c-mask"/>
-          <text x="225" y="556.5" class="t-muted" font-size="8" text-anchor="middle">mesh RouteMesh</text>
+        <g data-detail="context" data-edge-from="BO" data-edge-to="OPS" data-edge-label="STREAM" data-edge-key="2">
+          <rect x="208.1" y="308" width="38.8" height="14" rx="3" class="c-mask"/>
+          <text x="227.5" y="318" class="t-muted" font-size="8" text-anchor="middle">STREAM</text>
         </g>
-        <g data-detail="context" data-edge-from="gw" data-edge-to="z2" data-edge-label="mesh RouteMesh" data-edge-key="3">
-          <rect x="186.4" y="709.5" width="77.2" height="14" rx="3" class="c-mask"/>
-          <text x="225" y="719.5" class="t-muted" font-size="8" text-anchor="middle">mesh RouteMesh</text>
-        </g>
-        <g data-detail="context" data-edge-from="ops" data-edge-to="z1" data-edge-label="mesh RouteMesh" data-edge-key="4">
-          <rect x="416.4" y="551.1666666666667" width="77.2" height="14" rx="3" class="c-mask"/>
-          <text x="455" y="561.1666666666667" class="t-muted" font-size="8" text-anchor="middle">mesh RouteMesh</text>
-        </g>
-        <g data-detail="context" data-edge-from="ops" data-edge-to="z2" data-edge-label="mesh RouteMesh" data-edge-key="5">
-          <rect x="416.4" y="716.5" width="77.2" height="14" rx="3" class="c-mask"/>
-          <text x="455" y="726.5" class="t-muted" font-size="8" text-anchor="middle">mesh RouteMesh</text>
-        </g>
-        <g data-detail="context" data-edge-from="z1" data-edge-to="z2" data-edge-label="mesh RouteMesh" data-edge-key="6">
-          <rect x="301.4" y="448" width="77.2" height="14" rx="3" class="c-mask"/>
-          <text x="340" y="458" class="t-muted" font-size="8" text-anchor="middle">mesh RouteMesh</text>
-        </g>
-        <g data-detail="context" data-edge-from="ops" data-edge-to="z1" data-edge-label="broadcast fanout" data-edge-key="7">
-          <rect x="411.6" y="539.5" width="86.8" height="14" rx="3" class="c-mask"/>
-          <text x="455" y="549.5" class="t-muted" font-size="8" text-anchor="middle">broadcast fanout</text>
-        </g>
-        <g data-detail="context" data-edge-from="ops" data-edge-to="z2" data-edge-label="broadcast fanout" data-edge-key="8">
-          <rect x="411.6" y="704.8333333333333" width="86.8" height="14" rx="3" class="c-mask"/>
-          <text x="455" y="714.8333333333333" class="t-muted" font-size="8" text-anchor="middle">broadcast fanout</text>
+        <g data-detail="context" data-edge-from="OPS" data-edge-to="PL" data-edge-label="fanout" data-edge-key="3">
+          <rect x="560.6" y="249" width="38.8" height="14" rx="3" class="c-mask"/>
+          <text x="580" y="259" class="t-muted" font-size="8" text-anchor="middle">fanout</text>
         </g>
 
         <!-- Boundary labels (foreground masks keep routes out of titles) -->
-        <g data-graph-role="structural-frame-label" data-composition-frame-id="0" data-composition-frame-kind="region" data-composition-frame-label="Clients">
-          <rect data-graph-role="structural-frame-label-mask" x="24" y="130" width="47.8" height="16" rx="3" class="c-mask"/>
-          <text data-boundary-label="" x="28" y="143" class="t-cloud" font-size="9" font-weight="600">Clients</text>
-        </g>
 
-        <g data-graph-role="structural-frame-label" data-composition-frame-id="1" data-composition-frame-kind="region" data-composition-frame-label="Servers">
-          <rect data-graph-role="structural-frame-label-mask" x="24" y="442" width="47.8" height="16" rx="3" class="c-mask"/>
-          <text data-boundary-label="" x="28" y="455" class="t-cloud" font-size="9" font-weight="600">Servers</text>
-        </g>
 
         <!-- Legend -->
 
@@ -5354,23 +5310,14 @@
     <div class="cards">
       <div class="card">
         <div class="card-header">
-          <div class="card-dot cyan"></div>
-          <h3>채널 이름과 색 매핑</h3>
+          <div class="card-dot emerald"></div>
+          <h3>ZoneWorld 연결과 역할</h3>
         </div>
         <ul>
-          <li>&bull; 모든 mesh 간선의 원문 라벨은 &quot;zoneworld.mesh RouteMesh&quot;(ChannelName, Spot·Actor direct message와 Logical Multicast 운반), broadcast 간선은 &quot;zoneworld.broadcast fanout&quot;(mesh와 독립된 classic fanout publisher/subscriber 연결) — 그림에서는 접두사 zoneworld.를 생략했다.</li>
-          <li>&bull; 색: Game/Ops Browser=frontend(파랑, 브라우저 client), Gateway·Ops=external(회색, plumbing), ZoneNode A/B=backend(초록, Zone Spot·Player Actor를 제공하는 계층). 원문 mermaid는 모든 간선을 동일 스타일(---)로 그렸으므로 mesh·fanout 모두 variant=default로 옮겼다(선 굵기로 구분하지 않음).</li>
-        </ul>
-      </div>
-
-      <div class="card">
-        <div class="card-header">
-          <div class="card-dot slate"></div>
-          <h3>Ops↔ZoneNode 이중 연결</h3>
-        </div>
-        <ul>
-          <li>&bull; Ops와 각 ZoneNode 사이에는 mesh RouteMesh(제어용 direct/조회)와 broadcast fanout(공지·점검 전파) 두 채널이 별도로 존재한다 — 같은 두 노드를 잇는 별개 논리 연결이며 원문에 각각 독립된 화살표로 그려져 있다.</li>
-          <li>&bull; ZoneNode A/B는 같은 executable capability로 실행하며 Zone Spot factory(stable type zoneworld.zone), Player Actor factory(stable type zoneworld.player), zone Channel과 report channel을 등록한다. Client에는 Gateway·Ops endpoint만 노출되고 ZoneNode endpoint는 노출하지 않는다.</li>
+          <li>&bull; Gateway가 게임 세션을 관리하며 ZoneNode 프로세스 2대에 플레이어 메시지를 전달합니다.</li>
+          <li>&bull; 두 play node는 zoneworld.mesh RouteMesh에서 경계 상태를 동기화합니다. 경계를 넘는 Actor를 relocation해도 클라이언트 세션은 유지됩니다.</li>
+          <li>&bull; Ops는 별도 관제 STREAM에서 공지·점검을 받아 zoneworld.broadcast로 전달하며, zone Spot의 운영 이벤트를 수집합니다.</li>
+          <li>&bull; 두 프로세스는 동일한 zone Spot과 player Actor factory를 등록합니다. Location Store의 배치 결과에 따라 각 프로세스가 일부 zone을 담당합니다.</li>
         </ul>
       </div>
     </div>

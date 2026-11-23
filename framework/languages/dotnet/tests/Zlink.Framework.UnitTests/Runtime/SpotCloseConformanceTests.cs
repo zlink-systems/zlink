@@ -1586,7 +1586,7 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
         try
         {
             await activation.BeginCloseBoundaryAsync(CancellationToken.None);
-            activation.BeginCommittedClose();
+            activation.BeginCommittedClose("Spot context");
             var entered = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously
             );

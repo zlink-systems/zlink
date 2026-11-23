@@ -32,16 +32,16 @@
     {
       "id": "CG",
       "type": "backend",
-      "label": "CustomerGateway",
-      "sublabel": "customer actor",
+      "label": "session node",
+      "sublabel": "CustomerGateway",
       "row": 2,
       "col": 0
     },
     {
       "id": "D",
       "type": "external",
-      "label": "Dispatch",
-      "sublabel": "HTTP intake · dispatch worker",
+      "label": "api node",
+      "sublabel": "Dispatch",
       "row": 0,
       "col": 1
     },
@@ -56,16 +56,16 @@
     {
       "id": "CN",
       "type": "backend",
-      "label": "CourierActorNode ×2",
-      "sublabel": "courier actor",
+      "label": "play node ×2",
+      "sublabel": "CourierActorNode",
       "row": 1,
       "col": 2
     },
     {
       "id": "CS",
       "type": "external",
-      "label": "CourierSession",
-      "sublabel": "connection endpoint",
+      "label": "session node",
+      "sublabel": "CourierSession",
       "row": 1,
       "col": 3
     },

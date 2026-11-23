@@ -2298,10 +2298,10 @@ framework_exception_t spot_context_state_t::admission_error () const
         if ((node && (node->host_draining () || node->stopping.load (std::memory_order_acquire)))
             || closed == spot_close_reason_t::host_shutdown)
             return detail::make_framework_origin_exception (framework_error_kind_t::shutting_down,
-                                                            "Spot host is shutting down");
+                                                            "SPOT is closed.");
         if (closed == spot_close_reason_t::explicit_close
             || closed == spot_close_reason_t::idle_evicted)
-            return target_not_found ("Spot incarnation was closed");
+            return target_not_found ("SPOT is closing.");
         return detail::make_framework_origin_exception (framework_error_kind_t::rejected,
                                                         "Spot admission is sealed");
     });
@@ -4958,11 +4958,11 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                       complete ([state, completion, admission_terminal, retained_message] {
                           settle_handler_admission_once (admission_terminal);
                           completion->complete (
-                            retained_message ? result_t<zlink::message_t>::failure (
-                                                 framework_error_kind_t::internal_failure,
-                                                 "Spot incarnation was closed")
-                                             : detail::result_access_t::failure<zlink::message_t> (
-                                                 state->admission_error ()));
+                            retained_message
+                              ? result_t<zlink::message_t>::failure (
+                                  framework_error_kind_t::internal_failure, "SPOT is closed.")
+                              : detail::result_access_t::failure<zlink::message_t> (
+                                  state->admission_error ()));
                       });
                       return;
                   }
@@ -5158,7 +5158,7 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                   detail::result_access_t::failure<zlink::message_t> (detail::with_failure_code (
                     detail::make_framework_origin_exception (
                       framework_error_kind_t::unavailable,
-                      "Spot incarnation released its authority"),
+                      "The Instance Spot incarnation released its authority."),
                     static_cast<std::uint32_t> (
                       runtime::protocol::framework_error_code::spotMoving))));
             /* Dispatch rejection is framework-generated (zlink.origin
@@ -9828,7 +9828,7 @@ task_t<void> spot_node_runtime_t::seal_actor_application_suffix (const actor_ref
                                       ? std::move (invocation_metadata->content_type)
                                       : std::string (header.value ().content_type);
               packet.metadata = invocation_metadata ? std::move (invocation_metadata->values)
-                                                    : header.value ().metadata;
+                                                    : header.value ().metadata.values ();
               packet.is_request = kind == runtime::protocol::frozen_record_kind_t::actor_request;
           });
         packet.application_record = std::move (record);
@@ -10877,7 +10877,7 @@ task_t<void> spot_node_runtime_t::complete_remote_actor_transfer (
             }
             if (packet.is_request && terminal) {
                 (void) co_await send_handoff_terminal (
-                  _state, handoff_terminal_route (header.metadata), *terminal);
+                  _state, handoff_terminal_route (header.metadata.values ()), *terminal);
             }
         }
         if (replay.completed) {
@@ -15945,8 +15945,9 @@ bool spot_node_runtime_t::dispatch_mesh_record (
 
         if (node_record && record.kind == service::record_kind_t::node_send
             && header.message_name == actor_handoff_terminal_packet) {
-            const auto terminal_route = handoff_terminal_route (header.metadata);
-            const auto success = handoff_u64 (header.metadata, actor_handoff_terminal_success_key);
+            const auto terminal_route = handoff_terminal_route (header.metadata.values ());
+            const auto success =
+              handoff_u64 (header.metadata.values (), actor_handoff_terminal_success_key);
             if (!terminal_route || !success || *success > 1) {
                 if (!terminal_route)
                     report_handoff_terminal_drop (_state, "missing_parking_node");
@@ -16007,8 +16008,8 @@ bool spot_node_runtime_t::dispatch_mesh_record (
                                       framework_error_kind_t::protocol_error,
                                       "Actor handoff terminal body missing");
                 } else {
-                    const auto error_kind_value =
-                      handoff_u64 (header.metadata, actor_handoff_terminal_error_kind_key);
+                    const auto error_kind_value = handoff_u64 (
+                      header.metadata.values (), actor_handoff_terminal_error_kind_key);
                     const auto error_message =
                       header.metadata.find (std::string (actor_handoff_terminal_error_message_key));
                     completed = result_t<zlink::message_t>::failure (
@@ -16258,7 +16259,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (
                       header.message_name, {}, std::type_index (typeid (void)),
                       target->instance.get (), nullptr, services, serializers, body.value (),
                       spot_inbound_message_t{.content_type = header.content_type,
-                                             .values = header.metadata,
+                                             .values = header.metadata.values (),
                                              .received_at = record.received_at},
                       true, {}, {}, {}, spot_handler_registry_t::actor_queue_dispatch_t::acquire,
                       [target] { target->release (); }, record.release_mailbox_reservation,
@@ -16707,7 +16708,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (
         }
         auto relayed = [&] {
             auto relay_metadata = spot_inbound_message_t{.content_type = header.content_type,
-                                                         .values = header.metadata,
+                                                         .values = header.metadata.values (),
                                                          .received_at = record.received_at};
             if (record.kind == service::record_kind_t::actor_request
                 && !header.correlation_id.empty ()) {

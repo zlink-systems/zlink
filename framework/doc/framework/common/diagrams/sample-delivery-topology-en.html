@@ -5005,7 +5005,7 @@
     <!-- Main Diagram -->
     <div class="diagram-container" data-detail-level="read"
          data-preset-badge-editorial-plate="ARCHIFY / PLATE 04">
-      <svg viewBox="-140 102 1010 598" role="img" lang="en" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="standard" data-quality-gates="advisory">
+      <svg viewBox="-144 102 1010 598" role="img" lang="en" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="standard" data-quality-gates="advisory">
         <title id="archify-diagram-title">System configuration and topology — structural connections</title>
         <desc id="archify-diagram-description">Client/server component placement and RouteMesh/ClientServer connections (Store/evidence in the resource table)</desc>
         <!-- Definitions -->
@@ -5031,21 +5031,20 @@
         <rect width="100%" height="100%" fill="url(#grid)" />
 
         <!-- Boundaries (behind everything) -->
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="0" data-composition-frame-label="Servers" x="260" y="130" width="420" height="542" rx="12" class="c-region" stroke-width="1"/>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="0" data-composition-frame-label="session node" x="260" y="130" width="180" height="110" rx="12" class="c-region" stroke-width="1"/>
+
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="1" data-composition-frame-label="session node" x="260" y="562" width="180" height="110" rx="12" class="c-region" stroke-width="1"/>
 
         <!-- Connection paths (before components for correct z-order) -->
         <path data-edge-from="CA" data-edge-to="CS" data-edge-label="STREAM" data-edge-key="0" data-composition-points="170,183;290,183" d="M 170 183 L 290 183" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="CB" data-edge-to="CS" data-edge-label="STREAM" data-edge-key="1" data-composition-points="170,334;230,334;230,197;290,197" d="M 170 334 L 222 334 Q 230 334 230 326 L 230 205 Q 230 197 238 197 L 290 197" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="CC" data-edge-to="D" data-edge-label="HTTP" data-edge-key="2" data-composition-points="170,615;230,615;230,478;290,478" d="M 170 615 L 222 615 Q 230 615 230 607 L 230 486 Q 230 478 238 478 L 290 478" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="CC" data-edge-to="CG" data-edge-label="STREAM" data-edge-key="3" data-composition-points="170,629;290,629" d="M 170 629 L 290 629" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="CS" data-edge-to="CN1" data-edge-key="4" data-composition-points="410,183;434,183;434,199;506,199;506,176;530,176" d="M 410 183 L 426 183 Q 434 183 434 191 L 434 191 Q 434 199 442 199 L 498 199 Q 506 199 506 191 L 506 184 Q 506 176 514 176 L 530 176" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="CS" data-edge-to="CN2" data-edge-key="5" data-composition-points="410,197;470,197;470,320;530,320" d="M 410 197 L 462 197 Q 470 197 470 205 L 470 312 Q 470 320 478 320 L 530 320" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="D" data-edge-to="CN1" data-edge-label="RouteMesh" data-edge-key="6" data-composition-points="410,471;470,471;470,204;530,204" d="M 410 471 L 462 471 Q 470 471 470 463 L 470 212 Q 470 204 478 204 L 530 204" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="D" data-edge-to="CN2" data-edge-label="RouteMesh" data-edge-key="7" data-composition-points="410,485;470,485;470,348;530,348" d="M 410 485 L 462 485 Q 470 485 470 477 L 470 356 Q 470 348 478 348 L 530 348" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="D" data-edge-to="CN1" data-edge-label="ClientServer" data-edge-key="8" data-composition-points="410,464;470,464;470,190;530,190" d="M 410 464 L 462 464 Q 470 464 470 456 L 470 198 Q 470 190 478 190 L 530 190" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
-        <path data-edge-from="D" data-edge-to="CN2" data-edge-label="ClientServer" data-edge-key="9" data-composition-points="410,478;470,478;470,334;530,334" d="M 410 478 L 462 478 Q 470 478 470 470 L 470 342 Q 470 334 478 334 L 530 334" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
-        <path data-edge-from="D" data-edge-to="T" data-edge-label="ClientServer" data-edge-key="10" data-composition-points="410,492;470,492;470,471;530,471" d="M 410 492 L 462 492 Q 470 492 470 484 L 470 479 Q 470 471 478 471 L 530 471" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
-        <path data-edge-from="T" data-edge-to="CG" data-edge-label="RouteMesh" data-edge-key="11" data-composition-points="530,485;470,485;470,622;410,622" d="M 530 485 L 478 485 Q 470 485 470 493 L 470 614 Q 470 622 462 622 L 410 622" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="CS" data-edge-to="CN1" data-edge-key="4" data-composition-points="410,176;530,176" d="M 410 176 L 530 176" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="D" data-edge-to="CN1" data-edge-label="RouteMesh" data-edge-key="5" data-composition-points="410,478;470,478;470,204;530,204" d="M 410 478 L 462 478 Q 470 478 470 470 L 470 212 Q 470 204 478 204 L 530 204" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="CN1" data-edge-to="D" data-edge-label="client/server" data-edge-key="6" data-composition-points="530,190;470,190;470,464;410,464" d="M 530 190 L 478 190 Q 470 190 470 198 L 470 456 Q 470 464 462 464 L 410 464" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="D" data-edge-to="T" data-edge-label="ClientServer" data-edge-key="7" data-composition-points="410,492;470,492;470,471;530,471" d="M 410 492 L 462 492 Q 470 492 470 484 L 470 479 Q 470 471 478 471 L 530 471" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="T" data-edge-to="CG" data-edge-label="RouteMesh" data-edge-key="8" data-composition-points="530,485;470,485;470,622;410,622" d="M 530 485 L 478 485 Q 470 485 470 493 L 470 614 Q 470 622 462 622 L 410 622" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
 
         <!-- Components -->
         <g id="node-CA" data-node-id="CA" data-node-label="Courier Client A" tabindex="0" role="button" aria-label="Focus Courier Client A, Architecture component" aria-pressed="false" data-node-kind="frontend" data-node-context="Architecture component">
@@ -5074,8 +5073,8 @@
           <text data-node-label="" x="110" y="338" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Courier Client B</text>
         </g>
 
-        <g id="node-CS" data-node-id="CS" data-node-label="CourierSession" tabindex="0" role="button" aria-label="Focus CourierSession, Servers" aria-pressed="false" data-node-kind="frontend" data-node-context="Servers">
-          <title>CourierSession · Servers</title>
+        <g id="node-CS" data-node-id="CS" data-node-label="session node" tabindex="0" role="button" aria-label="Focus session node, CourierSession, session node" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="CourierSession" data-node-context="session node">
+          <title>session node · CourierSession · session node</title>
           <rect x="290" y="160" width="120" height="60" rx="6" class="c-mask"/>
           <rect x="290" y="160" width="120" height="60" rx="6" class="c-frontend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(296 166) scale(0.6875)">
@@ -5084,31 +5083,23 @@
             <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
             <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
           </g>
-          <text data-node-label="" x="350" y="194" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">CourierSession</text>
+          <text data-node-label="" data-detail-anchor="" x="350" y="188" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">session node</text>
+        <text data-detail="context" x="350" y="204" class="t-muted" font-size="9" text-anchor="middle">CourierSession</text>
         </g>
 
-        <g id="node-CN1" data-node-id="CN1" data-node-label="CourierActorNode 1" tabindex="0" role="button" aria-label="Focus CourierActorNode 1, Servers" aria-pressed="false" data-node-kind="backend" data-node-context="Servers">
-          <title>CourierActorNode 1 · Servers</title>
+        <g id="node-CN1" data-node-id="CN1" data-node-label="play node ×2" tabindex="0" role="button" aria-label="Focus play node ×2, CourierActorNode, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="CourierActorNode" data-node-context="Architecture component"><rect x="552" y="182" width="120" height="60" rx="6" class="c-backend" style="fill:none" stroke-width="2.2"/><rect x="541" y="171" width="120" height="60" rx="6" class="c-backend" style="fill:none" stroke-width="2.2"/>
+          <title>play node ×2 · CourierActorNode · Architecture component</title>
           <rect x="530" y="160" width="120" height="60" rx="6" class="c-mask"/>
           <rect x="530" y="160" width="120" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(536 166) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" x="590" y="194" class="t-primary" font-size="10.3" font-weight="600" text-anchor="middle">CourierActorNode 1</text>
+          <text data-node-label="" data-detail-anchor="" x="590" y="188" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">play node ×2</text>
+        <text data-detail="context" x="590" y="204" class="t-muted" font-size="9" text-anchor="middle">CourierActorNode</text>
         </g>
 
-        <g id="node-CN2" data-node-id="CN2" data-node-label="CourierActorNode 2" tabindex="0" role="button" aria-label="Focus CourierActorNode 2, Servers" aria-pressed="false" data-node-kind="backend" data-node-context="Servers">
-          <title>CourierActorNode 2 · Servers</title>
-          <rect x="530" y="304" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="530" y="304" width="120" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(536 310) scale(0.6875)">
-            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
-          </g>
-          <text data-node-label="" x="590" y="338" class="t-primary" font-size="10.3" font-weight="600" text-anchor="middle">CourierActorNode 2</text>
-        </g>
-
-        <g id="node-D" data-node-id="D" data-node-label="Dispatch" tabindex="0" role="button" aria-label="Focus Dispatch, Servers" aria-pressed="false" data-node-kind="frontend" data-node-context="Servers">
-          <title>Dispatch · Servers</title>
+        <g id="node-D" data-node-id="D" data-node-label="api node" tabindex="0" role="button" aria-label="Focus api node, Dispatch, Architecture component" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="Dispatch" data-node-context="Architecture component">
+          <title>api node · Dispatch · Architecture component</title>
           <rect x="290" y="448" width="120" height="60" rx="6" class="c-mask"/>
           <rect x="290" y="448" width="120" height="60" rx="6" class="c-frontend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(296 454) scale(0.6875)">
@@ -5117,11 +5108,12 @@
             <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
             <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
           </g>
-          <text data-node-label="" x="350" y="482" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Dispatch</text>
+          <text data-node-label="" data-detail-anchor="" x="350" y="476" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">api node</text>
+        <text data-detail="context" x="350" y="492" class="t-muted" font-size="9" text-anchor="middle">Dispatch</text>
         </g>
 
-        <g id="node-T" data-node-id="T" data-node-label="Tracking" tabindex="0" role="button" aria-label="Focus Tracking, Servers" aria-pressed="false" data-node-kind="frontend" data-node-context="Servers">
-          <title>Tracking · Servers</title>
+        <g id="node-T" data-node-id="T" data-node-label="Tracking" tabindex="0" role="button" aria-label="Focus Tracking, Architecture component" aria-pressed="false" data-node-kind="frontend" data-node-context="Architecture component">
+          <title>Tracking · Architecture component</title>
           <rect x="530" y="448" width="120" height="60" rx="6" class="c-mask"/>
           <rect x="530" y="448" width="120" height="60" rx="6" class="c-frontend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(536 454) scale(0.6875)">
@@ -5146,8 +5138,8 @@
           <text data-node-label="" x="110" y="626" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Customer Client</text>
         </g>
 
-        <g id="node-CG" data-node-id="CG" data-node-label="CustomerGateway" tabindex="0" role="button" aria-label="Focus CustomerGateway, Servers" aria-pressed="false" data-node-kind="frontend" data-node-context="Servers">
-          <title>CustomerGateway · Servers</title>
+        <g id="node-CG" data-node-id="CG" data-node-label="session node" tabindex="0" role="button" aria-label="Focus session node, CustomerGateway, session node" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="CustomerGateway" data-node-context="session node">
+          <title>session node · CustomerGateway · session node</title>
           <rect x="290" y="592" width="120" height="60" rx="6" class="c-mask"/>
           <rect x="290" y="592" width="120" height="60" rx="6" class="c-frontend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(296 598) scale(0.6875)">
@@ -5156,7 +5148,8 @@
             <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
             <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
           </g>
-          <text data-node-label="" x="350" y="626" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">CustomerGateway</text>
+          <text data-node-label="" data-detail-anchor="" x="350" y="620" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">session node</text>
+        <text data-detail="context" x="350" y="636" class="t-muted" font-size="9" text-anchor="middle">CustomerGateway</text>
         </g>
 
         <!-- Connection labels -->
@@ -5177,36 +5170,32 @@
           <text x="230" y="619" class="t-muted" font-size="8" text-anchor="middle">STREAM</text>
         </g>
 
-
-        <g data-detail="context" data-edge-from="D" data-edge-to="CN1" data-edge-label="RouteMesh" data-edge-key="6">
-          <rect x="443.4" y="317.5" width="53.199999999999996" height="14" rx="3" class="c-mask"/>
-          <text x="470" y="327.5" class="t-muted" font-size="8" text-anchor="middle">RouteMesh</text>
+        <g data-detail="context" data-edge-from="D" data-edge-to="CN1" data-edge-label="RouteMesh" data-edge-key="5">
+          <rect x="443.4" y="321" width="53.199999999999996" height="14" rx="3" class="c-mask"/>
+          <text x="470" y="331" class="t-muted" font-size="8" text-anchor="middle">RouteMesh</text>
         </g>
-        <g data-detail="context" data-edge-from="D" data-edge-to="CN2" data-edge-label="RouteMesh" data-edge-key="7">
-          <rect x="443.4" y="396.5" width="53.199999999999996" height="14" rx="3" class="c-mask"/>
-          <text x="470" y="406.5" class="t-muted" font-size="8" text-anchor="middle">RouteMesh</text>
+        <g data-detail="context" data-edge-from="CN1" data-edge-to="D" data-edge-label="client/server" data-edge-key="6">
+          <rect x="433.8" y="307" width="72.4" height="14" rx="3" class="c-mask"/>
+          <text x="470" y="317" class="t-messagebus" font-size="8" text-anchor="middle">client/server</text>
         </g>
-        <g data-detail="context" data-edge-from="D" data-edge-to="CN1" data-edge-label="ClientServer" data-edge-key="8">
-          <rect x="436.2" y="307" width="67.6" height="14" rx="3" class="c-mask"/>
-          <text x="470" y="317" class="t-messagebus" font-size="8" text-anchor="middle">ClientServer</text>
-        </g>
-        <g data-detail="context" data-edge-from="D" data-edge-to="CN2" data-edge-label="ClientServer" data-edge-key="9">
-          <rect x="436.2" y="386" width="67.6" height="14" rx="3" class="c-mask"/>
-          <text x="470" y="396" class="t-messagebus" font-size="8" text-anchor="middle">ClientServer</text>
-        </g>
-        <g data-detail="context" data-edge-from="D" data-edge-to="T" data-edge-label="ClientServer" data-edge-key="10">
+        <g data-detail="context" data-edge-from="D" data-edge-to="T" data-edge-label="ClientServer" data-edge-key="7">
           <rect x="436.2" y="461.5" width="67.6" height="14" rx="3" class="c-mask"/>
           <text x="470" y="471.5" class="t-messagebus" font-size="8" text-anchor="middle">ClientServer</text>
         </g>
-        <g data-detail="context" data-edge-from="T" data-edge-to="CG" data-edge-label="RouteMesh" data-edge-key="11">
+        <g data-detail="context" data-edge-from="T" data-edge-to="CG" data-edge-label="RouteMesh" data-edge-key="8">
           <rect x="443.4" y="533.5" width="53.199999999999996" height="14" rx="3" class="c-mask"/>
           <text x="470" y="543.5" class="t-muted" font-size="8" text-anchor="middle">RouteMesh</text>
         </g>
 
         <!-- Boundary labels (foreground masks keep routes out of titles) -->
-        <g data-graph-role="structural-frame-label" data-composition-frame-id="0" data-composition-frame-kind="region" data-composition-frame-label="Servers">
-          <rect data-graph-role="structural-frame-label-mask" x="264" y="140" width="47.8" height="16" rx="3" class="c-mask"/>
-          <text data-boundary-label="" x="268" y="153" class="t-cloud" font-size="9" font-weight="600">Servers</text>
+        <g data-graph-role="structural-frame-label" data-composition-frame-id="0" data-composition-frame-kind="region" data-composition-frame-label="session node">
+          <rect data-graph-role="structural-frame-label-mask" x="264" y="140" width="74.8" height="16" rx="3" class="c-mask"/>
+          <text data-boundary-label="" x="268" y="153" class="t-cloud" font-size="9" font-weight="600">session node</text>
+        </g>
+
+        <g data-graph-role="structural-frame-label" data-composition-frame-id="1" data-composition-frame-kind="region" data-composition-frame-label="session node">
+          <rect data-graph-role="structural-frame-label-mask" x="264" y="572" width="74.8" height="16" rx="3" class="c-mask"/>
+          <text data-boundary-label="" x="268" y="585" class="t-cloud" font-size="9" font-weight="600">session node</text>
         </g>
 
         <!-- Legend -->
@@ -5403,9 +5392,10 @@
           <h3>Channel names (verbatim)</h3>
         </div>
         <ul>
-          <li>&bull; Solid RouteMesh edges are for object routing — on the courier side `deliverydispatch.courier` (D/CS → CourierActorNode 1/2), on the customer side `deliverydispatch.customer` (Tracking → CustomerGateway).</li>
-          <li>&bull; Dashed ClientServer edges are independent, directed channels — `deliverydispatch.dispatch` (Dispatch → CourierActorNode 1/2), `deliverydispatch.tracking` (Dispatch → Tracking). Dispatch connects to each CourierActorNode over two channels: courier RouteMesh and dispatch ClientServer.</li>
-          <li>&bull; The source connections are undirected `---` structural links (arrowheads are a rendering constraint, not a claim of direction).</li>
+          <li>&bull; Solid RouteMesh edges are for object routing — on the courier side `deliverydispatch.courier` (D/CS → CourierActorNode replicas), on the customer side `deliverydispatch.customer` (Tracking → CustomerGateway).</li>
+          <li>&bull; The dashed ClientServer channels are deliverydispatch.dispatch (CourierActorNode → Dispatch) and deliverydispatch.tracking (Dispatch → Tracking).</li>
+          <li>&bull; The ClientServer arrows show the direction of requests. The RouteMesh arrows show peer connections.</li>
+          <li>&bull; The play node is the Client that calls the api node, which is the Server on the ZLink ClientServer Channel.</li>
         </ul>
       </div>
 
@@ -5415,7 +5405,7 @@
           <h3>Roles and boundaries</h3>
         </div>
         <ul>
-          <li>&bull; Dispatch provides the HTTP edge and the dispatch worker. CourierSession/CustomerGateway receive STREAMs and bind the current session to each Actor. CourierActorNode 1/2 are eligible object servers offering the same Actor type and Entry Spot (green). Tracking records status events and sends them to the Customer Actor.</li>
+          <li>&bull; Dispatch provides the HTTP edge and the dispatch worker. CourierSession/CustomerGateway receive STREAMs and bind the current session to each Actor. CourierActorNode replicas are eligible object servers offering the same Actor type and Entry Spot (green). Tracking records status events and sends them to the Customer Actor.</li>
           <li>&bull; The number of servers and the actor owner are not fixed by Application configuration. The Location Store provides current authority and the Framework selects the target.</li>
         </ul>
       </div>

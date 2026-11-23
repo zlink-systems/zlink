@@ -1,3 +1,4 @@
+import { runOutsideZLinkSpotSerialTurn } from '../execution';
 import { FrameworkContextField } from '../framework-context';
 
 interface ZLinkActorExecutionContext {
@@ -19,7 +20,7 @@ export function runZLinkActorExecution<T>(
   Object.defineProperty(context, 'active', hiddenActiveProperty);
   return actorExecutionStorage.run(context, async () => {
     try {
-      return await operation();
+      return await runOutsideZLinkSpotSerialTurn(operation);
     } finally {
       // Detached async work can inherit AsyncLocalStorage after the handler
       // terminal. The shared object prevents that stale work from claiming it

@@ -180,23 +180,44 @@ TEST (EnvelopeAllocations, ViewDecodeBorrowsHeaderStringsWithoutAllocating)
     header.content_type = "application/" + std::string (128, 't');
     header.correlation_id = std::string (32, 'a');
     header.deadline = std::string (96, 'd');
+    header.error_code = std::string (48, 'e');
+    header.error_message = std::string (96, 'f');
+    header.source = std::string (48, 's');
+    header.topic = std::string (48, 'p');
+    header.flow_id = "0196bc30-dce0-7abc-8def-0123456789ab";
+    header.flow_origin = fw::flow_origin_t::inbound;
     auto wire = codec.encode_header (header);
-    auto decoded = codec.decode_header_view (wire, false);
+    auto decoded = codec.decode_header_view (wire, true);
     ASSERT_TRUE (decoded);
     EXPECT_EQ (decoded.value ().channel_name, header.channel_name);
     EXPECT_EQ (decoded.value ().message_name, header.message_name);
     EXPECT_EQ (decoded.value ().content_type, header.content_type);
     EXPECT_EQ (decoded.value ().correlation_id, header.correlation_id);
     EXPECT_EQ (decoded.value ().deadline, header.deadline);
+    EXPECT_EQ (decoded.value ().error_code, header.error_code);
+    EXPECT_EQ (decoded.value ().error_message, header.error_message);
+    EXPECT_EQ (decoded.value ().source, header.source);
+    EXPECT_EQ (decoded.value ().topic, header.topic);
+    EXPECT_EQ (decoded.value ().flow_id, header.flow_id);
 
     // Mesh receive passes a rejection slot; an accepted header must not be copied into it.
     std::optional<decltype (decoded)> measured;
     std::optional<msg::envelope_header_t> rejected;
     EXPECT_EQ (count_allocations (
-                 [&] { measured.emplace (codec.decode_header_view (wire, false, &rejected)); }),
+                 [&] { measured.emplace (codec.decode_header_view (wire, true, &rejected)); }),
                0u);
     ASSERT_TRUE (*measured);
     EXPECT_FALSE (rejected.has_value ());
+    EXPECT_FALSE (codec.decode_header_view (wire, false).value ().flow_id);
+
+    const auto snapshot = measured->value ();
+    std::memset (wire.bytes ().data (), 0, wire.size ());
+    wire = zlink::message_t{};
+    EXPECT_EQ (snapshot.error_code, header.error_code);
+    EXPECT_EQ (snapshot.error_message, header.error_message);
+    EXPECT_EQ (snapshot.source, header.source);
+    EXPECT_EQ (snapshot.topic, header.topic);
+    EXPECT_EQ (snapshot.flow_id, header.flow_id);
 }
 
 TEST (EnvelopeAllocations, TypedAndErasedEncodingPreservesHeaders)
@@ -411,9 +432,7 @@ TEST (EnvelopeHeaderMicro, FixedAndChangingCorrelation)
                  static_cast<unsigned long long> (checksum));
 }
 
-// Container members (std::map metadata) may allocate even when empty, and how
-// many allocations that costs differs by standard library (MSVC allocates a
-// sentinel node). Measure a header whose strings fit inline as the baseline.
+// Measure header construction without heap-backed strings or metadata entries.
 std::size_t header_container_baseline ()
 {
     std::optional<msg::envelope_header_t> header;
@@ -766,9 +785,8 @@ TEST (EnvelopeAllocations, MailboxRecordDoesNotConstructAnUnusedContentType)
     alignas (record_t) std::byte actual_storage[sizeof (record_t)];
     header_t *header = nullptr;
     record_t *actual = nullptr;
-    // The baseline is the record's header member constructed the same way, alone. An empty
-    // std::map allocates its head node on MSVC and not on libstdc++, so the count is the
-    // platform's container cost; a default content type string would add to the record only.
+    // Construct the same header directly to isolate the cost of the mailbox record.
+    // A default content type string would add to the record only.
     const auto container_allocations = count_allocations (
       [&] { header = ::new (static_cast<void *> (header_storage)) header_t{.content_type = {}}; });
     const auto allocations =

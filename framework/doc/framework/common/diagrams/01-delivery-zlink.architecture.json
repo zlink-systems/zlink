@@ -3,7 +3,7 @@
   "diagram_type": "architecture",
   "meta": {
     "title": "ZLink 방식 — 배달 주문 앱",
-    "subtitle": "서버 간은 channel 직접 · location store는 주소 해석(discovery)만",
+    "subtitle": "주문 HTTP 요청과 실시간 배달 상태",
     "output": "01-delivery-zlink.html",
     "legend": {
       "mode": "hidden"
@@ -15,11 +15,11 @@
       50,
       150
     ],
-    "cols": 2,
-    "gapX": 150,
-    "gapY": 88,
-    "cellW": 150,
-    "cellH": 78
+    "cols": 4,
+    "gapX": 72,
+    "gapY": 100,
+    "cellW": 132,
+    "cellH": 60
   },
   "components": [
     {
@@ -30,109 +30,107 @@
       "col": 0
     },
     {
-      "id": "lb",
-      "type": "frontend",
-      "label": "L7 LB / gateway",
-      "sublabel": "HTTP는 그대로",
-      "row": 1,
-      "col": 0
-    },
-    {
-      "id": "app",
-      "type": "backend",
-      "label": "앱 서버 ×N",
-      "sublabel": "API + ZLink · Instance Spot",
-      "row": 2,
-      "col": 0
-    },
-    {
-      "id": "sess",
-      "type": "backend",
-      "label": "Session 서버 ×N",
-      "sublabel": "WebSocket · 세션 보유",
-      "row": 2,
+      "id": "l4",
+      "type": "external",
+      "label": "L4",
+      "row": 0,
       "col": 1
+    },
+    {
+      "id": "session",
+      "type": "database",
+      "label": "session node ×N",
+      "row": 0,
+      "col": 2,
+      "sublabel": "WebSocket"
+    },
+    {
+      "id": "play",
+      "type": "backend",
+      "label": "play node ×N",
+      "row": 0,
+      "col": 3,
+      "sublabel": "Instance Spot"
+    },
+    {
+      "id": "l7",
+      "type": "external",
+      "label": "L7 LB",
+      "row": 1,
+      "col": 0,
+      "sublabel": "HTTP"
+    },
+    {
+      "id": "api",
+      "type": "frontend",
+      "label": "api node ×N",
+      "row": 1,
+      "col": 3,
+      "sublabel": "주문 · 조회"
     },
     {
       "id": "store",
       "type": "external",
       "label": "location store",
-      "sublabel": "주소 해석용 (discovery)",
-      "row": 3,
-      "col": 0
+      "row": 1,
+      "col": 2
     }
   ],
   "connections": [
     {
       "from": "client",
-      "to": "lb",
-      "label": "HTTP (주문·조회)",
-      "variant": "emphasis",
-      "labelDy": 26
+      "to": "l4"
     },
     {
-      "from": "lb",
-      "to": "app",
-      "variant": "default"
+      "from": "l4",
+      "to": "session"
+    },
+    {
+      "from": "session",
+      "to": "play",
+      "label": "relay · push"
     },
     {
       "from": "client",
-      "to": "sess",
-      "label": "WebSocket",
-      "variant": "emphasis",
-      "fromSide": "right",
-      "toSide": "top"
+      "to": "l7"
     },
     {
-      "from": "sess",
-      "to": "app",
-      "label": "요청 relay (channel)",
-      "variant": "emphasis",
-      "fromSide": "left",
-      "toSide": "right",
-      "labelDy": -14
-    },
-    {
-      "from": "app",
-      "to": "sess",
-      "label": "배달 상태 push (channel)",
-      "variant": "emphasis",
-      "fromSide": "right",
-      "toSide": "left",
-      "labelDy": 16
-    },
-    {
-      "from": "app",
-      "to": "store",
-      "label": "주소 해석",
-      "variant": "dashed",
-      "labelDy": 26
-    },
-    {
-      "from": "sess",
-      "to": "store",
-      "label": "등록",
-      "variant": "dashed",
+      "from": "l7",
+      "to": "api",
       "fromSide": "bottom",
-      "toSide": "right"
+      "toSide": "bottom"
+    },
+    {
+      "from": "api",
+      "to": "play"
+    },
+    {
+      "from": "play",
+      "to": "api",
+      "fromSide": "right",
+      "toSide": "right",
+      "label": "client/server"
+    },
+    {
+      "from": "session",
+      "to": "store",
+      "variant": "dashed"
+    },
+    {
+      "from": "api",
+      "to": "store",
+      "variant": "dashed"
     }
   ],
   "cards": [
     {
       "dot": "emerald",
-      "title": "서버 간 messaging (핵심)",
+      "title": "배달 요청과 상태 전달",
       "items": [
-        "앱 서버 ↔ Session 서버: 요청 relay와 배달 상태 push를 channel 직접(브로커·LB 없이)",
-        "앱 서버: Instance Spot이 주문 하나를 직렬 소유 — 분산 락 불필요",
-        "Session 서버: WebSocket으로 고객 세션 보유, host relocation 단위 → 무중단 패치"
-      ]
-    },
-    {
-      "dot": "slate",
-      "title": "location store = discovery만",
-      "items": [
-        "주소 해석·등록(어느 노드에 있는지)만 담당 — 데이터/메시지 경로가 아니다",
-        "그래서 연결이 점선(control plane)"
+        "주문·조회 HTTP 요청은 L7을 거쳐 api node로 들어옵니다. 주문 상태를 소유한 Instance Spot은 play node에서 실행됩니다.",
+        "WebSocket 연결은 L4를 거쳐 session node에 도착합니다. play node의 상태 변경은 연결을 관리하는 session node를 통해 전달합니다.",
+        "play node는 저장·조회를 api node에 요청할 수 있습니다. location store는 서버 주소를 찾는 데 사용합니다.",
+        "ZLink ClientServer Channel에서 play node는 Client로 호출을 시작하고 api node는 Server로 요청을 처리합니다."
       ]
     }
   ]

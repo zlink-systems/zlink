@@ -12,7 +12,7 @@ const {
 for (const outcome of ['success', 'failure']) {
   test(`terminal progress waits for admission and ${outcome} request delivery`, async () => {
     const fence = {
-      nodeRid: 'target',
+      nodeRid: '746172676574',
       nodeGeneration: 6n,
       ownerId: 'target-owner',
       ownerLeaseGeneration: 14n
@@ -31,8 +31,8 @@ for (const outcome of ['success', 'failure']) {
       payload: Buffer.from('opaque'),
       relocation: {
         relocationId: '11111111-1111-1111-1111-111111111111',
-        phase: 'prepared',
-        source: { ...fence, nodeRid: 'source' },
+        phase: 'committed',
+        source: { ...fence, nodeRid: '736f75726365' },
         target: { ...fence, attemptGeneration: 1n },
         coordinator: { ...fence, expectedStoreVersion: 'source-v1' },
         sourceInventorySha256: '0'.repeat(64),
@@ -86,7 +86,10 @@ for (const outcome of ['success', 'failure']) {
       actorTransfer: {}
     };
     const runtime = new ZLinkHostServiceRelocationRuntime(runtimeOptions);
-    runtime.commitTargetReservation = async () => current;
+    runtime.commitTargetReservation = async () => {
+      events.push(current.relocation.phase);
+      return current;
+    };
     const stage = {
       phase: 'ready',
       lane: Promise.resolve(),
@@ -159,7 +162,7 @@ for (const outcome of ['success', 'failure']) {
 for (const phase of ['preparing', 'captured', 'prepared']) {
   test(`source cleanup records Aborted before removing ${phase} progress`, async () => {
     const fence = {
-      nodeRid: 'source',
+      nodeRid: '736f75726365',
       nodeGeneration: 2n,
       ownerId: 'source-owner',
       ownerLeaseGeneration: 3n
@@ -175,7 +178,9 @@ for (const phase of ['preparing', 'captured', 'prepared']) {
         phase,
         source: fence,
         target:
-          phase === 'prepared' ? { ...fence, nodeRid: 'target', attemptGeneration: 1n } : null,
+          phase === 'prepared'
+            ? { ...fence, nodeRid: '746172676574', attemptGeneration: 1n }
+            : null,
         coordinator: { ...fence, expectedStoreVersion: 'original' },
         sourceInventorySha256: '0'.repeat(64),
         applicationVersion: 1n
@@ -235,3 +240,311 @@ test('Actor destruction joins only the same incarnation target terminal', async 
   await destruction;
   assert.equal(released, true);
 });
+
+for (const outcome of ['accepted', 'publication', 'deadline', 'unavailable']) {
+  test(
+    `cross-node Actor Join after activated relocation: ${outcome}`,
+    { timeout: 10_000 },
+    async () => {
+      const {
+        DefaultZLinkActorContext
+      } = require('../../packages/framework/dist/runtime/actors/actor-context');
+      const {
+        ZLinkActorRuntimeState
+      } = require('../../packages/framework/dist/runtime/actors/actor-runtime-state');
+      const {
+        runActorHandlerWithDeferredJoins
+      } = require('../../packages/framework/dist/runtime/actors/actor-join-deferred-scope');
+      const { ZLinkFrameworkErrorKind, ZLinkSpotKind } = require('../../packages/framework/dist');
+      const {
+        ZLinkActorTransferRuntime
+      } = require('../../packages/framework/dist/runtime/host/actor-transfer-runtime');
+      const actorId = 'returning-actor';
+      const key = encodeAuthorityKey('actor', actorId);
+      const relocationId = '11111111-1111-1111-1111-111111111111';
+      const nodeGeneration = 6n;
+      const ownerId = 'current-owner';
+      const ownerLeaseGeneration = 14n;
+      const fence = { nodeRid: '63757272656e74', nodeGeneration, ownerId, ownerLeaseGeneration };
+      const next = { rid: 'next', lifecycleGeneration: 7n, applicationVersion: 1n };
+      const completions = [];
+      const targetActor = {
+        context: { actorId },
+        onJoinCompleted: (completion) => completions.push(completion)
+      };
+      const targetTransfer = new ZLinkActorTransferRuntime({ actorManager: () => undefined });
+      let joinOperationId;
+      let current = {
+        kind: 'snapshot',
+        ownerId,
+        ownerLeaseGeneration,
+        objectGeneration: 2n,
+        authorityOwnerGeneration: 3n,
+        storeVersion: { value: 'v1' },
+        payload: Buffer.alloc(0),
+        allocation: { objectKind: 'actor', stableType: 'player', descriptor: { rid: 'current' } },
+        relocation: {
+          relocationId,
+          phase: outcome === 'unavailable' ? 'activated' : 'committed',
+          source: { ...fence, nodeRid: '736f75726365' },
+          target: { ...fence, attemptGeneration: 1n },
+          coordinator: { ...fence, expectedStoreVersion: 'source-v1' },
+          sourceInventorySha256: '0'.repeat(64),
+          applicationVersion: 1n,
+          completion: {
+            acceptedRequests: 0n,
+            completedResults: 0n,
+            pendingDeliveries: 0n,
+            reference: null,
+            sha256: null
+          }
+        }
+      };
+      let releaseOpening;
+      const openingHeld = new Promise((resolve) => {
+        releaseOpening = resolve;
+      });
+      let openAdmission;
+      const opened = new Promise((resolve) => {
+        openAdmission = resolve;
+      });
+      let releasePublication;
+      const publicationHeld = new Promise((resolve) => {
+        releasePublication = resolve;
+      });
+      let publicationStarted;
+      const clearing = new Promise((resolve) => {
+        publicationStarted = resolve;
+      });
+      let joinRead;
+      const joinObserved = new Promise((resolve) => {
+        joinRead = resolve;
+      });
+      let joining = false;
+      let captureCount = 0;
+      const store = {
+        async readAuthority() {
+          if (joining) joinRead();
+          return current;
+        },
+        async compareExchangeAuthority(_key, expected, mutation) {
+          assert.equal(expected.value, current.storeVersion.value);
+          if (mutation.relocation === null) {
+            publicationStarted();
+            await publicationHeld;
+          }
+          current = {
+            ...current,
+            payload: mutation.payload,
+            relocation: mutation.relocation ?? undefined,
+            storeVersion: { value: `${expected.value}:cas` }
+          };
+          return { ...current, kind: 'stored' };
+        }
+      };
+      const runtime = new ZLinkHostServiceRelocationRuntime({
+        registration: {
+          spotNodes: new Map([
+            [
+              'play',
+              { actorFactoryRegistrations: { player: { relocation: { kind: 'recreate' } } } }
+            ]
+          ])
+        },
+        meshNode: () => ({
+          status: () => ({ routingId: 'current', lifecycleGeneration: nodeGeneration })
+        }),
+        liveDescriptors: async () => [next],
+        locationStore: () => store,
+        relocationStore: {},
+        spotManager: () => undefined,
+        actorTransfer: {
+          async prepareMaintenanceSession() {
+            captureCount++;
+            return { handoffBacklog: [], async rollback() {} };
+          }
+        }
+      });
+      runtime.commitTargetReservation = async () => current;
+      runtime.waitForRelocationBudgetHeadroom = async () => {};
+      runtime.runCoordinator = async (_mesh, target) => {
+        current = { ...current, allocation: { ...current.allocation, descriptor: target } };
+        const actorRef = {
+          actorId,
+          objectGeneration: current.objectGeneration,
+          meshName: 'play',
+          nodeRid: target.rid
+        };
+        const completion = targetTransfer.prepareDeferredJoinAccepted(
+          actorId,
+          joinOperationId,
+          actorRef,
+          Buffer.alloc(0)
+        );
+        await targetTransfer.deliverDeferredJoinCompletion(
+          completion,
+          targetActor,
+          actorRef,
+          (operation) => operation()
+        );
+      };
+      let terminal;
+      const stage = {
+        phase: 'ready',
+        lane: Promise.resolve(),
+        offer: { prepareFingerprint: 'previous', prepare: { target: fence } },
+        staging: {
+          primaryAuthorityKey: key,
+          envelope: {
+            aggregateId: relocationId,
+            participants: [{ key: key.value }],
+            memberships: []
+          },
+          hidden: new Map()
+        },
+        owner: {
+          async publish() {},
+          normalize: () => Promise.resolve(),
+          async openAdmission() {
+            openAdmission();
+            if (outcome !== 'publication') await openingHeld;
+          }
+        },
+        releaseActivation() {},
+        releaseJoinAdmission() {}
+      };
+      if (outcome !== 'unavailable') {
+        const wireHalf = BigInt('0x1111111111111111');
+        const stagingId = `${wireHalf}:${wireHalf}:1`;
+        runtime.targetStages.set(stagingId, stage);
+        terminal = runtime.beginTargetFinalize('play', stagingId, stage);
+      }
+      try {
+        if (terminal !== undefined) await Promise.race([opened, terminal]);
+        assert.equal(current.relocation.phase, 'activated');
+        if (outcome === 'publication') {
+          // The Join starts while the completed relocation is still published.
+          releaseOpening();
+          await Promise.race([clearing, terminal]);
+          assert.equal(current.relocation.phase, 'completed');
+        }
+        const state = new ZLinkActorRuntimeState(actorId);
+        state.setNativeActorRef({ actorId, nodeRid: 'current', generation: 2n });
+        const errors = [];
+        const context = new DefaultZLinkActorContext(
+          state,
+          {
+            messageFlow: () => ({
+              begin: () => ({ trace: (event) => errors.push(event.errorMessage) })
+            }),
+            async joinSpot(
+              actor,
+              runtimeState,
+              spotId,
+              _request,
+              _timeout,
+              signal,
+              operationId,
+              deadlineAtMs
+            ) {
+              joinOperationId = operationId;
+              const result = await runtime.relocateActorJoin({
+                meshName: 'play',
+                actor,
+                state: runtimeState,
+                target: {
+                  spotId,
+                  spotKind: ZLinkSpotKind.User,
+                  targetNodeRid: next.rid,
+                  targetNodeGeneration: next.lifecycleGeneration
+                },
+                relocationId: '22222222-2222-2222-2222-222222222222',
+                signal,
+                deadlineAtMs
+              });
+              return { accepted: true, actor: result.actorRef };
+            }
+          },
+          undefined,
+          undefined,
+          () => 'play'
+        );
+        const actor = { context, onJoinCompleted: (completion) => completions.push(completion) };
+        await state.getOrStartCreation('player', false, async () => {
+          state.bindActor(actor, context);
+          return { status: 'created', actor };
+        }).task;
+        joining = true;
+        const join = runActorHandlerWithDeferredJoins(() => {
+          context
+            .joinSpot('room')
+            .timeout(outcome === 'deadline' ? 250 : 5_000)
+            .defer();
+        });
+        await Promise.race([joinObserved, join]);
+        if (outcome === 'publication') {
+          await turn();
+          assert.deepEqual(
+            completions.map(({ status }) => status),
+            [],
+            errors.join('\n')
+          );
+          assert.equal(captureCount, 0, 'capture must wait for publication release');
+          releasePublication();
+          await join;
+          assert.equal(completions.length, 1);
+          assert.equal(completions[0].status, 'accepted', errors.join('\n'));
+          assert.equal(completions[0].actor.nodeRid, next.rid);
+          assert.equal(captureCount, 1);
+        } else if (outcome === 'accepted') {
+          await turn();
+          assert.deepEqual(
+            completions.map(({ status }) => status),
+            [],
+            errors.join('\n')
+          );
+          assert.equal(captureCount, 0, 'capture must wait until the previous flow finishes');
+          releaseOpening();
+          await Promise.race([clearing, terminal]);
+          assert.equal(current.relocation.phase, 'completed');
+          await turn();
+          assert.equal(captureCount, 0, 'terminal progress must include publication release');
+          releasePublication();
+          await join;
+          assert.equal(completions.length, 1);
+          assert.equal(completions[0].status, 'accepted');
+          assert.equal(completions[0].actor.nodeRid, next.rid);
+          assert.equal(current.allocation.descriptor.rid, next.rid);
+          assert.equal(captureCount, 1);
+        } else {
+          await join;
+          assert.equal(completions.length, 1);
+          assert.equal(completions[0].status, 'failed');
+          assert.equal(
+            completions[0].kind,
+            outcome === 'deadline'
+              ? ZLinkFrameworkErrorKind.DeadlineExceeded
+              : ZLinkFrameworkErrorKind.Unavailable,
+            errors.join('\n')
+          );
+          assert.equal(captureCount, 0);
+          assert.equal(current.relocation.phase, 'activated');
+          if (outcome === 'unavailable') {
+            await runActorHandlerWithDeferredJoins(() => context.joinSpot('room').defer());
+            assert.equal(completions.length, 2);
+            assert.equal(completions[1].status, 'failed');
+            assert.equal(
+              completions[1].kind,
+              ZLinkFrameworkErrorKind.Unavailable,
+              errors.join('\n')
+            );
+          }
+        }
+      } finally {
+        releaseOpening();
+        releasePublication();
+        await terminal;
+      }
+    }
+  );
+}

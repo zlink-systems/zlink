@@ -1178,6 +1178,12 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     });
   }
 
+  setActorJoinIngressRouter(
+    route: import('../../foundation/service-stateful-runtime').ZLinkActorJoinIngressRouter
+  ): void {
+    this.requireStateful().setActorJoinIngressRouter(route);
+  }
+
   setActorMessageFollowResolver(
     resolver: (
       fence: import('../../foundation/service-stateful-wire-codec').ServiceActorRouteFence
@@ -1770,9 +1776,11 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     }
     if (this.maintenanceTimer === undefined || dueMs < this.maintenanceDueMs) {
       if (this.maintenanceTimer !== undefined) clearTimeout(this.maintenanceTimer);
+      // A deadline that has already passed runs on the next timer turn. onMaintenance expires
+      // overdue work within a time budget, so the next deadline can already be past (#5357).
       this.maintenanceTimer = setTimeout(
         this.onMaintenance,
-        Math.min(MESH_BACKEND_MAINTENANCE_MAX_DELAY_MS, Math.ceil(dueMs - nowMs))
+        Math.min(MESH_BACKEND_MAINTENANCE_MAX_DELAY_MS, Math.max(0, Math.ceil(dueMs - nowMs)))
       );
       this.maintenanceDueMs = dueMs;
     }

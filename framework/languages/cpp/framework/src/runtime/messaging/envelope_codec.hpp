@@ -12,10 +12,12 @@
 
 #include <array>
 #include <chrono>
+#include <initializer_list>
 #include <map>
 #include <optional>
 #include <string>
 #include <typeindex>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -37,7 +39,7 @@ enum class message_kind_t
 };
 
 // Internal text either borrows the retained wire header or owns decoded/created text.
-// Copies preserve that representation; public contexts materialize their string values.
+// Copying a view gives the copy its own text.
 class header_text_t
 {
   public:
@@ -142,6 +144,78 @@ struct envelope_header_storage_t
     std::optional<zlink::message_t> message;
 };
 
+// Channel metadata has value semantics. An empty header does not construct a
+// tree, whose sentinel can require a heap allocation even when it has no entries.
+class envelope_metadata_t
+{
+  public:
+    using map_t = std::map<std::string, std::string>;
+    using const_iterator = map_t::const_iterator;
+
+    envelope_metadata_t () = default;
+    template <typename Values>
+        requires std::is_same_v<std::remove_cvref_t<Values>, map_t>
+    envelope_metadata_t (Values &&values)
+    {
+        *this = std::forward<Values> (values);
+    }
+    envelope_metadata_t (std::initializer_list<map_t::value_type> values)
+    {
+        if (values.size () != 0)
+            _values.emplace (values);
+    }
+
+    template <typename Values>
+        requires std::is_same_v<std::remove_cvref_t<Values>, map_t>
+    envelope_metadata_t &operator= (Values &&values)
+    {
+        if (values.empty ())
+            _values.reset ();
+        else
+            _values = std::forward<Values> (values);
+        return *this;
+    }
+
+    bool empty () const noexcept { return !_values || _values->empty (); }
+    std::size_t size () const noexcept { return _values ? _values->size () : 0; }
+    const_iterator begin () const noexcept
+    {
+        return _values ? _values->begin () : const_iterator{};
+    }
+    const_iterator end () const noexcept { return _values ? _values->end () : const_iterator{}; }
+    const_iterator find (const std::string &key) const
+    {
+        return _values ? _values->find (key) : const_iterator{};
+    }
+    bool contains (const std::string &key) const { return find (key) != end (); }
+    const std::string &at (const std::string &key) const { return values ().at (key); }
+
+    template <typename... Args> auto emplace (Args &&...args)
+    {
+        return writable ().emplace (std::forward<Args> (args)...);
+    }
+    template <typename Key, typename Value> void insert_or_assign (Key &&key, Value &&value)
+    {
+        writable ().insert_or_assign (std::forward<Key> (key), std::forward<Value> (value));
+    }
+    std::string &operator[] (std::string key) { return writable ()[std::move (key)]; }
+    void clear () noexcept { _values.reset (); }
+
+    const map_t &values () const;
+    map_t take_values () && { return _values ? std::move (*_values) : map_t{}; }
+
+    friend bool operator== (const envelope_metadata_t &a, const envelope_metadata_t &b)
+    {
+        if (a.empty ())
+            return b.empty ();
+        return a._values == b._values;
+    }
+
+  private:
+    map_t &writable () { return _values ? *_values : _values.emplace (); }
+    std::optional<map_t> _values;
+};
+
 struct envelope_header_t
 {
     message_kind_t kind = message_kind_t::request;
@@ -150,14 +224,14 @@ struct envelope_header_t
     header_text_t content_type = zlink::detail::json_profile::content_type;
     header_text_t correlation_id;
     std::optional<header_text_t> deadline;
-    std::optional<std::string> topic;
-    std::optional<std::string> error_code;
-    std::optional<std::string> error_message;
-    std::optional<std::string> source;
-    std::map<std::string, std::string> metadata;
+    std::optional<header_text_t> topic;
+    std::optional<header_text_t> error_code;
+    std::optional<header_text_t> error_message;
+    std::optional<header_text_t> source;
+    envelope_metadata_t metadata;
     /* Optional pair (flow-correlation §3.1): always together or absent.
      * Every route/actor/spot relay preserves both values as-is. */
-    std::optional<std::string> flow_id;
+    std::optional<header_text_t> flow_id;
     std::optional<flow_origin_t> flow_origin;
     bool can_correlate_reply () const noexcept;
     envelope_header_storage_t retained_header;
@@ -224,8 +298,8 @@ class envelope_codec_t
      * malformed observation fields can never fail a frame on an Off node.
      * Callers at a flow processing point pass capture_enabled(); callers that
      * never consume flow pass false. */
-    /* On rejection, the optional context retains readable base fields;
-     * metadata stays empty. Invalid JSON has no rejection context. */
+    /* On value rejection, the optional context retains readable base fields.
+     * A protobuf parse failure leaves the rejection context empty. */
     result_t<envelope_header_t>
     decode_header (const zlink::message_t &message,
                    bool capture_flow = true,

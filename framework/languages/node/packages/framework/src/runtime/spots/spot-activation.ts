@@ -929,7 +929,8 @@ export class ZLinkSpotActivationLifecycle {
     remoteBoundSessionTarget?: ZLinkRemoteBoundSessionTarget,
     fallbackActorRef?: ActorRef,
     requestTerminal?: (response: unknown) => Promise<void> | void,
-    messageFollowOrigin?: ZLinkMessageFollowOrigin
+    messageFollowOrigin?: ZLinkMessageFollowOrigin,
+    preparation?: import('../execution/serial-execution-queue').ZLinkSerialWorkPreparation
   ): Promise<unknown> {
     return await this.actorAdmission.dispatchActorPacket(
       origin,
@@ -940,7 +941,8 @@ export class ZLinkSpotActivationLifecycle {
       remoteBoundSessionTarget,
       fallbackActorRef,
       requestTerminal,
-      messageFollowOrigin
+      messageFollowOrigin,
+      preparation
     );
   }
 

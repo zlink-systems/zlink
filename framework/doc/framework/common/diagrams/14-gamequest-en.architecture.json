@@ -32,16 +32,16 @@
     {
       "id": "SS",
       "type": "external",
-      "label": "Session Server",
-      "sublabel": "session actor · pre-validate",
+      "label": "session node",
+      "sublabel": "GameApi",
       "row": 1,
       "col": 1
     },
     {
       "id": "SP",
       "type": "backend",
-      "label": "PlayerQuestSpot",
-      "sublabel": "one per player",
+      "label": "play node",
+      "sublabel": "PlayerQuestSpot",
       "row": 1,
       "col": 2
     },

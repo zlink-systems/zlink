@@ -5,21 +5,78 @@
     "title": "시스템 구성과 topology",
     "subtitle": "Client는 HTTP로 CommerceApi만 호출하고, CommerceApi와 OrderWorkflow는 shoppingmall.workflow RouteMesh로 통신한다",
     "output": "sample-shoppingmall-topology.html",
-    "legend": { "mode": "hidden" }
+    "legend": {
+      "mode": "hidden"
+    }
   },
-  "layout": { "mode": "grid", "origin": [50, 150], "cols": 3, "gapX": 100, "gapY": 84, "cellW": 120, "cellH": 60 },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 3,
+    "gapX": 100,
+    "gapY": 84,
+    "cellW": 120,
+    "cellH": 60
+  },
   "components": [
-    { "id": "C", "type": "frontend", "label": "Web Clients", "row": 0, "col": 0 },
-    { "id": "API", "type": "frontend", "label": "CommerceApi ×2", "row": 0, "col": 1 },
-    { "id": "WF", "type": "backend", "label": "OrderWorkflow ×2", "row": 0, "col": 2 }
+    {
+      "id": "C",
+      "type": "frontend",
+      "label": "Web Clients",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "API",
+      "type": "frontend",
+      "label": "api node ×2",
+      "row": 0,
+      "col": 1,
+      "sublabel": "CommerceApi"
+    },
+    {
+      "id": "WF",
+      "type": "backend",
+      "label": "play node ×2",
+      "row": 0,
+      "col": 2,
+      "sublabel": "OrderWorkflow"
+    }
   ],
   "boundaries": [
-    { "kind": "region", "label": "Clients", "wraps": ["C"] },
-    { "kind": "region", "label": "Servers", "wraps": ["API", "WF"] }
+    {
+      "kind": "region",
+      "label": "Clients",
+      "wraps": [
+        "C"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "Servers",
+      "wraps": [
+        "API",
+        "WF"
+      ]
+    }
   ],
   "connections": [
-    { "from": "C", "to": "API", "label": "HTTP", "variant": "default" },
-    { "from": "API", "to": "WF", "label": "shoppingmall.workflow RouteMesh", "variant": "default", "labelDy": -24 }
+    {
+      "from": "C",
+      "to": "API",
+      "label": "HTTP",
+      "variant": "default"
+    },
+    {
+      "from": "API",
+      "to": "WF",
+      "label": "shoppingmall.workflow RouteMesh",
+      "variant": "default",
+      "labelDy": -24
+    }
   ],
   "cards": [
     {
