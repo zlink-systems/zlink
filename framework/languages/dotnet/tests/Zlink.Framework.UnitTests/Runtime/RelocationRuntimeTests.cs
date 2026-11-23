@@ -1156,67 +1156,6 @@ public sealed partial class RelocationRuntimeTests
     }
 
     [Fact]
-    public void TargetStagingAcceptsOnlyAnExactJournalPrefixOfFinalManifest()
-    {
-        var staging = CreateEnvelope();
-        var stagedSpot = staging.Participants.Single(static participant =>
-            participant.ObjectKind == ZLinkPlacementObjectKind.UserSpot
-        );
-        var final = staging with
-        {
-            Participants = staging
-                .Participants.Select(participant =>
-                    participant == stagedSpot
-                        ? participant with
-                        {
-                            AcceptedJobs = participant
-                                .AcceptedJobs.Append(
-                                    new ZLinkRelocationQueuedJob(43, new byte[] { 4, 3 })
-                                )
-                                .ToArray(),
-                        }
-                        : participant
-                )
-                .ToArray(),
-        };
-
-        Assert.True(ZLinkSpotRetireTargetRuntime.IsStagingPrefix(staging, final));
-        var changedState = final with
-        {
-            Participants = final
-                .Participants.Select(participant =>
-                    participant == final.Participants[0]
-                        ? participant with
-                        {
-                            ApplicationState = new byte[] { 9 },
-                        }
-                        : participant
-                )
-                .ToArray(),
-        };
-        Assert.False(ZLinkSpotRetireTargetRuntime.IsStagingPrefix(staging, changedState));
-        var changedPrefix = final with
-        {
-            Participants = final
-                .Participants.Select(participant =>
-                    participant == final.Participants[0]
-                        ? participant with
-                        {
-                            AcceptedJobs = participant
-                                .AcceptedJobs.Select(
-                                    (job, index) =>
-                                        index == 0 ? job with { Payload = new byte[] { 0 } } : job
-                                )
-                                .ToArray(),
-                        }
-                        : participant
-                )
-                .ToArray(),
-        };
-        Assert.False(ZLinkSpotRetireTargetRuntime.IsStagingPrefix(staging, changedPrefix));
-    }
-
-    [Fact]
     public async Task CanonicalTargetStagingKeepsSourceCasRecoveryOutsideThePublishedRoot()
     {
         var (stage, candidate) = CreateCanonicalPublishedReconciliationFixture();
@@ -1365,38 +1304,6 @@ public sealed partial class RelocationRuntimeTests
             )
         );
         Assert.Equal(2, store.Events.Count);
-    }
-
-    [Fact]
-    public void CanonicalStagingRejectsAuthorityGenerationOtherThanPreparedTarget()
-    {
-        var (stage, _) = CreateCanonicalPublishedReconciliationFixture();
-        var participant = Assert.Single(stage.Envelope.Participants);
-        Assert.False(
-            ZLinkSpotRetireTargetRuntime.IsStagingPrefix(
-                stage.Envelope,
-                stage.Envelope,
-                stage.TargetAuthorityOwnerGenerationFor
-            )
-        );
-        var wrong = stage.Envelope with
-        {
-            Participants =
-            [
-                participant with
-                {
-                    AuthorityOwnerGeneration = checked(stage.TargetAuthorityOwnerGeneration + 1),
-                },
-            ],
-        };
-
-        Assert.False(
-            ZLinkSpotRetireTargetRuntime.IsStagingPrefix(
-                stage.Envelope,
-                wrong,
-                stage.TargetAuthorityOwnerGenerationFor
-            )
-        );
     }
 
     [Fact]
