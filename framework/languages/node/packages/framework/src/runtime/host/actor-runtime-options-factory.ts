@@ -51,6 +51,9 @@ export interface ZLinkActorRuntimeOptionsFactoryOptions {
   readonly primaryMeshNodeOrUndefined: () => ZLinkBackendMeshNode | undefined;
   readonly primaryMeshCompletions: () => ZLinkMeshCompletionTable | undefined;
   readonly meshNode: (meshName: string) => ZLinkBackendMeshNode | undefined;
+  readonly boundSessionRoute: (
+    sessionNodeRid: RoutingId
+  ) => import('../actors/actor-runtime-state').ZLinkRemoteBoundSessionTarget | undefined;
   readonly meshCompletions: (meshName: string) => ZLinkMeshCompletionTable | undefined;
   readonly notifyEntrySpotActorCreated: (
     nodeRid: RoutingId,
@@ -99,6 +102,7 @@ export class ZLinkActorRuntimeOptionsFactory {
     | 'messageSerializers'
     | 'nativeActorNode'
     | 'nativeActorNodeProvider'
+    | 'projectBoundSession'
     | 'nativeActorCompletionTableProvider'
     | 'actorCreatedNodeRidProvider'
     | 'actorRefResolver'
@@ -175,6 +179,27 @@ export class ZLinkActorRuntimeOptionsFactory {
       metrics: this.options.metrics,
       admission: this.options.admission,
       nativeActorNodeProvider: this.options.primaryMeshNodeOrUndefined,
+      projectBoundSession: (actor, meshName) => {
+        const node =
+          meshName === undefined
+            ? this.options.primaryMeshNodeOrUndefined()
+            : this.options.meshNode(meshName);
+        // An absent port identifies a backend without the native Session registry.
+        if (node?.actorSessionBinding === undefined) return undefined;
+        const binding = node.actorSessionBinding(actor);
+        if (binding === undefined) return null;
+        const route = this.options.boundSessionRoute(binding.sessionOwnerNodeRid);
+        if (route === undefined) return null;
+        return {
+          ...route,
+          sessionNodeRid: binding.sessionOwnerNodeRid,
+          sessionRid: binding.sessionRid,
+          sessionOwnerNodeGeneration: binding.sessionOwnerNodeGeneration,
+          sessionOwnerId: binding.sessionOwnerId,
+          sessionOwnerLeaseGeneration: binding.sessionOwnerLeaseGeneration,
+          bindingGeneration: binding.bindingGeneration
+        };
+      },
       nativeActorCompletionTableProvider: this.options.primaryMeshCompletions,
       locationLifecycle: this.options.locationLifecycle(),
       boundSessionFactory: (actorId) =>
