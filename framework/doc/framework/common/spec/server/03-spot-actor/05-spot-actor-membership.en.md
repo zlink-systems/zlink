@@ -418,6 +418,9 @@ mean the completion callback execution has finished too. The framework
 runs the completion callback after processing the lifecycle callback and
 source membership cleanup. If completion keeps failing, the Actor is kept
 sealed, and regular messages behind the barrier aren't run.
+`OnJoinedActor` and the completion callback run after the location change is committed, so an
+exception from them or a failed application send inside them does not undo the committed `Accepted`
+or target publication, nor turn them into a failure.
 
 When one handler registers Joins for several Actors, each Join is an operation
 for its own Actor. "The Actor is moving" in the table above is cleared when that
