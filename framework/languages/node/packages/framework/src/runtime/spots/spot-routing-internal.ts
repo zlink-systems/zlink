@@ -9,6 +9,8 @@ export interface ZLinkSpotRouteResolver {
   ): Promise<ZLinkSpotRouteTarget | ZLinkInstanceReactivationRoute>;
   resolve(spotId: RoutingId, signal?: AbortSignal): Promise<ZLinkSpotRouteTarget>;
   invalidate?(spotId: RoutingId): void;
+  observeAuthorityVersion?(spotId: RoutingId, storeVersion: string): void;
+  invalidateIfMatches?(used: ZLinkSpotRouteTarget): void;
 }
 
 export interface ZLinkSpotRouteTarget {
