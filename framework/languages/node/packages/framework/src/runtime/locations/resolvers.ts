@@ -1040,12 +1040,43 @@ export class ZLinkAuthoritySpotRouteResolver implements ZLinkSpotRouteResolver {
 
   invalidate(spotId: RoutingId): void {
     const key = String(spotId);
-    this.invalidateCore(key);
+    this.lane.tryPost(() => this.invalidateCore(key));
     this.fallback?.invalidate?.(spotId);
   }
 
-  private invalidateCore(key: string): void {
-    this.cache.delete(key);
+  observeAuthorityVersion(spotId: RoutingId, storeVersion: string): void {
+    this.lane.tryPost(() => this.invalidateCore(String(spotId), storeVersion));
+  }
+
+  invalidateIfMatches(used: ZLinkSpotRouteTarget): void {
+    if (used.authorityStoreVersion === undefined) return;
+    this.lane.tryPost(() => {
+      const key = String(used.spotId);
+      const cached = this.cache.get(key)?.row;
+      if (
+        cached !== undefined &&
+        cached.authorityStoreVersion === used.authorityStoreVersion &&
+        cached.targetSpotGeneration === used.targetSpotGeneration &&
+        routingIdsEqual(cached.targetNodeRid, used.targetNodeRid) &&
+        cached.targetNodeGeneration === used.targetNodeGeneration &&
+        cached.authorityOwnerGeneration === used.authorityOwnerGeneration &&
+        cached.targetOwnerId === used.targetOwnerId &&
+        cached.ownerLeaseGeneration === used.ownerLeaseGeneration
+      ) {
+        this.invalidateCore(key);
+      }
+    });
+  }
+
+  private invalidateCore(key: string, observedStoreVersion?: string): void {
+    // Current authority observations are ordered by the Store operation that
+    // produced them. Provider-issued versions can only be compared for equality.
+    if (
+      observedStoreVersion === undefined ||
+      this.cache.get(key)?.storeVersion !== observedStoreVersion
+    ) {
+      this.cache.delete(key);
+    }
     if (this.activeResolutions.has(key)) {
       this.routeEpochs.set(key, this.currentEpochCore(key) + 1);
     } else {

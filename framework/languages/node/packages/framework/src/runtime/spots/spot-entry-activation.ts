@@ -51,7 +51,11 @@ import {
   applyEntrySpotHandlerRegistrations,
   DefaultZLinkSpotHandlerRegistry
 } from './spot-handler-registry';
-import { DefaultZLinkSpotOutbound, type ZLinkSpotRoutedTransport } from './spot-outbound';
+import {
+  DefaultZLinkSpotOutbound,
+  type ZLinkSpotAddressTransport,
+  type ZLinkSpotRoutedTransport
+} from './spot-outbound';
 import { createFreshProviderInstance } from './spot-provider';
 import { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 import { ZLinkSpotSerialExecutor } from './spot-serial-executor';
@@ -89,6 +93,7 @@ interface ZLinkEntrySpotActivationOptions {
   readonly fanoutClient?: ZLinkFanoutClient;
   readonly spotPublisherClient?: ZLinkSpotPublisherClient;
   readonly routedTransport?: ZLinkSpotRoutedTransport;
+  readonly addressTransport?: ZLinkSpotAddressTransport;
   readonly spotRouterChannelIdForMesh?: (meshName: string) => string;
   readonly providerResolver?: ZLinkProviderResolver;
   readonly dispatchErrors?: ZLinkDispatchErrorReporter;
@@ -152,6 +157,7 @@ export class ZLinkEntrySpotActivation {
       channelClient: options.channelClient,
       spotPublisherClient: options.spotPublisherClient,
       routedTransport: options.routedTransport,
+      addressTransport: options.addressTransport,
       spotRouterChannelIdForMesh: options.spotRouterChannelIdForMesh,
       meshName: options.spotNodeName
     });

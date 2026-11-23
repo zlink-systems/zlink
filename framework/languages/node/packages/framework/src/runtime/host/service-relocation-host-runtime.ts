@@ -288,6 +288,7 @@ interface ZLinkHostRelocationOptions {
     clear?(): void | Promise<void>;
   };
   readonly trackInstanceSpot?: (input: ZLinkTrackedInstanceAuthority) => void;
+  readonly observeSpotAuthorityVersion?: (spotId: RoutingId, storeVersion: string) => void;
   readonly observeActorAuthorityVersion?: (actorId: string, storeVersion: string) => void;
   readonly runtimeEventPublisher?: ZLinkRuntimeEventPublisher;
   readonly metrics?: ZLinkRuntimeMetrics;
@@ -5756,6 +5757,12 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
         authority.objectGeneration,
         authority.authorityOwnerGeneration
       );
+      if (hidden.participant.objectKind === 'user_spot') {
+        this.options.observeSpotAuthorityVersion?.(
+          hidden.activation.spotId,
+          authority.storeVersion.value
+        );
+      }
       await this.requireSpotManager().publishRelocationSpot(
         hidden.activation,
         applicationSignaled ? () => hidden.activation!.notifyRelocatedBoundary() : undefined

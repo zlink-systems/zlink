@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import type { NodeRequestProgress } from '../foundation/operation-registry';
 import type {
   ZLinkLocationRuntimeQuery,
   ZLinkLocationRuntimeStatus,
@@ -73,6 +74,40 @@ export function isRelocationDebugEnabled(): boolean {
 export function relocationDebug(marker: string, detail: Record<string, unknown>): void {
   if (!isRelocationDebugEnabled()) return;
   console.error('[zlink.runtime.relocation]', marker, detail);
+}
+
+export function traceNodeRequestDeadline(
+  progress: NodeRequestProgress,
+  meshName: string,
+  targetRid: string,
+  correlationId: string
+): void {
+  const start = progress.nodeRequestStartedMs;
+  if (start === undefined) return;
+
+  let stage = 'route_unselected';
+  if (progress.replyReceivedMs !== undefined) stage = 'reply_completion';
+  else if (progress.bindingAdmittedMs !== undefined) stage = 'reply_wait';
+  else if (progress.bindingSubmittedMs !== undefined) stage = 'binding_admission';
+  else if (progress.peerAdmittedMs !== undefined) stage = 'binding_submit';
+  else if (progress.localDispatchMs !== undefined) stage = 'local_dispatch';
+  else if (progress.routeSelectedMs !== undefined) stage = 'peer_admission';
+
+  const elapsed = (time: number | undefined) => (time === undefined ? undefined : time - start);
+  relocationDebug('node_request_deadline', {
+    meshName,
+    targetRid,
+    correlationId,
+    stage,
+    routeGeneration: progress.routeGeneration,
+    elapsedMs: performance.now() - start,
+    routeSelectedMs: elapsed(progress.routeSelectedMs),
+    peerAdmittedMs: elapsed(progress.peerAdmittedMs),
+    bindingSubmittedMs: elapsed(progress.bindingSubmittedMs),
+    bindingAdmittedMs: elapsed(progress.bindingAdmittedMs),
+    replyReceivedMs: elapsed(progress.replyReceivedMs),
+    localDispatchMs: elapsed(progress.localDispatchMs)
+  });
 }
 
 export function relocationDebugTerminal(
