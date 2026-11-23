@@ -12,10 +12,10 @@
         "./run-e2e.sh --scenario table,reconnect,match,match-cancel,update"
       ],
       "powershell": [
-        "pwsh -NoProfile -File ./run-server.ps1",
-        "pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly",
-        "pwsh -NoProfile -File ./run-e2e.ps1",
-        "pwsh -NoProfile -File ./run-e2e.ps1 -Scenario table,reconnect,match,match-cancel,update"
+        "pwsh -NoProfile -ExecutionPolicy Bypass -File ./run-server.ps1",
+        "pwsh -NoProfile -ExecutionPolicy Bypass -File ./run-e2e.ps1 -BuildOnly",
+        "pwsh -NoProfile -ExecutionPolicy Bypass -File ./run-e2e.ps1",
+        "pwsh -NoProfile -ExecutionPolicy Bypass -File ./run-e2e.ps1 -Scenario table,reconnect,match,match-cancel,update"
       ]
     },
     "scenarios": [

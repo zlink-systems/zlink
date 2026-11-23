@@ -18,7 +18,7 @@ flowchart LR
 - Network access to Maven Central and the Redis container registry.
 - Published ZLink Framework 0.33.0, STREAM connector 0.33.0, and binding 1.26.0. Versions are owned by `build.gradle.kts`.
 
-The Gradle wrapper and all server modules are included. Copy this directory to build it independently. On Windows, run the commands in PowerShell 7; launchers use the JDK selected by Gradle and enable native access.
+The Gradle wrapper and all server modules are included. Copy this directory to build it independently. On Windows, run the commands in PowerShell 7; launchers use the JDK selected by Gradle and enable native access. Windows blocks scripts from a downloaded ZIP under the default execution policy, so the commands pass `-ExecutionPolicy Bypass` for that one process.
 
 ## Build
 
@@ -31,7 +31,7 @@ Linux or WSL:
 Windows:
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
+pwsh -NoProfile -ExecutionPolicy Bypass -File ./run-e2e.ps1 -BuildOnly
 ```
 
 The build creates a shared node image and a Java e2e runner image.
@@ -45,12 +45,12 @@ Install JDK 25 and start Docker. Run the server in a dedicated terminal.
 ```
 
 ```powershell
-pwsh -NoProfile -File ./run-server.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File ./run-server.ps1
 ```
 
 The launcher starts Redis, Play nodes A and B, Matchmaker, and Session. When all nodes are ready, the console prints `Server ready: ws://127.0.0.1:<port>`. Keep the terminal open while clients are connected. Press Ctrl+C to stop the nodes and remove this run's Redis Compose project.
 
-From another terminal, run `./run-e2e.sh` or `pwsh -NoProfile -File ./run-e2e.ps1`. While a server started by `run-server` is running, the e2e run only runs the test clients against it and leaves it running; it runs `table`, `reconnect`, `match` and `match-cancel`. Select scenarios with `--scenario match` or `-Scenario match`. Add `--attach` or `-Attach` to require an existing server. `update` replaces a node, so it runs only when no server is running and the e2e run starts its own.
+From another terminal, run `./run-e2e.sh` or `pwsh -NoProfile -ExecutionPolicy Bypass -File ./run-e2e.ps1`. While a server started by `run-server` is running, the e2e run only runs the test clients against it and leaves it running; it runs `table`, `reconnect`, `match` and `match-cancel`. Select scenarios with `--scenario match` or `-Scenario match`. Add `--attach` or `-Attach` to require an existing server. `update` replaces a node, so it runs only when no server is running and the e2e run starts its own.
 
 ## Client connection
 
@@ -141,7 +141,7 @@ Matchmaker runs the SpotWide Pool `pool-board`. `FindMatch` returns `MatchQueued
 
 Docker runs the Java e2e runner and every node role in containers. Nodes share the runner's network namespace and keep the existing stdin/stdout control protocol. Only the runner mounts the Docker socket. Each invocation removes its own containers, network and image tags; logs remain under `.logs/`.
 
-For local process debugging, install JDK 25 and use `./run-e2e.sh --local` or `pwsh -NoProfile -File ./run-e2e.ps1 -Local`. Add `--no-build` or `-NoBuild` to reuse a local build. Docker uses its image layer cache.
+For local process debugging, install JDK 25 and use `./run-e2e.sh --local` or `pwsh -NoProfile -ExecutionPolicy Bypass -File ./run-e2e.ps1 -Local`. Add `--no-build` or `-NoBuild` to reuse a local build. Docker uses its image layer cache.
 
 > **Base images.** Dockerfile ARG defaults pin Eclipse Temurin JDK/JRE 25.0.2+10 and Docker CLI 28.5.1. Replace these defaults when adopting a deployment base image.
 
@@ -155,8 +155,8 @@ Linux or WSL:
 Windows:
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario table,reconnect,match,match-cancel,update
+pwsh -NoProfile -ExecutionPolicy Bypass -File ./run-e2e.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File ./run-e2e.ps1 -Scenario table,reconnect,match,match-cancel,update
 ```
 
 The runner validates `zlink.structure.json` and uses the same Java server host as the local server when it needs an isolated deployment. Each isolated run uses OS-assigned ports and a unique Redis key prefix. The server host keeps effective settings and each node's stdout, stderr, and Framework message-flow file (`<node>.flow.log`) under `.logs/run-<id>/`. The standalone console shows server and game events. Cleanup failures cause exit code 1.
@@ -169,7 +169,7 @@ The runner validates `zlink.structure.json` and uses the same Java server host a
 | `match-cancel` | A queued client cancels its ticket. Two later clients match and complete a hand. |
 | `update` | Table state and client connections persist through drain, settlement on another node, source replacement, and a new hand. Settlement clears every hand, and a later private-hand query returns an empty list. |
 
-Use `./run-e2e.sh --check-structure` or `pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure` to validate the actual structure files without starting Redis or nodes.
+Use `./run-e2e.sh --check-structure` or `pwsh -NoProfile -ExecutionPolicy Bypass -File ./run-e2e.ps1 -CheckStructure` to validate the actual structure files without starting Redis or nodes.
 
 Before the scenarios, the runner executes the server table's `--check-domain` mode. It checks seven domain boundaries and reports `Domain checks: 7/7 passed`, then verifies the `ActionRejected` JSON contract. `retryAfterMs` is a signed 32-bit JSON integer with the lower camel case property name; chips, pot, and hand numbers remain 64-bit integers.
 
