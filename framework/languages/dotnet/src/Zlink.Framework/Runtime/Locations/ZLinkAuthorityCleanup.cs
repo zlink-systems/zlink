@@ -86,6 +86,12 @@ internal static class ZLinkAuthorityCleanup
 
     internal static string? RequireSteadyReady(ZLinkAuthoritySnapshot snapshot)
     {
+        if (snapshot.Relocation is not null)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                "Object authority requires relocation recovery.",
+                ZLinkRetryAdvice.RetryAfterStateChange
+            );
         if (snapshot.Allocation.ObjectKind == ZLinkPlacementObjectKind.UserSpot)
         {
             if (

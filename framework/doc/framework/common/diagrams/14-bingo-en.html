@@ -4957,7 +4957,7 @@
         <div class="pulse-dot"></div>
         <h1>Bingo — a typical online game server configuration</h1>
       </div>
-      <p class="subtitle">split into a connection gateway · auth/matching · room servers</p>
+      <p class="subtitle">Clients connect through the session node. Channels carry auth and matchmaking requests.</p>
     </div>
 
     <script id="archify-guided-views-data" type="application/json">[]</script>
@@ -5005,9 +5005,9 @@
     <!-- Main Diagram -->
     <div class="diagram-container" data-detail-level="read"
          data-preset-badge-editorial-plate="ARCHIFY / PLATE 04">
-      <svg viewBox="5 122 1010 442" role="img" lang="en" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="standard" data-quality-gates="advisory">
+      <svg viewBox="-63 92 1010 450" role="img" lang="en" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="standard" data-quality-gates="advisory">
         <title id="archify-diagram-title">Bingo — a typical online game server configuration</title>
-        <desc id="archify-diagram-description">split into a connection gateway · auth/matching · room servers</desc>
+        <desc id="archify-diagram-description">Clients connect through the session node. Channels carry auth and matchmaking requests.</desc>
         <!-- Definitions -->
         <defs>
           <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
@@ -5031,138 +5031,123 @@
         <rect width="100%" height="100%" fill="url(#grid)" />
 
         <!-- Boundaries (behind everything) -->
-
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="0" data-composition-frame-label="play node" x="653" y="120" width="180" height="262" rx="12" class="c-region" stroke-width="1"/>
 
         <!-- Connection paths (before components for correct z-order) -->
-        <path data-edge-from="C" data-edge-to="S" data-edge-label="1 STREAM" data-edge-key="0" data-composition-points="170,484;250,484" d="M 170 484 L 250 484" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="S" data-edge-to="A" data-edge-label="auth/matching request" data-edge-key="1" data-composition-points="370,498;650,498" d="M 370 498 L 650 498" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="A" data-edge-to="M" data-edge-label="level bucket matching" data-edge-key="2" data-composition-points="770,484;850,484" d="M 770 484 L 850 484" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="M" data-edge-to="R" data-edge-key="3" data-composition-points="910,454;910,362" d="M 910 454 L 910 362" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="S" data-edge-to="P" data-edge-label="packet relay" data-edge-key="4" data-composition-points="370,470;410,470;410,187;450,187" d="M 370 470 L 402 470 Q 410 470 410 462 L 410 195 Q 410 187 418 187 L 450 187" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="P" data-edge-to="S" data-edge-label="session push" data-edge-key="5" data-composition-points="450,173;310,173;310,454" d="M 450 173 L 318 173 Q 310 173 310 181 L 310 454" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="A" data-edge-to="P" data-edge-label="room GetOrCreate" data-edge-key="6" data-composition-points="650,470;610,470;610,180;570,180" d="M 650 470 L 618 470 Q 610 470 610 462 L 610 188 Q 610 180 602 180 L 570 180" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="S" data-edge-to="LS" data-edge-key="7" data-composition-points="370,484;410,484;410,332;450,332" d="M 370 484 L 402 484 Q 410 484 410 476 L 410 340 Q 410 332 418 332 L 450 332" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
-        <path data-edge-from="A" data-edge-to="LS" data-edge-key="8" data-composition-points="650,484;610,484;610,332;570,332" d="M 650 484 L 618 484 Q 610 484 610 476 L 610 340 Q 610 332 602 332 L 570 332" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
-        <path data-edge-from="P" data-edge-to="LS" data-edge-label="peer auto-connect" data-edge-key="9" data-composition-points="510,210;510,302" d="M 510 210 L 510 302" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="C" data-edge-to="S" data-edge-label="1 STREAM" data-edge-key="0" data-composition-points="170,180;261,180" d="M 170 180 L 261 180" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="S" data-edge-to="A" data-edge-key="1" data-composition-points="321,210;321,302" d="M 321 210 L 321 302" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="A" data-edge-to="M" data-edge-label="level bucket matching" data-edge-key="2" data-composition-points="381,339;683,339" d="M 381 339 L 683 339" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="M" data-edge-to="R" data-edge-key="3" data-composition-points="743,362;743,454" d="M 743 362 L 743 454" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="S" data-edge-to="P" data-edge-key="4" data-composition-points="381,173;683,173" d="M 381 173 L 683 173" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="A" data-edge-to="P" data-edge-label="room GetOrCreate" data-edge-key="5" data-composition-points="381,325;532,325;532,187;683,187" d="M 381 325 L 524 325 Q 532 325 532 317 L 532 195 Q 532 187 540 187 L 683 187" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="A" data-edge-to="LS" data-edge-key="6" data-composition-points="321,362;321,454" d="M 321 362 L 321 454" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
 
         <!-- Components -->
-        <g id="node-P" data-node-id="P" data-node-label="Play ×2" tabindex="0" role="button" aria-label="Focus Play ×2, player actor · room Spot, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="player actor · room Spot" data-node-context="Architecture component"><rect x="472" y="172" width="120" height="60" rx="6" class="c-backend" style="fill:none" stroke-width="2.2"/><rect x="461" y="161" width="120" height="60" rx="6" class="c-backend" style="fill:none" stroke-width="2.2"/>
-          <title>Play ×2 · player actor · room Spot · Architecture component</title>
-          <rect x="450" y="150" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="450" y="150" width="120" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(456 156) scale(0.6875)">
+        <g id="node-P" data-node-id="P" data-node-label="room ×2" tabindex="0" role="button" aria-label="Focus room ×2, player Actor · room, play node" aria-pressed="false" data-node-kind="backend" data-node-sublabel="player Actor · room" data-node-context="play node"><rect x="705" y="172" width="120" height="60" rx="6" class="c-backend" style="fill:none" stroke-width="2.2"/><rect x="694" y="161" width="120" height="60" rx="6" class="c-backend" style="fill:none" stroke-width="2.2"/>
+          <title>room ×2 · player Actor · room · play node</title>
+          <rect x="683" y="150" width="120" height="60" rx="6" class="c-mask"/>
+          <rect x="683" y="150" width="120" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(689 156) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="510" y="178" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Play ×2</text>
-        <text data-detail="context" x="510" y="194" class="t-muted" font-size="7.7" text-anchor="middle">player actor · room Spot</text>
+          <text data-node-label="" data-detail-anchor="" x="743" y="178" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">room ×2</text>
+        <text data-detail="context" x="743" y="194" class="t-muted" font-size="9" text-anchor="middle">player Actor · room</text>
         </g>
 
         <g id="node-LS" data-node-id="LS" data-node-label="Location Store" tabindex="0" role="button" aria-label="Focus Location Store, Architecture component" aria-pressed="false" data-node-kind="external" data-node-context="Architecture component">
           <title>Location Store · Architecture component</title>
-          <rect x="450" y="302" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="450" y="302" width="120" height="60" rx="6" class="c-external" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(456 308) scale(0.6875)">
+          <rect x="261" y="454" width="120" height="60" rx="6" class="c-mask"/>
+          <rect x="261" y="454" width="120" height="60" rx="6" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(267 460) scale(0.6875)">
             <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
             <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
-          <text data-node-label="" x="510" y="336" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Location Store</text>
+          <text data-node-label="" x="321" y="488" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Location Store</text>
         </g>
 
         <g id="node-R" data-node-id="R" data-node-label="Redis" tabindex="0" role="button" aria-label="Focus Redis, waiting-room reservation, Architecture component" aria-pressed="false" data-node-kind="database" data-node-sublabel="waiting-room reservation" data-node-context="Architecture component">
           <title>Redis · waiting-room reservation · Architecture component</title>
-          <rect x="850" y="302" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="850" y="302" width="120" height="60" rx="6" class="c-database" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(856 308) scale(0.6875)">
+          <rect x="683" y="454" width="120" height="60" rx="6" class="c-mask"/>
+          <rect x="683" y="454" width="120" height="60" rx="6" class="c-database" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(689 460) scale(0.6875)">
             <ellipse cx="8" cy="4" rx="5" ry="2"/>
             <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="910" y="330" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Redis</text>
-        <text data-detail="context" x="910" y="346" class="t-muted" font-size="7.7" text-anchor="middle">waiting-room reservation</text>
+          <text data-node-label="" data-detail-anchor="" x="743" y="482" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Redis</text>
+        <text data-detail="context" x="743" y="498" class="t-muted" font-size="7.7" text-anchor="middle">waiting-room reservation</text>
         </g>
 
         <g id="node-C" data-node-id="C" data-node-label="client" tabindex="0" role="button" aria-label="Focus client, Architecture component" aria-pressed="false" data-node-kind="frontend" data-node-context="Architecture component">
           <title>client · Architecture component</title>
-          <rect x="50" y="454" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="50" y="454" width="120" height="60" rx="6" class="c-frontend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(56 460) scale(0.6875)">
+          <rect x="50" y="150" width="120" height="60" rx="6" class="c-mask"/>
+          <rect x="50" y="150" width="120" height="60" rx="6" class="c-frontend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(56 156) scale(0.6875)">
             <rect x="2" y="3" width="12" height="10" rx="2"/>
             <path d="M2 6.5h12"/>
             <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
             <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
           </g>
-          <text data-node-label="" x="110" y="488" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">client</text>
+          <text data-node-label="" x="110" y="184" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">client</text>
         </g>
 
-        <g id="node-S" data-node-id="S" data-node-label="Session ×2" tabindex="0" role="button" aria-label="Focus Session ×2, endpoint · actor bind, Architecture component" aria-pressed="false" data-node-kind="external" data-node-sublabel="endpoint · actor bind" data-node-context="Architecture component"><rect x="272" y="476" width="120" height="60" rx="6" class="c-external" style="fill:none" stroke-width="2.2"/><rect x="261" y="465" width="120" height="60" rx="6" class="c-external" style="fill:none" stroke-width="2.2"/>
-          <title>Session ×2 · endpoint · actor bind · Architecture component</title>
-          <rect x="250" y="454" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="250" y="454" width="120" height="60" rx="6" class="c-external" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(256 460) scale(0.6875)">
+        <g id="node-S" data-node-id="S" data-node-label="session node ×2" tabindex="0" role="button" aria-label="Focus session node ×2, STREAM, Architecture component" aria-pressed="false" data-node-kind="database" data-node-sublabel="STREAM" data-node-context="Architecture component"><rect x="283" y="172" width="120" height="60" rx="6" class="c-database" style="fill:none" stroke-width="2.2"/><rect x="272" y="161" width="120" height="60" rx="6" class="c-database" style="fill:none" stroke-width="2.2"/>
+          <title>session node ×2 · STREAM · Architecture component</title>
+          <rect x="261" y="150" width="120" height="60" rx="6" class="c-mask"/>
+          <rect x="261" y="150" width="120" height="60" rx="6" class="c-database" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(267 156) scale(0.6875)">
+            <ellipse cx="8" cy="4" rx="5" ry="2"/>
+            <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="321" y="178" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">session node ×2</text>
+        <text data-detail="context" x="321" y="194" class="t-muted" font-size="9" text-anchor="middle">STREAM</text>
+        </g>
+
+        <g id="node-A" data-node-id="A" data-node-label="api node ×2" tabindex="0" role="button" aria-label="Focus api node ×2, auth · matchmaking, Architecture component" aria-pressed="false" data-node-kind="external" data-node-sublabel="auth · matchmaking" data-node-context="Architecture component"><rect x="283" y="324" width="120" height="60" rx="6" class="c-external" style="fill:none" stroke-width="2.2"/><rect x="272" y="313" width="120" height="60" rx="6" class="c-external" style="fill:none" stroke-width="2.2"/>
+          <title>api node ×2 · auth · matchmaking · Architecture component</title>
+          <rect x="261" y="302" width="120" height="60" rx="6" class="c-mask"/>
+          <rect x="261" y="302" width="120" height="60" rx="6" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(267 308) scale(0.6875)">
             <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
             <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="310" y="482" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Session ×2</text>
-        <text data-detail="context" x="310" y="498" class="t-muted" font-size="8.8" text-anchor="middle">endpoint · actor bind</text>
+          <text data-node-label="" data-detail-anchor="" x="321" y="330" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">api node ×2</text>
+        <text data-detail="context" x="321" y="346" class="t-muted" font-size="9" text-anchor="middle">auth · matchmaking</text>
         </g>
 
-        <g id="node-A" data-node-id="A" data-node-label="Api ×2" tabindex="0" role="button" aria-label="Focus Api ×2, auth · matching requests, Architecture component" aria-pressed="false" data-node-kind="external" data-node-sublabel="auth · matching requests" data-node-context="Architecture component"><rect x="672" y="476" width="120" height="60" rx="6" class="c-external" style="fill:none" stroke-width="2.2"/><rect x="661" y="465" width="120" height="60" rx="6" class="c-external" style="fill:none" stroke-width="2.2"/>
-          <title>Api ×2 · auth · matching requests · Architecture component</title>
-          <rect x="650" y="454" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="650" y="454" width="120" height="60" rx="6" class="c-external" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(656 460) scale(0.6875)">
-            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
-            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
-          </g>
-          <text data-node-label="" data-detail-anchor="" x="710" y="482" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Api ×2</text>
-        <text data-detail="context" x="710" y="498" class="t-muted" font-size="7.7" text-anchor="middle">auth · matching requests</text>
-        </g>
-
-        <g id="node-M" data-node-id="M" data-node-label="Matchmaking" tabindex="0" role="button" aria-label="Focus Matchmaking, Matchmaker Instance Spot, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="Matchmaker Instance Spot" data-node-context="Architecture component">
-          <title>Matchmaking · Matchmaker Instance Spot · Architecture component</title>
-          <rect x="850" y="454" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="850" y="454" width="120" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(856 460) scale(0.6875)">
+        <g id="node-M" data-node-id="M" data-node-label="Matchmaking" tabindex="0" role="button" aria-label="Focus Matchmaking, Instance Spot, play node" aria-pressed="false" data-node-kind="backend" data-node-sublabel="Instance Spot" data-node-context="play node">
+          <title>Matchmaking · Instance Spot · play node</title>
+          <rect x="683" y="302" width="120" height="60" rx="6" class="c-mask"/>
+          <rect x="683" y="302" width="120" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(689 308) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="910" y="482" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Matchmaking</text>
-        <text data-detail="context" x="910" y="498" class="t-muted" font-size="7.7" text-anchor="middle">Matchmaker Instance Spot</text>
+          <text data-node-label="" data-detail-anchor="" x="743" y="330" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Matchmaking</text>
+        <text data-detail="context" x="743" y="346" class="t-muted" font-size="9" text-anchor="middle">Instance Spot</text>
         </g>
 
         <!-- Connection labels -->
         <g data-detail="context" data-edge-from="C" data-edge-to="S" data-edge-label="1 STREAM" data-edge-key="0">
-          <rect x="185.8" y="464" width="48.4" height="14" rx="3" class="c-mask"/>
-          <text x="210" y="474" class="t-backend" font-size="8" text-anchor="middle">1 STREAM</text>
+          <rect x="191.3" y="160" width="48.4" height="14" rx="3" class="c-mask"/>
+          <text x="215.5" y="170" class="t-backend" font-size="8" text-anchor="middle">1 STREAM</text>
         </g>
-        <g data-detail="context" data-edge-from="S" data-edge-to="A" data-edge-label="auth/matching request" data-edge-key="1">
-          <rect x="454.6" y="518" width="110.8" height="14" rx="3" class="c-mask"/>
-          <text x="510" y="528" class="t-muted" font-size="8" text-anchor="middle">auth/matching request</text>
-        </g>
+
         <g data-detail="context" data-edge-from="A" data-edge-to="M" data-edge-label="level bucket matching" data-edge-key="2">
-          <rect x="754.6" y="424" width="110.8" height="14" rx="3" class="c-mask"/>
-          <text x="810" y="434" class="t-muted" font-size="8" text-anchor="middle">level bucket matching</text>
-        </g>
-
-        <g data-detail="context" data-edge-from="S" data-edge-to="P" data-edge-label="packet relay" data-edge-key="4">
-          <rect x="358.2" y="308.5" width="67.6" height="14" rx="3" class="c-mask"/>
-          <text x="392" y="318.5" class="t-muted" font-size="8" text-anchor="middle">packet relay</text>
-        </g>
-        <g data-detail="context" data-edge-from="P" data-edge-to="S" data-edge-label="session push" data-edge-key="5">
-          <rect x="294.2" y="293.5" width="67.6" height="14" rx="3" class="c-mask"/>
-          <text x="328" y="303.5" class="t-muted" font-size="8" text-anchor="middle">session push</text>
-        </g>
-        <g data-detail="context" data-edge-from="A" data-edge-to="P" data-edge-label="room GetOrCreate" data-edge-key="6">
-          <rect x="584.6" y="305" width="86.8" height="14" rx="3" class="c-mask"/>
-          <text x="628" y="315" class="t-muted" font-size="8" text-anchor="middle">room GetOrCreate</text>
+          <rect x="476.6" y="319" width="110.8" height="14" rx="3" class="c-mask"/>
+          <text x="532" y="329" class="t-muted" font-size="8" text-anchor="middle">level bucket matching</text>
         </g>
 
 
-        <g data-detail="context" data-edge-from="P" data-edge-to="LS" data-edge-label="peer auto-connect" data-edge-key="9">
-          <rect x="512.2" y="224" width="91.6" height="14" rx="3" class="c-mask"/>
-          <text x="558" y="234" class="t-messagebus" font-size="8" text-anchor="middle">peer auto-connect</text>
+        <g data-detail="context" data-edge-from="A" data-edge-to="P" data-edge-label="room GetOrCreate" data-edge-key="5">
+          <rect x="488.6" y="236" width="86.8" height="14" rx="3" class="c-mask"/>
+          <text x="532" y="246" class="t-muted" font-size="8" text-anchor="middle">room GetOrCreate</text>
         </g>
+
 
         <!-- Boundary labels (foreground masks keep routes out of titles) -->
-
+        <g data-graph-role="structural-frame-label" data-composition-frame-id="0" data-composition-frame-kind="region" data-composition-frame-label="play node">
+          <rect data-graph-role="structural-frame-label-mask" x="657" y="130" width="58.6" height="16" rx="3" class="c-mask"/>
+          <text data-boundary-label="" x="661" y="143" class="t-cloud" font-size="9" font-weight="600">play node</text>
+        </g>
 
         <!-- Legend -->
 
@@ -5358,6 +5343,7 @@
           <h3>gateway configuration</h3>
         </div>
         <ul>
+          <li>&bull; The session node relays game packets to the room Spot and delivers pushes from the play node.</li>
           <li>&bull; client ↔ Session is one STREAM connection (bidirectional, emphasis) — client keeps only one, to Session</li>
           <li>&bull; Session·Api·Play each scale out ×2, server-to-server connections resolved by Location Store</li>
           <li>&bull; Session→Api matching request → Api matches a Matchmaker Instance Spot by level bucket</li>

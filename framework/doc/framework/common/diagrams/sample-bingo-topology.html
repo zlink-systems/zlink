@@ -4957,7 +4957,7 @@
         <div class="pulse-dot"></div>
         <h1>시스템 구성과 topology — 역할별 연결</h1>
       </div>
-      <p class="subtitle">Client는 Session에만 연결하고, API·Matchmaking·Play는 server 간 channel과 RouteMesh로 통신한다</p>
+      <p class="subtitle">세션을 통해 접속하고 서버 간 channel로 인증·매칭을 요청합니다</p>
     </div>
 
     <script id="archify-guided-views-data" type="application/json">[]</script>
@@ -5005,9 +5005,9 @@
     <!-- Main Diagram -->
     <div class="diagram-container" data-detail-level="read"
          data-preset-badge-editorial-plate="ARCHIFY / PLATE 04">
-      <svg viewBox="-71 92 1010 312" role="img" lang="en" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="standard" data-quality-gates="advisory">
+      <svg viewBox="-78 92 1010 312" role="img" lang="en" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="standard" data-quality-gates="advisory">
         <title id="archify-diagram-title">시스템 구성과 topology — 역할별 연결</title>
-        <desc id="archify-diagram-description">Client는 Session에만 연결하고, API·Matchmaking·Play는 server 간 channel과 RouteMesh로 통신한다</desc>
+        <desc id="archify-diagram-description">세션을 통해 접속하고 서버 간 channel로 인증·매칭을 요청합니다</desc>
         <!-- Definitions -->
         <defs>
           <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
@@ -5033,19 +5033,19 @@
         <!-- Boundaries (behind everything) -->
         <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="0" data-composition-frame-label="Clients" x="20" y="120" width="180" height="254" rx="12" class="c-region" stroke-width="1"/>
 
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="1" data-composition-frame-label="Servers" x="236" y="120" width="612" height="254" rx="12" class="c-region" stroke-width="1"/>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="1" data-composition-frame-label="play node" x="653" y="120" width="180" height="254" rx="12" class="c-region" stroke-width="1"/>
 
         <!-- Connection paths (before components for correct z-order) -->
-        <path data-edge-from="PC" data-edge-to="S" data-edge-label="STREAM" data-edge-key="0" data-composition-points="170,173;266,173" d="M 170 173 L 266 173" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="OC" data-edge-to="S" data-edge-label="STREAM" data-edge-key="1" data-composition-points="170,324;218,324;218,187;266,187" d="M 170 324 L 210 324 Q 218 324 218 316 L 218 195 Q 218 187 226 187 L 266 187" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="S" data-edge-to="A" data-edge-label="bingo.api" data-edge-key="2" data-composition-points="386,173;482,173" d="M 386 173 L 482 173" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="S" data-edge-to="P" data-edge-label="bingo.play" data-edge-key="3" data-composition-points="386,187;434,187;434,324;482,324" d="M 386 187 L 426 187 Q 434 187 434 195 L 434 316 Q 434 324 442 324 L 482 324" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="A" data-edge-to="P" data-edge-label="bingo.play" data-edge-key="4" data-composition-points="542,210;542,294" d="M 542 210 L 542 294" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="A" data-edge-to="M" data-edge-label="bingo.matchmaking" data-edge-key="5" data-composition-points="602,180;698,180" d="M 602 180 L 698 180" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="PC" data-edge-to="S" data-edge-label="STREAM" data-edge-key="0" data-composition-points="170,173;261,173" d="M 170 173 L 261 173" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="OC" data-edge-to="S" data-edge-label="STREAM" data-edge-key="1" data-composition-points="170,324;215.5,324;215.5,187;261,187" d="M 170 324 L 207.5 324 Q 215.5 324 215.5 316 L 215.5 195 Q 215.5 187 223.5 187 L 261 187" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="S" data-edge-to="A" data-edge-key="2" data-composition-points="321,210;321,294" d="M 321 210 L 321 294" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="S" data-edge-to="P" data-edge-key="3" data-composition-points="381,173;683,173" d="M 381 173 L 683 173" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="A" data-edge-to="P" data-edge-label="bingo.play" data-edge-key="4" data-composition-points="381,317;532,317;532,187;683,187" d="M 381 317 L 524 317 Q 532 317 532 309 L 532 195 Q 532 187 540 187 L 683 187" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="A" data-edge-to="M" data-edge-label="bingo.matchmaking" data-edge-key="5" data-composition-points="381,331;683,331" d="M 381 331 L 683 331" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
 
         <!-- Components -->
-        <g id="node-PC" data-node-id="PC" data-node-label="Player Clients ×2" tabindex="0" role="button" aria-label="Focus Player Clients ×2, Clients" aria-pressed="false" data-node-kind="frontend" data-node-context="Clients"><rect x="72" y="172" width="120" height="60" rx="6" class="c-frontend" style="fill:none" stroke-width="2.2"/><rect x="61" y="161" width="120" height="60" rx="6" class="c-frontend" style="fill:none" stroke-width="2.2"/>
-          <title>Player Clients ×2 · Clients</title>
+        <g id="node-PC" data-node-id="PC" data-node-label="Player Clients ×2" tabindex="0" role="button" aria-label="Focus Player Clients ×2, 각각 STREAM 1개, Clients" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="각각 STREAM 1개" data-node-context="Clients"><rect x="72" y="172" width="120" height="60" rx="6" class="c-frontend" style="fill:none" stroke-width="2.2"/><rect x="61" y="161" width="120" height="60" rx="6" class="c-frontend" style="fill:none" stroke-width="2.2"/>
+          <title>Player Clients ×2 · 각각 STREAM 1개 · Clients</title>
           <rect x="50" y="150" width="120" height="60" rx="6" class="c-mask"/>
           <rect x="50" y="150" width="120" height="60" rx="6" class="c-frontend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(56 156) scale(0.6875)">
@@ -5054,7 +5054,8 @@
             <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
             <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
           </g>
-          <text data-node-label="" x="110" y="184" class="t-primary" font-size="10.9" font-weight="600" text-anchor="middle">Player Clients ×2</text>
+          <text data-node-label="" data-detail-anchor="" x="110" y="178" class="t-primary" font-size="10.9" font-weight="600" text-anchor="middle">Player Clients ×2</text>
+        <text data-detail="context" x="110" y="194" class="t-muted" font-size="9" text-anchor="middle">각각 STREAM 1개</text>
         </g>
 
         <g id="node-OC" data-node-id="OC" data-node-label="Observer Client" tabindex="0" role="button" aria-label="Focus Observer Client, Clients" aria-pressed="false" data-node-kind="frontend" data-node-context="Clients">
@@ -5070,78 +5071,72 @@
           <text data-node-label="" x="110" y="328" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Observer Client</text>
         </g>
 
-        <g id="node-S" data-node-id="S" data-node-label="Session Servers ×2" tabindex="0" role="button" aria-label="Focus Session Servers ×2, 연결 종단 · relay, Servers" aria-pressed="false" data-node-kind="external" data-node-sublabel="연결 종단 · relay" data-node-context="Servers"><rect x="288" y="172" width="120" height="60" rx="6" class="c-external" style="fill:none" stroke-width="2.2"/><rect x="277" y="161" width="120" height="60" rx="6" class="c-external" style="fill:none" stroke-width="2.2"/>
-          <title>Session Servers ×2 · 연결 종단 · relay · Servers</title>
-          <rect x="266" y="150" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="266" y="150" width="120" height="60" rx="6" class="c-external" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(272 156) scale(0.6875)">
-            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
-            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
+        <g id="node-S" data-node-id="S" data-node-label="session node ×2" tabindex="0" role="button" aria-label="Focus session node ×2, STREAM, Architecture component" aria-pressed="false" data-node-kind="database" data-node-sublabel="STREAM" data-node-context="Architecture component"><rect x="283" y="172" width="120" height="60" rx="6" class="c-database" style="fill:none" stroke-width="2.2"/><rect x="272" y="161" width="120" height="60" rx="6" class="c-database" style="fill:none" stroke-width="2.2"/>
+          <title>session node ×2 · STREAM · Architecture component</title>
+          <rect x="261" y="150" width="120" height="60" rx="6" class="c-mask"/>
+          <rect x="261" y="150" width="120" height="60" rx="6" class="c-database" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(267 156) scale(0.6875)">
+            <ellipse cx="8" cy="4" rx="5" ry="2"/>
+            <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="326" y="178" class="t-primary" font-size="10.3" font-weight="600" text-anchor="middle">Session Servers ×2</text>
-        <text data-detail="context" x="326" y="194" class="t-muted" font-size="9" text-anchor="middle">연결 종단 · relay</text>
+          <text data-node-label="" data-detail-anchor="" x="321" y="178" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">session node ×2</text>
+        <text data-detail="context" x="321" y="194" class="t-muted" font-size="9" text-anchor="middle">STREAM</text>
         </g>
 
-        <g id="node-A" data-node-id="A" data-node-label="API Servers ×2" tabindex="0" role="button" aria-label="Focus API Servers ×2, 인증 · 매칭 조율, Servers" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="인증 · 매칭 조율" data-node-context="Servers"><rect x="504" y="172" width="120" height="60" rx="6" class="c-frontend" style="fill:none" stroke-width="2.2"/><rect x="493" y="161" width="120" height="60" rx="6" class="c-frontend" style="fill:none" stroke-width="2.2"/>
-          <title>API Servers ×2 · 인증 · 매칭 조율 · Servers</title>
-          <rect x="482" y="150" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="482" y="150" width="120" height="60" rx="6" class="c-frontend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(488 156) scale(0.6875)">
+        <g id="node-A" data-node-id="A" data-node-label="api node ×2" tabindex="0" role="button" aria-label="Focus api node ×2, 인증 · 매칭 요청, Architecture component" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="인증 · 매칭 요청" data-node-context="Architecture component"><rect x="283" y="316" width="120" height="60" rx="6" class="c-frontend" style="fill:none" stroke-width="2.2"/><rect x="272" y="305" width="120" height="60" rx="6" class="c-frontend" style="fill:none" stroke-width="2.2"/>
+          <title>api node ×2 · 인증 · 매칭 요청 · Architecture component</title>
+          <rect x="261" y="294" width="120" height="60" rx="6" class="c-mask"/>
+          <rect x="261" y="294" width="120" height="60" rx="6" class="c-frontend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(267 300) scale(0.6875)">
             <rect x="2" y="3" width="12" height="10" rx="2"/>
             <path d="M2 6.5h12"/>
             <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
             <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="542" y="178" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">API Servers ×2</text>
-        <text data-detail="context" x="542" y="194" class="t-muted" font-size="9" text-anchor="middle">인증 · 매칭 조율</text>
+          <text data-node-label="" data-detail-anchor="" x="321" y="322" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">api node ×2</text>
+        <text data-detail="context" x="321" y="338" class="t-muted" font-size="9" text-anchor="middle">인증 · 매칭 요청</text>
         </g>
 
-        <g id="node-P" data-node-id="P" data-node-label="Play Servers ×2" tabindex="0" role="button" aria-label="Focus Play Servers ×2, player Actor · Room Spot, Servers" aria-pressed="false" data-node-kind="backend" data-node-sublabel="player Actor · Room Spot" data-node-context="Servers"><rect x="504" y="316" width="120" height="60" rx="6" class="c-backend" style="fill:none" stroke-width="2.2"/><rect x="493" y="305" width="120" height="60" rx="6" class="c-backend" style="fill:none" stroke-width="2.2"/>
-          <title>Play Servers ×2 · player Actor · Room Spot · Servers</title>
-          <rect x="482" y="294" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="482" y="294" width="120" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(488 300) scale(0.6875)">
+        <g id="node-P" data-node-id="P" data-node-label="room ×2" tabindex="0" role="button" aria-label="Focus room ×2, player Actor · 방, play node" aria-pressed="false" data-node-kind="backend" data-node-sublabel="player Actor · 방" data-node-context="play node"><rect x="705" y="172" width="120" height="60" rx="6" class="c-backend" style="fill:none" stroke-width="2.2"/><rect x="694" y="161" width="120" height="60" rx="6" class="c-backend" style="fill:none" stroke-width="2.2"/>
+          <title>room ×2 · player Actor · 방 · play node</title>
+          <rect x="683" y="150" width="120" height="60" rx="6" class="c-mask"/>
+          <rect x="683" y="150" width="120" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(689 156) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="542" y="322" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Play Servers ×2</text>
-        <text data-detail="context" x="542" y="338" class="t-muted" font-size="7.7" text-anchor="middle">player Actor · Room Spot</text>
+          <text data-node-label="" data-detail-anchor="" x="743" y="178" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">room ×2</text>
+        <text data-detail="context" x="743" y="194" class="t-muted" font-size="9" text-anchor="middle">player Actor · 방</text>
         </g>
 
-        <g id="node-M" data-node-id="M" data-node-label="Matchmaking Server" tabindex="0" role="button" aria-label="Focus Matchmaking Server, Matchmaker Instance Spot, Servers" aria-pressed="false" data-node-kind="backend" data-node-sublabel="Matchmaker Instance Spot" data-node-context="Servers">
-          <title>Matchmaking Server · Matchmaker Instance Spot · Servers</title>
-          <rect x="698" y="150" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="698" y="150" width="120" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(704 156) scale(0.6875)">
+        <g id="node-M" data-node-id="M" data-node-label="Matchmaking" tabindex="0" role="button" aria-label="Focus Matchmaking, Instance Spot, play node" aria-pressed="false" data-node-kind="backend" data-node-sublabel="Instance Spot" data-node-context="play node">
+          <title>Matchmaking · Instance Spot · play node</title>
+          <rect x="683" y="294" width="120" height="60" rx="6" class="c-mask"/>
+          <rect x="683" y="294" width="120" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(689 300) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="758" y="178" class="t-primary" font-size="10.3" font-weight="600" text-anchor="middle">Matchmaking Server</text>
-        <text data-detail="context" x="758" y="194" class="t-muted" font-size="7.7" text-anchor="middle">Matchmaker Instance Spot</text>
+          <text data-node-label="" data-detail-anchor="" x="743" y="322" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Matchmaking</text>
+        <text data-detail="context" x="743" y="338" class="t-muted" font-size="9" text-anchor="middle">Instance Spot</text>
         </g>
 
         <!-- Connection labels -->
         <g data-detail="context" data-edge-from="PC" data-edge-to="S" data-edge-label="STREAM" data-edge-key="0">
-          <rect x="198.6" y="153" width="38.8" height="14" rx="3" class="c-mask"/>
-          <text x="218" y="163" class="t-muted" font-size="8" text-anchor="middle">STREAM</text>
+          <rect x="196.1" y="153" width="38.8" height="14" rx="3" class="c-mask"/>
+          <text x="215.5" y="163" class="t-muted" font-size="8" text-anchor="middle">STREAM</text>
         </g>
         <g data-detail="context" data-edge-from="OC" data-edge-to="S" data-edge-label="STREAM" data-edge-key="1">
-          <rect x="198.6" y="235.5" width="38.8" height="14" rx="3" class="c-mask"/>
-          <text x="218" y="245.5" class="t-muted" font-size="8" text-anchor="middle">STREAM</text>
+          <rect x="196.1" y="235.5" width="38.8" height="14" rx="3" class="c-mask"/>
+          <text x="215.5" y="245.5" class="t-muted" font-size="8" text-anchor="middle">STREAM</text>
         </g>
-        <g data-detail="context" data-edge-from="S" data-edge-to="A" data-edge-label="bingo.api" data-edge-key="2">
-          <rect x="407.4" y="153" width="53.199999999999996" height="14" rx="3" class="c-mask"/>
-          <text x="434" y="163" class="t-muted" font-size="8" text-anchor="middle">bingo.api</text>
-        </g>
-        <g data-detail="context" data-edge-from="S" data-edge-to="P" data-edge-label="bingo.play" data-edge-key="3">
-          <rect x="405" y="235.5" width="58" height="14" rx="3" class="c-mask"/>
-          <text x="434" y="245.5" class="t-muted" font-size="8" text-anchor="middle">bingo.play</text>
-        </g>
+
+
         <g data-detail="context" data-edge-from="A" data-edge-to="P" data-edge-label="bingo.play" data-edge-key="4">
-          <rect x="535" y="220" width="58" height="14" rx="3" class="c-mask"/>
-          <text x="564" y="230" class="t-muted" font-size="8" text-anchor="middle">bingo.play</text>
+          <rect x="503" y="232" width="58" height="14" rx="3" class="c-mask"/>
+          <text x="532" y="242" class="t-muted" font-size="8" text-anchor="middle">bingo.play</text>
         </g>
         <g data-detail="context" data-edge-from="A" data-edge-to="M" data-edge-label="bingo.matchmaking" data-edge-key="5">
-          <rect x="604.2" y="160" width="91.6" height="14" rx="3" class="c-mask"/>
-          <text x="650" y="170" class="t-muted" font-size="8" text-anchor="middle">bingo.matchmaking</text>
+          <rect x="486.2" y="311" width="91.6" height="14" rx="3" class="c-mask"/>
+          <text x="532" y="321" class="t-muted" font-size="8" text-anchor="middle">bingo.matchmaking</text>
         </g>
 
         <!-- Boundary labels (foreground masks keep routes out of titles) -->
@@ -5150,9 +5145,9 @@
           <text data-boundary-label="" x="28" y="143" class="t-cloud" font-size="9" font-weight="600">Clients</text>
         </g>
 
-        <g data-graph-role="structural-frame-label" data-composition-frame-id="1" data-composition-frame-kind="region" data-composition-frame-label="Servers">
-          <rect data-graph-role="structural-frame-label-mask" x="240" y="130" width="47.8" height="16" rx="3" class="c-mask"/>
-          <text data-boundary-label="" x="244" y="143" class="t-cloud" font-size="9" font-weight="600">Servers</text>
+        <g data-graph-role="structural-frame-label" data-composition-frame-id="1" data-composition-frame-kind="region" data-composition-frame-label="play node">
+          <rect data-graph-role="structural-frame-label-mask" x="657" y="130" width="58.6" height="16" rx="3" class="c-mask"/>
+          <text data-boundary-label="" x="661" y="143" class="t-cloud" font-size="9" font-weight="600">play node</text>
         </g>
 
         <!-- Legend -->
@@ -5361,7 +5356,7 @@
         </div>
         <ul>
           <li>&bull; `bingo.api` ClientServer Channel: Session과 Play가 인증·player record API를 호출한다. STREAM: Client request·response·server push를 한 연결로 전달한다.</li>
-          <li>&bull; `bingo.matchmaking` RouteMesh: API가 level bucket의 Matchmaker Instance Spot을 호출한다. `bingo.play` RouteMesh: API와 Session이 Room·Actor를 찾고 Play node가 object message와 Logical Multicast를 처리한다.</li>
+          <li>&bull; `bingo.matchmaking` RouteMesh: API가 level bucket의 Matchmaker Instance Spot을 호출한다. `bingo.play` RouteMesh: API와 Session이 Room·Actor를 찾고 play node가 object message와 Logical Multicast를 처리한다.</li>
           <li>&bull; 각 process RID는 `&lt;role-prefix&gt;-&lt;uuid-v4&gt;`로 시작할 때 새로 만들고 연결·관측에만 쓴다. logical identity는 ActorId·RoomId다. prefix — API의 Play Mesh=api, API의 Matchmaking Mesh=api-matchmaking, Matchmaking=matchmaking, Play=play, Session=session.</li>
         </ul>
       </div>

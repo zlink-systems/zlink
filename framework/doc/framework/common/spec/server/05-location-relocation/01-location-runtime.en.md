@@ -1098,7 +1098,10 @@ ended, described below, does not use this wait; check only its existing conditio
 records `t0` on its own local monotonic clock at the first Store exact-read observation that the
 owner token recorded in authority is invalid: that token's owner lease record is `Missing`, has
 a different `LeaseGeneration`, or is expired with `ExpiresAt ≤ StoreNow`. Apply the same rule to
-each owner token when releasing User Spot members. Do not reuse an observation for a different
+each owner token when releasing User Spot members. Keep one `t0` per owner token (owner id and
+`LeaseGeneration`). When releasing another authority record that names the same token, use the
+`t0` already recorded for that token. The wait derives from the old owner lease becoming invalid
+and does not depend on the record address. Do not reuse an observation for a different
 authority token. If the authority record itself is `Missing`, there is no record to release;
 apply §7's ordinary creation procedure without this wait.
 

@@ -1,5 +1,5 @@
 import {
-  initialRelocationCompletion,
+  commitAuthorityRelocation,
   encodeAuthorityAggregate
 } from '../../packages/framework/src/runtime/locations/authority-relocation-record';
 import { LegacyRelocationAuthorityFixture } from './legacy-relocation-authority-fixture';
@@ -4129,12 +4129,11 @@ function actorJoinLocationStore(initial: ZLinkAuthoritySnapshot, events: string[
         relocation:
           participant.relocation === undefined
             ? undefined
-            : {
-                ...participant.relocation,
-                completion: initialRelocationCompletion(
-                  fence.acceptedRequests?.get(participant.authorityKey.value) ?? 0n
-                )
-              },
+            : commitAuthorityRelocation(
+                participant.relocation,
+                fence.aggregateId.value,
+                fence.acceptedRequests?.get(participant.authorityKey.value)
+              ),
         authorityOwnerGeneration: current.authorityOwnerGeneration + 1n,
         ownerId: prepared.targetOwner.ownerId,
         ownerLeaseGeneration: prepared.targetOwner.leaseGeneration,
@@ -4144,6 +4143,14 @@ function actorJoinLocationStore(initial: ZLinkAuthoritySnapshot, events: string[
           descriptorLifecycleGeneration: prepared.targetDescriptorLifecycleGeneration
         }
       };
+      if (current.relocation !== undefined) {
+        progress.push(
+          encodeAuthorityAggregate(undefined, current.relocation)?.relocation as Record<
+            string,
+            unknown
+          >
+        );
+      }
       return { kind: 'committed' };
     },
     async abortAggregate() {
@@ -4874,7 +4881,10 @@ test('source Preserve keeps membership rejection failed and preserves original r
     await harness.sourceFifoIdle();
     assert.equal(harness.location.preserves, 1);
     assert.equal(harness.membershipFailures.length, 1);
-    assert.match(String(harness.membershipFailures[0]), /committed Close/);
+    const [membershipFailure] = harness.membershipFailures;
+    assert.ok(membershipFailure instanceof ZLinkFrameworkException);
+    assert.equal(membershipFailure.kind, ZLinkFrameworkErrorKind.NotFound);
+    assert.equal(membershipFailure.message, 'SPOT is closing.');
     assert.equal(harness.sourceActivation!.hasDepartedActor('actor-host-profile'), true);
     assert.equal(harness.freshIngress(), 'stale');
     assert.equal(harness.sourceState.isMoving, false);

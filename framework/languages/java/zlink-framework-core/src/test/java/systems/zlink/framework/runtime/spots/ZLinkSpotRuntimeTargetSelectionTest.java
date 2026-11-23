@@ -83,7 +83,7 @@ final class ZLinkSpotRuntimeTargetSelectionTest {
         ZLinkMeshNodeDescriptor connected = descriptor(CONNECTED, 1);
 
         List<ZLinkMeshNodeDescriptor> selected =
-                ZLinkSpotRuntime.preferConnectedInstanceTargets(
+                ZLinkStoreLocationResolvers.preferConnectedInstanceTargets(
                         List.of(disconnected, connected), Set.of(CONNECTED));
 
         assertEquals(List.of(connected), selected);
@@ -96,7 +96,7 @@ final class ZLinkSpotRuntimeTargetSelectionTest {
         List<ZLinkMeshNodeDescriptor> candidates = List.of(first, second);
 
         List<ZLinkMeshNodeDescriptor> selected =
-                ZLinkSpotRuntime.preferConnectedInstanceTargets(candidates, Set.of());
+                ZLinkStoreLocationResolvers.preferConnectedInstanceTargets(candidates, Set.of());
 
         assertEquals(candidates, selected);
     }

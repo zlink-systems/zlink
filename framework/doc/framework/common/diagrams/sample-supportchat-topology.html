@@ -5040,7 +5040,7 @@
         <path data-edge-from="A" data-edge-to="S" data-edge-label="STREAM" data-edge-key="1" data-composition-points="260,180;215,180;215,317;170,317" d="M 260 180 L 223 180 Q 215 180 215 188 L 215 309 Q 215 317 207 317 L 170 317" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="S" data-edge-to="API" data-edge-label="supportchat.api" data-edge-key="2" data-composition-points="110,354;110,438" d="M 110 354 L 110 438" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="S" data-edge-to="SUP" data-edge-label="RouteMesh" data-edge-key="3" data-composition-points="170,331;215,331;215,461;260,461" d="M 170 331 L 207 331 Q 215 331 215 339 L 215 453 Q 215 461 223 461 L 260 461" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="SUP" data-edge-to="API" data-edge-label="supportchat.api" data-edge-key="4" data-composition-points="260,475;170,475" d="M 260 475 L 170 475" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="SUP" data-edge-to="API" data-edge-label="client/server" data-edge-key="4" data-composition-points="260,475;170,475" d="M 260 475 L 170 475" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="API" data-edge-to="SUP" data-edge-key="5" data-composition-points="110,498;110,522;320,522;320,498" d="M 110 498 L 110 514 Q 110 522 118 522 L 312 522 Q 320 522 320 514 L 320 498" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
 
         <!-- Components -->
@@ -5070,20 +5070,20 @@
           <text data-node-label="" x="320" y="184" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Agent Client</text>
         </g>
 
-        <g id="node-S" data-node-id="S" data-node-label="Session" tabindex="0" role="button" aria-label="Focus Session, client-facing STREAM, Servers" aria-pressed="false" data-node-kind="external" data-node-sublabel="client-facing STREAM" data-node-context="Servers">
-          <title>Session · client-facing STREAM · Servers</title>
+        <g id="node-S" data-node-id="S" data-node-label="session node ×N" tabindex="0" role="button" aria-label="Focus session node ×N, Session, Servers" aria-pressed="false" data-node-kind="external" data-node-sublabel="Session" data-node-context="Servers"><rect x="72" y="316" width="120" height="60" rx="6" class="c-external" style="fill:none" stroke-width="2.2"/><rect x="61" y="305" width="120" height="60" rx="6" class="c-external" style="fill:none" stroke-width="2.2"/>
+          <title>session node ×N · Session · Servers</title>
           <rect x="50" y="294" width="120" height="60" rx="6" class="c-mask"/>
           <rect x="50" y="294" width="120" height="60" rx="6" class="c-external" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(56 300) scale(0.6875)">
             <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
             <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="110" y="322" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Session</text>
-        <text data-detail="context" x="110" y="338" class="t-muted" font-size="9" text-anchor="middle">client-facing STREAM</text>
+          <text data-node-label="" data-detail-anchor="" x="110" y="322" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">session node ×N</text>
+        <text data-detail="context" x="110" y="338" class="t-muted" font-size="9" text-anchor="middle">Session</text>
         </g>
 
-        <g id="node-API" data-node-id="API" data-node-label="Api" tabindex="0" role="button" aria-label="Focus Api, token 검증 · Spot 생성, Servers" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="token 검증 · Spot 생성" data-node-context="Servers">
-          <title>Api · token 검증 · Spot 생성 · Servers</title>
+        <g id="node-API" data-node-id="API" data-node-label="api node ×N" tabindex="0" role="button" aria-label="Focus api node ×N, Api, Servers" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="Api" data-node-context="Servers"><rect x="72" y="460" width="120" height="60" rx="6" class="c-frontend" style="fill:none" stroke-width="2.2"/><rect x="61" y="449" width="120" height="60" rx="6" class="c-frontend" style="fill:none" stroke-width="2.2"/>
+          <title>api node ×N · Api · Servers</title>
           <rect x="50" y="438" width="120" height="60" rx="6" class="c-mask"/>
           <rect x="50" y="438" width="120" height="60" rx="6" class="c-frontend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(56 444) scale(0.6875)">
@@ -5092,19 +5092,19 @@
             <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
             <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="110" y="466" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Api</text>
-        <text data-detail="context" x="110" y="482" class="t-muted" font-size="8.4" text-anchor="middle">token 검증 · Spot 생성</text>
+          <text data-node-label="" data-detail-anchor="" x="110" y="466" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">api node ×N</text>
+        <text data-detail="context" x="110" y="482" class="t-muted" font-size="9" text-anchor="middle">Api</text>
         </g>
 
-        <g id="node-SUP" data-node-id="SUP" data-node-label="Support" tabindex="0" role="button" aria-label="Focus Support, Entry·Conversation Spot·actor, Servers" aria-pressed="false" data-node-kind="backend" data-node-sublabel="Entry·Conversation Spot·actor" data-node-context="Servers">
-          <title>Support · Entry·Conversation Spot·actor · Servers</title>
+        <g id="node-SUP" data-node-id="SUP" data-node-label="play node ×N" tabindex="0" role="button" aria-label="Focus play node ×N, Support, Servers" aria-pressed="false" data-node-kind="backend" data-node-sublabel="Support" data-node-context="Servers"><rect x="282" y="460" width="120" height="60" rx="6" class="c-backend" style="fill:none" stroke-width="2.2"/><rect x="271" y="449" width="120" height="60" rx="6" class="c-backend" style="fill:none" stroke-width="2.2"/>
+          <title>play node ×N · Support · Servers</title>
           <rect x="260" y="438" width="120" height="60" rx="6" class="c-mask"/>
           <rect x="260" y="438" width="120" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(266 444) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="320" y="466" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Support</text>
-        <text data-detail="context" x="320" y="482" class="t-muted" font-size="6.4" text-anchor="middle">Entry·Conversation Spot·actor</text>
+          <text data-node-label="" data-detail-anchor="" x="320" y="466" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">play node ×N</text>
+        <text data-detail="context" x="320" y="482" class="t-muted" font-size="9" text-anchor="middle">Support</text>
         </g>
 
         <!-- Connection labels -->
@@ -5124,9 +5124,9 @@
           <rect x="188.4" y="376" width="53.199999999999996" height="14" rx="3" class="c-mask"/>
           <text x="215" y="386" class="t-muted" font-size="8" text-anchor="middle">RouteMesh</text>
         </g>
-        <g data-detail="context" data-edge-from="SUP" data-edge-to="API" data-edge-label="supportchat.api" data-edge-key="4">
-          <rect x="174" y="455" width="82" height="14" rx="3" class="c-mask"/>
-          <text x="215" y="465" class="t-muted" font-size="8" text-anchor="middle">supportchat.api</text>
+        <g data-detail="context" data-edge-from="SUP" data-edge-to="API" data-edge-label="client/server" data-edge-key="4">
+          <rect x="178.8" y="455" width="72.4" height="14" rx="3" class="c-mask"/>
+          <text x="215" y="465" class="t-muted" font-size="8" text-anchor="middle">client/server</text>
         </g>
 
 
@@ -5335,9 +5335,10 @@
           <h3>연결 읽는 법</h3>
         </div>
         <ul>
-          <li>&bull; 모든 선은 원문의 `---` 무방향 구조적 연결이다 — 요청 방향이 아니라 peer·ingress 연결 의도만 나타낸다(화살표 머리는 렌더 제약이며 방향 주장이 아니다).</li>
+          <li>&bull; client/server 화살표는 Support에서 Api로 요청을 보내는 방향을 표시합니다. RouteMesh 화살표는 peer 연결을 표시합니다.</li>
           <li>&bull; Customer·Agent Client는 각각 STREAM으로 Session에 연결한다. Session만 client-facing STREAM endpoint를 제공한다.</li>
           <li>&bull; S↔API와 SUP↔API 실선은 supportchat.api ClientServer(API request/reply용 독립 채널). API↔SUP 사이에는 supportchat.api ClientServer와 supportchat RouteMesh 두 연결이 모두 있다 — 그림에서는 한 쌍만 라벨을 달고 두 번째(RouteMesh) 연결은 아래로 우회시켰다. S↔SUP도 supportchat RouteMesh다.</li>
+          <li>&bull; supportchat.api ClientServer Channel에서 play node인 Support가 Client로 호출하고 api node인 Api가 Server로 처리합니다.</li>
         </ul>
       </div>
 

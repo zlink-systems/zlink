@@ -259,10 +259,10 @@ TEST_P (ActiveActorReclaimTest, RecreatesOnlyEndedDisabledActor)
         EXPECT_EQ (location_reclaim_test_access_t::observations (repository), 1u);
         release_first.complete (result_t<void>::success ());
         EXPECT_TRUE (first.result ().value ());
-        EXPECT_EQ (location_reclaim_test_access_t::observations (repository), 0u);
+        EXPECT_EQ (location_reclaim_test_access_t::observations (repository), 1u);
         release_second.complete (result_t<void>::success ());
         EXPECT_FALSE (second.result ().value ());
-        EXPECT_EQ (location_reclaim_test_access_t::observations (repository), 0u);
+        EXPECT_EQ (location_reclaim_test_access_t::observations (repository), 1u);
         return;
     }
     if (scenario == "delete" || scenario == "deleteMissing" || scenario == "lateDelete"
@@ -316,7 +316,7 @@ TEST_P (ActiveActorReclaimTest, RecreatesOnlyEndedDisabledActor)
                 release_delete.complete (result_t<void>::success ());
                 EXPECT_TRUE (
                   std::holds_alternative<authority_deleted_t> (deletion.result ().value ()));
-                EXPECT_EQ (location_reclaim_test_access_t::observations (repository), 1u);
+                EXPECT_EQ (location_reclaim_test_access_t::observations (repository), 2u);
                 clock.advance (15s);
                 const auto reclaimed = repository.reserve (request).result ();
                 ASSERT_TRUE (reclaimed);
@@ -333,7 +333,7 @@ TEST_P (ActiveActorReclaimTest, RecreatesOnlyEndedDisabledActor)
                         .result ()
                         .value ()));
                 }
-                EXPECT_EQ (location_reclaim_test_access_t::observations (repository), 0u);
+                EXPECT_EQ (location_reclaim_test_access_t::observations (repository), 1u);
             }
         } else {
             clock.advance (15s - 1ms);

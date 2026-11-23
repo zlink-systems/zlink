@@ -21,17 +21,19 @@ class committed_authority_fixture_t final : public runtime::stateful::authority_
             return std::nullopt;
         return _committed;
     }
-    runtime::stateful::authority_publish_result_t publish (const runtime::stateful::object_ref_t &,
-                                                           const runtime::stateful::object_ref_t &,
-                                                           location_owner_token_t,
-                                                           object_creation_target_t,
-                                                           std::string,
-                                                           std::uint32_t,
-                                                           runtime::stateful::inventory_digest_t,
-                                                           std::vector<std::byte>,
-                                                           std::string,
-                                                           runtime::protocol::relocation_id_t,
-                                                           location_owner_token_t) override
+    runtime::stateful::authority_publish_result_t
+    publish (const runtime::stateful::object_ref_t &,
+             const runtime::stateful::object_ref_t &,
+             location_owner_token_t,
+             object_creation_target_t,
+             std::string,
+             std::uint32_t,
+             runtime::stateful::inventory_digest_t,
+             std::vector<std::byte>,
+             std::string,
+             runtime::protocol::relocation_id_t,
+             location_owner_token_t,
+             const runtime::protocol::relocation_prepare_t *) override
     {
         throw std::logic_error ("confirmed authority fixture does not publish");
     }

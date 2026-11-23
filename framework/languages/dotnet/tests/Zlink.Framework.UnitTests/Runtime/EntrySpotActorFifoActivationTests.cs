@@ -398,10 +398,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 );
                 Assert.Equal(
                     routedJoin,
-                    ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                        authority.Snapshot.Payload.Span,
-                        out _
-                    )
+                    ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(authority.Snapshot, out _)
                 );
                 Assert.NotNull(Assert.Single(state.Handoff.SnapshotFinalReplay()).Withdraw);
                 Assert.False(probe.ActorASecondStarted.Task.IsCompleted);

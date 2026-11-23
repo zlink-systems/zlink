@@ -155,6 +155,12 @@ export interface ZLinkSpotNodeRuntimeManagerOptions {
     owner: ReadyRecord,
     record: ReceiveRecord
   ) => void | Promise<void>;
+  readonly routeActorJoinIngress?: (
+    meshName: string,
+    ...args: Parameters<
+      import('../foundation/service-stateful-runtime').ZLinkActorJoinIngressRouter
+    >
+  ) => boolean;
   readonly messageFollowReceiver?: (record: ServiceMessageFollowRecord) => void;
   /** MeshNode §5.1 activation admission record; the descriptor projects it for placement. */
   readonly activationConcurrency?: (meshName: string) => ZLinkActivationConcurrency;
@@ -412,6 +418,9 @@ export class ZLinkSpotNodeRuntimeManager {
         }
         node.setMessageFollowHandler?.((record) => this.options.messageFollowReceiver?.(record));
         node.start('preparing');
+        node.setActorJoinIngressRouter?.(
+          (...args) => this.options.routeActorJoinIngress?.(spotNodeName, ...args) === true
+        );
         node.setActorMessageFollowResolver?.(
           (fence) => this.options.actorHandoffRuntime?.acceptsDepartedRoute?.(fence) === true
         );
@@ -1192,7 +1201,8 @@ export class ZLinkSpotNodeRuntimeManager {
     remoteBoundSessionTarget?: ZLinkRemoteBoundSessionTarget,
     fallbackActorRef?: ActorRef,
     requestTerminal?: (response: unknown) => Promise<void> | void,
-    messageFollowOrigin?: ZLinkMessageFollowOrigin
+    messageFollowOrigin?: ZLinkMessageFollowOrigin,
+    preparation?: import('../execution/serial-execution-queue').ZLinkSerialWorkPreparation
   ): Promise<unknown> {
     let activation = this.primaryEntryActivation();
     if (activation === undefined) {
@@ -1224,16 +1234,19 @@ export class ZLinkSpotNodeRuntimeManager {
         'Entry Spot actor packet dispatch requires an Entry Spot.'
       );
     }
-    return await activation.dispatchActorPacket({
-      origin,
-      actorId,
-      parts,
-      returnResponse,
-      remoteBoundSessionTarget,
-      fallbackActorRef,
-      requestTerminal,
-      messageFollowOrigin
-    });
+    return await activation.dispatchActorPacket(
+      {
+        origin,
+        actorId,
+        parts,
+        returnResponse,
+        remoteBoundSessionTarget,
+        fallbackActorRef,
+        requestTerminal,
+        messageFollowOrigin
+      },
+      preparation
+    );
   }
 
   async dispatchEntryActorJoin(

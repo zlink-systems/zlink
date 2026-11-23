@@ -478,6 +478,8 @@ export class ZLinkFrameworkRuntimeHost
     this.spotAddressTransport = new ZLinkHostSpotAddressTransport({
       requests: this.requests,
       resolver: () => this.createLocationSpotRouteResolver(),
+      requestSources: () => this.spotNodeRuntime?.locationAutoConnect?.requestSources,
+      shutdownSignal: () => this.executionState?.abortController.signal,
       routed: this.routeTransport,
       meshNames: () =>
         [...this.options.registration.spotNodes]
@@ -3058,6 +3060,12 @@ export class ZLinkFrameworkRuntimeHost
       admission: this.admission,
       errorSink: this.runtimeOrPreStartErrorSink,
       peerAdmissionSealed: (meshName: string) => !this.admission.accepts(meshName),
+      routeActorJoinIngress: (
+        meshName: string,
+        ...args: Parameters<
+          import('../foundation/service-stateful-runtime').ZLinkActorJoinIngressRouter
+        >
+      ) => this.spotManager?.routeActorJoinIngress(meshName, ...args) === true,
       messageFollowReceiver: (record: ServiceMessageFollowRecord) => {
         if (record.source.kind === 'actor') {
           this.actorClientLocationResolver?.invalidateActorRouteIfMatches({

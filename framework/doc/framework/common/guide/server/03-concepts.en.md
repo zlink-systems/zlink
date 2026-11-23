@@ -251,15 +251,15 @@ together on the same MeshNode.
 
 > **See it in a sample — [TicTacToe](../../../common/sample/tictactoe/README.en.md).** This
 > is the smallest example where all of these concepts show up in one sample. They all meet
-> in one place: the Play server's registration code.
+> in one place: the `Play` registration code.
 >
 > | Concept | In TicTacToe |
 > | --- | --- |
-> | channel | The Play server looks up credentials over an independent `tictactoe.api` ClientServer Channel |
+> | channel | The play node looks up credentials over an independent `tictactoe.api` ClientServer Channel |
 > | spot | One match is one `TicTacToeGame` spot — both players' moves are processed serially inside it |
 > | actor | A player is an actor, and even after a reconnect the same actor picks up the ongoing match |
 > | stream | The client connects directly to the Play STREAM endpoint from the API response to make moves and receive pushes |
-> | location | The Redis location store automatically picks which Play node will create a new `TicTacToeGame` spot — the API code has no specific Play node address |
+> | location | The Redis location store automatically picks which play node (a node that hosts Spots) will create a new `TicTacToeGame` Spot — the API code has no specific play node address |
 >
 > You've seen what problem each concept solves above; this sample shows **what it looks like
 > when they're put together.**
@@ -379,11 +379,14 @@ external edge.
 Server-to-server communication and a real-time state server are this framework's territory.
 Policy for an edge exposed directly to the internet is owned by whatever sits in front of it.
 
-## 10. Stateful Game Nodes and the HTTP Lobby
+## 10. Responsibilities of Play and API Nodes { #10-stateful-game-nodes-and-the-http-lobby }
 
-A game server built with ZLink contains two kinds of code with different natures. Before writing code, decide which kind you are writing. Most mistakes AI tools make come from building game node code like a web server.
+A session node manages client sessions. A play node hosts Spots for roles such as zones,
+dungeon instances, tables, and matches. An api node receives and handles requests like an
+ordinary HTTP server. Examples include matchmaking and reading or writing Actor data in a database.
+When a play node calls the api node over a ZLink [ClientServer Channel](../../../common/spec/server/02-channel-transport/03-client-server-channel.en.md), the play node acts as the Client and the api node as the Server.
 
-| | Game node | HTTP lobby |
+| | play node | api node |
 |---|---|---|
 | What it does | Holds room, round and player state and processes messages in order | Short requests and responses such as login, matchmaking and room assignment |
 | State | In memory. Its owner is one Spot or Actor | None (stateless) |
@@ -391,11 +394,11 @@ A game server built with ZLink contains two kinds of code with different natures
 | Template examples | The Room, Table, Field and Channel nodes of every template | The Lobby of `match-http-lobby` and `fps-http-lobby` |
 | Do not | A REST-style structure that reads the database per request | Keep game state (round progress, balance changes) in the lobby |
 
-The HTTP lobby may be built like an ordinary web server. From the moment it takes over game state, however, it follows the game node rules. The lobby only sends requests to game nodes; it never changes a game node's values directly.
+The api node sends requests to the play node, where the Spot or Actor owns the game state.
 
 The "common mistake" columns below come from code that AI tools wrote during real game development.
 
-### 10.1 A Game Node Is Not a REST Server
+### 10.1 State and Persistence on a Play Node { #101-a-game-node-is-not-a-rest-server }
 
 | Rule | Common mistake |
 |---|---|
@@ -410,7 +413,7 @@ The "common mistake" columns below come from code that AI tools wrote during rea
 
 "The one Spot that owns the value" means a SpotWide Spot that holds state. A `PerActor` Spot keeps no state, so values several Actors change together go to an external store as [Execution model §4](32-execution-model.en.md#4-peractor--one-lane-each) describes, protected by conditional updates.
 
-AI tools build it this way because common examples (Spring, NestJS and the like) are stateless REST: "load from repository → modify → save". When you see that shape in game node code, stop and move it to Actor and Spot ownership.
+AI tools build it this way because common examples (Spring, NestJS and the like) are stateless REST: "load from repository → modify → save". When you see that shape in play node code, stop and move it to Actor and Spot ownership.
 
 Exceptions and cautions for round settlement:
 
@@ -460,7 +463,7 @@ Decide in this order:
 
 Add layers only to separate rules from external technology. If the game rules are simple or there is only one external connection, do not add layers.
 
-| Role | What it does in a game node | What it does not do |
+| Role | What it does in a play node | What it does not do |
 |---|---|---|
 | domain | Pure rules and state transitions such as round progress and settlement math. Synchronous functions | ZLink, database or network calls, async |
 | Spot and Actor handlers | Own the state. Receive messages, call the domain, and call ports only on connect and at round end | Generic database reads, creating another state owner |
@@ -470,7 +473,7 @@ Add layers only to separate rules from external technology. If the game rules ar
 - Separate the domain model. Keep game state types such as rounds, hands and wallets apart from message DTOs and database row types, and convert once at the handler and adapter boundary. Game rule code must not change when a message or database schema changes.
 - Do not add pass-through layers. If `Handler → Service → DomainService → Entity` only forwards the same call, merge the layers.
 - Do not add an application service outside Spots and Actors; it would create a second state owner.
-- The HTTP lobby is stateless, so the usual hexagonal layout is fine there. Its ports are still defined per capability.
+- The api node is stateless, so the usual hexagonal layout is fine there. Its ports are still defined per capability.
 
 ### 10.7 Role Split — Start Small, Stay Scalable
 
@@ -478,11 +481,11 @@ Start small, but split roles so the game can scale out from the beginning. ZLink
 
 | Role | What it holds | How it scales |
 |---|---|---|
-| Game node process | Lobby and room (table) Spots, player Actors | Scale out by adding only these processes |
-| Shared node process | Only Instance Spots for values that are single for the whole game: matchmaking (choosing a room, filling seats), ownership of game-wide news and accumulated values | Start it on the same machine as a game node. With two or more game machines, run one per machine for fault tolerance |
+| play node process (lobby and table) | Lobby and room (table) Spots, player Actors | Scale out by adding only these processes |
+| play node process (shared Instance Spots) | Only Instance Spots for values that are single for the whole game: matchmaking (choosing a room, filling seats), ownership of game-wide news and accumulated values | Start it on the same machine as a play node. With two or more game machines, run one per machine for fault tolerance |
 
 - Split matchmaking structurally even when it starts on one server (an Instance Spot on the shared node).
-- Game nodes do not register the factories of shared Instance Spots. Which node holds such a Spot is placement configuration: which node registers the factory. Code sends and requests by Spot ID only, independent of placement.
+- Play nodes dedicated to rooms do not register the factories of shared Instance Spots. Which node holds such a Spot is placement configuration: which node registers the factory. Code sends and requests by Spot ID only, independent of placement.
 - Do not keep values shared by many players or rooms in framework singletons or global maps guarded by locks (synchronized, Mutex), and do not paper over them with Redis distributed locks. Game-wide values belong to an Instance Spot, room values to the room Spot, player values to the player Actor (10.2). Common mistake: node-wide objects with locks in seven places, most of them correct only under the assumption of a single node.
 - Keep in a shared Spot only values that can be recovered from room resends or read from the database at startup, so the game continues when the shared node restarts.
 - When measuring capacity, report the total cores of the two processes on the same machine, and CPU and entry-latency p99 per process.
@@ -522,7 +525,7 @@ Start small, but split roles so the game can scale out from the beginning. ZLink
 - Observation has one source. Do not mix query replies and notifications to judge state.
 - Take test expectations from the spec, not from the implementation. Check random outcomes exactly in unit tests with fixed inputs.
 
-### 10.12 Checklist — Before Merging Game Node Code
+### 10.12 Play Node Code Checklist { #1012-checklist--before-merging-game-node-code }
 
 - [ ] No database reads while handling a request
 - [ ] One database write transaction per round (per transaction)
@@ -542,7 +545,7 @@ Start small, but split roles so the game can scale out from the beginning. ZLink
 - [ ] Database connections close after the ZLink runtime stops
 - [ ] A login retry binds the ActorRef from the last attempt
 - [ ] Money and reward notices are sent after the commit
-- [ ] Values single for the whole game (such as matchmaking) live in Instance Spots on the shared node, and game nodes do not register those factories
+- [ ] Values single for the whole game (such as matchmaking) live in Instance Spots on the shared node, and room processes do not register those factories
 - [ ] Shared values are not guarded by singletons, global maps or distributed locks
 - [ ] Shared-Spot values are recoverable from room resends or a database read at startup
 - [ ] Game rules are tested without ZLink or a database; the database is reached through capability ports, with no generic CRUD repository

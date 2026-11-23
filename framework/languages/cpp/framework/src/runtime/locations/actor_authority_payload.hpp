@@ -143,6 +143,10 @@ struct relocation_capture_identity_t
     std::uint64_t source_owner_lease_generation = 0;
     std::string coordinator_owner_id;
     std::uint64_t coordinator_lease_generation = 0;
+    std::string source_node_rid;
+    std::uint64_t source_node_generation = 0;
+    std::string coordinator_node_rid;
+    std::uint64_t coordinator_node_generation = 0;
 };
 inline constexpr std::size_t canonical_envelope_header_bytes =
   canonical_envelope_magic.size () + sizeof (std::uint8_t) + sizeof (std::uint16_t)
@@ -330,9 +334,9 @@ inline bool read_actor_authority_relocation_state (
         return false;
     (void) relocation_reader.text16be ();
     (void) relocation_reader.u32be ();
-    if (relocation_reader.take (relocation_reader.u8 ()).empty ())
-        return false;
-    if (relocation_reader.u64be () == 0)
+    const auto source_node_rid = relocation_reader.take (relocation_reader.u8 ());
+    const auto source_node_generation = relocation_reader.u64be ();
+    if (source_node_rid.empty () || source_node_generation == 0)
         return false;
     const auto source_owner_id = relocation_reader.text8 ();
     const auto source_owner_lease_generation = relocation_reader.u64be ();
@@ -346,9 +350,10 @@ inline bool read_actor_authority_relocation_state (
     const auto target_owner_lease_generation = relocation_reader.u64be ();
     const auto coordinator_owner_id = relocation_reader.text8 ();
     const auto coordinator_lease_generation = relocation_reader.u64be ();
-    if (coordinator_lease_generation == 0
-        || relocation_reader.take (relocation_reader.u8 ()).empty ()
-        || relocation_reader.u64be () == 0)
+    const auto coordinator_node_rid = relocation_reader.take (relocation_reader.u8 ());
+    const auto coordinator_node_generation = relocation_reader.u64be ();
+    if (coordinator_lease_generation == 0 || coordinator_node_rid.empty ()
+        || coordinator_node_generation == 0)
         return false;
     std::string expected_version;
     if (!read_optional_text8 (relocation_reader, nullptr, &expected_version))
@@ -386,9 +391,18 @@ inline bool read_actor_authority_relocation_state (
         if (relocation_expected_store_version)
             *relocation_expected_store_version = expected_version;
         if (capture_identity)
-            *capture_identity = {relocation_high,      relocation_low,
-                                 source_owner_id,      source_owner_lease_generation,
-                                 coordinator_owner_id, coordinator_lease_generation};
+            *capture_identity = {
+              relocation_high,
+              relocation_low,
+              source_owner_id,
+              source_owner_lease_generation,
+              coordinator_owner_id,
+              coordinator_lease_generation,
+              {reinterpret_cast<const char *> (source_node_rid.data ()), source_node_rid.size ()},
+              source_node_generation,
+              {reinterpret_cast<const char *> (coordinator_node_rid.data ()),
+               coordinator_node_rid.size ()},
+              coordinator_node_generation};
     }
     return valid;
 }
