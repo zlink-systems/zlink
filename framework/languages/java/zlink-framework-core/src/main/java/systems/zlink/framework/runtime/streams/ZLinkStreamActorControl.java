@@ -33,7 +33,7 @@ public final class ZLinkStreamActorControl {
                 .array();
     }
 
-    /** Reads the Actor slot of a {@link #bound} or {@link #unbound} payload without consuming it. */
+    /** Reads the Actor slot of a bound or unbound payload without consuming it. */
     public static int actorSlot(ByteBuffer payload) {
         int at = payload.position() + 1;
         return (Byte.toUnsignedInt(payload.get(at)) << Byte.SIZE)
