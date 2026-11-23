@@ -23,6 +23,7 @@ import { operationIdentityKey } from '../foundation/operation-identity';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
+  internalFrameworkErrorKindFromWireReply,
   wireReplyFailureException
 } from '../framework-errors-internal';
 import type { ZLinkLocationLifecycle } from '../locations';
@@ -47,6 +48,7 @@ const ZLINK_FRAMEWORK_ACTOR_JOIN_PACKET_NAME = 'ZLinkFrameworkActorJoinRequest';
 
 export interface ZLinkLocalNativeActorJoinOptions {
   readonly locationLifecycle?: ZLinkLocationLifecycle;
+  readonly invalidateSpotRouteIfMatches?: (used: ZLinkSpotRouteTarget) => void;
   readonly localSpotJoin?: (
     spotId: RoutingId,
     actor: ZLinkActor,
@@ -403,6 +405,17 @@ export class ZLinkLocalNativeActorJoin {
       signal,
       deadlineAtMs
     );
+    const failureKind = internalFrameworkErrorKindFromWireReply(
+      admission.terminalResult,
+      admission.failureErrno
+    );
+    if (
+      failureKind === ZLinkFrameworkInternalErrorKind.ActorLocationStale ||
+      failureKind === ZLinkFrameworkInternalErrorKind.SpotGenerationStale ||
+      failureKind === ZLinkFrameworkInternalErrorKind.SpotMoving
+    ) {
+      this.options.invalidateSpotRouteIfMatches?.(target);
+    }
     const control = admission.kindData;
     if (control?.kind !== 'actorJoinCompletion' || control.actor === null) {
       closeMeshCompletion(admission);
