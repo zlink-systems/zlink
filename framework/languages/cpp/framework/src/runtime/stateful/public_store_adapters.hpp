@@ -141,18 +141,20 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
         // (05-spot-actor-membership :48); a relocation carries its coordinator fence
         // (04-relocation-flow §3, §4.5).
         const bool relocating = relocation.high != 0 || relocation.low != 0;
-        const std::span<const std::uint8_t> expected_node =
-          prepare ? std::span<const std::uint8_t> (prepare->coordinator.node_routing_id)
-                  : std::span<const std::uint8_t>{};
-        const auto expected_generation = prepare ? prepare->coordinator.node_generation : 0;
-        const bool source_claim_matches =
+        const relocation_authority_fence_t fence =
+          prepare ? relocation_authority_fence_t::from_prepare (source, *prepare)
+                  : relocation_authority_fence_t{source.kind,  source.key,   expected_store_version,
+                                                 source_owner, target_owner, relocation};
+        const bool prepare_matches =
           !prepare
-          || (prepare->source_node_routing_id == prepare->coordinator.node_routing_id
-              && prepare->source_node_generation == expected_generation);
-        if (relocating ? !source_claim_matches
-                           || !holds_source_fence (*snapshot, source.key, relocation, source_owner,
-                                                   expected_store_version, expected_node,
-                                                   expected_generation)
+          || (source_claim_matches (*prepare) && fence.relocation == relocation
+              && fence.expected_store_version == expected_store_version
+              && same_owner (fence.source_owner, source_owner)
+              && same_owner (fence.target_owner, target_owner)
+              && fence.target_node_generation == target_placement.node_lifecycle_generation
+              && zlink::routing_id_t::from (fence.target_node_routing_id).to_string ()
+                   == target.node_id);
+        if (relocating ? !prepare_matches || !holds_target_precommit_fence (*snapshot, fence)
                        : !expected_store_version.empty ()
                            && snapshot->store_version != expected_store_version)
             return {authority_publish_status_t::conflict, decode_current (read)};
@@ -183,7 +185,9 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
         if (prepare)
             mutation.replace_aggregate =
               source.kind == object_kind_t::actor
-                ? committed_record (*snapshot, key, mutation.payload, *prepare)
+                ? authority_aggregate_codec::replace (
+                    snapshot->aggregate,
+                    target_record (*snapshot, key, mutation.payload, *prepare, "committed"))
                 : authority_aggregate_codec::without_capture (snapshot->aggregate);
         const auto exchanged =
           infrastructure_result ([&] {
@@ -218,11 +222,12 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
             return {authority_publish_status_t::failed, std::nullopt};
         return {authority_publish_status_t::conflict, decode_current (conflict->current)};
     }
-    bool capture_source (const std::vector<object_ref_t> &participants,
-                         const relocation_authority_fence_t &fence,
-                         const std::string &target_node_id,
-                         std::uint64_t target_node_generation,
-                         std::uint64_t application_version) override
+    task_t<std::optional<std::string>>
+    begin_source_capture (const std::vector<object_ref_t> &participants,
+                          const relocation_authority_fence_t &fence,
+                          const std::string &target_node_id,
+                          std::uint64_t target_node_generation,
+                          std::uint64_t application_version) override
     {
         try {
             const auto &primary = relocation_primary (participants);
@@ -230,10 +235,11 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
             auto inventory = nlohmann::json::array ();
             for (const auto &participant : participants) {
                 const auto key = authority_key (participant);
-                const auto read =
-                  infrastructure_result ([&] { return _store->read_authority (key); }).value ();
-                const auto *snapshot = std::get_if<authority_snapshot_t> (&read);
+                auto read = co_await _store->read_authority (key);
+                auto *snapshot = std::get_if<authority_snapshot_t> (&read);
                 if (!snapshot || snapshot->aggregate
+                    || (&participant == &primary
+                        && snapshot->store_version != fence.expected_store_version)
                     || snapshot->object_generation != participant.object_generation
                     || snapshot->authority_owner_generation
                          != participant.authority_owner_generation
@@ -241,15 +247,15 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
                                             fence.source_owner, fence.expected_store_version,
                                             fence.source_node_routing_id,
                                             fence.source_node_generation, &participant == &primary))
-                    return false;
+                    co_return std::optional<std::string>{};
                 auto payload =
                   target_authority_payload (participant.kind, snapshot->payload, target_node_id,
                                             fence.target_owner, target_node_generation);
                 if (!payload)
-                    return false;
+                    co_return std::optional<std::string>{};
                 inventory.push_back (inventory_entry (key, snapshot->store_version, *payload));
                 if (&participant == &primary)
-                    original = *snapshot;
+                    original = std::move (*snapshot);
             }
             const auto digest = inventory_digest (std::move (inventory));
             const auto coordinator = protocol::relocation_coordinator_fence_t{
@@ -258,19 +264,71 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
               .node_routing_id = fence.source_node_routing_id,
               .node_generation = fence.source_node_generation,
               .expected_authority_store_version = fence.expected_store_version};
-            authority_put_t captured{original->payload};
-            captured.replace_aggregate = authority_aggregate_codec::replace (
-              original->aggregate,
-              captured_record (fence.relocation, coordinator, digest, application_version));
-            return std::holds_alternative<authority_stored_t> (
-              infrastructure_result ([&] {
-                  return _store->compare_exchange_authority (
-                    authority_key (primary), original->store_version, std::move (captured));
-              }).value ());
+            auto record = relocation_record (fence.relocation, coordinator, digest,
+                                             application_version, "preparing");
+            const auto result = co_await write_relocation (
+              authority_key (primary), std::move (*original), std::move (record));
+            if (const auto *stored = std::get_if<authority_stored_t> (&result))
+                co_return std::optional{stored->snapshot.store_version};
+            co_return std::optional<std::string>{};
         }
         catch (const std::exception &) {
-            return false;
+            co_return std::optional<std::string>{};
         }
+    }
+
+    task_t<bool> capture_source (const object_ref_t &primary,
+                                 const std::string &preparing_version) override
+    {
+        try {
+            const auto key = authority_key (primary);
+            auto read = co_await _store->read_authority (key);
+            auto *snapshot = std::get_if<authority_snapshot_t> (&read);
+            if (!snapshot || snapshot->store_version != preparing_version || !snapshot->aggregate
+                || !snapshot->aggregate->relocation
+                || snapshot->aggregate->relocation->phase != "preparing")
+                co_return false;
+            auto record = snapshot->aggregate->encoded.at ("relocation");
+            record["phase"] = "captured";
+            co_return std::holds_alternative<authority_stored_t> (
+              co_await write_relocation (key, std::move (*snapshot), std::move (record)));
+        }
+        catch (const std::exception &) {
+            co_return false;
+        }
+    }
+
+    task_t<bool> record_target_prepared (const object_ref_t &source,
+                                         const protocol::relocation_prepare_t &prepare) override
+    {
+        const auto key = authority_key (source);
+        auto read = co_await _store->read_authority (key);
+        auto *snapshot = std::get_if<authority_snapshot_t> (&read);
+        const auto fence = relocation_authority_fence_t::from_prepare (source, prepare);
+        if (!snapshot || snapshot->object_generation != source.object_generation
+            || snapshot->authority_owner_generation != source.authority_owner_generation
+            || !source_claim_matches (prepare) || !holds_target_precommit_fence (*snapshot, fence))
+            co_return false;
+        std::vector<std::byte> payload;
+        if (snapshot->aggregate && snapshot->aggregate->relocation) {
+            if (snapshot->aggregate->relocation->phase == "prepared")
+                co_return true;
+        } else {
+            // Preserve compatibility with sources that use a legacy payload
+            // capture or the original steady StoreVersion.
+            const auto node = zlink::routing_id_t::from (prepare.target.target_node_routing_id);
+            auto projected =
+              target_authority_payload (source.kind, snapshot->payload, node.to_string (),
+                                        fence.target_owner, prepare.target.target_node_generation);
+            if (!projected)
+                co_return false;
+            payload = std::move (*projected);
+            if (source.kind == object_kind_t::actor)
+                clear_legacy_capture (snapshot->payload);
+        }
+        auto record = target_record (*snapshot, key, payload, prepare, "prepared");
+        co_return std::holds_alternative<authority_stored_t> (
+          co_await write_relocation (key, std::move (*snapshot), std::move (record)));
     }
 
     bool cancel_source_capture (const relocation_authority_fence_t &fence) override
@@ -286,11 +344,11 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
             if (record.relocation_id
                   != authority_aggregate_codec::wire_uuid (fence.relocation.high,
                                                            fence.relocation.low)
-                || (record.phase != "captured" && record.phase != "prepared"))
+                || !source_precommit (record.phase))
                 return true;
             if (!holds_source_fence (*snapshot, fence.key, fence.relocation, fence.source_owner,
                                      fence.expected_store_version, fence.source_node_routing_id,
-                                     fence.source_node_generation, true, &fence))
+                                     fence.source_node_generation))
                 return false;
             const auto result = preserve_source (key, *snapshot);
             return std::holds_alternative<authority_stored_t> (result);
@@ -614,6 +672,13 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
         return {authority_publish_status_t::failed, std::nullopt};
     }
 
+    static void clear_legacy_capture (std::vector<std::byte> &payload)
+    {
+        const auto actor = runtime::decode_direct_actor_authority_payload (payload);
+        if (actor && actor->has_relocation_state)
+            payload = runtime::encode_actor_authority_payload (*actor);
+    }
+
     authority_compare_exchange_result_t preserve_source (const authority_key_t &key,
                                                          const authority_snapshot_t &snapshot)
     {
@@ -621,10 +686,8 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
         if (snapshot.aggregate && snapshot.aggregate->relocation)
             preserved.replace_aggregate =
               authority_aggregate_codec::replace (snapshot.aggregate, nullptr);
-        else if (const auto actor =
-                   runtime::decode_direct_actor_authority_payload (snapshot.payload);
-                 actor && actor->has_relocation_state)
-            preserved.payload = runtime::encode_actor_authority_payload (*actor);
+        else
+            clear_legacy_capture (preserved.payload);
         return infrastructure_result ([&] {
                    return _store->compare_exchange_authority (key, snapshot.store_version,
                                                               std::move (preserved));
@@ -690,11 +753,18 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
                 {"ownerLeaseGeneration", std::to_string (lease)}};
     }
 
+    static bool source_claim_matches (const protocol::relocation_prepare_t &prepare)
+    {
+        return prepare.source_node_routing_id == prepare.coordinator.node_routing_id
+               && prepare.source_node_generation == prepare.coordinator.node_generation;
+    }
+
     static authority_aggregate_codec::json_t
-    captured_record (const protocol::relocation_id_t &relocation,
-                     const protocol::relocation_coordinator_fence_t &coordinator,
-                     std::string digest,
-                     std::uint64_t application_version)
+    relocation_record (const protocol::relocation_id_t &relocation,
+                       const protocol::relocation_coordinator_fence_t &coordinator,
+                       std::string digest,
+                       std::uint64_t application_version,
+                       std::string_view phase)
     {
         auto source = encoded_fence (coordinator.node_routing_id, coordinator.node_generation,
                                      coordinator.owner_id, coordinator.lease_generation);
@@ -702,7 +772,7 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
         coordinator_record["expectedStoreVersion"] = coordinator.expected_authority_store_version;
         return {
           {"relocationId", authority_aggregate_codec::wire_uuid (relocation.high, relocation.low)},
-          {"phase", "captured"},
+          {"phase", phase},
           {"source", std::move (source)},
           {"target", nullptr},
           {"coordinator", std::move (coordinator_record)},
@@ -710,27 +780,46 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
           {"applicationVersion", std::to_string (application_version)}};
     }
 
-    static std::shared_ptr<const authority_aggregate_t>
-    committed_record (const authority_snapshot_t &snapshot,
-                      const authority_key_t &key,
-                      const std::vector<std::byte> &payload,
-                      const protocol::relocation_prepare_t &prepare)
+    static authority_aggregate_codec::json_t
+    encoded_target (const protocol::relocation_prepare_t &prepare)
     {
         auto target = encoded_fence (
           prepare.target.target_node_routing_id, prepare.target.target_node_generation,
           prepare.target.target_owner_id, prepare.target.target_owner_lease_generation);
         target["attemptGeneration"] = std::to_string (prepare.target_attempt_generation);
+        return target;
+    }
+
+    static authority_aggregate_codec::json_t
+    target_record (const authority_snapshot_t &snapshot,
+                   const authority_key_t &key,
+                   const std::vector<std::byte> &payload,
+                   const protocol::relocation_prepare_t &prepare,
+                   std::string_view phase)
+    {
         auto record =
           snapshot.aggregate && snapshot.aggregate->relocation
             ? snapshot.aggregate->encoded.at ("relocation")
-            : captured_record (
+            : relocation_record (
                 prepare.relocation, prepare.coordinator,
                 inventory_digest (nlohmann::json::array ({inventory_entry (
                   key, prepare.coordinator.expected_authority_store_version, payload)})),
-                prepare.application_version);
-        record["phase"] = "committed";
-        record["target"] = std::move (target);
-        return authority_aggregate_codec::replace (snapshot.aggregate, std::move (record));
+                prepare.application_version, phase);
+        record["phase"] = phase;
+        record["target"] = encoded_target (prepare);
+        return record;
+    }
+
+    task_t<authority_compare_exchange_result_t>
+    write_relocation (const authority_key_t &key,
+                      authority_snapshot_t snapshot,
+                      authority_aggregate_codec::json_t record)
+    {
+        authority_put_t put{std::move (snapshot.payload)};
+        put.replace_aggregate =
+          authority_aggregate_codec::replace (snapshot.aggregate, std::move (record));
+        return _store->compare_exchange_authority (key, std::move (snapshot.store_version),
+                                                   std::move (put));
     }
 
     static nlohmann::json inventory_entry (const authority_key_t &key,
@@ -802,6 +891,43 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
         }
     }
 
+    static bool source_precommit (std::string_view phase)
+    {
+        return phase == "preparing" || phase == "captured" || phase == "prepared";
+    }
+
+    static bool prepared_target_matches (const authority_snapshot_t &snapshot,
+                                         const relocation_authority_fence_t &fence)
+    {
+        if (!snapshot.aggregate || !snapshot.aggregate->relocation
+            || snapshot.aggregate->relocation->phase != "prepared")
+            return true;
+        const auto &target = snapshot.aggregate->encoded.at ("relocation").at ("target");
+        const auto durable = authority_aggregate_codec::read_fence (target);
+        return durable.owner_id == fence.target_owner.owner_id
+               && durable.owner_lease_generation
+                    == static_cast<std::uint64_t> (fence.target_owner.lease_generation)
+               && authority_aggregate_codec::number (target, "attemptGeneration")
+                    == fence.target_attempt_generation
+               && (fence.target_node_routing_id.empty ()
+                   || durable.node_rid_hex
+                        == zlink::routing_id_t::from (fence.target_node_routing_id).to_hex ())
+               && (fence.target_node_generation == 0
+                   || durable.node_generation == fence.target_node_generation);
+    }
+
+    static bool holds_target_precommit_fence (const authority_snapshot_t &snapshot,
+                                              const relocation_authority_fence_t &fence,
+                                              bool require_steady_version = true)
+    {
+        return holds_source_fence (snapshot, fence.key, fence.relocation, fence.source_owner,
+                                   fence.expected_store_version, fence.source_node_routing_id,
+                                   fence.source_node_generation, require_steady_version)
+               && (!snapshot.aggregate || !snapshot.aggregate->relocation
+                   || snapshot.aggregate->relocation->phase != "preparing")
+               && prepared_target_matches (snapshot, fence);
+    }
+
     static bool holds_source_fence (const authority_snapshot_t &snapshot,
                                     std::string_view actor_id,
                                     const protocol::relocation_id_t &relocation,
@@ -809,8 +935,7 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
                                     std::string_view original_version,
                                     std::span<const std::uint8_t> expected_node = {},
                                     std::uint64_t expected_node_generation = 0,
-                                    bool require_steady_version = true,
-                                    const relocation_authority_fence_t *active_attempt = nullptr)
+                                    bool require_steady_version = true)
     {
         if (source_owner.owner_id.empty () || source_owner.lease_generation <= 0
             || !same_owner (snapshot.owner, source_owner))
@@ -829,19 +954,7 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
                                                   source_owner.owner_id, lease};
         if (snapshot.aggregate && snapshot.aggregate->relocation) {
             const auto &record = *snapshot.aggregate->relocation;
-            const bool prepared = active_attempt && record.phase == "prepared";
-            if (prepared) {
-                const auto &target = snapshot.aggregate->encoded.at ("relocation").at ("target");
-                if (authority_aggregate_codec::number (target, "attemptGeneration")
-                      != active_attempt->target_attempt_generation
-                    || authority_aggregate_codec::text (target, "ownerId")
-                         != active_attempt->target_owner.owner_id
-                    || authority_aggregate_codec::number (target, "ownerLeaseGeneration")
-                         != static_cast<std::uint64_t> (
-                           active_attempt->target_owner.lease_generation))
-                    return false;
-            }
-            return (record.phase == "captured" || prepared)
+            return source_precommit (record.phase)
                    && record.relocation_id
                         == authority_aggregate_codec::wire_uuid (relocation.high, relocation.low)
                    && record.source == source && record.coordinator == source
@@ -907,7 +1020,8 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
         }
         return holds_source_fence (*snapshot, fence.key, fence.relocation, fence.source_owner,
                                    fence.expected_store_version, fence.source_node_routing_id,
-                                   fence.source_node_generation, true, &fence)
+                                   fence.source_node_generation)
+                   && prepared_target_matches (*snapshot, fence)
                  ? relocation_authority_t::unsettled
                  : relocation_authority_t::source_preserved;
     }
@@ -931,7 +1045,7 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
             return {relocation_authority_t::data_lost, {}};
         return {holds_source_fence (*current, fence.key, fence.relocation, fence.source_owner,
                                     fence.expected_store_version, fence.source_node_routing_id,
-                                    fence.source_node_generation, true, &fence)
+                                    fence.source_node_generation)
                   ? relocation_authority_t::unsettled
                   : relocation_authority_t::source_preserved,
                 {}};
@@ -996,12 +1110,12 @@ class public_aggregate_authority_adapter_t final : public aggregate_authority_po
                                     public_authority_store_adapter_t::authority_key (source));
                               }).value ();
             const auto *snapshot = std::get_if<authority_snapshot_t> (&read);
+            auto participant_fence = source_fence;
+            participant_fence.key = source.key;
             if (!snapshot || snapshot->object_generation != source.object_generation
                 || snapshot->authority_owner_generation != source.authority_owner_generation
-                || !public_authority_store_adapter_t::holds_source_fence (
-                  *snapshot, source.key, source_fence.relocation, source_fence.source_owner,
-                  source_fence.expected_store_version, source_fence.source_node_routing_id,
-                  source_fence.source_node_generation, &source == &primary))
+                || !public_authority_store_adapter_t::holds_target_precommit_fence (
+                  *snapshot, participant_fence, &source == &primary))
                 return {aggregate_publish_status_t::conflict, {}, {}};
             snapshots.push_back (*snapshot);
             capacity.actor_slots += snapshot->allocation.capacity_bundle.actor_slots;
