@@ -20,7 +20,7 @@ function fixture(accepted = 1n) {
   const fence = {
     ownerId: 'target',
     ownerLeaseGeneration: 1n,
-    nodeRid: '746172676574',
+    nodeRid: 'target',
     nodeGeneration: 1n
   };
   let authority = {
