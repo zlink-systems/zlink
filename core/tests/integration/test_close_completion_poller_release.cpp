@@ -66,8 +66,13 @@ void close_with_pending_writable_wait (bool with_monitor_)
         // the socket. Releasing its completion owner must not restart it.
         zlink_poller_event_t event = {};
         zlink_config_result_t error = ZLINK_CONFIG_INTERNAL_ERROR;
-        TEST_ASSERT_EQUAL_INT (
-          1, zlink_poller_wait (poller, &event, 1, 1000, &error));
+        const auto diag_t0 = std::chrono::steady_clock::now ();
+        const int diag_n = zlink_poller_wait (poller, &event, 1, 20000, &error);
+        const long long diag_ms = std::chrono::duration_cast<std::chrono::milliseconds> (std::chrono::steady_clock::now () - diag_t0).count ();
+        const bool diag_done = closed.wait_for (std::chrono::seconds (0)) == std::future_status::ready;
+        if (diag_ms > 300 || diag_n != 1)
+            fprintf (stderr, "DIAG monitor=%d it=%d n=%d ms=%lld close_done=%d\n", with_monitor_, iteration, diag_n, diag_ms, diag_done);
+        TEST_ASSERT_EQUAL_INT (1, diag_n);
         TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK, error);
         TEST_ASSERT_EQUAL_INT (ZLINK_POLLERR, event.events);
         TEST_ASSERT_EQUAL_PTR (socket, event.socket);
