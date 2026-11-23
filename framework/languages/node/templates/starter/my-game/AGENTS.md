@@ -31,7 +31,8 @@ This Node.js 22 starter provides one Session node, Redis hosting, diagnostics, s
 | `server/session/session.ts` | Connection callbacks; add authentication and application packet handling                      |
 | `server/shared/`            | Settings, hosting, and the single `Control` marker definition                                 |
 | `e2e/client.mts`            | Observable scenarios; add new scenario IDs to `Scenarios` and the descriptor together         |
-| `e2e/runner.ts`             | Start nodes, capture logs, and clean up owned resources                                       |
+| `e2e/runner.ts`             | Run the scenarios against the current deployment                                              |
+| `e2e/server-host.ts`        | Start nodes, capture logs, and clean up the deployment                                        |
 | `e2e/structure.ts`          | Check actual configuration and registration declarations before startup                       |
 
 `zlink.structure.json` describes initial composition, not runtime placement. This starter declares no application channels or Spots. When adding them, extend the checker to compare their names and types with registration constants.
@@ -66,7 +67,7 @@ The feature paths below are relative to the ZLink repository's `framework/langua
 | Dynamic dungeon                       | `morpg-lobby-instances/my-game/server/lobby/spots.ts`: getOrCreate and preparation; pair with `server/instance/dungeon.ts` and `server/instance/main.ts`             |
 | World/channel selection               | `mmo-world-channels/my-game/server/channel/handlers.ts`: ChangeChannel handler uses deferred membership changes; inspect `server/accounts/main.ts` for world listing |
 | Channel pub/sub and seamless movement | `mmo-seamless/my-game/server/zone/zone.ts`: border subscription/publication; pair with `handlers.ts` for delivery and `player.ts` for movement                       |
-| API node (matchmaking)                 | `match-http-lobby/my-game/server/lobby/http.ts`: HTTP endpoint; pair with `matchmaker.ts` for matching; room creation is in `http.ts`                                |
+| API node (matchmaking)                | `match-http-lobby/my-game/server/lobby/http.ts`: HTTP endpoint; pair with `matchmaker.ts` for matching; room creation is in `http.ts`                                |
 | Typed messages                        | `board-tables/my-game/server/shared/messages.ts`: shared packet classes                                                                                              |
 
 The channels in `mmo-world-channels` are player-selected game spaces within a world. They differ from messaging subscription channels, and that sample registers no pub/sub subscriptions. Use the actual registrations and handlers in `mmo-seamless` for border messaging subscriptions.

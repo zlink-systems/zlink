@@ -1,3 +1,4 @@
+import type { NodeControl } from './server-control.js';
 import '../.zlink-framework-json-schemas.cjs';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
@@ -30,11 +31,6 @@ interface Received {
   payload: unknown;
 }
 
-export interface NodeControl {
-  drain(id: string): Promise<void>;
-  replace(id: string): Promise<void>;
-}
-
 class PlayerClient {
   readonly connector: ZlinkStreamConnector;
   readonly messages: Received[] = [];
@@ -55,7 +51,14 @@ class PlayerClient {
       requestTimeoutMs: Limits.messageMs,
       reconnect: { enabled: false }
     });
-    for (const packetType of [RoomView, MatchFound, MoveResult, ShotResult, MatchEnded, ActionRejected])
+    for (const packetType of [
+      RoomView,
+      MatchFound,
+      MoveResult,
+      ShotResult,
+      MatchEnded,
+      ActionRejected
+    ])
       this.connector.on(packetType, (message) => {
         const name = packetType.name;
         this.messages.push({ name, payload: message.payload });
@@ -368,7 +371,11 @@ async function input(a: PlayerClient, b: PlayerClient): Promise<void> {
   assert.equal(playerView(afterMoveB, mover.playerId).lastSequence, moveSequence + 1n);
   assert.equal(playerView(afterMoveB, mover.playerId).x, source.x + moveDelta * 2);
   assert.equal(playerView(afterMoveB, other.playerId).hp, target.hp);
-  await rejectAction(mover, new MoveRequest(moveDelta, 0, moveSequence + 1n), Rejection.staleSequence);
+  await rejectAction(
+    mover,
+    new MoveRequest(moveDelta, 0, moveSequence + 1n),
+    Rejection.staleSequence
+  );
 
   const beforeShot = await a.view();
   const shotSequence = playerView(beforeShot, a.playerId).lastSequence + 1n;
@@ -465,8 +472,10 @@ export async function scenario(
   const b = create('p2');
   const failures: unknown[] = [];
   try {
+    step('Queue two players and enter their assigned room');
     const initial = await pair(a, b);
     if (name === 'input') {
+      step('Check movement limits and reject invalid input');
       await input(a, b);
     } else {
       const sessionA = await a.sessionInfo();
@@ -478,6 +487,7 @@ export async function scenario(
       const before = await hit(a, b, 2n, Game.initialHp - Game.shotDamage);
 
       if (name === 'hit') {
+        step('Verify damage and match completion');
         await rejectAction(a, new RoomAssignment(before.roomId), Rejection.packetNotAllowed);
         const wallCenterY = (Game.wallMinY + Game.wallMaxY) / 2;
         await walk(a, b, a, Game.firstSpawnX, Game.firstSpawnY);
@@ -497,6 +507,7 @@ export async function scenario(
         ]))
           assert.equal(ended.winner, a.playerId);
       } else if (name === 'wall') {
+        step('Check that cover blocks hits');
         const wallCenterY = (Game.wallMinY + Game.wallMaxY) / 2;
         const left = Game.wallX - Game.maxStep;
         const right = Game.wallX + Game.maxStep;
@@ -529,6 +540,7 @@ export async function scenario(
           'Wall behind the clear lane blocked a shot'
         );
       } else if (name === 'reconnect') {
+        step('Reconnect a player and verify their room state');
         await b.close();
         const again = create('reconnected', b.playerId);
         await again.queue();
@@ -560,6 +572,7 @@ export async function scenario(
         assert.equal(restoredFinished.winner, a.playerId);
         assert.equal(playerView(restoredFinished, again.playerId).lastSequence, 2n);
       } else if (name === 'update') {
+        step(`Drain ${before.nodeId} and move the active game state`);
         await control.drain(before.nodeId);
         assert.deepEqual(await a.sessionInfo(), sessionA);
         assert.deepEqual(await b.sessionInfo(), sessionB);
@@ -569,6 +582,7 @@ export async function scenario(
         assert.notEqual(afterB.nodeId, before.nodeId);
         sameState(before, afterA);
         sameState(before, afterB);
+        step(`Wait for safe shutdown and replace ${before.nodeId}`);
         await control.replace(before.nodeId);
         const fresh = await pair(create('new-a'), create('new-b'));
         assert.equal(fresh.nodeId, before.nodeId, 'Replacement did not accept a new Room');
@@ -589,4 +603,8 @@ export async function scenario(
   }
   if (failures.length)
     throw new AggregateError(failures, `Scenario ${name} or client cleanup failed`);
+}
+
+function step(message: string): void {
+  console.log(`▶ ${message}`);
 }

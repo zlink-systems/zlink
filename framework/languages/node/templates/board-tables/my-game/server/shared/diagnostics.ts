@@ -1,4 +1,5 @@
-import { appendFileSync, closeSync, mkdirSync, openSync } from 'node:fs';
+import { createWriteStream, mkdirSync } from 'node:fs';
+import { finished } from 'node:stream/promises';
 import { join } from 'node:path';
 import { getEnvironmentData, setEnvironmentData } from 'node:worker_threads';
 import { logs } from '@opentelemetry/api-logs';
@@ -17,7 +18,10 @@ type LogConfig = Pick<NodeConfig, 'id' | 'logDir'>;
 function registerDiagnostics(config: LogConfig): LoggerProvider {
   const directory = config.logDir ?? LogFiles.directory;
   mkdirSync(directory, { recursive: true });
-  const file = openSync(join(directory, config.id + LogFiles.nodeExtension), 'a');
+  // One append stream per thread: writes stay asynchronous and keep their order.
+  const file = createWriteStream(join(directory, config.id + LogFiles.nodeExtension), {
+    flags: 'a'
+  });
   const exporter: LogRecordExporter = {
     export(records: ReadableLogRecord[], callback) {
       for (const record of records) {
@@ -28,13 +32,14 @@ function registerDiagnostics(config: LogConfig): LoggerProvider {
             ...record.attributes
           }) + '\n';
         process.stderr.write(line);
-        appendFileSync(file, line);
+        file.write(line);
       }
       callback({ code: 0 });
     },
     async forceFlush() {},
     async shutdown() {
-      closeSync(file);
+      file.end();
+      await finished(file);
     }
   };
   const diagnostics = new LoggerProvider({

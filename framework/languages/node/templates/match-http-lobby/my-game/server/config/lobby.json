@@ -1,5 +1,6 @@
 {
   "id": "lobby",
+  "title": "API node (matchmaking)",
   "redisEndpoint": "127.0.0.1:6379",
   "keyPrefix": "my-game-arena:",
   "meshEndpoint": "tcp://127.0.0.1:0",

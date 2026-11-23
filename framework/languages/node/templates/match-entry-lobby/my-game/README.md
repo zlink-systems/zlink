@@ -16,7 +16,7 @@ flowchart LR
 
 ## Prerequisites
 
-Docker Compose with a running Docker daemon, and PowerShell 7 for the PowerShell runner. Dependencies are pinned in `package.json` to public Framework 0.32.0 packages. Copy this directory independently of the ZLink repository.
+Docker Compose with a running Docker daemon, and PowerShell 5.1 or later for the PowerShell runner. Dependencies are pinned in `package.json` to public Framework 0.32.0 packages. Copy this directory independently of the ZLink repository.
 
 ## Build
 
@@ -107,6 +107,34 @@ try {
 }
 ```
 
+## Run the server and the e2e separately
+
+Open two terminals in the template directory. In the first terminal, start Redis and the nodes. Wait for `Server ready:` and the Session endpoint. Each node's console lines start with its ID, such as `[session]`, and show when it starts (`Session node starting` / `started`), drains and stops. Message flow records stay in the file logs. Add `--trace` (`-Trace` in PowerShell) to `run-server` to show them in the console too.
+
+```sh
+./run-server.sh
+```
+
+```powershell
+pwsh -NoProfile -File ./run-server.ps1
+```
+
+On Windows PowerShell 5.1, use `powershell.exe` in place of `pwsh` for both scripts.
+
+In the second terminal, run the e2e. It finds the server from the first terminal through `logs/server.json` and runs the same scenarios against it. When no server is running, the script starts its own nodes in Docker. The e2e console shows scenario names and steps. Packet records go to `.logs/run-<id>/` as JSON lines. The server console shows node and game events. During an update, an old node forwards messages sent to its previous routes for the configured message follow window. The e2e waits for safe shutdown when it replaces that node.
+
+```sh
+./run-e2e.sh
+```
+
+```powershell
+pwsh -NoProfile -File ./run-e2e.ps1
+```
+
+The first scenario uses the nodes already running when their configuration is for that scenario. The server host starts a fresh deployment for each subsequent scenario to preserve scenario isolation.
+
+Press Ctrl+C in the first terminal to shut down the nodes and remove the Redis container. Each node appends diagnostic records to `logs/<node-id>.log` as JSON lines, including when it is started directly with `node`. Set `logDir` in a node's JSON config to use another directory. Docker e2e nodes write that file inside their container; the runner keeps each node's stderr in `.logs/run-<id>/`. The e2e runner and server host also keep per-run logs under `.logs/`.
+
 ## Docker e2e
 
 Docker runs the e2e runner and each node in containers. All roles use one image; the runner image adds Docker CLI 28.5.1. `NODE_IMAGE` pins `node:22.20.0-trixie` with a slim runtime and the native binding's OpenSSL dependency. Nodes share the runner network namespace, preserving loopback listeners and OS-assigned ports. Configuration is copied with `docker cp`; stdin/stdout controls use `docker start -a -i`. Each invocation owns a unique Compose project, network and image tags. Cleanup failures return exit code 1, and shared Docker build cache remains available.
@@ -125,13 +153,13 @@ pwsh -NoProfile -File ./run-e2e.ps1 -Scenario hit,wall,input,reconnect,update
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 ```
 
-| Scenario | Checks |
-| --- | --- |
-| hit | Matchmaking, client `RoomAssignment` rejection, HP damage, wall and range rejections without damage, absent target, HP zero, and winner |
-| wall | Wall blocks a shot and movement at its segment; walking below its endpoint reaches the other side, where a shot succeeds |
-| input | Duplicate and reversed sequences, `MaxStep`, map and wall bounds, movement and fire cooldown responses, state immutability after rejection, and first retry acceptance after the server-provided delay |
-| reconnect | A new Session retains Actor identity and the Room's position, HP, last sequence, phase, and winner, including after the match finishes |
-| update | Relocation retains Room state and client Sessions, then the replacement node accepts new work |
+| Scenario  | Checks                                                                                                                                                                                                 |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| hit       | Matchmaking, client `RoomAssignment` rejection, HP damage, wall and range rejections without damage, absent target, HP zero, and winner                                                                |
+| wall      | Wall blocks a shot and movement at its segment; walking below its endpoint reaches the other side, where a shot succeeds                                                                               |
+| input     | Duplicate and reversed sequences, `MaxStep`, map and wall bounds, movement and fire cooldown responses, state immutability after rejection, and first retry acceptance after the server-provided delay |
+| reconnect | A new Session retains Actor identity and the Room's position, HP, last sequence, phase, and winner, including after the match finishes                                                                 |
+| update    | Relocation retains Room state and client Sessions, then the replacement node accepts new work                                                                                                          |
 
 `QueueRequest` is the first client packet. The Session relays only `QueueRequest`, `RoomViewRequest`, `MoveRequest`, `ShootRequest`, and `SessionInfoRequest`; internal packets receive `ActionRejected("packet-not-allowed", 0)`. The example accepts a claimed player ID; replace this boundary with authenticated identity before deployment. Requests use typed messages and the default Framework serializer. The Framework message model carries only finite JSON numbers, so nonfinite input reaches only the domain checks.
 

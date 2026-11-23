@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs';
 export const NODE_CONFIG = Symbol('MyGame.NodeConfig');
 export interface NodeConfig {
   id: string;
+  title?: string;
+  logDir?: string;
   redisEndpoint: string;
   keyPrefix: string;
   meshEndpoint: string;
@@ -19,5 +21,9 @@ export function readConfig(path: string): NodeConfig {
     (typeof value.streamEndpoint !== 'string' || !value.streamEndpoint)
   )
     throw new Error('Invalid streamEndpoint');
+  if (value.title !== undefined && (typeof value.title !== 'string' || !value.title))
+    throw new Error('Invalid title');
+  if (value.logDir !== undefined && (typeof value.logDir !== 'string' || !value.logDir))
+    throw new Error('Invalid logDir');
   return value;
 }

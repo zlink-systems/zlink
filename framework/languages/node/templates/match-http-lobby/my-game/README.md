@@ -20,7 +20,7 @@ flowchart LR
 
 ## Prerequisites
 
-Docker Compose with a running Docker daemon, and PowerShell 7 for the PowerShell runner. Public Framework packages are pinned to 0.32.0 in `package.json`. This directory can be copied independently of the repository.
+Docker Compose with a running Docker daemon, and PowerShell 5.1 or later for the PowerShell runner. Public Framework packages are pinned to 0.32.0 in `package.json`. This directory can be copied independently of the repository.
 
 ## Build
 
@@ -126,6 +126,34 @@ try {
 }
 ```
 
+## Run the server and the e2e separately
+
+Open two terminals in the template directory. In the first terminal, start Redis and the nodes. Wait for `Server ready:` and the Session endpoint. Each node's console lines start with its ID, such as `[session]`, and show when it starts (`Session node starting` / `started`), drains and stops. Message flow records stay in the file logs. Add `--trace` (`-Trace` in PowerShell) to `run-server` to show them in the console too.
+
+```sh
+./run-server.sh
+```
+
+```powershell
+pwsh -NoProfile -File ./run-server.ps1
+```
+
+On Windows PowerShell 5.1, use `powershell.exe` in place of `pwsh` for both scripts.
+
+In the second terminal, run the e2e. It finds the server from the first terminal through `logs/server.json` and runs the same scenarios against it. When no server is running, the script starts its own nodes in Docker. The e2e console shows scenario names and steps. Packet records go to `.logs/run-<id>/` as JSON lines. The server console shows node and game events. During an update, an old node forwards messages sent to its previous routes for the configured message follow window. The e2e waits for safe shutdown when it replaces that node.
+
+```sh
+./run-e2e.sh
+```
+
+```powershell
+pwsh -NoProfile -File ./run-e2e.ps1
+```
+
+The first scenario uses the nodes already running when their configuration is for that scenario. The server host starts a fresh deployment for each subsequent scenario to preserve scenario isolation.
+
+Press Ctrl+C in the first terminal to shut down the nodes and remove the Redis container. Each node appends diagnostic records to `logs/<node-id>.log` as JSON lines, including when it is started directly with `node`. Set `logDir` in a node's JSON config to use another directory. Docker e2e nodes write that file inside their container; the runner keeps each node's stderr in `.logs/run-<id>/`. The e2e runner and server host also keep per-run logs under `.logs/`.
+
 ## Docker e2e
 
 Docker runs the e2e runner and each node in containers. All roles use one image; the runner image adds Docker CLI 28.5.1. `NODE_IMAGE` pins `node:22.20.0-trixie` with a slim runtime and the native binding's OpenSSL dependency. Nodes share the runner network namespace, preserving loopback listeners and OS-assigned ports. Configuration is copied with `docker cp`; stdin/stdout controls use `docker start -a -i`. Each invocation owns a unique Compose project, network and image tags. Cleanup failures return exit code 1, and shared Docker build cache remains available.
@@ -146,14 +174,14 @@ pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
 ```
 
-| Scenario | Observed behavior |
-| --- | --- |
-| `lobby` | Omitting `mode` selects `duel`; both players receive the same prepared Room assignment with a `room-` prefix and 32 lowercase UUID hex characters. Before either matched player joins, an outsider is rejected with `admission-rejected` and the first Room view confirms the rejection did not change state. A client `PrepareRoom` packet is rejected with `packet-not-allowed`, and restarting the API node produces a new Room ID. |
-| `hit` | Accepted shots reduce HP and advance `LastSequence`. If a cooldown rejection occurs, the client waits for its `RetryAfterMs` before retrying the same sequence. Out-of-range and missing-target rejections leave the Room view unchanged. The lethal hit reports `Phase` and `Winner`. Domain checks exercise the cooldown boundary deterministically. |
-| `wall` | Players on opposite sides of the wall cannot shoot through it; each `blocked-by-wall` rejection leaves HP and sequence unchanged. Moving both players below the wall opens a clear shot lane. |
-| `input` | Accepted and rejected movement requests are sent consecutively before waiting for replies, followed by consecutive shot requests. `MoveResult` and `ShotResult` identify accepted actions; `move-budget` and `fire-too-soon` preserve accepted state and sequence. Retrying the same request after the server's `RetryAfterMs` succeeds. Oversized, stale, out-of-map, wall-crossing and over-limit sequences are also rejected without state changes. |
-| `reconnect` | A new Session binds the same Actor generation and restores the finished Room view, including sequence, `Phase`, and `Winner`. |
-| `update` | Planned maintenance relocates the Room and its `{Game, Roster}` snapshot, preserves Session bindings and matched membership, and lets the replacement node accept a new Room. |
+| Scenario    | Observed behavior                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `lobby`     | Omitting `mode` selects `duel`; both players receive the same prepared Room assignment with a `room-` prefix and 32 lowercase UUID hex characters. Before either matched player joins, an outsider is rejected with `admission-rejected` and the first Room view confirms the rejection did not change state. A client `PrepareRoom` packet is rejected with `packet-not-allowed`, and restarting the API node produces a new Room ID.                 |
+| `hit`       | Accepted shots reduce HP and advance `LastSequence`. If a cooldown rejection occurs, the client waits for its `RetryAfterMs` before retrying the same sequence. Out-of-range and missing-target rejections leave the Room view unchanged. The lethal hit reports `Phase` and `Winner`. Domain checks exercise the cooldown boundary deterministically.                                                                                                 |
+| `wall`      | Players on opposite sides of the wall cannot shoot through it; each `blocked-by-wall` rejection leaves HP and sequence unchanged. Moving both players below the wall opens a clear shot lane.                                                                                                                                                                                                                                                          |
+| `input`     | Accepted and rejected movement requests are sent consecutively before waiting for replies, followed by consecutive shot requests. `MoveResult` and `ShotResult` identify accepted actions; `move-budget` and `fire-too-soon` preserve accepted state and sequence. Retrying the same request after the server's `RetryAfterMs` succeeds. Oversized, stale, out-of-map, wall-crossing and over-limit sequences are also rejected without state changes. |
+| `reconnect` | A new Session binds the same Actor generation and restores the finished Room view, including sequence, `Phase`, and `Winner`.                                                                                                                                                                                                                                                                                                                          |
+| `update`    | Planned maintenance relocates the Room and its `{Game, Roster}` snapshot, preserves Session bindings and matched membership, and lets the replacement node accept a new Room.                                                                                                                                                                                                                                                                          |
 
 The runner validates structure before starting an isolated Compose project. It starts the play nodes (match), the session node, and then the API node. The API node receives the Session's actual published endpoint. HTTP, mesh, and STREAM listeners bind port zero. Each scenario uses a unique Redis prefix and records node output, message-flow diagnostics, and client observations in `.logs/run-<id>/`. Cleanup failures fail the run.
 

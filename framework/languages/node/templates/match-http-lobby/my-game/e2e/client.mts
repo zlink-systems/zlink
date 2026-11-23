@@ -1,3 +1,4 @@
+import type { LobbyNodeControl as NodeControl } from './server-control.js';
 import '../.zlink-framework-json-schemas.cjs';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
@@ -30,12 +31,6 @@ import {
 interface Received {
   name: string;
   payload: unknown;
-}
-
-export interface NodeControl {
-  drain(id: string): Promise<void>;
-  replace(id: string): Promise<void>;
-  restartLobby(): Promise<string>;
 }
 
 class PlayerClient {
@@ -405,7 +400,11 @@ async function input(a: PlayerClient, b: PlayerClient): Promise<void> {
   assert.equal(playerView(afterMoveB, mover.playerId).lastSequence, moveSequence + 1n);
   assert.equal(playerView(afterMoveB, mover.playerId).x, source.x + moveDelta * 2);
   assert.equal(playerView(afterMoveB, other.playerId).hp, target.hp);
-  await rejectAction(mover, new MoveRequest(moveDelta, 0, moveSequence + 1n), Rejection.staleSequence);
+  await rejectAction(
+    mover,
+    new MoveRequest(moveDelta, 0, moveSequence + 1n),
+    Rejection.staleSequence
+  );
 
   const beforeShot = await a.view();
   const shotSequence = playerView(beforeShot, a.playerId).lastSequence + 1n;
@@ -556,7 +555,10 @@ export async function scenario(
     );
     assert.deepEqual(
       new Set(views[0].players.map((player) => `${player.x},${player.y}`)),
-      new Set([`${Game.firstSpawnX},${Game.firstSpawnY}`, `${Game.secondSpawnX},${Game.secondSpawnY}`]),
+      new Set([
+        `${Game.firstSpawnX},${Game.firstSpawnY}`,
+        `${Game.secondSpawnX},${Game.secondSpawnY}`
+      ]),
       'Rejected outsider changed the server-selected spawns in the empty Room'
     );
     return views[0];
@@ -565,12 +567,12 @@ export async function scenario(
     a: PlayerClient,
     b: PlayerClient,
     matchEndpoint = lobbyEndpoint
-  ): Promise<RoomView> =>
-    joinPair(a, b, await matchPair(matchEndpoint, a.playerId, b.playerId));
+  ): Promise<RoomView> => joinPair(a, b, await matchPair(matchEndpoint, a.playerId, b.playerId));
   const a = create('p1'),
     b = create('p2'),
     failures: unknown[] = [];
   try {
+    step('Request a room through HTTP matchmaking');
     if (name === 'lobby') {
       const assignment = await matchPair(lobbyEndpoint, a.playerId, b.playerId);
       assert.equal(assignment.sessionEndpoint, endpoint);
@@ -584,14 +586,13 @@ export async function scenario(
 
       const before = await b.view(),
         mark = a.messages.length;
-      await a.connector
-        .send(new PrepareRoom(initial.roomId, [a.playerId, b.playerId]))
-        .submit();
+      await a.connector.send(new PrepareRoom(initial.roomId, [a.playerId, b.playerId])).submit();
       const rejection = await a.wait<ActionRejected>(PacketNames.actionRejected, mark);
       assert.equal(rejection.reason, Rejection.packetNotAllowed);
       assert.equal(rejection.retryAfterMs, 0);
       sameState(before, await b.view());
 
+      step('Restart the API node while a match is active');
       const restartedEndpoint = await control.restartLobby(),
         nextA = create('after-restart-a'),
         nextB = create('after-restart-b'),
@@ -605,6 +606,7 @@ export async function scenario(
       assert.equal(sb.actorId, b.playerId);
 
       if (name === 'hit') {
+        step('Verify damage and match completion');
         await hit(a, b, 1n, Game.initialHp - Game.shotDamage, false);
         await hit(a, b, 2n, Game.initialHp - Game.shotDamage * 2);
         await walk(a, b, b, 49, 100);
@@ -624,10 +626,11 @@ export async function scenario(
         ]))
           assert.equal(ended.winner, a.playerId);
       } else if (name === 'wall') {
+        step('Check that cover blocks hits');
         await walk(a, b, a, Game.firstSpawnX, 40);
         await walk(a, b, b, Game.secondSpawnX, 40);
-        let viewA = await a.view(),
-          sequenceA = playerView(viewA, a.playerId).lastSequence + 1n;
+        let viewA = await a.view();
+        const sequenceA = playerView(viewA, a.playerId).lastSequence + 1n;
         await rejectShot(a, b, sequenceA, Rejection.blockedByWall);
         const viewB = await b.view(),
           sequenceB = playerView(viewB, b.playerId).lastSequence + 1n;
@@ -643,8 +646,10 @@ export async function scenario(
         assert.equal(clearShot.phase, Game.playingPhase);
         assert.equal(clearShot.winner, null);
       } else if (name === 'input') {
+        step('Check movement limits and reject invalid input');
         await input(a, b);
       } else if (name === 'reconnect') {
+        step('Reconnect a player and verify their room state');
         await hit(a, b, 1n, Game.initialHp - Game.shotDamage);
         await hit(a, b, 2n, Game.initialHp - Game.shotDamage * 2);
         await hit(a, b, 3n, Game.initialHp - Game.shotDamage * 3);
@@ -665,6 +670,7 @@ export async function scenario(
       } else if (name === 'update') {
         const beforeHit = await hit(a, b, 1n, Game.initialHp - Game.shotDamage),
           before = beforeHit;
+        step(`Drain ${before.nodeId} and move the active game state`);
         await control.drain(before.nodeId);
         assert.deepEqual(await a.sessionInfo(), sa);
         assert.deepEqual(await b.sessionInfo(), sb);
@@ -676,9 +682,14 @@ export async function scenario(
         sameState(before, afterB);
         const outsider = create('relocated-outsider');
         await rejectAdmission(a, outsider, before.roomId);
+        step(`Wait for safe shutdown and replace ${before.nodeId}`);
         await control.replace(before.nodeId);
         const fresh = await pair(create('new-a'), create('new-b'));
-        assert.equal(fresh.nodeId, before.nodeId, 'New Room is not on the replacement play node (match)');
+        assert.equal(
+          fresh.nodeId,
+          before.nodeId,
+          'New Room is not on the replacement play node (match)'
+        );
         await hit(a, b, 2n, Game.initialHp - Game.shotDamage * 2);
         assert.deepEqual(await a.sessionInfo(), sa);
         assert.deepEqual(await b.sessionInfo(), sb);
@@ -693,5 +704,10 @@ export async function scenario(
     const results = await Promise.allSettled(clients.map((client) => client.close()));
     for (const result of results) if (result.status === 'rejected') failures.push(result.reason);
   }
-  if (failures.length) throw new AggregateError(failures, `Scenario ${name} or client cleanup failed`);
+  if (failures.length)
+    throw new AggregateError(failures, `Scenario ${name} or client cleanup failed`);
+}
+
+function step(message: string): void {
+  console.log(`▶ ${message}`);
 }

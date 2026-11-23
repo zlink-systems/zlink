@@ -71,6 +71,7 @@ export class Matchmaking implements ZLinkSpot<Player> {
     const created = await this.spots.getOrCreate(roomId, Names.room).inMesh(Names.mesh).submit();
     if (created.state === ZLinkSpotCreateState.Rejected) throw new Error('Room creation rejected');
     this.state.remove(pair);
+    console.log(`Matchmaking assigned ${pair.length} players to room ${roomId}`);
     for (const player of pair)
       await this.actors.sendToActor(player.playerId, new RoomAssignment(roomId)).submit();
   }
@@ -99,6 +100,7 @@ export class Room implements ZLinkSpot<Player> {
     return { accepted: this.state.admit(id) };
   }
   async onJoinedActor(actor: Player): Promise<void> {
+    console.log(`Room ${String(this.context.spotId)} admitted a player`);
     await this.actors
       .sendToActor(actor.context.actorId, new MatchFound(String(this.context.spotId)))
       .submit();
@@ -127,9 +129,13 @@ export class Room implements ZLinkSpot<Player> {
       await actor.context.boundSession.send(rejection).submit();
       return;
     }
-    const player = this.state.players.find((candidate) => candidate.playerId === actor.context.actorId);
+    const player = this.state.players.find(
+      (candidate) => candidate.playerId === actor.context.actorId
+    );
     if (!player) throw new Error('Unknown room player');
-    await actor.context.boundSession.send(new MoveResult(player.x, player.y, request.sequence)).submit();
+    await actor.context.boundSession
+      .send(new MoveResult(player.x, player.y, request.sequence))
+      .submit();
     await this.broadcast(this.view());
   }
   async shoot(actor: Player, request: ShootRequest): Promise<void> {

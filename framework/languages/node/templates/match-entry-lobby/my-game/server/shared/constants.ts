@@ -89,3 +89,42 @@ export const NodeEntrypoints = {
   match: 'server/match/main.ts'
 } as const;
 export type NodeRole = keyof typeof NodeEntrypoints;
+
+export const LogFiles = {
+  directory: 'logs',
+  nodeExtension: '.log',
+  runs: '.logs',
+  runPrefix: 'run-',
+  serverState: 'server.json',
+  workerConfig: 'my-game.diagnostics',
+  // Docker e2e nodes write their file log inside the container; the runner keeps their stderr.
+  container: '/tmp/my-game-logs',
+  // Console tag for lines from run-server itself.
+  hostTag: 'host',
+  // HH:MM:SS.mmm of an ISO timestamp, for console lines.
+  consoleTimeStart: 11,
+  consoleTimeEnd: 23
+} as const;
+
+const loopback = '127.0.0.1';
+const redisPort = '6379';
+export const LocalHost = {
+  address: loopback,
+  controlPort: 0,
+  meshEndpoint: `tcp://${loopback}:0`,
+  streamEndpoint: `ws://${loopback}:0`,
+  redisPort,
+  dockerRedis: `redis:${redisPort}`,
+  keyPrefix: 'my-game:',
+  projectPrefix: 'my-game-',
+  structureFile: 'zlink.structure.json',
+  ready: 'Server ready:',
+  traceFlag: '--trace'
+} as const;
+
+export const ServerLog = {
+  connectedTo: 'connected to',
+  disconnectedFrom: 'disconnected from',
+  // A routing ID is "<node id>-<suffix>" (setRoutingIdPrefix).
+  routingIdSeparator: '-'
+} as const;

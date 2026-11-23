@@ -97,7 +97,12 @@ def node(game, packages, fw, bind):
     write(manifest, json.dumps(package, indent=2))
     (game / "package-lock.json").unlink(missing_ok=True)
     # The lockfile pins registry tarballs, so installs resolve again from package.json.
-    edit(game / "run-e2e.sh", (r"npm ci", "npm install", False))
+    for script in ("run-e2e.sh", "run-server.sh"):
+        if (game / script).is_file():
+            edit(game / script, (r"npm ci", "npm install", False))
+    for script in ("run-e2e.ps1", "run-server.ps1"):
+        if (game / script).is_file():
+            edit(game / script, (r"@\('ci'\)", "@('install')", False))
     edit(game / "Dockerfile",
          (r"npm ci", "npm install", False),
          (r"^(COPY package(?:-lock)?\.json[^\n]*\n)", r"COPY local-npm local-npm\n\1", True, 1),

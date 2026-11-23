@@ -9,8 +9,7 @@ export async function scenario(
   name: string,
   endpoint: string,
   drain: () => Promise<void>,
-  stop: () => Promise<void>,
-  cleanup: (release: () => Promise<void>) => Promise<void>
+  replace: () => Promise<void>
 ): Promise<void> {
   assert.equal(name, Scenario.connect);
   const connector = zlinkStreamConnectorFactory.create({
@@ -22,10 +21,13 @@ export async function scenario(
     reconnect: { enabled: false }
   });
   try {
+    console.log('▶ Connect to the Session node');
     await connector.connect();
   } finally {
-    await cleanup(() => connector.close());
+    await connector.close();
   }
+  console.log('▶ Drain the Session node');
   await drain();
-  await stop();
+  console.log('▶ Replace the Session node when it is safe to shut down');
+  await replace();
 }

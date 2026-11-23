@@ -7,6 +7,12 @@ import type {
 } from '@zlink-systems/framework';
 export class Session implements ZLinkSession {
   constructor(readonly context: ZLinkSessionContext) {}
+  async onConnected(): Promise<void> {
+    console.log('Game client connected to the Session node');
+  }
+  async onDisconnected(): Promise<void> {
+    console.log('Game client disconnected from the Session node');
+  }
   async onError(_context: ZLinkSessionContext, error: ZLinkStreamError): Promise<void> {
     console.error('Session error', error);
   }

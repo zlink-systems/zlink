@@ -1,3 +1,4 @@
+import { LocalHost } from '../server/shared/constants';
 import { readFileSync, realpathSync } from 'node:fs';
 import { isAbsolute, relative, resolve, sep, win32 } from 'node:path';
 import assert from 'node:assert/strict';
@@ -17,7 +18,7 @@ function array(value: unknown): unknown[] {
 function unique(values: string[], label: string): void {
   assert.equal(new Set(values).size, values.length, `Duplicate ${label}`);
 }
-export function checkStructure(path = 'zlink.structure.json'): void {
+export function checkStructure(path: string = LocalHost.structureFile): void {
   const root = realpathSync('.');
   const s = object(JSON.parse(readFileSync(path, 'utf8')));
   assert.equal(s.version, 1, 'Unknown structure version');

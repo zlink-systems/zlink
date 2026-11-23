@@ -10,7 +10,7 @@ flowchart LR
 
 ## Prerequisites
 
-Install Docker with Compose v2 and access to a Linux container daemon. Bash or PowerShell 7 runs the scripts. Docker builds use Node.js `22.20.0` and Docker CLI `28.5.1`; the image references are at the top of `Dockerfile`. Host debugging also requires Node.js 22 or later and npm.
+Install Docker with Compose v2 and access to a Linux container daemon. Bash or PowerShell 5.1 or later runs the scripts. Docker builds use Node.js `22.20.0` and Docker CLI `28.5.1`; the image references are at the top of `Dockerfile`. Host debugging also requires Node.js 22 or later and npm.
 
 `package.json` pins Framework and the STREAM connector to `0.32.0`. npm restores public packages. Do not add repository source references or a private feed.
 
@@ -84,6 +84,32 @@ try {
   await client.close();
 }
 ```
+
+## Run the server and the e2e separately
+
+Open two terminals in the template directory. In the first terminal, start Redis and the nodes. Wait for `Server ready:` and the Session endpoint. Each node's console lines start with its ID, such as `[session]`, and show when it starts (`Session node starting` / `started`), drains and stops. Message flow records stay in the file logs. Add `--trace` (`-Trace` in PowerShell) to `run-server` to show them in the console too.
+
+```sh
+./run-server.sh
+```
+
+```powershell
+pwsh -NoProfile -File ./run-server.ps1
+```
+
+On Windows PowerShell 5.1, use `powershell.exe` in place of `pwsh` for both scripts.
+
+In the second terminal, run the e2e. It finds the server from the first terminal through `logs/server.json` and runs the same scenarios against it. When no server is running, the script starts its own nodes in Docker. The e2e console shows the connection, drain, and replacement steps.
+
+```sh
+./run-e2e.sh
+```
+
+```powershell
+pwsh -NoProfile -File ./run-e2e.ps1
+```
+
+Press Ctrl+C in the first terminal to shut down the nodes and remove the Redis container. Each node appends diagnostic records to `logs/<node-id>.log` as JSON lines, including when it is started directly with `node`. Set `logDir` in a node's JSON config to use another directory. Docker e2e nodes write that file inside their container; the runner keeps each node's stderr in `.logs/run-<id>/`. The e2e runner and server host also keep per-run logs under `.logs/`.
 
 ## Local e2e
 

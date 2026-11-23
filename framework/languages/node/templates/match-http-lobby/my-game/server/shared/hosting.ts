@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { diagnostics } from './diagnostics';
+import { startDiagnostics } from './diagnostics';
 import '../../.zlink-framework-json-schemas.cjs';
 import { NestFactory } from '@nestjs/core';
 import { Global, Module, type Type, type INestApplicationContext } from '@nestjs/common';
@@ -25,9 +25,10 @@ import {
   type ZLinkFrameworkRuntime,
   type ZLinkFrameworkRuntimeStatus,
   type ZLinkRouteMeshRuntime,
-  type ZLinkRouteMeshStatus
+  type ZLinkRouteMeshStatus,
+  ZLinkPeerState
 } from '@zlink-systems/framework';
-import { Names, Limits, Control } from './constants';
+import { Names, Limits, Control, ServerLog } from './constants';
 import { NODE_CONFIG, readConfig, type NodeConfig } from './config';
 interface HostComposition {
   providers: Type[];
@@ -45,6 +46,9 @@ export async function runHost(
   ) => HostComposition
 ): Promise<void> {
   const config = readConfig(process.argv[2]);
+  const diagnostics = startDiagnostics(config);
+  const name = config.title ?? config.id;
+  console.log(`${name} starting`);
   const location = new ZLinkRedisLocationStore({
     url: `redis://${config.redisEndpoint}`,
     keyPrefix: `${config.keyPrefix}location`
@@ -117,7 +121,7 @@ export async function runHost(
   }
   async function waitSafe(): Promise<void> {
     let lastStatus: ZLinkFrameworkRuntimeStatus | undefined;
-    for await (const observed of runtime.observe(AbortSignal.timeout(Limits.safeShutdownMs))) {
+    for await (const observed of runtime.observe(AbortSignal.timeout(Limits.safeMs))) {
       if (observed.loss.discardedTerminalCount !== 0n)
         throw new Error('Lifecycle observation lost');
       lastStatus = observed.status;
@@ -128,29 +132,67 @@ export async function runHost(
         (lastStatus ? describe({ status: lastStatus }) : 'no status observed')
     );
   }
+  // Logs each mesh peer as it connects or disconnects. A peer's routing ID starts with its node ID.
+  const watching = new AbortController();
+  async function watchPeers(): Promise<void> {
+    const connected = new Set<string>();
+    try {
+      for await (const observed of meshes.observe(
+        Names.mesh,
+        Limits.observationCapacity,
+        watching.signal
+      )) {
+        const ready = new Set(
+          observed.status.peers
+            .filter((peer) => peer.state === ZLinkPeerState.Ready)
+            .map((peer) => peer.nodeRid.split(ServerLog.routingIdSeparator)[0])
+        );
+        for (const peer of ready)
+          if (!connected.has(peer)) console.log(`${name} ${ServerLog.connectedTo} ${peer}`);
+        for (const peer of connected)
+          if (!ready.has(peer)) console.log(`${name} ${ServerLog.disconnectedFrom} ${peer}`);
+        connected.clear();
+        for (const peer of ready) connected.add(peer);
+      }
+    } catch (error) {
+      if (!watching.signal.aborted) console.error(`${name} peer watch failed`, error);
+    }
+  }
   const input = createInterface({ input: process.stdin });
   const failures: unknown[] = [];
   try {
     await waitServing();
+    void watchPeers();
     await waitReady();
     await composition.initialize?.(app);
     const listener = runtime.getListenerStatus(
       composition.listener.kind,
       composition.listener.name
     );
+    const meshEndpoint = runtime.getListenerStatus('routeMesh', Names.mesh).endpoint;
+    const httpEndpoint = composition.endpoint?.();
+    const listenerAddresses = [
+      composition.listener.kind === 'stream'
+        ? `client WebSocket listen ${listener.endpoint}`
+        : undefined,
+      `server mesh listen ${meshEndpoint}`,
+      httpEndpoint ? `lobby HTTP listen ${httpEndpoint}` : undefined
+    ];
+    console.log(`${name} started — ${listenerAddresses.filter(Boolean).join(' · ')}`);
     console.log(
       Control.ready +
         JSON.stringify({
           id: config.id,
-          endpoint: composition.endpoint?.() ?? listener.endpoint,
-          httpEndpoint: composition.endpoint?.() ?? null,
-          meshEndpoint: runtime.getListenerStatus('routeMesh', Names.mesh).endpoint,
+          endpoint: httpEndpoint ?? listener.endpoint,
+          httpEndpoint: httpEndpoint ?? null,
+          meshEndpoint,
           streamEndpoint: composition.listener.kind === 'stream' ? listener.endpoint : null
         })
     );
     for await (const line of input) {
       if (line === Control.drain) {
         console.log(Control.requested);
+        console.log(`${name} draining: moving its actors`);
         const result = await runtime.relocate({
           mode: ZLinkFrameworkRelocationMode.PlannedMaintenance,
           deadlineMs: Limits.relocationMs
@@ -158,8 +200,10 @@ export async function runHost(
         if (result.outcome !== ZLinkFrameworkRelocationOutcome.Relocated)
           throw new Error(`Relocation blocked: ${result.reason}`);
         console.log(Control.relocated);
+        console.log(`${name} drained: actors moved`);
         await waitSafe();
         console.log(Control.safe);
+        console.log(`${name} safe to shut down`);
       } else if (line === Control.shutdown) break;
       else throw new Error(`Unknown control command: ${line}`);
     }
@@ -168,6 +212,8 @@ export async function runHost(
     console.error('Node operation failed', error);
   } finally {
     input.close();
+    watching.abort();
+    console.log(`${name} stopping`);
     const cleanup = [
       async (): Promise<void> => {
         await composition.release?.();
@@ -198,6 +244,7 @@ export async function runHost(
     }
   }
   if (failures.length) throw new AggregateError(failures, 'Node operation or cleanup failed');
+  console.log(`${name} stopped`);
 }
 export function failHost(error: unknown): void {
   console.error(error);
