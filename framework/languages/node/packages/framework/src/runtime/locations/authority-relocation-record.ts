@@ -1,4 +1,3 @@
-import { ZLINK_MAX_ROUTING_ID_BYTES } from '../../contracts/Common/CoreTypes';
 import { completionDataLost } from './relocation-completion-record';
 
 /** Location runtime §2.3, §9.1: the authority record owns durable relocation progress. */
@@ -17,7 +16,9 @@ export interface AuthorityRelocationCompletion {
   readonly sha256: string | null;
 }
 
-function initialRelocationCompletion(acceptedRequests: bigint): AuthorityRelocationCompletion {
+export function initialRelocationCompletion(
+  acceptedRequests: bigint
+): AuthorityRelocationCompletion {
   if (acceptedRequests < 0n || acceptedRequests > 0xffffffffffffffffn)
     completionDataLost('Accepted request count is invalid.');
   return {
@@ -47,26 +48,6 @@ export interface AuthorityRelocation {
   readonly sourceInventorySha256: string;
   readonly applicationVersion: bigint;
   readonly completion?: AuthorityRelocationCompletion;
-}
-
-export function isPreparedAuthorityRelocation(
-  relocation: AuthorityRelocation | undefined,
-  aggregateId: string
-): relocation is AuthorityRelocation & { readonly phase: 'prepared' } {
-  return relocation?.relocationId === aggregateId && relocation.phase === 'prepared';
-}
-
-export function commitAuthorityRelocation(
-  relocation: AuthorityRelocation | undefined,
-  aggregateId: string,
-  acceptedRequests = 0n
-): AuthorityRelocation | undefined {
-  if (!isPreparedAuthorityRelocation(relocation, aggregateId)) return undefined;
-  return {
-    ...relocation,
-    phase: 'committed',
-    completion: initialRelocationCompletion(acceptedRequests)
-  };
 }
 
 export interface AuthorityAggregateMarker {
@@ -156,7 +137,7 @@ export function decodeAuthorityAggregate(value: unknown): {
       ? null
       : {
           ...fence(state.target),
-          attemptGeneration: nonzeroInteger(object(state.target).attemptGeneration)
+          attemptGeneration: integer(object(state.target).attemptGeneration)
         };
   if (
     ((phase === 'preparing' || phase === 'captured') && target !== null) ||
@@ -202,26 +183,13 @@ function integer(value: unknown): bigint {
     throw new TypeError('Authority relocation integer must be a decimal uint64 string.');
   return BigInt(value);
 }
-function nonzeroInteger(value: unknown): bigint {
-  const result = integer(value);
-  if (result === 0n) throw new TypeError('Authority relocation fence generation must be nonzero.');
-  return result;
-}
-
 function fence(value: unknown): AuthorityRelocationFence {
   const item = object(value);
-  const nodeRid = text(item.nodeRid);
-  if (
-    nodeRid.length > 2 * ZLINK_MAX_ROUTING_ID_BYTES ||
-    nodeRid.length % 2 !== 0 ||
-    /[^0-9a-f]/.test(nodeRid)
-  )
-    throw new TypeError('Authority relocation node RID must be canonical hex.');
   return {
-    nodeRid,
-    nodeGeneration: nonzeroInteger(item.nodeGeneration),
+    nodeRid: text(item.nodeRid),
+    nodeGeneration: integer(item.nodeGeneration),
     ownerId: text(item.ownerId),
-    ownerLeaseGeneration: nonzeroInteger(item.ownerLeaseGeneration)
+    ownerLeaseGeneration: integer(item.ownerLeaseGeneration)
   };
 }
 
