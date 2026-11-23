@@ -266,12 +266,38 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
     }
 
     /// <summary>Reads the Actor's current row from the Location Store, never from the route
-    /// cache, and caches the result. Every Session bind reads here for its fence
-    /// (Session-Actor binding §5).</summary>
+    /// cache, and caches the result.</summary>
     internal async ValueTask<ZLinkResolvedActorLocation?> ReadActorRowAsync(
         ZLinkActorLocationKey key,
         CancellationToken cancellationToken = default
     ) => (await ReadActorRowCoreAsync(key, cancellationToken).ConfigureAwait(false)).Row;
+
+    internal async ValueTask<ZLinkResolvedActorLocation> ReadActorSessionBindingRowAsync(
+        ActorRef actor,
+        CancellationToken cancellationToken
+    )
+    {
+        var key = new ZLinkActorLocationKey(actor.ActorId);
+        var authority = await ReadActorAuthorityAsync(key, cancellationToken).ConfigureAwait(false);
+        var (row, _, _) = await ResolveActorAuthorityAsync(key, authority, cancellationToken)
+            .ConfigureAwait(false);
+        if (authority is ZLinkAuthorityReadResult.Missing)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.NotFound,
+                $"Actor '{actor.ActorId}' authority was not found."
+            );
+        if (row is not null && row.ActorRef.ObjectGeneration != actor.ObjectGeneration)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.InvalidOperation,
+                $"Actor '{actor.ActorId}' binding ObjectGeneration {actor.ObjectGeneration} differs from the current {row.ActorRef.ObjectGeneration}."
+            );
+        if (row is null || row.ActorRef != actor)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                $"Actor '{actor.ActorId}' binding route is unavailable."
+            );
+        return row;
+    }
 
     private async ValueTask<(
         ZLinkResolvedActorLocation? Row,
@@ -279,8 +305,18 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
         ZLinkLocationResolutionKind Kind
     )> ReadActorRowCoreAsync(ZLinkActorLocationKey key, CancellationToken cancellationToken)
     {
+        var authority = await ReadActorAuthorityAsync(key, cancellationToken).ConfigureAwait(false);
+        return await ResolveActorAuthorityAsync(key, authority, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async ValueTask<ZLinkAuthorityReadResult> ReadActorAuthorityAsync(
+        ZLinkActorLocationKey key,
+        CancellationToken cancellationToken
+    )
+    {
         _runtime?.EnsureOwnerAdmissionOpen();
-        var authority = await ZLinkLocationStoreRead
+        return await ZLinkLocationStoreRead
             .ExecuteAsync(
                 _health,
                 "ZLinkActorLocation-resolver-read",
@@ -292,6 +328,18 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
                     )
             )
             .ConfigureAwait(false);
+    }
+
+    private async ValueTask<(
+        ZLinkResolvedActorLocation? Row,
+        bool LiveRowPresent,
+        ZLinkLocationResolutionKind Kind
+    )> ResolveActorAuthorityAsync(
+        ZLinkActorLocationKey key,
+        ZLinkAuthorityReadResult authority,
+        CancellationToken cancellationToken
+    )
+    {
         var raw = ProjectActor(authority, key.ActorId);
         var (row, lease) = await _liveRows
             .ResolveWithPresenceAsync(raw, static row => row.OwnerId, cancellationToken)
