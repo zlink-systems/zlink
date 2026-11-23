@@ -108,6 +108,10 @@ export function admitServiceRequest(
         typeof targetNodeGeneration === 'function' ? targetNodeGeneration() : targetNodeGeneration;
       if (typeof targetNodeGeneration === 'function' && generation === undefined) return false;
       const observation = port.observePeerRoute(target, generation);
+      if (pending.nodeRequestStartedMs !== undefined && observation.selected === true) {
+        pending.routeSelectedMs ??= performance.now();
+        pending.routeGeneration = observation.generation;
+      }
       const attempts =
         baseline !== undefined || !observation.ready
           ? observation.connectionAttempts?.filter(

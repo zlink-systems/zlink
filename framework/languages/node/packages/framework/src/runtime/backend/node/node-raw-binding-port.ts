@@ -1,5 +1,5 @@
 import { RequestRuntime } from '../../foundation/request-runtime';
-import type { OperationHandle } from '../../foundation/operation-registry';
+import type { NodeRequestProgress } from '../../foundation/operation-registry';
 import { remainingRequestTimeout } from '../../messaging/request-deadline';
 import {
   Message,
@@ -33,6 +33,7 @@ import { ZLinkNodeEventLoopPoller } from './node-event-loop-poller';
 import { ZLinkBufferMessage } from '../runtime-message';
 import type {
   ZLinkRawBindingPort,
+  ZLinkRawRequestOperation,
   ZLinkRawDealerPort,
   ZLinkRawHostPort,
   ZLinkRawMonitorPort,
@@ -340,7 +341,7 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
     onFailed: (error: unknown) => T,
     recordReceived?: () => void,
     onAdmitted?: () => void,
-    existing?: Pick<OperationHandle<unknown>, 'id' | 'deadlineMs'>
+    existing?: ZLinkRawRequestOperation
   ): Promise<T> {
     if (existing !== undefined) {
       this.requireOpen();
@@ -349,7 +350,9 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
           remainingRequestTimeout('Request', existing.deadlineMs) ?? timeoutMs
         )
       );
-      return requestReply(submission, 0, onReply, onFailed, recordReceived, onAdmitted);
+      const progress = existing.nodeRequestStartedMs === undefined ? undefined : existing;
+      if (progress !== undefined) progress.bindingSubmittedMs = performance.now();
+      return requestReply(submission, 0, onReply, onFailed, recordReceived, onAdmitted, progress);
     }
     return this.requests.observe<readonly Buffer[], T>(
       timeoutMs,
@@ -603,28 +606,32 @@ function requestReply<T>(
   onReply: (parts: readonly Buffer[]) => T,
   onFailed: (error: unknown) => T,
   recordReceived: (() => void) | undefined,
-  onAdmitted: (() => void) | undefined
+  onAdmitted: (() => void) | undefined,
+  progress?: NodeRequestProgress
 ): Promise<T> {
   const result = observeRequestReply(submission.reply, onReply, onFailed, recordReceived);
   if (submission.result === SubmitResult.Backpressured) {
     void submission.admitted.then(
-      () => {
-        try {
-          onAdmitted?.();
-        } catch (error) {
-          onFailed(translateBindingResultError(error, 'completion'));
-        }
-      },
+      () => notifyRequestAdmitted(onAdmitted, onFailed, progress),
       (error) => onFailed(translateBindingResultError(error, 'completion'))
     );
   } else {
-    try {
-      onAdmitted?.();
-    } catch (error) {
-      onFailed(translateBindingResultError(error, 'completion'));
-    }
+    notifyRequestAdmitted(onAdmitted, onFailed, progress);
   }
   return result;
+}
+
+function notifyRequestAdmitted(
+  onAdmitted: (() => void) | undefined,
+  onFailed: (error: unknown) => unknown,
+  progress: NodeRequestProgress | undefined
+): void {
+  if (progress !== undefined) progress.bindingAdmittedMs = performance.now();
+  try {
+    onAdmitted?.();
+  } catch (error) {
+    onFailed(translateBindingResultError(error, 'completion'));
+  }
 }
 
 /** Consumes the binding reply and notifies its terminal in this continuation. */

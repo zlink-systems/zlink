@@ -141,21 +141,27 @@ import sys
 
 recipe = pathlib.Path(sys.argv[1]).resolve()
 pathlib.Path(sys.argv[2]).write_text(f'''from conan import ConanFile
+from conan.tools.cmake import CMakeToolchain
 import sys
 
 sys.path.insert(0, {str(recipe.parent)!r})
-from conanfile import ZLINK_FRAMEWORK_CPP_THIRD_PARTY_REQUIREMENTS, ZlinkFrameworkConan
+from conanfile import (
+    ZLINK_FRAMEWORK_CPP_THIRD_PARTY_REQUIREMENTS, ZlinkFrameworkConan,
+    generate_framework_cmake,
+)
 
 class ZlinkBootstrap(ConanFile):
     name = "zlink-bootstrap"
     version = "0"
     settings = "os", "arch", "compiler", "build_type"
     default_options = {{key: value for key, value in ZlinkFrameworkConan.default_options.items() if "/" in key}}
-    generators = "CMakeDeps", "CMakeToolchain"
 
     def requirements(self):
         for requirement in ZLINK_FRAMEWORK_CPP_THIRD_PARTY_REQUIREMENTS:
             self.requires(requirement, transitive_headers=True, transitive_libs=True)
+
+    def generate(self):
+        generate_framework_cmake(self, CMakeToolchain(self))
 ''', encoding='utf-8', newline='\n')
 # The archive ships these packages for consumers' own direct use (the Framework
 # configs' nlohmann_json and OpenTelemetry API, the samples' Boost.Asio and
@@ -388,9 +394,7 @@ conan install "$conan_dir/consumer" \
   --deployer=full_deploy \
   --output-folder "$prefix/cmake"
 find "$prefix/cmake" -maxdepth 1 -type f \( -name '*.sh' -o -name '*.bat' -o -name '*.ps1' \) -delete
-# The recipe's protobuf::protoc searches PATH first, which suits a Conan build
-# environment but not a shipped prefix: the archive's protoc is the one that
-# matches its libprotobuf.
+# The deployed CONFIG resolves protoc relative to the consumer archive.
 for protoc_target in "$prefix"/cmake/full_deploy/host/protobuf/*/*/*/lib/cmake/protobuf/protobuf-conan-protoc-target.cmake; do
   [[ -f "$protoc_target" ]] || { echo "missing deployed protobuf protoc target" >&2; exit 1; }
   cat >"$protoc_target" <<'CMAKE'
@@ -427,6 +431,8 @@ cmake -S "$source_dir" -B "$build_dir" -G Ninja \
   -DZLINK_STREAM_CONNECTOR_BUILD_UNREAL=OFF \
   -DZLINK_STREAM_CONNECTOR_BUILD_GODOT=OFF \
   -DZLINK_STREAM_CONNECTOR_BUILD_AXMOL=OFF
+"$python_command" "$script_dir/verify-conan-protoc.py" \
+  "$build_dir" "$conan_generators/zlink-conan-protobuf.json"
 cmake --build "$build_dir" --parallel "$build_jobs"
 cmake --install "$build_dir"
 

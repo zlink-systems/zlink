@@ -23,6 +23,7 @@ import { operationIdentityKey } from '../foundation/operation-identity';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
+  internalFrameworkErrorKindFromWireReply,
   wireReplyFailureException
 } from '../framework-errors-internal';
 import type { ZLinkLocationLifecycle } from '../locations';
@@ -47,6 +48,7 @@ const ZLINK_FRAMEWORK_ACTOR_JOIN_PACKET_NAME = 'ZLinkFrameworkActorJoinRequest';
 
 export interface ZLinkLocalNativeActorJoinOptions {
   readonly locationLifecycle?: ZLinkLocationLifecycle;
+  readonly invalidateSpotRouteIfMatches?: (used: ZLinkSpotRouteTarget) => void;
   readonly localSpotJoin?: (
     spotId: RoutingId,
     actor: ZLinkActor,
@@ -188,6 +190,12 @@ export class ZLinkLocalNativeActorJoin {
     request: Message,
     signal: AbortSignal | undefined
   ): Promise<ZLinkActorJoinRuntimeResult<Message>> {
+    // The previous relocation's target flow may still write this Actor's authority row and
+    // location (Relocation Flow §9); commit only after it ends, as a cross-node Join does.
+    await this.options.actorJoinRelocation?.awaitPreviousActorRelocation?.(
+      actor.context.actorId,
+      signal
+    );
     const location = node.actorLookup(actor.context.actorId);
     const meshName = runtimeActorMeshName(actor, state, target.routerChannelId);
     if (routingIdsEqual(toFrameworkRoutingId(location.spotId), target.spotId)) {
@@ -397,6 +405,17 @@ export class ZLinkLocalNativeActorJoin {
       signal,
       deadlineAtMs
     );
+    const failureKind = internalFrameworkErrorKindFromWireReply(
+      admission.terminalResult,
+      admission.failureErrno
+    );
+    if (
+      failureKind === ZLinkFrameworkInternalErrorKind.ActorLocationStale ||
+      failureKind === ZLinkFrameworkInternalErrorKind.SpotGenerationStale ||
+      failureKind === ZLinkFrameworkInternalErrorKind.SpotMoving
+    ) {
+      this.options.invalidateSpotRouteIfMatches?.(target);
+    }
     const control = admission.kindData;
     if (control?.kind !== 'actorJoinCompletion' || control.actor === null) {
       closeMeshCompletion(admission);

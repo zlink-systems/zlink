@@ -40,6 +40,9 @@
 #include <vector>
 #if defined(__linux__)
 #include <sched.h>
+#ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
+#include <sys/prctl.h>
+#endif
 #include <unistd.h>
 #endif
 
@@ -1785,6 +1788,25 @@ TEST (ZLinkStateLane, QueuedCompletionReleasesTheOnlyWorkerBeforeDependentLaneWa
 }
 
 #ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
+void disable_core_dump_for_expected_abort ()
+{
+#if defined(__linux__)
+    // A piped core handler can hold the child after it has emitted the diagnostic.
+    if (prctl (PR_SET_DUMPABLE, 0L, 0L, 0L, 0L) != 0) {
+        std::perror ("PR_SET_DUMPABLE");
+        std::_Exit (EXIT_FAILURE);
+    }
+#endif
+}
+
+#define ASSERT_WAIT_GUARD_DEATH(statement, diagnostic)                                             \
+    ASSERT_DEATH (                                                                                 \
+      {                                                                                            \
+          disable_core_dump_for_expected_abort ();                                                 \
+          statement;                                                                               \
+      },                                                                                           \
+      diagnostic)
+
 // The worker is outside every lane scope while its target drain is queued
 // behind it. Only executor identity can diagnose this pending dependency.
 template <typename Wait> void same_executor_pending_wait (Wait wait)
@@ -1814,29 +1836,29 @@ template <typename Wait> void same_executor_pending_wait (Wait wait)
 
 TEST (ZLinkStateLane, DebugWaitRejectsSameExecutorPendingGetOutsideLane)
 {
-    ASSERT_DEATH (same_executor_pending_wait ([] (auto &future) { future.get (); }),
-                  "infrastructure wait guard: state-lane/get");
+    ASSERT_WAIT_GUARD_DEATH (same_executor_pending_wait ([] (auto &future) { future.get (); }),
+                             "infrastructure wait guard: state-lane/get");
 }
 
 TEST (ZLinkStateLane, DebugWaitRejectsSameExecutorPendingWaitOutsideLane)
 {
-    ASSERT_DEATH (same_executor_pending_wait ([] (auto &future) { future.wait (); }),
-                  "infrastructure wait guard: state-lane/wait");
+    ASSERT_WAIT_GUARD_DEATH (same_executor_pending_wait ([] (auto &future) { future.wait (); }),
+                             "infrastructure wait guard: state-lane/wait");
 }
 
 TEST (ZLinkStateLane, DebugWaitRejectsSameExecutorPendingWaitForOutsideLane)
 {
-    ASSERT_DEATH (same_executor_pending_wait (
-                    [] (auto &future) { future.wait_for (std::chrono::seconds (1)); }),
-                  "infrastructure wait guard: state-lane/wait_for");
+    ASSERT_WAIT_GUARD_DEATH (same_executor_pending_wait (
+                               [] (auto &future) { future.wait_for (std::chrono::seconds (1)); }),
+                             "infrastructure wait guard: state-lane/wait_for");
 }
 
 TEST (ZLinkStateLane, DebugWaitRejectsSameExecutorPendingWaitUntilOutsideLane)
 {
-    ASSERT_DEATH (same_executor_pending_wait ([] (auto &future) {
-                      future.wait_until (std::chrono::steady_clock::time_point::max ());
-                  }),
-                  "infrastructure wait guard: state-lane/wait_until");
+    ASSERT_WAIT_GUARD_DEATH (same_executor_pending_wait ([] (auto &future) {
+                                 future.wait_until (std::chrono::steady_clock::time_point::max ());
+                             }),
+                             "infrastructure wait guard: state-lane/wait_until");
 }
 
 TEST (ZLinkStateLane, DebugWaitAllowsSameExecutorZeroDurationPoll)
@@ -1988,7 +2010,7 @@ TEST (ZLinkStateLane, DebugWaitPreservesReadyVoidReferenceAndMoveResults)
 
 TEST (ZLinkStateLane, DebugWaitRejectsSameExecutorPendingBoxedGet)
 {
-    ASSERT_DEATH (
+    ASSERT_WAIT_GUARD_DEATH (
       {
           using namespace zlink::framework::runtime::state_lane_internal;
           offload_executor_t executor (1);
@@ -2008,7 +2030,7 @@ TEST (ZLinkStateLane, DebugWaitRejectsSameExecutorPendingBoxedGet)
 
 TEST (ZLinkStateLane, DebugWaitRejectsPendingCompletionFromCurrentLane)
 {
-    ASSERT_DEATH (
+    ASSERT_WAIT_GUARD_DEATH (
       {
           offload_executor_t executor (1);
           state_lane_t lane (executor);
@@ -2026,7 +2048,7 @@ TEST (ZLinkStateLane, DebugWaitRejectsPendingCompletionFromCurrentLane)
 
 TEST (ZLinkStateLane, DebugCloseRejectsPendingDrainOnItsOnlyWorker)
 {
-    ASSERT_DEATH (
+    ASSERT_WAIT_GUARD_DEATH (
       {
           offload_executor_t executor (1);
           state_lane_t lane (executor);
@@ -2043,7 +2065,7 @@ TEST (ZLinkStateLane, DebugCloseRejectsPendingDrainOnItsOnlyWorker)
 
 TEST (ZLinkStateLane, DebugDestructorRejectsPendingDrainOnItsOnlyWorker)
 {
-    ASSERT_DEATH (
+    ASSERT_WAIT_GUARD_DEATH (
       {
           offload_executor_t executor (1);
           std::promise<void> done;
@@ -2157,15 +2179,17 @@ void contended_run_sync_from_worker (bool same_executor)
 #ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
 TEST (ZLinkStateLaneDeathTest, ContendedRunSyncDiagnosesTargetExecutorWorker)
 {
-    ASSERT_DEATH (contended_run_sync_from_worker (true),
-                  "infrastructure wait guard: state-lane/run_sync");
+    ASSERT_WAIT_GUARD_DEATH (contended_run_sync_from_worker (true),
+                             "infrastructure wait guard: state-lane/run_sync");
 }
 
 TEST (ZLinkStateLaneDeathTest, ContendedRunSyncDiagnosesDifferentExecutorLane)
 {
-    ASSERT_DEATH (contended_run_sync_from_worker (false),
-                  "infrastructure wait guard: state-lane/run_sync");
+    ASSERT_WAIT_GUARD_DEATH (contended_run_sync_from_worker (false),
+                             "infrastructure wait guard: state-lane/run_sync");
 }
+
+#undef ASSERT_WAIT_GUARD_DEATH
 #else
 TEST (ZLinkStateLane, ContendedRunSyncKeepsReleaseWorkerWaitCompatibility)
 {

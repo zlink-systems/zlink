@@ -288,6 +288,7 @@ interface ZLinkHostRelocationOptions {
     clear?(): void | Promise<void>;
   };
   readonly trackInstanceSpot?: (input: ZLinkTrackedInstanceAuthority) => void;
+  readonly observeSpotAuthorityVersion?: (spotId: RoutingId, storeVersion: string) => void;
   readonly observeActorAuthorityVersion?: (actorId: string, storeVersion: string) => void;
   readonly runtimeEventPublisher?: ZLinkRuntimeEventPublisher;
   readonly metrics?: ZLinkRuntimeMetrics;
@@ -2562,6 +2563,14 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       throw new Error(`Actor Join relocation '${id}' is already active.`);
     }
     this.sourceRelocationIds.add(id);
+  }
+
+  async awaitPreviousActorRelocation(actorId: string, signal?: AbortSignal): Promise<void> {
+    // A same-node Join commits on this node, so only a target flow here can still write the row.
+    if (this.targetStages.size === 0) return;
+    const key = encodeAuthorityKey('actor', actorId);
+    const current = await requireAuthority(this.requireLocationStore(), key, signal);
+    await this.waitForPreviousTarget(actorId, key, current, undefined, signal);
   }
 
   private findTargetStage(relocationId: string): LocalStage | undefined {
@@ -5748,6 +5757,12 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
         authority.objectGeneration,
         authority.authorityOwnerGeneration
       );
+      if (hidden.participant.objectKind === 'user_spot') {
+        this.options.observeSpotAuthorityVersion?.(
+          hidden.activation.spotId,
+          authority.storeVersion.value
+        );
+      }
       await this.requireSpotManager().publishRelocationSpot(
         hidden.activation,
         applicationSignaled ? () => hidden.activation!.notifyRelocatedBoundary() : undefined
