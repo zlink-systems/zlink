@@ -1,5 +1,5 @@
 import {
-  commitAuthorityRelocation,
+  initialRelocationCompletion,
   encodeAuthorityAggregate
 } from '../../packages/framework/src/runtime/locations/authority-relocation-record';
 import { LegacyRelocationAuthorityFixture } from './legacy-relocation-authority-fixture';
@@ -4129,11 +4129,12 @@ function actorJoinLocationStore(initial: ZLinkAuthoritySnapshot, events: string[
         relocation:
           participant.relocation === undefined
             ? undefined
-            : commitAuthorityRelocation(
-                participant.relocation,
-                fence.aggregateId.value,
-                fence.acceptedRequests?.get(participant.authorityKey.value)
-              ),
+            : {
+                ...participant.relocation,
+                completion: initialRelocationCompletion(
+                  fence.acceptedRequests?.get(participant.authorityKey.value) ?? 0n
+                )
+              },
         authorityOwnerGeneration: current.authorityOwnerGeneration + 1n,
         ownerId: prepared.targetOwner.ownerId,
         ownerLeaseGeneration: prepared.targetOwner.leaseGeneration,
@@ -4143,14 +4144,6 @@ function actorJoinLocationStore(initial: ZLinkAuthoritySnapshot, events: string[
           descriptorLifecycleGeneration: prepared.targetDescriptorLifecycleGeneration
         }
       };
-      if (current.relocation !== undefined) {
-        progress.push(
-          encodeAuthorityAggregate(undefined, current.relocation)?.relocation as Record<
-            string,
-            unknown
-          >
-        );
-      }
       return { kind: 'committed' };
     },
     async abortAggregate() {

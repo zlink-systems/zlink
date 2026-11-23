@@ -112,10 +112,10 @@ test('request terminal relay uses the activated authority before terminal cleanu
   let current = {
     kind: 'snapshot',
     ...targetOwner,
-    storeVersion: { value: '1:committed' },
+    storeVersion: { value: '1' },
     relocation: {
       relocationId,
-      phase: 'committed',
+      phase: 'prepared',
       sourceInventorySha256: '0'.repeat(64),
       completion: {
         acceptedRequests: 1n,
