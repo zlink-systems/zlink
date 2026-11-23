@@ -7,6 +7,7 @@ function Assert-PowerShellVersion {
 }
 
 function Build-Local {
+    Write-Host 'Preparing: building the server (the first run downloads Gradle and dependencies and can take a few minutes)...'
     New-Item -ItemType Directory -Force '.logs' | Out-Null
     $gradlew = if ($IsWindows) { './gradlew.bat' } else { './gradlew' }
     & $gradlew --no-daemon --max-workers=4 installDist :e2e:javaHome *> '.logs/build.log'
@@ -14,6 +15,7 @@ function Build-Local {
         Get-Content '.logs/build.log' -Tail 35 | Write-Host
         exit 1
     }
+    Write-Host 'Build complete. Starting servers...'
 }
 
 function Get-LocalJava {

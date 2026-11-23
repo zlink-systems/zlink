@@ -2,11 +2,13 @@
 e2e_classpath='e2e/build/install/e2e/lib/*'
 
 build_local() {
+  echo 'Preparing: building the server (the first run downloads Gradle and dependencies and can take a few minutes)...'
   mkdir -p .logs
   if ! ./gradlew --no-daemon --max-workers=4 installDist :e2e:javaHome >.logs/build.log 2>&1; then
     tail -n 35 .logs/build.log >&2
     exit 1
   fi
+  echo 'Build complete. Starting servers...'
 }
 
 local_java() {
