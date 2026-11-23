@@ -173,10 +173,10 @@ public final class Structure {
         for (var required :
                 Set.of(
                         new Edge("players", "session", "STREAM", ""),
-                        new Edge("session", "tableA", "relay", ""),
-                        new Edge("tableA", "matchmaker", "match requests", ""),
-                        new Edge("matchmaker", "tableA", "room preparation", ""),
-                        new Edge("tableA", "location", "Location / lease", "location-authority")))
+                        new Edge("session", "playA", "relay", ""),
+                        new Edge("playA", "matchmaker", "match requests", ""),
+                        new Edge("matchmaker", "playA", "room preparation", ""),
+                        new Edge("playA", "location", "Location / lease", "location-authority")))
             require(declaredEdges.contains(required), "Missing required edge: " + required);
         System.out.println("Structure: valid");
     }

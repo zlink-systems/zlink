@@ -8,6 +8,7 @@ import systems.zlink.framework.spots.*;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.stream.Collectors;
 
 public final class Pool implements ZLinkSpot<ZLinkActor> {
     private final ZLinkSpotContext context;
@@ -76,6 +77,11 @@ public final class Pool implements ZLinkSpot<ZLinkActor> {
                 || assignment.entered.size() != assignment.members.size())
             return CompletableFuture.completedFuture(null);
         queue.settle(assignment, Set.of());
+        var players =
+                assignment.members.stream()
+                        .map(ticket -> GameLog.shortId(ticket.playerId()))
+                        .collect(Collectors.joining(", "));
+        GameLog.table(assignment.id, "matched " + players);
         return context.outbound().sendToSpot(assignment.id, new CommitRoom(assignment.id)).submit();
     }
 

@@ -9,6 +9,7 @@ import systems.zlink.framework.monitoring.*;
 import systems.zlink.framework.runtime.host.*;
 
 import java.io.*;
+import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.concurrent.*;
 import java.util.concurrent.Flow;
@@ -66,13 +67,26 @@ public final class Hosting {
             throws Exception {
         if (args.length != 1)
             throw new IllegalArgumentException("Supply a node configuration path");
-        System.setProperty("MyGame.config", new File(args[0]).getAbsolutePath());
+        var config = Json.MAPPER.readValue(new File(args[0]), NodeConfig.class);
+        var logDirectory = System.getenv("MYGAME_LOG_DIR");
+        System.setProperty(
+                "MyGame.flowFile",
+                Path.of(logDirectory == null ? ".logs" : logDirectory)
+                        .resolve(config.id() + ".flow.log")
+                        .toAbsolutePath()
+                        .toString());
+        var title = GameLog.nodeTitle(config.id());
+        System.out.println(title + " starting");
         try (var app =
                 new SpringApplicationBuilder(application, Stores.class)
                         .web(WebApplicationType.NONE)
+                        .logStartupInfo(false)
                         .properties("spring.main.banner-mode=off")
+                        .initializers(
+                                context ->
+                                        context.getBeanFactory()
+                                                .registerSingleton("config", config))
                         .run()) {
-            var config = app.getBean(NodeConfig.class);
             var runtime = app.getBean(ZLinkFrameworkRuntime.class);
             var ready = new CompletableFuture<Void>();
             var safe = new CompletableFuture<Void>();
@@ -82,19 +96,6 @@ public final class Hosting {
                             ready,
                             observed -> {
                                 var status = observed.status();
-                                if (runtime.messageFlowMode() != ZLinkMessageFlowLogMode.OFF) {
-                                    System.err.println(
-                                            "RUNTIME state="
-                                                    + status.state()
-                                                    + " ready="
-                                                    + status.isReady()
-                                                    + " safeToShutdown="
-                                                    + status.safeToShutdown()
-                                                    + " relocation="
-                                                    + status.relocationResult()
-                                                    + " termination="
-                                                    + status.terminationResult());
-                                }
                                 if (observed.loss().discardedTerminalCount() != 0)
                                     ready.completeExceptionally(
                                             new IllegalStateException("Startup observation lost"));
@@ -110,24 +111,27 @@ public final class Hosting {
             try {
                 ready.get(Control.HOST_DEADLINE.toSeconds(), TimeUnit.SECONDS);
                 bootstrap.accept(app);
-                var endpoints = new LinkedHashMap<String, Object>();
-                endpoints.put("id", config.id());
-                endpoints.put(
-                        "meshEndpoint",
-                        runtime.listenerStatus(ZLinkListenerKind.ROUTE_MESH, Names.MESH)
-                                .endpoint());
-                endpoints.put(
-                        "streamEndpoint",
+                var meshEndpoint =
+                        runtime.listenerStatus(ZLinkListenerKind.ROUTE_MESH, Names.MESH).endpoint();
+                var streamEndpoint =
                         config.streamEndpoint() == null
                                 ? null
                                 : runtime.listenerStatus(ZLinkListenerKind.STREAM, Names.STREAM)
-                                        .endpoint());
+                                        .endpoint();
+                var endpoints = new LinkedHashMap<String, Object>();
+                endpoints.put("id", config.id());
+                endpoints.put("meshEndpoint", meshEndpoint);
+                endpoints.put("streamEndpoint", streamEndpoint);
+                var endpoint = streamEndpoint == null ? meshEndpoint : streamEndpoint;
+                System.out.println(title + " ready at " + endpoint);
                 System.out.println(Control.READY + Json.MAPPER.writeValueAsString(endpoints));
                 var input = new BufferedReader(new InputStreamReader(System.in));
+                commands:
                 for (String command; (command = input.readLine()) != null; ) {
                     switch (command) {
                         case Control.DRAIN -> {
                             System.out.println(Control.RELOCATION_REQUESTED);
+                            System.out.println(title + " draining: moving tables and players");
                             var result =
                                     runtime.relocate(
                                                     new ZLinkFrameworkRelocationOptions(
@@ -140,15 +144,18 @@ public final class Hosting {
                             if (result.outcome() != ZLinkFrameworkRelocationOutcome.RELOCATED)
                                 throw new IllegalStateException(result.toString());
                             System.out.println(Control.RELOCATED);
+                            System.out.println(title + " drained: tables and players moved");
                             safe.get(Control.SAFE_DEADLINE.toSeconds(), TimeUnit.SECONDS);
                             System.out.println(Control.SAFE_TO_SHUTDOWN);
+                            System.out.println(title + " safe to shut down");
                         }
                         case Control.SHUTDOWN -> {
+                            System.out.println(title + " stopping");
                             runtime.shutdown().toCompletableFuture().join();
                             if (runtime.status().state() != ZLinkFrameworkRuntimeState.STOPPED)
                                 throw new IllegalStateException(runtime.status().toString());
                             System.out.println(Control.STOPPED);
-                            return;
+                            break commands;
                         }
                         default ->
                                 throw new IllegalArgumentException(
@@ -159,5 +166,6 @@ public final class Hosting {
                 subscription.cancel();
             }
         }
+        System.out.println(title + " stopped");
     }
 }

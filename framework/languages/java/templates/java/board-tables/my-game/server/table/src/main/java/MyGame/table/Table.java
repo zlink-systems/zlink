@@ -10,6 +10,7 @@ import java.security.SecureRandom;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.function.IntUnaryOperator;
+import java.util.stream.Collectors;
 
 public final class Table implements ZLinkSpot<Player> {
     private final ZLinkSpotContext context;
@@ -58,9 +59,11 @@ public final class Table implements ZLinkSpot<Player> {
     }
 
     public CompletionStage<Void> onJoinedActor(Player actor) {
-        return index(actor.context().actorId()) == Rules.NO_SEAT
-                ? CompletableFuture.completedFuture(null)
-                : broadcastViews();
+        var player = actor.context().actorId();
+        int seat = index(player);
+        if (seat == Rules.NO_SEAT) return CompletableFuture.completedFuture(null);
+        logSeat(player, seat);
+        return broadcastViews();
     }
 
     public CompletionStage<Void> onDisconnectActor(Player actor) {
@@ -83,7 +86,10 @@ public final class Table implements ZLinkSpot<Player> {
 
     CompletionStage<Void> commit(CommitRoom message) {
         if (!reserved(message.assignmentId())) return CompletableFuture.completedFuture(null);
-        for (var member : state.matchMembers) admit(member);
+        for (var member : state.matchMembers) {
+            admit(member);
+            logSeat(member, index(member));
+        }
         return broadcastViews();
     }
 
@@ -147,8 +153,13 @@ public final class Table implements ZLinkSpot<Player> {
     }
 
     public CompletionStage<Void> start(Player actor) {
-        String reason = startDomain(actor.context().actorId());
-        if (reason != null) return reject(actor, reason);
+        var player = actor.context().actorId();
+        String reason = startDomain(player);
+        if (reason != null) {
+            log(GameLog.shortId(player) + " start rejected (" + reason + ")");
+            return reject(actor, reason);
+        }
+        log("hand " + state.handNumber + " started, seat " + state.turnSeat + " to act");
 
         CompletionStage<Void> sends = CompletableFuture.completedFuture(null);
         for (var seat : state.seats) {
@@ -193,8 +204,14 @@ public final class Table implements ZLinkSpot<Player> {
     }
 
     public CompletionStage<Void> bet(Player actor, BetRequest request) {
-        BetOutcome outcome = betDomain(actor.context().actorId(), request);
-        if (outcome.rejection() != null) return reject(actor, outcome.rejection());
+        var player = actor.context().actorId();
+        BetOutcome outcome = betDomain(player, request);
+        var bet = GameLog.shortId(player) + " bet " + request.amount();
+        if (outcome.rejection() != null) {
+            log(bet + " rejected (" + outcome.rejection() + ")");
+            return reject(actor, outcome.rejection());
+        }
+        log(bet + (state.turnSeat == Rules.NO_SEAT ? "" : ", seat " + state.turnSeat + " to act"));
         return broadcastViews()
                 .thenCompose(
                         ignored ->
@@ -283,6 +300,10 @@ public final class Table implements ZLinkSpot<Player> {
 
     private CompletionStage<Void> settle(SettlementPlan plan) {
         HandResult result = applySettlement(plan);
+        var winners =
+                result.winners().stream().map(seat -> "seat " + seat)
+                        .collect(Collectors.joining(", "));
+        log("hand " + result.handNumber() + " settled, winner " + winners + ", pot " + result.pot());
         CompletionStage<Void> sends = CompletableFuture.completedFuture(null);
         for (var seat : state.seats)
             sends = sends.thenCompose(ignored -> send(seat.playerId, result));
@@ -338,5 +359,13 @@ public final class Table implements ZLinkSpot<Player> {
 
     private CompletionStage<Void> send(String id, Object message) {
         return clients.sendToActor(id, message).submit();
+    }
+
+    void log(String message) {
+        GameLog.table(context.spotId(), message);
+    }
+
+    private void logSeat(String player, int seat) {
+        log(GameLog.shortId(player) + " joined (seat " + seat + ")");
     }
 }

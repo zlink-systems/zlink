@@ -103,8 +103,8 @@ public final class Scenarios {
         }
     }
 
-    static void run(Scenario id, Nodes nodes) throws Exception {
-        run(id, nodes, null);
+    static void run(Scenario id, ServerControl.Connection server) throws Exception {
+        run(id, server, null);
     }
 
     private static TableView matchedView(Client client, MatchFound found) throws Exception {
@@ -131,17 +131,17 @@ public final class Scenarios {
         }
     }
 
-    private static void run(Scenario id, Nodes nodes, String expectedNode) throws Exception {
+    private static void run(Scenario id, ServerControl.Connection server, String expectedNode) throws Exception {
         String suffix = UUID.randomUUID().toString(), tableId = "table-" + suffix;
-        var p1 = new Client(nodes.endpoint, "p1-" + suffix, tableId);
-        var p2 = new Client(nodes.endpoint, "p2-" + suffix, tableId);
+        var p1 = new Client(server.endpoint(), "p1-" + suffix, tableId);
+        var p2 = new Client(server.endpoint(), "p2-" + suffix, tableId);
         Throwable primary = null;
         try {
             boolean matching = id == Scenario.MATCH || id == Scenario.MATCH_CANCEL;
             TableView first;
             TableView second;
             if (matching) {
-                if (id == Scenario.MATCH_CANCEL) cancelMatch(nodes.endpoint);
+                if (id == Scenario.MATCH_CANCEL) cancelMatch(server.endpoint());
                 var queued1 = p1.findMatch();
                 p1.send(new FindMatch());
                 check(
@@ -258,7 +258,7 @@ public final class Scenarios {
             switch (id) {
                 case RECONNECT -> {
                     p2.close();
-                    p2 = new Client(nodes.endpoint, p2.playerId, tableId);
+                    p2 = new Client(server.endpoint(), p2.playerId, tableId);
                     var rejoined = p2.connect();
                     var session = p2.sessionInfo();
                     check(
@@ -275,7 +275,7 @@ public final class Scenarios {
                             "Connection continuity failed");
                 }
                 case UPDATE -> {
-                    nodes.drain(before1.nodeId());
+                    server.control().drain(before1.nodeId());
                     var after1 = view(p1);
                     var after2 = view(p2);
                     check(
@@ -319,8 +319,8 @@ public final class Scenarios {
                         "Settlement did not clear every private hand");
             }
             if (id == Scenario.UPDATE) {
-                nodes.replace(before1.nodeId());
-                run(Scenario.TABLE, nodes, before1.nodeId());
+                server.control().replace(before1.nodeId());
+                run(Scenario.TABLE, server, before1.nodeId());
             }
         } catch (Exception | Error failure) {
             primary = failure;

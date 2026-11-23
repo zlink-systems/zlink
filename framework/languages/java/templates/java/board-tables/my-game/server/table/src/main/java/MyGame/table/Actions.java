@@ -13,6 +13,7 @@ public final class Actions {
     public CompletionStage<Void> join(
             Table table, Player actor, ZLinkMessageContext context, JoinTableRequest request) {
         table.checkJoin(actor.context().actorId(), request);
+        table.log(GameLog.shortId(request.playerId()) + " reconnected");
         return table.current(actor);
     }
 

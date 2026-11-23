@@ -2,7 +2,7 @@
 
 ## Client connection
 
-Use [Client connection in README](README.md#client-connection) for this template's endpoint, first application flow, connector choices and Java example. Keep the endpoint and packet order consistent with `server/config/`, Session startup, shared DTOs and the e2e client. Register push handlers before sending; preserve the documented join and HTTP preconditions. TCP listeners cannot serve browser, WebGL or Cocos Creator web targets. Use the release pinned by `build.gradle.kts` extra `frameworkVersion` for connectors and `bindingVersion` for the binding; `<version>` and `<binding-version>` in this file refer to those keys. Do not add literal release versions or copy engine sample packets into this template.
+Use [Client connection in README](README.md#client-connection) for this template's endpoint, first application flow, connector choices and Java example. Keep the endpoint and packet order consistent with `server/config/`, Session startup, shared DTOs and the e2e client. Register push handlers before sending; preserve the documented join preconditions. TCP listeners cannot serve browser, WebGL or Cocos Creator web targets. Use the release pinned by `build.gradle.kts` extra `frameworkVersion` for connectors and `bindingVersion` for the binding; `<version>` and `<binding-version>` in this file refer to those keys. Do not add literal release versions or copy engine sample packets into this template.
 
 ## Rules for AI
 
@@ -27,7 +27,7 @@ Details: [Stateful game nodes and the HTTP lobby](https://docs.zlink.systems/jav
 
 ## Project overview
 
-This Java 25 project is a board-table server example in which players sit at a Table, are dealt private cards, and bet in turn. It runs a Session gateway for connections, Table hosts A and B whose Tables are created on demand, a Matchmaker node, and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework to `0.33.0` and the binding to `1.26.0`.
+This Java 25 project is a board-table server example in which players sit at a Table, are dealt private cards, and bet in turn. It runs a Session gateway for connections, Play nodes A and B whose Tables are created on demand, a Matchmaker node, and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework to `0.33.0` and the binding to `1.26.0`.
 
 The project layout below describes where to add gameplay, and "Extend this template's domain" describes where to add new rules. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 
@@ -35,7 +35,9 @@ The project layout below describes where to add gameplay, and "Extend this templ
 
 ## Development commands
 
-Default builds and e2e run nodes and the client in Docker, so they need Docker with Compose v2 and no host JDK. Run these commands from this directory.
+Run `./run-server.sh` or `pwsh -NoProfile -File ./run-server.ps1` with JDK 25 and Docker Compose v2 to start a local server. Keep the process in the foreground and use its printed Session STREAM address for clients. From a second terminal, select `match` to exercise the live server. Use Ctrl+C in the server terminal to clean it up.
+
+Default builds and isolated e2e run nodes and the client in Docker. Run these commands from this directory.
 
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
@@ -77,7 +79,7 @@ An Actor is a game state object addressed by ID; `Player` in `server/table/src/m
 
 ### E2E client
 
-`e2e/src/main/java/MyGame/e2e/Client.java` connects through the public connector, and `e2e/src/main/java/MyGame/e2e/Scenarios.java` checks results observable by the client. `e2e/src/main/java/MyGame/e2e/Nodes.java` starts the nodes, keeps their logs, and cleans up the resources of each run; `e2e/src/main/java/MyGame/e2e/Program.java` reports cleanup failures after scenario failures, and either one makes the exit code 1. `e2e/src/main/java/MyGame/e2e/Structure.java` validates the actual files before startup. Keep the scenario order `table,reconnect,match,match-cancel,update`. Verify new gameplay through received client results; the project includes no separate unit-test module or formatter configuration.
+`e2e/src/main/java/MyGame/e2e/Client.java` connects through the public connector, and `e2e/src/main/java/MyGame/e2e/Scenarios.java` checks results observable by the client. `e2e/src/main/java/MyGame/e2e/ServerHost.java` owns node startup, control, logging, and cleanup for both launch modes. `e2e/src/main/java/MyGame/e2e/ServerControl.java` publishes a loopback control endpoint for the standalone server. `e2e/src/main/java/MyGame/e2e/Program.java` runs scenarios using the selected server. Scenario and cleanup failures set exit code 1. `e2e/src/main/java/MyGame/e2e/Structure.java` validates the actual files before startup. Keep the scenario order `table,reconnect,match,match-cancel,update`. Verify new gameplay through received client results; the project includes no separate unit-test module or formatter configuration.
 
 ## ZLink concepts in this project
 
@@ -155,9 +157,9 @@ Investigate Framework failures using actual replies, events, and lifecycle resul
 
 ### Logs for each run
 
-Preserve the first failing run and read its logs before deciding whether to run it again. An intermittent failure is an observed defect; a subsequent pass does not invalidate it. `.logs/run-<id>/` contains the effective settings that `Nodes.java` writes at node startup and the logs of each node.
+Preserve the first failing run and read its logs before deciding whether to run it again. An intermittent failure is an observed defect; a subsequent pass does not invalidate it. `.logs/run-<id>/` contains the effective settings that `ServerHost.java` writes at node startup and the logs of each node.
 
-Settings files are `session.json`, `tableA.json`, `tableB.json`, and `matchmaker.json`. Each node start has its own directory `<node>-<uuid>/` with `<node>-stderr.log` for diagnostic stderr and `<node>-stdout.log` for readiness and control stdout; a replaced node (the `update` scenario) logs to a new directory. In local mode `compose.log` records the Redis Compose output of the run and `.logs/build.log` records the local build. In Docker mode `.logs/docker-<project>/` holds `build.log`, `redis-start.log`, `redis.log`, and `cleanup.log`.
+Settings files are `session.json`, `playA.json`, `playB.json`, and `matchmaker.json`. Each node start has its own directory `<node>-<uuid>/` with `<node>-stderr.log` for diagnostics, `<node>-stdout.log` for lifecycle and game events, and `<node>.flow.log` for message flow. Replacement nodes log to a new directory during the `update` scenario. In local mode `compose.log` records the Redis Compose output of the run and `.logs/build.log` records the local build. In Docker mode `.logs/docker-<project>/` holds `build.log`, `redis-start.log`, `redis.log`, and `cleanup.log`.
 
 ### Diagnostic levels
 
@@ -173,7 +175,7 @@ options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
 
 ### Message flow investigation
 
-The logback configuration in `server/shared/src/main/resources/logback.xml` writes console logs to stderr, so inspect message flow in the node `<node>-stderr.log` files; the template creates no separate flow file. `Hosting.java` also writes `RUNTIME state=...` lines to stderr while message flow is enabled. A record's `flow` value identifies a message across nodes, and `corr` relates request and reply records. Records begin with `zlink flow:`; failures have `outcome=failed`, `error_type`, and `error_message`.
+The configuration in `server/shared/src/main/resources/logback.xml` routes message flow to `<node>.flow.log`. Use `<node>-stderr.log` for startup and runtime errors. A record's `flow` value identifies a message across nodes, and `corr` relates request and reply records. Records begin with `zlink flow:`; failures have `outcome=failed`, `error_type`, and `error_message`.
 
 Read the failure fields and preceding stage together without filtering categories out. Flow IDs differ between runs, so compare passing and failing runs by logical operation, Actor ID, and stage order to find the first missing or failed stage. If startup fails before message flow recording, preserve the startup exception and stack.
 

@@ -5,42 +5,63 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 local_mode=false
 no_build=false
 build_only=false
+attach=false
+check_structure=false
+select_scenario=false
 arguments=()
 for argument in "$@"; do
   case "$argument" in
     --local) local_mode=true ;;
     --no-build) no_build=true ;;
     --build-only) build_only=true ;;
+    --attach) attach=true ;;
+    --check-structure) check_structure=true; arguments+=("$argument") ;;
+    --scenario) select_scenario=true; arguments+=("$argument") ;;
     *) arguments+=("$argument") ;;
   esac
 done
 cd "$ROOT"
 mkdir -p "$ROOT/.logs"
+. "$ROOT/scripts/run-helpers.sh"
+if ! $attach && ! $local_mode && ! $build_only && ! $check_structure && $select_scenario && server_running; then
+  attach=true
+fi
+if $attach; then
+  if $build_only || $check_structure; then
+    echo '--attach requires a scenario run.' >&2
+    exit 1
+  fi
+  if ! java=$(local_java); then
+    echo 'Run ./run-server.sh to build and start the server before attaching.' >&2
+    exit 1
+  fi
+  exec "$java" --enable-native-access=ALL-UNNAMED -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 -cp "$e2e_classpath" MyGame.e2e.Program --attach "${arguments[@]}"
+fi
 if $local_mode; then
   if ! $no_build; then
-    if ! ./gradlew --no-daemon --max-workers=4 installDist :e2e:javaHome >"$ROOT/.logs/build.log" 2>&1; then
-      tail -n 35 "$ROOT/.logs/build.log" >&2
-      exit 1
-    fi
+    assert_no_running_server
+    build_local
   fi
   $build_only && exit 0
-  java_home_path=$(cat "$ROOT/.logs/java-home.txt")
-  check_domain=true
-  for argument in "${arguments[@]}"; do
-    [[ "$argument" == "--check-structure" ]] && check_domain=false
-  done
-  if $check_domain; then
-    "$java_home_path/bin/java" --enable-native-access=ALL-UNNAMED -cp 'server/table/build/install/table/lib/*' MyGame.table.Program --check-domain
+  if ! java=$(local_java); then
+    echo 'Build with ./run-e2e.sh --local --build-only before using --no-build.' >&2
+    exit 1
   fi
-  exec "$java_home_path/bin/java" --enable-native-access=ALL-UNNAMED -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 -cp 'e2e/build/install/e2e/lib/*' MyGame.e2e.Program "${arguments[@]}"
+  if ! $check_structure; then
+    "$java" --enable-native-access=ALL-UNNAMED -cp 'server/table/build/install/table/lib/*' MyGame.table.Program --check-domain
+  fi
+  exec "$java" --enable-native-access=ALL-UNNAMED -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 -cp "$e2e_classpath" MyGame.e2e.Program "${arguments[@]}"
 fi
 if $no_build; then
   echo '--no-build requires --local; Docker builds reuse the layer cache automatically.' >&2
   exit 1
 fi
 if [[ -S /var/run/docker.sock ]]; then
-  export MY_GAME_RUNNER_USER="$(id -u):$(id -g)"
-  export MY_GAME_DOCKER_GID="$(stat -c '%g' /var/run/docker.sock 2>/dev/null || stat -f '%g' /var/run/docker.sock)"
+  runner_uid=$(id -u)
+  runner_gid=$(id -g)
+  MY_GAME_RUNNER_USER="$runner_uid:$runner_gid"
+  MY_GAME_DOCKER_GID=$(stat -c '%g' /var/run/docker.sock 2>/dev/null || stat -f '%g' /var/run/docker.sock)
+  export MY_GAME_RUNNER_USER MY_GAME_DOCKER_GID
 fi
 project="my-game-e2e-$(date +%s)-$$-$RANDOM"
 logs="$ROOT/.logs/docker-$project"
@@ -59,6 +80,7 @@ cleanup() {
   containers=$(docker ps -aq --filter "label=my-game.e2e=$project") || result=1
   if [[ -n "$containers" ]]; then
     # IDs are Docker-generated hexadecimal tokens, one per line.
+    # shellcheck disable=SC2086
     docker rm -f $containers >>"$logs/cleanup.log" 2>&1 || result=1
   fi
   "${compose[@]}" logs --no-color redis >"$logs/redis.log" 2>&1 || result=1
@@ -81,9 +103,7 @@ if ! "${compose[@]}" build >"$logs/build.log" 2>&1; then
 fi
 $build_only && exit 0
 "${compose[@]}" run --rm --no-deps -T --name "$project-check" runner --check-structure
-for argument in "${arguments[@]}"; do
-  [[ "$argument" == "--check-structure" ]] && exit 0
-done
+$check_structure && exit 0
 "${compose[@]}" run --rm --no-deps -T --entrypoint java --name "$project-domain" runner \
   --enable-native-access=ALL-UNNAMED -cp '/app/table/lib/*' MyGame.table.Program --check-domain
 "${compose[@]}" up -d --wait --wait-timeout 30 redis >"$logs/redis-start.log" 2>&1

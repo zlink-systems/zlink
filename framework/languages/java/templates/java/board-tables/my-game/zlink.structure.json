@@ -6,11 +6,13 @@
   "run": {
     "commands": {
       "sh": [
+        "./run-server.sh",
         "./run-e2e.sh --build-only",
         "./run-e2e.sh",
         "./run-e2e.sh --scenario table,reconnect,match,match-cancel,update"
       ],
       "powershell": [
+        "pwsh -NoProfile -File ./run-server.ps1",
         "pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly",
         "pwsh -NoProfile -File ./run-e2e.ps1",
         "pwsh -NoProfile -File ./run-e2e.ps1 -Scenario table,reconnect,match,match-cancel,update"
@@ -38,16 +40,16 @@
       "config": "server/config/session.json"
     },
     {
-      "id": "tableA",
+      "id": "playA",
       "role": "table",
-      "title": "Table node A",
-      "config": "server/config/table-a.json"
+      "title": "Play node A",
+      "config": "server/config/play-a.json"
     },
     {
-      "id": "tableB",
+      "id": "playB",
       "role": "table",
-      "title": "Table node B",
-      "config": "server/config/table-b.json"
+      "title": "Play node B",
+      "config": "server/config/play-b.json"
     },
     {
       "id": "matchmaker",
@@ -68,19 +70,19 @@
       "id": "table-entry-a",
       "kind": "entry",
       "type": null,
-      "owner": "tableA"
+      "owner": "playA"
     },
     {
       "id": "table-entry-b",
       "kind": "entry",
       "type": null,
-      "owner": "tableB"
+      "owner": "playB"
     },
     {
       "id": "table",
       "kind": "user",
       "type": "Table",
-      "owner": "tableA",
+      "owner": "playA",
       "dynamic": true
     },
     {
@@ -99,23 +101,23 @@
     },
     {
       "from": "session",
-      "to": "tableA",
+      "to": "playA",
       "label": "relay"
     },
     {
-      "from": "tableA",
+      "from": "playA",
       "to": "location",
       "label": "Location / lease",
       "semantic": "location-authority"
     },
     {
-      "from": "tableA",
+      "from": "playA",
       "to": "matchmaker",
       "label": "match requests"
     },
     {
       "from": "matchmaker",
-      "to": "tableA",
+      "to": "playA",
       "label": "room preparation"
     }
   ]

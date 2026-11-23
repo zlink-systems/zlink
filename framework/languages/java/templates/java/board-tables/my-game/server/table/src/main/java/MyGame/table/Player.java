@@ -37,6 +37,11 @@ public final class Player implements ZLinkActor {
                         queued -> {
                             state.ticketId = queued.ticketId();
                             state.withdrawnAssignments.clear();
+                            System.out.println(
+                                    "Player "
+                                            + GameLog.shortId(context.actorId())
+                                            + " queued for a match (ticket "
+                                            + GameLog.shortId(queued.ticketId()) + ")");
                             return reply(queued);
                         });
     }
@@ -66,6 +71,12 @@ public final class Player implements ZLinkActor {
     CompletionStage<Void> cancelled(MatchCancelled message) {
         if (!isCurrent(message.ticketId())) return CompletableFuture.completedFuture(null);
         state.ticketId = null;
+        System.out.println(
+                "Player "
+                        + GameLog.shortId(context.actorId())
+                        + " left the match queue ("
+                        + message.reason()
+                        + ")");
         return state.disconnected ? CompletableFuture.completedFuture(null) : reply(message);
     }
 

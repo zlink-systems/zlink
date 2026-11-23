@@ -5,7 +5,7 @@ A Java server template for four-seat card tables. Table User Spots own seats, ch
 ```mermaid
 flowchart LR
   players[Players] -->|STREAM| session[Session node]
-  session -->|relay| tables[Table node ×N]
+  session -->|relay| tables[Play node ×N]
   tables -->|match requests| matchmaker[Matchmaker node]
   matchmaker -->|room preparation| tables
   tables -->|Location / lease| location[Location Store]
@@ -35,17 +35,36 @@ pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 
 The build creates a shared node image and a Java e2e runner image.
 
+## Local server
+
+Install JDK 25 and start Docker. Run the server in a dedicated terminal.
+
+```sh
+./run-server.sh
+```
+
+```powershell
+pwsh -NoProfile -File ./run-server.ps1
+```
+
+The launcher starts Redis, Play nodes A and B, Matchmaker, and Session. When all nodes are ready, the console prints `Server ready: tcp://127.0.0.1:<port>`. Keep the terminal open while clients are connected. Press Ctrl+C to stop the nodes and remove this run's Redis Compose project.
+
+From another terminal, run `./run-e2e.sh --scenario match` or `pwsh -NoProfile -File ./run-e2e.ps1 -Scenario match`. The scenario uses the running server and leaves it running. Add `--attach` or `-Attach` to require an existing server. Run `update` in an isolated e2e run because it depends on a fresh topology and a per-scenario table limit.
+
 ## Client connection
 
 ### Endpoint and first packet
 
-Connect to the Session node's `players` STREAM listener. `server/config/session.json` configures `tcp://127.0.0.1:0`: loopback with port `0` requesting an OS-selected port. `server/shared/src/main/java/MyGame/Hosting.java` prints `READY {"id":"...","meshEndpoint":"...","streamEndpoint":"..."}`; use its actual `streamEndpoint`, not port `0`. Mesh and Redis endpoints are not client endpoints.
+Use the Session STREAM address from the `Server ready:` line. `server/config/session.json` configures `ws://127.0.0.1:0` (WebSocket on loopback, path `/`), so the OS picks the actual port. Direct node launchers can read the same address from the Session `READY` record's `streamEndpoint` field.
 
-This is TCP with no URL path. Web browsers, Unity WebGL and Cocos Creator web cannot connect to this default TCP listener. Those targets need a separately configured WebSocket listener and a reachable `ws://` or `wss://` endpoint. Loopback is reachable only from the same host/network namespace. The Docker e2e runner owns and removes its temporary deployment. For an external client, keep a deployment running, bind a reachable interface and port, expose the container port, and use the server's reachable host.
+The default WebSocket listener serves clients on the same host or network namespace, including web browsers, Unity WebGL, and Cocos Creator web. An HTTPS page needs a `wss://` deployment, which the default configuration does not provide. For clients on other hosts, configure a reachable listener and expose its port.
 
-Send `JoinTableRequest(playerId, tableId)` to join a named Table. A successful join pushes `TableView` with the seat and table state. `ActionRejected` reports rejection. Send `FindMatch` as the first packet to let Session create a player ID and enter matchmaking.
+Register push handlers before sending either first packet:
 
-These first application operations use `send(...).submit()` and push handlers, not correlated request/reply. After joining and binding, `request(new SessionInfoRequest()).submit(SessionInfo.class)` returns Session identity. Do not request it before entry. Player IDs are not authentication credentials; this template has no production authentication, so validate identity before binding.
+- `FindMatch` creates a player ID for the Session. The client receives `MatchQueued(ticketId)`, then `MatchFound(ticketId, roomId, seat)` and `TableView` when the room is ready. Send `CancelMatch(ticketId)` for a waiting ticket and handle `MatchCancelled`.
+- `JoinTableRequest(playerId, tableId)` joins a named Table. The server pushes `TableView` with the player's seat or `ActionRejected` with the reason.
+
+Send these packets using `send(...).submit()`. Once the player is seated, use `request(new SessionInfoRequest()).submit(SessionInfo.class)` to read Session identity. Add authentication before binding a player ID in a production deployment.
 
 ### Connector installation
 
@@ -117,7 +136,7 @@ Matchmaker runs the SpotWide Pool `pool-board`. `FindMatch` returns `MatchQueued
 
 `server/matchmaker` contains the in-memory queue and the `MatchRule` pairing policy. Change `MatchRule` to change which waiting players are paired. The Pool owns ticket transitions and assignment decisions. The Table checks the prepared members and runs the game.
 
-## Docker e2e
+## End-to-end scenarios
 
 Docker runs the Java e2e runner and every node role in containers. Nodes share the runner's network namespace and keep the existing stdin/stdout control protocol. Only the runner mounts the Docker socket. Each invocation removes its own containers, network and image tags; logs remain under `.logs/`.
 
@@ -139,7 +158,7 @@ pwsh -NoProfile -File ./run-e2e.ps1
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario table,reconnect,match,match-cancel,update
 ```
 
-The runner checks `zlink.structure.json`, starts an isolated Redis Compose project, starts Table A, Table B, Matchmaker, and Session, and validates received typed messages. Each run uses OS-assigned ports and a unique Redis key prefix. Its configuration files and node stdout/stderr are retained under `.logs/run-<id>/`. Node stderr contains the Framework's Normal message-flow diagnostics. Cleanup failures cause exit code 1.
+The runner validates `zlink.structure.json` and uses the same Java server host as the local server when it needs an isolated deployment. Each isolated run uses OS-assigned ports and a unique Redis key prefix. The server host keeps effective settings and each node's stdout, stderr, and Framework message-flow file (`<node>.flow.log`) under `.logs/run-<id>/`. The standalone console shows server and game events. Cleanup failures cause exit code 1.
 
 | Scenario | Verification |
 | --- | --- |
@@ -170,12 +189,12 @@ Message Follow is explicitly configured for 30 seconds. The `SAFE_TO_SHUTDOWN` o
 ## Deployment sequence
 
 1. Provision Redis and use one shared, deployment-specific key prefix in the node configuration files. Set mesh endpoints reachable by all nodes and a client-reachable Session stream endpoint.
-2. Start `server/table/build/install/table/bin/table` with `server/config/table-a.json` and `server/config/table-b.json`, each as a separate process. Windows launchers have a `.bat` suffix.
+2. Start `server/table/build/install/table/bin/table` with `server/config/play-a.json` and `server/config/play-b.json`, each as a separate process. Windows launchers have a `.bat` suffix.
 3. Start `server/matchmaker/build/install/matchmaker/bin/matchmaker` with `server/config/matchmaker.json`.
 4. Start `server/session/build/install/session/bin/session` with `server/config/session.json`. The processes publish `READY` with the endpoints actually bound by Framework.
 5. Send `drain` on the selected Table process's stdin. Wait for `RELOCATION_REQUESTED`, `RELOCATED` and `SAFE_TO_SHUTDOWN`, then send `shutdown` and wait for `STOPPED` and process exit.
 6. Start the replacement Table process with the same configuration. Wait for `READY` before submitting new work.
 
-Production launchers use the configuration files directly. The e2e runner derives its node IDs and configuration paths from the structure and replaces Redis, key-prefix and listener endpoint values only in its run-specific copies. Application transfer contains no Framework routing, membership or lease state.
+Production launchers use the configuration files directly. The server host derives its node IDs and configuration paths from the structure and replaces Redis, key-prefix and listener endpoint values only in its run-specific copies. Application transfer contains no Framework routing, membership or lease state.
 
-The e2e runner sets each node's optional `tableCapacity` to the number of selected scenarios through the public Table stable-type limit. Each scenario retains one Table, so the runner executes `update` last. After update drains the source, the surviving node is at capacity, so only the replacement can host the new table. Both new players must observe the replacement node ID. Omitted or zero capacity leaves deployment capacity unlimited. Entry declarations belong to Table nodes. Matchmaker starts the fixed `pool-board` User Spot.
+The e2e runner sets each node's optional `tableCapacity` to the number of selected scenarios through the public Table stable-type limit. Each scenario retains one Table, so the runner executes `update` last. After update drains the source, the surviving node is at capacity, so only the replacement can host the new table. Both new players must observe the replacement node ID. Omitted or zero capacity leaves local server and deployment capacity unlimited. Entry declarations belong to Table nodes. Matchmaker starts the fixed `pool-board` User Spot.
