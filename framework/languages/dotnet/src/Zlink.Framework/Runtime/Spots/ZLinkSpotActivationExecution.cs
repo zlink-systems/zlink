@@ -24,7 +24,6 @@ internal sealed record ZLinkSpotRelocationApplicationState(
 
 internal abstract partial class ZLinkSpotActivation
 {
-    private const ZLinkSpotCloseReason CommittedCloseReason = ZLinkSpotCloseReason.ExplicitClose;
     private const int MaxConcurrentRelocationAdapterCallbacks = 8;
     private readonly Queue<PendingMessageFollowRoute> _messageFollowPending = new();
     private ZLinkSpotMessageFollow? _messageFollow;
@@ -1117,9 +1116,14 @@ internal abstract partial class ZLinkSpotActivation
     internal bool HasCommittedClose => _successor is not null;
     internal bool HasCompletedClose => _successor?.Task.IsCompleted == true;
 
-    internal void BeginCommittedClose()
+    private (string SpotId, string Source, Task Completion)? CommittedClose =>
+        _successor is { Task: { } completion }
+            ? (SpotId, (string)completion.AsyncState!, completion)
+            : null;
+
+    internal void BeginCommittedClose(string source)
     {
-        _successor = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        _successor = new(source, TaskCreationOptions.RunContinuationsAsynchronously);
         _serial.SchedulePendingApplications();
     }
 
@@ -1347,7 +1351,8 @@ internal abstract partial class ZLinkSpotActivation
             return;
         try
         {
-            await InvokeClosingAsync(CommittedCloseReason, deadline).ConfigureAwait(false);
+            await InvokeClosingAsync(ZLinkSpotCloseReason.ExplicitClose, deadline)
+                .ConfigureAwait(false);
         }
         catch (Exception exception)
         {
@@ -1711,7 +1716,11 @@ internal abstract partial class ZLinkSpotActivation
                 received,
                 ChannelName,
                 admission,
-                _runtime
+                _runtime,
+                // Instance intent can be forwarded and refused by a successor.
+                received.InstanceIntent
+                    ? null
+                    : CommittedClose
             );
     }
 
@@ -1795,7 +1804,7 @@ internal abstract partial class ZLinkSpotActivation
             ChannelName,
             ZLinkAcceptedWorkAdmission.Closing,
             _runtime,
-            (SpotId, CommittedCloseReason)
+            CommittedClose
         );
         return true;
     }

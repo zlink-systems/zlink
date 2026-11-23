@@ -56,7 +56,7 @@
     {
       "id": "api",
       "type": "frontend",
-      "label": "API servers ×N",
+      "label": "api node ×N",
       "sublabel": "route client",
       "row": 2,
       "col": 1
@@ -64,8 +64,8 @@
     {
       "id": "spot",
       "type": "backend",
-      "label": "OrderWorkflow ×N",
-      "sublabel": "OrderId owner · serial exec",
+      "label": "play node ×N",
+      "sublabel": "OrderWorkflowSpot",
       "row": 2,
       "col": 2
     },

@@ -3,6 +3,7 @@ using Xunit.Abstractions;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Runtime.Backend.Contracts;
+using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Spots;
 
 namespace Zlink.Framework.UnitTests.Runtime;
@@ -10,6 +11,8 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed class SpotAdmissionRejectionTests(ITestOutputHelper output)
 {
     private const string Packet = "SpotAdmissionProbe";
+    private const string ProbeFlow = "0193cd00-6000-7e00-a000-000000000001";
+    private const string Correlation = "admission-request";
     private static readonly TimeSpan Wait = TimeSpan.FromSeconds(5);
 
     [Theory]
@@ -59,67 +62,193 @@ public sealed class SpotAdmissionRejectionTests(ITestOutputHelper output)
         Assert.Equal(message, reply.ErrorMessage);
     }
 
+    [Theory]
+    [InlineData("local Spot manager")]
+    [InlineData("Spot context")]
+    [InlineData("remote Spot manager (command 48)")]
+    public async Task CommittedExplicitCloseReportsItsSourceOnlyOnTheFlow(string source)
+    {
+        using var flow = StartFlow();
+        await using var host = await SpotCloseHost.StartAsync();
+        EnableDiagnostics(host);
+        var spot = await host.CreateSpotAsync();
+        await using var peer =
+            source == "remote Spot manager (command 48)"
+                ? await SpotCloseHost.StartAsync(host.Store)
+                : null;
+        if (peer is not null)
+        {
+            using var ready = new CancellationTokenSource(Wait);
+            await Task.WhenAll(
+                peer.WaitForPeerAsync(host, ready.Token),
+                host.WaitForPeerAsync(peer, ready.Token)
+            );
+        }
+        host.State.HoldOnClosing = true;
+        var close = StartCloseAsync();
+        try
+        {
+            await host.State.OnClosingEntered.Task.WaitAsync(Wait);
+
+            var result = await RequestDirectAsync(
+                host,
+                spot.NodeRid,
+                spot.SpotId,
+                spot.ObjectGeneration
+            );
+            var rejection = WaitForFlow(flow, "ExplicitClose");
+            Assert.Equal("not_found", result.ErrorCode);
+            Assert.Equal("SPOT is closing.", result.ErrorMessage);
+            Assert.Contains(spot.SpotId, rejection);
+            Assert.Contains($"Close reason: ExplicitClose via {source}.", rejection);
+            output.WriteLine(rejection);
+        }
+        finally
+        {
+            host.State.ReleaseOnClosing.TrySetResult();
+            Assert.True(await close.WaitAsync(Wait));
+        }
+
+        async Task<bool> StartCloseAsync()
+        {
+            if (source == "Spot context")
+            {
+                host.State.HandlerMode = "closeAndReturn";
+                Assert.Equal("handlerReply", await host.RequestAsync(spot.SpotId));
+                return await host.State.ContextCloseTask!;
+            }
+            return await (peer ?? host).Manager.CloseAsync(spot);
+        }
+    }
+
     [Fact]
-    public async Task CommittedExplicitCloseReportsTheReasonOnTheRejectedRequestFlow()
+    public async Task CancellationWhileDrainingStartedCallsIsRecordedOnTheRejectedRequestFlow()
+    {
+        using var flow = StartFlow();
+        await using var host = await SpotCloseHost.StartAsync();
+        EnableDiagnostics(host);
+        ZLinkSpotActivation? instance = null;
+        host.State.OnInstanceInitializing = context => instance = (ZLinkSpotActivation)context;
+        const string spotId = "close-admission-cancel";
+        var initial = await host.RequestInstanceAsync(spotId);
+        var activation = Assert.IsAssignableFrom<ZLinkSpotActivation>(instance);
+        var entered = new TaskCompletionSource<Task<bool>>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started = activation
+            ._serial.ExecuteAsync(
+                (_, _, ct) =>
+                {
+                    entered.SetResult(
+                        ((IZLinkInstanceSpotContext)activation).CloseAsync().AsTask()
+                    );
+                    return ZLinkSerialTurn.Current!.YieldFrameworkCallAsync(
+                        _ => new ValueTask(release.Task),
+                        ct
+                    );
+                },
+                0,
+                CancellationToken.None
+            )
+            .AsTask();
+        Task<bool>? close = null;
+        try
+        {
+            close = await entered.Task.WaitAsync(Wait);
+            TelemetryReceipt.Wait(() => activation.HasCommittedClose);
+            var result = await RequestDirectAsync(
+                host,
+                activation.NodeRid,
+                spotId,
+                initial.Generation
+            );
+            var rejection = WaitForFlow(flow, "ExplicitClose");
+            Assert.Equal("not_found", result.ErrorCode);
+            Assert.Equal(0, host.State.OnClosingCalls);
+            Assert.False(close.IsCompleted);
+            Assert.Contains("Close reason: ExplicitClose via Spot context.", rejection);
+            output.WriteLine(rejection);
+
+            activation.CancelActiveOperations();
+            release.TrySetResult();
+            var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                close.WaitAsync(Wait)
+            );
+            Assert.Equal(0, host.State.OnClosingCalls);
+            output.WriteLine(failure.ToString());
+            var failedClose = WaitForFlow(flow, "CanceledException");
+            Assert.Contains(spotId, failedClose);
+            output.WriteLine(failedClose);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await Record.ExceptionAsync(() => started.WaitAsync(Wait));
+            if (close is not null)
+                await Record.ExceptionAsync(() => close.WaitAsync(Wait));
+        }
+    }
+
+    private TestHostMessageFlowListener StartFlow()
     {
         var directory =
             Environment.GetEnvironmentVariable("ZLINK_TEST_FLOW_DIR") ?? Path.GetTempPath();
         var path = Path.Combine(directory, $"spot-admission-{Guid.NewGuid():N}.flow");
         output.WriteLine($"Message flow file: {path}");
-        using var flow = new TestHostMessageFlowListener(path);
-        await using var host = await SpotCloseHost.StartAsync();
+        return new TestHostMessageFlowListener(path);
+    }
+
+    private static void EnableDiagnostics(SpotCloseHost host) =>
         host.Runtime.Registration.DispatchOptions.Diagnostics.SetLevel(
             ZLinkDiagnosticsLevel.Normal
         );
-        var spot = await host.CreateSpotAsync();
+
+    private static string WaitForFlow(TestHostMessageFlowListener flow, string marker)
+    {
+        bool Matches(string line) =>
+            line.Contains("event=zlink.dispatch_error")
+            && line.Contains($"packet={Packet}")
+            && line.Contains($"flow={ProbeFlow}")
+            && line.Contains(Correlation)
+            && line.Contains(marker);
+        TelemetryReceipt.Wait(() => flow.ReadLines().Any(Matches));
+        return Assert.Single(flow.ReadLines(), Matches);
+    }
+
+    private static async Task<ZLinkEnvelopeHeader> RequestDirectAsync(
+        SpotCloseHost host,
+        RoutingId nodeRid,
+        string spotId,
+        ulong generation
+    )
+    {
+        // A direct request reaches the receiving Spot even when the Store says Closing.
         var node = host.Runtime.GetSpotNodeRuntime(SpotCloseHost.MeshName).Node.RequestOperations;
         var header = CreateHeader(SpotCloseHost.MeshName) with
         {
-            FlowId = "0193cd00-6000-7e00-a000-000000000001",
+            FlowId = ProbeFlow,
             FlowOrigin = ZLinkFlowOrigin.Inbound,
         };
         var parts = ZLinkEnvelopeCodec.EncodeParts(header, null, null, null);
-
-        host.State.HoldOnClosing = true;
-        var close = host.CloseAsync(spot);
         try
         {
-            await host.State.OnClosingEntered.Task.WaitAsync(Wait);
-
-            // Address the committed owner directly so sender-side resolution cannot
-            // complete the request before it reaches the receiver's admission path.
             using var reply = await node.RequestToSpotDirectAsync(
                 string.Empty,
-                spot.NodeRid,
-                spot.SpotId,
-                spot.ObjectGeneration,
+                nodeRid,
+                spotId,
+                generation,
                 parts,
                 SendFlags.None,
                 default,
                 Wait,
                 CancellationToken.None
             );
-            var result = ZLinkEnvelopeCodec.DecodeHeader(reply.Parts, validateFlow: false);
-            Assert.Equal("not_found", result.ErrorCode);
-            TelemetryReceipt.Wait(() =>
-                flow.ReadLines().Any(line => line.Contains("ExplicitClose"))
-            );
-            var rejection = Assert.Single(
-                flow.ReadLines(),
-                line => line.Contains($"packet={Packet}") && line.Contains("ExplicitClose")
-            );
-            Assert.Contains("event=zlink.dispatch_error", rejection);
-            Assert.Contains($"flow={header.FlowId}", rejection);
-            Assert.Contains(header.CorrelationId!, rejection);
-            Assert.Contains(spot.SpotId, rejection);
-            Assert.Equal("SPOT is closing.", result.ErrorMessage);
-            output.WriteLine(rejection);
+            return ZLinkEnvelopeCodec.DecodeHeader(reply.Parts, validateFlow: false);
         }
         finally
         {
             ZLinkMessageParts.DisposeAll(parts);
-            host.State.ReleaseOnClosing.TrySetResult();
-            Assert.Equal(true, await close.WaitAsync(Wait));
         }
     }
 
@@ -129,7 +258,7 @@ public sealed class SpotAdmissionRejectionTests(ITestOutputHelper output)
             channel,
             Packet,
             ZLinkEnvelopeCodec.DefaultContentType,
-            "admission-request",
+            Correlation,
             null,
             null,
             null,

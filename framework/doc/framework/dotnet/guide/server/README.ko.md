@@ -36,6 +36,11 @@ handler 하나를 등록하면 메시지 디코딩·routing·인코딩은 framew
 공통 구조는 역할별 서버 프로세스가 typed 메시지로 통신하고, client는 실시간 연결로
 상태 변화를 받는 것이다.
 
+session node는 클라이언트 세션을 관리하는 node입니다. play node는 Spot이 있는 node입니다.
+Spot은 zone, dungeon instance, table, match 등을 맡습니다. api node는 일반 HTTP 서버처럼
+요청을 받아 처리하는 node입니다. 매치메이킹 요청과 Actor 정보 DB 저장·조회가 이에 해당합니다.
+play node가 ZLink [ClientServer Channel](../../../common/spec/server/02-channel-transport/03-client-server-channel.ko.md)로 api node를 호출할 때 play node는 Client, api node는 Server 역할을 맡습니다.
+
 <iframe class="zlink-diagram" src="/common/diagrams/guide-topology.html"
         title="역할별 서버가 typed 메시지로 통신하고, client는 STREAM으로 받는다" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/guide-topology.html" target="_blank">↗ 크게 보기</a></p>

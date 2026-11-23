@@ -5,47 +5,94 @@
     "title": "ZoneWorld — zone 분할과 운영 관제",
     "subtitle": "게임 화면은 Gateway→zone Spot · 관제 화면은 Ops fanout",
     "output": "14-zoneworld.html",
-    "legend": { "mode": "hidden" }
+    "legend": {
+      "mode": "hidden"
+    }
   },
-  "layout": { "mode": "grid", "origin": [50, 160], "cols": 3, "gapX": 110, "gapY": 92, "cellW": 120, "cellH": 60 },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 3,
+    "gapX": 103,
+    "gapY": 88,
+    "cellW": 132,
+    "cellH": 60
+  },
   "components": [
-    { "id": "BG", "type": "frontend", "label": "게임 화면", "sublabel": "브라우저", "row": 0, "col": 1 },
-    { "id": "GW", "type": "external", "label": "Gateway", "sublabel": "연결 종단 · actor relay", "row": 1, "col": 1 },
-    { "id": "Z1", "type": "backend", "label": "A — zone Spot", "sublabel": "player actor", "row": 2, "col": 0 },
-    { "id": "Z2", "type": "backend", "label": "B — zone Spot", "sublabel": "player actor", "row": 2, "col": 2 },
-    { "id": "OPS", "type": "external", "label": "Ops", "sublabel": "runtime event · fanout", "row": 3, "col": 1 },
-    { "id": "BO", "type": "frontend", "label": "관제 화면", "sublabel": "브라우저", "row": 4, "col": 1 }
-  ],
-  "boundaries": [
-    { "kind": "region", "label": "ZoneNode 2대", "wraps": ["Z1", "Z2"] }
+    {
+      "id": "BG",
+      "type": "external",
+      "label": "게임 client",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "GW",
+      "type": "database",
+      "label": "session node",
+      "row": 0,
+      "col": 1,
+      "sublabel": "Gateway"
+    },
+    {
+      "id": "PL",
+      "type": "backend",
+      "label": "play node ×2",
+      "row": 0,
+      "col": 2,
+      "sublabel": "zone · player Actor"
+    },
+    {
+      "id": "BO",
+      "type": "external",
+      "label": "관제 client",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "OPS",
+      "type": "frontend",
+      "label": "Ops",
+      "row": 1,
+      "col": 1,
+      "sublabel": "관제 STREAM"
+    }
   ],
   "connections": [
-    { "from": "BG", "to": "GW", "label": "STREAM", "variant": "default", "labelDy": 40 },
-    { "from": "GW", "to": "Z1", "label": "actor relay · push", "variant": "default", "toSide": "top", "labelDx": -18 },
-    { "from": "GW", "to": "Z2", "variant": "default", "toSide": "top" },
-    { "from": "Z1", "to": "Z2", "label": "경계 동기화 · relocation", "variant": "emphasis" },
-    { "from": "OPS", "to": "Z1", "label": "공지 · 점검 fanout", "variant": "default", "toSide": "bottom", "labelDx": -18 },
-    { "from": "OPS", "to": "Z2", "variant": "default", "toSide": "bottom" },
-    { "from": "Z1", "to": "OPS", "label": "Spot event 보고", "variant": "default", "fromSide": "bottom", "toSide": "left", "labelDx": -14 },
-    { "from": "BO", "to": "OPS", "label": "STREAM", "variant": "default", "labelDy": -40 }
+    {
+      "from": "BG",
+      "to": "GW",
+      "label": "STREAM"
+    },
+    {
+      "from": "GW",
+      "to": "PL",
+      "label": "actor relay"
+    },
+    {
+      "from": "BO",
+      "to": "OPS",
+      "label": "STREAM"
+    },
+    {
+      "from": "OPS",
+      "to": "PL",
+      "fromSide": "right",
+      "toSide": "bottom",
+      "label": "fanout"
+    }
   ],
   "cards": [
     {
-      "dot": "cyan",
-      "title": "두 표면",
+      "dot": "emerald",
+      "title": "ZoneWorld 연결과 역할",
       "items": [
-        "게임 화면: 브라우저 → Gateway → zone Spot·player actor (actor relay·push)",
-        "관제 화면: 브라우저 → Ops (runtime event 수집·fanout 발행)",
-        "zone A ↔ zone B는 경계 동기화 (양방향) — owner가 다르면 relocation, client 연결은 유지"
-      ]
-    },
-    {
-      "dot": "slate",
-      "title": "fanout · 보고",
-      "items": [
-        "region은 원본 subgraph ZoneNode ×2 (zone 노드 2대: A·B)",
-        "원본 mermaid는 Ops→ZoneNode 묶음(region) 전체로 fanout — 발행자가 노드 목록을 갖지 않는다. 여기선 Z1·Z2 각각으로 그린다(공지·점검 변경 fanout)",
-        "zone Spot은 자기 event를 Ops로 보고 (runtime event)"
+        "Gateway가 게임 세션을 관리하며 ZoneNode 프로세스 2대에 플레이어 메시지를 전달합니다.",
+        "두 play node는 zoneworld.mesh RouteMesh에서 경계 상태를 동기화합니다. 경계를 넘는 Actor를 relocation해도 클라이언트 세션은 유지됩니다.",
+        "Ops는 별도 관제 STREAM에서 공지·점검을 받아 zoneworld.broadcast로 전달하며, zone Spot의 운영 이벤트를 수집합니다."
       ]
     }
   ]

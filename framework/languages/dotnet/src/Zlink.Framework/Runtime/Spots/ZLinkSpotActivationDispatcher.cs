@@ -440,7 +440,7 @@ internal sealed class ZLinkSpotActivationDispatcher
         string channelName,
         ZLinkAcceptedWorkAdmission admission,
         ZLinkFrameworkRuntime runtime,
-        (string SpotId, ZLinkSpotCloseReason Reason)? committedClose = null
+        (string SpotId, string Source, Task Completion)? committedClose = null
     )
     {
         using (received)
@@ -475,7 +475,11 @@ internal sealed class ZLinkSpotActivationDispatcher
                     }
                 );
                 ZLinkSpotReplySubmitter.SubmitAndDispose(received, reply);
-                if (captureFlow && committedClose is { } close)
+                if (
+                    captureFlow
+                    && admission == ZLinkAcceptedWorkAdmission.Closing
+                    && committedClose is { } close
+                )
                 {
                     using var flow = ZLinkFlowContext.Enter(
                         header.FlowId,
@@ -483,23 +487,26 @@ internal sealed class ZLinkSpotActivationDispatcher
                         captureFlow,
                         ZLinkFlowOrigin.Inbound
                     );
-                    runtime.Flow.TraceDispatchError(
-                        new ZLinkDispatchFailure(
-                            ZLinkDispatchErrorSurface.SpotRoute,
-                            ZLinkDispatchMessageKind.Request,
-                            ZLinkDispatchErrorReason.StaleTarget,
-                            ZLinkDispatchErrorAction.ReplyError,
-                            header.MessageName,
-                            channelName,
-                            SpotId: close.SpotId,
-                            CorrelationId: header.CorrelationId,
-                            Exception: new ZLinkFrameworkException(
-                                errorKind,
-                                $"{message} Close reason: {close.Reason}."
-                            ),
-                            ActivationState: "closing"
-                        )
+                    var flowValue = ZLinkFlowContext.Current;
+                    var rejection = new ZLinkDispatchFailure(
+                        ZLinkDispatchErrorSurface.SpotRoute,
+                        ZLinkDispatchMessageKind.Request,
+                        ZLinkDispatchErrorReason.StaleTarget,
+                        ZLinkDispatchErrorAction.ReplyError,
+                        header.MessageName,
+                        channelName,
+                        SpotId: close.SpotId,
+                        CorrelationId: header.CorrelationId,
+                        Exception: new ZLinkFrameworkException(
+                            errorKind,
+                            $"{message} Close reason: {ZLinkSpotCloseReason.ExplicitClose} via {close.Source}."
+                        ),
+                        ActivationState: "closing",
+                        FlowId: flowValue?.FlowId,
+                        FlowOrigin: flowValue?.Origin
                     );
+                    runtime.Flow.TraceDispatchError(rejection);
+                    _ = TraceCloseFailureAsync(runtime.Flow, close.Completion, rejection);
                 }
             }
             catch (Exception exception)
@@ -507,6 +514,19 @@ internal sealed class ZLinkSpotActivationDispatcher
                 ReportRejectionReplyFailure(runtime, exception);
             }
         }
+    }
+
+    private static async Task TraceCloseFailureAsync(
+        ZLinkMessageFlowTracer flow,
+        Task closeCompletion,
+        ZLinkDispatchFailure rejection
+    )
+    {
+        // The rejection has already completed on the wire. The existing Close
+        // outcome can fail later, while the Spot is still waiting for started calls.
+        await closeCompletion.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        if (closeCompletion.Exception?.InnerException is { } failure && flow.CaptureEnabled)
+            flow.TraceDispatchError(rejection with { Exception = failure.GetBaseException() });
     }
 
     internal static void RejectApplicationRouteForRelocation(
