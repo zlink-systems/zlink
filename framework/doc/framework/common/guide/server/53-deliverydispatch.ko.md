@@ -13,6 +13,10 @@ DeliveryDispatch 샘플의 역할과 코드 위치, 주요 메시지 흐름, 실
 
 ## 1. 이 샘플이 보여 주는 것
 
+`CourierSession`과 `CustomerGateway`는 각각 배송원과 고객의 클라이언트 세션을 관리하는 session node입니다.
+`CourierActorNode`는 배송원 Entry Spot이 있는 play node입니다. `Dispatch`는 일반 HTTP 서버처럼 배차 요청을 받아 처리하는 api node입니다.
+play node인 `CourierActorNode`는 `deliverydispatch.dispatch` [ClientServer Channel](../../../common/spec/server/02-channel-transport/03-client-server-channel.ko.md)의 Client로 api node인 `Dispatch`를 호출합니다.
+
 고객은 HTTP로 배송을 만들고 STREAM으로 상태를 받는다. 배송원은 STREAM으로 제안을 받고 결정을
 보낸다. 그 사이의 서버는 session map이나 socket registry를 두지 않는다 — 배송원과 고객은 각각
 id를 가진 Actor이고, 제안과 상태는 그 Actor에 묶인 session으로 push된다. 배송원의 응답을 기다리는
@@ -28,11 +32,11 @@ id를 가진 Actor이고, 제안과 상태는 그 Actor에 묶인 session으로 
 
 | 역할 | process 수 | 소유하는 것 | 코드 위치 |
 | --- | ---: | --- | --- |
-| Dispatch | 1 | HTTP 접수, 후보 선택, offer 기록과 deadline, 재배정 | `Server/Dispatch` |
-| CourierSession | 1 | 배송원 STREAM, courier Actor bind와 relay | `Server/CourierSession` |
-| CourierActorNode | 2 | courier Entry Spot과 courier Actor | `Server/CourierActorNode` |
+| api node (Dispatch) | 1 | HTTP 접수, 후보 선택, offer 기록과 deadline, 재배정 | `Server/Dispatch` |
+| session node (CourierSession) | 1 | 배송원 STREAM, courier Actor bind와 relay | `Server/CourierSession` |
+| play node (CourierActorNode) | 2 | courier Entry Spot과 courier Actor | `Server/CourierActorNode` |
 | Tracking | 1 | 상태 event 기록, customer Actor로 전달 | `Server/Tracking` |
-| CustomerGateway | 1 | 고객 STREAM, customer Actor bind와 push | `Server/CustomerGateway` |
+| session node (CustomerGateway) | 1 | 고객 STREAM, customer Actor bind와 push | `Server/CustomerGateway` |
 | Client | 1 | 고객·배송원 시나리오와 self-check | `Client` |
 
 후보 순서, deadline과 Attempt 검증은 Dispatch의 Application이, 상태 전이는 Tracking의 Domain이

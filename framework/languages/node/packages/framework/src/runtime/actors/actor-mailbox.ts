@@ -30,14 +30,21 @@ export class ZLinkActorSerialExecutor {
   execute<T>(
     operation: () => Promise<T> | T,
     workOptions?: ZLinkSerialWorkOptions,
-    capture?: () => Promise<T> | T
+    capture?: () => Promise<T> | T,
+    preparation?: ZLinkSerialWorkPreparation
   ): Promise<T> {
     const initial = currentApplicationJobPermit();
     const packetAdmission = capture === undefined ? undefined : bindApplicationJobPermit(capture);
     const boundOperation = () => runZLinkActorExecution(this.actorId, this.sourceSpotId, operation);
     return initial !== undefined
-      ? this.scheduler.submitPreAdmitted(boundOperation, workOptions, undefined, packetAdmission)
-      : this.scheduler.submit(boundOperation, workOptions, undefined, packetAdmission);
+      ? this.scheduler.submitPreAdmitted(
+          boundOperation,
+          workOptions,
+          undefined,
+          packetAdmission,
+          preparation
+        )
+      : this.scheduler.submit(boundOperation, workOptions, undefined, packetAdmission, preparation);
   }
 
   /**

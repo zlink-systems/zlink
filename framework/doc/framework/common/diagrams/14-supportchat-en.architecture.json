@@ -32,7 +32,7 @@
     {
       "id": "SE",
       "type": "external",
-      "label": "session",
+      "label": "session node",
       "row": 1,
       "col": 1
     },
@@ -135,6 +135,13 @@
       "items": [
         "each conversation Spot holds the agent-side conversation actor and the customer actor together",
         "customers A·B are participants in their own conversation — only inside each Spot, with no separate connection line"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Server roles",
+      "items": [
+        "Support is the play node that hosts conversation Spots. This diagram shows how several Actors bind to one agent session."
       ]
     }
   ]

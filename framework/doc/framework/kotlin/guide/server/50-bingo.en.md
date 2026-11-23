@@ -34,8 +34,12 @@ message contracts, and verification criteria.
 
 ## 1. What This Sample Demonstrates
 
-The client keeps a single STREAM connection to a Session server. API handles authentication,
-Matchmaking reserves the waiting room, the Play server that owns the room runs the game, and the
+`Session` is the session node that manages client sessions. `Play` is the play node that hosts room Spots.
+`Api` is the api node that handles requests like an ordinary HTTP server, including authentication and matchmaking.
+The play node `Play` calls the api node `Api` as the Client on the `bingo.api` [ClientServer Channel](../../../common/spec/server/02-channel-transport/03-client-server-channel.en.md).
+
+The client keeps a single STREAM connection to a session node. API handles authentication,
+Matchmaking reserves the waiting room, the play node that owns the room runs the game, and the
 Location Store resolves both the connections between servers and the location of every object. A
 game proceeds as authentication → matching → room join → card submission → timer draws and pushes →
 winner and reward publish → cleanup, and the sections of this chapter follow the same order.
@@ -46,7 +50,7 @@ winner and reward publish → cleanup, and the sections of this chapter follow t
 This layout uses more framework features than any other sample because each flow needs a different
 one. Binding a player to a single connection uses session binding; reserving a waiting room uses an
 Instance Spot that is created when the first request arrives; the room is a User Spot that processes
-members, timers and pushes in one line; and telling observers on other Play servers uses Logical
+members, timers and pushes in one line; and telling observers on other play nodes uses Logical
 Multicast.
 
 ## 2. Roles and Where the Code Lives
@@ -56,10 +60,10 @@ package path differs per language, but the directory names are the same.
 
 | Role | Processes | Owns | Code |
 | --- | ---: | --- | --- |
-| Session | 2 | STREAM connections, packets before authentication, Actor binding and relay | `Server/Session` |
-| API | 2 | Authentication, player records, matching coordination | `Server/Api` |
-| Matchmaking | 1 | Waiting-room reservation per level bucket — Redis holds the decision | `Server/Matchmaking` |
-| Play | 2 | Player Actors, room Spots, timers, pushes, reward publish | `Server/Play/Infrastructure` |
+| session node | 2 | STREAM connections, packets before authentication, Actor binding and relay | `Server/Session` |
+| api node (Api) | 2 | Authentication, player records, matching coordination | `Server/Api` |
+| play node (Matchmaking) | 1 | Waiting-room reservation per level bucket — Redis holds the decision | `Server/Matchmaking` |
+| play node (room) | 2 | Player Actors, room Spots, timers, pushes, reward publish | `Server/Play/Infrastructure` |
 | Client | 1 | The scenario from authentication to the end of observation, with self-checks | `Client` |
 
 The Bingo rules — card validation, number draws, marks and the winner decision — live in
@@ -113,7 +117,7 @@ Actor from the Play mesh. The Actor's creation payload travels with that call.
 --8<-- "framework/languages/java/samples/kotlin/Bingo/Server/Session/src/main/kotlin/systems/zlink/samples/kotlin/bingo/server/session/sessions/handlers/AuthenticateSessionHandler.kt:doc-bingo-session-auth"
 ```
 
-The call that obtains the Actor does not decide which Play node creates it. It returns the existing
+The call that obtains the Actor does not decide which play node creates it. It returns the existing
 Actor if there is one and a newly created Actor otherwise, and either way Session binds the returned
 reference as it is.
 
@@ -169,7 +173,7 @@ or finds the room Spot with the `RoomId` it gets back.
 
 An Instance Spot is created when its first request arrives. Concurrent requests for the same id wait
 for the single creation, and the room's `getOrCreate` follows the same rule — API does not decide
-which Play node the room is created on. The Matchmaker decides reservations atomically in Redis, so it
+which play node the room is created on. The Matchmaker decides reservations atomically in Redis, so it
 keeps no recovery ground in process memory, and it closes itself with a timer when idle.
 
 `Server/Matchmaking/src/main/kotlin/systems/zlink/samples/kotlin/bingo/server/matchmaking/BingoMatchmaker.kt`
@@ -213,8 +217,8 @@ The timer handler runs inside the room Spot's turn, so it never overlaps the car
 --8<-- "framework/languages/java/samples/kotlin/Bingo/Server/Play/src/main/kotlin/systems/zlink/samples/kotlin/bingo/server/play/infrastructure/zlink/spots/bingoroomspot/BingoRoomSpot.kt:doc-bingo-draw-timer"
 ```
 
-Pushes go to the session bound to each player Actor. Whichever Play node the Actor is on and
-whichever Session node the session is on, the sender addresses only the Actor's bound session.
+Pushes go to the session bound to each player Actor. Whichever play node the Actor is on and
+whichever session node the session is on, the sender addresses only the Actor's bound session.
 
 `Server/Play/src/main/kotlin/systems/zlink/samples/kotlin/bingo/server/play/infrastructure/zlink/spots/bingoroomspot/BingoRoomSpot.kt`
 
@@ -229,7 +233,7 @@ session by [How Session Binding Works](39-session-binding.en.md).
 ## 8. Rewards over Logical Multicast
 
 Once the winner is decided, the room sends the end-of-game pushes and then publishes the reward event.
-An observer may be on a different Play node, so the room does not address a particular Spot; it
+An observer may be on a different play node, so the room does not address a particular Spot; it
 publishes with a topic that sets the scope — the managed languages name the channel as well.
 
 <iframe class="zlink-diagram" src="/common/diagrams/sample-bingo-reward-observe-en.html" title="Reward observation" loading="lazy" style="width:100%;border:0"></iframe>
@@ -241,7 +245,7 @@ publishes with a topic that sets the scope — the managed languages name the ch
 --8<-- "framework/languages/java/samples/kotlin/Bingo/Server/Play/src/main/kotlin/systems/zlink/samples/kotlin/bingo/server/play/infrastructure/zlink/spots/bingoroomspot/BingoRoomSpot.kt:doc-bingo-reward-publish"
 ```
 
-The observer room on each Play node subscribes to the same topic. The subscription handler sends a
+The observer room on each play node subscribes to the same topic. The subscription handler sends a
 notify to the observer Actor's bound session only when the event's `RoomId` matches the room it
 observes.
 

@@ -13,134 +13,88 @@
     "mode": "grid",
     "origin": [
       50,
-      160
+      150
     ],
-    "cols": 4,
-    "gapX": 96,
-    "gapY": 96,
-    "cellW": 120,
+    "cols": 3,
+    "gapX": 120,
+    "gapY": 88,
+    "cellW": 132,
     "cellH": 60
   },
   "components": [
     {
       "id": "C",
-      "type": "frontend",
+      "type": "external",
       "label": "client",
-      "row": 1,
-      "col": 0
-    },
-    {
-      "id": "A1",
-      "type": "external",
-      "label": "Api A",
       "row": 0,
-      "col": 1
+      "col": 0,
+      "sublabel": "host · guest · observer"
     },
     {
-      "id": "A2",
-      "type": "external",
-      "label": "Api B",
-      "row": 2,
-      "col": 1
-    },
-    {
-      "id": "P1",
-      "type": "backend",
-      "label": "Play A",
-      "sublabel": "session · actor · room",
+      "id": "A",
+      "type": "frontend",
+      "label": "api node ×2",
       "row": 0,
-      "col": 2
+      "col": 1,
+      "sublabel": "Api A/B"
     },
     {
-      "id": "P2",
+      "id": "P",
       "type": "backend",
-      "label": "Play B",
-      "sublabel": "session · actor · room",
-      "row": 2,
-      "col": 2
+      "label": "play node ×2",
+      "row": 0,
+      "col": 2,
+      "sublabel": "Play A/B · room"
     },
     {
       "id": "LS",
       "type": "external",
       "label": "Location Store",
       "row": 1,
-      "col": 3
+      "col": 2
     }
   ],
   "connections": [
     {
       "from": "C",
-      "to": "A1",
-      "label": "HTTP create room",
-      "variant": "default"
+      "to": "A",
+      "label": "HTTP"
+    },
+    {
+      "from": "A",
+      "to": "P",
+      "label": "RouteMesh"
     },
     {
       "from": "C",
-      "to": "A2",
-      "variant": "dashed"
-    },
-    {
-      "from": "A1",
-      "to": "P1",
-      "label": "create room Spot",
-      "variant": "default"
-    },
-    {
-      "from": "A2",
-      "to": "P2",
-      "variant": "dashed"
-    },
-    {
-      "from": "C",
-      "to": "P1",
-      "label": "STREAM direct connect",
-      "variant": "emphasis",
+      "to": "P",
       "fromSide": "top",
-      "toSide": "top"
+      "toSide": "top",
+      "label": "STREAM"
     },
     {
-      "from": "C",
-      "to": "P2",
-      "variant": "emphasis",
+      "from": "P",
+      "to": "A",
+      "variant": "dashed",
       "fromSide": "bottom",
-      "toSide": "bottom"
+      "toSide": "bottom",
+      "label": "client/server"
     },
     {
-      "from": "P1",
-      "to": "P2",
-      "label": "manual peer · milestone LM",
-      "variant": "default",
-      "labelDy": 40
-    },
-    {
-      "from": "P1",
-      "to": "LS",
-      "label": "location lookup",
-      "variant": "dashed"
-    },
-    {
-      "from": "P2",
+      "from": "P",
       "to": "LS",
       "variant": "dashed"
     }
   ],
   "cards": [
     {
-      "dot": "cyan",
-      "title": "Connection flow",
+      "dot": "emerald",
+      "title": "Sample connections and roles",
       "items": [
-        "With no separate Session server, each Play owns the stream session · actor · Entry Spot · room Spot together",
-        "client creates a room over HTTP via Api → Api creates a room User Spot on Play",
-        "client connects directly to each Play by STREAM using the Play endpoints it got from Api (emphasis)",
-        "the dashed path to Api B / Play B is the alternate route · the second player's share"
-      ]
-    },
-    {
-      "dot": "slate",
-      "title": "peer · location",
-      "items": [
-        "Play A ↔ Play B is a manual peer connection (bidirectional) — publishes the win-count milestone by Logical Multicast",
-        "room·actor location is resolved by Location Store lookup (dashed) — only the connection between nodes is manual, object location is resolved by the store"
+        "The host uses HTTP on Api A and STREAM on Play A. The guest and observer connect to Api B and Play B.",
+        "Play A/B also act as session nodes. They are manual RouteMesh peers and use the separate tictactoe.api ClientServer channel to request authentication.",
+        "The Location Store records the current owner for RoomId and ActorId.",
+        "The play node is the Client that requests authentication from the api node, the Server on the tictactoe.api ClientServer Channel."
       ]
     }
   ]

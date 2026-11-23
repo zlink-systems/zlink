@@ -13,7 +13,11 @@ for requirements and message contracts.
 
 ## 1. What This Sample Demonstrates
 
-The customer and the agent each keep a single STREAM connection to the Session server. API handles
+`Session` is the session node that manages client sessions. `Support` is the play node that hosts conversation Spots.
+`Api` is the api node that receives and handles authentication and conversation creation requests like an ordinary HTTP server.
+The play node `Support` calls the api node `Api` as the Client on the `supportchat.api` [ClientServer Channel](../../../common/spec/server/02-channel-transport/03-client-server-channel.en.md).
+
+The customer and the agent each keep a single STREAM connection to the session node. API handles
 authentication, and the conversation state is owned by a conversation Spot on Support. One agent
 handles several conversations at once, so the agent's single connection has a roster Actor and one
 conversation Actor per conversation bound to it. The agent sends through each room's Actor handle,
@@ -30,9 +34,9 @@ timer and closing.
 
 | Role | Processes | Owns | Code |
 | --- | ---: | --- | --- |
-| Session | 1 | STREAM connections, authentication and join packets, Actor binding and Actor slot relay | `Server/Session` |
-| API | 1 | Token verification, the request to create a conversation Spot | `Server/Api` |
-| Support | 1 | Entry Spot, conversation Spot, identity, roster and conversation Actors, assignment and pushes | `Server/Support/Infrastructure` |
+| session node (Session) | 1 | STREAM connections, authentication and join packets, Actor binding and Actor slot relay | `Server/Session` |
+| api node (Api) | 1 | Token verification, the request to create a conversation Spot | `Server/Api` |
+| play node (Support) | 1 | Entry Spot, conversation Spot, identity, roster and conversation Actors, assignment and pushes | `Server/Support/Infrastructure` |
 | Client | 1 | The customer and agent scenarios, with self-checks | `Client` |
 
 Participants, `MessageSeq`, typing and the idle/close transitions live in `Server/Support/Domain` and
