@@ -499,7 +499,9 @@ export class ZLinkFrameworkRuntimeHost
       metrics: this.metrics,
       fallbackNodeRid: `node-${randomUUID()}`,
       observeActorAuthorityVersion: (actorId, storeVersion) =>
-        this.actorClientLocationResolver?.observeActorAuthorityVersion(actorId, storeVersion)
+        this.actorClientLocationResolver?.observeActorAuthorityVersion(actorId, storeVersion),
+      observeSpotAuthorityVersion: (spotId, storeVersion) =>
+        this.cachedLocationSpotRouteResolver?.observeAuthorityVersion?.(spotId, storeVersion)
     });
     this.streamBindingRuntime = new ZLinkStreamBindingRuntime({
       dispatchErrors: this.createDispatchErrorReporter(this.runtimeOrPreStartErrorSink),
@@ -913,6 +915,8 @@ export class ZLinkFrameworkRuntimeHost
         clear: () => this.boundSessionRelay.boundSessions.clearServiceWireSessionRelocations()
       },
       trackInstanceSpot: (input) => this.locationOwner.currentLifecycle?.trackInstanceSpot(input),
+      observeSpotAuthorityVersion: (spotId, storeVersion) =>
+        this.cachedLocationSpotRouteResolver?.observeAuthorityVersion?.(spotId, storeVersion),
       observeActorAuthorityVersion: (actorId, storeVersion) =>
         this.actorClientLocationResolver?.observeActorAuthorityVersion(actorId, storeVersion),
       runtimeEventPublisher: this.runtimeEventPublisher,
@@ -2598,7 +2602,6 @@ export class ZLinkFrameworkRuntimeHost
           encodeAuthorityKey('user_spot', String(route.spot.spotId)),
           authority
         );
-        this.cachedLocationSpotRouteResolver?.invalidate?.(route.spot.spotId);
         this.spotNodeRuntime?.meshNode(meshName)?.rememberSpotRoute?.(route);
       },
       forgetReadyRoute: (meshName, route) => {
