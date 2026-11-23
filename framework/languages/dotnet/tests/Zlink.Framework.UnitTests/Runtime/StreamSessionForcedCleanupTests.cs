@@ -409,7 +409,7 @@ public sealed class StreamSessionForcedCleanupTests
         await using var provider = services.BuildServiceProvider();
         runtime = CreateRuntime(provider, registration);
         var socket = new TestStreamSocket();
-        var time = new ManualTimeProvider();
+        var time = new ControllableTimeProvider();
         await using var session = await ZLinkStreamSessionRuntime.CreateAsync(
             provider,
             socket,
@@ -422,7 +422,6 @@ public sealed class StreamSessionForcedCleanupTests
         );
 
         time.Advance(TimeSpan.FromSeconds(5));
-        session.CheckLiveness();
         Assert.Equal(0, socket.DisconnectCount);
         Assert.False(socket.SendAsyncStarted.Task.IsCompleted);
         Assert.Equal(
@@ -465,7 +464,6 @@ public sealed class StreamSessionForcedCleanupTests
                             decoded: header
                         )
                     );
-                session.CheckLiveness();
                 Assert.Equal(0, socket.DisconnectCount);
             }
         }
@@ -473,9 +471,74 @@ public sealed class StreamSessionForcedCleanupTests
         time.Advance(TimeSpan.FromSeconds(5) - TimeSpan.FromSeconds(1));
         session.EnqueueConnected("duplicate-local", "duplicate-remote");
         time.Advance(TimeSpan.FromSeconds(1));
-        session.CheckLiveness();
         await socket.DisconnectStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
         AssertHeartbeatTimeoutFrame(socket.SentFrames.Last());
+    }
+
+    [Fact]
+    public async Task Stream_heartbeat_timers_wake_only_the_due_session_and_keep_connection_phase()
+    {
+        var registration = new ZLinkFrameworkRegistration();
+        ZLinkFrameworkRuntime runtime = null!;
+        var services = new ServiceCollection()
+            .AddSingleton(registration)
+            .AddSingleton(_ => runtime);
+        await using var provider = services.BuildServiceProvider();
+        runtime = CreateRuntime(provider, registration);
+        var time = new ControllableTimeProvider();
+        var earlySocket = new TestStreamSocket();
+        var lateSocket = new TestStreamSocket();
+        var options = new ZLinkStreamNodeRegistration { StreamNodeName = "heartbeat" };
+        new ZLinkStreamNodeBuilder(options).SetIdleTimeout(TimeSpan.FromMilliseconds(4900));
+
+        var connectedAt = time.GetTimestamp();
+        time.Advance(TimeSpan.FromMilliseconds(100));
+        await using var early = await CreateSessionAsync(earlySocket, "early");
+        early.EnqueueConnected("local", "remote", connectedAt);
+        time.Advance(TimeSpan.FromMilliseconds(300));
+        await using var late = await CreateSessionAsync(lateSocket, "late");
+        late.EnqueueConnected("local", "remote");
+        time.Advance(TimeSpan.FromMilliseconds(599));
+        Assert.Empty(earlySocket.SentFrames);
+        Assert.Empty(lateSocket.SentFrames);
+        time.Advance(TimeSpan.FromMilliseconds(1));
+        Assert.Single(earlySocket.SentFrames);
+        Assert.Empty(lateSocket.SentFrames);
+        time.Advance(TimeSpan.FromMilliseconds(400));
+        Assert.Single(lateSocket.SentFrames);
+
+        await time.AdvanceMonotonicAndFireTimerAsync(
+            TimeSpan.FromMilliseconds(1850),
+            TimeSpan.FromMilliseconds(600)
+        );
+        Assert.Equal(2, earlySocket.SentFrames.Count);
+        Assert.Single(lateSocket.SentFrames);
+        time.Advance(TimeSpan.FromMilliseconds(749));
+        Assert.Equal(2, earlySocket.SentFrames.Count);
+        time.Advance(TimeSpan.FromMilliseconds(1));
+        Assert.Equal(3, earlySocket.SentFrames.Count);
+
+        time.Advance(TimeSpan.FromMilliseconds(999));
+        Assert.Equal(0, earlySocket.DisconnectCount);
+        time.Advance(TimeSpan.FromMilliseconds(1));
+        await earlySocket.DisconnectStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        AssertHeartbeatTimeoutFrame(earlySocket.SentFrames.Last());
+
+        ValueTask<ZLinkStreamSessionRuntime> CreateSessionAsync(
+            TestStreamSocket socket,
+            string rid
+        ) =>
+            ZLinkStreamSessionRuntime.CreateAsync(
+                provider,
+                socket,
+                RoutingId.From(rid),
+                typeof(DrainRaceSession),
+                static _ => { },
+                "test",
+                time,
+                requireConnectionReady: true,
+                livenessOptions: options
+            );
     }
 
     private static void AssertHeartbeatTimeoutFrame(byte[] frame)
