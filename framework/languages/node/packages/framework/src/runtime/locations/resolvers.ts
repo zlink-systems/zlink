@@ -440,6 +440,44 @@ export class ZLinkStoreLocationResolvers
     return await resolving;
   }
 
+  async readActorSessionBindingRoute(
+    actor: ActorRef,
+    signal?: AbortSignal
+  ): Promise<ZLinkResolvedActorRoute> {
+    this.requireRouteLookup();
+    const current = await this.options.stores.authorityStore.readAuthority(
+      encodeAuthorityKey('actor', actor.actorId),
+      signal
+    );
+    if (current.kind === 'missing') {
+      throw new ZLinkFrameworkException(
+        ZLinkFrameworkErrorKind.NotFound,
+        `Actor '${actor.actorId}' authority was not found.`
+      );
+    }
+    const resolution = await this.projectDirectActorRoute(actor.actorId, current, signal, true);
+    if (
+      resolution.kind === 'ready' &&
+      resolution.route.actorRef.objectGeneration !== actor.objectGeneration
+    ) {
+      throw new ZLinkFrameworkException(
+        ZLinkFrameworkErrorKind.InvalidOperation,
+        `Actor '${actor.actorId}' binding ObjectGeneration differs from the current Actor.`
+      );
+    }
+    if (
+      resolution.kind !== 'ready' ||
+      !routingIdsEqual(resolution.route.actorRef.nodeRid, actor.nodeRid) ||
+      resolution.route.meshName !== actor.meshName
+    ) {
+      throw new ZLinkFrameworkException(
+        ZLinkFrameworkErrorKind.Unavailable,
+        `Actor '${actor.actorId}' binding route is unavailable.`
+      );
+    }
+    return resolution.route;
+  }
+
   private async readDirectActorRoute(
     actorId: string,
     signal: AbortSignal | undefined,
@@ -449,7 +487,18 @@ export class ZLinkStoreLocationResolvers
       encodeAuthorityKey('actor', actorId),
       signal
     );
-    if (current.kind !== 'snapshot' || current.allocation.state !== 'active') {
+    return current.kind === 'missing'
+      ? { kind: 'missing' }
+      : await this.projectDirectActorRoute(actorId, current, signal, cache);
+  }
+
+  private async projectDirectActorRoute(
+    actorId: string,
+    current: ZLinkAuthoritySnapshot,
+    signal: AbortSignal | undefined,
+    cache: boolean
+  ): Promise<ZLinkDirectActorRouteResolution> {
+    if (current.allocation.state !== 'active') {
       return { kind: 'missing' };
     }
     const decoded = decodeActorAuthorityIdentity(current.payload, current.objectGeneration);
