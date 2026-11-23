@@ -388,13 +388,7 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                         target.LifecycleGeneration,
                         owner,
                         creating,
-                        new ZLinkCapacityVector(1, 0, null),
-                        source.Registration.ActorFactories.TryGetValue(
-                            actorType,
-                            out var relocation
-                        )
-                            ? relocation.Relocation.PolicyKind
-                            : null
+                        new ZLinkCapacityVector(1, 0, null)
                     ),
                     deadlineToken
                 )

@@ -16,7 +16,7 @@ using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.Locations.Redis.Tests;
 
-public sealed class ActorManagerProductionTests
+public sealed partial class ActorManagerProductionTests
 {
     [Fact]
     public async Task ConcurrentActorCreationRebuildsSharedCapacityWithoutRepeatingCallbacks()
@@ -373,7 +373,8 @@ public sealed class ActorManagerProductionTests
         string endpoint,
         string? routingIdPrefix = null,
         int placementWeight = 100,
-        int actorLimit = 0
+        int actorLimit = 0,
+        bool includeUserSpot = false
     )
     {
         var services = new ServiceCollection();
@@ -387,18 +388,30 @@ public sealed class ActorManagerProductionTests
             node.SetPlacementWeight(placementWeight);
             node.SetActorLimit(actorLimit);
             node.Channel("objects").Server();
-            node.Objects()
+            var objects = node.Objects()
                 .Server()
                 .AddEntrySpot<TestEntrySpot>()
                 .AddActorFactory<TestActor, TestActorFactory>(
                     "player",
                     factory => factory.DisableRelocation()
                 );
+            if (includeUserSpot)
+                objects.AddSpotFactory<ReclaimProbeSpot>(
+                    "room",
+                    factory =>
+                        factory
+                            .ExecutionMode(ZLinkUserSpotExecutionMode.SpotWide)
+                            .DisableRelocation()
+                );
         });
         return services.BuildServiceProvider();
     }
 
-    private static ServiceProvider BuildClient(IZLinkLocationStore store, string endpoint)
+    private static ServiceProvider BuildClient(
+        IZLinkLocationStore store,
+        string endpoint,
+        TimeProvider? timeProvider = null
+    )
     {
         var services = new ServiceCollection();
         services.AddZLinkFramework(options =>
@@ -408,6 +421,8 @@ public sealed class ActorManagerProductionTests
             var node = options.AddRouteMesh("objects").Listen(endpoint);
             node.Channel("objects").Client();
             node.Objects().Client();
+            if (timeProvider is not null)
+                options.UseTestTimeProvider(timeProvider);
         });
         return services.BuildServiceProvider();
     }

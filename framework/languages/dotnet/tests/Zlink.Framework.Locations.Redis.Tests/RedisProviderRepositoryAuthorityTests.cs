@@ -194,15 +194,7 @@ public sealed class RedisProviderRepositoryAuthorityTests(RedisTestFixture fixtu
             )
         );
         await repository.ReleaseOwnerLeaseAsync(oldOwner);
-        var next = SpotReservation(spotId, newDescriptor, newOwner) with
-        {
-            ObjectRelocationPolicy = Zlink
-                .Framework
-                .Runtime
-                .Configuration
-                .ZLinkObjectRelocationRegistration
-                .DisabledPolicy,
-        };
+        var next = SpotReservation(spotId, newDescriptor, newOwner);
 
         async Task ReserveIsUnavailableAsync()
         {
@@ -375,18 +367,5 @@ public sealed class RedisProviderRepositoryAuthorityTests(RedisTestFixture fixtu
             new byte[] { 0x11 },
             new ZLinkCapacityVector(1, 0, null)
         );
-    }
-
-    /// <summary>Controls only the monotonic clock the release wait reads;
-    /// wall-clock time stays real.</summary>
-    private sealed class MonotonicTimeProvider : TimeProvider
-    {
-        private long _timestamp;
-
-        public override long GetTimestamp() => Interlocked.Read(ref _timestamp);
-
-        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
-
-        public void Advance(TimeSpan delta) => Interlocked.Add(ref _timestamp, delta.Ticks);
     }
 }

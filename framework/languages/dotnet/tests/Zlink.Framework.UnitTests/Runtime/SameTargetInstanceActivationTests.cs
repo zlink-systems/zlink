@@ -398,14 +398,46 @@ public sealed partial class EntrySpotActorDispatchTests
             Assert.Equal("Tests.InstanceSpot", canonical.InstanceSpotType);
             Assert.Null(resolution.Handle);
             var registration = runtime.Registration.SpotNodes["entry"];
-            if (policy == "recreate")
-                registration.InstanceSpotRelocations["Tests.InstanceSpot"] =
-                    registration.InstanceSpotRelocations["Tests.InstanceSpot"] with
-                    {
-                        PolicyKind = ZLinkObjectRelocationRegistration.RecreatePolicy,
-                    };
-            if (policy == "unregistered")
-                registration.InstanceSpotRelocations.Remove("Tests.InstanceSpot");
+            if (policy != "disabled")
+            {
+                var capability = Assert.Single(
+                    descriptor.ObjectCapabilities,
+                    candidate => candidate.ObjectKind == ZLinkPlacementObjectKind.InstanceSpot
+                );
+                var capabilities = descriptor
+                    .ObjectCapabilities.Where(candidate => candidate != capability)
+                    .ToList();
+                if (policy == "recreate")
+                    capabilities.Add(
+                        capability with
+                        {
+                            Policy = ZLinkObjectMaintenancePolicyKind.Recreate,
+                        }
+                    );
+                descriptor = descriptor with
+                {
+                    DescriptorRevision = checked(descriptor.DescriptorRevision + 1),
+                    ObjectCapabilities = capabilities,
+                    Capacity =
+                        policy == "unregistered"
+                            ? descriptor.Capacity with
+                            {
+                                SpotTypes = descriptor
+                                    .Capacity.SpotTypes.Where(type =>
+                                        type.ObjectKind != capability.ObjectKind
+                                        || type.StableType != capability.StableType
+                                    )
+                                    .ToArray(),
+                            }
+                            : descriptor.Capacity,
+                };
+                Assert.Equal(
+                    ZLinkLocationWriteStatus.Stored,
+                    (
+                        await store.UpdateMeshNodeAsync(descriptor, ZLinkLocationWriteIntent.Renew)
+                    ).Status
+                );
+            }
             var target = new ZLinkInstanceSpotActivationTarget(
                 store,
                 new ZLinkProviderRelocationRepository(blobs),

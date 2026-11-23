@@ -456,8 +456,11 @@ internal sealed partial class ZLinkInMemoryLocationStore
                         request.Key,
                         existing,
                         now,
-                        request.Key,
-                        request.ObjectRelocationPolicy
+                        new ZLinkCreationAuthorityRecovery(
+                            request.TargetDescriptor,
+                            request.TargetNodeLifecycleGeneration,
+                            request.TargetOwner
+                        )
                     )
                 )
                     return existing.Allocation.State == ZLinkPlacementAllocationState.Active
@@ -766,13 +769,7 @@ internal sealed partial class ZLinkInMemoryLocationStore
         return _lane.RunAsync(() =>
             _authorities.TryGetValue(key.Value, out var current)
             && current.StoreVersion == expectedStoreVersion
-            && TryReleaseEndedReservation(
-                key,
-                current,
-                _time.GetUtcNow(),
-                creationRecovery is null ? null : key,
-                creationRecovery?.RelocationPolicy
-            )
+            && TryReleaseEndedReservation(key, current, _time.GetUtcNow(), creationRecovery)
         );
     }
 
@@ -800,15 +797,14 @@ internal sealed partial class ZLinkInMemoryLocationStore
         ZLinkAuthorityKey key,
         ZLinkAuthoritySnapshot current,
         DateTimeOffset now,
-        ZLinkAuthorityKey? creationKey = null,
-        byte? creationRelocationPolicy = null,
+        ZLinkCreationAuthorityRecovery? creationTarget = null,
         bool discarded = false
     )
     {
         if (
             (
                 current.Allocation.State == ZLinkPlacementAllocationState.Active
-                    ? creationKey is null && !discarded
+                    ? creationTarget is null && !discarded
                     : current.ReservedCreation is null
             ) || IsAuthorityInPreparedAggregate(key)
         )
@@ -824,18 +820,19 @@ internal sealed partial class ZLinkInMemoryLocationStore
         {
             if (ownerLive)
                 return false;
-            if (
-                !discarded
-                && creationRelocationPolicy != ZLinkObjectRelocationRegistration.DisabledPolicy
-            )
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.Unavailable,
-                    current.Allocation.ObjectKind == ZLinkPlacementObjectKind.UserSpot
-                    && ZLinkAuthorityKeyCodec.TryDecodeSpot(key, out var unavailableSpotId)
-                        ? $"User Spot '{unavailableSpotId}' owner lease is not live."
-                        : "Object owner lease is unavailable.",
-                    ZLinkRetryAdvice.RetryAfterStateChange
+            if (!discarded && creationTarget is { } target)
+            {
+                _meshNodes.Rows.TryGetValue(
+                    ZLinkLocationKeyCodec.EncodeMeshNodeKey(target.Descriptor),
+                    out var targetDescriptor
                 );
+                ZLinkAuthorityCleanup.RequireDisabledCreationTarget(
+                    key,
+                    current.Allocation,
+                    target,
+                    targetDescriptor
+                );
+            }
         }
         else if (
             ownerLive
@@ -848,7 +845,7 @@ internal sealed partial class ZLinkInMemoryLocationStore
         if (active && !ownerLive)
             _ownerLeaseReleaseWait.Observe(owner);
         if (endedUserSpotId is not null && !discarded)
-            members = EndedUserSpotMembers(key, current, endedUserSpotId, now);
+            members = EndedUserSpotMembers(key, current, endedUserSpotId, creationTarget, now);
         if (active)
         {
             releaseWaitElapsed = _ownerLeaseReleaseWait.HasElapsed(owner, _ownerLeaseFencingMargin);
@@ -895,6 +892,7 @@ internal sealed partial class ZLinkInMemoryLocationStore
         ZLinkAuthorityKey spotKey,
         ZLinkAuthoritySnapshot spot,
         string spotId,
+        ZLinkCreationAuthorityRecovery? creationTarget,
         DateTimeOffset now
     )
     {
@@ -906,6 +904,10 @@ internal sealed partial class ZLinkInMemoryLocationStore
             "descriptor:" + ZLinkLocationKeyCodec.EncodeMeshNodeKey(spot.Allocation.Descriptor),
             "capacity:" + ZLinkLocationKeyCodec.EncodeMeshNodeKey(spot.Allocation.Descriptor),
         };
+        if (creationTarget is { } target)
+            batchKeys.Add(
+                "descriptor:" + ZLinkLocationKeyCodec.EncodeMeshNodeKey(target.Descriptor)
+            );
         foreach (var entry in _authorities)
         {
             var authority = entry.Value;

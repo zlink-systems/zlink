@@ -84,6 +84,44 @@ internal static class ZLinkAuthorityCleanup
         return await release(current, cancellationToken).ConfigureAwait(false);
     }
 
+    // Location runtime §6.1 uses the selected factory target's descriptor for creation release.
+    internal static void RequireDisabledCreationTarget(
+        ZLinkAuthorityKey key,
+        ZLinkPlacementAllocation allocation,
+        ZLinkCreationAuthorityRecovery target,
+        ZLinkMeshNodeDescriptor? descriptor
+    )
+    {
+        if (
+            descriptor is not null
+            && descriptor.MeshName == target.Descriptor.MeshName
+            && descriptor.Rid == target.Descriptor.Rid
+            && descriptor.LifecycleGeneration == target.LifecycleGeneration
+            && descriptor.OwnerId == target.Owner.OwnerId
+            && descriptor.LeaseGeneration == target.Owner.LeaseGeneration
+            && descriptor.ObjectCapabilities.Any(capability =>
+                capability.ObjectKind == allocation.ObjectKind
+                && capability.StableType == allocation.StableType
+                && capability.Policy == ZLinkObjectMaintenancePolicyKind.Disabled
+            )
+        )
+            return;
+        throw EndedOwnerUnavailable(key, allocation.ObjectKind);
+    }
+
+    internal static ZLinkFrameworkException EndedOwnerUnavailable(
+        ZLinkAuthorityKey key,
+        ZLinkPlacementObjectKind objectKind
+    ) =>
+        new(
+            ZLinkFrameworkErrorKind.Unavailable,
+            objectKind == ZLinkPlacementObjectKind.UserSpot
+            && ZLinkAuthorityKeyCodec.TryDecodeSpot(key, out var spotId)
+                ? $"User Spot '{spotId}' owner lease is not live."
+                : "Object owner lease is unavailable.",
+            ZLinkRetryAdvice.RetryAfterStateChange
+        );
+
     internal static string? RequireSteadyReady(ZLinkAuthoritySnapshot snapshot)
     {
         if (snapshot.Relocation is not null)

@@ -233,11 +233,14 @@ internal sealed record ZLinkObjectReservationRequest(
     ulong TargetNodeLifecycleGeneration,
     ZLinkLocationOwnerToken TargetOwner,
     ReadOnlyMemory<byte> CreatingPayload,
-    ZLinkCapacityVector Capacity,
-    byte? ObjectRelocationPolicy = null
+    ZLinkCapacityVector Capacity
 );
 
-internal sealed record ZLinkCreationAuthorityRecovery(byte? RelocationPolicy);
+internal readonly record struct ZLinkCreationAuthorityRecovery(
+    ZLinkMeshNodeDescriptorKey Descriptor,
+    ulong LifecycleGeneration,
+    ZLinkLocationOwnerToken Owner
+);
 
 internal sealed record ZLinkObjectReservation(
     ZLinkAuthorityKey Key,

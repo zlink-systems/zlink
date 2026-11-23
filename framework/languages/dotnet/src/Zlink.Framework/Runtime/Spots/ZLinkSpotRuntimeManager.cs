@@ -204,12 +204,6 @@ internal sealed class ZLinkSpotRuntimeManager(
             var applicationPayloadHash = System.Security.Cryptography.SHA256.HashData(
                 applicationPayload
             );
-            var creationRelocationPolicy = source.Registration.SpotRelocations.TryGetValue(
-                stableType,
-                out var policy
-            )
-                ? (byte?)policy.PolicyKind
-                : null;
             var reservationRefreshAttempt = 0;
             ZLinkMeshNodeDescriptor target;
             ZLinkLocationOwnerToken owner;
@@ -219,6 +213,7 @@ internal sealed class ZLinkSpotRuntimeManager(
                 var authority = await locationStore
                     .ReadAuthorityAsync(key, deadlineToken.Token)
                     .ConfigureAwait(false);
+                ZLinkAuthoritySnapshot? ended = null;
                 if (authority is ZLinkAuthorityReadResult.Found observed)
                 {
                     if (!joinExisting)
@@ -226,18 +221,19 @@ internal sealed class ZLinkSpotRuntimeManager(
                             ZLinkFrameworkErrorKind.AlreadyExists,
                             $"User Spot '{requestedSpotId}' already exists."
                         );
-                    var joined = await JoinExistingAsync(
+                    var (joined, endedAuthority) = await JoinExistingAsync(
                             requestedSpotId,
                             stableType,
                             observed.Snapshot,
-                            creationRelocationPolicy,
                             deadlineAt,
                             deadlineToken.Token
                         )
                         .ConfigureAwait(false);
                     if (joined.HasValue)
                         return joined.Value;
-                    continue;
+                    if (endedAuthority is null)
+                        continue;
+                    ended = endedAuthority;
                 }
                 var descriptors = await ListLiveMeshNodesAsync(meshName, deadlineToken.Token)
                     .ConfigureAwait(false);
@@ -253,12 +249,18 @@ internal sealed class ZLinkSpotRuntimeManager(
                 );
                 if (selectedTarget is null && placementEligible.Count == 0)
                 {
-                    if (
-                        await locationStore
-                            .ReadAuthorityAsync(key, deadlineToken.Token)
-                            .ConfigureAwait(false) is ZLinkAuthorityReadResult.Found
-                    )
+                    var reobserved = await locationStore
+                        .ReadAuthorityAsync(key, deadlineToken.Token)
+                        .ConfigureAwait(false);
+                    if (reobserved is ZLinkAuthorityReadResult.Found found)
+                    {
+                        if (found.Snapshot.StoreVersion == ended?.StoreVersion)
+                            throw ZLinkAuthorityCleanup.EndedOwnerUnavailable(
+                                key,
+                                ZLinkPlacementObjectKind.UserSpot
+                            );
                         continue;
+                    }
                     var anyCompatible = descriptors.Any(candidate =>
                         IsCompatibleCandidate(candidate, stableType)
                     );
@@ -281,6 +283,36 @@ internal sealed class ZLinkSpotRuntimeManager(
                 }
                 target = selectedTarget;
                 owner = new ZLinkLocationOwnerToken(target.OwnerId, target.LeaseGeneration);
+                var targetKey = new ZLinkMeshNodeDescriptorKey(meshName, target.Rid);
+                if (
+                    ended is not null
+                    && !await locationStore
+                        .ReleaseEndedReservationAsync(
+                            key,
+                            ended.StoreVersion,
+                            new ZLinkCreationAuthorityRecovery(
+                                targetKey,
+                                target.LifecycleGeneration,
+                                owner
+                            ),
+                            deadlineToken.Token
+                        )
+                        .ConfigureAwait(false)
+                )
+                {
+                    if (
+                        await locationStore
+                            .ReadAuthorityAsync(key, deadlineToken.Token)
+                            .ConfigureAwait(false)
+                            is ZLinkAuthorityReadResult.Found retained
+                        && retained.Snapshot.StoreVersion == ended.StoreVersion
+                    )
+                        throw ZLinkAuthorityCleanup.EndedOwnerUnavailable(
+                            key,
+                            ZLinkPlacementObjectKind.UserSpot
+                        );
+                    continue;
+                }
                 var creating = ZLinkUserSpotAuthorityPayloadCodec.Encode(
                     new ZLinkUserSpotAuthorityPayload(
                         ZLinkUserSpotAuthorityState.Creating,
@@ -302,7 +334,7 @@ internal sealed class ZLinkSpotRuntimeManager(
                             creationIntentReference,
                             applicationPayloadHash,
                             applicationPayload.Length,
-                            new ZLinkMeshNodeDescriptorKey(meshName, target.Rid),
+                            targetKey,
                             target.LifecycleGeneration,
                             owner,
                             creating,
@@ -314,8 +346,7 @@ internal sealed class ZLinkSpotRuntimeManager(
                                     stableType,
                                     1
                                 )
-                            ),
-                            creationRelocationPolicy
+                            )
                         ),
                         deadlineToken.Token
                     )
@@ -513,11 +544,13 @@ internal sealed class ZLinkSpotRuntimeManager(
         return _locationResolver.ListLiveMeshNodesAsync(meshName, cancellationToken);
     }
 
-    private async ValueTask<ZLinkSpotCreateResult?> JoinExistingAsync(
+    private async ValueTask<(
+        ZLinkSpotCreateResult? Joined,
+        ZLinkAuthoritySnapshot? Ended
+    )> JoinExistingAsync(
         string spotId,
         string stableType,
         ZLinkAuthoritySnapshot current,
-        byte? creationRelocationPolicy,
         TimeSpan deadline,
         CancellationToken cancellationToken
     )
@@ -546,29 +579,29 @@ internal sealed class ZLinkSpotRuntimeManager(
                     .ConfigureAwait(false)
             )
             {
+                if (current.Allocation.State == ZLinkPlacementAllocationState.Active)
+                    return (null, current);
                 var key = ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(spotId);
                 await _locationStore!
                     .ReleaseEndedReservationAsync(
                         key,
                         current.StoreVersion,
-                        new ZLinkCreationAuthorityRecovery(creationRelocationPolicy),
-                        cancellationToken
+                        cancellationToken: cancellationToken
                     )
                     .ConfigureAwait(false);
                 var ownerRead = await _locationStore
                     .ReadAuthorityAsync(key, cancellationToken)
                     .ConfigureAwait(false);
                 if (ownerRead is not ZLinkAuthorityReadResult.Found reobserved)
-                    return null;
+                    return default;
                 if (reobserved.Snapshot.StoreVersion != current.StoreVersion)
                 {
                     current = reobserved.Snapshot;
                     continue;
                 }
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.Unavailable,
-                    $"User Spot '{spotId}' owner lease is not live.",
-                    ZLinkRetryAdvice.RetryAfterStateChange
+                throw ZLinkAuthorityCleanup.EndedOwnerUnavailable(
+                    key,
+                    ZLinkPlacementObjectKind.UserSpot
                 );
             }
             if (
@@ -596,14 +629,17 @@ internal sealed class ZLinkSpotRuntimeManager(
                     && relocation.Phase >= (byte)ServiceWireCodec.RelocationPhase.Committed
                     && !string.IsNullOrWhiteSpace(relocation.State.TargetNodeRid)
                 )
-                    return new ZLinkSpotCreateResult(
-                        new SpotRef(
-                            spotId,
-                            current.ObjectGeneration,
-                            steady.MeshName,
-                            RoutingId.FromHex(relocation.State.TargetNodeRid)
+                    return (
+                        new ZLinkSpotCreateResult(
+                            new SpotRef(
+                                spotId,
+                                current.ObjectGeneration,
+                                steady.MeshName,
+                                RoutingId.FromHex(relocation.State.TargetNodeRid)
+                            ),
+                            ZLinkSpotCreateState.Existing,
+                            null
                         ),
-                        ZLinkSpotCreateState.Existing,
                         null
                     );
                 if (Stopwatch.GetElapsedTime(0) >= deadline)
@@ -621,7 +657,7 @@ internal sealed class ZLinkSpotRuntimeManager(
                     )
                     .ConfigureAwait(false);
                 if (relocatingRead is not ZLinkAuthorityReadResult.Found relocatingFound)
-                    return null;
+                    return default;
                 current = relocatingFound.Snapshot;
                 continue;
             }
@@ -640,14 +676,17 @@ internal sealed class ZLinkSpotRuntimeManager(
                 current.Allocation.State == ZLinkPlacementAllocationState.Active
                 && authority.State == ZLinkUserSpotAuthorityState.Ready
             )
-                return new ZLinkSpotCreateResult(
-                    new SpotRef(
-                        spotId,
-                        current.ObjectGeneration,
-                        authority.MeshName,
-                        authority.NodeRid
+                return (
+                    new ZLinkSpotCreateResult(
+                        new SpotRef(
+                            spotId,
+                            current.ObjectGeneration,
+                            authority.MeshName,
+                            authority.NodeRid
+                        ),
+                        ZLinkSpotCreateState.Existing,
+                        null
                     ),
-                    ZLinkSpotCreateState.Existing,
                     null
                 );
             if (
@@ -683,7 +722,7 @@ internal sealed class ZLinkSpotRuntimeManager(
                     )
                     .ConfigureAwait(false)
             )
-                return null;
+                return default;
             await Task.Delay(LocationConvergencePollInterval, cancellationToken)
                 .ConfigureAwait(false);
             var read = await _locationStore!
@@ -693,7 +732,7 @@ internal sealed class ZLinkSpotRuntimeManager(
                 )
                 .ConfigureAwait(false);
             if (read is not ZLinkAuthorityReadResult.Found found)
-                return null;
+                return default;
             current = found.Snapshot;
         }
     }

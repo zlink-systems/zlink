@@ -417,6 +417,40 @@ public sealed partial class EntrySpotActorDispatchTests
         );
         try
         {
+            var local = Assert.Single(
+                (await fixture.Store.ListMeshNodesAsync("entry", default)).Items,
+                descriptor => descriptor.Rid == RoutingId.From("entry-node")
+            );
+            Assert.Equal(
+                ZLinkLocationWriteStatus.Stored,
+                (
+                    await fixture.Store.UpdateMeshNodeAsync(
+                        local with
+                        {
+                            DescriptorRevision = checked(local.DescriptorRevision + 1),
+                            ObjectCapabilities = local
+                                .ObjectCapabilities.Select(capability =>
+                                    capability.StableType == fixture.StableType
+                                        ? capability with
+                                        {
+                                            Policy = ZLinkObjectMaintenancePolicyKind.Recreate,
+                                        }
+                                        : capability
+                                )
+                                .ToArray(),
+                        },
+                        ZLinkLocationWriteIntent.Renew
+                    )
+                ).Status
+            );
+            fixture.Runtime.Registration.SpotNodes["entry"].SpotRelocations[fixture.StableType] =
+                new ZLinkObjectRelocationRegistration(
+                    typeof(EmptyUserSpot),
+                    new ZLinkObjectPlacementOptions(),
+                    ZLinkObjectRelocationRegistration.DisabledPolicy,
+                    null,
+                    null
+                );
             fixture.Time.Advance(TimeSpan.FromSeconds(2));
 
             //  The request timeout is long on purpose. A lost owner is a
