@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.locations;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -13,6 +14,7 @@ import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.backend.ZLinkRequestFailureMapping;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimConflict;
 import systems.zlink.framework.runtime.internal.locations.ZLinkOwnerLeaseClaimResult;
@@ -37,6 +39,7 @@ import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 final class ZLinkLocationRuntimeRecoveryTest {
     @Test
@@ -176,34 +179,29 @@ final class ZLinkLocationRuntimeRecoveryTest {
     }
 
     @Test
-    void failedHeartbeatWaitsForPendingRenewalAndResumesAfterElapsedInterval() throws Exception {
+    void failedHeartbeatWaitsForPendingRenewalAndResumesAfterElapsedInterval() {
         var firstRenewal = new CompletableFuture<ZLinkOwnerLeaseRenewResult>();
         var secondRenewal = new CompletableFuture<ZLinkOwnerLeaseRenewResult>();
-        var firstStarted = new CountDownLatch(1);
-        var secondStarted = new CountDownLatch(1);
+        var clock = new AtomicLong(1L);
+        var scheduler = new ZLinkLocationFirstHeartbeatTest.RecordingScheduler();
+        var interval = Duration.ofSeconds(1);
         var renewals = new AtomicInteger();
         var store =
                 new ZLinkLocationStoreTestAdapter() {
                     @Override
                     public CompletionStage<ZLinkOwnerLeaseClaimResult> claimOwnerLease(
                             String ownerId, Duration ttl) {
-                        Instant now = Instant.now();
                         return CompletableFuture.completedFuture(
                                 new ZLinkOwnerLeaseClaimed(
                                         new ZLinkLocationOwnerToken(ownerId, 1),
-                                        now.plus(ttl),
-                                        now));
+                                        Instant.EPOCH.plus(ttl),
+                                        Instant.EPOCH));
                     }
 
                     @Override
                     public CompletionStage<ZLinkOwnerLeaseRenewResult> renewOwnerLease(
                             ZLinkLocationOwnerToken token, Duration ttl) {
-                        if (renewals.incrementAndGet() == 1) {
-                            firstStarted.countDown();
-                            return firstRenewal;
-                        }
-                        secondStarted.countDown();
-                        return secondRenewal;
+                        return renewals.incrementAndGet() == 1 ? firstRenewal : secondRenewal;
                     }
                 };
         try (var runtime =
@@ -211,15 +209,34 @@ final class ZLinkLocationRuntimeRecoveryTest {
                         ZLinkRegisteredLocationStores.fromUnified(store),
                         "owner-a",
                         Duration.ofSeconds(15),
-                        Duration.ofSeconds(1),
+                        interval,
                         Duration.ofSeconds(5),
-                        Duration.ofSeconds(1))) {
+                        Duration.ofSeconds(1),
+                        clock::get,
+                        scheduler,
+                        new ZLinkStateLane(Runnable::run))) {
+            var firstScheduled =
+                    scheduler.nextTask(
+                            task -> task.getDelay(TimeUnit.NANOSECONDS) == interval.toNanos());
             runtime.start(RoutingId.from("node-a")).toCompletableFuture().join();
-            assertTrue(firstStarted.await(2, TimeUnit.SECONDS));
-            assertFalse(secondStarted.await(2, TimeUnit.SECONDS));
+            var heartbeat = firstScheduled.getNow(null);
+            assertNotNull(heartbeat);
+
+            var nextScheduled =
+                    scheduler.nextTask(
+                            task -> task.getDelay(TimeUnit.NANOSECONDS) <= interval.toNanos());
+            clock.addAndGet(interval.toNanos());
+            heartbeat.run();
+            assertEquals(1, renewals.get());
+            clock.addAndGet(Duration.ofSeconds(2).toNanos());
+            assertFalse(nextScheduled.isDone(), "a pending renewal must not schedule a heartbeat");
+
             firstRenewal.completeExceptionally(
                     new IllegalStateException("provider rejected renewal"));
-            assertTrue(secondStarted.await(500, TimeUnit.MILLISECONDS));
+            var next = nextScheduled.getNow(null);
+            assertNotNull(next);
+            assertEquals(0, next.getDelay(TimeUnit.NANOSECONDS));
+            next.run();
             assertEquals(2, renewals.get());
         } finally {
             firstRenewal.completeExceptionally(
@@ -821,7 +838,10 @@ final class ZLinkLocationRuntimeRecoveryTest {
     }
 
     @Test
-    void stopPreservesCancelledStartupReleaseFailure() throws Exception {
+    void stopPreservesCancelledStartupReleaseFailure() {
+        var clock = new AtomicLong(1L);
+        var scheduler = new ZLinkLocationFirstHeartbeatTest.RecordingScheduler();
+        var timeout = Duration.ofSeconds(1);
         HangingReleaseStore store = new HangingReleaseStore();
         try (ZLinkLocationRuntime runtime =
                 new ZLinkLocationRuntime(
@@ -829,18 +849,26 @@ final class ZLinkLocationRuntimeRecoveryTest {
                         "owner-a",
                         Duration.ofSeconds(5),
                         Duration.ofSeconds(1),
-                        Duration.ofSeconds(1),
-                        Duration.ofMillis(100))) {
+                        timeout,
+                        Duration.ofMillis(100),
+                        clock::get,
+                        scheduler,
+                        new ZLinkStateLane(Runnable::run))) {
             CompletableFuture<Void> startup =
-                    runtime.start(RoutingId.from("node-a")).toCompletableFuture();
+                    runtime.start(RoutingId.from("node-a"), () -> Instant.now().plus(timeout))
+                            .toCompletableFuture();
             assertTrue(startup.cancel(true));
             CompletableFuture<Void> stopping = runtime.stop().toCompletableFuture();
+            var scheduled = scheduler.nextTask();
             store.completeClaim();
-            assertTrue(store.releaseStarted.await(1, TimeUnit.SECONDS));
-            var failure =
-                    assertThrows(
-                            java.util.concurrent.ExecutionException.class,
-                            () -> stopping.get(2, TimeUnit.SECONDS));
+            assertEquals(0, store.releaseStarted.getCount());
+            var releaseDeadline = scheduled.getNow(null);
+            assertNotNull(releaseDeadline);
+            assertFalse(stopping.isDone(), "stop must wait for startup lease release");
+
+            clock.addAndGet(releaseDeadline.getDelay(TimeUnit.NANOSECONDS));
+            releaseDeadline.run();
+            var failure = assertThrows(CompletionException.class, () -> stopping.getNow(null));
             assertTrue(failure.getCause() instanceof java.util.concurrent.TimeoutException);
             assertThrows(java.util.concurrent.CancellationException.class, startup::join);
             assertEquals(0, store.heartbeatRenewals.get());
