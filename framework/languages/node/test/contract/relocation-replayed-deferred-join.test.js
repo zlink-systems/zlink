@@ -50,10 +50,15 @@ for (const [scenario, name] of [
   [
     'send before request',
     'a Join deferred by a replayed send fails immediately while the same Actor has a captured request queued'
+  ],
+  [
+    'same-node',
+    'a same-node Join from a replayed send commits after the previous target finalization'
   ]
 ]) {
   test(name, { timeout: 10_000 }, async () => {
-    const hasRequest = scenario !== 'send';
+    const sameNode = scenario === 'same-node';
+    const hasRequest = scenario !== 'send' && !sameNode;
     const sendBeforeRequest = scenario === 'send before request';
     const actorId = 'returning-actor';
     const key = encodeAuthorityKey('actor', actorId);
@@ -113,13 +118,20 @@ for (const [scenario, name] of [
         assert.equal(current.storeVersion.value, expected.value);
         // Replay must not wait for publication release: hold the release until the replayed send runs.
         if (scenario === 'send' && mutation.relocation === null) await sendStarted.promise;
+        // Keep finalization in flight while the replayed send starts its same-node Join.
+        if (sameNode && mutation.relocation?.phase === 'cleaning') {
+          await sendStarted.promise;
+          await turn();
+        }
+        // A writer that changed the row meanwhile makes this exchange a conflict.
+        assert.equal(current.storeVersion.value, expected.value, 'authority row conflict');
         current = {
           ...current,
           payload: mutation.payload,
-          relocation: mutation.relocation ?? undefined,
+          relocation: mutation.local ? current.relocation : (mutation.relocation ?? undefined),
           storeVersion: { value: `${expected.value}:cas` }
         };
-        events.push(current.relocation?.phase ?? 'release');
+        events.push(mutation.local ? 'local-commit' : (current.relocation?.phase ?? 'release'));
         return { ...current, kind: 'stored' };
       }
     };
@@ -268,6 +280,25 @@ for (const [scenario, name] of [
         context.joinSpot('room').timeout(1_500).defer();
       });
 
+    // The membership commit of a same-node Join: wait for the previous target flow, then
+    // read and exchange the authority row (actor-location-claims commitMembership).
+    const localJoinErrors = [];
+    const localJoinInActorTurn = async () => {
+      try {
+        await runtime.awaitPreviousActorRelocation(actorId);
+        const read = await store.readAuthority();
+        await store.compareExchangeAuthority(key, read.storeVersion, {
+          kind: 'put',
+          local: true,
+          payload: read.payload
+        });
+      } catch (error) {
+        localJoinErrors.push(String(error));
+      } finally {
+        joinFinished();
+      }
+    };
+
     const joinInActorTurn = async () => {
       const started = performance.now();
       await startJoin();
@@ -312,6 +343,7 @@ for (const [scenario, name] of [
                     events.push('handler');
                     sendStarted.resolve();
                     if (scenario === 'send' || sendBeforeRequest) await joinInActorTurn();
+                    if (sameNode) await localJoinInActorTurn();
                     await replayTerminalHeld;
                     events.push('replay-terminal');
                   })
@@ -494,6 +526,24 @@ for (const [scenario, name] of [
         finishRequest.resolve();
         acknowledgeReply.resolve();
         await Promise.race([sendStarted.promise, finalization]);
+      } else if (sameNode) {
+        await Promise.race([joined, finalization.then(() => joined)]);
+        assert.deepEqual(localJoinErrors, []);
+        assert.ok(events.indexOf('open') < events.indexOf('handler'));
+        assert.ok(events.indexOf('handler') < events.indexOf('cleaning'));
+        assert.deepEqual(
+          events.filter((event) => event !== 'handler'),
+          [
+            'committed',
+            'activating',
+            'activated',
+            'open',
+            'cleaning',
+            'completed',
+            'release',
+            'local-commit'
+          ]
+        );
       } else {
         await Promise.race([joined, finalization.then(() => joined)]);
         assert.deepEqual(
