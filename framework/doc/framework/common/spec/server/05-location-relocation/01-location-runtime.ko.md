@@ -1517,7 +1517,8 @@ lowercase canonical UUID(8-4-4-4-12)이고 `aggregateGeneration`과 `index`·`le
 **Participant 변경 bytes.** Participant의 새 authority payload record와 membership 변경 record는
 JSON이 아니라 bytes를 그대로 저장한다. 새 authority payload record는 commit 때 그 participant의
 authority `payload`가 될 application 정의 opaque bytes이고, membership 변경 record는 규범 schema의
-`aggregate-participant-mutation-bytes` 본문 bytes다. 아래 본문 공통 규칙은 이 두 record에 적용하지 않는다.
+`aggregate-participant-mutation-bytes` 본문 bytes다. 이 type의 u32 길이 prefix는 wire에서만 쓰며 record에는
+저장하지 않는다. 크기 제한과 SHA-256은 본문 bytes에 적용한다. 아래 본문 공통 규칙은 이 두 record에 적용하지 않는다.
 
 **본문 공통 규칙.** Aggregate 기록, 목록 root와 page의 본문은 UTF-8 JSON object이며
 [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785)(JSON Canonicalization Scheme, JCS)로

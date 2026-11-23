@@ -1698,7 +1698,9 @@ and `level` are decimal integers without leading zeros.
 record store bytes as they are, not JSON. The new authority payload record is the
 application-defined opaque bytes that become the participant authority's `payload` at commit, and
 the membership change record is the body bytes of the normative schema's
-`aggregate-participant-mutation-bytes`. The common body rules below don't apply to these two records.
+`aggregate-participant-mutation-bytes`. The type's u32 length prefix is used only on the wire and isn't
+stored in the record. The size limits and SHA-256 apply to the body bytes. The common body rules below
+don't apply to these two records.
 
 **Common body rules.** The bodies of the aggregate record and the inventory root and pages are UTF-8
 JSON objects, stored exactly as the bytes produced by
