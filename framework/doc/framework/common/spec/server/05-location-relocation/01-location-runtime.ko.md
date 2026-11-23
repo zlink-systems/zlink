@@ -515,7 +515,7 @@ field는 다른 record의 generation field와 마찬가지로 JSON number가 아
 
 `aggregate` field는 aggregate marker field와 선택적인 `relocation` field를 담는다. Aggregate marker가 아직 materialize되지 않은 relocation에서는 `aggregate`에 `relocation`만 기록할 수 있으며, 이 형태는 aggregate transaction marker가 준비되었음을 뜻하지 않는다. `aggregate`가 있으면 marker field는 전부 있거나 전부 없어야 하고, 빈 object는 유효하지 않다. Aggregate marker를 materialize하거나 갱신하는 authority 변경은 기존 `aggregate.relocation`을 보존하며, 그동안 `visibleStoreVersion`은 aggregate 준비 전 공개 StoreVersion을 유지한다. Relocation 진행 정보는 기존 terminal cleanup의 조건부 authority 변경에서 제거하고, 제거 뒤 marker도 없으면 `aggregate` field를 쓰지 않는다.
 
-`aggregate.relocation`은 이 record의 durable relocation phase와 source·target·coordinator fence를 소유한다. 같은 사실을 `payload`나 `visibleStoreVersion`에 중복 기록하지 않으며, `payload`는 application 정의 opaque bytes로 유지한다. Aggregate generation은 같은 record의 aggregate marker(`aggregate.aggregateGeneration`)만 소유하고 `aggregate.relocation`에 사본을 두지 않는다. Marker가 아직 없는 Direct Join은 호출자가 가진 이동 요청의 fence로 aggregate generation을 받는다. Source 정리의 진행은 phase `cleaning` 하나로 나타내며 별도 정리 상태 field를 두지 않는다. 이전 언어별 relocation 표현은 호환 reader의 입력으로만 읽고 새 writer는 이 표현 하나만 쓴다. 이 field는 `recordVersion` 1의 선택적 확장이다. Field가 없는 기존 record는 그대로 읽되 그 부재로 relocation이 없다고 추측하지 않는다. 이 field를 쓰는 runtime으로 올리기 전에 진행 중인 relocation을 끝내고, 이 field가 남은 record가 있으면 이전 버전으로 되돌리지 않는다.
+`aggregate.relocation`은 이 record의 durable relocation phase와 source·target·coordinator fence를 소유한다. 같은 사실을 `payload`나 `visibleStoreVersion`에 중복 기록하지 않으며, `payload`는 application 정의 opaque bytes로 유지한다. Aggregate generation은 같은 record의 aggregate marker(`aggregate.aggregateGeneration`)만 소유하고 `aggregate.relocation`에 사본을 두지 않는다. Marker가 아직 없는 Direct Join(Actor 하나의 이동)은 §8.3 key의 `aggregateId`로 그 이동의 `RelocationId`를 lowercase canonical UUID 형식(16 bytes를 8-4-4-4-12 hex로 쓴 값)으로 쓰고, `aggregateGeneration`은 `1`로 고정한다. `RelocationId`는 이동마다 새로 발급하고 source는 한 이동의 목록을 `preparing`에서 한 번만 seal하므로, 같은 key를 다른 내용으로 다시 쓰는 경우가 생기지 않는다. 이 두 값은 wire로 따로 전달하지 않으며, target은 Restore 요청의 `RelocationId`로 같은 key를 만든다. Source 정리의 진행은 phase `cleaning` 하나로 나타내며 별도 정리 상태 field를 두지 않는다. 이전 언어별 relocation 표현은 호환 reader의 입력으로만 읽고 새 writer는 이 표현 하나만 쓴다. 이 field는 `recordVersion` 1의 선택적 확장이다. Field가 없는 기존 record는 그대로 읽되 그 부재로 relocation이 없다고 추측하지 않는다. 이 field를 쓰는 runtime으로 올리기 전에 진행 중인 relocation을 끝내고, 이 field가 남은 record가 있으면 이전 버전으로 되돌리지 않는다.
 
 Relocation Store가 보관하는 payload(cold activation envelope, 완료 기록)는 이 opaque
 record를 사용하지 않는다. 별도로 버전을 매긴 key 공간과 raw bytes 저장 형식을
@@ -2010,6 +2010,7 @@ provider conformance test가 store record golden fixture로 관찰하는 key·va
 
 **Relocation 공간과 단계**
 
+- Aggregate marker 없이 Actor 하나를 옮기면 source가 seal한 목록 root와 page key의 `aggregateId`는 그 이동의 `RelocationId`(lowercase UUID 형식)이고 `aggregateGeneration`은 `1`이며, 다른 언어의 target이 같은 key에서 목록을 읽어 이동을 완료한다.
 - Source descriptor가 없거나 그 owner lease가 만료돼도 Location Store의 정확한 owner와 사용
   중인 공간으로 복구할 수 있다. Owner lease가 만료된 target은 Store를 변경하지 않고 거부한다.
 - User Spot 전체 이동에서 owner를 바꿀 때는 새 owner가 사용할 공간만 확보하고, 완료 정보를
