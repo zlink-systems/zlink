@@ -932,7 +932,8 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
       () => {
         if (state.actor !== undefined)
           this.options.locationLifecycle?.discardExecution(state.actor);
-      }
+      },
+      this.options.projectBoundSession
     );
     const remembered = this.actorMeshNames.get(actorId);
     if (remembered !== undefined) {

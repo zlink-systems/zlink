@@ -134,14 +134,14 @@ export class ZLinkSpotRuntimeOptionsFactory {
           preparation
         );
       },
-      dispatchEntryActorJoin: async (meshName, actor, handoffBacklog) => {
+      dispatchEntryActorJoin: async (meshName, actor, handoffBacklog, onCallbackFailure) => {
         const runtime = this.options.spotNodeRuntime();
         if (runtime === undefined) {
           throw new ZLinkConfigurationException(
             'Entry Spot actor join requires the MeshNode runtime.'
           );
         }
-        await runtime.dispatchEntryActorJoin(meshName, actor, handoffBacklog);
+        await runtime.dispatchEntryActorJoin(meshName, actor, handoffBacklog, onCallbackFailure);
       },
       admitEntryActorPacketPrefix: (meshName, actorId, records) => {
         const runtime = this.options.spotNodeRuntime();
@@ -152,14 +152,14 @@ export class ZLinkSpotRuntimeOptionsFactory {
         }
         return runtime.admitEntryActorPacketPrefix(meshName, actorId, records);
       },
-      executeEntryActor: (meshName, actorId, operation) => {
+      executeEntryActor: (meshName, actorId, operation, onFailure) => {
         const runtime = this.options.spotNodeRuntime();
         if (runtime === undefined) {
           throw new ZLinkConfigurationException(
             'Entry Spot Actor completion requires the MeshNode runtime.'
           );
         }
-        return runtime.executeEntryActor(meshName, actorId, operation);
+        return runtime.executeEntryActor(meshName, actorId, operation, onFailure);
       },
       channelClient: new DefaultZLinkChannelClient(
         this.options.registration,
