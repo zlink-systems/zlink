@@ -347,6 +347,8 @@ Session owner에 target route 적용과 seal 해제를 one-way로 알린다.
 끝났다는 뜻은 아니다. Framework는 lifecycle callback과 source membership cleanup을 처리한
 뒤 completion callback을 실행한다. Completion이 계속 실패하면 Actor를 sealed 상태로
 유지하고 barrier 뒤의 일반 message를 실행하지 않는다.
+`OnJoinedActor`와 completion callback은 위치 변경을 commit한 뒤 실행되므로, 이 callback의 예외나 그 안의 application
+송신 실패는 이미 commit한 `Accepted`와 target publication을 되돌리거나 실패로 바꾸지 않는다.
 
 한 handler가 여러 Actor의 Join을 등록해도 각 Join은 해당 Actor의 operation이다. 위 표의 "Actor가 이동
 중이다"는 그 Actor 자신의 Join terminal과

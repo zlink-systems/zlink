@@ -86,7 +86,11 @@ import {
 } from '../../foundation/service-runtime-contracts';
 
 import { serviceSessionBindingIngressPortIfRegistered } from '../../foundation/service-session-binding-ingress-port';
-import type { ServiceActorRef, ServiceSpotState } from '../../foundation/service-stateful-registry';
+import type {
+  ServiceActorRef,
+  ServiceSessionBinding,
+  ServiceSpotState
+} from '../../foundation/service-stateful-registry';
 import {
   ServiceStatefulRuntime,
   statefulMailboxData,
@@ -1192,11 +1196,23 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     this.requireStateful().setActorMessageFollowResolver(resolver);
   }
 
+  actorSessionBinding(actor: ZLinkBackendActorRef) {
+    return this.requireStateful().actorSessionBinding({
+      nodeRid: String(actor.nodeRid),
+      actorId: actor.actorId,
+      generation: actor.generation
+    });
+  }
+
   restoreActorSessionBinding(
     actor: ZLinkBackendActorRef,
     sessionNodeRid: unknown,
     sessionRid: unknown,
-    bindingGeneration: bigint
+    bindingGeneration: bigint,
+    sessionOwner?: Pick<
+      ServiceSessionBinding,
+      'sessionOwnerNodeGeneration' | 'sessionOwnerId' | 'sessionOwnerLeaseGeneration'
+    >
   ): void {
     this.requireStateful().restoreActorSessionBinding(
       {
@@ -1206,7 +1222,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       },
       String(sessionNodeRid),
       toBackendRoutingId(sessionRid),
-      bindingGeneration
+      bindingGeneration,
+      sessionOwner
     );
   }
 
