@@ -12,7 +12,7 @@ const {
 for (const outcome of ['success', 'failure']) {
   test(`terminal progress waits for admission and ${outcome} request delivery`, async () => {
     const fence = {
-      nodeRid: 'target',
+      nodeRid: '746172676574',
       nodeGeneration: 6n,
       ownerId: 'target-owner',
       ownerLeaseGeneration: 14n
@@ -31,8 +31,8 @@ for (const outcome of ['success', 'failure']) {
       payload: Buffer.from('opaque'),
       relocation: {
         relocationId: '11111111-1111-1111-1111-111111111111',
-        phase: 'prepared',
-        source: { ...fence, nodeRid: 'source' },
+        phase: 'committed',
+        source: { ...fence, nodeRid: '736f75726365' },
         target: { ...fence, attemptGeneration: 1n },
         coordinator: { ...fence, expectedStoreVersion: 'source-v1' },
         sourceInventorySha256: '0'.repeat(64),
@@ -86,7 +86,10 @@ for (const outcome of ['success', 'failure']) {
       actorTransfer: {}
     };
     const runtime = new ZLinkHostServiceRelocationRuntime(runtimeOptions);
-    runtime.commitTargetReservation = async () => current;
+    runtime.commitTargetReservation = async () => {
+      events.push(current.relocation.phase);
+      return current;
+    };
     const stage = {
       phase: 'ready',
       lane: Promise.resolve(),
@@ -159,7 +162,7 @@ for (const outcome of ['success', 'failure']) {
 for (const phase of ['preparing', 'captured', 'prepared']) {
   test(`source cleanup records Aborted before removing ${phase} progress`, async () => {
     const fence = {
-      nodeRid: 'source',
+      nodeRid: '736f75726365',
       nodeGeneration: 2n,
       ownerId: 'source-owner',
       ownerLeaseGeneration: 3n
@@ -175,7 +178,9 @@ for (const phase of ['preparing', 'captured', 'prepared']) {
         phase,
         source: fence,
         target:
-          phase === 'prepared' ? { ...fence, nodeRid: 'target', attemptGeneration: 1n } : null,
+          phase === 'prepared'
+            ? { ...fence, nodeRid: '746172676574', attemptGeneration: 1n }
+            : null,
         coordinator: { ...fence, expectedStoreVersion: 'original' },
         sourceInventorySha256: '0'.repeat(64),
         applicationVersion: 1n
@@ -280,8 +285,8 @@ for (const outcome of ['accepted', 'publication', 'deadline', 'unavailable']) {
         allocation: { objectKind: 'actor', stableType: 'player', descriptor: { rid: 'current' } },
         relocation: {
           relocationId,
-          phase: outcome === 'unavailable' ? 'activated' : 'prepared',
-          source: { ...fence, nodeRid: 'source' },
+          phase: outcome === 'unavailable' ? 'activated' : 'committed',
+          source: { ...fence, nodeRid: '736f75726365' },
           target: { ...fence, attemptGeneration: 1n },
           coordinator: { ...fence, expectedStoreVersion: 'source-v1' },
           sourceInventorySha256: '0'.repeat(64),
