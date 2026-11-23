@@ -68,6 +68,12 @@ export function runWithFlow<T>(flow: ZLinkFlowContextValue | undefined, callback
   return flowStorage.run(flow, callback);
 }
 
+/** Propagates the submitted operation's flow across a serial queue. */
+export function bindFlowContext<T>(operation: () => T): () => T {
+  const flow = currentFlowContext();
+  return flow === undefined ? operation : () => runWithFlow(flow, operation);
+}
+
 /**
  * Call-scoped outbound flow scope shared by every outbound entry point
  * (channel operations, mesh/route transports, spot address transport,
