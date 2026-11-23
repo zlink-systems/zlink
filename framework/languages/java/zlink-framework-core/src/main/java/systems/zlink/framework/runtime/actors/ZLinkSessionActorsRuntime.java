@@ -924,8 +924,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                         (ignored, failure) -> {
                             // Callers no longer wait for the cleanup, so report it here.
                             if (failure != null) {
-                                LOGGER.log(
-                                        Level.WARNING, "Actor binding cleanup failed", failure);
+                                LOGGER.log(Level.WARNING, "Actor binding cleanup failed", failure);
                             }
                         });
     }
