@@ -5734,6 +5734,78 @@ test('bound-session replacement is one-way, does not retry admission, and fences
   }
 });
 
+test('session bind target separates an ObjectGeneration mismatch from a stale location fence', async () => {
+  let ingress: ((record: RawServiceIngressRecord) => string | undefined) | undefined;
+  const replies: Buffer[][] = [];
+  const raw = {
+    topology: {
+      peer: () => ({ descriptor: { lifecycleGeneration: 3n } })
+    },
+    mailbox: { tryEnqueue: () => true },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
+    observePeerConnectionIntentRemoved() {
+      return () => {};
+    },
+    setServiceIngress(handler: typeof ingress) {
+      ingress = (record) =>
+        handler!(
+          withIngressOwner(
+            record,
+            raw.topology.peer(record.sourceRoutingId)?.descriptor.lifecycleGeneration
+          )
+        );
+    },
+    replyService(_record: RawServiceIngressRecord, parts: readonly Buffer[]) {
+      replies.push([...parts]);
+    }
+  } as unknown as RawServiceMeshRuntime;
+  const runtime = withTestSessionOwners(new ServiceStatefulRuntime(raw, 'actor-node', 3n));
+  const actor = runtime.createActor('actor-generation-bind');
+  const bindError = async (
+    correlation: bigint,
+    fence: { readonly generation: bigint; readonly targetNodeGeneration: bigint }
+  ) => {
+    replies.length = 0;
+    await ingress?.({
+      command: M6bServiceWireCommand.boundSessionBind,
+      flags: 0,
+      sourceRoutingId: 'session-node',
+      requestSequence: correlation,
+      parts: [
+        encodeBoundSessionBindHeader(
+          correlation,
+          {
+            actor: { ...actor.ref, generation: fence.generation },
+            targetNodeGeneration: fence.targetNodeGeneration,
+            authorityOwnerGeneration: actor.authorityOwnerGeneration,
+            ownerLeaseGeneration: 3n
+          },
+          'session-a',
+          { state: 'active', generation: 9n }
+        )
+      ]
+    });
+    assert.equal(replies.length, 1);
+    const reply = decodeStatefulReply(replies[0]![0]!, correlation, 'streamBind');
+    return wireReplyFailureException(reply.terminalResult, reply.failureCode, 'bind');
+  };
+
+  // Session-Actor binding §12: another ObjectGeneration of a known ActorId is InvalidOperation.
+  assert.equal(
+    (await bindError(51n, { generation: actor.ref.generation + 1n, targetNodeGeneration: 3n }))
+      .kind,
+    ZLinkFrameworkErrorKind.InvalidOperation
+  );
+  // Every other fence mismatch (here the target node generation) stays Unavailable.
+  assert.equal(
+    (await bindError(52n, { generation: actor.ref.generation, targetNodeGeneration: 4n })).kind,
+    ZLinkFrameworkErrorKind.Unavailable
+  );
+  assert.equal(runtime.registry.binding(actor.ref), undefined);
+  runtime.close();
+});
+
 test('mailbox saturation reports dropped actor binding control records', async () => {
   let ingress: ((record: RawServiceIngressRecord) => string | undefined) | undefined;
   const dropped: Array<{ readonly kind: string; readonly owner: string }> = [];

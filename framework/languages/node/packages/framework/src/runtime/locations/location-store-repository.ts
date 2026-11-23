@@ -1,9 +1,8 @@
+import { initialRelocationCompletion } from './authority-relocation-record';
 import {
   type AuthorityAggregateMarker as AggregateParticipantFenceRecord,
   encodeAuthorityAggregate,
-  decodeAuthorityAggregate,
-  commitAuthorityRelocation,
-  isPreparedAuthorityRelocation
+  decodeAuthorityAggregate
 } from './authority-relocation-record';
 import { cleanupDiscardedAuthority } from './discarded-authority-cleanup';
 import { sameAuthorityIncarnation, type ZLinkDiscardedAuthorityFence } from './lifecycle-runtime';
@@ -1257,23 +1256,6 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           )
         );
       }
-      const relocationMutations: ZLinkStoreMutation[] = [];
-      for (const row of authorityRows) {
-        const relocation = commitAuthorityRelocation(
-          row.record.snapshot.relocation,
-          fence.aggregateId.value,
-          fence.acceptedRequests?.get(row.entry.authorityKey)
-        );
-        if (relocation === undefined) continue;
-        relocationMutations.push({
-          kind: 'put',
-          key: row.key,
-          bytes: encodeAuthorityRecord({
-            ...row.record,
-            snapshot: { ...row.record.snapshot, relocation }
-          })
-        });
-      }
       const published = await this.provider.write(
         {
           conditions: [
@@ -1298,7 +1280,28 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
               key: rowKey,
               bytes: encodeJson({ ...aggregate, state: 'committed' } satisfies AggregateRecord)
             },
-            ...relocationMutations,
+            ...authorityRows
+              .filter(
+                (row) =>
+                  row.record.snapshot.relocation !== undefined &&
+                  fence.acceptedRequests?.has(row.entry.authorityKey) === true
+              )
+              .map((row) => ({
+                kind: 'put' as const,
+                key: row.key,
+                bytes: encodeAuthorityRecord({
+                  ...row.record,
+                  snapshot: {
+                    ...row.record.snapshot,
+                    relocation: {
+                      ...row.record.snapshot.relocation!,
+                      completion: initialRelocationCompletion(
+                        fence.acceptedRequests!.get(row.entry.authorityKey)!
+                      )
+                    }
+                  }
+                })
+              })),
             ...capacityMutations
           ]
         },
@@ -3640,12 +3643,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       throw new Error('Aggregate participant references a missing authority record.');
     }
     const aggregate = decodeJson<AggregateRecord>(aggregateRead.value.bytes);
-    // The publish CAS rewrites both rows. A Prepared snapshot can predate
-    // the aggregate row read and still represents the source owner.
-    if (
-      aggregate.state !== 'committed' ||
-      isPreparedAuthorityRelocation(record.snapshot.relocation, marker.aggregateId)
-    ) {
+    if (aggregate.state !== 'committed') {
       return authoritySnapshot(
         record.snapshot,
         { value: marker.expectedStoreVersion } as ZLinkStoreVersion,
