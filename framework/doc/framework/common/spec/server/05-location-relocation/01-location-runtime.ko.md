@@ -1024,12 +1024,16 @@ message다. 이 operation이 steady `Ready` record를 읽었고, 그 record의 o
 activation은 allocation이 `Active`라는 이유로 이 대상이 되지 않으며 각자의 lifecycle·recovery 절차를 따른다.
 Actor의 `Closing`은 destroy가 admission을 이미 닫은 상태이므로, owner lease가 없거나 다른
 `LeaseGeneration`이거나 만료됐으면 같은 조건부 batch로 해제한다. 이 경우 relocation 정책 조건은 적용하지
-않으며, 생성 operation과 같은 generation을 destroy하려는 호출이 이 해제를 시작한다. factory를 실행할 node는 Actor와 User Spot에서는 생성 operation이 고른 placement target이고, Instance Spot에서는
-activation envelope를 받은 target이다. 생성을 요청한 node가 그 type을 등록하지 않아도 된다 — 세션 node와
+않으며, 생성 operation과 같은 generation을 destroy하려는 호출이 이 해제를 시작한다. factory를 실행할 node는 Actor와 User Spot에서는 생성 operation이 이번 시도에 고른 target이고, Instance Spot에서는
+activation envelope를 받은 target이다. Actor와 User Spot의 생성 operation은 owner lease가 무효인 steady `Ready`를
+읽으면 해제를 판정하기 전에 기존 배치 규칙([Actor model §6.3](../03-spot-actor/04-actor-model.ko.md#63-mesh와-placement-target-선택),
+User Spot 생성의 target 선택)으로 이번 시도의 target을 먼저 고른다. 해제가 commit된 뒤 `Reserve`가 실패해 다른
+target을 고르면 이미 `Missing`이므로 일반 생성 절차를 따른다. 생성을 요청한 node가 그 type을 등록하지 않아도 된다 — 세션 node와
 play node를 나눈 배치에서 요청 node에는 factory가 없기 때문이다. 정책은 그 target이 게시한 MeshNode descriptor의
 `objectCapabilities`([§3.4](#34-여러-언어가-같은-redis-record를-읽고-쓰는-방법)) 중 같은 `objectKind`·`stableType` 원소의 `policy`로 판정하며, 요청 node가 target이면
 자기 등록과 같은 값이다. `policy`가 `disabled`일 때만 `Disabled`로 보고, 원소가 없거나 다른 값이면 `Disabled`로
-보지 않는다. 해제 batch는 판정에 쓴 target descriptor record의 상태도 조건으로 함께 검사한다. User Spot은 그 SpotId와 `ObjectGeneration`에 남은 Actor membership이
+보지 않는다. 정책을 검사한 해제에서만, 아래 batch 조건에 더해 정책을 읽은 target descriptor record의 `StoreVersion`을 같은 batch의
+조건으로 검사한다. 정책을 검사하지 않는 Actor `Closing`과 §5.1 정리의 해제에는 이 조건이 없다. User Spot은 그 SpotId와 `ObjectGeneration`에 남은 Actor membership이
 모두 **owner가 끝난 member**일 때만 해제한다. Membership이 없으면 이 조건을 만족한다. Owner가 끝난
 member는 membership이 가리키는 Actor authority가 같은 SpotId·`ObjectGeneration`을 가리키는 steady
 `Ready`이고, 그 authority에 기록된 owner lease가 없거나 다른 `LeaseGeneration`이거나 만료된 Actor다.
