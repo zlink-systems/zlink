@@ -20,6 +20,12 @@ export type ZLinkActorPacketTurnDispatch = (
   ...args: Parameters<ZLinkActorHandoffDispatch>
 ) => ReturnType<ZLinkActorHandoffDispatch>;
 
+class ActorJoinCompletionSealedError extends Error {
+  constructor() {
+    super('Actor Join completion did not release application dispatch.');
+  }
+}
+
 /**
  * Owns every application serial unit that belongs to one Spot activation.
  *
@@ -155,10 +161,36 @@ export class ZLinkSpotSerialExecutor {
     return this.timerSerial(timerName).post(operation, workOptions);
   }
 
-  executeActorLifecycle<T>(actorId: string, operation: () => Promise<T> | T): Promise<T> {
-    return this.executeActor(
-      actorId,
-      (serial) => serial.execute(operation, { lane: 'lifecycle' }),
+  executeActorLifecycle<T>(
+    actorId: string,
+    operation: () => Promise<T> | T,
+    onFailure?: (error: unknown) => T
+  ): Promise<T> {
+    const executor = this.actorExecutor(actorId);
+    const serial = this.actorSerial(actorId);
+    if (onFailure === undefined) {
+      return executor.execute(() => serial.execute(operation, { lane: 'lifecycle' }), {
+        lane: 'lifecycle'
+      });
+    }
+    return executor.execute(
+      () =>
+        serial.execute(
+          async () => {
+            try {
+              return await operation();
+            } catch (error) {
+              // A failed Join completion seals application work in this Actor's mailbox.
+              const sealed = new ActorJoinCompletionSealedError();
+              executor.scheduler.setExecutionPolicy(() => ({
+                executionDecision: () => 'lost',
+                executionFailure: () => sealed
+              }));
+              return onFailure(error);
+            }
+          },
+          { lane: 'lifecycle' }
+        ),
       { lane: 'lifecycle' }
     );
   }
@@ -182,7 +214,14 @@ export class ZLinkSpotSerialExecutor {
         workOptions: { payloadBytes: record.payloadBytes, onWithdrawable: record.onWithdrawable }
       }))
     );
-    const terminal = Promise.allSettled(terminals).then((outcomes) => {
+    const settled = terminals.map((terminal, index) =>
+      terminal.catch((error) => {
+        if (!(error instanceof ActorJoinCompletionSealedError)) throw error;
+        // Settle accepted requests through the existing handoff reply path.
+        records[index]!.reject(error);
+      })
+    );
+    const terminal = Promise.allSettled(settled).then((outcomes) => {
       const errors = outcomes.flatMap((outcome) =>
         outcome.status === 'rejected' ? [outcome.reason] : []
       );
