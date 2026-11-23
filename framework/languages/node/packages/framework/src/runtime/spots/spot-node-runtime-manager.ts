@@ -102,7 +102,7 @@ import {
   spotNodeAutoConnectCapability,
   type ZLinkSpotNodeLocationAutoConnectContext
 } from './spot-node-autoconnect';
-import type { ZLinkSpotRoutedTransport } from './spot-outbound';
+import type { ZLinkSpotAddressTransport, ZLinkSpotRoutedTransport } from './spot-outbound';
 import type { ZLinkSpotRouteResolver } from './spot-routing-internal';
 import type {
   ZLinkEntryActorRuntime,
@@ -136,6 +136,7 @@ export interface ZLinkSpotNodeRuntimeManagerOptions {
   readonly spotPublisherClient?: ZLinkSpotPublisherClient;
   readonly spotRouteResolver?: ZLinkSpotRouteResolver;
   readonly routedTransport?: ZLinkSpotRoutedTransport;
+  readonly addressTransport?: ZLinkSpotAddressTransport;
   readonly spotRouterChannelIdForMesh?: (meshName: string) => string;
   readonly providerResolver?: ZLinkProviderResolver;
   readonly dispatchErrors?: ZLinkDispatchErrorReporter;
@@ -1155,6 +1156,7 @@ export class ZLinkSpotNodeRuntimeManager {
       fanoutClient: this.options.fanoutClient,
       spotPublisherClient: this.options.spotPublisherClient,
       routedTransport: this.options.routedTransport,
+      addressTransport: this.options.addressTransport,
       spotRouterChannelIdForMesh: this.options.spotRouterChannelIdForMesh,
       timerHandlers: spotNode.entrySpotTimerHandlers,
       packetHandlers: spotNode.entrySpotPacketHandlers,

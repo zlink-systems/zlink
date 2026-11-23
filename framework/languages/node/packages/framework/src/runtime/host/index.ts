@@ -3048,6 +3048,7 @@ export class ZLinkFrameworkRuntimeHost
       context,
       channelTransport: this.channelTransport,
       routeTransport: this.routeTransport,
+      addressTransport: this.spotAddressTransport,
       spotPublisherTransport: this.spotPublisherTransport,
       meshRouters: this.meshRouters,
       providerResolver: this.options.providerResolver,
