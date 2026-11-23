@@ -16,6 +16,8 @@ restate them.
 
 ## 1. What This Sample Demonstrates
 
+`GameApi` is the session node that manages client sessions. `QuestMission` is the play node that hosts quest Instance Spots.
+
 GameApi validates the client's action and turns it into a gameplay event, and one owner Spot on
 QuestMission decides every event of the same `PlayerId` in order. The decision is recorded in an event
 stream, and progress and completion are pushed to the connection through the player's session Actor.
@@ -32,8 +34,8 @@ the owner → the owner Spot's decision and recording → the progress push → 
 
 | Role | Processes | Owns | Code |
 | --- | ---: | --- | --- |
-| GameApi | 2 | STREAM sessions, session Actors, action validation and gameplay events, owner calls | `Server/GameApi` |
-| QuestMission | 2 | The player quest Instance Spot, replay, decision, append and projection, notifies | `Server/QuestMission` |
+| session node (GameApi) | 2 | STREAM sessions, session Actors, action validation and gameplay events, owner calls | `Server/GameApi` |
+| play node (QuestMission) | 2 | The player quest Instance Spot, replay, decision, append and projection, notifies | `Server/QuestMission` |
 | Client | 1 | The join, action, reconnect and reconcile assertions | `Client` |
 
 Quest conditions, the aggregate fold and the completion rule live in `Server/QuestMission/Domain` and

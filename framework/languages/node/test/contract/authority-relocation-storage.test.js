@@ -12,7 +12,7 @@ const {
 } = require('../../packages/framework/dist/runtime/locations/opaque-record-key');
 
 const source = {
-  nodeRid: 'source-node',
+  nodeRid: '736f757263652d6e6f6465',
   nodeGeneration: '9007199254740993',
   ownerId: 'source-owner',
   ownerLeaseGeneration: '1'

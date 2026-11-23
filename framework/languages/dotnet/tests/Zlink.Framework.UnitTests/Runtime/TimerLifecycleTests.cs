@@ -144,11 +144,13 @@ public sealed class TimerLifecycleTests(Xunit.Abstractions.ITestOutputHelper out
         {
             var time = new ControllableTimeProvider();
             await using var scheduler = new ZLinkTimerScheduler(time);
+            const int tickCount = 100;
+            var period = TimeSpan.FromSeconds(1);
             var count = 0;
             await using var timer = new ZLinkTimer(
                 new ZLinkTimerLogicalSnapshot(
                     "normal",
-                    TimeSpan.FromSeconds(1),
+                    period,
                     new ZLinkTimerOptions(),
                     time.GetUtcNow(),
                     0,
@@ -166,15 +168,21 @@ public sealed class TimerLifecycleTests(Xunit.Abstractions.ITestOutputHelper out
                 startFrozen: true,
                 scheduler: scheduler
             );
+            var countsAtArming = new List<int>(tickCount + 1);
+            var finalArm = time.WaitForNextTimerAsync(
+                period,
+                occurrences: tickCount + 1,
+                beforeNextOccurrence: () =>
+                {
+                    countsAtArming.Add(Volatile.Read(ref count));
+                    // Fire the virtual deadline before the scheduler can replace this wait.
+                    time.AdvanceMonotonic(period);
+                }
+            );
             timer.Resume();
-            await WaitUntilAsync(() => time.ActiveTimerCount == 1);
-            for (var index = 1; index <= 100; index++)
-            {
-                var armed = time.WaitForNextTimerAsync(TimeSpan.FromSeconds(1));
-                time.AdvanceMonotonic(TimeSpan.FromSeconds(1));
-                await armed.WaitAsync(TimeSpan.FromSeconds(5));
-                Assert.Equal(index, Volatile.Read(ref count));
-            }
+            await finalArm.WaitAsync(TimeSpan.FromSeconds(5));
+            countsAtArming.Add(Volatile.Read(ref count));
+            Assert.Equal(Enumerable.Range(0, tickCount + 1), countsAtArming);
             var tickCancellations = Volatile.Read(ref cancellations);
             await timer.CancelAsync();
             var drained = scheduler.DisposeAsync().AsTask();

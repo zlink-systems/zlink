@@ -5005,7 +5005,7 @@
     <!-- Main Diagram -->
     <div class="diagram-container" data-detail-level="read"
          data-preset-badge-editorial-plate="ARCHIFY / PLATE 04">
-      <svg viewBox="-165 92 1010 616" role="img" lang="en" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="standard" data-quality-gates="advisory">
+      <svg viewBox="-152 122 1010 138" role="img" lang="en" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="standard" data-quality-gates="advisory">
         <title id="archify-diagram-title">시스템 구성과 topology</title>
         <desc id="archify-diagram-description">GameApi 2대, QuestMission 2대가 하나의 gamequest RouteMesh를 공유한다 · owner는 PlayerId별로 선택</desc>
         <!-- Definitions -->
@@ -5031,118 +5031,59 @@
         <rect width="100%" height="100%" fill="url(#grid)" />
 
         <!-- Boundaries (behind everything) -->
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="0" data-composition-frame-label="Clients" x="20" y="120" width="180" height="560" rx="12" class="c-region" stroke-width="1"/>
 
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="1" data-composition-frame-label="Servers" x="250" y="120" width="410" height="560" rx="12" class="c-region" stroke-width="1"/>
 
         <!-- Connection paths (before components for correct z-order) -->
-        <path data-edge-from="C1" data-edge-to="G1" data-edge-label="STREAM" data-edge-key="0" data-composition-points="170,180;280,180" d="M 170 180 L 280 180" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="C2" data-edge-to="G2" data-edge-label="STREAM" data-edge-key="1" data-composition-points="170,630;280,630" d="M 170 630 L 280 630" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="G1" data-edge-to="Q1" data-edge-label="gamequest RouteMesh" data-edge-key="2" data-composition-points="400,173;455,173;455,323;510,323" d="M 400 173 L 447 173 Q 455 173 455 181 L 455 315 Q 455 323 463 323 L 510 323" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="G1" data-edge-to="Q2" data-edge-key="3" data-composition-points="400,187;455,187;455,473;510,473" d="M 400 187 L 447 187 Q 455 187 455 195 L 455 465 Q 455 473 463 473 L 510 473" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="G2" data-edge-to="Q1" data-edge-key="4" data-composition-points="400,623;455,623;455,337;510,337" d="M 400 623 L 447 623 Q 455 623 455 615 L 455 345 Q 455 337 463 337 L 510 337" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="G2" data-edge-to="Q2" data-edge-key="5" data-composition-points="400,637;455,637;455,487;510,487" d="M 400 637 L 447 637 Q 455 637 455 629 L 455 495 Q 455 487 463 487 L 510 487" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="C" data-edge-to="G" data-edge-label="STREAM" data-edge-key="0" data-composition-points="170,180;282,180" d="M 170 180 L 282 180" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="G" data-edge-to="Q" data-edge-label="gamequest RouteMesh" data-edge-key="1" data-composition-points="402,180;514,180" d="M 402 180 L 514 180" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
 
         <!-- Components -->
-        <g id="node-C1" data-node-id="C1" data-node-label="Game Client A" tabindex="0" role="button" aria-label="Focus Game Client A, Clients" aria-pressed="false" data-node-kind="frontend" data-node-context="Clients">
-          <title>Game Client A · Clients</title>
+        <g id="node-C" data-node-id="C" data-node-label="Game clients ×2" tabindex="0" role="button" aria-label="Focus Game clients ×2, Architecture component" aria-pressed="false" data-node-kind="external" data-node-context="Architecture component"><rect x="72" y="172" width="120" height="60" rx="6" class="c-external" style="fill:none" stroke-width="2.2"/><rect x="61" y="161" width="120" height="60" rx="6" class="c-external" style="fill:none" stroke-width="2.2"/>
+          <title>Game clients ×2 · Architecture component</title>
           <rect x="50" y="150" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="50" y="150" width="120" height="60" rx="6" class="c-frontend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(56 156) scale(0.6875)">
-            <rect x="2" y="3" width="12" height="10" rx="2"/>
-            <path d="M2 6.5h12"/>
-            <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
-            <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
+          <rect x="50" y="150" width="120" height="60" rx="6" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(56 156) scale(0.6875)">
+            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
+            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
-          <text data-node-label="" x="110" y="184" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Game Client A</text>
+          <text data-node-label="" x="110" y="184" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Game clients ×2</text>
         </g>
 
-        <g id="node-C2" data-node-id="C2" data-node-label="Game Client B" tabindex="0" role="button" aria-label="Focus Game Client B, Clients" aria-pressed="false" data-node-kind="frontend" data-node-context="Clients">
-          <title>Game Client B · Clients</title>
-          <rect x="50" y="600" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="50" y="600" width="120" height="60" rx="6" class="c-frontend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(56 606) scale(0.6875)">
-            <rect x="2" y="3" width="12" height="10" rx="2"/>
-            <path d="M2 6.5h12"/>
-            <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
-            <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
+        <g id="node-G" data-node-id="G" data-node-label="session node ×2" tabindex="0" role="button" aria-label="Focus session node ×2, GameApi, Architecture component" aria-pressed="false" data-node-kind="database" data-node-sublabel="GameApi" data-node-context="Architecture component"><rect x="304" y="172" width="120" height="60" rx="6" class="c-database" style="fill:none" stroke-width="2.2"/><rect x="293" y="161" width="120" height="60" rx="6" class="c-database" style="fill:none" stroke-width="2.2"/>
+          <title>session node ×2 · GameApi · Architecture component</title>
+          <rect x="282" y="150" width="120" height="60" rx="6" class="c-mask"/>
+          <rect x="282" y="150" width="120" height="60" rx="6" class="c-database" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(288 156) scale(0.6875)">
+            <ellipse cx="8" cy="4" rx="5" ry="2"/>
+            <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
           </g>
-          <text data-node-label="" x="110" y="634" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Game Client B</text>
+          <text data-node-label="" data-detail-anchor="" x="342" y="178" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">session node ×2</text>
+        <text data-detail="context" x="342" y="194" class="t-muted" font-size="9" text-anchor="middle">GameApi</text>
         </g>
 
-        <g id="node-G1" data-node-id="G1" data-node-label="GameApi 1" tabindex="0" role="button" aria-label="Focus GameApi 1, Servers" aria-pressed="false" data-node-kind="frontend" data-node-context="Servers">
-          <title>GameApi 1 · Servers</title>
-          <rect x="280" y="150" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="280" y="150" width="120" height="60" rx="6" class="c-frontend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(286 156) scale(0.6875)">
-            <rect x="2" y="3" width="12" height="10" rx="2"/>
-            <path d="M2 6.5h12"/>
-            <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
-            <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
-          </g>
-          <text data-node-label="" x="340" y="184" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">GameApi 1</text>
-        </g>
-
-        <g id="node-G2" data-node-id="G2" data-node-label="GameApi 2" tabindex="0" role="button" aria-label="Focus GameApi 2, Servers" aria-pressed="false" data-node-kind="frontend" data-node-context="Servers">
-          <title>GameApi 2 · Servers</title>
-          <rect x="280" y="600" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="280" y="600" width="120" height="60" rx="6" class="c-frontend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(286 606) scale(0.6875)">
-            <rect x="2" y="3" width="12" height="10" rx="2"/>
-            <path d="M2 6.5h12"/>
-            <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
-            <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
-          </g>
-          <text data-node-label="" x="340" y="634" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">GameApi 2</text>
-        </g>
-
-        <g id="node-Q1" data-node-id="Q1" data-node-label="QuestMission 1" tabindex="0" role="button" aria-label="Focus QuestMission 1, Servers" aria-pressed="false" data-node-kind="backend" data-node-context="Servers">
-          <title>QuestMission 1 · Servers</title>
-          <rect x="510" y="300" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="510" y="300" width="120" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(516 306) scale(0.6875)">
+        <g id="node-Q" data-node-id="Q" data-node-label="play node ×2" tabindex="0" role="button" aria-label="Focus play node ×2, QuestMission, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="QuestMission" data-node-context="Architecture component"><rect x="536" y="172" width="120" height="60" rx="6" class="c-backend" style="fill:none" stroke-width="2.2"/><rect x="525" y="161" width="120" height="60" rx="6" class="c-backend" style="fill:none" stroke-width="2.2"/>
+          <title>play node ×2 · QuestMission · Architecture component</title>
+          <rect x="514" y="150" width="120" height="60" rx="6" class="c-mask"/>
+          <rect x="514" y="150" width="120" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(520 156) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" x="570" y="334" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">QuestMission 1</text>
-        </g>
-
-        <g id="node-Q2" data-node-id="Q2" data-node-label="QuestMission 2" tabindex="0" role="button" aria-label="Focus QuestMission 2, Servers" aria-pressed="false" data-node-kind="backend" data-node-context="Servers">
-          <title>QuestMission 2 · Servers</title>
-          <rect x="510" y="450" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="510" y="450" width="120" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(516 456) scale(0.6875)">
-            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
-          </g>
-          <text data-node-label="" x="570" y="484" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">QuestMission 2</text>
+          <text data-node-label="" data-detail-anchor="" x="574" y="178" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">play node ×2</text>
+        <text data-detail="context" x="574" y="194" class="t-muted" font-size="9" text-anchor="middle">QuestMission</text>
         </g>
 
         <!-- Connection labels -->
-        <g data-detail="context" data-edge-from="C1" data-edge-to="G1" data-edge-label="STREAM" data-edge-key="0">
-          <rect x="205.6" y="160" width="38.8" height="14" rx="3" class="c-mask"/>
-          <text x="225" y="170" class="t-muted" font-size="8" text-anchor="middle">STREAM</text>
+        <g data-detail="context" data-edge-from="C" data-edge-to="G" data-edge-label="STREAM" data-edge-key="0">
+          <rect x="206.6" y="160" width="38.8" height="14" rx="3" class="c-mask"/>
+          <text x="226" y="170" class="t-muted" font-size="8" text-anchor="middle">STREAM</text>
         </g>
-        <g data-detail="context" data-edge-from="C2" data-edge-to="G2" data-edge-label="STREAM" data-edge-key="1">
-          <rect x="205.6" y="610" width="38.8" height="14" rx="3" class="c-mask"/>
-          <text x="225" y="620" class="t-muted" font-size="8" text-anchor="middle">STREAM</text>
+        <g data-detail="context" data-edge-from="G" data-edge-to="Q" data-edge-label="gamequest RouteMesh" data-edge-key="1">
+          <rect x="407.4" y="160" width="101.2" height="14" rx="3" class="c-mask"/>
+          <text x="458" y="170" class="t-muted" font-size="8" text-anchor="middle">gamequest RouteMesh</text>
         </g>
-        <g data-detail="context" data-edge-from="G1" data-edge-to="Q1" data-edge-label="gamequest RouteMesh" data-edge-key="2">
-          <rect x="404.4" y="228" width="101.2" height="14" rx="3" class="c-mask"/>
-          <text x="455" y="238" class="t-muted" font-size="8" text-anchor="middle">gamequest RouteMesh</text>
-        </g>
-
-
-
 
         <!-- Boundary labels (foreground masks keep routes out of titles) -->
-        <g data-graph-role="structural-frame-label" data-composition-frame-id="0" data-composition-frame-kind="region" data-composition-frame-label="Clients">
-          <rect data-graph-role="structural-frame-label-mask" x="24" y="130" width="47.8" height="16" rx="3" class="c-mask"/>
-          <text data-boundary-label="" x="28" y="143" class="t-cloud" font-size="9" font-weight="600">Clients</text>
-        </g>
 
-        <g data-graph-role="structural-frame-label" data-composition-frame-id="1" data-composition-frame-kind="region" data-composition-frame-label="Servers">
-          <rect data-graph-role="structural-frame-label-mask" x="254" y="130" width="47.8" height="16" rx="3" class="c-mask"/>
-          <text data-boundary-label="" x="258" y="143" class="t-cloud" font-size="9" font-weight="600">Servers</text>
-        </g>
 
         <!-- Legend -->
 
