@@ -1620,10 +1620,6 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                         return;
                     if (EndUnverifiedTarget(key, lease.Slot, fenceSettled: false))
                         return;
-                    var targetOwner = new ZLinkLocationOwnerToken(
-                        stage.TargetAuthority.OwnerId,
-                        checked((long)stage.TargetAuthority.OwnerLeaseGeneration)
-                    );
                     if (
                         IsTargetOwnerLeaseValid(stage.TargetAuthority)
                         && await ZLinkRelocationTargetFence
@@ -1636,7 +1632,12 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                                         stage.Envelope,
                                         stage.Prepare
                                     ),
-                                targetOwner,
+                                current =>
+                                    ZLinkAuthorityRelocation.MatchesCommittedTarget(
+                                        current,
+                                        stage.Envelope.AggregateId,
+                                        stage.Prepare.TargetAttemptGeneration
+                                    ),
                                 runtime.ShutdownToken
                             )
                             .ConfigureAwait(false) != ZLinkRelocationTargetFenceReading.FenceChanged
