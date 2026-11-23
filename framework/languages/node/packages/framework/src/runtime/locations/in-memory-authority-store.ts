@@ -1,3 +1,4 @@
+import { allowsEndedReadyRelease, endedOwnerCreationState } from './ended-owner-creation-release';
 import { isDeepStrictEqual } from 'node:util';
 import {
   encodeAuthorityAggregate,
@@ -36,6 +37,7 @@ import type {
   ZLinkAuthorityStoreVersion,
   ZLinkCapacityVector,
   ZLinkLocationOwnerToken,
+  ZLinkMeshNodeDescriptor,
   ZLinkMeshNodeDescriptorKey,
   ZLinkObjectAbortRequest,
   ZLinkObjectAbortResult,
@@ -77,6 +79,7 @@ export interface ZLinkInMemoryAuthorityValidation {
     owner: ZLinkLocationOwnerToken,
     generationTransition?: 'preserve'
   ): boolean;
+  readTargetDescriptor?(target: ZLinkMeshNodeDescriptorKey): ZLinkMeshNodeDescriptor | undefined;
   placementCapacityAvailable?(
     descriptor: ZLinkMeshNodeDescriptorKey,
     requested: ZLinkCapacityVector,
@@ -405,69 +408,54 @@ export class ZLinkInMemoryAuthorityStore {
       return false;
     let members: string[] = [];
     if (current.snapshot.allocation.state === 'active') {
-      let unavailable = false;
-      for (const aggregate of this.aggregates.values()) {
-        if (
-          aggregate.state === 'prepared' &&
-          aggregate.request.participants.some(
-            (participant) => participant.authorityKey.value === key.value
-          )
-        )
-          unavailable = true;
-      }
-      unavailable ||=
-        current.snapshot.relocation !== undefined ||
-        relocationAuthorityCodec.read(current.snapshot.payload) !== undefined;
+      const snapshot = current.snapshot;
       const owner = {
-        ownerId: current.snapshot.ownerId,
-        leaseGeneration: current.snapshot.ownerLeaseGeneration
+        ownerId: snapshot.ownerId,
+        leaseGeneration: snapshot.ownerLeaseGeneration
       };
-      const spot =
-        current.snapshot.allocation.objectKind === 'actor'
-          ? undefined
-          : decodeServiceReadySpotAuthority(current.snapshot.payload);
-      if (discarded === undefined && current.snapshot.allocation.objectKind !== 'actor') {
-        unavailable ||=
-          spot === undefined ||
-          spot.kind !== creation?.key.kind ||
-          spot.stableType !== creation.intent.stableType ||
-          spot.spotId !== creation.key.globalId ||
-          spot.activationRecovery !== undefined;
-      }
-      const actor =
-        current.snapshot.allocation.objectKind === 'actor'
-          ? decodeActorAuthorityPayload(
-              serviceRelocationAuthorityApplicationPayload(current.snapshot.payload)
+      if (this.validation.isOwnerLive(owner)) return false;
+      const steady =
+        snapshot.relocation === undefined &&
+        relocationAuthorityCodec.read(snapshot.payload) === undefined &&
+        ![...this.aggregates.values()].some(
+          (aggregate) =>
+            aggregate.state === 'prepared' &&
+            aggregate.request.participants.some(
+              (participant) => participant.authorityKey.value === key.value
             )
-          : undefined;
-      const releaseCandidate =
-        !unavailable &&
-        (discarded !== undefined ||
-          (creation?.actorRelocationPolicy === 'disabled' &&
-            creation.key.kind === current.snapshot.allocation.objectKind &&
-            creation.intent.stableType === current.snapshot.allocation.stableType &&
-            (spot !== undefined || actor?.state === 'ready')));
-      const ownerLive = this.validation.isOwnerLive(owner);
-      if (ownerLive) return false;
-      const releaseAllowed = releaseCandidate && this.ownerLeaseReleaseDelay.allowsAuthority(owner);
-      if (discarded !== undefined && unavailable) return false;
-      if (
-        unavailable ||
-        (discarded === undefined && creation?.actorRelocationPolicy !== 'disabled')
-      )
-        throw new ZLinkFrameworkException(
-          ZLinkFrameworkErrorKind.Unavailable,
-          'Object owner lease is unavailable.'
         );
-      if (discarded === undefined && spot?.kind === 'user_spot') {
-        members = this.endedSpotMembers(key.value, current.snapshot, spot.spotId);
+      const state =
+        steady && creation !== undefined ? endedOwnerCreationState(snapshot, creation) : undefined;
+      if (discarded !== undefined) {
+        if (!steady || !this.ownerLeaseReleaseDelay.allowsAuthority(owner)) return false;
+      } else {
+        const target =
+          creation === undefined
+            ? undefined
+            : {
+                meshName: creation.target.meshName,
+                rid: creation.target.nodeRid
+              };
+        if (
+          state?.kind !== 'ready' ||
+          creation === undefined ||
+          target === undefined ||
+          !allowsEndedReadyRelease(creation, this.validation.readTargetDescriptor?.(target))
+        )
+          throw new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.Unavailable,
+            'Object owner lease is unavailable.'
+          );
+        // Descriptor observation and release both run synchronously on this store's turn.
+        const releaseAllowed = this.ownerLeaseReleaseDelay.allowsAuthority(owner);
+        if (state.spot?.kind === 'user_spot')
+          members = this.endedSpotMembers(key.value, snapshot, state.spot.spotId, target);
+        if (!releaseAllowed)
+          throw new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.Unavailable,
+            'Object owner lease release is waiting for the invalid lease delay.'
+          );
       }
-      if (discarded !== undefined && releaseCandidate && !releaseAllowed) return false;
-      if (releaseCandidate && !releaseAllowed)
-        throw new ZLinkFrameworkException(
-          ZLinkFrameworkErrorKind.Unavailable,
-          'Object owner lease release is waiting for the invalid lease delay.'
-        );
     } else {
       if (
         this.validation.isTargetLive(
@@ -504,13 +492,19 @@ export class ZLinkInMemoryAuthorityStore {
    * with an invalid owner lease. The release must fit one provider batch; its key set mirrors
    * the provider repository batch (authorities, owner leases, descriptor and capacity records).
    */
-  private endedSpotMembers(spotKey: string, spot: StoredSnapshot, spotId: string): string[] {
+  private endedSpotMembers(
+    spotKey: string,
+    spot: StoredSnapshot,
+    spotId: string,
+    target: ZLinkMeshNodeDescriptorKey
+  ): string[] {
     const descriptorKey = (descriptor: ZLinkMeshNodeDescriptorKey) =>
       `${descriptor.meshName}\0${String(descriptor.rid)}`;
     const batchKeys = new Set<string>([
       `authority:${spotKey}`,
       `owner:${spot.ownerId}`,
       `descriptor:${descriptorKey(spot.allocation.descriptor)}`,
+      `descriptor:${descriptorKey(target)}`,
       `capacity:${descriptorKey(spot.allocation.descriptor)}`
     ]);
     const members: string[] = [];

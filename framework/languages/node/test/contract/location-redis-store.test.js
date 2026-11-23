@@ -31,10 +31,10 @@ function authorityPreimage(authorityKey) {
 }
 
 test('redis provider exports only the two opaque Store implementations', () => {
-  assert.deepEqual(
-    Object.keys(redisLocations).sort(),
-    ['ZLinkRedisLocationStore', 'ZLinkRedisRelocationStore']
-  );
+  assert.deepEqual(Object.keys(redisLocations).sort(), [
+    'ZLinkRedisLocationStore',
+    'ZLinkRedisRelocationStore'
+  ]);
   const locationMethods = Object.getOwnPropertyNames(
     redisLocations.ZLinkRedisLocationStore.prototype
   ).sort();
@@ -60,13 +60,16 @@ async function verifyValueCondition(store, advanceClock) {
   const marker = key('value-condition/marker');
   const bytes = Buffer.from([0, 255, 17]);
   const condition = { kind: 'value', key: subject, expected: bytes };
-  const batch = () => store.write({
-    conditions: [condition, { kind: 'missing', key: marker }],
-    mutations: [{ kind: 'put', key: marker, bytes: Buffer.from('applied') }]
-  });
-  const put = (value, retentionMs) => store.write({
-    conditions: [], mutations: [{ kind: 'put', key: subject, bytes: value, retentionMs }]
-  });
+  const batch = () =>
+    store.write({
+      conditions: [condition, { kind: 'missing', key: marker }],
+      mutations: [{ kind: 'put', key: marker, bytes: Buffer.from('applied') }]
+    });
+  const put = (value, retentionMs) =>
+    store.write({
+      conditions: [],
+      mutations: [{ kind: 'put', key: subject, bytes: value, retentionMs }]
+    });
   const absentMarker = async () => assert.equal((await store.read(marker)).kind, 'missing');
 
   const first = await put(bytes, 60_000);
@@ -104,7 +107,9 @@ async function verifyValueCondition(store, advanceClock) {
 test('in-memory provider checks Value against live bytes at commit', async () => {
   let now = 0;
   const store = new frameworkInternal.ZLinkInMemoryProviderLocationStore(() => new Date(now));
-  await verifyValueCondition(store, milliseconds => { now += milliseconds; });
+  await verifyValueCondition(store, (milliseconds) => {
+    now += milliseconds;
+  });
 });
 
 test('redis provider checks Value against live bytes in its write script', async (t) => {
@@ -131,13 +136,16 @@ test('descriptor publication accepts a lease renewal between read and commit', a
     read: (key, signal) => inner.read(key, signal),
     scan: (request, signal) => inner.scan(request, signal),
     async write(request, signal) {
-      const publishes = request.mutations.some(mutation =>
-        mutation.kind === 'put' && mutation.key.value.startsWith('mesh-node\0')
+      const publishes = request.mutations.some(
+        (mutation) => mutation.kind === 'put' && mutation.key.value.startsWith('mesh-node\0')
       );
       if (publishes) attempts += 1;
       if (publishes && armed) {
         armed = false;
-        assert.equal((await repository.renewOwnerLease(owner.token, 60_000, signal)).kind, 'renewed');
+        assert.equal(
+          (await repository.renewOwnerLease(owner.token, 60_000, signal)).kind,
+          'renewed'
+        );
       }
       return inner.write(request, signal);
     }
@@ -146,12 +154,15 @@ test('descriptor publication accepts a lease renewal between read and commit', a
   owner = await repository.claimOwnerLease('descriptor-renew-owner', 60_000);
   assert.equal(owner.kind, 'claimed');
   const target = {
-    meshName: 'descriptor-renew-mesh', nodeRid: 'descriptor-renew-node',
-    nodeLifecycleGeneration: 1n, owner: owner.token
+    meshName: 'descriptor-renew-mesh',
+    nodeRid: 'descriptor-renew-node',
+    nodeLifecycleGeneration: 1n,
+    owner: owner.token
   };
   armed = true;
   const result = await repository.updateMeshNode(
-    aggregateDescriptor(target, 4), frameworkInternal.ZLinkLocationWriteIntent.NewClaim
+    aggregateDescriptor(target, 4),
+    frameworkInternal.ZLinkLocationWriteIntent.NewClaim
   );
   assert.equal(result.status, frameworkInternal.ZLinkLocationWriteStatus.Stored);
   assert.equal(attempts, 1);
@@ -174,7 +185,10 @@ test('redis opaque Location Store applies conditional batches atomically', async
     assert.ok(missing.storeNow instanceof Date);
 
     const first = await store.write({
-      conditions: [{ kind: 'missing', key: alpha }, { kind: 'missing', key: beta }],
+      conditions: [
+        { kind: 'missing', key: alpha },
+        { kind: 'missing', key: beta }
+      ],
       mutations: [
         { kind: 'put', key: alpha, bytes: Uint8Array.from([0, 1, 255]) },
         { kind: 'put', key: beta, bytes: Buffer.from('before') }
@@ -182,7 +196,7 @@ test('redis opaque Location Store applies conditional batches atomically', async
     });
     assert.equal(first.kind, 'applied');
     assert.equal(first.putVersions.length, 2);
-    const alphaVersion = first.putVersions.find(item => item.key.value === alpha.value).version;
+    const alphaVersion = first.putVersions.find((item) => item.key.value === alpha.value).version;
 
     const conflict = await store.write({
       conditions: [
@@ -195,7 +209,7 @@ test('redis opaque Location Store applies conditional batches atomically', async
       ]
     });
     assert.equal(conflict.kind, 'conflict');
-    assert.deepEqual([...((await store.read(alpha)).value.bytes)], [0, 1, 255]);
+    assert.deepEqual([...(await store.read(alpha)).value.bytes], [0, 1, 255]);
     assert.equal(Buffer.from((await store.read(beta)).value.bytes).toString(), 'before');
 
     const updated = await store.write({
@@ -229,7 +243,10 @@ test('redis Store serializes concurrent first-use connection', async (t) => {
       Array.from({ length: 16 }, (_, index) => store.read(key(`missing/${index}`)))
     );
     assert.equal(reads.length, 16);
-    assert.equal(reads.every(result => result.kind === 'missing'), true);
+    assert.equal(
+      reads.every((result) => result.kind === 'missing'),
+      true
+    );
   } finally {
     await store.dispose();
     await cleanup(fixture.client, prefix);
@@ -237,25 +254,34 @@ test('redis Store serializes concurrent first-use connection', async (t) => {
   }
 });
 
-test('redis prefix scan excludes unrelated index records from its page work', async t => {
+test('redis prefix scan excludes unrelated index records from its page work', async (t) => {
   const fixture = await redisFixture(t);
   if (!fixture) return;
   const prefix = testPrefix('prefix-work');
   const store = new redisLocations.ZLinkRedisLocationStore({ url: fixture.url, keyPrefix: prefix });
   try {
     for (let index = 0; index < 130; index++) {
-      await store.write({ conditions: [], mutations: [
-        { kind: 'put', key: key(`authority/${index}`), bytes: Buffer.from('outside') },
-        { kind: 'put', key: key(`terminal/${index}`), bytes: Buffer.from('outside') }
-      ] });
+      await store.write({
+        conditions: [],
+        mutations: [
+          { kind: 'put', key: key(`authority/${index}`), bytes: Buffer.from('outside') },
+          { kind: 'put', key: key(`terminal/${index}`), bytes: Buffer.from('outside') }
+        ]
+      });
     }
     const expected = ['descriptor/', 'descriptor/a', 'descriptor/한글'];
     for (const value of expected) {
-      await store.write({ conditions: [], mutations: [{ kind: 'put', key: key(value), bytes: Buffer.from(value) }] });
+      await store.write({
+        conditions: [],
+        mutations: [{ kind: 'put', key: key(value), bytes: Buffer.from(value) }]
+      });
     }
     const page = await store.scan({ prefix: 'descriptor/', limit: 3 });
     assert.equal(page.kind, 'page');
-    assert.deepEqual(page.value.items.map(item => item.key.value), expected);
+    assert.deepEqual(
+      page.value.items.map((item) => item.key.value),
+      expected
+    );
     assert.equal(page.value.nextCursor, undefined);
   } finally {
     await store.dispose();
@@ -264,27 +290,45 @@ test('redis prefix scan excludes unrelated index records from its page work', as
   }
 });
 
-test('redis history pruning follows the oldest active snapshot before backlog admission', async t => {
+test('redis history pruning follows the oldest active snapshot before backlog admission', async (t) => {
   const fixture = await redisFixture(t);
   if (!fixture) return;
   const prefix = testPrefix('history-boundary');
   const store = new redisLocations.ZLinkRedisLocationStore({ url: fixture.url, keyPrefix: prefix });
-  const put = value => store.write({ conditions: [], mutations: [{ kind: 'put', key: key('history/a'), bytes: Buffer.from(value) }] });
+  const put = (value) =>
+    store.write({
+      conditions: [],
+      mutations: [{ kind: 'put', key: key('history/a'), bytes: Buffer.from(value) }]
+    });
   try {
     await put('original');
-    await store.write({ conditions: [], mutations: [{ kind: 'put', key: key('history/0'), bytes: Buffer.from('last') }] });
+    await store.write({
+      conditions: [],
+      mutations: [{ kind: 'put', key: key('history/0'), bytes: Buffer.from('last') }]
+    });
     const oldest = await store.scan({ prefix: 'history/', limit: 1 });
     assert.ok(oldest.value.nextCursor);
     for (let index = 1; index < 128; index++) await put(`version-${index}`);
     await assert.rejects(() => put('blocked'), /backlog/u);
-    assert.equal(Buffer.from((await store.read(key('history/a'))).value.bytes).toString(), 'version-127');
+    assert.equal(
+      Buffer.from((await store.read(key('history/a'))).value.bytes).toString(),
+      'version-127'
+    );
     const newer = await store.scan({ prefix: 'history/', limit: 1 });
     assert.ok(newer.value.nextCursor);
     assert.equal(newer.value.items[0].key.value, 'history/0');
-    const oldTail = await store.scan({ prefix: 'history/', limit: 10, cursor: oldest.value.nextCursor });
+    const oldTail = await store.scan({
+      prefix: 'history/',
+      limit: 10,
+      cursor: oldest.value.nextCursor
+    });
     assert.equal(Buffer.from(oldTail.value.items[0].value.bytes).toString(), 'original');
     assert.equal((await put('after-oldest')).kind, 'applied');
-    const newTail = await store.scan({ prefix: 'history/', limit: 10, cursor: newer.value.nextCursor });
+    const newTail = await store.scan({
+      prefix: 'history/',
+      limit: 10,
+      cursor: newer.value.nextCursor
+    });
     assert.equal(Buffer.from(newTail.value.items[0].value.bytes).toString(), 'version-127');
     assert.equal((await put('after-all')).kind, 'applied');
   } finally {
@@ -309,7 +353,7 @@ test('redis opaque Location Store enforces TTL and fixed scan snapshots', async 
       conditions: [{ kind: 'missing', key: expiring }],
       mutations: [{ kind: 'put', key: expiring, bytes: Buffer.from('ttl'), retentionMs: 20 }]
     });
-    await new Promise(resolve => setTimeout(resolve, 40));
+    await new Promise((resolve) => setTimeout(resolve, 40));
     assert.equal((await store.read(expiring)).kind, 'missing');
 
     await store.write({
@@ -338,7 +382,7 @@ test('redis opaque Location Store enforces TTL and fixed scan snapshots', async 
     });
     assert.equal(second.kind, 'page');
     assert.deepEqual(
-      [...first.value.items, ...second.value.items].map(item => item.key.value),
+      [...first.value.items, ...second.value.items].map((item) => item.key.value),
       ['scan/a', 'scan/b']
     );
 
@@ -400,8 +444,7 @@ test('redis Location Store persists and validates a 10,100-participant inventory
     assert.equal(restored[0].authorityKey, 'actor:00000');
     assert.equal(restored[10_099].authorityKey, 'actor:10099');
 
-    const logicalPrefix =
-      `zlink:v11:aggregate-inventory:${aggregateId}:1:`;
+    const logicalPrefix = `zlink:v11:aggregate-inventory:${aggregateId}:1:`;
     const values = [];
     let cursor;
     do {
@@ -415,8 +458,8 @@ test('redis Location Store persists and validates a 10,100-participant inventory
       cursor = page.value.nextCursor;
     } while (cursor !== undefined);
 
-    assert.equal(values.filter(item => item.key.value.endsWith('root')).length, 1);
-    const pages = values.filter(item => item.key.value.includes(':page:'));
+    assert.equal(values.filter((item) => item.key.value.endsWith('root')).length, 1);
+    const pages = values.filter((item) => item.key.value.includes(':page:'));
     assert.ok(pages.length > 1);
     for (const item of pages) {
       assert.ok(item.value.bytes.byteLength <= 1024 * 1024);
@@ -427,16 +470,20 @@ test('redis Location Store persists and validates a 10,100-participant inventory
 
     const damaged = pages[0];
     await store.write({
-      conditions: [{
-        kind: 'version',
-        key: damaged.key,
-        expected: damaged.value.version
-      }],
-      mutations: [{
-        kind: 'put',
-        key: damaged.key,
-        bytes: Buffer.from('damaged')
-      }]
+      conditions: [
+        {
+          kind: 'version',
+          key: damaged.key,
+          expected: damaged.value.version
+        }
+      ],
+      mutations: [
+        {
+          kind: 'put',
+          key: damaged.key,
+          bytes: Buffer.from('damaged')
+        }
+      ]
     });
     await assert.rejects(
       inventory.read(
@@ -472,25 +519,30 @@ test('redis-backed descriptor NewClaim reports an active owner conflict', async 
     const second = await repository.claimOwnerLease('second-owner', 15_000);
     assert.equal(first.kind, 'claimed');
     assert.equal(second.kind, 'claimed');
-    const descriptor = aggregateDescriptor({
-      meshName: 'game',
-      nodeRid: 'game-server-1',
-      nodeLifecycleGeneration: 1n,
-      owner: first.token
-    }, 1);
+    const descriptor = aggregateDescriptor(
+      {
+        meshName: 'game',
+        nodeRid: 'game-server-1',
+        nodeLifecycleGeneration: 1n,
+        owner: first.token
+      },
+      1
+    );
     await assert.rejects(
       repository.updateMeshNode(
         descriptor,
         frameworkInternal.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
       ),
-      error => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
+      (error) => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
     );
     monotonicMs = 3;
     assert.equal(
-      (await repository.updateMeshNode(
-        descriptor,
-        frameworkInternal.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
-      )).status,
+      (
+        await repository.updateMeshNode(
+          descriptor,
+          frameworkInternal.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
+        )
+      ).status,
       frameworkInternal.ZLinkLocationWriteStatus.Stored
     );
     const replacement = {
@@ -501,10 +553,12 @@ test('redis-backed descriptor NewClaim reports an active owner conflict', async 
       leaseGeneration: second.token.leaseGeneration
     };
     assert.equal(
-      (await repository.updateMeshNode(
-        replacement,
-        frameworkInternal.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
-      )).status,
+      (
+        await repository.updateMeshNode(
+          replacement,
+          frameworkInternal.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
+        )
+      ).status,
       frameworkInternal.ZLinkLocationWriteStatus.RejectedConflict
     );
     assert.equal((await repository.listMeshNodes('game')).items[0].ownerId, first.token.ownerId);
@@ -518,10 +572,12 @@ test('redis-backed descriptor NewClaim reports an active owner conflict', async 
     );
     monotonicMs = 6;
     assert.equal(
-      (await repository.updateMeshNode(
-        replacement,
-        frameworkInternal.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
-      )).status,
+      (
+        await repository.updateMeshNode(
+          replacement,
+          frameworkInternal.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
+        )
+      ).status,
       frameworkInternal.ZLinkLocationWriteStatus.Stored
     );
   } finally {
@@ -564,30 +620,33 @@ test('redis-backed aggregate prepare commit and abort converge across repository
       owner: targetOwner.token
     };
     assert.equal(
-      (await source.updateMeshNode(
-        aggregateDescriptor(sourceTarget, 64),
-        frameworkInternal.ZLinkLocationWriteIntent.NewClaim
-      )).status,
+      (
+        await source.updateMeshNode(
+          aggregateDescriptor(sourceTarget, 64),
+          frameworkInternal.ZLinkLocationWriteIntent.NewClaim
+        )
+      ).status,
       frameworkInternal.ZLinkLocationWriteStatus.Stored
     );
     assert.equal(
-      (await recovery.updateMeshNode(
-        aggregateDescriptor(targetTarget, 64),
-        frameworkInternal.ZLinkLocationWriteIntent.NewClaim
-      )).status,
+      (
+        await recovery.updateMeshNode(
+          aggregateDescriptor(targetTarget, 64),
+          frameworkInternal.ZLinkLocationWriteIntent.NewClaim
+        )
+      ).status,
       frameworkInternal.ZLinkLocationWriteStatus.Stored
     );
 
     const snapshots = [];
     for (let index = 0; index < 2; index++) {
-      snapshots.push(await createReadyUserSpot(
-        source,
-        `room-${index.toString().padStart(2, '0')}`,
-        sourceTarget
-      ));
+      snapshots.push(
+        await createReadyUserSpot(source, `room-${index.toString().padStart(2, '0')}`, sourceTarget)
+      );
     }
-    const sourceDescriptor = (await source.listMeshNodes('play')).items.find(row =>
-      String(row.rid) === String(sourceTarget.nodeRid));
+    const sourceDescriptor = (await source.listMeshNodes('play')).items.find(
+      (row) => String(row.rid) === String(sourceTarget.nodeRid)
+    );
     assert.ok(sourceDescriptor);
     assert.deepEqual(sourceDescriptor.populationCapacity.spots, {
       active: 2,
@@ -602,23 +661,16 @@ test('redis-backed aggregate prepare commit and abort converge across repository
       limit: 64
     });
     const aggregateId = { value: '44444444-4444-4444-8444-444444444444' };
-    const request = aggregateRequest(
-      aggregateId,
-      1n,
-      snapshots,
-      targetTarget
-    );
+    const request = aggregateRequest(aggregateId, 1n, snapshots, targetTarget);
     const prepareResults = await Promise.all([
       source.prepareAggregate(request),
       recovery.prepareAggregate(request)
     ]);
-    assert.deepEqual(
-      prepareResults.map(result => result.kind).sort(),
-      ['alreadyPrepared', 'prepared']
-    );
-    const prepared = prepareResults.find(result =>
-      result.kind === 'prepared'
-    );
+    assert.deepEqual(prepareResults.map((result) => result.kind).sort(), [
+      'alreadyPrepared',
+      'prepared'
+    ]);
+    const prepared = prepareResults.find((result) => result.kind === 'prepared');
     assert.ok(prepared);
     if (prepared === undefined || prepared.kind !== 'prepared') return;
     assert.deepEqual(
@@ -629,38 +681,19 @@ test('redis-backed aggregate prepare commit and abort converge across repository
       { kind: 'conflict' }
     );
 
-    const hidden = await recovery.readAuthority(
-      request.participants[0].authorityKey
-    );
+    const hidden = await recovery.readAuthority(request.participants[0].authorityKey);
     assert.equal(hidden.kind, 'snapshot');
     assert.equal(hidden.ownerId, sourceOwner.token.ownerId);
 
-    runAggregateCrashProcess(
-      'commit-crash',
-      91,
-      fixture.url,
-      prefix,
-      prepared.fence
-    );
-    assert.deepEqual(
-      await recovery.commitAggregate(prepared.fence),
-      { kind: 'alreadyCommitted' }
-    );
-    assert.deepEqual(
-      await source.commitAggregate(prepared.fence),
-      { kind: 'alreadyCommitted' }
-    );
+    runAggregateCrashProcess('commit-crash', 91, fixture.url, prefix, prepared.fence);
+    assert.deepEqual(await recovery.commitAggregate(prepared.fence), { kind: 'alreadyCommitted' });
+    assert.deepEqual(await source.commitAggregate(prepared.fence), { kind: 'alreadyCommitted' });
     for (let index = 0; index < request.participants.length; index++) {
-      const moved = await source.readAuthority(
-        request.participants[index].authorityKey
-      );
+      const moved = await source.readAuthority(request.participants[index].authorityKey);
       assert.equal(moved.kind, 'snapshot');
       assert.equal(moved.ownerId, targetOwner.token.ownerId);
       assert.equal(moved.objectGeneration, snapshots[index].objectGeneration);
-      assert.ok(
-        moved.authorityOwnerGeneration
-          > snapshots[index].authorityOwnerGeneration
-      );
+      assert.ok(moved.authorityOwnerGeneration > snapshots[index].authorityOwnerGeneration);
       assert.equal(moved.authorityOwnerGeneration, BigInt(index + 3));
       assert.equal(
         Buffer.from(moved.payload).toString(),
@@ -673,11 +706,7 @@ test('redis-backed aggregate prepare commit and abort converge across repository
     assert.equal(authorityOwnerCounter.kind, 'found');
     assert.deepEqual(Buffer.from(authorityOwnerCounter.value.bytes), Buffer.from('5'));
 
-    const abortSnapshot = await createReadyUserSpot(
-      source,
-      'room-abort',
-      sourceTarget
-    );
+    const abortSnapshot = await createReadyUserSpot(source, 'room-abort', sourceTarget);
     const abortRequest = aggregateRequest(
       { value: '55555555-5555-4555-8555-555555555555' },
       1n,
@@ -687,20 +716,11 @@ test('redis-backed aggregate prepare commit and abort converge across repository
     const abortPrepared = await recovery.prepareAggregate(abortRequest);
     assert.equal(abortPrepared.kind, 'prepared');
     if (abortPrepared.kind !== 'prepared') return;
-    runAggregateCrashProcess(
-      'abort-crash',
-      92,
-      fixture.url,
-      prefix,
-      abortPrepared.fence
-    );
-    assert.deepEqual(
-      await recovery.abortAggregate(abortPrepared.fence),
-      { kind: 'alreadyAborted' }
-    );
-    const retained = await source.readAuthority(
-      abortRequest.participants[0].authorityKey
-    );
+    runAggregateCrashProcess('abort-crash', 92, fixture.url, prefix, abortPrepared.fence);
+    assert.deepEqual(await recovery.abortAggregate(abortPrepared.fence), {
+      kind: 'alreadyAborted'
+    });
+    const retained = await source.readAuthority(abortRequest.participants[0].authorityKey);
     assert.equal(retained.kind, 'snapshot');
     assert.equal(retained.ownerId, sourceOwner.token.ownerId);
     const retainedRow = await providerA.read({
@@ -711,18 +731,12 @@ test('redis-backed aggregate prepare commit and abort converge across repository
       // Location runtime §3.4 omits visibleStoreVersion after progress is cleared.
       assert.equal(retained.storeVersion.value, retainedRow.value.version.value);
       assert.notEqual(retained.storeVersion.value, abortSnapshot.storeVersion.value);
-      const retainedRecord = JSON.parse(
-        Buffer.from(retainedRow.value.bytes).toString('utf8')
-      );
+      const retainedRecord = JSON.parse(Buffer.from(retainedRow.value.bytes).toString('utf8'));
       assert.equal(retainedRecord.aggregate, undefined);
       assert.equal(Object.hasOwn(retainedRecord, 'visibleStoreVersion'), false);
     }
 
-    const damagedSnapshot = await createReadyUserSpot(
-      source,
-      'room-damaged',
-      sourceTarget
-    );
+    const damagedSnapshot = await createReadyUserSpot(source, 'room-damaged', sourceTarget);
     const damagedRequest = aggregateRequest(
       { value: '66666666-6666-4666-8666-666666666666' },
       1n,
@@ -733,29 +747,25 @@ test('redis-backed aggregate prepare commit and abort converge across repository
     const damagedPrepared = await source.prepareAggregate(damagedRequest);
     assert.equal(damagedPrepared.kind, 'prepared');
     if (damagedPrepared.kind !== 'prepared') return;
-    const damagedPage = await firstInventoryPage(
-      providerA,
-      damagedPrepared.fence
-    );
+    const damagedPage = await firstInventoryPage(providerA, damagedPrepared.fence);
     await providerA.write({
-      conditions: [{
-        kind: 'version',
-        key: damagedPage.key,
-        expected: damagedPage.value.version
-      }],
-      mutations: [{
-        kind: 'put',
-        key: damagedPage.key,
-        bytes: Buffer.from('damaged')
-      }]
+      conditions: [
+        {
+          kind: 'version',
+          key: damagedPage.key,
+          expected: damagedPage.value.version
+        }
+      ],
+      mutations: [
+        {
+          kind: 'put',
+          key: damagedPage.key,
+          bytes: Buffer.from('damaged')
+        }
+      ]
     });
-    await assert.rejects(
-      recovery.commitAggregate(damagedPrepared.fence),
-      /checksum/
-    );
-    const afterDamage = await recovery.readAuthority(
-      damagedRequest.participants[0].authorityKey
-    );
+    await assert.rejects(recovery.commitAggregate(damagedPrepared.fence), /checksum/);
+    const afterDamage = await recovery.readAuthority(damagedRequest.participants[0].authorityKey);
     assert.equal(afterDamage.kind, 'snapshot');
     assert.equal(afterDamage.ownerId, sourceOwner.token.ownerId);
   } finally {
@@ -777,19 +787,16 @@ test('aggregate committer accepts an unchanged target owner lease after renewal'
     read: (key, signal) => inner.read(key, signal),
     scan: (request, signal) => inner.scan(request, signal),
     async write(request, signal) {
-      const preparesAggregate = request.mutations.some(mutation =>
-        mutation.kind === 'put'
-        && mutation.key.value.startsWith('zlink:v11:aggregate:')
-        && JSON.parse(Buffer.from(mutation.bytes).toString('utf8')).state === 'prepared'
+      const preparesAggregate = request.mutations.some(
+        (mutation) =>
+          mutation.kind === 'put' &&
+          mutation.key.value.startsWith('zlink:v11:aggregate:') &&
+          JSON.parse(Buffer.from(mutation.bytes).toString('utf8')).state === 'prepared'
       );
       if (preparesAggregate) prepareCasAttempts += 1;
       if (preparesAggregate && heartbeatArmed) {
         heartbeatArmed = false;
-        const renewed = await targetRepository.renewOwnerLease(
-          targetOwner.token,
-          60_000,
-          signal
-        );
+        const renewed = await targetRepository.renewOwnerLease(targetOwner.token, 60_000, signal);
         assert.equal(renewed.kind, 'renewed');
         heartbeatWrites += 1;
       }
@@ -815,18 +822,17 @@ test('aggregate committer accepts an unchanged target owner lease after renewal'
     nodeLifecycleGeneration: 1n,
     owner: targetOwner.token
   };
-  for (const [repository, target] of [[source, sourceTarget], [targetRepository, targetTarget]]) {
+  for (const [repository, target] of [
+    [source, sourceTarget],
+    [targetRepository, targetTarget]
+  ]) {
     const stored = await repository.updateMeshNode(
       aggregateDescriptor(target, 4),
       frameworkInternal.ZLinkLocationWriteIntent.NewClaim
     );
     assert.equal(stored.status, frameworkInternal.ZLinkLocationWriteStatus.Stored);
   }
-  const authority = await createReadyUserSpot(
-    source,
-    'heartbeat-room',
-    sourceTarget
-  );
+  const authority = await createReadyUserSpot(source, 'heartbeat-room', sourceTarget);
   const plan = aggregateCommitterPlan(
     'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     authority,
@@ -888,8 +894,12 @@ test('aggregate committer does not retry a conflict after authority StoreVersion
       assert.equal(readKey.value, key.value);
       return { ...expected, storeVersion: { value: 'foreign-v2' } };
     },
-    async commitAggregate() { return { kind: 'stale' }; },
-    async abortAggregate() { return { kind: 'stale' }; }
+    async commitAggregate() {
+      return { kind: 'stale' };
+    },
+    async abortAggregate() {
+      return { kind: 'stale' };
+    }
   };
 
   await assert.rejects(
@@ -910,19 +920,16 @@ test('aggregate commit accepts an unchanged target owner lease after renewal', a
     read: (key, signal) => inner.read(key, signal),
     scan: (request, signal) => inner.scan(request, signal),
     async write(request, signal) {
-      const commitsAggregate = request.mutations.some(mutation =>
-        mutation.kind === 'put'
-        && mutation.key.value.startsWith('zlink:v11:aggregate:')
-        && JSON.parse(Buffer.from(mutation.bytes).toString('utf8')).state === 'committed'
+      const commitsAggregate = request.mutations.some(
+        (mutation) =>
+          mutation.kind === 'put' &&
+          mutation.key.value.startsWith('zlink:v11:aggregate:') &&
+          JSON.parse(Buffer.from(mutation.bytes).toString('utf8')).state === 'committed'
       );
       if (commitsAggregate) commitCasAttempts += 1;
       if (commitsAggregate && heartbeatArmed) {
         heartbeatArmed = false;
-        const renewed = await targetRepository.renewOwnerLease(
-          targetOwner.token,
-          60_000,
-          signal
-        );
+        const renewed = await targetRepository.renewOwnerLease(targetOwner.token, 60_000, signal);
         assert.equal(renewed.kind, 'renewed');
         heartbeatWrites += 1;
       }
@@ -948,18 +955,17 @@ test('aggregate commit accepts an unchanged target owner lease after renewal', a
     nodeLifecycleGeneration: 1n,
     owner: targetOwner.token
   };
-  for (const [repository, target] of [[source, sourceTarget], [targetRepository, targetTarget]]) {
+  for (const [repository, target] of [
+    [source, sourceTarget],
+    [targetRepository, targetTarget]
+  ]) {
     const stored = await repository.updateMeshNode(
       aggregateDescriptor(target, 4),
       frameworkInternal.ZLinkLocationWriteIntent.NewClaim
     );
     assert.equal(stored.status, frameworkInternal.ZLinkLocationWriteStatus.Stored);
   }
-  const authority = await createReadyUserSpot(
-    source,
-    'commit-heartbeat-room',
-    sourceTarget
-  );
+  const authority = await createReadyUserSpot(source, 'commit-heartbeat-room', sourceTarget);
   const request = aggregateRequest(
     { value: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' },
     1n,
@@ -993,16 +999,24 @@ test('in-memory aggregate prepare, commit, and abort converge across repository 
   assert.equal(targetOwner.kind, 'claimed');
   if (sourceOwner.kind !== 'claimed' || targetOwner.kind !== 'claimed') return;
   const sourceTarget = {
-    meshName: 'memory-play', nodeRid: 'memory-source-node', nodeLifecycleGeneration: 1n,
+    meshName: 'memory-play',
+    nodeRid: 'memory-source-node',
+    nodeLifecycleGeneration: 1n,
     owner: sourceOwner.token
   };
   const targetTarget = {
-    meshName: 'memory-play', nodeRid: 'memory-target-node', nodeLifecycleGeneration: 1n,
+    meshName: 'memory-play',
+    nodeRid: 'memory-target-node',
+    nodeLifecycleGeneration: 1n,
     owner: targetOwner.token
   };
-  for (const [repository, target] of [[source, sourceTarget], [recovery, targetTarget]]) {
+  for (const [repository, target] of [
+    [source, sourceTarget],
+    [recovery, targetTarget]
+  ]) {
     const stored = await repository.updateMeshNode(
-      aggregateDescriptor(target, 16), frameworkInternal.ZLinkLocationWriteIntent.NewClaim
+      aggregateDescriptor(target, 16),
+      frameworkInternal.ZLinkLocationWriteIntent.NewClaim
     );
     assert.equal(stored.status, frameworkInternal.ZLinkLocationWriteStatus.Stored);
   }
@@ -1011,37 +1025,50 @@ test('in-memory aggregate prepare, commit, and abort converge across repository 
     snapshots.push(await createReadyUserSpot(source, `memory-room-${index}`, sourceTarget));
   }
   const request = aggregateRequest(
-    { value: '77777777-7777-4777-8777-777777777777' }, 1n, snapshots, targetTarget,
+    { value: '77777777-7777-4777-8777-777777777777' },
+    1n,
+    snapshots,
+    targetTarget,
     snapshots.map((_, index) => `memory-room-${index}`)
   );
   const prepares = await Promise.all([
-    source.prepareAggregate(request), recovery.prepareAggregate(request)
+    source.prepareAggregate(request),
+    recovery.prepareAggregate(request)
   ]);
-  assert.deepEqual(prepares.map(value => value.kind).sort(), ['alreadyPrepared', 'prepared']);
-  const prepared = prepares.find(value => value.kind === 'prepared');
+  assert.deepEqual(prepares.map((value) => value.kind).sort(), ['alreadyPrepared', 'prepared']);
+  const prepared = prepares.find((value) => value.kind === 'prepared');
   assert.ok(prepared);
   if (prepared === undefined || prepared.kind !== 'prepared') return;
   const commits = await Promise.all([
-    source.commitAggregate(prepared.fence), recovery.commitAggregate(prepared.fence)
+    source.commitAggregate(prepared.fence),
+    recovery.commitAggregate(prepared.fence)
   ]);
-  assert.equal(commits.every(value =>
-    value.kind === 'committed' || value.kind === 'alreadyCommitted'), true);
+  assert.equal(
+    commits.every((value) => value.kind === 'committed' || value.kind === 'alreadyCommitted'),
+    true
+  );
 
   const abortSnapshot = await createReadyUserSpot(source, 'memory-room-abort', sourceTarget);
   const abortRequest = aggregateRequest(
-    { value: '88888888-8888-4888-8888-888888888888' }, 1n,
-    [abortSnapshot], targetTarget, ['memory-room-abort']
+    { value: '88888888-8888-4888-8888-888888888888' },
+    1n,
+    [abortSnapshot],
+    targetTarget,
+    ['memory-room-abort']
   );
   const abortPrepared = await source.prepareAggregate(abortRequest);
   assert.equal(abortPrepared.kind, 'prepared');
   if (abortPrepared.kind !== 'prepared') return;
   const aborts = await Promise.all([
-    source.abortAggregate(abortPrepared.fence), recovery.abortAggregate(abortPrepared.fence)
+    source.abortAggregate(abortPrepared.fence),
+    recovery.abortAggregate(abortPrepared.fence)
   ]);
-  assert.deepEqual(aborts.map(value => value.kind).sort(), ['aborted', 'alreadyAborted']);
+  assert.deepEqual(aborts.map((value) => value.kind).sort(), ['aborted', 'alreadyAborted']);
 
   const foreignSnapshot = await createReadyUserSpot(
-    source, 'memory-room-foreign-source', sourceTarget
+    source,
+    'memory-room-foreign-source',
+    sourceTarget
   );
   const foreignRequest = aggregateRequest(
     { value: '99999999-9999-4999-8999-999999999999' },
@@ -1059,21 +1086,23 @@ test('in-memory aggregate prepare, commit, and abort converge across repository 
   const foreignSourceCapacity = await provider.read(foreignSourceCapacityKey);
   assert.equal(foreignSourceCapacity.kind, 'found');
   if (foreignSourceCapacity.kind !== 'found') return;
-  assert.equal((await provider.write({
-    conditions: [{
-      kind: 'version',
-      key: foreignSourceCapacityKey,
-      expected: foreignSourceCapacity.value.version
-    }],
-    mutations: [{ kind: 'delete', key: foreignSourceCapacityKey }]
-  })).kind, 'applied');
-  assert.deepEqual(
-    await recovery.commitAggregate(foreignPrepared.fence),
-    { kind: 'committed' }
+  assert.equal(
+    (
+      await provider.write({
+        conditions: [
+          {
+            kind: 'version',
+            key: foreignSourceCapacityKey,
+            expected: foreignSourceCapacity.value.version
+          }
+        ],
+        mutations: [{ kind: 'delete', key: foreignSourceCapacityKey }]
+      })
+    ).kind,
+    'applied'
   );
-  const foreignMoved = await recovery.readAuthority(
-    foreignRequest.participants[0].authorityKey
-  );
+  assert.deepEqual(await recovery.commitAggregate(foreignPrepared.fence), { kind: 'committed' });
+  const foreignMoved = await recovery.readAuthority(foreignRequest.participants[0].authorityKey);
   assert.equal(foreignMoved.kind, 'snapshot');
   assert.equal(foreignMoved.ownerId, targetOwner.token.ownerId);
 });
@@ -1118,10 +1147,11 @@ test('redis opaque Relocation Store uses Framework-issued immutable references',
 
 test('redis Store validates exact public bounds', async () => {
   assert.throws(
-    () => new redisLocations.ZLinkRedisLocationStore({
-      url: 'redis://127.0.0.1:6379',
-      keyPrefix: ''
-    }),
+    () =>
+      new redisLocations.ZLinkRedisLocationStore({
+        url: 'redis://127.0.0.1:6379',
+        keyPrefix: ''
+      }),
     /keyPrefix/
   );
   const location = new redisLocations.ZLinkRedisLocationStore({
@@ -1142,15 +1172,24 @@ test('redis Store validates exact public bounds', async () => {
 test('redis-backed repository writes the golden canonical authority allocation envelope', async (t) => {
   const fixture = await redisFixture(t);
   if (fixture === undefined) return;
-  const golden = JSON.parse(fs.readFileSync(
-    path.join(
-      __dirname, '..', '..', '..', '..',
-      'runtime', 'protocol', 'golden', 'store-record-v1.json'
-    ),
-    'utf8'
-  ));
+  const golden = JSON.parse(
+    fs.readFileSync(
+      path.join(
+        __dirname,
+        '..',
+        '..',
+        '..',
+        '..',
+        'runtime',
+        'protocol',
+        'golden',
+        'store-record-v1.json'
+      ),
+      'utf8'
+    )
+  );
   const vector = golden.valueVectors.genericOpaqueRecord.find(
-    item => item.name === 'authority-actor-normal'
+    (item) => item.name === 'authority-actor-normal'
   );
   assert.ok(vector);
   const prefix = testPrefix('golden-conformance');
@@ -1172,22 +1211,29 @@ test('redis-backed repository writes the golden canonical authority allocation e
     };
     const descriptor = aggregateDescriptor(target, 0);
     descriptor.populationCapacity.actors.limit = vector.decoded.allocation.capacity.actors;
-    descriptor.objectCapabilities = [{
-      objectKind: 'actor', stableType: vector.decoded.allocation.stableType,
-      policy: 'snapshot', hasSnapshotAdapter: true, limit: vector.decoded.allocation.capacity.actors
-    }];
+    descriptor.objectCapabilities = [
+      {
+        objectKind: 'actor',
+        stableType: vector.decoded.allocation.stableType,
+        policy: 'snapshot',
+        hasSnapshotAdapter: true,
+        limit: vector.decoded.allocation.capacity.actors
+      }
+    ];
     assert.equal(
-      (await repository.updateMeshNode(
-        descriptor,
-        frameworkInternal.ZLinkLocationWriteIntent.NewClaim
-      )).status,
+      (
+        await repository.updateMeshNode(
+          descriptor,
+          frameworkInternal.ZLinkLocationWriteIntent.NewClaim
+        )
+      ).status,
       frameworkInternal.ZLinkLocationWriteStatus.Stored
     );
     const objectCounter = golden.counterVectors.vectors.find(
-      item => item.logicalKey === 'zlink:v11:object-counter'
+      (item) => item.logicalKey === 'zlink:v11:object-counter'
     );
     const authorityOwnerCounter = golden.counterVectors.vectors.find(
-      item => item.logicalKey === 'zlink:v11:authority-owner-counter'
+      (item) => item.logicalKey === 'zlink:v11:authority-owner-counter'
     );
     assert.ok(objectCounter);
     assert.ok(authorityOwnerCounter);
@@ -1197,7 +1243,11 @@ test('redis-backed repository writes the golden canonical authority allocation e
         { kind: 'missing', key: key(authorityOwnerCounter.logicalKey) }
       ],
       mutations: [
-        { kind: 'put', key: key(objectCounter.logicalKey), bytes: Buffer.from(objectCounter.issuedValue) },
+        {
+          kind: 'put',
+          key: key(objectCounter.logicalKey),
+          bytes: Buffer.from(objectCounter.issuedValue)
+        },
         {
           kind: 'put',
           key: key(authorityOwnerCounter.logicalKey),
@@ -1290,18 +1340,22 @@ test('redis-backed repository completes Actor creation from a canonical authorit
     };
     const descriptor = aggregateDescriptor(target, 0);
     descriptor.populationCapacity.actors.limit = 1;
-    descriptor.objectCapabilities = [{
-      objectKind: 'actor',
-      stableType: 'player',
-      policy: 'snapshot',
-      hasSnapshotAdapter: true,
-      limit: 1
-    }];
+    descriptor.objectCapabilities = [
+      {
+        objectKind: 'actor',
+        stableType: 'player',
+        policy: 'snapshot',
+        hasSnapshotAdapter: true,
+        limit: 1
+      }
+    ];
     assert.equal(
-      (await repository.updateMeshNode(
-        descriptor,
-        frameworkInternal.ZLinkLocationWriteIntent.NewClaim
-      )).status,
+      (
+        await repository.updateMeshNode(
+          descriptor,
+          frameworkInternal.ZLinkLocationWriteIntent.NewClaim
+        )
+      ).status,
       frameworkInternal.ZLinkLocationWriteStatus.Stored
     );
 
@@ -1334,14 +1388,16 @@ test('redis-backed repository completes Actor creation from a canonical authorit
     assert.equal(rewritten.kind, 'applied');
     if (rewritten.kind !== 'applied') throw new Error('canonical authority row rewrite failed');
     const expectedStoreVersion = rewritten.putVersions.find(
-      item => item.key.value === rowKey.value
+      (item) => item.key.value === rowKey.value
     )?.version.value;
     assert.ok(expectedStoreVersion);
 
-    const terminalEnvelope = Buffer.from(fs.readFileSync(path.resolve(
-      __dirname,
-      'fixtures/creation-terminal-node.hex'
-    ), 'utf8').trim(), 'hex');
+    const terminalEnvelope = Buffer.from(
+      fs
+        .readFileSync(path.resolve(__dirname, 'fixtures/creation-terminal-node.hex'), 'utf8')
+        .trim(),
+      'hex'
+    );
     const operation = {
       sourceNodeRid: {
         toHex: () => '00ff10',
@@ -1350,12 +1406,9 @@ test('redis-backed repository completes Actor creation from a canonical authorit
       sourceNodeGeneration: 7n,
       operationId: { high: 0x1n, low: 0xabcdefn }
     };
-    const terminalKey = key([
-      'creation-terminal',
-      '00ff10',
-      '7',
-      '00000000000000010000000000abcdef'
-    ].join('\0'));
+    const terminalKey = key(
+      ['creation-terminal', '00ff10', '7', '00000000000000010000000000abcdef'].join('\0')
+    );
     const completed = await repository.completeCreation({
       key: { kind: 'actor', globalId: 'actor-canonical' },
       reservationId: reserved.reservationId,
@@ -1407,13 +1460,12 @@ for (const liveMember of [false, true]) {
       encodeActorAuthorityPayload
     } = require('../../packages/framework/dist/runtime/actors/actor-authority-payload-codec');
     const prefix = testPrefix(`ended-spot-members-${liveMember}`);
-    const store = new redisLocations.ZLinkRedisLocationStore({ url: fixture.url, keyPrefix: prefix });
+    const store = new redisLocations.ZLinkRedisLocationStore({
+      url: fixture.url,
+      keyPrefix: prefix
+    });
     const repository = testLocationRepository(store, () => monotonicMs, 5_000);
-    const descriptorRepository = testLocationRepository(
-      store,
-      () => descriptorMonotonicMs,
-      1
-    );
+    const descriptorRepository = testLocationRepository(store, () => descriptorMonotonicMs, 1);
     try {
       const publish = async (ownerId, nodeRid) => {
         const claimed = await repository.claimOwnerLease(ownerId, 60_000);
@@ -1441,14 +1493,16 @@ for (const liveMember of [false, true]) {
             descriptor,
             frameworkInternal.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
           ),
-          error => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
+          (error) => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
         );
         descriptorMonotonicMs += 3;
         assert.equal(
-          (await descriptorRepository.updateMeshNode(
-            descriptor,
-            frameworkInternal.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
-          )).status,
+          (
+            await descriptorRepository.updateMeshNode(
+              descriptor,
+              frameworkInternal.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
+            )
+          ).status,
           frameworkInternal.ZLinkLocationWriteStatus.Stored
         );
         return target;
@@ -1456,7 +1510,7 @@ for (const liveMember of [false, true]) {
       const old = await publish('owner-old', 'node-old');
       const next = await publish('owner-new', 'node-new');
       const spotId = 'ended-spot';
-      const spotRequest = target => ({
+      const spotRequest = (target) => ({
         key: { kind: 'user_spot', globalId: spotId },
         intent: {
           stableType: 'lobby',
@@ -1466,8 +1520,7 @@ for (const liveMember of [false, true]) {
         },
         target,
         creatingPayload: Buffer.from('creating'),
-        capacity: userSpotCapacity(1),
-        actorRelocationPolicy: 'disabled'
+        capacity: userSpotCapacity(1)
       });
       const reserved = await repository.reserve(spotRequest(old));
       if (reserved.kind !== 'reserved') throw new Error('Spot reservation failed');
@@ -1499,8 +1552,7 @@ for (const liveMember of [false, true]) {
         },
         target: memberTarget,
         creatingPayload: Buffer.from('creating'),
-        capacity: { actors: 1, spots: 0 },
-        actorRelocationPolicy: 'disabled'
+        capacity: { actors: 1, spots: 0 }
       };
       const member = await repository.reserve(actorRequest);
       if (member.kind !== 'reserved') throw new Error('member reservation failed');
@@ -1541,14 +1593,16 @@ for (const liveMember of [false, true]) {
       if (liveMember) {
         await assert.rejects(
           repository.reserve(spotRequest(next)),
-          error => error instanceof framework.ZLinkFrameworkException
-            && error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
+          (error) =>
+            error instanceof framework.ZLinkFrameworkException &&
+            error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
         );
         monotonicMs = 15_000;
         await assert.rejects(
           repository.reserve(spotRequest(next)),
-          error => error instanceof framework.ZLinkFrameworkException
-            && error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
+          (error) =>
+            error instanceof framework.ZLinkFrameworkException &&
+            error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
         );
         const retained = await repository.readAuthority(encodeAuthorityKey('user_spot', spotId));
         assert.equal(retained.kind, 'snapshot');
@@ -1558,14 +1612,16 @@ for (const liveMember of [false, true]) {
       }
       await assert.rejects(
         repository.reserve(spotRequest(next)),
-        error => error instanceof framework.ZLinkFrameworkException
-          && error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
+        (error) =>
+          error instanceof framework.ZLinkFrameworkException &&
+          error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
       );
       monotonicMs = 14_999;
       await assert.rejects(
         repository.reserve(spotRequest(next)),
-        error => error instanceof framework.ZLinkFrameworkException
-          && error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
+        (error) =>
+          error instanceof framework.ZLinkFrameworkException &&
+          error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
       );
       monotonicMs = 15_000;
       const recreated = await repository.reserve(spotRequest(next));
@@ -1585,9 +1641,22 @@ for (const liveMember of [false, true]) {
 test('redis-backed production repository writes the golden canonical descriptor bodies', async (t) => {
   const fixture = await redisFixture(t);
   if (fixture === undefined) return;
-  const golden = JSON.parse(fs.readFileSync(path.join(
-    __dirname, '..', '..', '..', '..', 'runtime', 'protocol', 'golden', 'store-record-v1.json'
-  ), 'utf8'));
+  const golden = JSON.parse(
+    fs.readFileSync(
+      path.join(
+        __dirname,
+        '..',
+        '..',
+        '..',
+        '..',
+        'runtime',
+        'protocol',
+        'golden',
+        'store-record-v1.json'
+      ),
+      'utf8'
+    )
+  );
   const prefix = testPrefix('golden-descriptor-conformance');
   const store = new redisLocations.ZLinkRedisLocationStore({ url: fixture.url, keyPrefix: prefix });
   const repository = testLocationRepository(store);
@@ -1600,30 +1669,61 @@ test('redis-backed production repository writes the golden canonical descriptor 
       ['clientServerDescriptor-normal', 'updateClientServer'],
       ['fanoutPublisherDescriptor-normal', 'updateFanoutPublisher']
     ]) {
-      const vector = golden.valueVectors.genericOpaqueRecord.find(item => item.name === name);
+      const vector = golden.valueVectors.genericOpaqueRecord.find((item) => item.name === name);
       assert.ok(vector, `${name} fixture missing`);
       const body = vector.decoded.descriptor;
-      const rid = { toHex: () => body.routingIdHex ?? body.serverRoutingIdHex ?? body.publisherRoutingIdHex,
-        toString: () => body.routingIdHex ?? body.serverRoutingIdHex ?? body.publisherRoutingIdHex };
-      const common = {
-        lifecycleGeneration: BigInt(body.lifecycleGeneration), descriptorRevision: BigInt(body.descriptorRevision),
-        endpoint: body.endpoint, state: framework.ZLinkFrameworkRuntimeState.Serving,
-        securityIdentity: body.securityIdentity, ownerId: owner.token.ownerId,
-        leaseGeneration: owner.token.leaseGeneration, updatedAt: new Date(Number(body.updatedAtEpochMs))
+      const rid = {
+        toHex: () => body.routingIdHex ?? body.serverRoutingIdHex ?? body.publisherRoutingIdHex,
+        toString: () => body.routingIdHex ?? body.serverRoutingIdHex ?? body.publisherRoutingIdHex
       };
-      const descriptor = update === 'updateMeshNode' ? {
-        ...common, meshName: body.meshName, rid, objectRole: framework.ZLinkObjectRole.Server,
-        entrySpotId: body.entrySpotId, channelWeights: body.channelWeights,
-        applicationVersion: BigInt(body.applicationVersion), placementWeight: body.placementWeight,
-        populationCapacity: { ...body.capacity, spotTypes: body.capacity.spotTypes.map(value => ({ ...value,
-          objectKind: value.objectKind === 'userSpot' ? 'user_spot' : 'instance_spot' })) },
-        activationConcurrency: body.activationConcurrency,
-        spotTypes: [], objectCapabilities: body.objectCapabilities.map(value => ({ ...value,
-          objectKind: value.objectKind === 'userSpot' ? 'user_spot' : value.objectKind === 'instanceSpot' ? 'instance_spot' : 'actor' })),
-        maintenanceWave: body.maintenanceWave ?? undefined
-      } : update === 'updateClientServer' ? { ...common, channelName: body.channelName, serverRid: rid, weight: body.weight }
-        : { ...common, channelName: body.channelName, publisherRid: rid };
-      const result = await repository[update](descriptor, frameworkInternal.ZLinkLocationWriteIntent.NewClaim);
+      const common = {
+        lifecycleGeneration: BigInt(body.lifecycleGeneration),
+        descriptorRevision: BigInt(body.descriptorRevision),
+        endpoint: body.endpoint,
+        state: framework.ZLinkFrameworkRuntimeState.Serving,
+        securityIdentity: body.securityIdentity,
+        ownerId: owner.token.ownerId,
+        leaseGeneration: owner.token.leaseGeneration,
+        updatedAt: new Date(Number(body.updatedAtEpochMs))
+      };
+      const descriptor =
+        update === 'updateMeshNode'
+          ? {
+              ...common,
+              meshName: body.meshName,
+              rid,
+              objectRole: framework.ZLinkObjectRole.Server,
+              entrySpotId: body.entrySpotId,
+              channelWeights: body.channelWeights,
+              applicationVersion: BigInt(body.applicationVersion),
+              placementWeight: body.placementWeight,
+              populationCapacity: {
+                ...body.capacity,
+                spotTypes: body.capacity.spotTypes.map((value) => ({
+                  ...value,
+                  objectKind: value.objectKind === 'userSpot' ? 'user_spot' : 'instance_spot'
+                }))
+              },
+              activationConcurrency: body.activationConcurrency,
+              spotTypes: [],
+              objectCapabilities: body.objectCapabilities.map((value) => ({
+                ...value,
+                objectKind:
+                  value.objectKind === 'userSpot'
+                    ? 'user_spot'
+                    : value.objectKind === 'instanceSpot'
+                      ? 'instance_spot'
+                      : 'actor'
+              })),
+              maintenanceWave: body.maintenanceWave ?? undefined
+            }
+          : update === 'updateClientServer'
+            ? { ...common, channelName: body.channelName, serverRid: rid, weight: body.weight }
+            : { ...common, channelName: body.channelName, publisherRid: rid };
+      const result = await repository[update](
+        descriptor,
+        frameworkInternal.ZLinkLocationWriteIntent.NewClaim
+      );
       assert.equal(result.status, frameworkInternal.ZLinkLocationWriteStatus.Stored);
       const read = await store.read(key(vector.originalKey.replace(/\\u0000/g, '\0')));
       assert.equal(read.kind, 'found', name);
@@ -1632,7 +1732,11 @@ test('redis-backed production repository writes the golden canonical descriptor 
         ...vector.decoded,
         leaseGeneration: String(owner.token.leaseGeneration),
         ownerId: owner.token.ownerId,
-        descriptor: { ...vector.decoded.descriptor, leaseGeneration: String(owner.token.leaseGeneration), ownerId: owner.token.ownerId }
+        descriptor: {
+          ...vector.decoded.descriptor,
+          leaseGeneration: String(owner.token.leaseGeneration),
+          ownerId: owner.token.ownerId
+        }
       });
     }
   } finally {
@@ -1652,17 +1756,16 @@ test('redis-backed production repository rejects an authority envelope without r
   try {
     const written = await store.write({
       conditions: [{ kind: 'missing', key: key(authorityPreimage(authorityKey)) }],
-      mutations: [{
-        kind: 'put',
-        key: key(authorityPreimage(authorityKey)),
-        bytes: Buffer.from(JSON.stringify({ snapshot: {} }))
-      }]
+      mutations: [
+        {
+          kind: 'put',
+          key: key(authorityPreimage(authorityKey)),
+          bytes: Buffer.from(JSON.stringify({ snapshot: {} }))
+        }
+      ]
     });
     assert.equal(written.kind, 'applied');
-    await assert.rejects(
-      repository.readAuthority(authorityKey),
-      /unrecognized recordVersion/
-    );
+    await assert.rejects(repository.readAuthority(authorityKey), /unrecognized recordVersion/);
   } finally {
     await store.dispose();
     await cleanup(fixture.client, prefix);
@@ -1676,26 +1779,30 @@ function aggregateCommitterPlan(aggregateId, snapshot, spotId, target) {
     envelope: {
       aggregateId,
       aggregateGeneration: 1n,
-      participants: [{
-        key: key.value,
-        objectKind: 'user_spot',
-        stableType: 'lobby',
-        objectGeneration: snapshot.objectGeneration,
-        authorityOwnerGeneration: snapshot.authorityOwnerGeneration,
-        applicationState: Buffer.alloc(0),
-        boundSessionState: Buffer.alloc(0),
-        queuedMessages: [],
-        timers: []
-      }],
+      participants: [
+        {
+          key: key.value,
+          objectKind: 'user_spot',
+          stableType: 'lobby',
+          objectGeneration: snapshot.objectGeneration,
+          authorityOwnerGeneration: snapshot.authorityOwnerGeneration,
+          applicationState: Buffer.alloc(0),
+          boundSessionState: Buffer.alloc(0),
+          queuedMessages: [],
+          timers: []
+        }
+      ],
       memberships: []
     },
-    participants: [{
-      key,
-      expected: snapshot,
-      ownerTransition: 'newOwner',
-      authorityPayload: Buffer.from(`relocated-${spotId}`),
-      membershipMutation: Buffer.alloc(0)
-    }],
+    participants: [
+      {
+        key,
+        expected: snapshot,
+        ownerTransition: 'newOwner',
+        authorityPayload: Buffer.from(`relocated-${spotId}`),
+        membershipMutation: Buffer.alloc(0)
+      }
+    ],
     targetDescriptor: { meshName: target.meshName, rid: target.nodeRid },
     targetDescriptorLifecycleGeneration: target.nodeLifecycleGeneration,
     capacity: userSpotCapacity(1),
@@ -1705,38 +1812,32 @@ function aggregateCommitterPlan(aggregateId, snapshot, spotId, target) {
 
 async function firstInventoryPage(provider, fence) {
   const prefix =
-    `zlink:v11:aggregate-inventory:${fence.aggregateId.value}:`
-    + `${fence.aggregateGeneration}:page:`;
+    `zlink:v11:aggregate-inventory:${fence.aggregateId.value}:` +
+    `${fence.aggregateGeneration}:page:`;
   const result = await provider.scan({ prefix, limit: 1 });
   assert.equal(result.kind, 'page');
   assert.equal(result.value.items.length, 1);
   return result.value.items[0];
 }
 
-function runAggregateCrashProcess(
-  operation,
-  expectedExitCode,
-  url,
-  keyPrefix,
-  fence
-) {
-  const fixture = path.join(
-    __dirname,
-    'fixtures',
-    'redis-aggregate-process.js'
+function runAggregateCrashProcess(operation, expectedExitCode, url, keyPrefix, fence) {
+  const fixture = path.join(__dirname, 'fixtures', 'redis-aggregate-process.js');
+  const result = spawnSync(
+    process.execPath,
+    [
+      fixture,
+      operation,
+      url,
+      keyPrefix,
+      fence.aggregateId.value,
+      fence.aggregateGeneration.toString()
+    ],
+    {
+      cwd: path.resolve(__dirname, '../..'),
+      encoding: 'utf8',
+      timeout: 30_000
+    }
   );
-  const result = spawnSync(process.execPath, [
-    fixture,
-    operation,
-    url,
-    keyPrefix,
-    fence.aggregateId.value,
-    fence.aggregateGeneration.toString()
-  ], {
-    cwd: path.resolve(__dirname, '../..'),
-    encoding: 'utf8',
-    timeout: 30_000
-  });
   assert.equal(result.status, expectedExitCode, result.stderr);
 }
 

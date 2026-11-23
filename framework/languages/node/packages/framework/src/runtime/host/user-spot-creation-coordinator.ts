@@ -42,10 +42,6 @@ const DEFAULT_USER_SPOT_CLEANUP_TIMEOUT_MS = 1_000;
 const DEFAULT_USER_SPOT_POLL_INTERVAL_MS = 10;
 
 export interface ZLinkUserSpotCreationCoordinatorOptions {
-  readonly relocationPolicy?: (
-    meshName: string | undefined,
-    stableType: string
-  ) => import('../locations/internal-location-contracts').ZLinkObjectReserveRequest['actorRelocationPolicy'];
   readonly store: ZLinkObjectCreationStore & ZLinkAuthorityStore;
   readonly leaseTracker: Pick<ZLinkOwnerLeaseTracker, 'isOwnerTokenLive'>;
   readonly target: (
@@ -142,9 +138,10 @@ export class ZLinkUserSpotCreationCoordinator {
     let target: Awaited<ReturnType<ZLinkUserSpotCreationCoordinatorOptions['target']>>;
     let reserved: ZLinkObjectReserveResult;
     for (;;) {
+      let spot: Awaited<ReturnType<ZLinkUserSpotCreationCoordinator['awaitReady']>>;
       try {
-        const spot = await this.awaitReady(request, signal, excludedHostRuns);
-        if (spot !== undefined) {
+        spot = await this.awaitReady(request, signal, excludedHostRuns);
+        if (spot !== undefined && !('endedOwnerVersion' in spot)) {
           deadline.close();
           return { result: { spot, state: ZLinkSpotCreateState.Existing }, spot };
         }
@@ -170,7 +167,14 @@ export class ZLinkUserSpotCreationCoordinator {
             encodeAuthorityKey('user_spot', String(request.spotId)),
             signal
           );
-          if (current.kind !== 'missing') continue;
+          if (current.kind !== 'missing') {
+            if (spot === undefined || current.storeVersion.value !== spot.endedOwnerVersion)
+              continue;
+            throw new ZLinkFrameworkException(
+              ZLinkFrameworkErrorKind.Unavailable,
+              'User Spot authority owner lease is unavailable.'
+            );
+          }
         } catch (error) {
           deadline.close();
           throw error;
@@ -193,10 +197,6 @@ export class ZLinkUserSpotCreationCoordinator {
         reserved = await this.options.store.reserve(
           {
             key: { kind: 'user_spot', globalId: String(request.spotId) },
-            actorRelocationPolicy: this.options.relocationPolicy?.(
-              target.meshName,
-              request.stableType
-            ),
             intent: {
               stableType: request.stableType,
               requestContentReference: contentReference,
@@ -725,7 +725,7 @@ export class ZLinkUserSpotCreationCoordinator {
     request: ZLinkUserSpotCreationRequest,
     signal: AbortSignal,
     excludedHostRuns: Map<string, bigint>
-  ): Promise<SpotRef | undefined> {
+  ): Promise<SpotRef | { readonly endedOwnerVersion: string } | undefined> {
     const key = encodeAuthorityKey('user_spot', String(request.spotId));
     for (;;) {
       signal.throwIfAborted();
@@ -750,7 +750,9 @@ export class ZLinkUserSpotCreationCoordinator {
         },
         signal
       );
-      if (!ownerLive || current.allocation.state !== 'active') {
+      if (!ownerLive && current.allocation.state === 'active')
+        return { endedOwnerVersion: current.storeVersion.value };
+      if (current.allocation.state !== 'active') {
         const release = this.options.store.releaseEndedReservation;
         if (release === undefined) {
           throw new ZLinkFrameworkException(
@@ -758,16 +760,7 @@ export class ZLinkUserSpotCreationCoordinator {
             'User Spot creation requires repository ended-owner release support.'
           );
         }
-        if (
-          await release.call(this.options.store, key, current.storeVersion.value, signal, {
-            key: { kind: 'user_spot', globalId: String(request.spotId) },
-            intent: { stableType: request.stableType },
-            actorRelocationPolicy: this.options.relocationPolicy?.(
-              request.meshName,
-              request.stableType
-            )
-          })
-        )
+        if (await release.call(this.options.store, key, current.storeVersion.value, signal))
           continue;
         const confirmed = await this.options.store.readAuthority(key, signal);
         if (

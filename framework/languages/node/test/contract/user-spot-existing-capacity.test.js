@@ -123,9 +123,9 @@ async function creationFixture(policy = 'disabled') {
   const authorityEntered = deferred(),
     authorityReleased = deferred();
   let holdAuthority = false;
-  let holdDescriptor = false,
-    conflictRelease = false,
-    releaseConflicts = 0;
+  let holdDescriptor = false;
+  let conflictRelease = false;
+  let releaseConflicts = 0;
   class Provider extends internal.ZLinkInMemoryProviderLocationStore {
     async read(key, signal) {
       if (holdDescriptor && key.value.startsWith('mesh-node\0')) {
@@ -221,26 +221,32 @@ async function creationFixture(policy = 'disabled') {
   );
   monotonicOffsetMs += 3;
   assert.equal(
-    (await store.updateMeshNode(descriptor, internal.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim)).status,
+    (
+      await store.updateMeshNode(
+        descriptor,
+        internal.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
+      )
+    ).status,
     internal.ZLinkLocationWriteStatus.Stored
   );
   let factoryCalls = 0;
+  let target = { meshName: 'mesh', nodeRid: 'node', nodeGeneration: 1n, owner, isLocal: true };
   const coordinator = new ZLinkUserSpotCreationCoordinator({
     store,
     leaseTracker: new ZLinkOwnerLeaseTracker({ store, monotonicNowMs: () => now.getTime() }),
-    relocationPolicy: () => policy,
     target: async (_request, signal, excluded) => {
-      const live = await store.readOwnerLease(owner.ownerId, signal);
+      const live = await store.readOwnerLease(target.owner.ownerId, signal);
       if (
         live.kind !== 'found' ||
         live.leaseExpiresAt.getTime() <= live.storeNow.getTime() ||
-        excluded?.has(encodeRoutingIdStorageHex('node'))
+        excluded?.has(encodeRoutingIdStorageHex(target.nodeRid))
       )
         return undefined;
-      const capacity = (await store.listMeshNodes('mesh', {}, signal)).items[0].populationCapacity
-        .spots;
+      const capacity = (await store.listMeshNodes('mesh', {}, signal)).items.find(
+        (node) => node.rid === target.nodeRid
+      ).populationCapacity.spots;
       if (capacity.active + capacity.reserved >= capacity.limit) return undefined;
-      return { meshName: 'mesh', nodeRid: 'node', nodeGeneration: 1n, owner, isLocal: true };
+      return target;
     }
   });
   return {
@@ -250,14 +256,36 @@ async function creationFixture(policy = 'disabled') {
     get factoryCalls() {
       return factoryCalls;
     },
-    get releaseConflicts() {
-      return releaseConflicts;
-    },
     expire() {
       now = new Date(31001);
     },
+    get releaseConflicts() {
+      return releaseConflicts;
+    },
     conflictReleaseOnce() {
       conflictRelease = true;
+    },
+    async publishReplacement() {
+      const claim = await store.claimOwnerLease('replacement', 30000);
+      assert.equal(claim.kind, 'claimed');
+      const replacement = {
+        ...descriptor,
+        rid: 'replacement',
+        ownerId: claim.token.ownerId,
+        leaseGeneration: claim.token.leaseGeneration
+      };
+      assert.equal(
+        (await store.updateMeshNode(replacement, ZLinkLocationWriteIntent.NewClaim)).status,
+        internal.ZLinkLocationWriteStatus.Stored
+      );
+      target = {
+        meshName: replacement.meshName,
+        nodeRid: replacement.rid,
+        nodeGeneration: replacement.lifecycleGeneration,
+        owner: claim.token,
+        isLocal: true
+      };
+      return { ...target, nodeLifecycleGeneration: target.nodeGeneration };
     },
     observePending() {
       watchPending = true;
@@ -295,39 +323,47 @@ async function creationFixture(policy = 'disabled') {
     }
   };
 }
-for (const conflict of [false, true]) {
-  test(`expired Ready owner is released before capacity selection (conflict=${conflict})`, async (t) => {
-    let monotonicMs = 0;
-    t.mock.method(performance, 'now', () => monotonicMs);
-    const f = await creationFixture();
-    assert.equal((await f.create('expired-room')).result.state, ZLinkSpotCreateState.Created);
-    f.expire();
-    if (conflict) f.conflictReleaseOnce();
-    await assert.rejects(
-      f.create('expired-room'),
-      (e) => e.kind === ZLinkFrameworkErrorKind.Unavailable
-    );
-    monotonicMs = 15_000;
-    await assert.rejects(
-      f.create('expired-room'),
-      (e) => e.kind === ZLinkFrameworkErrorKind.Unavailable
-    );
-    assert.equal(
-      (await f.store.readAuthority(encodeAuthorityKey('user_spot', 'expired-room'))).kind,
-      'missing'
-    );
-    assert.equal(
-      (await f.observer.listMeshNodes('mesh')).items[0].populationCapacity.spots.active,
-      0
-    );
-    assert.equal(f.factoryCalls, 1);
-    assert.equal(f.releaseConflicts, conflict ? 1 : 0);
-  });
-}
+test('expired Ready owner is retained when placement has no target', async () => {
+  const f = await creationFixture();
+  const original = await f.create('expired-room');
+  assert.equal(original.result.state, ZLinkSpotCreateState.Created);
+  f.expire();
+  await assert.rejects(
+    f.create('expired-room'),
+    (error) => error.kind === ZLinkFrameworkErrorKind.Unavailable
+  );
+  const authority = await f.store.readAuthority(encodeAuthorityKey('user_spot', 'expired-room'));
+  assert.equal(authority.objectGeneration, original.spot.objectGeneration);
+  assert.equal(
+    (await f.observer.listMeshNodes('mesh')).items[0].populationCapacity.spots.active,
+    1
+  );
+  assert.equal(f.factoryCalls, 1);
+});
+test('selected target stays fixed while the release retries a capacity conflict', async (t) => {
+  let monotonicMs = 0;
+  t.mock.method(performance, 'now', () => monotonicMs);
+  const f = await creationFixture();
+  const original = await f.create('expired-room');
+  f.expire();
+  await f.publishReplacement();
+  await assert.rejects(
+    f.create('expired-room'),
+    (error) => error.kind === ZLinkFrameworkErrorKind.Unavailable
+  );
+  f.conflictReleaseOnce();
+  monotonicMs = 3;
+  const next = await f.create('expired-room');
+  assert.ok(next.spot.objectGeneration > original.spot.objectGeneration);
+  assert.equal(next.spot.nodeRid, 'replacement');
+  assert.equal(f.factoryCalls, 2);
+  assert.equal(f.releaseConflicts, 1);
+});
 test('expired Ready owner with relocation policy remains unavailable without unsafe release', async () => {
   const f = await creationFixture('recreate'),
     original = await f.create('retained-room');
   f.expire();
+  await f.publishReplacement();
   await assert.rejects(
     f.create('retained-room'),
     (e) => e.kind === ZLinkFrameworkErrorKind.Unavailable
@@ -382,10 +418,12 @@ test('provider descriptors project reserved, active and released capacity across
     f.expire();
     const key = encodeAuthorityKey('user_spot', 'view-room'),
       authority = await f.store.readAuthority(key);
-    const releaseAuthority = () => f.store.releaseEndedReservation(key, authority.storeVersion.value, undefined, {
+    const target = await f.publishReplacement();
+    const releaseAuthority = () =>
+      f.store.releaseEndedReservation(key, authority.storeVersion.value, undefined, {
         key: { kind: 'user_spot', globalId: 'view-room' },
         intent: { stableType: 'room' },
-        actorRelocationPolicy: 'disabled'
+        target
       });
     await assert.rejects(
       releaseAuthority(),

@@ -21,9 +21,7 @@ const {
 const {
   ZLinkInstanceActivationAuthority
 } = require('../../packages/framework/dist/runtime/host/instance-activation-authority');
-const {
-  ServiceStatefulRuntime
-} = require('../../packages/framework/dist/internal');
+const { ServiceStatefulRuntime } = require('../../packages/framework/dist/internal');
 const channelEnvelope = require('../../packages/framework/dist/runtime/channels/channel-envelope');
 const {
   ZLinkBufferMessage
@@ -57,40 +55,44 @@ async function fixture(
     const lease = await store.claimOwnerLease(ownerId, 30000);
     assert.equal(lease.kind, 'claimed');
     const owner = lease.token;
+    const policy = now.getTime() > 31_000 && rid === 'node-a' ? targetPolicy : 'disabled';
     const meshNode = {
-        meshName: 'mesh',
-        rid,
-        lifecycleGeneration: 1n,
-        descriptorRevision: 1n,
-        endpoint: 'tcp://node',
-        objectRole: framework.ZLinkObjectRole.Server,
-        placementWeight: 1,
-        populationCapacity: {
-          actors: { active: 0, reserved: 0, limit: 1 },
-          spots: { active: 0, reserved: 0, limit: 1 },
-          spotTypes: [
-            { objectKind: 'instance_spot', stableType: 'room', active: 0, reserved: 0, limit: 1 }
-          ]
-        },
-        activationConcurrency: { active: 0, limit: 1 },
-        channelWeights: {},
-        applicationVersion: 1n,
-        spotTypes: ['room'],
-        objectCapabilities: [
-          {
-            objectKind: 'instance_spot',
-            stableType: 'room',
-            policy: 'disabled',
-            hasSnapshotAdapter: false,
-            limit: 1
-          }
-        ],
-        state: framework.ZLinkFrameworkRuntimeState.Serving,
-        securityIdentity: 'test',
-        ownerId,
-        leaseGeneration: owner.leaseGeneration,
-        updatedAt: now
-      };
+      meshName: 'mesh',
+      rid,
+      lifecycleGeneration: 1n,
+      descriptorRevision: 1n,
+      endpoint: 'tcp://node',
+      objectRole: framework.ZLinkObjectRole.Server,
+      placementWeight: 1,
+      populationCapacity: {
+        actors: { active: 0, reserved: 0, limit: 1 },
+        spots: { active: 0, reserved: 0, limit: 1 },
+        spotTypes: [
+          { objectKind: 'instance_spot', stableType: 'room', active: 0, reserved: 0, limit: 1 }
+        ]
+      },
+      activationConcurrency: { active: 0, limit: 1 },
+      channelWeights: {},
+      applicationVersion: 1n,
+      spotTypes: ['room'],
+      objectCapabilities:
+        policy === null
+          ? []
+          : [
+              {
+                objectKind: 'instance_spot',
+                stableType: 'room',
+                policy,
+                hasSnapshotAdapter: policy === 'snapshot',
+                limit: 1
+              }
+            ],
+      state: framework.ZLinkFrameworkRuntimeState.Serving,
+      securityIdentity: 'test',
+      ownerId,
+      leaseGeneration: owner.leaseGeneration,
+      updatedAt: now
+    };
     const claim = () =>
       store.updateMeshNode(meshNode, internal.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim);
     if (now.getTime() === 1000 && rid === 'node-a') {
@@ -128,7 +130,6 @@ async function fixture(
   const key = encodeAuthorityKey('instance_spot', 'ended-room');
   const request = {
     key: { kind: 'instance_spot', globalId: 'ended-room' },
-    actorRelocationPolicy: 'disabled',
     intent: {
       stableType: 'room',
       requestContentReference: 'old-request',
@@ -190,7 +191,7 @@ async function fixture(
   };
   let factories = 0;
   const runtimes = [];
-  function activation(rid, policy = 'disabled') {
+  function activation(rid) {
     const runtime = new ServiceStatefulRuntime(
       { setServiceIngress() {}, topology: { localDescriptor: () => undefined } },
       rid,
@@ -209,8 +210,7 @@ async function fixture(
       store,
       relocationStore,
       meshName: 'mesh',
-      owner: () => owners[rid],
-      relocationPolicy: () => policy ?? undefined
+      owner: () => owners[rid]
     });
     runtime.registerAsyncInstanceActivationAuthority(authority);
     runtime.registerInstanceApplicationLifecycle({
@@ -299,7 +299,7 @@ async function fixture(
     }),
     defaultRequestTimeoutMs: 5000
   });
-  const activate = activation('node-a', targetPolicy);
+  const activate = activation('node-a');
   return {
     store,
     key,
@@ -457,8 +457,7 @@ for (const provider of [false, true]) {
           }
         },
         meshName: 'mesh',
-        owner: () => undefined,
-        relocationPolicy: () => 'disabled'
+        owner: () => ({ ownerId: snapshot.ownerId, leaseGeneration: snapshot.ownerLeaseGeneration })
       });
       assert.deepEqual(
         await authority.read(
@@ -551,11 +550,11 @@ for (const provider of [false, true]) {
   });
   for (const policy of ['recreate', 'snapshot', null]) {
     test(`${label}: target policy ${policy} refuses without factory or Store mutation`, async () => {
-      const f = await fixture(provider);
+      const f = await fixture(provider, policy);
       try {
         const before = await f.store.readAuthority(f.key);
         await assert.rejects(
-          f.activation('node-a', policy)(),
+          f.activate(),
           (error) => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
         );
         assert.deepEqual(await f.store.readAuthority(f.key), before);

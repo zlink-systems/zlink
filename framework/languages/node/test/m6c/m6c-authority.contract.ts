@@ -42,9 +42,6 @@ import { encodeAuthorityKey } from '../../packages/framework/src/runtime/locatio
 import { ZLinkUserSpotCreationCoordinator } from '../../packages/framework/src/runtime/host/user-spot-creation-coordinator';
 import { ZLinkActorPlacementCoordinator } from '../../packages/framework/src/runtime/host/actor-placement-coordinator';
 import { randomOperationId } from '../../packages/framework/src/runtime/locations/creation-operation-id';
-import { createFrameworkOptions } from '../../packages/framework/src/contracts/Configuration/RegistrationBuilders';
-import type { ZLinkActorContext } from '../../packages/framework/src/contracts/Actors/ZLinkActorContext';
-import type { ZLinkSpotNodeOptions } from '../../packages/framework/src/contracts/Configuration/RegistrationTypes';
 import {
   decodeCreationOperationTerminalV1,
   encodeCreationOperationTerminalV1
@@ -124,17 +121,23 @@ for (const backend of ['provider', 'memory'] as const) {
                   entryAccepted: false,
                   limit: 0
                 },
-                {
-                  objectKind: kind,
-                  stableType: 'room',
-                  policy:
-                    scenario === 'factory' && descriptor.ownerId === 'owner-b'
-                      ? 'recreate'
-                      : 'disabled',
-                  hasSnapshotAdapter: false,
-                  entryAccepted: false,
-                  limit: 0
-                }
+                ...(scenario === 'unregistered' && descriptor.ownerId === 'owner-b'
+                  ? []
+                  : [
+                      {
+                        objectKind: kind,
+                        stableType: 'room',
+                        policy:
+                          descriptor.ownerId === 'owner-b' &&
+                          (scenario === 'recreate' || scenario === 'snapshot')
+                            ? scenario
+                            : ('disabled' as const),
+                        hasSnapshotAdapter:
+                          descriptor.ownerId === 'owner-b' && scenario === 'snapshot',
+                        entryAccepted: false,
+                        limit: 0
+                      }
+                    ])
               ],
               populationCapacity: {
                 ...descriptor.populationCapacity,
@@ -155,8 +158,7 @@ for (const backend of ['provider', 'memory'] as const) {
             actors: 0,
             spots: 1,
             spotType: { objectKind: kind, stableType: 'room', count: 1 }
-          },
-          actorRelocationPolicy: 'disabled' as const
+          }
         };
         const first = await store.reserve(request);
         assert.equal(first.kind, 'reserved');
@@ -209,8 +211,7 @@ for (const backend of ['provider', 'memory'] as const) {
             },
             target: request.target,
             creatingPayload: Buffer.from('creating'),
-            capacity: { actors: 1, spots: 0 },
-            actorRelocationPolicy: 'disabled' as const
+            capacity: { actors: 1, spots: 0 }
           };
           const member = await store.reserve(actorRequest);
           if (member.kind !== 'reserved') throw new Error('Actor reservation missing');
@@ -293,15 +294,7 @@ for (const backend of ['provider', 'memory'] as const) {
             ...target('node-b', 'owner-b'),
             nodeLifecycleGeneration: 1n,
             owner: { ownerId: replacement.ownerId, leaseGeneration: replacement.leaseGeneration }
-          },
-          actorRelocationPolicy:
-            scenario === 'unregistered'
-              ? undefined
-              : scenario === 'snapshot'
-                ? ('snapshot' as const)
-                : scenario === 'recreate'
-                  ? ('recreate' as const)
-                  : ('disabled' as const)
+          }
         };
         const beforeAttempt = await store.readAuthority(
           encodeAuthorityKey(kind, request.key.globalId)
@@ -410,7 +403,6 @@ for (const backend of ['provider', 'memory'] as const) {
           const coordinator = new ZLinkUserSpotCreationCoordinator({
             leaseTracker: creationLeaseTracker(store),
             store,
-            relocationPolicy: () => 'disabled',
             target: async () => ({
               meshName: 'mesh',
               nodeRid: 'node-b',
@@ -565,10 +557,10 @@ for (const backend of ['provider', 'memory'] as const) {
         backend === 'provider'
           ? new ZLinkLocationStoreRepository(provider, () => now)
           : new ZLinkInMemoryLocationStore(() => now);
-      // Batch keys: Spot authority, owner lease, descriptor and capacity plus one key per
-      // member (all members share the Spot's owner and node). member-a plus 2,043 bulk
+      // Batch keys: Spot authority, owner lease, descriptor, capacity and target descriptor plus one key per
+      // member (all members share the Spot's owner and node). member-a plus 2,042 bulk
       // members fill the unchanged 2,048-key bound exactly; route rows are not counted.
-      const bulk = scenario === 'batchFits' ? 2043 : scenario === 'batchBound' ? 2044 : 0;
+      const bulk = scenario === 'batchFits' ? 2042 : scenario === 'batchBound' ? 2043 : 0;
       const configure = async (descriptor: Awaited<ReturnType<typeof writeTargetDescriptor>>) => {
         await store.removeMeshNode({ meshName: 'mesh', rid: descriptor.rid }, descriptor);
         const configured = {
@@ -607,8 +599,7 @@ for (const backend of ['provider', 'memory'] as const) {
       });
       const spotId = `member-release-${scenario}`;
       const request = {
-        ...reserveRequest(spotId, placement(old)),
-        actorRelocationPolicy: 'disabled' as const
+        ...reserveRequest(spotId, placement(old))
       };
       const first = await store.reserve(request);
       if (first.kind !== 'reserved') throw new Error('Spot reservation missing');
@@ -666,8 +657,7 @@ for (const backend of ['provider', 'memory'] as const) {
             options.activated === false
               ? memberPayload(actorId, descriptor, 'creating')
               : Buffer.from('creating'),
-          capacity: { actors: 1, spots: 0 },
-          actorRelocationPolicy: 'disabled' as const
+          capacity: { actors: 1, spots: 0 }
         };
         const reserved = await store.reserve(actorRequest);
         if (reserved.kind !== 'reserved') throw new Error(`member ${actorId} not reserved`);
@@ -793,8 +783,7 @@ for (const backend of ['provider', 'memory'] as const) {
       now = new Date(61_000);
       const next = {
         ...request,
-        target: placement(live),
-        actorRelocationPolicy: 'disabled' as const
+        target: placement(live)
       };
       if (scenario === 'dead')
         await assert.rejects(
@@ -808,8 +797,7 @@ for (const backend of ['provider', 'memory'] as const) {
             },
             target: placement(live),
             creatingPayload: Buffer.from('creating'),
-            capacity: { actors: 1, spots: 0 },
-            actorRelocationPolicy: 'disabled'
+            capacity: { actors: 1, spots: 0 }
           }),
           (error: unknown) =>
             error instanceof ZLinkFrameworkException &&
@@ -827,8 +815,7 @@ for (const backend of ['provider', 'memory'] as const) {
             },
             target: placement(live),
             creatingPayload: Buffer.from('creating'),
-            capacity: { actors: 1, spots: 0 },
-            actorRelocationPolicy: 'disabled'
+            capacity: { actors: 1, spots: 0 }
           }),
           (error: unknown) =>
             error instanceof ZLinkFrameworkException &&
@@ -948,8 +935,7 @@ for (const backend of ['provider', 'memory'] as const) {
               },
               target: placement(live),
               creatingPayload: Buffer.from('creating'),
-              capacity: { actors: 1, spots: 0 },
-              actorRelocationPolicy: 'disabled'
+              capacity: { actors: 1, spots: 0 }
             });
             assert.equal(replacement.kind, 'reserved');
             if (replacement.kind !== 'reserved') throw new Error('member replacement missing');
@@ -1010,8 +996,7 @@ for (const backend of ['provider', 'memory'] as const) {
           },
           target: placement(live),
           creatingPayload: Buffer.from('creating'),
-          capacity: { actors: 1, spots: 0 },
-          actorRelocationPolicy: 'disabled'
+          capacity: { actors: 1, spots: 0 }
         });
         assert.equal(again.kind, 'reserved');
         if (again.kind === 'reserved' && members.length > 0)
@@ -1043,28 +1028,23 @@ for (const backend of ['provider', 'memory'] as const) {
     ...(backend === 'provider' ? (['capacityRace', 'capacityCorrupt'] as const) : [])
   ] as const) {
     test(`ended Active Actor recreation: ${backend} ${scenario}`, async () => {
-      class ReclaimFactory {
-        async create(context: ZLinkActorContext) {
-          return { context };
-        }
-      }
-      const registration = createFrameworkOptions((options) => {
-        options
-          .addRouteMesh('reclaim-source')
-          .listen('tcp://127.0.0.1:0')
-          .objects()
-          .server()
-          .addActorFactory('player', ReclaimFactory, (factory) => factory.disableRelocation());
-      });
-      const policy = (registration.spotNodes as Readonly<Record<string, ZLinkSpotNodeOptions>>)[
-        'reclaim-source'
-      ].actorFactoryRegistrations!['player'].relocation.kind;
       let now = new Date(100);
+      let monotonicMs = 0;
       const provider = new ZLinkInMemoryProviderLocationStore(() => now);
       const store =
         backend === 'provider'
-          ? new ZLinkLocationStoreRepository(provider, () => now)
-          : new ZLinkInMemoryLocationStore(() => now);
+          ? new ZLinkLocationStoreRepository(
+              provider,
+              () => now,
+              undefined,
+              () => monotonicMs,
+              1
+            )
+          : new ZLinkInMemoryLocationStore(
+              () => now,
+              () => monotonicMs,
+              1
+            );
       const old = await writeTargetDescriptor(store, 'owner-a', 'node-a', 60_000);
       await store.removeMeshNode(
         { meshName: 'mesh', rid: 'node-a' },
@@ -1093,27 +1073,36 @@ for (const backend of ['provider', 'memory'] as const) {
           ...reserveRequest('unused', target('node-a', 'owner-a')).intent,
           stableType: 'player'
         },
-        capacity: { actors: 1, spots: 0 },
-        actorRelocationPolicy: 'disabled' as const
+        capacity: { actors: 1, spots: 0 }
       };
       const first = await store.reserve(request);
       assert.equal(first.kind, 'reserved');
       if (first.kind !== 'reserved') throw new Error('reservation missing');
+      const steadyPayload = encodeActorAuthorityPayload({
+        state: 'ready',
+        stableType: 'player',
+        actorId: request.key.globalId,
+        currentSpotKind: ZLinkSpotKind.Entry,
+        currentSpotId: 'entry',
+        currentSpotGeneration: 1n,
+        ownerId: old.ownerId,
+        ownerLeaseGeneration: old.leaseGeneration,
+        meshName: 'mesh',
+        nodeRid: 'node-a',
+        nodeGeneration: 1n
+      });
       const readyPayload =
         scenario === 'relocation' || scenario === 'relocationRecreate'
-          ? new LegacyRelocationAuthorityFixture().publish(
-              Buffer.from('old-state-and-membership'),
-              {
-                reference: 'reclaim-relocation',
-                checksumCrc32c: 0,
-                aggregateId: '00000000-0000-0000-0000-000000000001',
-                aggregateGeneration: 1n,
-                inventoryDigest: '00'.repeat(32),
-                targetOwnerId: 'reclaim-target',
-                targetOwnerLeaseGeneration: 1n
-              }
-            )
-          : Buffer.from('old-state-and-membership');
+          ? new LegacyRelocationAuthorityFixture().publish(steadyPayload, {
+              reference: 'reclaim-relocation',
+              checksumCrc32c: 0,
+              aggregateId: '00000000-0000-0000-0000-000000000001',
+              aggregateGeneration: 1n,
+              inventoryDigest: '00'.repeat(32),
+              targetOwnerId: 'reclaim-target',
+              targetOwnerLeaseGeneration: 1n
+            })
+          : steadyPayload;
       const completed = await store.completeCreation({
         key: request.key,
         target: request.target,
@@ -1146,7 +1135,10 @@ for (const backend of ['provider', 'memory'] as const) {
             {
               objectKind: 'actor',
               stableType: 'player',
-              policy: 'disabled',
+              policy:
+                scenario === 'recreate' || scenario === 'relocationRecreate'
+                  ? 'recreate'
+                  : 'disabled',
               hasSnapshotAdapter: false,
               entryAccepted: false,
               limit: 0
@@ -1162,15 +1154,15 @@ for (const backend of ['provider', 'memory'] as const) {
           nodeLifecycleGeneration: 1n,
           owner: { ownerId: replacement.ownerId, leaseGeneration: replacement.leaseGeneration }
         },
-        actorRelocationPolicy:
-          scenario === 'recreate' || scenario === 'relocationRecreate'
-            ? ('recreate' as const)
-            : policy,
         intent: {
           ...request.intent,
           stableType: scenario === 'typeMismatch' ? 'different' : 'player'
         }
       };
+      if (['expired', 'race', 'capacityRace', 'capacityCorrupt'].includes(scenario)) {
+        await assert.rejects(store.reserve(next), /invalid lease delay/);
+        monotonicMs = 3;
+      }
       if (scenario === 'recreate') {
         await assert.rejects(
           store.reserve(next),
@@ -1217,7 +1209,7 @@ for (const backend of ['provider', 'memory'] as const) {
         assert.equal(current.kind, 'snapshot');
         if (current.kind === 'snapshot') {
           assert.equal(current.objectGeneration, first.creating.objectGeneration);
-          assert.deepEqual(current.payload, Buffer.from('old-state-and-membership'));
+          assert.deepEqual(current.payload, steadyPayload);
         }
       } else if (scenario === 'capacityRace') {
         const read = provider.read.bind(provider);
@@ -1300,8 +1292,7 @@ for (const backend of ['provider', 'memory'] as const) {
         nodeRid: newDescriptor.rid,
         nodeLifecycleGeneration: newDescriptor.lifecycleGeneration,
         owner: owner(newDescriptor.ownerId, newDescriptor.leaseGeneration)
-      }),
-      actorRelocationPolicy: 'disabled' as const
+      })
     };
     const key = encodeAuthorityKey('user_spot', 'release-delay');
     const expectUnavailable = async (observer: typeof store) => {
@@ -1366,8 +1357,7 @@ test('a Missing authority row retains the previous owner token release delay', a
       nodeRid: newDescriptor.rid,
       nodeLifecycleGeneration: newDescriptor.lifecycleGeneration,
       owner: owner(newDescriptor.ownerId, newDescriptor.leaseGeneration)
-    }),
-    actorRelocationPolicy: 'disabled' as const
+    })
   };
   await assert.rejects(
     store.reserve(request),
@@ -1571,8 +1561,7 @@ test('an earlier live lease callback cannot clear a later invalid observation', 
       nodeRid: newDescriptor.rid,
       nodeLifecycleGeneration: newDescriptor.lifecycleGeneration,
       owner: owner(newDescriptor.ownerId, newDescriptor.leaseGeneration)
-    }),
-    actorRelocationPolicy: 'disabled' as const
+    })
   };
   const capacityKey = storeKey('zlink:v11:capacity:mesh:race-old-node');
   let staleLeaseReadPending = true;
@@ -1654,8 +1643,7 @@ test('deferred Spot scan and release write preserve a different owner token t0',
       nodeRid: newDescriptor.rid,
       nodeLifecycleGeneration: newDescriptor.lifecycleGeneration,
       owner: owner(newDescriptor.ownerId, newDescriptor.leaseGeneration)
-    }),
-    actorRelocationPolicy: 'disabled' as const
+    })
   };
   const delay = store.ownerLeaseReleaseDelayForTesting;
   const g2Owner = owner('future-member-owner', 1n);
@@ -1758,8 +1746,7 @@ test('a completed member release preserves a newer token observation made after 
       nodeRid: newDescriptor.rid,
       nodeLifecycleGeneration: newDescriptor.lifecycleGeneration,
       owner: owner(newDescriptor.ownerId, newDescriptor.leaseGeneration)
-    }),
-    actorRelocationPolicy: 'disabled' as const
+    })
   };
   const spotRowKey = storeKey(opaqueRecordPreimage('authority', 'spot', spotId));
   const memberRowKey = storeKey(opaqueRecordPreimage('authority', 'actor', 'member-after-release'));
@@ -4489,8 +4476,7 @@ async function createReadyMember(
     },
     target: placement,
     creatingPayload: Buffer.from('creating'),
-    capacity: { actors: 1, spots: 0 },
-    actorRelocationPolicy: 'disabled' as const
+    capacity: { actors: 1, spots: 0 }
   };
   const reserved = await store.reserve(request);
   assert.equal(reserved.kind, 'reserved');
