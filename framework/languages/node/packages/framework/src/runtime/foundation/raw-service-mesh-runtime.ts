@@ -1802,6 +1802,8 @@ export class RawServiceMeshRuntime {
       }
     }
     if (selectedTargetNodeRoutingId === this.descriptor.nodeRoutingId) {
+      if (requestOperation?.nodeRequestStartedMs !== undefined)
+        requestOperation.localDispatchMs = performance.now();
       encodedPayload = copyPayloadBytes(encodedPayload);
       // The registry ends local admission before delivering the terminal.
       const pending =
@@ -1889,6 +1891,7 @@ export class RawServiceMeshRuntime {
     }
     const parts = [header, encodedPayload];
     const completed = (replyParts: readonly Buffer[]) => {
+      if (pending.nodeRequestStartedMs !== undefined) pending.replyReceivedMs = performance.now();
       try {
         if (replyParts.length < 1 || replyParts.length > 2) {
           throw new ServiceWireProtocolError('Invalid reply parts.');
@@ -1935,6 +1938,12 @@ export class RawServiceMeshRuntime {
         operationKind
       );
     if (selectedPeer !== undefined) {
+      if (pending.nodeRequestStartedMs !== undefined) {
+        const now = performance.now();
+        pending.routeGeneration = this.selectedRoutes.get(selectedTargetNodeRoutingId);
+        if (pending.routeGeneration !== undefined) pending.routeSelectedMs = now;
+        pending.peerAdmittedMs = now;
+      }
       try {
         this.requireStarted().request(
           selectedTargetNodeRoutingId,
@@ -1956,6 +1965,7 @@ export class RawServiceMeshRuntime {
       selectedTargetNodeRoutingId,
       pending,
       (remaining, finished) => {
+        if (pending.nodeRequestStartedMs !== undefined) pending.peerAdmittedMs = performance.now();
         this.requireStarted().request(
           selectedTargetNodeRoutingId,
           parts,
