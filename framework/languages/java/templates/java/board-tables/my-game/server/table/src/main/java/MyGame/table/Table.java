@@ -37,12 +37,17 @@ public final class Table implements ZLinkSpot<Player> {
         return context;
     }
 
+    public void configure() {
+        context.handlers().addHandler(RoomPackets.Commit.class);
+        context.handlers().addHandler(RoomPackets.Withdraw.class);
+    }
+
     public CompletionStage<ZLinkSpotActorJoinResult> onActorJoin(
             String actorId, ZLinkMessage request) {
         var join = request.decode(JoinTableRequest.class);
         checkJoin(actorId, join);
         return CompletableFuture.completedFuture(
-                admit(actorId)
+                (state.matchMembers == null ? admit(actorId) : state.matchMembers.contains(actorId))
                         ? ZLinkSpotActorJoinResult.accept()
                         : ZLinkSpotActorJoinResult.reject());
     }
@@ -53,7 +58,44 @@ public final class Table implements ZLinkSpot<Player> {
     }
 
     public CompletionStage<Void> onJoinedActor(Player actor) {
+        return index(actor.context().actorId()) == Rules.NO_SEAT
+                ? CompletableFuture.completedFuture(null)
+                : broadcastViews();
+    }
+
+    public CompletionStage<Void> onDisconnectActor(Player actor) {
+        return actor.disconnected();
+    }
+
+    RoomPrepared prepare(PrepareRoom request) {
+        boolean valid =
+                context.spotId().equals(request.assignmentId())
+                        && request.members() != null
+                        && request.members().size() == Rules.MIN_PLAYERS
+                        && new HashSet<>(request.members()).size() == Rules.MIN_PLAYERS
+                        && request.members().stream().noneMatch(id -> id == null || id.isBlank());
+        if (!valid) return new RoomPrepared(request.assignmentId(), false);
+        if (state.matchMembers == null && state.seats.isEmpty())
+            state.matchMembers = List.copyOf(request.members());
+        return new RoomPrepared(
+                request.assignmentId(), request.members().equals(state.matchMembers));
+    }
+
+    CompletionStage<Void> commit(CommitRoom message) {
+        if (!reserved(message.assignmentId())) return CompletableFuture.completedFuture(null);
+        for (var member : state.matchMembers) admit(member);
         return broadcastViews();
+    }
+
+    void withdraw(WithdrawRoom message) {
+        if (reserved(message.assignmentId())) state.matchMembers = List.of();
+    }
+
+    private boolean reserved(String assignmentId) {
+        return context.spotId().equals(assignmentId)
+                && state.matchMembers != null
+                && !state.matchMembers.isEmpty()
+                && state.seats.isEmpty();
     }
 
     public CompletionStage<Void> onLeaveActor(Player actor) {
@@ -94,6 +136,8 @@ public final class Table implements ZLinkSpot<Player> {
     public CompletionStage<Void> current(Player actor) {
         String id = actor.context().actorId();
         int i = index(id);
+        if (state.matchMembers != null && i == Rules.NO_SEAT)
+            return CompletableFuture.completedFuture(null);
         var response = reply(actor, view(id, seatViews()));
         if (i != Rules.NO_SEAT) {
             var dealt = new HandDealt(state.handNumber, privateHand(id));
@@ -169,8 +213,7 @@ public final class Table implements ZLinkSpot<Player> {
         if (reason == null && (!state.inHand || request.handNumber() != state.handNumber))
             reason = Rules.NO_HAND;
         if (reason == null && i != state.turnSeat) reason = Rules.NOT_YOUR_TURN;
-        if (reason == null
-                && (request.amount() < 0 || request.amount() > state.seats.get(i).chips))
+        if (reason == null && (request.amount() < 0 || request.amount() > state.seats.get(i).chips))
             reason = Rules.INVALID_AMOUNT;
         if (reason != null) return new BetOutcome(reason, null);
 
@@ -197,8 +240,7 @@ public final class Table implements ZLinkSpot<Player> {
         for (int next = 0; next < state.seats.size(); next++)
             if (next != currentSeat
                     && !state.seats.get(next).cards.isEmpty()
-                    && !state.seats.get(next).acted)
-                return next;
+                    && !state.seats.get(next).acted) return next;
         return Rules.NO_SEAT;
     }
 
@@ -224,8 +266,7 @@ public final class Table implements ZLinkSpot<Player> {
         var winnerBalances = new ArrayList<Long>(winners.size());
         for (int i = 0; i < winners.size(); i++) {
             int winner = winners.get(i);
-            long balance =
-                    state.seats.get(winner).chips - (winner == bettor ? betAmount : 0L);
+            long balance = state.seats.get(winner).chips - (winner == bettor ? betAmount : 0L);
             var withShare = Rules.tryAddContractIntegers(balance, share);
             if (withShare.isEmpty()) return null;
             balance = withShare.getAsLong();
@@ -288,7 +329,7 @@ public final class Table implements ZLinkSpot<Player> {
     }
 
     static CompletionStage<Void> reply(Player actor, Object message) {
-        return actor.context().boundSession().send(message).submit();
+        return actor.reply(message);
     }
 
     private CompletionStage<Void> reject(Player actor, String reason) {

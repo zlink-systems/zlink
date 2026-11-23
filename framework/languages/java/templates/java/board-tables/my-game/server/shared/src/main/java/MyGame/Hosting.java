@@ -28,9 +28,7 @@ public final class Hosting {
     }
 
     public static <T> Flow.Subscription observe(
-            Flow.Publisher<T> publisher,
-            CompletableFuture<Void> ready,
-            Consumer<T> action) {
+            Flow.Publisher<T> publisher, CompletableFuture<Void> ready, Consumer<T> action) {
         var subscribed = new CompletableFuture<Flow.Subscription>();
         publisher.subscribe(
                 new Flow.Subscriber<>() {
@@ -50,13 +48,22 @@ public final class Hosting {
 
                     public void onComplete() {
                         ready.completeExceptionally(
-                                new IllegalStateException("Runtime observation ended before Serving"));
+                                new IllegalStateException(
+                                        "Runtime observation ended before Serving"));
                     }
                 });
         return subscribed.join();
     }
 
     public static void run(Class<?> application, String[] args) throws Exception {
+        run(application, args, ignored -> {});
+    }
+
+    public static void run(
+            Class<?> application,
+            String[] args,
+            Consumer<org.springframework.context.ConfigurableApplicationContext> bootstrap)
+            throws Exception {
         if (args.length != 1)
             throw new IllegalArgumentException("Supply a node configuration path");
         System.setProperty("MyGame.config", new File(args[0]).getAbsolutePath());
@@ -89,17 +96,20 @@ public final class Hosting {
                                                     + status.terminationResult());
                                 }
                                 if (observed.loss().discardedTerminalCount() != 0)
-                                    ready.completeExceptionally(new IllegalStateException("Startup observation lost"));
+                                    ready.completeExceptionally(
+                                            new IllegalStateException("Startup observation lost"));
                                 else if (status.state() == ZLinkFrameworkRuntimeState.SERVING)
                                     ready.complete(null);
                                 else if (status.state() != ZLinkFrameworkRuntimeState.PREPARING)
                                     ready.completeExceptionally(
-                                            new IllegalStateException("Runtime startup failed: " + status.state()));
+                                            new IllegalStateException(
+                                                    "Runtime startup failed: " + status.state()));
                                 if (status.state() == ZLinkFrameworkRuntimeState.RELOCATED
                                         && status.safeToShutdown()) safe.complete(null);
                             });
             try {
                 ready.get(Control.HOST_DEADLINE.toSeconds(), TimeUnit.SECONDS);
+                bootstrap.accept(app);
                 var endpoints = new LinkedHashMap<String, Object>();
                 endpoints.put("id", config.id());
                 endpoints.put(

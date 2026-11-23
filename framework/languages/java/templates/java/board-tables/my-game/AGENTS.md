@@ -1,8 +1,33 @@
 # MyGame development guide
 
+## Client connection
+
+Use [Client connection in README](README.md#client-connection) for this template's endpoint, first application flow, connector choices and Java example. Keep the endpoint and packet order consistent with `server/config/`, Session startup, shared DTOs and the e2e client. Register push handlers before sending; preserve the documented join and HTTP preconditions. TCP listeners cannot serve browser, WebGL or Cocos Creator web targets. Use the release pinned by `build.gradle.kts` extra `frameworkVersion` for connectors and `bindingVersion` for the binding; `<version>` and `<binding-version>` in this file refer to those keys. Do not add literal release versions or copy engine sample packets into this template.
+
+## Rules for AI
+
+Every server process in this project is a stateful ZLink node. Before writing code, decide which kind you are editing.
+
+- A game node is not a REST server. A player's state is owned by one session-bound Actor (or the Spot that owns a shared value). Load it once on connect; do not read the database while handling a request.
+- Write only results to the database, one transaction per round. Check duplicate requests in Actor or Spot memory.
+- While a game is running, a Spot handler never awaits a remote request or a database reply: the await holds the Spot's turn and stops every message and timer in it. When a round ends, the Spot writes the results of all its Actors in one transaction, then tells each Actor after the commit.
+- Values many players see live in node memory or one owning Spot; values many requests update are applied by that one owning Spot. A process that does not own a value sends a request to its owner instead of writing it.
+- Spots and Actors already process one message at a time. Do not guard their state with locks, semaphores or process-wide static stores, and do not update memory from database commit hooks; the writer updates its owner's memory after commit, others send a message to the owner.
+- Split roles so the game can scale out from day one: game nodes host lobby and room Spots and player Actors and are the only processes you add; a shared node hosts only game-wide Instance Spots (matchmaking, game-wide values), and game nodes do not register those factories. Send and request by Spot ID only; placement is configuration. Keep shared-Spot values recoverable from room resends or a database read at startup.
+- Never have two Actors or Spots wait on requests to each other inside a turn; notify with send and let the state owner decide.
+- Actors move between nodes when they join a Spot or relocate. Keep all mutable Actor fields in one state record, register stateful Actors with the state-preserving relocation policy, and test that save and restore preserve every field.
+- Player data reaches a Spot with the Actor that joins it; do not request it per player at Spot entry. If a Spot truly needs extra data, fetch it for all players in one request before the game starts.
+- Keep game rules as synchronous domain code with no ZLink or database calls. Reach the database only through capability ports named after game events (`loadPlayer`, `commitRound`), never a generic CRUD repository. Keep the domain model (rounds, hands, wallets) separate from message DTOs and database rows, converting once at the handler and adapter boundary. Do not add pass-through layers or a service layer outside Spots and Actors.
+- Decide what remains in the database if the process dies now, and how startup cleans it up. Retry only on the "being removed" reply; return other failures to the caller.
+- Do not block, sleep, retry or raise timeouts in handlers; ZLink waits for remote connections. Report ZLink defects with a minimal repro instead of compensating in game code.
+- Send money or reward results only after the database commit.
+- One decision has one owner; find the existing one before adding another. Take test expectations from the spec, not from the implementation.
+
+Details: [Stateful game nodes and the HTTP lobby](https://docs.zlink.systems/java/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
+
 ## Project overview
 
-This Java 25 project is a board-table server example in which players sit at a Table, are dealt private cards, and bet in turn. It runs a Session gateway for connections, Table hosts A and B whose Tables are created on demand, and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework to `0.32.0` and the binding to `1.23.0`.
+This Java 25 project is a board-table server example in which players sit at a Table, are dealt private cards, and bet in turn. It runs a Session gateway for connections, Table hosts A and B whose Tables are created on demand, a Matchmaker node, and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework to `0.33.0` and the binding to `1.26.0`.
 
 The project layout below describes where to add gameplay, and "Extend this template's domain" describes where to add new rules. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 
@@ -15,7 +40,7 @@ Default builds and e2e run nodes and the client in Docker, so they need Docker w
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario table,reconnect,update
+pwsh -NoProfile -File ./run-e2e.ps1 -Scenario table,reconnect,match,match-cancel,update
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 ```
 
@@ -24,7 +49,7 @@ Bash provides the same workflow:
 ```bash
 ./run-e2e.sh --build-only
 ./run-e2e.sh
-./run-e2e.sh --scenario table,reconnect,update
+./run-e2e.sh --scenario table,reconnect,match,match-cancel,update
 ./run-e2e.sh --check-structure
 ```
 
@@ -34,7 +59,11 @@ For host process debugging, install JDK 25 and add `--local` or `-Local`. Add `-
 
 ### Session gateway
 
-`server/session/src/main/java/MyGame/session/Program.java` registers STREAM and the mesh listener, and `server/session/src/main/java/MyGame/session/GameSession.java` handles connection callbacks and forwards incoming packets. A Session is a communication object for a connection; Framework provides binding to associate it with a player state object. `GameSession.onDispatch` requires `JoinTableRequest` as the first packet, gets or creates the Player Actor by `playerId`, binds it, and relays the original packet. Add authentication before binding and retain the typed relay so Framework can identify the connection for replies to that player.
+`server/session/src/main/java/MyGame/session/Program.java` registers STREAM and the mesh listener, and `server/session/src/main/java/MyGame/session/GameSession.java` handles connection callbacks and forwards incoming packets. A Session is a communication object for a connection; Framework provides binding to associate it with a player state object. `GameSession.onDispatch` accepts `JoinTableRequest` or `FindMatch` as the first packet, gets or creates the Player Actor, binds it, and relays the packet. Session generates an ID for a first `FindMatch`. Add authentication before binding and retain the typed relay so Framework can identify the connection for replies to that player.
+
+### Matchmaker
+
+The Matchmaker node registers one Pool factory and starts the SpotWide `pool-board` Spot. `MatchQueue` owns the in-memory queue, and `MatchRule` selects the oldest eligible pair. Keep pairing policy in `MatchRule`. `Pool` prepares each room, receives the Actors' entry reports, and decides commit or withdrawal. A Player stores and forwards its own ticket and reports connection loss from its current Spot. The Table admits prepared members and assigns seats on commit.
 
 ### Tables and players
 
@@ -48,7 +77,7 @@ An Actor is a game state object addressed by ID; `Player` in `server/table/src/m
 
 ### E2E client
 
-`e2e/src/main/java/MyGame/e2e/Client.java` connects through the public connector, and `e2e/src/main/java/MyGame/e2e/Scenarios.java` checks results observable by the client. `e2e/src/main/java/MyGame/e2e/Nodes.java` starts the nodes, keeps their logs, and cleans up the resources of each run; `e2e/src/main/java/MyGame/e2e/Program.java` reports cleanup failures after scenario failures, and either one makes the exit code 1. `e2e/src/main/java/MyGame/e2e/Structure.java` validates the actual files before startup. Keep the scenario order `table,reconnect,update`. Verify new gameplay through received client results; the project includes no separate unit-test module or formatter configuration.
+`e2e/src/main/java/MyGame/e2e/Client.java` connects through the public connector, and `e2e/src/main/java/MyGame/e2e/Scenarios.java` checks results observable by the client. `e2e/src/main/java/MyGame/e2e/Nodes.java` starts the nodes, keeps their logs, and cleans up the resources of each run; `e2e/src/main/java/MyGame/e2e/Program.java` reports cleanup failures after scenario failures, and either one makes the exit code 1. `e2e/src/main/java/MyGame/e2e/Structure.java` validates the actual files before startup. Keep the scenario order `table,reconnect,match,match-cancel,update`. Verify new gameplay through received client results; the project includes no separate unit-test module or formatter configuration.
 
 ## ZLink concepts in this project
 
@@ -118,9 +147,9 @@ Keep type registration and per-instance callbacks in their defined lifecycle pha
 
 ### Reconnection and failure handling
 
-Reconnect with the same Actor ID and bind the new Session to continue using existing player state. Framework manages current placement, so do not add an application route cache or reset player state during reconnect. Backpressure is the behavior that delays or rejects calls when processing capacity is unavailable; observe the public results described in the [Backpressure guide](https://docs.zlink.systems/java/guide/server/33-backpressure/).
+In the named-Table flow, reconnect with the same Actor ID and bind the new Session to continue the game. Framework manages current placement, so do not add an application route cache or reset player state during reconnect. Backpressure is the behavior that delays or rejects calls when processing capacity is unavailable; observe the public results described in the [Backpressure guide](https://docs.zlink.systems/java/guide/server/33-backpressure/).
 
-Investigate Framework failures using actual replies, events, and lifecycle results. Internal APIs, reflection, raw frames, private codecs, extra pollers, fixed sleeps, transport retries, increased deadlines, and weakened assertions do not verify the failing public operation and must not be added as fixes. Write code comments in English and exclude execution and build artifacts in `.logs/`, `build/`, `.gradle/`, and `zlink.license` files from commits.
+Investigate Framework failures using actual replies, events, and lifecycle results. Internal APIs, reflection, raw frames, private codecs, extra pollers, fixed sleeps, transport retries, increased deadlines, and weakened assertions do not verify the failing public operation and must not be added as fixes. Write code comments in English and exclude execution and build artifacts in `.logs/`, `build/`, and `.gradle/` from commits.
 
 ## Debugging
 
@@ -128,7 +157,7 @@ Investigate Framework failures using actual replies, events, and lifecycle resul
 
 Preserve the first failing run and read its logs before deciding whether to run it again. An intermittent failure is an observed defect; a subsequent pass does not invalidate it. `.logs/run-<id>/` contains the effective settings that `Nodes.java` writes at node startup and the logs of each node.
 
-Settings files are `session.json`, `tableA.json`, `tableB.json`. Each node start has its own directory `<node>-<uuid>/` with `<node>-stderr.log` for diagnostic stderr and `<node>-stdout.log` for readiness and control stdout; a replaced node (the `update` scenario) logs to a new directory. In local mode `compose.log` records the Redis Compose output of the run and `.logs/build.log` records the local build. In Docker mode `.logs/docker-<project>/` holds `build.log`, `redis-start.log`, `redis.log`, and `cleanup.log`.
+Settings files are `session.json`, `tableA.json`, `tableB.json`, and `matchmaker.json`. Each node start has its own directory `<node>-<uuid>/` with `<node>-stderr.log` for diagnostic stderr and `<node>-stdout.log` for readiness and control stdout; a replaced node (the `update` scenario) logs to a new directory. In local mode `compose.log` records the Redis Compose output of the run and `.logs/build.log` records the local build. In Docker mode `.logs/docker-<project>/` holds `build.log`, `redis-start.log`, `redis.log`, and `cleanup.log`.
 
 ### Diagnostic levels
 
@@ -198,7 +227,7 @@ The body follows the issue template of the ZLink repository. Copy the following 
 
 Reduce the reproduction to the minimal code or commands that keep only the failing public call, not this whole project. Paste only the first failing log section and the step before it; attach the full log as a file when it is needed. State when startup failed before flow recording.
 
-> **Issues are public.** Remove license keys, tokens, internal host names, and personal data from logs and settings before filing.
+> **Issues are public.** Remove tokens, internal host names, and personal data from logs and settings before filing.
 
 ### Filing procedure
 

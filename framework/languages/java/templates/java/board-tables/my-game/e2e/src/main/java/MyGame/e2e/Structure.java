@@ -106,10 +106,21 @@ public final class Structure {
         unique(spots.stream().map(p -> text(p, "id")).toList());
         var logical = new ArrayList<String>();
         boolean dynamic = false;
+        int pools = 0;
         for (var spot : spots) {
-            require(
-                    roles.get(owner(spot, roles)).equals("table"),
-                    "Table Spot owner must be a table node");
+            String role = roles.get(owner(spot, roles));
+            if (spot.path("type").asText().equals(Names.POOL)) {
+                require(
+                        role.equals("matchmaker")
+                                && text(spot, "kind").equals("user")
+                                && text(spot, "logicalId").equals(Names.POOL_KEY)
+                                && !spot.has("dynamic"),
+                        "Invalid Pool spot declaration");
+                logical.add(Names.POOL_KEY);
+                pools++;
+                continue;
+            }
+            require(role.equals("table"), "Table Spot owner must be a table node");
             switch (text(spot, "kind")) {
                 case "entry" ->
                         require(
@@ -130,6 +141,7 @@ public final class Structure {
             }
         }
         unique(logical);
+        require(pools == 1, "Matchmaker must declare exactly one Pool Spot");
         require(dynamic, "Missing dynamic Table family");
         for (var node : nodes)
             if (roles.get(text(node, "id")).equals("table"))
@@ -162,6 +174,8 @@ public final class Structure {
                 Set.of(
                         new Edge("players", "session", "STREAM", ""),
                         new Edge("session", "tableA", "relay", ""),
+                        new Edge("tableA", "matchmaker", "match requests", ""),
+                        new Edge("matchmaker", "tableA", "room preparation", ""),
                         new Edge("tableA", "location", "Location / lease", "location-authority")))
             require(declaredEdges.contains(required), "Missing required edge: " + required);
         System.out.println("Structure: valid");

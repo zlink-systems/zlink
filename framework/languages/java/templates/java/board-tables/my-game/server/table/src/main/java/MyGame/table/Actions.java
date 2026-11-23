@@ -37,7 +37,7 @@ public final class Actions {
     @ZLinkSpotActorSend
     public CompletionStage<Void> forward(
             Table table, Player actor, ZLinkMessageContext context, TableView message) {
-        return Table.reply(actor, message);
+        return actor.tableView(message);
     }
 
     @ZLinkSpotActorSend

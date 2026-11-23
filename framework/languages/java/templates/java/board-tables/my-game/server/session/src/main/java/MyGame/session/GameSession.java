@@ -7,12 +7,15 @@ import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.streams.*;
 
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.*;
 
 public final class GameSession implements ZLinkSession {
     private static final Set<String> CLIENT_PACKETS =
             Set.of(
                     JoinTableRequest.class.getSimpleName(),
+                    FindMatch.class.getSimpleName(),
+                    CancelMatch.class.getSimpleName(),
                     TableViewRequest.class.getSimpleName(),
                     StartHandRequest.class.getSimpleName(),
                     BetRequest.class.getSimpleName(),
@@ -45,9 +48,7 @@ public final class GameSession implements ZLinkSession {
     public CompletionStage<Void> onDispatch(
             ZLinkSessionDispatchContext dispatch, ZLinkMessage payload) {
         if (!CLIENT_PACKETS.contains(dispatch.packetName()))
-            return context.client()
-                    .send(new ActionRejected(Rules.PACKET_NOT_ALLOWED, 0))
-                    .submit();
+            return context.client().send(new ActionRejected(Rules.PACKET_NOT_ALLOWED, 0)).submit();
 
         if (dispatch.packetName().equals(SessionInfoRequest.class.getSimpleName())) {
             var actor = bound();
@@ -66,34 +67,44 @@ public final class GameSession implements ZLinkSession {
                     || request.tableId() == null
                     || request.tableId().isBlank())
                 throw new IllegalArgumentException("Player and table IDs are required");
-            return actors.getOrCreate(request.playerId(), Names.PLAYER)
-                    .inMesh(Names.MESH)
-                    .request(ZLinkMessage.empty())
-                    .submit()
-                    .thenCompose(
-                            result -> {
-                                ActorRef actor =
-                                        switch (result) {
-                                            case ZLinkActorCreateResult.Created created ->
-                                                    created.actor();
-                                            case ZLinkActorCreateResult.Existing existing ->
-                                                    existing.actor();
-                                            case ZLinkActorCreateResult.Rejected rejected ->
-                                                    throw new IllegalStateException(
-                                                            "Actor creation rejected: " + rejected);
-                                        };
-                                return context.actors()
-                                        .bindOrGet(actor)
-                                        .thenCompose(bound -> bound.relay(dispatch, payload));
-                            });
+            return bindAndRelay(request.playerId(), dispatch, payload);
+        }
+        if (dispatch.packetName().equals(FindMatch.class.getSimpleName())
+                && context.actors().bound().isEmpty()) {
+            return bindAndRelay("player-" + UUID.randomUUID(), dispatch, payload);
         }
         return bound().relay(dispatch, payload);
+    }
+
+    private CompletionStage<Void> bindAndRelay(
+            String playerId, ZLinkSessionDispatchContext dispatch, ZLinkMessage payload) {
+        return actors.getOrCreate(playerId, Names.PLAYER)
+                .inMesh(Names.MESH)
+                .request(ZLinkMessage.empty())
+                .submit()
+                .thenCompose(
+                        result -> {
+                            ActorRef actor =
+                                    switch (result) {
+                                        case ZLinkActorCreateResult.Created created ->
+                                                created.actor();
+                                        case ZLinkActorCreateResult.Existing existing ->
+                                                existing.actor();
+                                        case ZLinkActorCreateResult.Rejected rejected ->
+                                                throw new IllegalStateException(
+                                                        "Actor creation rejected: " + rejected);
+                                    };
+                            return context.actors()
+                                    .bindOrGet(actor)
+                                    .thenCompose(bound -> bound.relay(dispatch, payload));
+                        });
     }
 
     private ZLinkSessionActor bound() {
         var bound = context.actors().bound();
         if (bound.size() != 1)
-            throw new IllegalStateException("JoinTableRequest must be the first packet");
+            throw new IllegalStateException(
+                    "JoinTableRequest or FindMatch must be the first packet");
         return bound.getFirst();
     }
 }
