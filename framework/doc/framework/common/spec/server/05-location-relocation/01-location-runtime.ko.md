@@ -850,8 +850,8 @@ Downgrade나 이전 버전 host 추가 전에는 보존을 끄고 기존 `T` 보
   기존 token이 아직 유효하면 같은 token의 renew로 admission 기한을 갱신하고 token 교체 CAS 없이
   기존 gate를 다시 연다. 정상 만료된 경우에만 새 claim으로 새 `LeaseGeneration`을 발급하고
   객체별 token 교체 CAS를 수행한다. 새 claim이 성공하면 §5의 첫 갱신과 같이 admission 기한을
-  다시 계산하고, 객체별 교체 CAS 제출 전에 새 `LeaseGeneration`을 기록한 descriptor를 §5의
-  게시 규칙(`Renew` intent)으로 다시 게시한다. 게시가 Store에 반영됐다는 확인은 기존 비동기
+  다시 계산하고, 객체별 교체 CAS 제출 전에 새 `LeaseGeneration`을 기록한 descriptor를 §4의
+  Revision 증가와 §5의 게시 규칙(`Renew` intent)으로 다시 게시한다. 게시가 Store에 반영됐다는 확인은 기존 비동기
   continuation으로 받는다. 게시 결과가 불확정이면 §10으로 재확인한다. 교체 CAS는 게시 확인을
   기다리지 않지만 gate 재개에는 그 확인이 필요하다. 재게시가 확정 거절되면 실행권 상실로
   판정하고 복구하지 않으며 기존 폐기·정리 규칙을 적용한다.
@@ -918,18 +918,16 @@ Downgrade나 이전 버전 host 추가 전에는 보존을 끄고 기존 `T` 보
   변경 확인으로 정리를 끝낸다. 폐기한 incarnation의 gate는 다시 열지 않으며, 다른 owner·incarnation의
   record는 삭제하지 않는다.
 
-**같은 process의 owner lease 재claim.** 이 host의 owner lease가 정상 만료된 것을 확인하면, Store 장애
-복구 중인지와 관계없이 같은 process가 같은 `OwnerId`로 새 claim을 요청할 수 있다. 새 claim이 성공하면
-위 복구 규칙과 같은 순서를 따른다. 새 `LeaseGeneration`을 발급받고, admission 기한을 다시 계산하고, 그
-`LeaseGeneration`을 기록한 descriptor를 §5의 게시 규칙(`Renew` intent)으로 다시 게시한 뒤 객체별 token
-교체 CAS를 제출한다. 교체 CAS의 대상과 기한은 위 보존 규칙을 따르며, 보존 대상이 아니거나 `T`를 넘긴
-객체는 기존 폐기·정리 규칙을 적용한다. 새 claim을 하지 않으면 이 host는 그 owner 자격을 다시 얻을
-방법이 없으므로 재claim 경로를 장애 복구에만 두지 않는다.
+**같은 process의 owner lease 재claim.** 이 host의 owner lease가 정상 만료된 것을 확인하면 같은 process가
+같은 `OwnerId`로 새 claim을 요청할 수 있다. Store 장애 복구 중이 아니어도 같다. 새 claim이 성공한 뒤의
+descriptor 재게시, 객체별 token 교체 CAS, gate 재개와 폐기는 위 복구 규칙 하나를 따른다. 보존 대상은
+Store 통신 실패를 처음 관측하기 전에 steady `Ready`였던 객체이므로, 장애 없이 만료됐으면 교체 CAS 대상이
+없고 만료 전의 객체는 기존 폐기·정리 규칙으로 정리한다. 재claim 경로를 장애 복구에만 두면 그 host는
+owner 자격을 다시 얻을 방법이 없다.
 
-- **새 token과 admission 기한은 확인 전까지 잠정이다.** §5 차단 표의 일반 새 작업은 다시 게시한
-  descriptor의 Store 반영을 확인한 뒤에만 받는다. 각 객체의 gate는 자기 교체 CAS 성공과 그 반영 확인을
-  모두 받은 뒤에만 다시 연다. 새 claim의 성공만으로 host나 객체의 admission을 열면 다른 host가 아직 옛
-  descriptor를 보는 동안 새 token으로 작업을 시작하기 때문이다.
+- **일반 새 작업은 재게시 반영을 확인한 뒤에 받는다.** 새 claim 뒤 host는 새 `LeaseGeneration`을 기록한
+  descriptor를 다시 게시하고, 그 반영을 확인하기 전까지 §5 차단 표의 나머지 작업을 받지 않는다. 새 claim
+  성공만으로 admission을 열면 다른 host가 아직 옛 descriptor를 보는 동안 새 token으로 작업을 시작하기 때문이다.
 - **재claim은 옛 handler·timer의 종료를 기다리지 않는다.** 정상 만료를 확인하면 기존 gate와 fence를
   먼저 닫고 새 claim을 요청한다. 이미 시작한 callback은 아래 한계대로 끝까지 실행될 수 있으며, 그
   callback이 만드는 Store 변경은 옛 token을 쓰므로 새 token을 검증하는 CAS가 거절한다. 종료 대기를
@@ -1929,7 +1927,7 @@ provider conformance test가 store record golden fixture로 관찰하는 key·va
   Framework 검증 항목이 아니다. 동일 margin에서 host별 TTL이 달라도 해제는 옛 owner의 `T`보다 이르지 않다.
 - 장애 없이 owner lease가 정상 만료된 host는 같은 `OwnerId`로 새 claim을 하고 새 `LeaseGeneration`의
   descriptor를 다시 게시한다. 그 게시가 Store에 반영되기 전에는 새 Actor·Spot 생성과 message 수용이
-  거절되고, 각 객체는 자기 교체 CAS와 게시 반영을 모두 확인한 뒤에만 다음 message를 처리한다.
+  거절되고, 만료 전의 객체는 다시 열리지 않고 정리된다.
 - 재claim 시점에 실행 중이던 callback이 끝난 뒤 옛 token으로 제출한 Store 변경은 거절되고, 재claim은 그
   callback의 종료를 기다리지 않고 진행한다.
 - 만료 전 복구는 검증·renew 뒤 같은 token으로 gate를 다시 열고, 정상 만료 뒤에만 교체 CAS를 한다.
