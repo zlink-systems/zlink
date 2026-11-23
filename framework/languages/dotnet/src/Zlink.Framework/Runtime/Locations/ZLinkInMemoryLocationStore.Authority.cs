@@ -814,7 +814,13 @@ internal sealed partial class ZLinkInMemoryLocationStore
         )
             return false;
         var active = current.Allocation.State == ZLinkPlacementAllocationState.Active;
-        if (active && ZLinkRelocationAuthorityPayloadCodec.TryDecode(current.Payload.Span, out _))
+        if (
+            active
+            && (
+                current.Relocation is not null
+                || ZLinkRelocationAuthorityPayloadCodec.TryDecode(current.Payload.Span, out _)
+            )
+        )
             return false;
         var descriptorKey = ZLinkLocationKeyCodec.EncodeMeshNodeKey(current.Allocation.Descriptor);
         var owner = new ZLinkLocationOwnerToken(current.OwnerId, current.OwnerLeaseGeneration);
@@ -1158,6 +1164,7 @@ internal sealed partial class ZLinkInMemoryLocationStore
                 {
                     StoreVersion = Next(ref _authorityRevision).ToString(),
                     Payload = participant.AuthorityPayload.ToArray(),
+                    Relocation = aggregate.Request.ApplyRelocation(current.Relocation),
                     AuthorityOwnerGeneration = changesOwner
                         ? aggregate.TargetAuthorityOwnerGenerations[participant.Key]
                         : current.AuthorityOwnerGeneration,
@@ -1571,6 +1578,8 @@ internal sealed partial class ZLinkInMemoryLocationStore
             || left.TargetDescriptorLifecycleGeneration != right.TargetDescriptorLifecycleGeneration
             || left.Capacity != right.Capacity
             || left.AllowPreparingTarget != right.AllowPreparingTarget
+            || left.Relocation != right.Relocation
+            || left.ClearRelocation != right.ClearRelocation
             || !left.InventoryDigest.Span.SequenceEqual(right.InventoryDigest.Span)
             || left.Participants.Count != right.Participants.Count
         )
