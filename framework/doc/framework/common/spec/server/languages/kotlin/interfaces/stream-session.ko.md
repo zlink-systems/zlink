@@ -8,7 +8,7 @@ builder member는 `enableActorDispatch()`이며 MeshName 인자를 받지 않는
 또는 Server인 Mesh와 Location Store가 필요하다. Global ActorId가 current authority와 Mesh를 결정한다.
 
 Session bind는 `ActorRef`를 한 번 받는다. Local Actor instance나 ActorId만 받는 bind overload는 없다.
-Bind 시 current mapping이 없으면 `NotFound`, generation이 다르면 `InvalidOperation`, pre-commit
+Bind 시 current mapping이 없으면 `Unavailable`, generation이 다르면 `InvalidOperation`, pre-commit
 seal 구간이면 `Unavailable`이다. Framework는 hidden retry나 local fallback을 수행하지 않는다.
 
 Session send·reply, bound session send와 Session Actor relay는 Kotlin one-way wrapper를 반환한다. Application은

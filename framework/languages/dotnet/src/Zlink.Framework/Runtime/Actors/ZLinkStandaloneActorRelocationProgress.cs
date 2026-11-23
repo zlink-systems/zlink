@@ -78,14 +78,22 @@ internal sealed class ZLinkStandaloneActorRelocationProgressCoordinator(
                 throw new ZLinkRelocationDataLostException(
                     $"Canonical standalone Actor relocation phase is '{canonical.Phase}', not '{(byte)expected}'."
                 );
-            var payload = ZLinkCanonicalRelocationAuthorityStateCodec.ReplaceRelocationState(
-                current.Authority.Payload.Span,
-                canonical.State with
+            var payload = current.Authority.Relocation is not null
+                ? current.Authority.Payload
+                : ZLinkCanonicalRelocationAuthorityStateCodec.ReplaceRelocationState(
+                    current.Authority.Payload.Span,
+                    canonical.State with
+                    {
+                        Phase = (byte)next,
+                    },
+                    current.Root
+                );
+            var relocation = current.Authority.Relocation is { } record
+                ? record with
                 {
-                    Phase = (byte)next,
-                },
-                current.Root
-            );
+                    Phase = (ServiceWireCodec.RelocationPhase)next,
+                }
+                : null;
             var exchanged = await authorityStore
                 .CompareExchangeAuthorityAsync(
                     identity.Participants.Single().AuthorityKey,
@@ -95,7 +103,10 @@ internal sealed class ZLinkStandaloneActorRelocationProgressCoordinator(
                         ZLinkAuthorityGenerationTransition.Preserve,
                         null,
                         null
-                    ),
+                    )
+                    {
+                        Relocation = relocation,
+                    },
                     cancellationToken
                 )
                 .ConfigureAwait(false);
@@ -154,7 +165,10 @@ internal sealed class ZLinkStandaloneActorRelocationProgressCoordinator(
                             ZLinkAuthorityGenerationTransition.Preserve,
                             null,
                             null
-                        ),
+                        )
+                        {
+                            ClearRelocation = true,
+                        },
                         cancellationToken
                     )
                     .ConfigureAwait(false);
@@ -237,7 +251,7 @@ internal sealed class ZLinkStandaloneActorRelocationProgressCoordinator(
             );
         if (
             ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                found.Snapshot.Payload.Span,
+                found.Snapshot,
                 out var directCanonical
             )
             && ZLinkStandaloneActorRelocationPrecommitCoordinator.IsDirectTransferReference(
@@ -301,10 +315,7 @@ internal sealed class ZLinkStandaloneActorRelocationProgressCoordinator(
         if (publication.IsCanonical)
         {
             if (
-                !ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                    found.Snapshot.Payload.Span,
-                    out canonical
-                )
+                !ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(found.Snapshot, out canonical)
                 || canonical.RelocationReference != publication.Reference
                 || canonical.RelocationChecksumCrc32c != publication.ChecksumCrc32c
                 || !ZLinkActorAuthorityPayloadCodec.TryDecode(

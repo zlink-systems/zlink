@@ -32,8 +32,8 @@
     {
       "id": "API",
       "type": "external",
-      "label": "CommerceApi",
-      "sublabel": "HTTP · validate · query",
+      "label": "api node",
+      "sublabel": "CommerceApi",
       "row": 1,
       "col": 1
     },
@@ -63,7 +63,7 @@
   "boundaries": [
     {
       "kind": "region",
-      "label": "OrderWorkflow node ×2",
+      "label": "play node ×2",
       "wraps": [
         "SP"
       ]

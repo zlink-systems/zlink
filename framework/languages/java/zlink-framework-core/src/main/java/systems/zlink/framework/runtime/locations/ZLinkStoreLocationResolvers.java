@@ -31,6 +31,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -320,7 +321,7 @@ public final class ZLinkStoreLocationResolvers
         if (decision.waitForDiscovery()) {
             discovery = withinPlacementDeadline(observation.changed(), deadline);
         } else {
-            discovery = refreshPlacement(meshName, observation, deadline);
+            discovery = refreshPlacement(meshName, observation, OptionalLong.of(deadline));
         }
         return discovery.thenCompose(
                 ignored ->
@@ -336,18 +337,20 @@ public final class ZLinkStoreLocationResolvers
     }
 
     private CompletionStage<List<ZLinkMeshNodeDescriptor>> refreshPlacement(
-            String meshName, PlacementObservation observation, long deadline) {
-        if (System.currentTimeMillis() >= deadline) {
+            String meshName, PlacementObservation observation, OptionalLong deadline) {
+        if (placementDeadlineExpired(deadline)) {
             return CompletableFuture.failedFuture(
                     new ZLinkFrameworkException(
                             ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
                             "Placement deadline exceeded"));
         }
-        return withinPlacementDeadline(
-                        CompletableFuture.completedFuture(meshName)
-                                .thenCompose(this::listLiveMeshNodes),
-                        deadline)
+        var scan = CompletableFuture.completedFuture(meshName).thenCompose(this::listLiveMeshNodes);
+        return (deadline.isPresent() ? withinPlacementDeadline(scan, deadline.getAsLong()) : scan)
                 .thenApply(nodes -> publishPlacementScan(meshName, observation, nodes));
+    }
+
+    private static boolean placementDeadlineExpired(OptionalLong deadline) {
+        return deadline.isPresent() && System.currentTimeMillis() >= deadline.getAsLong();
     }
 
     private List<ZLinkMeshNodeDescriptor> observedLiveNodes(PlacementObservation observation) {
@@ -373,7 +376,10 @@ public final class ZLinkStoreLocationResolvers
      * Spot address messaging §4.1: infer types from serving descriptors before applying capacity.
      */
     public CompletionStage<InstancePlacement> selectInstancePlacement(
-            String meshName, String requestedType, Set<RoutingId> connected, long deadline) {
+            String meshName,
+            String requestedType,
+            Set<RoutingId> connected,
+            OptionalLong deadline) {
         return selectInstancePlacement(meshName, requestedType, connected, deadline, true);
     }
 
@@ -381,7 +387,7 @@ public final class ZLinkStoreLocationResolvers
             String meshName,
             String requestedType,
             Set<RoutingId> connected,
-            long deadline,
+            OptionalLong deadline,
             boolean refreshAvailable) {
         PlacementObservation observation;
         synchronized (placement) {
@@ -417,7 +423,13 @@ public final class ZLinkStoreLocationResolvers
                                                         Set.of()))
                                 .toList()
                         : List.<ZLinkMeshNodeDescriptor>of();
-        if (!candidates.isEmpty() && System.currentTimeMillis() < deadline) {
+        if (placementDeadlineExpired(deadline)) {
+            return CompletableFuture.failedFuture(
+                    new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                            "Placement deadline exceeded"));
+        }
+        if (!candidates.isEmpty()) {
             return CompletableFuture.completedFuture(
                     new InstancePlacement(
                             stableType,
@@ -430,12 +442,6 @@ public final class ZLinkStoreLocationResolvers
                             ignored ->
                                     selectInstancePlacement(
                                             meshName, requestedType, connected, deadline, false));
-        }
-        if (System.currentTimeMillis() >= deadline) {
-            return CompletableFuture.failedFuture(
-                    new ZLinkFrameworkException(
-                            ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
-                            "Placement deadline exceeded"));
         }
         return CompletableFuture.failedFuture(
                 new ZLinkFrameworkException(

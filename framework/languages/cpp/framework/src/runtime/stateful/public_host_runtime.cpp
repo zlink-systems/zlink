@@ -3684,7 +3684,10 @@ public_host_runtime_t::relocation_target_fence (const relocation_target_attempt_
             {coordinator.owner_id, static_cast<std::int64_t> (coordinator.lease_generation)},
             {attempt.prepare.target.target_owner_id,
              static_cast<std::int64_t> (attempt.prepare.target.target_owner_lease_generation)},
-            attempt.prepare.relocation};
+            attempt.prepare.relocation,
+            coordinator.node_routing_id,
+            coordinator.node_generation,
+            attempt.prepare.target_attempt_generation};
 }
 
 public_host_runtime_t::relocation_target_settlement_t
@@ -4053,7 +4056,8 @@ bool public_host_runtime_t::submit_relocation_target_authority (
               attempt.prepare.coordinator.expected_authority_store_version,
               attempt.prepare.relocation,
               {attempt.prepare.coordinator.owner_id,
-               static_cast<std::int64_t> (attempt.prepare.coordinator.lease_generation)});
+               static_cast<std::int64_t> (attempt.prepare.coordinator.lease_generation)},
+              &attempt.prepare);
             if (published.status != stateful::authority_publish_status_t::published
                 || !published.current || published.current->source != attempt.sources.front ())
                 return adopt_store_fences ();
@@ -4317,6 +4321,11 @@ task_t<bool> public_host_runtime_t::try_finalize_relocation_target (relocation_a
         co_await discard_attempt ();
         co_return false;
     }
+
+    if (attempt.targets.size () == 1
+        && attempt.targets.front ().kind == stateful::object_kind_t::actor && _relocation_authority
+        && !_relocation_authority->finish_relocation (attempt.targets.front (), attempt.prepare))
+        co_return false;
 
     for (const auto &object : attempt.wire_objects)
         (void) _relocation_wire->unregister_target (

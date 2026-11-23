@@ -20,10 +20,12 @@ import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
 import systems.zlink.framework.spots.ZLinkSpot;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
@@ -58,7 +60,8 @@ public final class ZLinkSpotRuntimeTestAccess {
             ScheduledExecutorService timerExecutor,
             ThreadPoolExecutor multicastExecutor,
             Executor handlerExecutor,
-            Supplier<ZLinkStateLane> timerStateLaneFactory) {
+            Supplier<ZLinkStateLane> timerStateLaneFactory,
+            Clock activationClock) {
         return new ZLinkSpotRuntime(
                 backendFactory,
                 adapterOptions,
@@ -72,7 +75,8 @@ public final class ZLinkSpotRuntimeTestAccess {
                 timerExecutor,
                 multicastExecutor,
                 handlerExecutor,
-                timerStateLaneFactory);
+                timerStateLaneFactory,
+                activationClock);
     }
 
     public static boolean actorQueuesEmpty(ZLinkSpotSerialExecutor executor) {
@@ -177,7 +181,7 @@ public final class ZLinkSpotRuntimeTestAccess {
 
     public static CompletionStage<?> selectInstanceSpotTarget(
             ZLinkSpotRuntime runtime, String meshName, String stableType, long deadline) {
-        return runtime.selectInstanceSpotTarget(meshName, stableType, deadline);
+        return runtime.selectInstanceSpotTarget(meshName, stableType, OptionalLong.of(deadline));
     }
 
     public static Map<String, ZLinkInternalMeshNode> routeMeshNodesByName(

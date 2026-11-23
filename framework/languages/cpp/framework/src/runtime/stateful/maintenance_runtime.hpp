@@ -142,6 +142,9 @@ struct relocation_authority_fence_t
     location_owner_token_t source_owner;
     location_owner_token_t target_owner;
     protocol::relocation_id_t relocation;
+    std::vector<std::uint8_t> source_node_routing_id{};
+    std::uint64_t source_node_generation = 0;
+    std::uint64_t target_attempt_generation = 0;
 };
 
 /* Settled authority of one relocation unit as the Location Store shows it.
@@ -235,7 +238,21 @@ class authority_relocation_port_t
               * fence); empty for a publish that is not a relocation CAS. */
              std::string expected_store_version = {},
              protocol::relocation_id_t relocation = {},
-             location_owner_token_t source_owner = {}) = 0;
+             location_owner_token_t source_owner = {},
+             const protocol::relocation_prepare_t *prepare = nullptr) = 0;
+    virtual bool capture_source (const std::vector<object_ref_t> &,
+                                 const relocation_authority_fence_t &,
+                                 const std::string &,
+                                 std::uint64_t,
+                                 std::uint64_t)
+    {
+        return true;
+    }
+    virtual bool cancel_source_capture (const relocation_authority_fence_t &) { return true; }
+    virtual bool finish_relocation (const object_ref_t &, const protocol::relocation_prepare_t &)
+    {
+        return true;
+    }
     virtual std::optional<authority_relocation_reference_t> read (object_kind_t kind,
                                                                   const std::string &key) = 0;
     virtual authority_publish_result_t publish_completion (object_kind_t,
@@ -635,6 +652,7 @@ class maintenance_runtime_t
     task_t<bool> capture_relocation_session_bindings (
       eligible_relocation_unit_t::canonical_wire_context_t &context);
     task_t<bool> relocate_encode (std::shared_ptr<relocation_terminal_state_t> state);
+    static relocation_authority_fence_t source_fence (const relocation_terminal_state_t &state);
     task_t<bool> relocate_prepare_target (std::shared_ptr<relocation_terminal_state_t> state);
     task_t<bool> relocate_send_state_chunks (std::shared_ptr<relocation_terminal_state_t> state,
                                              std::function<bool ()> target_failed = {});
@@ -645,7 +663,8 @@ class maintenance_runtime_t
     void release_transfer_budget (std::uint64_t bytes) noexcept;
     task_t<source_relocation_settlement_t>
     settle_relocation (std::shared_ptr<relocation_terminal_state_t> state,
-                       std::vector<object_ref_t> participants);
+                       std::vector<object_ref_t> participants,
+                       bool before_cutover = false);
     task_t<std::pair<relocation_terminal_t, relocation_reason_t>>
     apply_relocation_settlement (const std::shared_ptr<relocation_terminal_state_t> &state,
                                  const std::vector<object_ref_t> &participants,

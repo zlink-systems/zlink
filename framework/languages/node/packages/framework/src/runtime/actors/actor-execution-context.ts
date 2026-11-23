@@ -39,6 +39,13 @@ export function currentZLinkActorExecution():
   return context?.active === true ? context : undefined;
 }
 
+/** Carries the Actor mailbox claim into one of its Spot application turns. */
+export function bindZLinkActorExecution<T>(operation: () => T): () => T {
+  const context = actorExecutionStorage.getStore();
+  if (context?.active !== true) return operation;
+  return () => actorExecutionStorage.run(context, operation);
+}
+
 /** Runs Spot work outside the submitting Actor's execution scope. */
 export function runOutsideZLinkActorExecution<T>(operation: () => T): T {
   return actorExecutionStorage.exit(operation);

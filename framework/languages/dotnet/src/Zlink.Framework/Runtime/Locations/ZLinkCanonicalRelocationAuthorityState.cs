@@ -133,6 +133,18 @@ internal static class ZLinkCanonicalRelocationAuthorityStateCodec
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
     internal static bool TryRead(
+        Zlink.Framework.Contracts.Locations.ZLinkAuthoritySnapshot snapshot,
+        out ZLinkCanonicalRelocationAuthorityProjection projection,
+        ulong aggregateGeneration = 0
+    )
+    {
+        if (snapshot.Relocation is not { } relocation)
+            return TryRead(snapshot.Payload.Span, out projection);
+        projection = relocation.Project(snapshot.Payload, aggregateGeneration);
+        return true;
+    }
+
+    internal static bool TryRead(
         ReadOnlySpan<byte> authorityPayload,
         out ZLinkCanonicalRelocationAuthorityProjection projection
     )
