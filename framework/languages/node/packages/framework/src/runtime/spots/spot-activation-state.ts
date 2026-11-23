@@ -244,9 +244,10 @@ export class ZLinkSpotActivation {
     actorId: string,
     operation: (serial: ZLinkSpotSerialTurnExecutor) => Promise<T> | T,
     workOptions?: import('../execution/serial-execution-queue').ZLinkSerialWorkOptions,
-    capture?: (serial: ZLinkSpotSerialTurnExecutor) => Promise<T> | T
+    capture?: (serial: ZLinkSpotSerialTurnExecutor) => Promise<T> | T,
+    preparation?: import('../execution/serial-execution-queue').ZLinkSerialWorkPreparation
   ): Promise<T> {
-    return this.serialExecutor.executeActor(actorId, operation, workOptions, capture);
+    return this.serialExecutor.executeActor(actorId, operation, workOptions, capture, preparation);
   }
 
   /** @internal Restores a non-executing durable prefix into one Actor FIFO. */

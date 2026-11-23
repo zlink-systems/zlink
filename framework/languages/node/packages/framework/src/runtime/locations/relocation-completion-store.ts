@@ -200,12 +200,7 @@ export class RelocationCompletionStore {
   }
 
   requireCompleted(authority: ZLinkAuthoritySnapshot): void {
-    const completion = authority.relocation?.completion;
-    if (
-      completion === undefined ||
-      completion.acceptedRequests !== completion.completedResults ||
-      completion.pendingDeliveries !== 0n
-    )
+    if (!isRelocationCompletionReady(authority))
       completionDataLost('Relocation still has incomplete requests or pending delivery.');
   }
 
@@ -285,6 +280,15 @@ export class RelocationCompletionStore {
     return read;
   }
 }
+export function isRelocationCompletionReady(authority: ZLinkAuthoritySnapshot): boolean {
+  const completion = authority.relocation?.completion;
+  return (
+    completion !== undefined &&
+    completion.acceptedRequests === completion.completedResults &&
+    completion.pendingDeliveries === 0n
+  );
+}
+
 function sha256(bytes: Uint8Array): string {
   return createHash('sha256').update(bytes).digest('hex');
 }

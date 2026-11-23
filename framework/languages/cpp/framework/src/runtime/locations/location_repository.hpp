@@ -98,6 +98,8 @@ struct pending_object_creation_t
     bool operator== (const pending_object_creation_t &) const = default;
 };
 
+struct authority_aggregate_t;
+
 struct authority_snapshot_t
 {
     std::string store_version;
@@ -108,6 +110,7 @@ struct authority_snapshot_t
     std::chrono::system_clock::time_point store_now;
     placement_allocation_t allocation;
     std::optional<pending_object_creation_t> pending_creation;
+    std::shared_ptr<const authority_aggregate_t> aggregate{};
 
     bool same_incarnation (const authority_snapshot_t &other) const
     {
@@ -171,6 +174,7 @@ struct authority_put_t
     std::vector<std::byte> payload;
     std::optional<std::chrono::steady_clock::time_point> operation_deadline;
     std::shared_ptr<const std::pair<authority_snapshot_t, location_owner_token_t>> preservation;
+    std::optional<std::shared_ptr<const authority_aggregate_t>> replace_aggregate{};
 
     static authority_put_t preserve (authority_snapshot_t snapshot, location_owner_token_t owner)
     {
@@ -242,6 +246,7 @@ struct authority_retarget_t
 {
     std::vector<std::byte> payload;
     object_creation_target_t target;
+    std::optional<std::shared_ptr<const authority_aggregate_t>> replace_aggregate{};
 };
 struct authority_restore_t
 {

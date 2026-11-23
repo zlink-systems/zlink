@@ -295,9 +295,9 @@ for (const outcome of ['accepted', 'publication', 'deadline', 'unavailable']) {
           }
         }
       };
-      let releaseReplay;
-      const replayHeld = new Promise((resolve) => {
-        releaseReplay = resolve;
+      let releaseOpening;
+      const openingHeld = new Promise((resolve) => {
+        releaseOpening = resolve;
       });
       let openAdmission;
       const opened = new Promise((resolve) => {
@@ -397,7 +397,14 @@ for (const outcome of ['accepted', 'publication', 'deadline', 'unavailable']) {
           },
           hidden: new Map()
         },
-        owner: { async publish() {}, normalize: () => replayHeld, openAdmission },
+        owner: {
+          async publish() {},
+          normalize: () => Promise.resolve(),
+          async openAdmission() {
+            openAdmission();
+            if (outcome !== 'publication') await openingHeld;
+          }
+        },
         releaseActivation() {},
         releaseJoinAdmission() {}
       };
@@ -412,7 +419,7 @@ for (const outcome of ['accepted', 'publication', 'deadline', 'unavailable']) {
         assert.equal(current.relocation.phase, 'activated');
         if (outcome === 'publication') {
           // The Join starts while the completed relocation is still published.
-          releaseReplay();
+          releaseOpening();
           await Promise.race([clearing, terminal]);
           assert.equal(current.relocation.phase, 'completed');
         }
@@ -492,7 +499,7 @@ for (const outcome of ['accepted', 'publication', 'deadline', 'unavailable']) {
             errors.join('\n')
           );
           assert.equal(captureCount, 0, 'capture must wait until the previous flow finishes');
-          releaseReplay();
+          releaseOpening();
           await Promise.race([clearing, terminal]);
           assert.equal(current.relocation.phase, 'completed');
           await turn();
@@ -529,7 +536,7 @@ for (const outcome of ['accepted', 'publication', 'deadline', 'unavailable']) {
           }
         }
       } finally {
-        releaseReplay();
+        releaseOpening();
         releasePublication();
         await terminal;
       }

@@ -33,6 +33,8 @@ title: "ZoneWorld 따라 읽기 · Kotlin"
 
 ## 1. 이 샘플이 보여 주는 것
 
+`Gateway`는 게임 클라이언트 세션을 관리하는 session node입니다. `ZoneNode`는 zone Spot이 있는 play node입니다.
+
 월드는 zone으로 나뉘고, 각 zone은 id를 가진 User Spot이다. 어느 ZoneNode가 어느 zone을 맡는지는
 설정이 아니라 Location Store의 placement가 정한다. player는 id를 가진 Actor이며, zone 경계를 넘는
 것은 인접 zone Spot에 join하는 것이다 — owner가 다르면 framework가 Actor를 옮기고, client의
@@ -49,8 +51,8 @@ push와 경계 snapshot → 운영 fanout과 node 관찰 순서다. "여러 node
 
 | 역할 | process 수 | 소유하는 것 | 코드 위치 |
 | --- | ---: | --- | --- |
-| Gateway | 1 | game STREAM, player Actor bind, relay와 push | `Server/Gateway` |
-| ZoneNode | 2 | Entry Spot, zone Spot, player Actor, bot timer, local report | `Server/ZoneNode` |
+| session node (Gateway) | 1 | game STREAM, player Actor bind, relay와 push | `Server/Gateway` |
+| play node (ZoneNode) | 2 | Entry Spot, zone Spot, player Actor, bot timer, local report | `Server/ZoneNode` |
 | Ops | 1 | ops STREAM, runtime event 수집, fanout publish, maintenance store | `Server/Ops` |
 | Client | 브라우저 | game 화면과 ops 콘솔 | `Client` |
 

@@ -5125,8 +5125,8 @@
           <text data-node-label="" x="141.5" y="94" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">HTTP client</text>
         </g>
 
-        <g id="node-Api" data-node-id="Api" data-node-label="API server" tabindex="0" role="button" aria-label="Focus API server, Sequence participant" aria-pressed="false" data-node-kind="frontend" data-node-context="Sequence participant">
-          <title>API server · Sequence participant</title>
+        <g id="node-Api" data-node-id="Api" data-node-label="api node" tabindex="0" role="button" aria-label="Focus api node, Sequence participant" aria-pressed="false" data-node-kind="frontend" data-node-context="Sequence participant">
+          <title>api node · Sequence participant</title>
           <rect x="256.75" y="72" width="159" height="54" rx="6" class="c-mask"/>
           <rect x="256.75" y="72" width="159" height="54" rx="6" class="c-frontend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(262.75 78) scale(0.6875)">
@@ -5135,7 +5135,7 @@
             <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
             <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
           </g>
-          <text data-node-label="" x="336.25" y="94" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">API server</text>
+          <text data-node-label="" x="336.25" y="94" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">api node</text>
         </g>
 
         <g id="node-Store" data-node-id="Store" data-node-label="Location Store" tabindex="0" role="button" aria-label="Focus Location Store, Sequence participant" aria-pressed="false" data-node-kind="external" data-node-context="Sequence participant">
@@ -5149,14 +5149,14 @@
           <text data-node-label="" x="531" y="94" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Location Store</text>
         </g>
 
-        <g id="node-Play" data-node-id="Play" data-node-label="Selected Play node" tabindex="0" role="button" aria-label="Focus Selected Play node, Sequence participant" aria-pressed="false" data-node-kind="backend" data-node-context="Sequence participant">
-          <title>Selected Play node · Sequence participant</title>
+        <g id="node-Play" data-node-id="Play" data-node-label="play node" tabindex="0" role="button" aria-label="Focus play node, Sequence participant" aria-pressed="false" data-node-kind="backend" data-node-context="Sequence participant">
+          <title>play node · Sequence participant</title>
           <rect x="646.25" y="72" width="159" height="54" rx="6" class="c-mask"/>
           <rect x="646.25" y="72" width="159" height="54" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(652.25 78) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" x="725.75" y="94" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Selected Play node</text>
+          <text data-node-label="" x="725.75" y="94" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">play node</text>
         </g>
 
         <g id="node-Spot" data-node-id="Spot" data-node-label="Game Spot" tabindex="0" role="button" aria-label="Focus Game Spot, Sequence participant" aria-pressed="false" data-node-kind="backend" data-node-context="Sequence participant">
@@ -5363,8 +5363,8 @@
           <h3>Reservation and placement</h3>
         </div>
         <ul>
-          <li>&bull; The API doesn&#39;t pick a specific Play node. The Location Store reserves a new Spot and returns a globally unique SpotId and the selected owner.</li>
-          <li>&bull; The API tells the selected Play node to create the Spot along with the initial request — Create Spot with initial request.</li>
+          <li>&bull; The API doesn&#39;t pick a specific play node. The Location Store reserves a new Spot and returns a globally unique SpotId and the selected owner.</li>
+          <li>&bull; The API tells the selected play node to create the Spot along with the initial request — Create Spot with initial request.</li>
         </ul>
       </div>
 
@@ -5374,7 +5374,7 @@
           <h3>Creation and response</h3>
         </div>
         <ul>
-          <li>&bull; The Play node constructs and initializes the Game Spot, and once the Spot returns Accept it is ready.</li>
+          <li>&bull; The play node constructs and initializes the Game Spot, and once the Spot returns Accept it is ready.</li>
           <li>&bull; The API returns RoomId = SpotId to the client.</li>
         </ul>
       </div>

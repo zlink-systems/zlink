@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 #pragma once
 #include "runtime/locations/actor_authority_payload.hpp"
+#include "runtime/locations/authority_aggregate_relocation.hpp"
 #include "runtime/locations/relocation_authority_payload.hpp"
 
 #include "../../../../../../runtime/protocol/generated/cpp/service_wire_constants.hpp"
@@ -588,6 +589,8 @@ class in_memory_location_repository_t : public location_repository_t
                 auto snapshot = found->second;
                 snapshot.store_version = next_store_version ();
                 snapshot.payload = std::move (retarget->payload);
+                if (retarget->replace_aggregate)
+                    snapshot.aggregate = *retarget->replace_aggregate;
                 snapshot.authority_owner_generation = _authority_owner_generation;
                 snapshot.owner = retarget->target.owner;
                 snapshot.store_now = now;
@@ -646,6 +649,7 @@ class in_memory_location_repository_t : public location_repository_t
                   authority_compare_exchange_result_t{authority_generation_exhausted_t{}});
 
             std::vector<std::byte> payload;
+            auto aggregate = found->second.aggregate;
             if (auto *reincarnate = std::get_if<authority_reincarnate_t> (&mutation)) {
                 if (!issue_generations (
                       {{&_object_generation, 1}, {&_authority_owner_generation, 1}}))
@@ -655,12 +659,15 @@ class in_memory_location_repository_t : public location_repository_t
                 owner_generation = _authority_owner_generation;
                 payload = std::move (reincarnate->payload);
             } else {
-                payload = std::move (std::get<authority_put_t> (mutation).payload);
+                auto &put = std::get<authority_put_t> (mutation);
+                payload = std::move (put.payload);
+                if (put.replace_aggregate)
+                    aggregate = std::move (*put.replace_aggregate);
             }
-            authority_snapshot_t snapshot{next_store_version (), std::move (payload),
-                                          object_generation,     owner_generation,
-                                          std::move (owner),     now,
-                                          std::move (allocation)};
+            authority_snapshot_t snapshot{
+              next_store_version (),  std::move (payload), object_generation,
+              owner_generation,       std::move (owner),   now,
+              std::move (allocation), std::nullopt,        std::move (aggregate)};
             _authorities[key.value] = snapshot;
             return completed (
               authority_compare_exchange_result_t{authority_stored_t{std::move (snapshot)}});
@@ -1210,6 +1217,8 @@ class in_memory_location_repository_t : public location_repository_t
                   if (participant.owner_transition
                       == authority_generation_transition_t::new_owner) {
                       snapshot.authority_owner_generation = ++next_owner_generation;
+                      snapshot.aggregate =
+                        authority_aggregate_codec::without_capture (snapshot.aggregate);
                       snapshot.owner = aggregate->second.request.target_owner;
                       const auto source_allocation = snapshot.allocation;
                       snapshot.allocation.target = target;
@@ -1416,7 +1425,7 @@ class in_memory_location_repository_t : public location_repository_t
         }
         if (active) {
             const auto actor = decode_direct_actor_authority_payload (snapshot.payload);
-            if (actor && actor->has_relocation_state)
+            if (snapshot.aggregate || (actor && actor->has_relocation_state))
                 throw framework_exception_t (framework_error_kind_t::unavailable,
                                              "Object authority requires relocation recovery");
             if (!discarded
@@ -1508,7 +1517,7 @@ class in_memory_location_repository_t : public location_repository_t
                 continue;
             if (authority.allocation.state != placement_allocation_state_t::active
                 || member->state != actor_authority_state_t::ready || member->has_relocation_state
-                || authority_mutation_locked_on_lane (member_key))
+                || authority.aggregate || authority_mutation_locked_on_lane (member_key))
                 throw framework_exception_t (
                   framework_error_kind_t::unavailable,
                   "User Spot still has a relocating or unactivated member");

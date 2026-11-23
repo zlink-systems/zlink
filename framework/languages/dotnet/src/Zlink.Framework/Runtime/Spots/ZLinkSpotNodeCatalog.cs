@@ -1581,7 +1581,7 @@ internal sealed class ZLinkSpotNodeCatalog(
                         .ConfigureAwait(false);
                     return claimed.Owner is null
                         ? default
-                        : await CloseOnLifecycleLaneAsync(current, null, null, ct)
+                        : await CloseOnLifecycleLaneAsync(current, null, null, "Spot context", ct)
                             .ConfigureAwait(false);
                 }
                 finally
@@ -1959,7 +1959,13 @@ internal sealed class ZLinkSpotNodeCatalog(
             async (current, ct) =>
             {
                 await current.BeginCloseBoundaryAsync(ct).ConfigureAwait(false);
-                return await CloseOnLifecycleLaneAsync(current, fence, deadline, ct)
+                return await CloseOnLifecycleLaneAsync(
+                        current,
+                        fence,
+                        deadline,
+                        fence is null ? "local Spot manager" : "remote Spot manager (command 48)",
+                        ct
+                    )
                     .ConfigureAwait(false);
             }
         );
@@ -1973,6 +1979,7 @@ internal sealed class ZLinkSpotNodeCatalog(
         ZLinkSpotActivation activation,
         UserSpotCloseFence? fence,
         DateTimeOffset? deadline,
+        string closeSource,
         CancellationToken cancellationToken
     )
     {
@@ -2009,7 +2016,7 @@ internal sealed class ZLinkSpotNodeCatalog(
 
         // Closing CAS 이후에는 원 incarnation을 Ready로 되돌리지 않는다.
         // CAS 전에 설정한 gate boundary를 유지하며 이미 시작한 호출만 완료한다.
-        activation.BeginCommittedClose();
+        activation.BeginCommittedClose(closeSource);
         try
         {
             await activation.AwaitStartedCloseCallsAsync(cancellationToken).ConfigureAwait(false);

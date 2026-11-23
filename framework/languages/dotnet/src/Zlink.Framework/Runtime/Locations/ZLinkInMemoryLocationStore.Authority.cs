@@ -166,6 +166,7 @@ internal sealed partial class ZLinkInMemoryLocationStore
                     {
                         StoreVersion = Next(ref _authorityRevision).ToString(),
                         Payload = restore.Payload.ToArray(),
+                        Relocation = restore.ClearRelocation ? null : current.Relocation,
                         StoreNow = now,
                     };
                     _authorities[key.Value] = restored;
@@ -330,7 +331,10 @@ internal sealed partial class ZLinkInMemoryLocationStore
                     nextAllocation,
                     current.ReservedCreation,
                     now
-                );
+                )
+                {
+                    Relocation = put.ApplyRelocation(current),
+                };
                 _authorityObjectGeneration = Math.Max(
                     _authorityObjectGeneration,
                     checked((long)nextObjectGeneration)
@@ -905,6 +909,7 @@ internal sealed partial class ZLinkInMemoryLocationStore
             if (
                 authority.Allocation.State != ZLinkPlacementAllocationState.Active
                 || IsAuthorityInPreparedAggregate(new ZLinkAuthorityKey(entry.Key))
+                || authority.Relocation is not null
                 || !ZLinkActorAuthorityPayloadCodec.IsSteadyReady(authority.Payload.Span)
             )
                 throw new ZLinkFrameworkException(

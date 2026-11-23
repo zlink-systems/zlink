@@ -327,10 +327,7 @@ public sealed class JoinCallbackSendTests
                         )
                 );
                 Assert.False(
-                    ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                        authority.Snapshot.Payload.Span,
-                        out _
-                    )
+                    ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(authority.Snapshot, out _)
                 );
                 Assert.True(target.Runtime.TryGetActorState(actor.ActorId, out var state));
                 Assert.False(state.Handoff.TargetActivation.IsCompleted);
