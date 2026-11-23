@@ -23,8 +23,10 @@ if ($RunnerArguments -ccontains '--attach') {
     $RunnerArguments = @($RunnerArguments | Where-Object { $_ -cne '--attach' })
 }
 $checkingStructure = $RunnerArguments -ccontains '--check-structure'
+# A test run uses the server started by run-server.ps1 whenever one is running.
 if (-not $Attach -and -not $Local -and -not $BuildOnly -and -not $checkingStructure -and
-    $RunnerArguments -ccontains '--scenario' -and (Test-RunningServer)) {
+    (Test-RunningServer)) {
+    Write-Host 'Using the running server (.logs/server.json)'
     $Attach = $true
 }
 if ($Attach) {

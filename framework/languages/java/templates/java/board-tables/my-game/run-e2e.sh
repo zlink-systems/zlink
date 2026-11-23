@@ -7,7 +7,6 @@ no_build=false
 build_only=false
 attach=false
 check_structure=false
-select_scenario=false
 arguments=()
 for argument in "$@"; do
   case "$argument" in
@@ -16,14 +15,16 @@ for argument in "$@"; do
     --build-only) build_only=true ;;
     --attach) attach=true ;;
     --check-structure) check_structure=true; arguments+=("$argument") ;;
-    --scenario) select_scenario=true; arguments+=("$argument") ;;
+    --scenario) arguments+=("$argument") ;;
     *) arguments+=("$argument") ;;
   esac
 done
 cd "$ROOT"
 mkdir -p "$ROOT/.logs"
 . "$ROOT/scripts/run-helpers.sh"
-if ! $attach && ! $local_mode && ! $build_only && ! $check_structure && $select_scenario && server_running; then
+# A test run uses the server started by run-server.sh whenever one is running.
+if ! $attach && ! $local_mode && ! $build_only && ! $check_structure && server_running; then
+  echo 'Using the running server (.logs/server.json)'
   attach=true
 fi
 if $attach; then

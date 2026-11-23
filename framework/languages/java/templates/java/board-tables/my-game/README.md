@@ -1,4 +1,5 @@
 # MyGame board tables
+[한국어](README.ko.md)
 
 A Java server template for four-seat card tables. Table User Spots own seats, chips, private hands, turns and settlement. Player Actors identify players and forward messages to their bound Sessions. Table nodes preserve application state during planned host relocation.
 
@@ -47,9 +48,9 @@ Install JDK 25 and start Docker. Run the server in a dedicated terminal.
 pwsh -NoProfile -File ./run-server.ps1
 ```
 
-The launcher starts Redis, Play nodes A and B, Matchmaker, and Session. When all nodes are ready, the console prints `Server ready: tcp://127.0.0.1:<port>`. Keep the terminal open while clients are connected. Press Ctrl+C to stop the nodes and remove this run's Redis Compose project.
+The launcher starts Redis, Play nodes A and B, Matchmaker, and Session. When all nodes are ready, the console prints `Server ready: ws://127.0.0.1:<port>`. Keep the terminal open while clients are connected. Press Ctrl+C to stop the nodes and remove this run's Redis Compose project.
 
-From another terminal, run `./run-e2e.sh --scenario match` or `pwsh -NoProfile -File ./run-e2e.ps1 -Scenario match`. The scenario uses the running server and leaves it running. Add `--attach` or `-Attach` to require an existing server. Run `update` in an isolated e2e run because it depends on a fresh topology and a per-scenario table limit.
+From another terminal, run `./run-e2e.sh` or `pwsh -NoProfile -File ./run-e2e.ps1`. While a server started by `run-server` is running, the e2e run only runs the test clients against it and leaves it running; it runs `table`, `reconnect`, `match` and `match-cancel`. Select scenarios with `--scenario match` or `-Scenario match`. Add `--attach` or `-Attach` to require an existing server. `update` replaces a node, so it runs only when no server is running and the e2e run starts its own.
 
 ## Client connection
 

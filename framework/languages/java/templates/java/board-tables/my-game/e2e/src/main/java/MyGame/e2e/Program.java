@@ -25,6 +25,12 @@ public final class Program {
                 !requested.isEmpty() && new HashSet<>(requested).size() == requested.size(),
                 "Invalid scenarios");
         var selected = Arrays.stream(Scenario.values()).filter(requested::contains).toList();
+        if (attach && scenarioArgs.length == 0) {
+            // update replaces a node, so it runs only on servers the e2e run starts itself.
+            selected = selected.stream().filter(s -> s != Scenario.UPDATE).toList();
+            System.out.println(
+                    "Running against the started server; update runs when no server is running.");
+        }
         if (attach) {
             Structure.require(
                     !selected.contains(Scenario.UPDATE),
