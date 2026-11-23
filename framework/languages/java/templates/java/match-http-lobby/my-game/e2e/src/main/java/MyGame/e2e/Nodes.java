@@ -287,6 +287,7 @@ public final class Nodes implements AutoCloseable {
                     System.err.println(
                             "infra cleanup delay: " + id + " " + DOCKER_CLEANUP_SECONDS + "s");
                     process.destroyForcibly().waitFor();
+                    docker("rm", "-f", container);
                     return;
                 }
             } else if (!process.waitFor(Control.PROCESS_SECONDS, TimeUnit.SECONDS)) {
