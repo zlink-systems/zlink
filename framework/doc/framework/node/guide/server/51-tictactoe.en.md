@@ -34,7 +34,11 @@ for requirements, message contracts, and verification criteria.
 
 ## 1. What This Sample Demonstrates
 
-There is no separate Session server. `Play` owns the STREAM connection, the player Actor, the Entry
+`Play` is the play node that hosts room Spots and also acts as the session node that manages client sessions.
+`Api` is the api node that receives and handles room creation and authentication requests like an ordinary HTTP server.
+The play node `Play` calls the api node `Api` as the Client on the `tictactoe.api` [ClientServer Channel](../../../common/spec/server/02-channel-transport/03-client-server-channel.en.md).
+
+`Play` owns the STREAM connection, the player Actor, the Entry
 Spot and the room Spot together, and `Api` handles only HTTP room creation and authentication. The
 connections between servers are not resolved through the Location Store; the code connects directly
 to the endpoints the runner supplies. Handlers are not left to scanning either — each one is listed
@@ -52,8 +56,8 @@ differ — how the framework handles that case is the second subject of this sam
 
 | Role | Processes | Owns | Code |
 | --- | ---: | --- | --- |
-| Api | 2 | HTTP room creation, token verification | `Server/Api` |
-| Play | 2 | STREAM session, Entry Spot, player Actor, room Spot, milestone publish | `Server/Play/Infrastructure` |
+| api node (Api) | 2 | HTTP room creation, token verification | `Server/Api` |
+| play node (Play) | 2 | STREAM session, Entry Spot, player Actor, room Spot, milestone publish | `Server/Play/Infrastructure` |
 | Client | 3 | The host, guest and observer scenarios with self-checks | `Client` |
 
 The board, the turn and the win/draw decision live in `Server/Play/Domain` and reference no framework

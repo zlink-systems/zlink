@@ -207,7 +207,8 @@ export interface ZLinkSpotManagerOptions {
     remoteBoundSessionTarget?: ZLinkRemoteBoundSessionTarget,
     fallbackActorRef?: ActorRef,
     requestTerminal?: (response: unknown) => Promise<void> | void,
-    messageFollowOrigin?: ZLinkMessageFollowOrigin
+    messageFollowOrigin?: ZLinkMessageFollowOrigin,
+    preparation?: import('../execution/serial-execution-queue').ZLinkSerialWorkPreparation
   ) => Promise<unknown>;
   /**
    * Commits a stateful MeshNode Actor return to the Entry Spot after the
@@ -2257,7 +2258,7 @@ export class DefaultZLinkSpotManager {
             const encoded =
               preparedReply === undefined
                 ? this.encodeMeshActorReply(
-                    record.parts[0],
+                    record.parts[0].data(),
                     ZLinkStreamMessageKind.Response,
                     response
                   )
@@ -2268,7 +2269,7 @@ export class DefaultZLinkSpotManager {
           {
             prepare: (response: unknown): readonly Buffer[] => {
               const encoded = this.encodeMeshActorReply(
-                record.parts[0],
+                record.parts[0].data(),
                 ZLinkStreamMessageKind.Response,
                 response
               );
@@ -2316,7 +2317,11 @@ export class DefaultZLinkSpotManager {
         if (request && !requestTerminalState.submitted) {
           requireMeshSpotReply(
             record.reply(
-              this.encodeMeshActorReply(record.parts[0], ZLinkStreamMessageKind.Response, response)
+              this.encodeMeshActorReply(
+                record.parts[0].data(),
+                ZLinkStreamMessageKind.Response,
+                response
+              )
             )
           );
         }
@@ -2332,7 +2337,7 @@ export class DefaultZLinkSpotManager {
       requireMeshSpotReply(
         record.reply(
           this.encodeMeshActorReply(
-            record.parts[0],
+            record.parts[0].data(),
             ZLinkStreamMessageKind.Error,
             boundSessionErrorPayload(error)
           )
@@ -3406,6 +3411,55 @@ export class DefaultZLinkSpotManager {
     return true;
   }
 
+  routeActorJoinIngress(
+    meshName: string,
+    ...[origin, message, parts, reply, reject, prepareSource]: Parameters<
+      import('../foundation/service-stateful-runtime').ZLinkActorJoinIngressRouter
+    >
+  ): boolean {
+    if (parts.length < 2) {
+      throw new ZLinkFrameworkException(
+        ZLinkFrameworkErrorKind.ProtocolError,
+        'Actor ingress requires a header and body.'
+      );
+    }
+    const [header, payload] = parts;
+    const { actorId, generation, nodeRid } = message.target.actor;
+    const prepare = (response: unknown) =>
+      this.encodeMeshActorReply(header, ZLinkStreamMessageKind.Response, response);
+    let submitted = false;
+    const requestTerminal =
+      reply === undefined
+        ? undefined
+        : Object.assign(
+            (response: unknown, prepared?: unknown) => {
+              reply(prepared === undefined ? prepare(response) : (prepared as readonly Buffer[]));
+              submitted = true;
+            },
+            { prepare }
+          );
+    return (
+      this.formalRemoteActorAdmissions.routeIngress(actorId, generation, {
+        origin,
+        header,
+        payload,
+        returnResponse: reply !== undefined,
+        fallbackActorRef: { actorId, objectGeneration: generation, nodeRid, meshName },
+        requestTerminal,
+        messageFollowOrigin: message,
+        preparation: { prepare: prepareSource, cancel() {} },
+        resolve: (response) => {
+          if (!submitted && response !== RELOCATED_REQUEST_OWNED_BY_REQUESTER) {
+            requestTerminal?.(response);
+          }
+        },
+        reject: (error) => {
+          if (!submitted) reject(error);
+        }
+      }) === 'parked'
+    );
+  }
+
   beginActorJoinRelocation(relocationId: string): () => void {
     this.formalRemoteActorAdmissions.beginRestore(relocationId);
     return () => this.formalRemoteActorAdmissions.finishRestore(relocationId);
@@ -3415,10 +3469,17 @@ export class DefaultZLinkSpotManager {
   openActorJoinRelocation(meshName: string, relocationId: string, actor: ZLinkActor): void {
     const admission = this.formalRemoteActorAdmissions.get(relocationId);
     if (admission === undefined) return;
-    const activation = this.activations.resolve(meshName, admission.admission.spotId);
-    if (activation !== undefined) {
-      this.migrateActorJoinPrewarm(activation, actor, relocationId);
+    const spotId = admission.admission.spotId;
+    const activation = this.activations.resolve(meshName, spotId);
+    if (activation === undefined) {
+      if (this.options.dispatchEntryActorPacket === undefined) return;
+      const entrySpotId =
+        this.options.entrySpotIdProvider?.(meshName) ??
+        this.options.entryNodeRidProvider?.() ??
+        this.options.entryNodeRid;
+      if (!routingIdsEqual(spotId, entrySpotId)) return;
     }
+    this.migrateActorJoinPrewarm(activation, actor, relocationId);
   }
 
   async restoreCanonicalActorJoinRecovery(
@@ -3511,12 +3572,12 @@ export class DefaultZLinkSpotManager {
   }
 
   private encodeMeshActorReply(
-    requestHeaderPart: Message,
+    requestHeader: Uint8Array,
     kind: ZLinkStreamMessageKind.Response | ZLinkStreamMessageKind.Error,
     payload: unknown
   ): readonly Buffer[] {
     return encodeActorReply(
-      requestHeaderPart.data(),
+      requestHeader,
       kind,
       payload,
       this.options.messageSerializers,
@@ -3558,7 +3619,8 @@ export class DefaultZLinkSpotManager {
     remoteBoundSessionTarget?: ZLinkRemoteBoundSessionTarget,
     fallbackActorRef?: ActorRef,
     requestTerminal?: (response: unknown) => Promise<void> | void,
-    messageFollowOrigin?: ZLinkMessageFollowOrigin
+    messageFollowOrigin?: ZLinkMessageFollowOrigin,
+    preparation?: import('../execution/serial-execution-queue').ZLinkSerialWorkPreparation
   ): Promise<unknown> {
     return await this.activationLifecycle.dispatchActorPacket(
       origin,
@@ -3569,7 +3631,8 @@ export class DefaultZLinkSpotManager {
       remoteBoundSessionTarget,
       fallbackActorRef,
       requestTerminal,
-      messageFollowOrigin
+      messageFollowOrigin,
+      preparation
     );
   }
 
@@ -3584,27 +3647,36 @@ export class DefaultZLinkSpotManager {
    * ordinary ingress — never both, never neither.
    */
   private migrateActorJoinPrewarm(
-    activation: ZLinkSpotActivation,
+    activation: ZLinkSpotActivation | undefined,
     actor: ZLinkActor,
     transferId: string
   ): void {
     const drained = this.formalRemoteActorAdmissions.completeMigration(transferId);
     if (drained.length === 0) return;
     const terminals = drained.map(async (arrival) => {
+      const parts = [
+        RuntimeMessage.fromOwned(arrival.header),
+        RuntimeMessage.fromOwned(arrival.payload)
+      ];
       try {
-        const response = await this.dispatchActorPacket(
-          arrival.origin,
-          activation,
+        const args = [
           actor.context.actorId,
-          [RuntimeMessage.from(arrival.header), RuntimeMessage.from(arrival.payload)],
+          parts,
           arrival.returnResponse,
           arrival.remoteBoundSessionTarget,
           arrival.fallbackActorRef,
-          arrival.requestTerminal
-        );
+          arrival.requestTerminal,
+          arrival.messageFollowOrigin,
+          arrival.preparation
+        ] as const;
+        const response = await (activation === undefined
+          ? this.options.dispatchEntryActorPacket!(arrival.origin, ...args)
+          : this.dispatchActorPacket(arrival.origin, activation, ...args));
         arrival.resolve(response);
       } catch (error) {
         arrival.reject(error);
+      } finally {
+        for (const part of parts) part.close();
       }
     });
     // Reserve every retained arrival's FIFO position before ordinary ingress

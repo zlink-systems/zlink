@@ -214,15 +214,15 @@ store 없이 endpoint를 등록에 직접 지정하는 수동 연결도 지원�
 같은 MeshNode에서 두 방식을 함께 사용할 수는 없다.
 
 > **샘플에서 보기 — [TicTacToe](../../../common/sample/tictactoe/README.ko.md).** 이 개념들이
-> 한 샘플에 전부 나오는 가장 작은 예다. Play 서버의 등록 코드 한 곳에서 모두 만난다.
+> 한 샘플에 전부 나오는 가장 작은 예다. `Play`의 등록 코드 한 곳에서 모두 만난다.
 >
 > | 개념 | TicTacToe에서 |
 > | --- | --- |
-> | channel | Play 서버가 독립 `tictactoe.api` ClientServer Channel로 인증 정보를 조회한다 |
+> | channel | play node가 독립 `tictactoe.api` ClientServer Channel로 인증 정보를 조회한다 |
 > | spot | 대국 한 판이 `TicTacToeGame` spot 하나 — 두 플레이어의 수가 이 안에서 직렬 처리된다 |
 > | actor | 플레이어가 actor이고, 재접속해도 같은 actor로 이어져 두던 판을 계속한다 |
 > | stream | client가 API 응답의 Play STREAM endpoint에 직접 연결해 수를 두고 push를 받는다 |
-> | location | Redis location store가 새 `TicTacToeGame` spot을 만들 Play node를 자동으로 고른다 — API 코드에 특정 Play node 주소가 없다 |
+> | location | Redis location store가 새 `TicTacToeGame` Spot을 만들 play node(Spot이 있는 node)를 자동으로 고른다 — API 코드에 특정 play node 주소가 없다 |
 >
 > 각 개념이 어떤 문제를 푸는지는 위에서 봤고, **함께 놓이면 어떤 모양인지**는
 > 이 샘플이 보여 준다.
@@ -283,11 +283,14 @@ store 없이 endpoint를 등록에 직접 지정하는 수동 연결도 지원�
 서버 사이 통신과 실시간 상태 서버가 이 framework의 자리다. 인터넷에 직접 노출하는
 edge의 정책은 그 앞단이 소유한다.
 
-## 10. stateful 게임 노드와 HTTP 로비
+## 10. play node와 api node의 역할 { #10-stateful-게임-노드와-http-로비 }
 
-ZLink로 만드는 게임 서버에는 성격이 다른 두 종류의 코드가 있다. 코드를 쓰기 전에 지금 쓰는 코드가 어느 쪽인지 먼저 정한다. AI 도구가 저지르는 실수의 대부분은 게임 노드 코드를 웹 서버처럼 만드는 데서 나온다.
+session node는 클라이언트 세션을 관리하는 node입니다. play node는 Spot이 있는 node입니다.
+Spot은 zone, dungeon instance, table, match 등을 맡습니다. api node는 일반 HTTP 서버처럼
+요청을 받아 처리하는 node입니다. 매치메이킹 요청과 Actor 정보 DB 저장·조회가 이에 해당합니다.
+play node가 ZLink [ClientServer Channel](../../../common/spec/server/02-channel-transport/03-client-server-channel.ko.md)로 api node를 호출할 때 play node는 Client, api node는 Server 역할을 맡습니다.
 
-| 구분 | 게임 노드 | HTTP 로비 |
+| 구분 | play node | api node |
 |---|---|---|
 | 하는 일 | 방·판·이용자 상태를 들고 메시지를 순서대로 처리한다 | 로그인, 매칭, 방 배정처럼 짧은 요청과 응답 |
 | 상태 | 메모리에 있다. 주인은 Spot·Actor 하나다 | 들고 있지 않는다(무상태) |
@@ -295,11 +298,11 @@ ZLink로 만드는 게임 서버에는 성격이 다른 두 종류의 코드가 
 | 템플릿 예 | 모든 템플릿의 Room·Table·Field·Channel 노드 | `match-http-lobby`, `fps-http-lobby`의 Lobby |
 | 하면 안 되는 것 | 요청마다 DB를 읽는 REST식 구조 | 게임 상태(판 진행, 잔액 변화)를 로비에 두기 |
 
-HTTP 로비는 일반 웹 서버처럼 만들어도 된다. 다만 게임 상태를 넘겨받는 순간부터는 게임 노드의 규칙을 따른다. 로비는 게임 노드에 요청을 보낼 뿐, 게임 노드의 값을 직접 바꾸지 않는다.
+api node는 play node에 요청을 보냅니다. 게임 상태는 play node의 Spot이나 Actor가 소유합니다.
 
 아래 규칙의 "흔한 실수"는 실제 게임 개발에서 AI 도구가 만든 코드에서 나온 것이다.
 
-### 10.1 게임 노드는 REST 서버가 아니다
+### 10.1 play node의 상태 관리와 저장 { #101-게임-노드는-rest-서버가-아니다 }
 
 | 규칙 | 흔한 실수 |
 |---|---|
@@ -314,7 +317,7 @@ HTTP 로비는 일반 웹 서버처럼 만들어도 된다. 다만 게임 상태
 
 "그 값을 소유한 Spot 하나"는 상태를 두는 SpotWide Spot을 말한다. `PerActor` Spot은 Spot에 상태를 두지 않으므로 여러 Actor가 함께 바꾸는 값은 [실행 모델 §4](32-execution-model.ko.md#4-peractor--lane마다-하나)대로 외부 저장소에 두고, 조건부 갱신으로 지킨다.
 
-AI가 이렇게 만드는 이유는 흔한 예제(Spring·NestJS 등)가 "리포지토리 조회 → 수정 → 저장"의 무상태 REST이기 때문이다. 게임 노드 코드에서 이 형태가 보이면 멈추고 Actor·Spot 소유 구조로 바꾼다.
+AI가 이렇게 만드는 이유는 흔한 예제(Spring·NestJS 등)가 "리포지토리 조회 → 수정 → 저장"의 무상태 REST이기 때문이다. play node 코드에서 이 형태가 보이면 멈추고 Actor·Spot 소유 구조로 바꾼다.
 
 판 결과 정산의 예외와 주의:
 
@@ -364,7 +367,7 @@ Actor는 Spot에 들어갈 때(Join)와 노드를 옮길 때 다른 노드로 �
 
 계층은 규칙과 외부 기술을 떼어 놓을 때만 둔다. 게임 규칙이 단순하거나 외부 연결이 하나뿐이면 계층을 만들지 않는다.
 
-| 역할 | 게임 노드에서 맡는 것 | 하지 않는 것 |
+| 역할 | play node에서 맡는 것 | 하지 않는 것 |
 |---|---|---|
 | domain | 판 진행·정산 계산 같은 순수 규칙과 상태 전이. 동기 함수 | ZLink·DB·네트워크 호출, async |
 | Spot·Actor handler | 상태의 주인. 메시지를 받아 domain을 부르고, 접속·판 끝에서만 port를 부른다 | 범용 DB 조회, 다른 상태 주인 만들기 |
@@ -374,7 +377,7 @@ Actor는 Spot에 들어갈 때(Join)와 노드를 옮길 때 다른 노드로 �
 - 도메인 모델을 분리한다. 판·패·지갑 같은 게임 상태 타입은 메시지 DTO나 DB 행 타입과 따로 두고, 변환은 adapter와 handler 경계에서 한 번만 한다. 메시지·DB 스키마가 바뀌어도 게임 규칙 코드는 바뀌지 않아야 한다.
 - 전달만 하는 계층을 만들지 않는다. `Handler → Service → DomainService → Entity`가 같은 호출을 넘기기만 하면 계층을 합친다.
 - Spot·Actor 밖에 application service를 따로 두지 않는다. 상태의 주인이 둘이 된다.
-- HTTP 로비는 무상태라 일반적인 헥사고날 배치를 써도 된다. 다만 port는 여기서도 능력 단위로 정한다.
+- api node는 무상태라 일반적인 헥사고날 배치를 써도 된다. 다만 port는 여기서도 능력 단위로 정한다.
 
 ### 10.7 역할 분리 — 작게 시작해도 스케일아웃할 수 있게
 
@@ -382,11 +385,11 @@ Actor는 Spot에 들어갈 때(Join)와 노드를 옮길 때 다른 노드로 �
 
 | 역할 | 맡는 것 | 늘리는 방법 |
 |---|---|---|
-| 게임 노드 프로세스 | 로비·방(테이블) Spot, 이용자 Actor | 스케일아웃은 이 프로세스만 늘린다 |
-| 공용 노드 프로세스 | 게임 전체에 하나인 값의 Instance Spot만: 매칭(방 고르기·빈자리 채우기), 게임 전체 소식·누적 값의 소유 | 처음엔 게임 노드와 같은 장비에 함께 띄운다. 게임 장비가 2대 이상이 되면 장비마다 하나씩 두어 장애에 대비한다 |
+| play node 프로세스(로비·테이블) | 로비·방(테이블) Spot, 이용자 Actor | 스케일아웃은 이 프로세스만 늘린다 |
+| play node 프로세스(공용 Instance Spot) | 게임 전체에 하나인 값의 Instance Spot만: 매칭(방 고르기·빈자리 채우기), 게임 전체 소식·누적 값의 소유 | 처음엔 play node와 같은 장비에 함께 띄운다. 게임 장비가 2대 이상이 되면 장비마다 하나씩 두어 장애에 대비한다 |
 
 - 매칭은 한 서버에서 시작하더라도 구조적으로 분리한다(공용 노드의 Instance Spot).
-- 게임 노드는 공용 Instance Spot의 factory를 등록하지 않는다. 어느 노드가 그 Spot을 맡는지는 'factory를 어느 노드가 등록하느냐'라는 배치 설정이다. 코드는 배치와 무관하게 Spot ID로만 send·request한다.
+- 방을 담당하는 play node에서는 공용 Instance Spot의 factory를 등록하지 않는다. 어느 노드가 그 Spot을 맡는지는 'factory를 어느 노드가 등록하느냐'라는 배치 설정이다. 코드는 배치와 무관하게 Spot ID로만 send·request한다.
 - 여러 이용자·방이 함께 쓰는 값을 프레임워크 싱글턴·전역 Map에 두고 lock(synchronized, Mutex)으로 지키지 않는다. Redis 분산 lock으로 덮지도 않는다. 게임 전체 값은 Instance Spot, 방 값은 방 Spot, 이용자 값은 이용자 Actor가 갖는다(10.2). 흔한 실수: 노드 공용 객체와 lock이 일곱 곳에 있었고, 대부분 '노드가 하나일 때만 맞다'는 가정에 기대고 있었다.
 - 공용 Spot의 값은 방이 다시 보내 주거나 시작 때 DB에서 읽어 복구할 수 있는 것만 둔다. 공용 노드가 다시 시작해도 게임이 이어져야 한다.
 - 용량을 잴 때는 같은 장비에 있는 두 프로세스의 합계 코어와, 프로세스별 CPU·입장 지연 p99를 따로 보고한다.
@@ -426,7 +429,7 @@ Actor는 Spot에 들어갈 때(Join)와 노드를 옮길 때 다른 노드로 �
 - 관측의 원본은 하나다. 조회 응답과 통지를 섞어 상태를 판단하지 않는다.
 - 시험의 기대값은 명세에서 가져오고 구현에 맞추지 않는다. 무작위 결과는 입력을 고정한 단위 시험에서 정확히 확인한다.
 
-### 10.12 점검표 — 게임 노드 코드를 합치기 전에
+### 10.12 play node 코드 점검표 { #1012-점검표--게임-노드-코드를-합치기-전에 }
 
 - [ ] 요청을 처리하는 동안 DB 읽기가 0번이다
 - [ ] 한 판(한 거래)에 DB 쓰기 트랜잭션이 한 번이다
@@ -446,7 +449,7 @@ Actor는 Spot에 들어갈 때(Join)와 노드를 옮길 때 다른 노드로 �
 - [ ] DB 연결은 ZLink runtime이 멈춘 뒤에 닫힌다
 - [ ] 로그인 재시도는 마지막 시도가 돌려준 ActorRef로 bind한다
 - [ ] 돈·보상 통지는 커밋 뒤에 보낸다
-- [ ] 게임 전체에 하나인 값(매칭 등)은 공용 노드의 Instance Spot이고, 게임 노드는 그 factory를 등록하지 않는다
+- [ ] 게임 전체에 하나인 값(매칭 등)은 공용 노드의 Instance Spot이고, 방 프로세스는 그 factory를 등록하지 않는다
 - [ ] 공유 값을 싱글턴·전역 Map·분산 lock으로 지키지 않는다
 - [ ] 공용 Spot의 값은 방 재전송이나 시작 때 DB 읽기로 복구된다
 - [ ] 게임 규칙이 ZLink·DB 없이 시험되고, DB 출구는 능력 단위 port이며 범용 CRUD repository가 없다

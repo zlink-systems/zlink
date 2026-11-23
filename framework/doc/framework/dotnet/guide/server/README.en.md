@@ -37,6 +37,11 @@ between them and state changes reach the client in real time.
 The shape they share is that server processes for each role talk in typed
 messages, and the client receives state changes over a real-time connection.
 
+A session node manages client sessions. A play node hosts Spots for roles such as zones,
+dungeon instances, tables, and matches. An api node receives and handles requests like an
+ordinary HTTP server. Examples include matchmaking and reading or writing Actor data in a database.
+When a play node calls the api node over a ZLink [ClientServer Channel](../../../common/spec/server/02-channel-transport/03-client-server-channel.en.md), the play node acts as the Client and the api node as the Server.
+
 <iframe class="zlink-diagram" src="/common/diagrams/guide-topology-en.html"
         title="Servers for each role talk in typed messages and the client receives over STREAM" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/guide-topology-en.html" target="_blank">↗ Open larger</a></p>

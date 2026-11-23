@@ -3,7 +3,7 @@
   "diagram_type": "architecture",
   "meta": {
     "title": "전체 topology",
-    "subtitle": "API 서버 · 세션 서버 · 도메인 서버 · location store",
+    "subtitle": "session node · play node · api node · location store",
     "output": "01-topology.html",
     "legend": {
       "mode": "hidden"
@@ -13,229 +13,109 @@
     "mode": "grid",
     "origin": [
       50,
-      160
+      150
     ],
-    "cols": 4,
-    "gapX": 104,
-    "gapY": 78,
+    "cols": 5,
+    "gapX": 60,
+    "gapY": 85,
     "cellW": 132,
-    "cellH": 56
+    "cellH": 60
   },
   "components": [
     {
       "id": "client",
       "type": "external",
-      "label": "클라이언트 앱",
-      "row": 1,
+      "label": "client",
+      "row": 0,
       "col": 0
+    },
+    {
+      "id": "l4",
+      "type": "external",
+      "label": "L4",
+      "row": 0,
+      "col": 1
+    },
+    {
+      "id": "session",
+      "type": "database",
+      "label": "session node ×N",
+      "row": 0,
+      "col": 2,
+      "sublabel": "STREAM · relay"
+    },
+    {
+      "id": "play",
+      "type": "backend",
+      "label": "play node ×N",
+      "row": 0,
+      "col": 3,
+      "sublabel": "Spot · Actor"
+    },
+    {
+      "id": "api",
+      "type": "frontend",
+      "label": "api node ×N",
+      "row": 0,
+      "col": 4,
+      "sublabel": "HTTP · handler"
     },
     {
       "id": "store",
       "type": "external",
-      "label": "Location store",
-      "row": 3,
-      "col": 0
-    },
-    {
-      "id": "http",
-      "type": "external",
-      "label": "HTTP endpoint",
-      "row": 0,
-      "col": 1,
-      "sublabel": "POST /games"
-    },
-    {
-      "id": "apic",
-      "type": "frontend",
-      "label": "channel client",
-      "row": 1,
-      "col": 1
-    },
-    {
-      "id": "spotc",
-      "type": "frontend",
-      "label": "spot client",
-      "row": 2,
-      "col": 1
-    },
-    {
-      "id": "actorc",
-      "type": "frontend",
-      "label": "actor client",
-      "row": 3,
-      "col": 1
-    },
-    {
-      "id": "streamn",
-      "type": "database",
-      "label": "STREAM node",
-      "row": 4,
-      "col": 1
-    },
-    {
-      "id": "relay",
-      "type": "messagebus",
-      "label": "session relay",
-      "row": 4,
-      "col": 2
-    },
-    {
-      "id": "nodeh",
-      "type": "frontend",
-      "label": "node handler",
-      "row": 0,
-      "col": 3
-    },
-    {
-      "id": "ispot",
-      "type": "backend",
-      "label": "Instance Spot",
+      "label": "Location Store",
       "row": 1,
       "col": 3
-    },
-    {
-      "id": "espot",
-      "type": "backend",
-      "label": "entry spot",
-      "row": 2,
-      "col": 3,
-      "sublabel": "배정"
-    },
-    {
-      "id": "uspot",
-      "type": "backend",
-      "label": "user spot",
-      "row": 3,
-      "col": 3,
-      "sublabel": "actor"
-    }
-  ],
-  "boundaries": [
-    {
-      "kind": "region",
-      "label": "API 서버 (예: Api)",
-      "wraps": [
-        "http",
-        "apic",
-        "spotc",
-        "actorc"
-      ]
-    },
-    {
-      "kind": "region",
-      "label": "세션 서버 (예: Session)",
-      "wraps": [
-        "streamn",
-        "relay"
-      ]
-    },
-    {
-      "kind": "region",
-      "label": "도메인 서버 (예: Play)",
-      "wraps": [
-        "nodeh",
-        "ispot",
-        "espot",
-        "uspot"
-      ]
     }
   ],
   "connections": [
     {
       "from": "client",
-      "to": "http",
-      "variant": "emphasis",
-      "label": "1 HTTP 요청"
+      "to": "l4"
     },
     {
-      "from": "http",
-      "to": "apic",
-      "variant": "default"
+      "from": "l4",
+      "to": "session"
     },
     {
-      "from": "apic",
-      "to": "nodeh",
-      "variant": "emphasis",
-      "label": "2a ClientServer channel",
-      "labelDy": -22
+      "from": "session",
+      "to": "play",
+      "label": "RouteMesh"
     },
     {
-      "from": "apic",
-      "to": "ispot",
-      "variant": "emphasis",
-      "label": "2b RouteMesh channel",
-      "labelDy": -22
-    },
-    {
-      "from": "spotc",
-      "to": "espot",
-      "variant": "emphasis",
-      "label": "2c id로 Spot 호출",
-      "labelDy": -22
-    },
-    {
-      "from": "actorc",
-      "to": "uspot",
-      "variant": "emphasis",
-      "label": "2d id로 Actor 호출",
-      "labelDy": -22
+      "from": "play",
+      "to": "api",
+      "label": "client/server"
     },
     {
       "from": "client",
-      "to": "streamn",
-      "variant": "emphasis",
-      "label": "3 STREAM 접속"
+      "to": "api",
+      "label": "HTTP",
+      "fromSide": "top",
+      "toSide": "top"
     },
     {
-      "from": "streamn",
-      "to": "relay",
-      "variant": "default",
-      "label": "relay"
-    },
-    {
-      "from": "relay",
-      "to": "uspot",
-      "variant": "emphasis",
-      "label": "4 RouteMesh channel",
-      "labelDy": 22
-    },
-    {
-      "from": "apic",
+      "from": "play",
       "to": "store",
-      "variant": "dashed",
-      "label": "주소 해석",
-      "labelDy": 22
-    },
-    {
-      "from": "streamn",
-      "to": "store",
-      "variant": "dashed",
-      "label": "등록"
+      "variant": "dashed"
     }
   ],
   "cards": [
     {
       "dot": "cyan",
-      "title": "API 서버에서 나가는 길",
+      "title": "api node",
       "items": [
-        "channel client — 이름으로 부른다. handler 하나가 처리하면 ClientServer channel, 상태 단위가 받아야 하면 RouteMesh channel",
-        "spot client — id로 Spot을 부른다",
-        "actor client — id로 Actor를 부른다"
+        "HTTP endpoint(예: POST /games)가 요청을 받습니다. channel client는 ClientServer channel로 node handler를, RouteMesh channel로 Instance Spot을 호출합니다.",
+        "spot client와 actor client는 각각 Spot ID와 Actor ID로 호출합니다.",
+        "ZLink ClientServer Channel에서 play node는 Client로 호출을 시작하고 api node는 Server로 요청을 처리합니다."
       ]
     },
     {
-      "dot": "amber",
-      "title": "세션 서버",
+      "dot": "emerald",
+      "title": "play node",
       "items": [
-        "STREAM node가 client 연결을 받아 session relay하고, RouteMesh channel로 spot의 actor에 전달한다",
-        "도메인 서버에 함께 둘 수는 있으나 일반적인 모양은 아니다 — 연결 수와 상태 처리량이 따로 늘기 때문이다"
-      ]
-    },
-    {
-      "dot": "slate",
-      "title": "Location store = discovery만",
-      "items": [
-        "서버 주소 정보만 관리한다. 점선은 store 조회로 endpoint를 찾는 연결이며 데이터 경로가 아니다"
+        "Entry Spot이 참가자를 배정하고 User Spot과 Actor가 게임 메시지를 처리합니다. play node는 필요할 때 api node에 매칭이나 저장·조회를 요청합니다.",
+        "점선은 Location Store에서 endpoint를 찾는 경로입니다."
       ]
     }
   ]

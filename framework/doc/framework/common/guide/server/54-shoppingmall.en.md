@@ -16,6 +16,9 @@ for requirements, message contracts, and verification criteria.
 
 ## 1. What This Sample Demonstrates
 
+`CommerceApi` is the api node that handles order and read requests like an ordinary HTTP server.
+`OrderWorkflow` is the play node that hosts order Instance Spots.
+
 One order is owned by an Instance Spot whose id is the `OrderId`. The API terminates HTTP, never
 changes order state itself, and only sends requests to that id. The code inside the Spot re-reads the
 event stream to learn the current step, executes exactly one next step, and records an event — there
@@ -32,8 +35,8 @@ first request, and executing one order's handlers one at a time.
 
 | Role | Processes | Owns | Code |
 | --- | ---: | --- | --- |
-| CommerceApi | 2 | HTTP input validation, idempotency mapping, workflow requests, read model queries | `Server/CommerceApi` |
-| OrderWorkflow | 2 | The order workflow Instance Spot, replay, next step and event recording, external module adapters | `Server/OrderWorkflow` |
+| api node (CommerceApi) | 2 | HTTP input validation, idempotency mapping, workflow requests, read model queries | `Server/CommerceApi` |
+| play node (OrderWorkflow) | 2 | The order workflow Instance Spot, replay, next step and event recording, external module adapters | `Server/OrderWorkflow` |
 | Client | 1 | Order start, polling, and the duplicate, failure, resume and rebuild assertions | `Client` |
 
 State transitions, event creation and compensation rules live in `Server/OrderWorkflow/Domain` and
