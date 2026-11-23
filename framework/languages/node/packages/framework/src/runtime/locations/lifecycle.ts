@@ -59,7 +59,8 @@ export class ZLinkLocationLifecycle {
     private readonly authorityStore?: ZLinkAuthorityStore,
     _spotStore?: ZLinkSpotLocationStore,
     invalidateSpotRoute?: (spotId: RoutingId) => void,
-    observeActorAuthorityVersion?: (actorId: string, storeVersion: string) => void
+    observeActorAuthorityVersion?: (actorId: string, storeVersion: string) => void,
+    observeSpotAuthorityVersion?: (spotId: RoutingId, storeVersion: string) => void
   ) {
     this.actorClaims = new ZLinkActorLocationClaims(
       runtime,
@@ -68,7 +69,12 @@ export class ZLinkLocationLifecycle {
       authorityStore,
       observeActorAuthorityVersion
     );
-    this.spotClaims = new ZLinkSpotLocationClaims(runtime, authorityStore, invalidateSpotRoute);
+    this.spotClaims = new ZLinkSpotLocationClaims(
+      runtime,
+      authorityStore,
+      invalidateSpotRoute,
+      observeSpotAuthorityVersion
+    );
     this.actorSessionRoutes = new ZLinkActorSessionRouteClaims(runtime);
     this.runtime.addOwnershipLostHandler(this.ownershipLostHandler);
   }
