@@ -36,15 +36,30 @@ if $local_mode; then
       exit 1
     fi
   fi
+  # Runs the checks of one phase from e2e/checks.conf with the local Node, as Docker runs them in
+  # the runner or node-image service.
+  local_checks() {
+    local wanted="$1" phase service command argument
+    [[ -f e2e/checks.conf ]] || return 0
+    while read -r phase service command argument; do
+      [[ "$phase" == "$wanted" ]] || continue
+      if [[ "$service" == runner ]]; then
+        node dist/e2e/runner.js "$command" ${argument:+"$argument"}
+      else
+        node "$command" ${argument:+"$argument"}
+      fi
+    done < e2e/checks.conf
+  }
   if $build_only; then
-    if [[ -f e2e/checks.conf ]]; then
-      while read -r phase service command argument; do
-        if [[ "$phase" == build && "$service" == runner ]]; then
-          node dist/e2e/runner.js "$command" ${argument:+"$argument"}
-        fi
-      done < e2e/checks.conf
-    fi
+    local_checks build
     exit 0
+  fi
+  if [[ "$mode" == --check-domain ]] && grep -q '^preflight ' e2e/checks.conf 2>/dev/null; then
+    local_checks preflight
+    exit 0
+  fi
+  if [[ "$mode" != --check-* && "$mode" != --domain-checks-only && "$mode" != --attach ]]; then
+    local_checks preflight
   fi
   exec node dist/e2e/runner.js "${arguments[@]}"
 fi

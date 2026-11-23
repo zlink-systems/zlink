@@ -413,7 +413,7 @@ async function main(): Promise<void> {
   try {
     const state = await host.startAll(stopping.signal);
     if (stopping.signal.aborted) return;
-    const unpublish = await publishServer(state, host.control);
+    const unpublish = await publishServer(state, () => host.control);
     try {
       host.announce(`${LocalHost.ready} ${state.sessionEndpoint} (game clients connect here)`);
       host.announce(

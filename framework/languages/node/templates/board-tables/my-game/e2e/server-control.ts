@@ -1,34 +1,82 @@
 import assert from 'node:assert/strict';
 import { linkSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { Control, Limits, LocalHost, LogFiles } from '../server/shared/constants';
+import { Limits, LocalHost, LogFiles } from '../server/shared/constants';
 
 export interface NodeControl {
   drain(id: string): Promise<void>;
   replace(id: string): Promise<void>;
 }
 
-export interface ServerState {
+export interface LobbyNodeControl extends NodeControl {
+  restartLobby(): Promise<string>;
+}
+
+export interface WorldNodeControl extends NodeControl {
+  createUpdateZone(id: string): Promise<void>;
+}
+
+interface DeploymentState {
   controlEndpoint: string;
-  sessionEndpoint: string;
   runId: string;
   keyPrefix: string;
   nodes: string[];
 }
 
-const statePath = `${LogFiles.directory}/${LogFiles.serverState}`;
-const operations = [Control.drain, Control.replace] as const;
+export interface ServerState extends DeploymentState {
+  sessionEndpoint: string;
+}
 
-export async function publishServer(
-  state: Omit<ServerState, 'controlEndpoint'>,
-  control: NodeControl
+export interface LobbyServerState extends ServerState {
+  apiEndpoint: string;
+}
+
+export interface WorldServerState extends DeploymentState {
+  sessionEndpoints: Record<string, string>;
+  apiEndpoint: string;
+}
+
+const commands = {
+  drain: 'drain',
+  replace: 'replace',
+  createUpdateZone: 'create-update-zone',
+  restartLobby: 'restart-lobby',
+  prepare: 'prepare'
+} as const;
+
+const controlTimeoutMs = Math.max(
+  Limits.messageMs + Limits.relocationMs + Limits.safeMs,
+  Limits.shutdownMs + Limits.messageMs + Limits.startupMs
+);
+const statePath = `${LogFiles.directory}/${LogFiles.serverState}`;
+type HostControl = NodeControl & Partial<LobbyNodeControl & WorldNodeControl>;
+type AttachedControl = LobbyNodeControl & WorldNodeControl;
+type StateWithoutEndpoint<State extends DeploymentState> = Omit<State, 'controlEndpoint'>;
+
+export async function publishServer<State extends DeploymentState>(
+  state: StateWithoutEndpoint<State>,
+  control: () => HostControl,
+  prepare?: (name: string) => Promise<StateWithoutEndpoint<State>>
 ): Promise<() => Promise<void>> {
   let busy = false;
   const server = createServer(async (request, response) => {
     const [command, target, extra] = request.url?.slice(1).split('/') ?? [];
-    const operation = operations.find((operation) => operation === command);
-    const id = state.nodes.find((id) => encodeURIComponent(id) === target);
-    if (request.method !== 'POST' || !operation || !id || extra !== undefined) {
+    const id = state.nodes.find((nodeId) => encodeURIComponent(nodeId) === target);
+    const handlers = control();
+    const operations = {
+      [commands.drain]: id && (() => handlers.drain(id)),
+      [commands.replace]: id && (() => handlers.replace(id)),
+      [commands.createUpdateZone]:
+        id && handlers.createUpdateZone && (() => handlers.createUpdateZone!(id)),
+      [commands.restartLobby]:
+        target === undefined && handlers.restartLobby && (() => handlers.restartLobby!()),
+      [commands.prepare]:
+        target !== undefined && prepare && (() => prepare(decodeURIComponent(target)))
+    };
+    const execute = Object.hasOwn(operations, command)
+      ? operations[command as keyof typeof operations]
+      : undefined;
+    if (request.method !== 'POST' || extra !== undefined || !execute) {
       response.writeHead(404).end();
       return;
     }
@@ -38,10 +86,10 @@ export async function publishServer(
     }
     busy = true;
     try {
-      await control[operation](id);
-      response.writeHead(204).end();
+      const result = await execute();
+      response.writeHead(result === undefined ? 204 : 200).end(JSON.stringify(result));
     } catch (error) {
-      console.error(`[${id}] ${operation} failed`, error);
+      console.error(`Server control ${command} failed`, error);
       response.writeHead(500).end(String(error));
     } finally {
       busy = false;
@@ -111,38 +159,65 @@ export async function assertNoRunningServer(): Promise<void> {
 async function isRecordedServerAlive(): Promise<boolean> {
   let endpoint: string;
   try {
-    endpoint = (JSON.parse(readFileSync(statePath, 'utf8')) as ServerState).controlEndpoint;
+    endpoint = (JSON.parse(readFileSync(statePath, 'utf8')) as DeploymentState).controlEndpoint;
   } catch {
     return false;
   }
   try {
-    await fetch(endpoint, { redirect: 'error', signal: AbortSignal.timeout(Limits.controlMs) });
+    await fetch(endpoint, { redirect: 'error', signal: AbortSignal.timeout(controlTimeoutMs) });
     return true;
   } catch {
     return false;
   }
 }
 
-export function attachServer(): { state: ServerState; control: NodeControl } {
-  const state = JSON.parse(readFileSync(statePath, 'utf8')) as ServerState;
+export function attachServer<State extends DeploymentState = ServerState>(): {
+  state: State;
+  prepare(name: string): Promise<State>;
+  control: AttachedControl;
+} {
+  const state = JSON.parse(readFileSync(statePath, 'utf8')) as State;
   const endpoint = new URL(state.controlEndpoint);
   assert.equal(endpoint.protocol, 'http:');
   assert.equal(endpoint.hostname, LocalHost.address);
   assert(endpoint.port, 'Missing server control port');
-  async function call(operation: (typeof operations)[number], id: string): Promise<void> {
-    const response = await fetch(new URL(`/${operation}/${encodeURIComponent(id)}`, endpoint), {
-      method: 'POST',
-      redirect: 'error',
-      signal: AbortSignal.timeout(Limits.controlMs)
-    });
+  async function call(operation: string, id?: string): Promise<Response> {
+    const response = await fetch(
+      new URL(
+        id === undefined ? `/${operation}` : `/${operation}/${encodeURIComponent(id)}`,
+        endpoint
+      ),
+      {
+        method: 'POST',
+        redirect: 'error',
+        signal: AbortSignal.timeout(controlTimeoutMs)
+      }
+    );
     if (!response.ok)
-      throw new Error(`${operation} ${id} failed (${response.status}): ${await response.text()}`);
+      throw new Error(
+        `${operation} ${id ?? ''} failed (${response.status}): ${await response.text()}`
+      );
+    return response;
   }
   return {
     state,
+    async prepare(name) {
+      const deployment = (await (await call(commands.prepare, name)).json()) as State;
+      return { ...deployment, controlEndpoint: state.controlEndpoint };
+    },
     control: {
-      drain: (id) => call(Control.drain, id),
-      replace: (id) => call(Control.replace, id)
+      async drain(id) {
+        await call(commands.drain, id);
+      },
+      async replace(id) {
+        await call(commands.replace, id);
+      },
+      async restartLobby() {
+        return (await (await call(commands.restartLobby)).json()) as string;
+      },
+      async createUpdateZone(id) {
+        await call(commands.createUpdateZone, id);
+      }
     }
   };
 }

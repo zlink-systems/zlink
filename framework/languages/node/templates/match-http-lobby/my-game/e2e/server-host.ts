@@ -440,6 +440,11 @@ async function main(): Promise<void> {
   try {
     const state = await host.startAll(stopping.signal);
     if (stopping.signal.aborted) return;
+    // Printed again for each fresh deployment, whose listeners get new ports.
+    const announceEndpoints = (deployment: typeof state): void => {
+      host.announce(`${LocalHost.ready} ${deployment.sessionEndpoint} (game clients connect here)`);
+      host.announce(`API ready: ${deployment.apiEndpoint} (HTTP clients connect here)`);
+    };
     let firstDeployment: typeof state | undefined = state;
     const unpublish = await publishServer(
       state,
@@ -455,12 +460,13 @@ async function main(): Promise<void> {
         host.announce(`Starting a fresh deployment for ${name}`);
         assert(await host.stopAll(), 'Previous deployment cleanup failed');
         host = createServerHost(options);
-        return host.startAll(stopping.signal);
+        const fresh = await host.startAll(stopping.signal);
+        announceEndpoints(fresh);
+        return fresh;
       }
     );
     try {
-      host.announce(`${LocalHost.ready} ${state.sessionEndpoint} (game clients connect here)`);
-      host.announce(`API ready: ${state.apiEndpoint} (HTTP clients connect here)`);
+      announceEndpoints(state);
       host.announce(
         `Logs: ${LogFiles.directory}/<server>.log` +
           (options.trace ? '' : ` (message flow: add ${LocalHost.traceFlag} to show it here)`)

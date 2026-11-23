@@ -44,16 +44,28 @@ if ($Local) {
             exit 1
         }
     }
-    if ($BuildOnly) {
+    # Runs the checks of one phase from e2e/checks.conf with the local Node, as Docker runs them in
+    # the runner or node-image service.
+    function Invoke-LocalChecks([string]$Phase) {
         foreach ($line in $checks) {
-            $parts = @($line -split '\s+')
-            if ($parts[0] -eq 'build' -and $parts[1] -eq 'runner') {
-                $arguments = $parts[2..($parts.Length - 1)]
-                & node dist/e2e/runner.js @arguments
-                if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            }
+            $parts = @($line.Trim() -split '\s+')
+            if ($parts.Length -lt 3 -or $parts[0] -ne $Phase) { continue }
+            $arguments = @($parts[2..($parts.Length - 1)])
+            if ($parts[1] -eq 'runner') { & node dist/e2e/runner.js @arguments }
+            else { & node @arguments }
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         }
+    }
+    if ($BuildOnly) {
+        Invoke-LocalChecks build
         exit 0
+    }
+    if ($mode -eq '--check-domain' -and @($checks -like 'preflight *').Count -gt 0) {
+        Invoke-LocalChecks preflight
+        exit 0
+    }
+    if ($mode -notlike '--check-*' -and $mode -ne '--domain-checks-only' -and $mode -ne '--attach') {
+        Invoke-LocalChecks preflight
     }
     & node dist/e2e/runner.js @RunnerArguments
     exit $LASTEXITCODE

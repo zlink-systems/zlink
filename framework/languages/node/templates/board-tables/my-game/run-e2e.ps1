@@ -4,6 +4,7 @@ param(
     [switch]$NoBuild,
     [switch]$BuildOnly,
     [switch]$CheckStructure,
+    [switch]$CheckDomain,
     [string]$Scenario,
     [Parameter(ValueFromRemainingArguments = $true)][string[]]$RunnerArguments = @()
 )
@@ -14,12 +15,21 @@ $root = $PSScriptRoot
 Assert-PowerShellVersion
 Set-Location $root
 New-Item -ItemType Directory -Force (Join-Path $root '.logs') | Out-Null
+if ($CheckStructure -and $CheckDomain) { throw 'Choose one domain or structure check.' }
 if ($CheckStructure) { $RunnerArguments = @('--check-structure') + $RunnerArguments }
+elseif ($CheckDomain) { $RunnerArguments = @('--check-domain') + $RunnerArguments }
 elseif ($Scenario) { $RunnerArguments = @('--scenario', $Scenario) + $RunnerArguments }
+$mode = if ($RunnerArguments.Count -gt 0) { $RunnerArguments[0] } else { '' }
+$checks = @(if (Test-Path -LiteralPath 'e2e/checks.conf') { Get-Content -LiteralPath 'e2e/checks.conf' })
 # A scenario run uses the server started by run-server.ps1 when one is running.
-if (-not $Local -and -not $BuildOnly -and -not $CheckStructure -and (Test-RunningServer -Root $root)) {
+if (-not $Local -and -not $BuildOnly -and $mode -ne '--attach' -and
+    $mode -notlike '--check-*' -and $mode -ne '--domain-checks-only' -and (Test-RunningServer -Root $root)) {
     Write-Host 'Using the running server (logs/server.json)'
     & node dist/e2e/runner.js --attach @RunnerArguments
+    exit $LASTEXITCODE
+}
+if (-not $Local -and $mode -eq '--attach') {
+    & node dist/e2e/runner.js @RunnerArguments
     exit $LASTEXITCODE
 }
 if ($Local) {
@@ -34,15 +44,43 @@ if ($Local) {
             exit 1
         }
     }
+    # Runs the checks of one phase from e2e/checks.conf with the local Node, as Docker runs them in
+    # the runner or node-image service.
+    function Invoke-LocalChecks([string]$Phase) {
+        foreach ($line in $checks) {
+            $parts = @($line.Trim() -split '\s+')
+            if ($parts.Length -lt 3 -or $parts[0] -ne $Phase) { continue }
+            $arguments = @($parts[2..($parts.Length - 1)])
+            if ($parts[1] -eq 'runner') { & node dist/e2e/runner.js @arguments }
+            else { & node @arguments }
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        }
+    }
     if ($BuildOnly) {
-        & node dist/e2e/runner.js --domain-checks-only
-        exit $LASTEXITCODE
+        Invoke-LocalChecks build
+        exit 0
+    }
+    if ($mode -eq '--check-domain' -and @($checks -like 'preflight *').Count -gt 0) {
+        Invoke-LocalChecks preflight
+        exit 0
+    }
+    if ($mode -notlike '--check-*' -and $mode -ne '--domain-checks-only' -and $mode -ne '--attach') {
+        Invoke-LocalChecks preflight
     }
     & node dist/e2e/runner.js @RunnerArguments
     exit $LASTEXITCODE
 }
 if ($NoBuild) { throw '-NoBuild requires -Local; Docker builds reuse the layer cache automatically.' }
 $project = 'my-game-e2e-' + [guid]::NewGuid().ToString('N')
+$compose = @('compose', '-f', (Join-Path $root 'docker-compose.yml'), '-p', $project)
+$profiles = $env:COMPOSE_PROFILES
+try {
+    $env:COMPOSE_PROFILES = ''
+    $redisServices = @(& docker @compose config --services)
+    if ($LASTEXITCODE -ne 0) { throw 'Compose service discovery failed.' }
+}
+finally { $env:COMPOSE_PROFILES = $profiles }
+$compose += @('--profile', 'docker')
 $logs = Join-Path $root ".logs/docker-$project"
 New-Item -ItemType Directory $logs | Out-Null
 # BuildKit reuses the previous transfer of a build context with the same directory name and
@@ -52,7 +90,16 @@ New-Item -ItemType Directory $logs | Out-Null
 $env:MY_GAME_BUILD_CONTEXT = Join-Path $logs $project
 $linkType = if (Test-OnWindows) { 'Junction' } else { 'SymbolicLink' }
 New-Item -ItemType $linkType -Path $env:MY_GAME_BUILD_CONTEXT -Target $root | Out-Null
-$compose = @('compose', '-f', (Join-Path $root 'docker-compose.yml'), '-p', $project, '--profile', 'docker')
+function Invoke-Checks([string]$Phase) {
+    foreach ($line in $checks) {
+        $parts = @($line -split '\s+')
+        if ($parts[0] -eq $Phase) {
+            $checkArguments = $parts[1..($parts.Length - 1)]
+            & docker @compose run --rm --no-deps -T @checkArguments
+            if ($LASTEXITCODE -ne 0) { throw "Docker $Phase check failed." }
+        }
+    }
+}
 $result = 1
 Write-Host "Docker logs: $logs"
 try {
@@ -62,20 +109,31 @@ try {
         throw 'Docker image build failed.'
     }
     if ($BuildOnly) {
-        & docker @compose run --rm --no-deps -T --name "$project-domain" runner --domain-checks-only
+        Invoke-Checks build
+        $result = 0
+    }
+    elseif ($mode -eq '--check-structure' -or $mode -eq '--domain-checks-only') {
+        & docker @compose run --rm --no-deps -T --name "$project-check" runner @RunnerArguments
         $result = $LASTEXITCODE
     }
-    else {
-        $checkArguments = @(if ($CheckStructure) { $RunnerArguments } else { '--check-structure' })
-        & docker @compose run --rm --no-deps -T --name "$project-check" runner @checkArguments
-        if ($LASTEXITCODE -ne 0) { throw 'Structure check failed.' }
-        if ($CheckStructure) { $result = 0 }
+    elseif ($mode -eq '--check-domain') {
+        if (@($checks -like 'preflight *').Count -gt 0) {
+            Invoke-Checks preflight
+            $result = 0
+        }
         else {
-            $code = Invoke-Logged -Log (Join-Path $logs 'redis-start.log') -Command docker -Arguments ($compose + @('up', '-d', '--wait', '--wait-timeout', '30', 'redis'))
-            if ($code -ne 0) { throw 'Redis startup failed.' }
-            & docker @compose run --rm --no-deps -T --name "$project-control" runner @RunnerArguments
+            & docker @compose run --rm --no-deps -T --name "$project-domain" runner @RunnerArguments
             $result = $LASTEXITCODE
         }
+    }
+    else {
+        & docker @compose run --rm --no-deps -T --name "$project-check" runner --check-structure
+        if ($LASTEXITCODE -ne 0) { throw 'Structure check failed.' }
+        Invoke-Checks preflight
+        $code = Invoke-Logged -Log (Join-Path $logs 'redis-start.log') -Command docker -Arguments ($compose + @('up', '-d', '--wait', '--wait-timeout', '30') + $redisServices)
+        if ($code -ne 0) { throw 'Redis startup failed.' }
+        & docker @compose run --rm --no-deps -T --name "$project-control" runner @RunnerArguments
+        $result = $LASTEXITCODE
     }
 }
 catch { Write-Host $_ -ForegroundColor Red }
@@ -86,7 +144,7 @@ finally {
         $code = Invoke-Logged -Log (Join-Path $logs 'containers-stop.log') -Command docker -Arguments (@('rm', '-f') + $containers)
         if ($code -ne 0) { $result = 1 }
     }
-    $code = Invoke-Logged -Log (Join-Path $logs 'redis.log') -Command docker -Arguments ($compose + @('logs', '--no-color', 'redis'))
+    $code = Invoke-Logged -Log (Join-Path $logs 'redis.log') -Command docker -Arguments ($compose + @('logs', '--no-color') + $redisServices)
     if ($code -ne 0) { $result = 1 }
     $code = Invoke-Logged -Log (Join-Path $logs 'cleanup.log') -Command docker -Arguments ($compose + @('down', '--volumes'))
     if ($code -ne 0) { $result = 1 }

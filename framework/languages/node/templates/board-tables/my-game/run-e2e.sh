@@ -18,7 +18,12 @@ cd "$ROOT"
 mkdir -p "$ROOT/.logs"
 . "$ROOT/scripts/run-helpers.sh"
 # A scenario run uses the server started by run-server.sh when one is running.
-if ! $local_mode && ! $build_only && [[ "${arguments[0]:-}" != "--check-structure" ]] &&
+mode="${arguments[0]:-}"
+case "$mode" in
+  --attach)
+    if ! $local_mode; then exec node dist/e2e/runner.js "${arguments[@]}"; fi ;;
+esac
+if ! $local_mode && ! $build_only && [[ "$mode" != --check-* && "$mode" != --domain-checks-only ]] &&
   server_running "$ROOT"; then
   echo 'Using the running server (logs/server.json)'
   exec node dist/e2e/runner.js --attach "${arguments[@]}"
@@ -31,8 +36,30 @@ if $local_mode; then
       exit 1
     fi
   fi
+  # Runs the checks of one phase from e2e/checks.conf with the local Node, as Docker runs them in
+  # the runner or node-image service.
+  local_checks() {
+    local wanted="$1" phase service command argument
+    [[ -f e2e/checks.conf ]] || return 0
+    while read -r phase service command argument; do
+      [[ "$phase" == "$wanted" ]] || continue
+      if [[ "$service" == runner ]]; then
+        node dist/e2e/runner.js "$command" ${argument:+"$argument"}
+      else
+        node "$command" ${argument:+"$argument"}
+      fi
+    done < e2e/checks.conf
+  }
   if $build_only; then
-    exec node dist/e2e/runner.js --domain-checks-only
+    local_checks build
+    exit 0
+  fi
+  if [[ "$mode" == --check-domain ]] && grep -q '^preflight ' e2e/checks.conf 2>/dev/null; then
+    local_checks preflight
+    exit 0
+  fi
+  if [[ "$mode" != --check-* && "$mode" != --domain-checks-only && "$mode" != --attach ]]; then
+    local_checks preflight
   fi
   exec node dist/e2e/runner.js "${arguments[@]}"
 fi
@@ -52,7 +79,13 @@ mkdir -p "$logs"
 # timestamps would build each other's files. A link with a per-run name gives every build its own
 # transfer.
 export MY_GAME_BUILD_CONTEXT="$logs/$project"
-compose=(docker compose -f "$ROOT/docker-compose.yml" -p "$project" --profile docker)
+compose=(docker compose -f "$ROOT/docker-compose.yml" -p "$project")
+service_lines=$(COMPOSE_PROFILES= "${compose[@]}" config --services)
+redis_services=()
+while IFS= read -r service; do
+  redis_services+=("$service")
+done <<< "$service_lines"
+compose+=(--profile docker)
 cleanup() {
   local result=$?
   trap - EXIT
@@ -63,7 +96,7 @@ cleanup() {
     # IDs are Docker-generated hexadecimal tokens, one per line.
     docker rm -f $containers >>"$logs/cleanup.log" 2>&1 || result=1
   fi
-  "${compose[@]}" logs --no-color redis >"$logs/redis.log" 2>&1 || result=1
+  "${compose[@]}" logs --no-color "${redis_services[@]}" >"$logs/redis.log" 2>&1 || result=1
   "${compose[@]}" down --volumes >>"$logs/cleanup.log" 2>&1 || result=1
   for image in "$project-node" "$project-runner"; do
     if docker image inspect "$image" >/dev/null 2>&1; then
@@ -81,14 +114,32 @@ if ! "${compose[@]}" build >"$logs/build.log" 2>&1; then
   tail -n 30 "$logs/build.log" >&2
   exit 1
 fi
+run_checks() {
+  local wanted="$1" phase service command argument
+  [[ -f e2e/checks.conf ]] || return 0
+  while read -r phase service command argument; do
+    if [[ "$phase" == "$wanted" ]]; then
+      "${compose[@]}" run --rm --no-deps -T "$service" "$command" ${argument:+"$argument"}
+    fi
+  done < e2e/checks.conf
+}
 if $build_only; then
-  "${compose[@]}" run --rm --no-deps -T --name "$project-domain" runner --domain-checks-only
+  run_checks build
   exit 0
 fi
-if [[ "${arguments[0]:-}" == "--check-structure" ]]; then
-  "${compose[@]}" run --rm --no-deps -T --name "$project-check" runner "${arguments[@]}"
-  exit 0
-fi
+case "$mode" in
+  --check-structure|--domain-checks-only)
+    "${compose[@]}" run --rm --no-deps -T --name "$project-check" runner "${arguments[@]}"
+    exit 0 ;;
+  --check-domain)
+    if [[ -f e2e/checks.conf ]] && grep -q '^preflight ' e2e/checks.conf; then
+      run_checks preflight
+    else
+      "${compose[@]}" run --rm --no-deps -T --name "$project-domain" runner "${arguments[@]}"
+    fi
+    exit 0 ;;
+esac
 "${compose[@]}" run --rm --no-deps -T --name "$project-check" runner --check-structure
-"${compose[@]}" up -d --wait --wait-timeout 30 redis >"$logs/redis-start.log" 2>&1
+run_checks preflight
+"${compose[@]}" up -d --wait --wait-timeout 30 "${redis_services[@]}" >"$logs/redis-start.log" 2>&1
 "${compose[@]}" run --rm --no-deps -T --name "$project-control" runner "${arguments[@]}"

@@ -34,8 +34,7 @@ export const Limits = {
   messageFollowMs,
   relocationMs,
   safeMs,
-  shutdownMs,
-  controlMs: Math.max(messageMs + relocationMs + safeMs, shutdownMs + messageMs + startupMs)
+  shutdownMs
 } as const;
 export const Reasons = {
   full: 'table-full',
@@ -65,7 +64,6 @@ export const PacketNames = {
 export const Control = {
   ready: 'READY ',
   drain: 'drain',
-  replace: 'replace',
   shutdown: 'shutdown',
   requested: 'RELOCATION_REQUESTED',
   relocated: 'RELOCATED',
