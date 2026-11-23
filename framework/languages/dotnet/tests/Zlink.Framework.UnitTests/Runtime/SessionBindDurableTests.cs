@@ -322,4 +322,60 @@ public sealed partial class EntrySpotActorDispatchTests
             await runtime.StopAsync(CancellationToken.None);
         }
     }
+
+    // Session-Actor binding §12: a bind whose ObjectGeneration differs from the Store row of the
+    // same ActorId ends InvalidOperation; a ref whose location is stale (another node) ends
+    // Unavailable. Neither reaches the Session owner's bind command.
+    [Theory]
+    [InlineData(true, ZLinkFrameworkErrorKind.InvalidOperation)]
+    [InlineData(false, ZLinkFrameworkErrorKind.Unavailable)]
+    public async Task SessionBind_ClassifiesGenerationMismatchSeparatelyFromStaleLocation(
+        bool differentGeneration,
+        ZLinkFrameworkErrorKind expected
+    )
+    {
+        var node = new CapturingSpotNode();
+        var sentCount = 0;
+        node.CanonicalBindHandler = (_, _, _) =>
+        {
+            sentCount++;
+            return ValueTask.FromException<Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.RequestSpecificTailCase2?>(
+                new ZLinkFrameworkException(ZLinkFrameworkErrorKind.Unavailable, "Not expected.")
+            );
+        };
+        var (runtime, actor) = await CreateStartedRuntimeAsync(node);
+        try
+        {
+            var submitted = differentGeneration
+                ? new ActorRef(actor.ActorId, actor.Generation + 1, "entry", actor.NodeRid)
+                : new ActorRef(
+                    actor.ActorId,
+                    actor.Generation,
+                    "entry",
+                    RoutingId.From("stale-location-node")
+                );
+            var context = new ZLinkSessionContext(
+                runtime,
+                new RetainedOutboundCapturingStream(RoutingId.From("generation-session")),
+                new RelaySessionHandlerRegistry(),
+                static () => ValueTask.CompletedTask,
+                static _ => ValueTask.CompletedTask
+            );
+
+            var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await context.ActorCoordinator.BindActorAsync(
+                    context,
+                    submitted,
+                    CancellationToken.None
+                )
+            );
+
+            Assert.Equal(expected, error.Kind);
+            Assert.Equal(0, sentCount);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
 }
