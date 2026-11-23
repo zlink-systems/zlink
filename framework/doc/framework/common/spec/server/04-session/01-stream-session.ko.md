@@ -225,9 +225,9 @@ connector는 connector instance별 typed codec option
 
 **Session 생성 실패.** Framework가 연결 하나의 session 객체를 만들지 못하면(연결 수립 시점이든 첫 packet 시점이든) 그 연결의 session admission 경계 한 곳에서 다음을 정확히 한 번 한다. 같은 실패를 연결 수립과 첫 packet이 함께 보아도 한 번이다.
 
-- 원래 예외를 Runtime monitoring에 Error 수준으로 기록한다. Debug 설정과 무관하게 기록한다.
-- 생성을 일으킨 packet이 있으면 그 packet을 handler에 전달하지 않고 그 packet의 message-flow를 실패로 끝낸다. `Request`는 같은 sequence의 `Error` reply(`InternalFailure`)로 끝낸다. 연결 수립만 있고 packet이 없으면 message가 없으므로 message-flow 기록을 만들지 않는다.
-- 그 연결을 `session-closing` control packet의 종료 사유 `TransportError`로 닫는다. 진단 문자열에는 session 생성 실패임을 적는다. 새 종료 사유를 만들지 않는다 — 종료 사유는 [Stream Connector §6.2](../../stream-connector/32-stream-connector.ko.md#62-종료-사유)의 닫힌 집합이고, client 쪽에서 이 연결은 서버가 session을 열지 못한 transport 실패와 같게 다룬다. `ProtocolError`는 client의 위반을 뜻하므로 쓰지 않는다.
+- 원래 예외를 기존 runtime logger에 `Error` 수준으로 기록한다. Debug 설정과 무관하게 기록한다.
+- 생성을 일으킨 packet이 있으면 그 packet을 handler에 전달하지 않고 그 packet의 message-flow를 `outcome=failed`, `reason=session_creation_failed`로 끝낸다([Message-flow tracing §3.1](../06-observability/03-message-flow-tracing.ko.md#31-모든-언어가-공유하는-닫힌-값)). `Request`는 같은 sequence의 `Error` reply(`InternalFailure`)로 끝내며, 이 reply를 먼저 제출한 뒤 아래 `session-closing`을 제출하고 [§4.1](#41-transport-종료-경계)의 transport 종료를 시작한다. 연결 수립만 있고 packet이 없으면 message가 없으므로 message-flow 기록을 만들지 않는다.
+- 그 연결을 `session-closing` control packet의 종료 사유 `TransportError`로 닫는다. 진단 문자열에는 session 생성 실패임을 적는다. 새 종료 사유를 만들지 않는다 — `TransportError`의 의미에 이 경우가 포함되고, 종료 사유는 [Stream Connector §6.2](../../stream-connector/32-stream-connector.ko.md#62-종료-사유)의 닫힌 집합이고, client 쪽에서 이 연결은 서버가 session을 열지 못한 transport 실패와 같게 다룬다. `ProtocolError`는 client의 위반을 뜻하므로 쓰지 않는다.
 - 연결 하나의 생성 실패로 process나 다른 연결을 끝내지 않는다.
 
 Session 오류 callback은 monitor에서 관찰 가능한 transport 오류를 session 단위로 다시

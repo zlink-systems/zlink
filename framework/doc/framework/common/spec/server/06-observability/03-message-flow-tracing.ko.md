@@ -120,9 +120,9 @@ Message가 send, request, response, error 또는 control 중 어떤 처리 방�
 다음 값 중 하나다.
 
 `backpressure`, `stale_target`, `target_closed`, `shutdown`, `location_unavailable`,
-`activation_rejected`, `activation_timeout`.
+`activation_rejected`, `activation_timeout`, `session_creation_failed`.
 
-마지막 세 값은 각각 Instance Spot의 위치를 찾지 못한 경우, 새 Spot 생성을 거부한
+`session_creation_failed`는 STREAM 연결의 session 객체 생성이 실패해 그 packet을 전달하지 못한 경우다([STREAM session §7](../04-session/01-stream-session.ko.md#7-오류-경계)). 그 앞의 세 값은 각각 Instance Spot의 위치를 찾지 못한 경우, 새 Spot 생성을 거부한
 경우와 제한 시간 안에 생성을 마치지 못한 경우를 나타낸다. Instance Spot close와
 lease fencing은 `target_closed`로 기록한다.
 
@@ -131,7 +131,7 @@ lease fencing은 `target_closed`로 기록한다.
 
 `no_handler`, `decode_error`, `handler_exception`, `invalid_frame`,
 `reply_path_missing`, `unexpected_reply`, `backpressure`, `stale_target`,
-`shutdown`.
+`shutdown`, `session_creation_failed`.
 
 기존 admission·Message Follow 규칙이 local dispatch 대상을 확정한 뒤 그 대상의 packet handler 조회만
 실패하면 `no_handler`다. 그 규칙이 대상 Actor·Spot·node 또는 유효한 target route가 없다고 확정해 전달을
