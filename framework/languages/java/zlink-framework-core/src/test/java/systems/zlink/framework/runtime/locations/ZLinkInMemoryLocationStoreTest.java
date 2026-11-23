@@ -1318,13 +1318,8 @@ class ZLinkInMemoryLocationStoreTest {
                                         .get())
                         .token();
         var nextDescriptor =
-                meshNodeDescriptor(
-                        nextOwner,
-                        RoutingId.from(new byte[] {2}),
-                        8,
-                        1,
-                        "tcp://127.0.0.1:6101",
-                        "ready-next-entry");
+                ZLinkLocationDescriptorFixture.descriptor(
+                        nextOwner, "ready-next", ZLinkPlacementObjectKind.USER_SPOT, 8);
         store.updateMeshNode(nextDescriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
                 .toCompletableFuture()
                 .get();
@@ -1417,9 +1412,7 @@ class ZLinkInMemoryLocationStoreTest {
                 descriptor.lifecycleGeneration(),
                 owner,
                 new byte[] {(byte) generation},
-                ZLinkPlacementCapacityBundle.actor(1),
-                new systems.zlink.framework.runtime.internal.configuration
-                        .ZLinkObjectFactoryRegistration.RelocationPolicy.Disabled());
+                ZLinkPlacementCapacityBundle.actor(1));
     }
 
     private static void assertUnavailable(

@@ -247,11 +247,6 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
         return Map.copyOf(relocatableActorFactories);
     }
 
-    public RelocationPolicy actorRelocationPolicy(String stableType) {
-        var factory = relocatableActorFactories.get(stableType);
-        return factory == null ? null : factory.relocationPolicy();
-    }
-
     /**
      * Whether an Entry Spot type registered on this node accepts the Actor type that the factory
      * for {@code stableType} produces. The one decision behind both the published {@code

@@ -1,6 +1,9 @@
 package systems.zlink.framework.runtime.internal.locations;
 
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.*;
+import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration.RelocationPolicy;
 
 import java.time.Duration;
 import java.util.Optional;
@@ -57,6 +60,17 @@ public interface ZLinkLocationRepository {
     CompletionStage<ZLinkOwnerLeaseClaimResult> claimOwnerLease(String ownerId, Duration leaseTtl);
 
     CompletionStage<ZLinkOwnerLeaseReadResult> readOwnerLease(String ownerId);
+
+    default CompletionStage<Boolean> hasLiveOwner(ZLinkAuthoritySnapshot snapshot) {
+        return readOwnerLease(snapshot.ownerId())
+                .thenApply(
+                        read ->
+                                read instanceof ZLinkOwnerLeaseFound found
+                                        && found.token().ownerId().equals(snapshot.ownerId())
+                                        && found.token().leaseGeneration()
+                                                == snapshot.ownerLeaseGeneration()
+                                        && found.leaseExpiresAt().isAfter(found.storeNow()));
+    }
 
     CompletionStage<ZLinkOwnerLeaseRenewResult> renewOwnerLease(
             ZLinkLocationOwnerToken token, Duration leaseTtl);
@@ -132,6 +146,37 @@ public interface ZLinkLocationRepository {
         return CompletableFuture.failedFuture(
                 new UnsupportedOperationException(
                         "Reservation lifecycle recovery is not supported"));
+    }
+
+    /** Policy evidence for Location runtime §6.1, shared by both repository implementations. */
+    static void requireDisabledReclaimPolicy(
+            ZLinkObjectReservationRequest request, ZLinkMeshNodeDescriptor target) {
+        boolean disabled =
+                request.usesTargetReclaimPolicy()
+                        ? target != null
+                                && target.lifecycleGeneration()
+                                        == request.targetDescriptorLifecycleGeneration()
+                                && target.ownerId().equals(request.targetOwner().ownerId())
+                                && target.leaseGeneration()
+                                        == request.targetOwner().leaseGeneration()
+                                && target.objectCapabilities().stream()
+                                        .anyMatch(
+                                                capability ->
+                                                        capability.objectKind()
+                                                                        == request.objectKind()
+                                                                && capability
+                                                                        .stableType()
+                                                                        .equals(
+                                                                                request
+                                                                                        .stableType())
+                                                                && capability.policy()
+                                                                        == ZLinkObjectMaintenancePolicyKind
+                                                                                .DISABLED)
+                        : request.relocationPolicy() instanceof RelocationPolicy.Disabled;
+        if (!disabled) {
+            throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.UNAVAILABLE, "Object owner lease is unavailable");
+        }
     }
 
     default CompletionStage<Boolean> releaseEndedReservation(

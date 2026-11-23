@@ -824,12 +824,7 @@ final class ZLinkEndedSpotRecreationTest {
     }
 
     @ParameterizedTest
-    @CsvSource({
-        "provider, USER_SPOT",
-        "provider, INSTANCE_SPOT",
-        "memory, USER_SPOT",
-        "memory, INSTANCE_SPOT"
-    })
+    @CsvSource({"provider, INSTANCE_SPOT", "memory, INSTANCE_SPOT"})
     void unregisteredTypeDoesNotReleaseEndedReadySpot(
             String backend, ZLinkPlacementObjectKind kind) {
         var fixture = fixture(backend, kind, ZLinkServiceAuthorityPayloadCodec.State.READY);
@@ -907,12 +902,7 @@ final class ZLinkEndedSpotRecreationTest {
     }
 
     @ParameterizedTest
-    @CsvSource({
-        "provider, USER_SPOT",
-        "provider, INSTANCE_SPOT",
-        "memory, USER_SPOT",
-        "memory, INSTANCE_SPOT"
-    })
+    @CsvSource({"provider, INSTANCE_SPOT", "memory, INSTANCE_SPOT"})
     void nonDisabledTypeDoesNotReleaseEndedReadySpot(
             String backend, ZLinkPlacementObjectKind kind) {
         var fixture = fixture(backend, kind, ZLinkServiceAuthorityPayloadCodec.State.READY);
@@ -1515,11 +1505,11 @@ final class ZLinkEndedSpotRecreationTest {
     }
 
     @ParameterizedTest
-    @CsvSource({"provider, 2044", "memory, 2044", "provider, 2045", "memory, 2045"})
+    @CsvSource({"provider, 2043", "memory, 2043", "provider, 2044", "memory, 2044"})
     void endedMemberReleaseIsBoundedByOneProviderBatch(String backend, int members) {
-        // Batch keys: Spot authority, owner lease, descriptor and capacity plus one authority
-        // per member (all members share the Spot's owner and node). 2,044 members fill the
-        // 2,048-key bound exactly.
+        // The release checks the Spot authority, owner lease, old descriptor, capacity and
+        // selected target descriptor. The members share the Spot's owner and node, so
+        // 2,043 member authority keys fill the 2,048-key batch.
         var fixture =
                 fixture(
                         backend,
@@ -1530,7 +1520,7 @@ final class ZLinkEndedSpotRecreationTest {
         for (int index = 0; index < members; index++)
             keys.add(endedMember(fixture, "bulk-" + index, true).authorityKey());
         fixture.store.releaseOwnerLease(fixture.oldOwner).toCompletableFuture().join();
-        if (members <= 2044) {
+        if (members <= 2043) {
             reserveNewSpot(fixture);
             for (String key : keys)
                 assertInstanceOf(

@@ -71,6 +71,10 @@ public record ZLinkObjectReservationRequest(
         }
     }
 
+    public boolean usesTargetReclaimPolicy() {
+        return objectKind != ZLinkPlacementObjectKind.INSTANCE_SPOT;
+    }
+
     @Override
     public byte[] creationIntentHash() {
         return creationIntentHash.clone();

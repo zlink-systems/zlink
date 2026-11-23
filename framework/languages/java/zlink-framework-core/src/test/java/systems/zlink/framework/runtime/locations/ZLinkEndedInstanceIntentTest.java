@@ -57,13 +57,13 @@ final class ZLinkEndedInstanceIntentTest {
 
     @ParameterizedTest
     @CsvSource({"provider, false", "provider, true", "memory, false", "memory, true"})
-    void endedEmptyUserGetOrCreateUsesRequestingNodePolicy(String backend, boolean fromClientNode)
+    void endedEmptyUserGetOrCreateUsesTargetPolicy(String backend, boolean fromClientNode)
             throws Exception {
         recreateEndedSpot(backend, ZLinkPlacementObjectKind.USER_SPOT, fromClientNode, null);
     }
 
     @RepeatedTest(100)
-    void endedEmptyUserGetOrCreateWaitsBeforeApplyingRequestingNodePolicy() throws Exception {
+    void endedEmptyUserGetOrCreateWaitsBeforeRecreatingAcrossBackends() throws Exception {
         for (String backend : List.of("provider", "memory"))
             for (boolean fromClientNode : List.of(false, true))
                 recreateEndedSpot(
@@ -72,13 +72,13 @@ final class ZLinkEndedInstanceIntentTest {
 
     @ParameterizedTest
     @CsvSource({"provider, false", "provider, true", "memory, false", "memory, true"})
-    void userReclamationPolicyComesFromRequestNodeRatherThanFactoryTarget(
+    void userReclamationPolicyComesFromTargetRatherThanRequestNode(
             String backend, boolean requestDisabled) throws Exception {
         recreateEndedSpot(backend, ZLinkPlacementObjectKind.USER_SPOT, true, requestDisabled);
     }
 
     @RepeatedTest(100)
-    void userReclamationPolicyRemainsRequestOwnedAfterReleaseWait() throws Exception {
+    void userReclamationPolicyRemainsTargetOwnedAfterReleaseWait() throws Exception {
         for (String backend : List.of("provider", "memory"))
             for (boolean requestDisabled : List.of(false, true))
                 recreateEndedSpot(
@@ -401,7 +401,7 @@ final class ZLinkEndedInstanceIntentTest {
                                     .getOrCreate("ended-instance-spot", "room")
                                     .submit()
                                     .toCompletableFuture();
-                    if (fromClientNode && !Boolean.TRUE.equals(requestingNodeDisabled)) {
+                    if (Boolean.TRUE.equals(requestingNodeDisabled)) {
                         var failure =
                                 assertThrows(
                                         java.util.concurrent.ExecutionException.class,

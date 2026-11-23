@@ -4,7 +4,6 @@ import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.*;
-import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityRestore;
@@ -443,11 +442,20 @@ final class ZLinkInMemoryAuthorityStore {
                 throw new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.UNAVAILABLE,
                         "Ended authority requires relocation recovery");
-            if (!discarded
-                    && !(request.relocationPolicy()
-                            instanceof ZLinkObjectFactoryRegistration.RelocationPolicy.Disabled))
-                throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.UNAVAILABLE, "Object owner lease is unavailable");
+            ZLinkMeshNodeDescriptorKey policyTarget = null;
+            if (!discarded) {
+                ZLinkMeshNodeDescriptor policyDescriptor = null;
+                if (request.usesTargetReclaimPolicy()) {
+                    policyTarget = request.targetDescriptor();
+                    policyDescriptor =
+                            descriptorLookup.find(
+                                    policyTarget,
+                                    request.targetDescriptorLifecycleGeneration(),
+                                    request.targetOwner());
+                }
+                // The descriptor and authority share this state lane.
+                ZLinkLocationRepository.requireDisabledReclaimPolicy(request, policyDescriptor);
+            }
             if (current.allocation.objectKind() != ZLinkPlacementObjectKind.ACTOR) {
                 var spot = new ZLinkServiceAuthorityPayloadCodec().decode(current.payload);
                 if (spot.isEmpty()
@@ -461,7 +469,8 @@ final class ZLinkInMemoryAuthorityStore {
                 }
                 if (spot.get().user().isPresent()) {
                     var endedMembers =
-                            endedSpotMembers(key, current, spot.get().spotId(), discarded);
+                            endedSpotMembers(
+                                    key, current, spot.get().spotId(), discarded, policyTarget);
                     if (discarded && !endedMembers.members().isEmpty()) return false;
                     members = endedMembers.members();
                     ownerLeaseReleaseBlocked |= endedMembers.ownerLeaseReleaseBlocked();
@@ -507,13 +516,18 @@ final class ZLinkInMemoryAuthorityStore {
     private record EndedSpotMembers(List<String> members, boolean ownerLeaseReleaseBlocked) {}
 
     private EndedSpotMembers endedSpotMembers(
-            String spotKey, Row spot, String spotId, boolean discarded) {
+            String spotKey,
+            Row spot,
+            String spotId,
+            boolean discarded,
+            ZLinkMeshNodeDescriptorKey policyTarget) {
         List<String> members = new ArrayList<>();
         Set<String> batchKeys = new HashSet<>();
         boolean ownerLeaseReleaseBlocked = false;
         batchKeys.add("authority:" + spotKey);
         batchKeys.add("owner:" + spot.owner.ownerId());
         batchKeys.add("descriptor:" + spot.allocation.descriptor());
+        if (policyTarget != null) batchKeys.add("descriptor:" + policyTarget);
         batchKeys.add("capacity:" + spot.allocation.descriptor());
         for (var entry : rows.entrySet()) {
             Row row = entry.getValue();
