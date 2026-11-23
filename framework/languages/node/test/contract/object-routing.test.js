@@ -831,6 +831,72 @@ test('Message Follow invalidation deletes only the exact cached Actor route fenc
   assert.equal((await resolveReadyActorRoute(resolver, 'actor-follow')).actorRef.nodeRid, 'node-b');
 });
 
+test('stale Join invalidates only the Spot route fence it used', async () => {
+  const {
+    ZLinkAuthoritySpotRouteResolver
+  } = require('../../packages/framework/dist/runtime/locations/resolvers');
+  const {
+    encodeServiceUserSpotAuthorityPayload
+  } = require('../../packages/framework/dist/runtime/foundation/service-authority-payload-codec');
+  const spotId = 'table';
+  const ownerId = 'owner';
+  const targetNodeRid = 'node';
+  const ownerLeaseGeneration = 3n;
+  const snapshot = {
+    kind: 'snapshot',
+    objectGeneration: 7n,
+    authorityOwnerGeneration: 11n,
+    ownerId,
+    ownerLeaseGeneration,
+    allocation: { state: 'active', descriptorLifecycleGeneration: 2n },
+    storeVersion: { value: 'old-version' },
+    payload: encodeServiceUserSpotAuthorityPayload({
+      state: 'ready',
+      stableType: 'Table',
+      spotId,
+      ownerId,
+      ownerLeaseGeneration,
+      ownerMeshName: 'play',
+      ownerNodeRid: targetNodeRid,
+      ownerNodeGeneration: 2n
+    })
+  };
+  let current = snapshot;
+  let reads = 0;
+  const resolver = new ZLinkAuthoritySpotRouteResolver(
+    {
+      async readAuthority() {
+        reads++;
+        return current;
+      }
+    },
+    (mesh) => mesh,
+    undefined,
+    {
+      async ownerTokenLeaseDeadlineMs() {
+        return 30_000;
+      }
+    },
+    15_000,
+    () => 0
+  );
+
+  const used = await resolver.resolve(spotId);
+  current = { ...snapshot, storeVersion: { value: 'current-version' } };
+  resolver.invalidateIfMatches?.({ ...used, authorityOwnerGeneration: 10n });
+  assert.equal(await resolver.resolve(spotId), used);
+  assert.equal(reads, 1);
+
+  resolver.invalidateIfMatches?.(used);
+  const replacement = await resolver.resolve(spotId);
+  assert.equal(replacement.authorityStoreVersion, 'current-version');
+  assert.equal(reads, 2);
+
+  resolver.invalidateIfMatches?.(used);
+  assert.equal(await resolver.resolve(spotId), replacement);
+  assert.equal(reads, 2);
+});
+
 test('Session Actor relay route is the stored binding route rather than a per-message Store lookup', async () => {
   const bindings = new internal.ZLinkActorSessionBindingRegistry();
   const localBindings = [];
