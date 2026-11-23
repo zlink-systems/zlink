@@ -2928,6 +2928,8 @@ export class ZLinkFrameworkRuntimeHost
       primaryMeshNodeOrUndefined: () => this.spotNodeRuntime?.primaryMeshNode,
       primaryMeshCompletions: () => this.spotNodeRuntime?.primaryMeshCompletions,
       meshNode: (meshName) => this.spotNodeRuntime?.meshNode(meshName),
+      boundSessionRoute: (sessionNodeRid) =>
+        this.meshRouters.remoteBoundSessionTargetForSource(sessionNodeRid),
       meshCompletions: (meshName) => this.spotNodeRuntime?.meshCompletionTable(meshName),
       notifyEntrySpotActorCreated: (nodeRid, actor, createRequest, signal) =>
         this.spotNodeRuntime?.notifyEntrySpotActorCreated(nodeRid, actor, createRequest, signal) ??
@@ -3037,6 +3039,7 @@ export class ZLinkFrameworkRuntimeHost
       context,
       channelTransport: this.channelTransport,
       routeTransport: this.routeTransport,
+      addressTransport: this.spotAddressTransport,
       spotPublisherTransport: this.spotPublisherTransport,
       meshRouters: this.meshRouters,
       providerResolver: this.options.providerResolver,
