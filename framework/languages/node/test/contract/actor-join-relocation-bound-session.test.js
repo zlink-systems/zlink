@@ -62,7 +62,9 @@ test('cross-node Actor Join publishes the carried Session binding and committed 
         let completion;
         let received;
         let probeCalls = 0;
-        const push = Promise.withResolvers();
+        let resolvePush;
+        const push = { promise: new Promise((resolve) => (resolvePush = resolve)) };
+        push.resolve = (value) => resolvePush(value);
         const apps = [];
         let client;
         let sourceActors;
