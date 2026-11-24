@@ -42,6 +42,19 @@ if [ "$package" = java ]; then
   sed -i 's#./gradlew --no-daemon #./gradlew --no-daemon --max-workers=2 --init-script /opt/ci-mirror.gradle #' "$game/Dockerfile"
   grep -q -- '--init-script /opt/ci-mirror.gradle ' "$game/Dockerfile" \
     || { echo "run-template: no Gradle build in $game/Dockerfile" >&2; exit 1; }
+  # CI installs JDK ${JAVA_VERSION} with setup-java and the Docker build image ships the same
+  # JDK, so the copy does not need the foojay toolchain resolver. Resolving that plugin from
+  # the Plugin Portal failed repeatedly on hosted runners before any template code built
+  # (#5472); the template source keeps it for developer machines without that JDK.
+  for settings in "$game/settings.gradle.kts" "$game/settings.gradle"; do
+    if [ -f "$settings" ]; then
+      sed -i '/org\.gradle\.toolchains\.foojay-resolver-convention/d' "$settings"
+    fi
+  done
+  if grep -rqs 'foojay-resolver-convention' "$game"/settings.gradle*; then
+    echo "run-template: foojay resolver still declared in $game settings" >&2
+    exit 1
+  fi
   # The first (host) build uses the same policy without changing template files.
   export GRADLE_USER_HOME="${GRADLE_USER_HOME:-$TEMPLATE_WORK/gradle-home}"
   mkdir -p "$GRADLE_USER_HOME/init.d"
@@ -56,30 +69,8 @@ if [ "$TEMPLATE_SOURCE" = local ]; then
     "$lang" "$game" "$PACKAGES_DIR" "$FRAMEWORK_VERSION" "$binding_version"
 fi
 
-# Gradle resolves plugins (Plugin Portal and Maven Central) before the build and does not
-# retry that lookup, so a transient portal failure ends the job before any template code
-# builds (#5472). Retry only that signature; any other build failure fails at once.
-plugin_lookup_failed='Plugin \[id: .*\] was not found in any of the following sources'
-host_build() {
-  local attempt log
-  : >"$game/.logs/ci-build.log"
-  for attempt in 1 2 3; do
-    log="$game/.logs/ci-build-$attempt.log"
-    if (cd "$game" && ./run-e2e.sh --local --build-only) 2>&1 </dev/null | tee "$log"; then
-      cat "$log" >>"$game/.logs/ci-build.log"
-      return 0
-    fi
-    cat "$log" >>"$game/.logs/ci-build.log"
-    if [ "$package" != java ] || [ "$attempt" -eq 3 ] || ! grep -Eq "$plugin_lookup_failed" "$log"; then
-      return 1
-    fi
-    echo "run-template: Gradle plugin lookup failed (attempt $attempt); retrying in $((attempt * 30))s" >&2
-    sleep "$((attempt * 30))"
-  done
-}
-
 build=fail e2e=skipped scenarios=""
-if host_build; then
+if (cd "$game" && ./run-e2e.sh --local --build-only) 2>&1 </dev/null | tee "$game/.logs/ci-build.log"; then
   build=pass
   e2e=fail
   e2e_exit=0
