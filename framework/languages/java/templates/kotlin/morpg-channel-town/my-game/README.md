@@ -156,7 +156,7 @@ The runner checks the structure, starts a unique Compose project with Redis on a
 
 ## Known issues
 
-Validated against the published Framework 0.32.0 packages.
+Validated against the published Framework 0.34.0 packages.
 
 ## Deployment sequence
 
