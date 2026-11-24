@@ -8,6 +8,19 @@ flowchart LR
     Session -->|Location / relocation store| Redis
 ```
 
+## Server and e2e
+
+Run the server from the project directory. The local build requires CMake, Ninja, a C++20 compiler and Docker Compose for Redis.
+
+| Shell | Start the server | Run e2e in a second terminal |
+| --- | --- | --- |
+| Bash | `./run-server.sh` | `./run-e2e.sh` |
+| Windows (PowerShell 7) | `.\run-server.cmd` | `.\run-e2e.cmd` |
+
+Use the WebSocket address printed after `Server ready` for game clients. Press Ctrl+C in the server terminal to stop the nodes and Redis. E2e attaches automatically when the server has published `.logs/server.json`. With no running server, e2e starts an isolated Docker deployment. The attached `connect` scenario checks the client connection. The isolated run also drains and stops the Session node.
+
+Each run saves node stdout (`*.out.log`), stderr (`*.err.log`), Framework message-flow (`*.flow.log`) and failure details (`failure.log`, on failure) under `.logs/run-<id>/`. Build and Docker Compose logs are also under `.logs/`. See [한국어](README.ko.md).
+
 ## Prerequisites
 
 Docker with Compose v2 and a running Linux-container daemon is required. Use Bash on Linux or PowerShell 7 on Windows. The Docker build installs the C++ toolchain and CMake; the host does not need them for the default run. The `Dockerfile` defines the Ubuntu 24.04 base in `UBUNTU_IMAGE` and Docker CLI 28.5.1 in `DOCKER_CLI_IMAGE`.
@@ -18,9 +31,9 @@ Docker with Compose v2 and a running Linux-container daemon is required. Use Bas
 
 ### Endpoint and first packet
 
-Connect to the Session `players` STREAM listener. `server/config/session.json` pins `StreamEndpoint` to `tcp://127.0.0.1:0`: loopback with an OS-assigned port. Read the Session stdout line `READY {"id":"...","meshEndpoint":"...","streamEndpoint":"..."}` and use its actual `streamEndpoint`, not port `0`. `server/shared/hosting.hpp` emits this value and `e2e/world.hpp` consumes it. Mesh and Redis addresses are internal endpoints.
+Connect to the Session `players` STREAM listener. `server/config/session.json` pins `StreamEndpoint` to `ws://127.0.0.1:0`: loopback with an OS-assigned port. Read the Session stdout line `READY {"id":"...","meshEndpoint":"...","streamEndpoint":"..."}` and use its actual `streamEndpoint`, not port `0`. `server/shared/hosting.hpp` emits this value and `e2e/world.hpp` consumes it. Mesh and Redis addresses are internal endpoints.
 
-The listener is reachable from its host/network namespace. Keep a deployment running separately from e2e, which owns and removes its nodes; configure a reachable `StreamEndpoint` interface and port and expose it from containers for external clients. This is a TCP endpoint with no HTTP/WebSocket path. Browsers, Unity WebGL and Cocos Creator web cannot connect to this default listener; those clients require a deployed WebSocket listener.
+The listener is reachable from its host/network namespace. Keep a deployment running separately from e2e, which owns and removes its nodes; configure a reachable `StreamEndpoint` interface and port and expose it from containers for external clients. The WebSocket listener supports native and browser clients.
 
 This starter has no application packets or application handshake. `on_connected` completes without sending a message, and `on_packet` rejects incoming application packets with `No application packets are registered yet.` A client can connect and close; add typed DTOs and Session handlers before sending game messages.
 
@@ -90,14 +103,14 @@ Build the node and runner images from this directory.
 The build command removes its image tags after checking the build; Docker retains reusable build layers. PowerShell provides the same command.
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
+.\run-e2e.cmd -BuildOnly
 ```
 
 Both commands build the targets listed in `CMakeLists.txt`: `my-game-session` and `my-game-e2e`.
 
 ## Local e2e
 
-Run the default Docker scenario from this directory.
+With the foreground server stopped, run the default Docker scenario from this directory.
 
 ```sh
 ./run-e2e.sh
@@ -107,9 +120,9 @@ Run the default Docker scenario from this directory.
 The `connect` scenario waits for node READY, connects and closes one public STREAM connector, then checks the drain markers and a successful shutdown. PowerShell selects the same scenario.
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario connect
-pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+.\run-e2e.cmd
+.\run-e2e.cmd -Scenario connect
+.\run-e2e.cmd -CheckStructure
 ```
 
 A successful run prints `✓ connect` and `Scenarios: 1/1 passed`. Cleanup failures return a nonzero exit code.
@@ -135,7 +148,7 @@ Install a C++20 compiler (GCC 13 or later, or Visual Studio 2022 17.4 or later),
 The script runs `cmake -P bootstrap.cmake`, `cmake --preset default`, and `cmake --build --preset default`, then executes `build/bin/my-game-e2e`. Redis still runs in an isolated Compose project. On Windows, run:
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -Local
+.\run-e2e.cmd -Local
 ```
 
 Add `--no-build` or `-NoBuild` only after a local build. Local build-only uses `--local --build-only` or `-Local -BuildOnly`.
@@ -151,6 +164,8 @@ Add `--no-build` or `-NoBuild` only after a local build. Local build-only uses `
 - **READY and Serving** — Framework nodes print `READY` after observing runtime `Serving`. [Guide](https://docs.zlink.systems/cpp/guide/server/12-operations/#wait-for-serving). [server/shared/hosting.hpp:43](server/shared/hosting.hpp); [server/shared/hosting.hpp:75](server/shared/hosting.hpp).
 
 ## Known issues
+
+The pinned C++ Framework release can publish a `tcp://` address for a STREAM listener configured with WebSocket. The runner reports a startup failure when this occurs. [#5460](https://github.com/zlink-systems/zlink/issues/5460)
 
 Validated against the published Framework 0.34.0 packages.
 
