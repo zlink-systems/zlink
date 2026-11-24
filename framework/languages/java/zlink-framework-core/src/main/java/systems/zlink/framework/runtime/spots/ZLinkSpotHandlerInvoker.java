@@ -15,6 +15,7 @@ import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -216,10 +217,11 @@ final class ZLinkSpotHandlerInvoker {
             Map<String, String> metadata,
             Function<Class<?>, Object> handlers) {
         return invokePacket(
-                registration, spot, payload, contentType, metadata, Instant.now(), handlers);
+                        registration, spot, payload, contentType, metadata, Instant.now(), handlers)
+                .thenApply(ignored -> null);
     }
 
-    CompletionStage<Void> invokePacket(
+    CompletionStage<?> invokePacket(
             SpotPacketHandlerRegistration registration,
             Object spot,
             Message payload,
@@ -233,9 +235,8 @@ final class ZLinkSpotHandlerInvoker {
                         registration.packetName(), contentType, metadata, receivedAt);
         try {
             Object handler = handlers.apply(registration.handlerType());
-            CompletionStage<?> stage =
-                    registration.invocation().invoke(handler, spot, message, context);
-            return stage.thenApply(ignored -> null);
+            return Objects.requireNonNull(
+                    registration.invocation().invoke(handler, spot, message, context));
         } catch (RuntimeException ex) {
             return failed(
                     "failed to invoke SPOT packet handler: " + registration.handlerType().getName(),

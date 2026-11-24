@@ -36,14 +36,41 @@ covered by [How Channels Work](30-channel-patterns.en.md).
 
 ### 1.1 Message Contracts
 
-A contract is an ordinary record. It needs no separate registration or attribute declaration. A
-one-way message has no matching response type.
+A contract is an ordinary record. A one-way message has no matching response type.
 
 ```typescript
 --8<-- "framework/languages/node/tutorial/Shared/contracts.ts:channel-contracts"
 ```
 
-### 1.2 A Handler That Returns a Response
+### 1.2 Message Value Rules
+
+A message contract declares requiredness and nullability separately. Only a nullable property
+accepts `null`, and only an omittable property may be left out. A required nullable property
+must appear in the JSON even when its value is `null`.
+
+| Value or property | JSON representation or handling |
+|---|---|
+| Signed or unsigned 64-bit integer | Decimal string with no leading zeros, such as `"9223372036854775807"`. The value must fit the declared type. |
+| Integer of 32 bits or fewer | JSON number with no fraction, such as `42`. |
+| Enum | Case-sensitive string containing a declared name, such as `"Ready"`. |
+| Object property | The default decoder ignores unknown properties and rejects duplicates and missing required properties. |
+
+Use `nickname: string | null` to allow `null` and `nickname?: string` to allow omission.
+When the packet schema is generated, the union produces a `nullable` schema and the
+optional marker leaves the property out of `required`. In a hand-written packet schema,
+use `{ type: 'nullable', value: { type: 'string' } }` and leave the property out of
+`required` if it may also be omitted.
+
+When constructing JSON in a browser for the TypeScript stream connector, put 64-bit values
+in strings, for example `{ "score": "9223372036854775807" }`. The connector's JSON codec also
+converts `bigint` to a string. Java and .NET connectors convert typed 64-bit integers
+automatically, so server E2E tests using those connectors do not exercise the browser case
+that sends a JSON number.
+
+See [Message Model §5](../../../common/spec/server/00-foundation/05-message-model.en.md#5-the-framework-json-v1-typed-payload-profile)
+for the full `framework-json-v1` rules.
+
+### 1.3 A Handler That Returns a Response
 
 The handler's return value becomes the response as it stands.
 
@@ -51,7 +78,7 @@ The handler's return value becomes the response as it stands.
 --8<-- "framework/languages/node/tutorial/Server/Channel/get-player-profile-handler.ts:channel-request-handler"
 ```
 
-### 1.3 A Handler with No Response
+### 1.4 A Handler with No Response
 
 It receives a message that arrived by `send`. There is no return value, so the caller cannot
 learn the result of the processing.
@@ -60,7 +87,7 @@ learn the result of the processing.
 --8<-- "framework/languages/node/tutorial/Server/Channel/record-login-handler.ts:channel-send-handler"
 ```
 
-### 1.4 A Call Is Sent by Its Terminator
+### 1.5 A Call Is Sent by Its Terminator
 
 Every call in this chapter has **a leading part that assembles it and one last piece that sends
 it**. The leading part that picks the target name and the message only assembles the call;

@@ -162,6 +162,108 @@ final class ZLinkActorClientRuntimeTest {
     }
 
     @Test
+    void actorSendEncodeFailureRecordsOneErrorAndPreservesCallerFailure() {
+        var options =
+                new systems.zlink.framework.runtime.configuration
+                        .ZLinkDispatchOptionsRegistration();
+        options.messageFlow(systems.zlink.framework.configuration.ZLinkMessageFlowLogMode.DETAILED);
+        var tracer =
+                new systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer(
+                        options,
+                        systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator
+                                .reflection(),
+                        Runnable::run);
+        var records = new java.util.concurrent.CopyOnWriteArrayList<String>();
+        var logger = java.util.logging.Logger.getLogger(tracer.getClass().getName());
+        var listener =
+                new java.util.logging.Handler() {
+                    public void publish(java.util.logging.LogRecord record) {
+                        if (record.getMessage().contains(" packet=SnapshotForEncodeFailure")) {
+                            records.add(record.getMessage());
+                        }
+                    }
+
+                    public void flush() {}
+
+                    public void close() {}
+                };
+        logger.addHandler(listener);
+        try {
+            var node = new RecordingSpotNode();
+            var typedJson = new ZLinkJsonMessageSerializer();
+            var thrown = new java.util.concurrent.atomic.AtomicReference<RuntimeException>();
+            ZLinkMessageSerializer serializer =
+                    new ZLinkMessageSerializer() {
+                        @Override
+                        public <T> ZLinkEncodedPayload serialize(T value) {
+                            try {
+                                return typedJson.serialize(value);
+                            } catch (RuntimeException failure) {
+                                var wrapper =
+                                        new IllegalArgumentException("encode wrapper", failure);
+                                thrown.set(wrapper);
+                                throw wrapper;
+                            }
+                        }
+
+                        @Override
+                        public <T> T deserialize(ZLinkEncodedPayload payload, Class<T> type) {
+                            return typedJson.deserialize(payload, type);
+                        }
+                    };
+            var client =
+                    new ZLinkActorClientRuntime(
+                            () -> node,
+                            new ZLinkStoreLocationResolvers(
+                                    ZLinkRegisteredLocationStores.fromUnified(
+                                            storeWithActor("actor-1")),
+                                    new ZLinkLocationOptions()),
+                            serializer,
+                            Duration.ofSeconds(5),
+                            CompletableFuture.completedFuture(null),
+                            tracer::captureEnabled);
+            client.setFlowTracer(tracer);
+            var flow =
+                    systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext.create(
+                            systems.zlink.framework.monitoring.ZLinkFlowOrigin.APPLICATION);
+            CompletionException failure;
+            try (var scope =
+                    systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext.enter(
+                            flow)) {
+                failure =
+                        assertThrows(
+                                CompletionException.class,
+                                () ->
+                                        client.sendToActor(
+                                                        "actor-1",
+                                                        new SnapshotForEncodeFailure(null))
+                                                .submit()
+                                                .toCompletableFuture()
+                                                .join());
+            }
+
+            assertSame(thrown.get(), failure.getCause());
+            assertEquals(0, node.sendAttempts);
+            systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
+            assertEquals(1, records.size(), records.toString());
+            String record = records.getFirst();
+            assertTrue(record.contains("event_id=zlink.dispatch_error"), record);
+            assertTrue(record.contains("outcome=failed"), record);
+            assertTrue(record.contains("reason=encode_error"), record);
+            assertTrue(record.contains("action=fail_caller"), record);
+            assertTrue(record.contains("flow=" + flow.flowId()), record);
+            assertFalse(record.contains("phase="), record);
+            assertTrue(
+                    record.contains("error_message=" + thrown.get().getCause().getMessage()),
+                    record);
+            assertTrue(record.contains("Property 'value' does not allow null."), record);
+        } finally {
+            systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence.awaitIdle();
+            logger.removeHandler(listener);
+        }
+    }
+
+    @Test
     void actorErrorPayloadFollowsSharedVectors() throws Exception {
         var current = java.nio.file.Path.of(System.getProperty("user.dir")).toAbsolutePath();
         while (current != null
@@ -1413,6 +1515,8 @@ final class ZLinkActorClientRuntimeTest {
                         ZLinkStreamFrameCodec.encode(
                                 header, body.getBytes(StandardCharsets.UTF_8))));
     }
+
+    private record SnapshotForEncodeFailure(String value) {}
 
     private record Ping(String value) {}
 

@@ -131,7 +131,15 @@ lease fencing은 `target_closed`로 기록한다.
 
 `no_handler`, `decode_error`, `handler_exception`, `invalid_frame`,
 `reply_path_missing`, `unexpected_reply`, `backpressure`, `stale_target`,
-`shutdown`, `session_creation_failed`.
+`shutdown`, `session_creation_failed`, `encode_error`.
+
+`encode_error`는 송신 측이 application message를 wire bytes로 인코딩하지 못해 보내지 못한 경우다 —
+예를 들어 nullable로 선언하지 않은 필드가 null이거나 값이 wire 형식의 범위를 넘는 경우다
+([Message model](../00-foundation/05-message-model.ko.md)). 이 실패는 §2.1의 `sent` 경계에 이르기 전이므로
+`zlink.message_flow` 단계 기록은 남기지 않고, 송신하려던 packet과 flow로 `zlink.dispatch_error`를
+한 번 기록한다. `phase`는 넣지 않고 `action=fail_caller`다 — send·request 호출자는 같은 실패로 끝난다.
+기록에는 message type 이름을 담고, 오류 메시지에는 field 경로를 담는다. Handler 안에서 보낸 경우 그 실패가
+handler 실패로 이어지면 handler 쪽 기록(`handler_exception`)은 별도로 남긴다.
 
 기존 admission·Message Follow 규칙이 local dispatch 대상을 확정한 뒤 그 대상의 packet handler 조회만
 실패하면 `no_handler`다. 그 규칙이 대상 Actor·Spot·node 또는 유효한 target route가 없다고 확정해 전달을

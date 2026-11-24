@@ -181,7 +181,12 @@ which state it was in again.
 | `Unavailable` | The fact that authority remains without a Ready route, and that authority's state (`Creating`, `Closing`, and so on) | Calls without Instance intent go to the terminal mapper of [Spot address messaging §9](06-spot-address-messaging.en.md#9-failure-and-observability). Instance-intent activation follows the `Creating` wait, the release request for a steady `Ready` with an invalid owner lease, and the idle-cleanup route refresh in [Object lifecycle §§3, 5](09-object-lifecycle.en.md#3-when-to-build-a-missing-object). An Instance intent that observes authority under explicit Close keeps the owner route and fence and is forwarded to that owner node; handling at the owner follows [Spot address messaging §7](06-spot-address-messaging.en.md#7-close-and-the-generation-boundary). |
 | `StoreFailure` | The fact that authority presence couldn't be determined | Delivered to Store retry/reconciliation. |
 
-Only `ReadyRoute` is stored in the positive route cache. Forwarding to the
+Only `ReadyRoute` is stored in the positive route cache. Only resolver lookups
+made to find a message delivery route fill the cache — a Store read made to confirm
+authority, such as bind validation, is used only for that operation's decision and is
+not put into the positive route cache. If that read observes a larger `StoreVersion` than an
+existing entry, the entry is still removed as the table above requires. An entry filled by such a confirming read would
+point at an old owner without Follow if the object moved twice before the first message. Forwarding to the
 creation coordinator follows [Object lifecycle §3](09-object-lifecycle.en.md#3-when-to-build-a-missing-object). The resolver returns `Missing` only
 after the lifecycle component that owns authority release completes that
 release — without this order, an object still being cleaned up would look as

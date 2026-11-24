@@ -12,6 +12,7 @@ import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.execution.ZLinkWorkerPool;
 import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget;
+import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.execution.ZLinkSpotCloseCallAccess;
@@ -55,7 +56,8 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
     private final ZLinkSerialExecutionQueue infrastructureQueue;
     private final ZLinkSpotSerialExecutor serials;
     private final ZLinkHandlerInstanceOwner handlerInstances;
-    private final List<DefaultSpotContext> timerContexts = new ArrayList<>();
+    private final ZLinkEntrySpotTimerSurface timerSurface;
+    private final ZLinkSpotTimerRegistry timers;
     final Map<String, ZLinkSpotTimerRegistry> actorTimers = new ConcurrentHashMap<>();
     private final ZLinkSpotHandlerCatalog handlerCatalog =
             new ZLinkSpotHandlerCatalog(
@@ -88,6 +90,19 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
                         false);
         this.outbound = host.createContextOutbound(backendSpot, nodeRid);
         this.handlerInstances = host.createHandlerInstances();
+        this.timerSurface = new ZLinkEntrySpotTimerSurface(this);
+        this.timers =
+                host.createTimerRegistry(
+                        spotId(),
+                        handlerInstances,
+                        (timerName, operation) ->
+                                ZLinkHandlerStages.fromStageSupplier(
+                                        () ->
+                                                enqueueDispatch(
+                                                        () ->
+                                                                host.runWithOutbound(
+                                                                        outbound, operation))));
+        timers.setSpot(timerSurface);
     }
 
     @Override
@@ -137,7 +152,6 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
 
     void setEntrySpot(ZLinkEntrySpot<?> entrySpot) {
         this.entrySpot = entrySpot;
-        actorTimers.values().forEach(timer -> timer.setSpot(new ZLinkEntrySpotTimerSurface(this)));
     }
 
     @Override
@@ -154,26 +168,12 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
         if (actorId != null) {
             return actorTimer(actorId).add(name, period, handlerType, options);
         }
-        DefaultSpotContext timerContext =
-                new DefaultSpotContext(
-                        host,
-                        workerPool,
-                        handlerLoader,
-                        nodeRid,
-                        backendSpot,
-                        dispatchQueue,
-                        ZLinkUserSpotExecutionMode.PER_ACTOR,
-                        false,
-                        handlerInstances);
-        timerContext.setSpot(new ZLinkEntrySpotTimerSurface(this));
-        timerContexts.add(timerContext);
-        return timerContext.addTimer(name, period, handlerType, options);
+        return timers.add(name, period, handlerType, options);
     }
 
     CompletionStage<Void> closeTimersAsync() {
         List<CompletableFuture<?>> closing = new ArrayList<>();
-        timerContexts.forEach(
-                context -> closing.add(context.closeTimersAsync().toCompletableFuture()));
+        closing.add(timers.closeAsync().toCompletableFuture());
         actorTimers
                 .values()
                 .forEach(timer -> closing.add(timer.closeAsync().toCompletableFuture()));
@@ -207,18 +207,12 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
     }
 
     void sealTimerAdmission() {
-        timerContexts.forEach(DefaultSpotContext::sealTimerAdmission);
+        timers.freeze();
         actorTimers.values().forEach(ZLinkSpotTimerRegistry::freeze);
     }
 
     CompletionStage<Void> awaitAllLanes(ZLinkSerialExecutionQueue.Quiescence spotScope) {
-        List<CompletionStage<Void>> lanes = new ArrayList<>();
-        lanes.add(serials.awaitAllLanes(spotScope));
-        timerContexts.forEach(context -> lanes.add(context.awaitAllLanes(spotScope)));
-        return CompletableFuture.allOf(
-                lanes.stream()
-                        .map(CompletionStage::toCompletableFuture)
-                        .toArray(CompletableFuture[]::new));
+        return serials.awaitAllLanes(spotScope);
     }
 
     @Override
@@ -405,9 +399,7 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
                                                                             host.runWithOutbound(
                                                                                     outbound,
                                                                                     operation))));
-                    if (entrySpot != null) {
-                        timer.setSpot(new ZLinkEntrySpotTimerSurface(this));
-                    }
+                    timer.setSpot(timerSurface);
                     return timer;
                 });
     }
@@ -522,7 +514,6 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                 dispatchQueue,
                 executionMode,
                 instanceSpot,
-                null,
                 ZLinkSpotRelocationCoordinationMode.FRAMEWORK_MANAGED);
     }
 
@@ -535,30 +526,6 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
             ZLinkSerialExecutionQueue dispatchQueue,
             ZLinkUserSpotExecutionMode executionMode,
             boolean instanceSpot,
-            ZLinkHandlerInstanceOwner sharedHandlerInstances) {
-        this(
-                host,
-                workerPool,
-                handlerLoader,
-                nodeRid,
-                backendSpot,
-                dispatchQueue,
-                executionMode,
-                instanceSpot,
-                sharedHandlerInstances,
-                ZLinkSpotRelocationCoordinationMode.FRAMEWORK_MANAGED);
-    }
-
-    DefaultSpotContext(
-            ZLinkSpotContextHost host,
-            ZLinkWorkerPool workerPool,
-            ZLinkSpotHandlerLoader handlerLoader,
-            RoutingId nodeRid,
-            ZLinkBackendSpot backendSpot,
-            ZLinkSerialExecutionQueue dispatchQueue,
-            ZLinkUserSpotExecutionMode executionMode,
-            boolean instanceSpot,
-            ZLinkHandlerInstanceOwner sharedHandlerInstances,
             ZLinkSpotRelocationCoordinationMode relocationCoordinationMode) {
         this.host = host;
         this.workerPool = workerPool;
@@ -577,10 +544,7 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                         host.serialExecutor(),
                         executionMode,
                         instanceSpot);
-        this.handlerInstances =
-                sharedHandlerInstances == null
-                        ? host.createHandlerInstances()
-                        : sharedHandlerInstances;
+        this.handlerInstances = host.createHandlerInstances();
         this.outbound = host.createContextOutbound(backendSpot, nodeRid);
         this.timers =
                 host.createTimerRegistry(

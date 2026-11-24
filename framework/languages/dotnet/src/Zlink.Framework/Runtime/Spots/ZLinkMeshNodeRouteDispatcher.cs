@@ -565,7 +565,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         }
         catch (Exception error)
         {
-            scope.HandlerException(_dispatchErrors, ZLinkDispatchErrorAction.Drop, error);
+            scope.DispatchFailure(_dispatchErrors, ZLinkDispatchErrorAction.Drop, error);
         }
     }
 
@@ -648,7 +648,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
             }
             catch (Exception ex)
             {
-                scope.HandlerException(_dispatchErrors, ZLinkDispatchErrorAction.Drop, ex);
+                scope.DispatchFailure(_dispatchErrors, ZLinkDispatchErrorAction.Drop, ex);
             }
 
             return;
@@ -686,7 +686,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         catch (Exception ex)
         {
             await ReplyErrorAsync(received, header, ex, cancellationToken).ConfigureAwait(false);
-            scope.HandlerException(_dispatchErrors, ZLinkDispatchErrorAction.ReplyError, ex);
+            scope.DispatchFailure(_dispatchErrors, ZLinkDispatchErrorAction.ReplyError, ex);
             return;
         }
 
