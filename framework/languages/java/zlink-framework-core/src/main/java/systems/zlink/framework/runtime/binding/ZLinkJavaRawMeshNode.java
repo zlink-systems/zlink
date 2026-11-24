@@ -74,6 +74,7 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescript
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceRelocationWireCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceRequestProgress.InstanceReply;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceTopologyRegistry;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceWireFrame;
@@ -3441,7 +3442,13 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                     Duration remainingTimeout = Duration.ofNanos(remainingNanos);
                     long correlation = allocateCorrelation();
                     ZLinkServiceOperationRegistry.Operation<List<Message>> operation =
-                            operations.registerOnOwner(remainingTimeout);
+                            operations.registerInstanceRequestOnOwner(
+                                    remainingTimeout,
+                                    meshName,
+                                    route.targetNodeRid(),
+                                    correlation,
+                                    route.targetNodeGeneration(),
+                                    false);
                     UUID operationId = operation.id();
                     admitRequest(
                             route.targetNodeRid(),
@@ -3456,10 +3463,12 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                             List.of(),
                             requestAdmission,
                             admittedTimeout -> {
+                                var progress = operation.requestProgress();
+                                progress.peerAdmitted();
                                 BiConsumer<List<byte[]>, Throwable> finished =
                                         (replyFrames, failure) ->
                                                 finishInstanceSpotRequest(
-                                                        operationId,
+                                                        operation,
                                                         correlation,
                                                         replyFrames,
                                                         failure);
@@ -3495,7 +3504,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                                     frames,
                                                     admittedTimeout,
                                                     requestAdmission,
-                                                    finished);
+                                                    finished,
+                                                    progress);
                                 } catch (RuntimeException | Error failure) {
                                     finished.accept(null, failure);
                                     submitted = CompletableFuture.completedStage(null);
@@ -3509,7 +3519,11 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     }
 
     private void finishInstanceSpotRequest(
-            UUID operationId, long correlation, List<byte[]> replyFrames, Throwable failure) {
+            ZLinkServiceOperationRegistry.Operation<List<Message>> operation,
+            long correlation,
+            List<byte[]> replyFrames,
+            Throwable failure) {
+        UUID operationId = operation.id();
         RequestResult result = requestTerminal(failure);
         List<byte[]> replies = replyFrames == null ? List.of() : replyFrames;
         if (result != RequestResult.OK || replies.isEmpty()) {
@@ -3522,6 +3536,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                             failure));
             return;
         }
+        operation.requestProgress().replyReceived();
         try {
             var header = wire.decodeReplyHeader(replies.getFirst());
             if (header.correlation() != correlation) {
@@ -3689,13 +3704,27 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                         new TimeoutException("Instance Spot request deadline expired"));
             }
             ZLinkServiceOperationRegistry.Operation<List<Message>> operation =
-                    request ? operations.registerOnOwner(Duration.ofNanos(remainingNanos)) : null;
-            java.util.UUID identity =
-                    operation != null
-                            ? operation.id()
-                            : route instanceof ZLinkServiceM6BWireCodec.InstanceColdActivation
-                                    ? java.util.UUID.randomUUID()
-                                    : null;
+                    request
+                            ? operations.registerInstanceRequestOnOwner(
+                                    Duration.ofNanos(remainingNanos),
+                                    meshName,
+                                    route.targetNodeRid(),
+                                    correlation,
+                                    route.targetNodeGeneration(),
+                                    true)
+                            : null;
+            UUID identity;
+            InstanceReply reply;
+            if (operation != null) {
+                identity = operation.id();
+                reply = operation.requestProgress().localReply(operations, identity);
+            } else {
+                identity =
+                        route instanceof ZLinkServiceM6BWireCodec.InstanceColdActivation
+                                ? UUID.randomUUID()
+                                : null;
+                reply = InstanceReply.DISCARD;
+            }
             var header =
                     new ZLinkServiceM6BWireCodec.InstanceSpotMessage(
                             flags,
@@ -3723,15 +3752,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                                         flags == 0 ? new byte[0] : ownedMetadata,
                                         messages,
                                         contentType,
-                                        replyParts -> {
-                                            boolean completed =
-                                                    operation != null
-                                                            && operations.complete(
-                                                                    operation.id(), replyParts);
-                                            if (!completed) {
-                                                replyParts.forEach(Message::close);
-                                            }
-                                        },
+                                        reply,
                                         failure -> {
                                             recordInstanceActivationFailure(
                                                     header.route().targetSpotId(),
