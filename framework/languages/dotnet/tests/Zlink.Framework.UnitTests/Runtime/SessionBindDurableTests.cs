@@ -323,14 +323,12 @@ public sealed partial class EntrySpotActorDispatchTests
         }
     }
 
-    // Session-Actor binding §12: a bind whose ObjectGeneration differs from the Store row of the
-    // same ActorId ends InvalidOperation; a ref whose location is stale (another node) ends
-    // Unavailable. Neither reaches the Session owner's bind command.
     [Theory]
-    [InlineData(true, ZLinkFrameworkErrorKind.InvalidOperation)]
-    [InlineData(false, ZLinkFrameworkErrorKind.Unavailable)]
-    public async Task SessionBind_ClassifiesGenerationMismatchSeparatelyFromStaleLocation(
-        bool differentGeneration,
+    [InlineData("different-generation", ZLinkFrameworkErrorKind.InvalidOperation)]
+    [InlineData("stale-location", ZLinkFrameworkErrorKind.Unavailable)]
+    [InlineData("missing-authority", ZLinkFrameworkErrorKind.NotFound)]
+    public async Task SessionBind_ClassifiesAuthorityAndRouteFailures(
+        string scenario,
         ZLinkFrameworkErrorKind expected
     )
     {
@@ -346,14 +344,27 @@ public sealed partial class EntrySpotActorDispatchTests
         var (runtime, actor) = await CreateStartedRuntimeAsync(node);
         try
         {
-            var submitted = differentGeneration
-                ? new ActorRef(actor.ActorId, actor.Generation + 1, "entry", actor.NodeRid)
-                : new ActorRef(
+            var submitted = scenario switch
+            {
+                "missing-authority" => new ActorRef(
+                    "missing-actor",
+                    actor.Generation,
+                    "entry",
+                    actor.NodeRid
+                ),
+                "different-generation" => new ActorRef(
+                    actor.ActorId,
+                    actor.Generation + 1,
+                    "entry",
+                    actor.NodeRid
+                ),
+                _ => new ActorRef(
                     actor.ActorId,
                     actor.Generation,
                     "entry",
                     RoutingId.From("stale-location-node")
-                );
+                ),
+            };
             var context = new ZLinkSessionContext(
                 runtime,
                 new RetainedOutboundCapturingStream(RoutingId.From("generation-session")),

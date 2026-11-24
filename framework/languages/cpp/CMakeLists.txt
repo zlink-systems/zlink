@@ -3154,6 +3154,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     TIER contract
     TIMEOUT 30)
   zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_bind_missing_authority
+    COMMAND test_cpp_framework_same_node_duplicate_bind missing-authority
+    LABELS "framework-integration;framework-contract;stream;stream-session"
+    TIER contract
+    TIMEOUT 30)
+  zlink_framework_cpp_add_test(
     NAME test_cpp_framework_bind_generation_mismatch
     COMMAND test_cpp_framework_same_node_duplicate_bind generation-mismatch
     LABELS "framework-integration;framework-contract;stream;stream-session"
