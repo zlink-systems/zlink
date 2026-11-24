@@ -67,7 +67,8 @@ public final class DungeonActions {
     }
 
     @ZLinkSpotActorSend
-    public CompletionStage<Void> notificationBorderVisible(Dungeon spot, Player actor, ZLinkMessageContext context, BorderVisible message) {
+    public CompletionStage<Void> notificationBorderVisible(
+            Dungeon spot, Player actor, ZLinkMessageContext context, BorderVisible message) {
         return actor.deliver(message);
     }
 }

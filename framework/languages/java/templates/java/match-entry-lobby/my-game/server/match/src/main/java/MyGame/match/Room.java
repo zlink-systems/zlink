@@ -35,6 +35,7 @@ public final class Room implements ZLinkSpot<Player> {
     }
 
     public CompletionStage<Void> onJoinedActor(Player actor) {
+        System.out.println("Player entered Room " + context.spotId());
         var view = view();
         return actors.sendToActor(actor.context().actorId(), new MatchFound(context.spotId()))
                 .submit()
@@ -42,6 +43,7 @@ public final class Room implements ZLinkSpot<Player> {
     }
 
     public CompletionStage<Void> onLeaveActor(Player actor) {
+        System.out.println("Player left " + context.spotId());
         return CompletableFuture.completedFuture(null);
     }
 
@@ -57,10 +59,11 @@ public final class Room implements ZLinkSpot<Player> {
     public CompletionStage<Void> move(Player actor, MoveRequest request) {
         var rejection = state.move(actor.context().actorId(), request);
         if (rejection != null) return reply(actor, rejection);
-        var player = state.view().stream()
-                .filter(candidate -> candidate.playerId().equals(actor.context().actorId()))
-                .findFirst()
-                .orElseThrow(() -> new IllegalStateException("Unknown room player"));
+        var player =
+                state.view().stream()
+                        .filter(candidate -> candidate.playerId().equals(actor.context().actorId()))
+                        .findFirst()
+                        .orElseThrow(() -> new IllegalStateException("Unknown room player"));
         return reply(actor, new MoveResult(player.x(), player.y(), request.sequence()))
                 .thenCompose(ignored -> broadcast(view()));
     }
@@ -79,11 +82,11 @@ public final class Room implements ZLinkSpot<Player> {
     }
 
     private CompletionStage<Void> broadcast(Object message) {
+        if (message instanceof MatchEnded ended)
+            System.out.println("Match ended in " + context.spotId() + ", winner " + ended.winner());
         CompletionStage<Void> sends = CompletableFuture.completedFuture(null);
         for (var player : state.playerIds())
-            sends =
-                    sends.thenCompose(
-                            ignored -> actors.sendToActor(player, message).submit());
+            sends = sends.thenCompose(ignored -> actors.sendToActor(player, message).submit());
         return sends;
     }
 

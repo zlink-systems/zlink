@@ -123,8 +123,7 @@ public final class Client implements AutoCloseable {
                 throw new IllegalStateException(
                         "Timed out waiting for " + type.getSimpleName() + ", received=" + history);
             if (event instanceof Exception error) throw error;
-            if (type.isInstance(event) && predicate.test(type.cast(event)))
-                return type.cast(event);
+            if (type.isInstance(event) && predicate.test(type.cast(event))) return type.cast(event);
             if (event instanceof ActionRejected rejected)
                 throw new IllegalStateException("Action rejected: " + rejected.reason());
             pending.add(event);
