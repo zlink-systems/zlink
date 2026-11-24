@@ -3211,6 +3211,18 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     "framework-unit;framework-contract;stream;reply"
     unit)
   add_zlink_framework_test(
+    test_cpp_framework_login_admission
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_login_admission.cpp
+    "framework-unit;framework-contract;stream;admission"
+    contract)
+  target_compile_definitions(test_cpp_framework_login_admission PRIVATE
+    ZLINK_LOGIN_ADMISSION_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/login-admission-v1.json")
+  target_include_directories(test_cpp_framework_login_admission PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  target_link_libraries(test_cpp_framework_login_admission PRIVATE
+    opentelemetry-cpp::metrics
+    nlohmann_json::nlohmann_json)
+  add_zlink_framework_test(
     test_cpp_framework_same_node_duplicate_bind
     tests/Zlink.Framework.UnitTests/test_cpp_framework_same_node_duplicate_bind.cpp
     "framework-integration;framework-contract;stream;stream-session"
@@ -3942,6 +3954,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_heartbeat.cpp
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_inbound_codec.cpp
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_inbound_framing.cpp
+    tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_login_admission.cpp
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_payload_codecs.cpp
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_receive_waits.cpp
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_reconnect.cpp
@@ -3951,6 +3964,23 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_typed_messaging.cpp
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_wire_headers.cpp
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_write_order.cpp)
+  target_compile_definitions(test_cpp_stream_connector PRIVATE
+    ZLINK_LOGIN_ADMISSION_FIXTURE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/login-admission-v1.json")
+  target_link_libraries(test_cpp_stream_connector PRIVATE nlohmann_json::nlohmann_json)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_stream_connector_login_admission
+    COMMAND test_cpp_stream_connector login-admission
+    LABELS "connector-unit;connector-contract;stream;admission"
+    TIER contract
+    TIMEOUT 30)
+  add_zlink_connector_test(
+    test_cpp_stream_connector_request_allocations
+    tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_request_allocations.cpp
+    "connector-unit;connector-regression"
+    unit)
+  target_sources(test_cpp_stream_connector_request_allocations PRIVATE
+    tests/support/allocation_counter.cpp)
+  target_link_libraries(test_cpp_stream_connector_request_allocations PRIVATE zlink::cpp)
   add_zlink_connector_test(
     test_cpp_stream_revision
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_revision.cpp
