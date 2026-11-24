@@ -33,6 +33,8 @@ Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/dot
 
 ## Project and development
 
+Run one scenario with `./run-e2e.sh --scenario matchmaking`. Close the connection only after receiving the reply to the last request. The server may miss a send that is immediately followed by close.
+
 Use this template's domain as a reference when designing an FPS server in a separate project. This .NET 8 project runs a Session node, play nodes A and B (match), and a Redis Location Store. Entry Spots forward players to a fixed Matchmaking User Spot; same-mode players join dynamic Room User Spots. Public Framework and connector packages are pinned to 0.34.0 in `Directory.Packages.props`. The [README](README.md) owns execution, deployment and known issues; [zlink.structure.json](zlink.structure.json) describes initial topology and ordered scenarios.
 
 Run from this project root with Docker Compose v2 and Linux containers:
@@ -60,6 +62,10 @@ For host process debugging with the .NET 8 SDK, add `--local` or `-Local`. After
 `--check-domain` (`-CheckDomain` in PowerShell) runs 46 game domain checks and one separate wire golden check for four samples. The wire check briefly starts one local typed Session node and observes its public connector payloads; Redis and game scenario nodes are not started.
 
 ## Modules and extension points
+
+1. When creating a typed message, declare nullability and wire types in the shared contract.
+   - Use nullable reference types such as `string?` or nullable value types such as `long?`. To allow omission, declare a constructor parameter default.
+   - Encode 64-bit integers as decimal strings in JSON. Browser clients also send strings, for example `"handNumber": "42"`. [Message value rules](https://docs.zlink.systems/dotnet/guide/server/20-channel-messaging/#12-message-value-rules)
 
 - `server/MyGame.Shared/Contracts.cs`: typed client and internal contracts, action limits and protocol names. `Geometry.cs`: Vec3, closed slab ray/AABB intersection, static map, spawn points and player boxes.
 - `server/MyGame.Match/Domain/RoomState.cs`: authoritative positions, HP, phase, winner, shared sequences, movement budgets, cooldowns and hit selection. Extend this domain for weapons, scoring and match rules. Production time is monotonic; only the domain constructor permits a test clock. Snapshot DTOs contain remaining milliseconds rather than process clock readings.

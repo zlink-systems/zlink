@@ -102,6 +102,10 @@ class Join(private val spots: ZLinkSpotManager) {
         request: JoinTableRequest,
     ) {
         require(actor.context().actorId() == request.playerId)
+        if (request.reconnect) {
+            actor.context().boundSession().kotlin().send(ActionRejected(Rules.NOT_SEATED, 0)).await()
+            return
+        }
         if (actor.state.match != null) return
         val chips = actor.loadChips()
         val created =

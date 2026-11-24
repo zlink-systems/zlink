@@ -184,6 +184,8 @@ The domain check covers movement rejection order, sequence bounds, relative-time
 
 ## Known issues
 
+Drain confirmation takes about 30 seconds, so a turn clock may expire during the wait. For an update scenario in a game with turn clocks, finish the round before relocating it. Verify that relocation preserves the remaining time in a domain check with a controlled clock.
+
 Validated against the published Framework 0.34.0 packages.
 Border subscriptions use Framework 0.34.0 `addSubscribe(handlerType, channelName, topic)` at Field activation. One handler serves all adjacent-field topics.
 

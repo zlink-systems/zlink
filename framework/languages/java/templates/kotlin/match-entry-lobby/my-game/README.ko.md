@@ -1,5 +1,13 @@
 # MyGame 매치 Entry 로비
 
+## 메시지 계약과 연결 종료
+
+1. 공유 DTO에 null 허용과 JSON 표현을 선언합니다.
+   - Kotlin DTO에서 null을 허용하는 필드는 `String?`처럼 선언합니다. Kotlin에서 사용하는 Java 레코드는 `@Nullable`로 null 허용을 표시합니다. Kotlin DTO에서 필드 생략을 허용하려면 주 생성자 매개변수에 기본값을 지정합니다.
+   - 64비트 정수는 JSON에서 10진 문자열로 표현합니다. 브라우저 클라이언트도 `"handNumber": "42"`처럼 문자열을 보냅니다. [메시지 모델](https://docs.zlink.systems/kotlin/guide/server/20-channel-messaging/#12-message-value-rules)
+
+시나리오 하나만 실행하려면 `./run-e2e.sh --scenario hit`를 사용합니다. 마지막 request의 응답을 받은 뒤 연결을 닫습니다. send 직후 연결을 닫으면 서버가 메시지를 처리하지 못할 수 있습니다.
+
 [English](README.md)
 
 Entry Spot이 입장을 전달하고 고정 Matchmaking User Spot이 대기열과 Room 배정을 관리합니다. Room User Spot은 두 플레이어의 위치, HP, 행동 순서와 승자를 결정합니다. Session binding이 Actor 식별자를 유지합니다.
@@ -167,3 +175,7 @@ Redis를 시작하고 `server/config/`에서 노드별 Redis 주소, 배포 전�
 ## 게임 규칙과 확장 지점
 
 이동과 사격은 같은 입력 순서를 사용합니다. 거절된 입력은 위치, HP, 입력 순서와 재사용 대기 시간을 유지합니다. 이동 예산이나 사격 간격 때문에 거절되면 응답의 `retryAfterMs`를 확인합니다. Room 상태와 판정은 `RoomState`에서 확장합니다. Relocation에는 위치와 HP, 입력 순서, 남은 대기 시간을 저장합니다.
+
+## 알려진 문제
+
+drain 확인에 약 30초가 걸리므로 대기하는 동안 진행 중인 판의 턴 시간이 끝날 수 있습니다. 턴 시계가 있는 게임의 update 시나리오에서는 판을 끝낸 뒤 옮깁니다. 남은 시간이 이전되는지는 시계를 제어하는 도메인 검사에서 확인합니다.

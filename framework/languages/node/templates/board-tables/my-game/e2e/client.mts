@@ -163,10 +163,13 @@ class PlayerClient {
       check();
     });
   }
-  async join(playerId: string, tableId: string): Promise<TableView> {
+  async sendJoin(playerId: string, tableId: string, reconnect: boolean): Promise<void> {
     await this.connector.connect();
+    await this.connector.send(new JoinTableRequest(playerId, tableId, reconnect)).submit();
+  }
+  async join(playerId: string, tableId: string, reconnect = false): Promise<TableView> {
     const index = this.messages.length;
-    await this.connector.send(new JoinTableRequest(playerId, tableId)).submit();
+    await this.sendJoin(playerId, tableId, reconnect);
     const view = await this.wait<TableView>(
       PacketNames.tableView,
       index,
@@ -305,7 +308,14 @@ export async function scenario(
     if (name === 'match-cancel') {
       const playerId = `p0-${name}-${runId}`;
       const original = create('cancelled-original');
-      const ticket = await original.queue(playerId);
+      await original.sendJoin(playerId, tableId, true);
+      const stale = await original.wait<ActionRejected>(PacketNames.actionRejected, 0);
+      assert.equal(stale.reason, Reasons.seated);
+      const start = original.messages.length;
+      await original.connector.send(new FindMatch(playerId)).submit();
+      const ticket = await original.wait<MatchQueued>(PacketNames.matchQueued, start);
+      assert(ticket.ticketId);
+      assert.equal((await original.sessionInfo()).actorId, playerId);
       await original.close();
       const cancelled = create('cancelled-reconnected');
       assert.equal((await cancelled.queue(playerId)).ticketId, ticket.ticketId);
@@ -428,7 +438,7 @@ export async function scenario(
       await p2.close();
       p2 = create('p2-reconnected');
       const mark = p2.messages.length;
-      const restored = await p2.join(ids[1], tableId);
+      const restored = await p2.join(ids[1], tableId, true);
       identity(b2, restored);
       assert.equal(restored.seats[1].chips, Game.initialChips);
       const rebound = await p2.sessionInfo();
@@ -499,9 +509,17 @@ export async function scenario(
       assert(results[0].seats.every((seat) => seat.chips !== Game.initialChips));
       await Promise.all([p1.close(), p2.close()]);
       await control.restartTables();
+      const stale = create('persist-stale');
+      await stale.sendJoin(ids[0], tableId, true);
+      const rejection = await stale.wait<ActionRejected>(PacketNames.actionRejected, 0);
+      assert.equal(rejection.reason, Reasons.seated);
+      assert.equal(rejection.retryAfterMs, 0);
+      await stale.close();
       for (const [index, session] of [session1, session2].entries()) {
         const client = create(`persist-reconnected-${index + 1}`);
-        const view = await client.join(ids[index], `${tableId}-restored`);
+        const view = await client.join(ids[index], tableId);
+        assert.equal(view.yourSeat, index);
+        assert.equal(view.seats.length, index + 1);
         const reconnected = await client.sessionInfo();
         assert.equal(reconnected.actorId, session.actorId);
         assert.notEqual(reconnected.objectGeneration, session.objectGeneration);

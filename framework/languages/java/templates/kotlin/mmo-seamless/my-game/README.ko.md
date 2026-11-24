@@ -1,5 +1,13 @@
 # MyGame MMO 심리스 월드
 
+## 메시지 계약과 연결 종료
+
+1. 공유 DTO에 null 허용과 JSON 표현을 선언합니다.
+   - Kotlin DTO에서 null을 허용하는 필드는 `String?`처럼 선언합니다. Kotlin에서 사용하는 Java 레코드는 `@Nullable`로 null 허용을 표시합니다. Kotlin DTO에서 필드 생략을 허용하려면 주 생성자 매개변수에 기본값을 지정합니다.
+   - 64비트 정수는 JSON에서 10진 문자열로 표현합니다. 브라우저 클라이언트도 `"handNumber": "42"`처럼 문자열을 보냅니다. [메시지 모델](https://docs.zlink.systems/kotlin/guide/server/20-channel-messaging/#12-message-value-rules)
+
+시나리오 하나만 실행하려면 `./run-e2e.sh --scenario cross`를 사용합니다. 마지막 request의 응답을 받은 뒤 연결을 닫습니다. send 직후 연결을 닫으면 서버가 메시지를 처리하지 못할 수 있습니다.
+
 [English](README.md)
 
 Session node가 플레이어를 Actor에 연결하고 Zone play node가 여섯 Zone을 운영합니다. `ZonePositionDomain`이 이동과 시야, relocation 시 보존할 이동 예산을 관리합니다. Dungeon play node가 요청에 따라 Dungeon User Spot을 생성합니다.
@@ -167,3 +175,7 @@ Redis를 시작하고 `server/config/`에서 노드별 Redis 주소, 배포 전�
 계획된 종료에는 표준 입력으로 `drain`을 보내고 `RELOCATION_REQUESTED`, `RELOCATED`, `SAFE_TO_SHUTDOWN`을 확인합니다. 이후 `shutdown`을 보내고 `STOPPED`와 종료 코드 0을 확인합니다. 등록, 설정, 구조 검사와 시나리오를 함께 수정하는 절차는 [개발 가이드](AGENTS.md)를 참고합니다.
 
 Zone A가 zone-1~3을 준비한 뒤 Zone B가 zone-4~6을 준비합니다. 이후 Instance와 Session을 시작합니다. `update`는 사용하지 않는 Zone을 `vacate-zone`으로 닫은 뒤 Zone A를 drain하고, Zone B의 용량이 찬 상태에서 교체 Zone A가 새 Zone을 만들 수 있는지 확인합니다.
+
+## 알려진 문제
+
+drain 확인에 약 30초가 걸리므로 대기하는 동안 진행 중인 판의 턴 시간이 끝날 수 있습니다. 턴 시계가 있는 게임의 update 시나리오에서는 판을 끝낸 뒤 옮깁니다. 남은 시간이 이전되는지는 시계를 제어하는 도메인 검사에서 확인합니다.

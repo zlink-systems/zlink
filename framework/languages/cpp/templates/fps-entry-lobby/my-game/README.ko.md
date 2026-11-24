@@ -1,5 +1,13 @@
 # MyGame FPS entry lobby
 
+## 메시지 계약과 연결 종료
+
+1. 공유 DTO에 null 허용과 JSON 표현을 선언합니다.
+   - null을 허용하는 DTO 필드는 `std::optional<T>`로 선언합니다. 필드 생략을 허용하려면 `dto_traits`에서 별도로 `zlink::json::defaulted`를 지정합니다.
+   - 64비트 정수는 JSON에서 10진 문자열로 표현합니다. 브라우저 클라이언트도 `"handNumber": "42"`처럼 문자열을 보냅니다. [메시지 모델](https://docs.zlink.systems/cpp/guide/server/20-channel-messaging/#12-message-value-rules)
+
+시나리오 하나만 실행하려면 `./run-e2e.sh --scenario matchmaking`를 사용합니다. 마지막 request의 응답을 받은 뒤 연결을 닫습니다. send 직후 연결을 닫으면 서버가 메시지를 처리하지 못할 수 있습니다.
+
 Entry Spot이 플레이어를 고정 Matchmaking User Spot으로 보내면 Matchmaking이 모드별로 짝을 찾습니다. Session은 Player Actor를 연결에 바인딩하고 typed JSON을 전달합니다. 동적 Room User Spot이 이동 예산, 판정, HP, 입력 순서와 경기 종료를 관리합니다.
 
 이 템플릿은 새 게임을 설계할 때 참고하는 예제입니다. 새 프로젝트에서 게임에 맞는 노드, Spot, Actor, 메시지를 설계하고 이 템플릿의 구조와 규칙을 참고합니다. 템플릿의 이름을 바꾸거나 원본을 수정해서 게임 프로젝트로 사용하지 않습니다.
@@ -143,6 +151,8 @@ int main (int argc, char **argv)
 고정 Matchmaking Spot은 `my-game-match server/config/match-a.json`에서 bootstrap합니다. 공개 GetOrCreate가 완료되어 READY가 출력된 뒤 match-b와 Session을 시작합니다. 노드를 교체할 때는 호환되는 Room 슬롯을 남기고 교체 노드의 `BootstrapMatchmaking`을 끕니다. Framework가 Actor 배치, 소속, 바인딩과 relocation을 소유하며 application adapter는 대기열과 전투 상태를 저장합니다.
 
 ## Framework 동작과 알려진 문제
+
+drain 확인에 약 30초가 걸리므로 대기하는 동안 진행 중인 판의 턴 시간이 끝날 수 있습니다. 턴 시계가 있는 게임의 update 시나리오에서는 판을 끝낸 뒤 옮깁니다. 남은 시간이 이전되는지는 시계를 제어하는 도메인 검사에서 확인합니다.
 
 - handler의 일반 async 호출은 turn을 유지합니다. DB나 파일 I/O에 `Yield`를 사용하면 같은 Spot의 다른 handler가 진행할 수 있습니다. [실행 모델](https://docs.zlink.systems/cpp/guide/server/32-execution-model/#io-worker-wait)
 - 생성 기한을 초과한 경우 `DeadlineExceeded`가 발생합니다. 호출자의 취소는 별도 결과입니다. [Actor 생성](https://docs.zlink.systems/cpp/guide/server/22-actor/#creation-deadline)

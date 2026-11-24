@@ -41,6 +41,8 @@ The project layout and feature procedure below describe where to add gameplay. T
 
 ## Development commands
 
+Run one scenario with `./run-e2e.sh --scenario channel`. Close the connection only after receiving the reply to the last request. The server may miss a send that is immediately followed by close.
+
 Default builds and e2e run nodes and the client in Docker without a host SDK. Run these commands from this directory.
 
 ```powershell
@@ -127,6 +129,10 @@ Requests in the example game follow this path. Reading the code along this path 
 8. To replace a node, `drain` in `NodeControl` requests relocation. Framework takes the state from `TownRelocation` and `DungeonRelocation` and restores it on another node.
 
 ## Extending the template domain
+
+1. When creating a typed message, declare nullability and wire types in the shared contract.
+   - Use nullable reference types such as `string?` or nullable value types such as `long?`. To allow omission, declare a constructor parameter default.
+   - Encode 64-bit integers as decimal strings in JSON. Browser clients also send strings, for example `"handNumber": "42"`. [Message value rules](https://docs.zlink.systems/dotnet/guide/server/20-channel-messaging/#12-message-value-rules)
 
 Use this template's domain as a reference when designing a MORPG server in a separate project. Follow the [README](README.md) for execution and deployment.
 

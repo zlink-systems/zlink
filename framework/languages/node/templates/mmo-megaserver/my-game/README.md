@@ -169,6 +169,8 @@ Each scenario uses an isolated Compose project, Redis prefix and `.logs/run-<id>
 
 ## Known issues
 
+Drain confirmation takes about 30 seconds, so a turn clock may expire during the wait. For an update scenario in a game with turn clocks, finish the round before relocating it. Verify that relocation preserves the remaining time in a domain check with a controlled clock.
+
 Validated against the published Framework 0.34.0 packages.
 
 Node typed handler forwarding requires the packet-name-to-class table in `server/region/infrastructure/zlink/handlers.ts` until #1731 is fixed in 0.34.0. No Framework state is included in application relocation snapshots.

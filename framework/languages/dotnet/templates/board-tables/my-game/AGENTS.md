@@ -31,6 +31,8 @@ The project layout and feature procedure below describe where to add gameplay. T
 
 ## Development commands
 
+Run one scenario with `./run-e2e.sh --scenario reconnect`. Close the connection only after receiving the reply to the last request. The server may miss a send that is immediately followed by close.
+
 Default builds and e2e run nodes and the client in Docker without a host SDK. Run these commands from this directory.
 
 ```powershell
@@ -102,7 +104,7 @@ Relocation changes an object's execution host; drain moves a host's workload els
 Requests in the example game follow this path. Reading the code along this path before adding or transferring a feature locates the places to change.
 
 1. The client connects to the Session node over STREAM and sends the first packet, `JoinTableRequest`. `PlayerSession` checks the first packet type, calls `GetOrCreate` for the Player Actor by `playerId`, binds it to the Session, and relays the original packet.
-2. A new Actor starts in the Entry Spot `TableEntry`. `EnterTableHandler` checks the identity, calls `GetOrCreate` for the Table, and requests `JoinSpot(...).Defer()`.
+2. A new Actor starts in the Entry Spot `TableEntry`. `EnterTableHandler` checks the identity. For first entry, it calls `GetOrCreate` for the Table, and requests `JoinSpot(...).Defer()`. Entry rejects a reconnect with `not-seated`.
 3. `TableSpot.OnActorJoinAsync` assigns a seat or rejects a full table. `OnJoinedActorAsync` sends `TableView` to every seated player by player ID, and `TableViewDelivery` forwards it through each Actor's bound Session. A rejected join reaches the client as `ActionRejected` from `PlayerActor.OnJoinCompletedAsync`.
 4. `StartHandRequest` and `BetRequest` reach the Table's handlers (`StartHandler`, `BetHandler`). Rejections go through the requester's bound Session; deals, views, and the `HandResult` settlement go to each player by player ID and are forwarded by the delivery handlers.
 5. When the same player reconnects, `PlayerSession` binds the existing Actor to the new Session, and `ReconnectHandler` checks the identity and resends the current table state and the player's own cards.
@@ -119,6 +121,8 @@ Before adding a rule, run the build and e2e with the [Development commands](#dev
 ### Add a game rule
 
 1. Add typed request and result records in `server/MyGame.Shared/Contracts.cs`. Put shared integer limits and rejection reason strings there. Clients send requested actions; `TableSpot` validates them and calculates the resulting state.
+   - Use nullable reference types such as `string?` or nullable value types such as `long?`. To allow omission, declare a constructor parameter default.
+   - Encode 64-bit integers as decimal strings in JSON. Browser clients also send strings, for example `"handNumber": "42"`. [Message value rules](https://docs.zlink.systems/dotnet/guide/server/20-channel-messaging/#12-message-value-rules)
 2. Add domain state and its decisions in `server/MyGame.Table/TableSpot.cs`. `TableState` and `PlayerSeat` hold the table state, and `TableSpot` is the only decision location for seats, chips, cards, turns, and settlement. `TableRelocation` captures this state. If a new rule depends on time, use a monotonic clock owned by `TableSpot`, pass a test clock only through its constructor, and store remaining milliseconds in relocation state.
 3. Add a packet to the client allowlist in `server/MyGame.Session/PlayerSession.cs` only when clients are allowed to send it. The allowlist contains client-to-server requests; internal and server-originated packets receive `packet-not-allowed`.
 4. Add client-observable checks in `e2e/MyGame.E2E/Scenarios.cs`. Keep `table`, `reconnect`, and `update` behavior, and update the scenario table in the [README](README.md) and `run.scenarios` in `zlink.structure.json` together when adding a scenario ID.
@@ -142,6 +146,8 @@ Await public asynchronous calls as the template does, and avoid `.Wait()`, `.Res
 Create tables with `GetOrCreate` and move Actors with `JoinSpot(...).Defer()` and the public completion callback, and use relocation with runtime observations for host shutdown, so request acceptance is not mistaken for completion. `TableSpot` is an application-created User Spot; [Activation and lifetime](https://docs.zlink.systems/dotnet/guide/server/34-activation-lifetime/) explains creation and initialization. The runner sets `TableCapacity` through the public stable-type limit; a node with the limit reached accepts no further tables, so do not rely on a fixed table-to-node assignment.
 
 ### Reconnection and failure handling
+
+Set `reconnect: true` in `JoinTableRequest` when resuming a previously assigned seat. The Actor’s existing Table membership handles the request. Entry responds with `ActionRejected` (`not-seated`) when membership is missing. Discard the previous table ID and return to table selection. Omit `reconnect` or send `false` for first entry.
 
 Reconnect with the same Actor ID and bind the new Session to continue using the existing seat and game state. Framework manages current placement, so do not add an application route cache or reset game state during reconnect. Backpressure is the behavior that delays or rejects calls when processing capacity is unavailable; observe the public results described in the [Backpressure guide](https://docs.zlink.systems/dotnet/guide/server/33-backpressure/).
 

@@ -31,6 +31,8 @@ The project layout and feature procedure below describe where to add gameplay. T
 
 ## Development commands
 
+Run one scenario with `./run-e2e.sh --scenario reconnect`. Close the connection only after receiving the reply to the last request. The server may miss a send that is immediately followed by close.
+
 Run these commands from this directory. Install JDK 25 for the foreground server. It prints the Session WebSocket address once Redis and all nodes are ready. Stop it with Ctrl+C. From another terminal, run e2e to attach through `.logs/server.json`. The attached run leaves the server running and exercises the scenarios that leave the running deployment intact. Stop the server before running `update` or `persist`. The default isolated mode uses Docker without a host JDK.
 
 ```powershell
@@ -114,7 +116,7 @@ Relocation changes an object's execution host; drain moves a host's workload els
 Requests in the example game follow this path. Reading the code along this path before adding or transferring a feature locates the places to change.
 
 1. The client connects to the Session node over STREAM and sends the first packet, `JoinTableRequest`. `GameSession` calls `getOrCreate` for the Player Actor by `playerId`, binds it to the Session with `bindOrGet`, and relays the original packet.
-2. A new Actor starts in the Entry Spot `Entry`. `Join.join` checks the identity, loads the Actor’s chips once, creates the table by `tableId` with `getOrCreate`, and requests `joinSpot(...).defer()`.
+2. A new Actor starts in the Entry Spot `Entry`. `Join.join` checks the identity. For first entry, it loads the Actor’s chips once, creates the table by `tableId` with `getOrCreate`, and requests `joinSpot(...).defer()`. Entry rejects a reconnect with `not-seated`.
 3. `Table.onActorJoinSuspending` seats the player or rejects the join when the table is full. After an accepted join, `Table.onJoinedActorSuspending` pushes a `TableView` to every seated player; a rejection reaches the client as `ActionRejected` from `Player.onJoinCompletedSuspending`.
 4. Later packets (`TableViewRequest`, `StartHandRequest`, `BetRequest`) are handled by the `Actions` handlers of the Table that holds the Actor. Replies go through the requester's bound Session; pushes to other seated players use `sendToActor`, and the receiving `Actions` handlers (`tableView`, `dealt`, `result`) forward them through that Actor's bound Session.
 5. A reconnecting client sends `JoinTableRequest` again on a new Session. The same Actor is bound, `Table.admit` accepts the seated player without a new seat, and `Actions.join` resends the current view and the player's cards.
@@ -131,6 +133,8 @@ Before adding a rule, run the commands in [Development commands](#development-co
 ### Add a game rule
 
 1. Add typed request and result classes in `server/shared/src/main/kotlin/MyGame/Contracts.kt`. Keep the shared integer limit and rejection reasons in that file. Clients submit requested actions; `Table` validates amounts and calculates resulting state.
+   - Use a nullable Kotlin type such as `String?` in a DTO. A Java record used from Kotlin declares nullability with `@Nullable`. To allow omission in a Kotlin DTO, declare a primary-constructor default.
+   - Encode 64-bit integers as decimal strings in JSON. Browser clients also send strings, for example `"handNumber": "42"`. [Message value rules](https://docs.zlink.systems/kotlin/guide/server/20-channel-messaging/#12-message-value-rules)
 2. Add domain state and decisions in `server/table/src/main/kotlin/MyGame/table/Table.kt`. `TableState` and `Seat` hold the state, and `Table` owns the decisions. `TableTransfer` captures that state. If a rule depends on time, use a monotonic clock at this domain decision, pass a test clock only through the `Table` constructor, and store remaining milliseconds in relocation state.
 3. Add only client-to-server request types to the allowlist in `server/session/src/main/kotlin/MyGame/session/Program.kt`. Reject other packets as `packet-not-allowed`.
 4. Add client-observable checks in `e2e/src/main/kotlin/MyGame/e2e/Scenarios.kt`. Preserve `table`, `reconnect`, and `update`. When adding a scenario ID, update `Names.SCENARIOS` in `Contracts.kt`, `zlink.structure.json`, and the README table together.
@@ -151,6 +155,8 @@ Await public calls with `await()` as the template does, and avoid blocking calls
 Keep type registration and per-instance callbacks in their defined lifecycle phases. `Table` is a User Spot that `Join.join` creates on demand with `getOrCreate`; [Activation and lifetime](https://docs.zlink.systems/kotlin/guide/server/34-activation-lifetime/) explains creation and initialization. Use `joinSpot(...).defer()` and the public completion callback (`onJoinCompletedSuspending`) for membership changes, and relocation with runtime observations (`drain`, then `SAFE_TO_SHUTDOWN`) for host shutdown, so request acceptance is not mistaken for completion. `Control.kt` derives the safe-shutdown wait (`SAFE_DEADLINE`) from the Message Follow duration (`MESSAGE_FOLLOW`) and the host deadline (`HOST_DEADLINE`); change them there only.
 
 ### Reconnection and failure handling
+
+Set `reconnect: true` in `JoinTableRequest` when resuming a previously assigned seat. The Actor’s existing Table membership handles the request. Entry responds with `ActionRejected` (`not-seated`) when membership is missing. Discard the previous table ID and return to matchmaking with `FindMatch` on the bound Session. Omit `reconnect` or send `false` for first entry.
 
 Reconnect with the same player ID and bind the new Session to the same Actor to continue using existing player state. Framework manages current placement, so do not add an application route cache or reset player state during reconnect. Backpressure is the behavior that delays or rejects calls when processing capacity is unavailable; observe the public results described in the [Backpressure guide](https://docs.zlink.systems/kotlin/guide/server/33-backpressure/). A seated player who reconnects is admitted again without a new seat, and the current view and cards are resent.
 

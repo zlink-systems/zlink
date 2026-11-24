@@ -33,6 +33,8 @@ This Java 25 starter provides one Session node, Redis hosting, diagnostics, stdi
 
 ## Local server and E2E
 
+Run one scenario with `./run-e2e.sh --scenario connect`. Close the connection only after receiving the reply to the last request. The server may miss a send that is immediately followed by close.
+
 Start the server with `./run-server.sh` or `.\run-server.cmd` on Windows. Use its reported `ws://` endpoint and press Ctrl+C in its terminal to stop the nodes and Redis.
 
 Run `./run-e2e.sh` or `.\run-e2e.cmd` in another terminal. The runner attaches using `.logs/server.json` while the server is running and otherwise starts an isolated Docker stack. The [README](README.md#local-server) describes the checks that require isolation. Use `.logs/run-<id>/` for stdout, stderr, Framework message-flow logs and failure details. Docker build and cleanup output is under `.logs/docker-*/`.
@@ -51,6 +53,10 @@ Run `./run-e2e.sh` or `.\run-e2e.cmd` in another terminal. The runner attaches u
 `zlink.structure.json` describes initial composition, not runtime placement. This starter declares no application channels or Spots. When adding them, extend the checker to compare their names and types with registration constants.
 
 ## Development from samples
+
+1. When creating a typed message, declare nullability and wire types in the shared contract.
+   - Mark a nullable record component with `@Nullable`. Use `@ZLinkJsonOptional` separately to allow omission.
+   - Encode 64-bit integers as decimal strings in JSON. Browser clients also send strings, for example `"handNumber": "42"`. [Message value rules](https://docs.zlink.systems/java/guide/server/20-channel-messaging/#12-message-value-rules)
 
 Download and run a structure from [ZLink Start](https://zlink.systems/start) before introducing its features here. The sample collection contains nine structures in five server languages. Keep the sample separate and transfer only the registrations, application state, and tests required by your feature.
 

@@ -1,5 +1,13 @@
 # MyGame Kotlin 시작 템플릿
 
+## 메시지 계약과 연결 종료
+
+1. 공유 DTO에 null 허용과 JSON 표현을 선언합니다.
+   - Kotlin DTO에서 null을 허용하는 필드는 `String?`처럼 선언합니다. Kotlin에서 사용하는 Java 레코드는 `@Nullable`로 null 허용을 표시합니다. Kotlin DTO에서 필드 생략을 허용하려면 주 생성자 매개변수에 기본값을 지정합니다.
+   - 64비트 정수는 JSON에서 10진 문자열로 표현합니다. 브라우저 클라이언트도 `"handNumber": "42"`처럼 문자열을 보냅니다. [메시지 모델](https://docs.zlink.systems/kotlin/guide/server/20-channel-messaging/#12-message-value-rules)
+
+시나리오 하나만 실행하려면 `./run-e2e.sh --scenario connect`를 사용합니다. 마지막 request의 응답을 받은 뒤 연결을 닫습니다. send 직후 연결을 닫으면 서버가 메시지를 처리하지 못할 수 있습니다.
+
 [English](README.md)
 
 Session node가 클라이언트 STREAM 연결을 받고 Redis를 Location Store와 relocation 저장소로 사용합니다. 서버 구동, 진단, 프로세스 제어와 e2e 예제를 제공합니다. 게임 Spot, Actor, Entry, 인증, 구독과 게임 패킷은 프로젝트에서 추가합니다.

@@ -1,5 +1,13 @@
 # MyGame MORPG 로비와 Dungeon 인스턴스
 
+## 메시지 계약과 연결 종료
+
+1. 공유 DTO에 null 허용과 JSON 표현을 선언합니다.
+   - null을 허용하는 필드는 `T | null`로 선언합니다. 템플릿의 스키마 생성기는 해당 패킷에 `{ type: "nullable", value }`를 생성합니다. 필드 생략을 허용하려면 별도로 `?`를 붙입니다.
+   - 64비트 정수는 JSON에서 10진 문자열로 표현합니다. 브라우저 클라이언트도 `"handNumber": "42"`처럼 문자열을 보냅니다. [메시지 모델](https://docs.zlink.systems/node/guide/server/20-channel-messaging/#12-message-value-rules)
+
+시나리오 하나만 실행하려면 `./run-e2e.sh --scenario lobby`를 사용합니다. 마지막 request의 응답을 받은 뒤 연결을 닫습니다. send 직후 연결을 닫으면 서버가 메시지를 처리하지 못할 수 있습니다.
+
 로비에서 파티를 구성하고 준비를 마친 파티를 Dungeon User Spot으로 보냅니다. Party가 구성원과 준비 상태를, Dungeon이 승인된 파티와 스테이지를 관리합니다. Lobby와 Instance가 공유 Entry와 첫 파티 입장 handler를 등록합니다. Framework가 배치, 바인딩, 재접속 ID와 relocation을 담당합니다.
 
 ```mermaid
@@ -151,6 +159,8 @@ try {
 - **준비 상태.** Host가 Framework의 `Serving`을 관찰한 뒤 `READY`를 출력합니다. [가이드](https://docs.zlink.systems/node/guide/server/12-operations/#wait-for-serving)
 
 ## 알려진 문제
+
+drain 확인에 약 30초가 걸리므로 대기하는 동안 진행 중인 판의 턴 시간이 끝날 수 있습니다. 턴 시계가 있는 게임의 update 시나리오에서는 판을 끝낸 뒤 옮깁니다. 남은 시간이 이전되는지는 시계를 제어하는 도메인 검사에서 확인합니다.
 
 공개 Framework 0.34.0을 사용합니다. Typed push에서 DTO class를 복원하는 표는 공개 typed handler 제약(#1731)에 대응합니다. 기본 typed JSON serializer를 사용합니다.
 

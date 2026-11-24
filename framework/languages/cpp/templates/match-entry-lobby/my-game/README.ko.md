@@ -1,5 +1,13 @@
 # my-game — Match entry lobby
 
+## 메시지 계약과 연결 종료
+
+1. 공유 DTO에 null 허용과 JSON 표현을 선언합니다.
+   - null을 허용하는 DTO 필드는 `std::optional<T>`로 선언합니다. 필드 생략을 허용하려면 `dto_traits`에서 별도로 `zlink::json::defaulted`를 지정합니다.
+   - 64비트 정수는 JSON에서 10진 문자열로 표현합니다. 브라우저 클라이언트도 `"handNumber": "42"`처럼 문자열을 보냅니다. [메시지 모델](https://docs.zlink.systems/cpp/guide/server/20-channel-messaging/#12-message-value-rules)
+
+시나리오 하나만 실행하려면 `./run-e2e.sh --scenario hit`를 사용합니다. 마지막 request의 응답을 받은 뒤 연결을 닫습니다. send 직후 연결을 닫으면 서버가 메시지를 처리하지 못할 수 있습니다.
+
 Session 노드가 STREAM을 받고 Player Actor를 바인딩합니다. Entry Spot이 플레이어를 고정 `matchmaking` User Spot에 전달합니다. Matchmaking은 모드별 FIFO 대기열을, 동적 Room은 이동·HP·입력 순서와 명중 판정을 관리합니다.
 
 이 템플릿은 새 게임을 설계할 때 참고하는 예제입니다. 새 프로젝트에서 게임에 맞는 노드, Spot, Actor, 메시지를 설계하고 이 템플릿의 구조와 규칙을 참고합니다. 템플릿의 이름을 바꾸거나 원본을 수정해서 게임 프로젝트로 사용하지 않습니다.
@@ -144,6 +152,8 @@ Matchmaking bootstrap 소유자는 `my-game-match server/config/match-a.json`으
 맵 범위는 X와 Y가 각각 0–100입니다. 플레이어는 `(40,10)`과 `(60,10)`에서 시작합니다. X=50, Y=20–60의 닫힌 벽은 끝점 접촉을 포함해 이동과 사격을 막습니다. 이동 한 번은 최대 2, 속도는 초당 10입니다. 첫 이동은 2를 사용할 수 있습니다. 사격은 범위 80, 데미지 25, 간격 250 ms이며 초기 HP는 100입니다. 이동과 사격이 입력 순서를 공유하며 최대 순서는 `9007199254740991`입니다. 거부된 입력은 순서를 소모하지 않습니다. Room snapshot은 남은 이동 및 사격 시간을 밀리초 단위로 저장하고 목적지의 monotonic clock으로 복원합니다.
 
 ## Framework 동작과 알려진 문제
+
+drain 확인에 약 30초가 걸리므로 대기하는 동안 진행 중인 판의 턴 시간이 끝날 수 있습니다. 턴 시계가 있는 게임의 update 시나리오에서는 판을 끝낸 뒤 옮깁니다. 남은 시간이 이전되는지는 시계를 제어하는 도메인 검사에서 확인합니다.
 
 - handler의 일반 async 호출은 turn을 유지합니다. DB나 파일 I/O에 `Yield`를 사용하면 같은 Spot의 다른 handler가 진행할 수 있습니다. [실행 모델](https://docs.zlink.systems/cpp/guide/server/32-execution-model/#io-worker-wait)
 - 생성 기한을 초과한 경우 `DeadlineExceeded`가 발생합니다. 호출자의 취소는 별도 결과입니다. [Actor 생성](https://docs.zlink.systems/cpp/guide/server/22-actor/#creation-deadline)

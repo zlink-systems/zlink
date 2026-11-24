@@ -108,7 +108,7 @@ suspend fun scenario(
             "reconnect" -> {
                 p2.close()
                 p2 = Client(endpoint, p2.playerId, tableId)
-                val rejoined = p2.connect()
+                val rejoined = p2.connect(reconnect = true)
                 val rejoinedSession = p2.sessionInfo()
                 check(rejoinedSession.sessionId != session2.sessionId)
                 check(rejoinedSession.actorId == session2.actorId)

@@ -23,7 +23,8 @@ export class SessionInfo {
 export class JoinTableRequest {
   constructor(
     readonly playerId: string,
-    readonly tableId: string
+    readonly tableId: string,
+    readonly reconnect?: boolean
   ) {}
 }
 export class TableViewRequest {}

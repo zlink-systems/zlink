@@ -39,6 +39,10 @@ export class EntryJoin {
     request: JoinTableRequest
   ): Promise<void> {
     if (actor.context.actorId !== request.playerId) throw new Error('Player identity mismatch');
+    if (request.reconnect) {
+      await actor.reject(Reasons.seated);
+      return;
+    }
     if (actor.match) {
       await actor.reject(Reasons.matchPending);
       return;

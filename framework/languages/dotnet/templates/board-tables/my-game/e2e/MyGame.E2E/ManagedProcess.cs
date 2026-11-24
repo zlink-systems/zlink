@@ -146,6 +146,8 @@ internal sealed class ManagedProcess : IAsyncDisposable
             );
     }
 
+    public Task WaitForExitAsync(CancellationToken ct) => process.WaitForExitAsync(ct);
+
     public async ValueTask DisposeAsync()
     {
         await StopAsync();

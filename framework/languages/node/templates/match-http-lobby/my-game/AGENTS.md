@@ -39,6 +39,8 @@ The project layout and feature procedure below describe where to add gameplay. T
 
 ## Development commands
 
+Run one scenario with `./run-e2e.sh --scenario lobby`. Close the connection only after receiving the reply to the last request. The server may miss a send that is immediately followed by close.
+
 With the local server stopped, builds and e2e run the nodes and runner in Docker without a host Node.js installation. Run these commands from this directory.
 
 ```powershell
@@ -123,6 +125,10 @@ Requests in the example game follow this path. Reading the code along this path 
 6. To replace a node, the `drain` command in `runHost` requests relocation. Framework takes the game state from `capture` in `RoomRelocation` and calls `restore` on another node.
 
 ## Developing from this sample
+
+1. When creating a typed message, declare nullability and wire types in the shared contract.
+   - Declare nullable fields as `T | null`. The template schema generator emits `{ type: "nullable", value }` for the packet. Use `?` separately to allow omission.
+   - Encode 64-bit integers as decimal strings in JSON. Browser clients also send strings, for example `"handNumber": "42"`. [Message value rules](https://docs.zlink.systems/node/guide/server/20-channel-messaging/#12-message-value-rules)
 
 Extend this template's domain to build a two-dimensional action server. Add domain state and rule decisions in `server/match/domain.ts`, message contracts in `server/shared/messages.ts`, and client-sendable packet names in the allowlist in `server/session/session.ts`. Add an observable scenario in `e2e/client.mts`, then register it in `server/shared/constants.ts`, `zlink.structure.json`, and the README scenario table. Keep roster membership in `server/match/roster.ts` and HTTP matchmaking in `server/lobby/matchmaker.ts`.
 

@@ -33,6 +33,8 @@ Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/jav
 
 ## Local server and E2E
 
+Run one scenario with `./run-e2e.sh --scenario lobby`. Close the connection only after receiving the reply to the last request. The server may miss a send that is immediately followed by close.
+
 Start the server with `./run-server.sh` or `.\run-server.cmd` on Windows. Use its reported `ws://` endpoint and press Ctrl+C in its terminal to stop the nodes and Redis.
 
 Run `./run-e2e.sh` or `.\run-e2e.cmd` in another terminal. The runner attaches using `.logs/server.json` while the server is running and otherwise starts an isolated Docker stack. The [README](README.md#local-server) describes the checks that require isolation. Use `.logs/run-<id>/` for stdout, stderr, Framework message-flow logs and failure details. Docker build and cleanup output is under `.logs/docker-*/`.
@@ -70,6 +72,10 @@ Bash provides the same workflow:
 For host process debugging, install JDK 25 and add `--local` or `-Local`. Add `--no-build` or `-NoBuild` only with an existing local build. Keep canonical scenario order and assertions; compare first failures with Known issues in the README.
 
 ## Project layout and extension points
+
+1. When creating a typed message, declare nullability and wire types in the shared contract.
+   - Mark a nullable record component with `@Nullable`. Use `@ZLinkJsonOptional` separately to allow omission.
+   - Encode 64-bit integers as decimal strings in JSON. Browser clients also send strings, for example `"handNumber": "42"`. [Message value rules](https://docs.zlink.systems/java/guide/server/20-channel-messaging/#12-message-value-rules)
 
 ### Session node
 

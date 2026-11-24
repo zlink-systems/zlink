@@ -1,12 +1,16 @@
 package MyGame.e2e
 
 import MyGame.*
+import java.util.UUID
 
 internal suspend fun matchScenario(endpoint: String, cancelFirst: Boolean) {
     if (cancelFirst) {
-        val client = Client(endpoint, "", "")
+        val suffix = UUID.randomUUID().toString()
+        val client = Client(endpoint, "p0-$suffix", "table-$suffix")
         withCleanup(cleanup = { client.close() }) {
-            client.connectForMatch()
+            client.sendJoin(reconnect = true)
+            check(client.next<ActionRejected>() == ActionRejected(Rules.NOT_SEATED, 0))
+            client.send(FindMatch())
             val queued = client.next<MatchQueued>()
             client.send(FindMatch())
             check(client.next<MatchQueued>() == queued)

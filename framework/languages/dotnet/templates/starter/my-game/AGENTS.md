@@ -8,6 +8,8 @@ This template is a reference. To build a new game, create a new project and desi
 
 ### Server and e2e commands
 
+Run one scenario with `./run-e2e.sh --scenario connect`. Close the connection only after receiving the reply to the last request. The server may miss a send that is immediately followed by close.
+
 Run `./run-server.sh` or `.\run-server.cmd` to start Redis and the nodes in the foreground. Run `./run-e2e.sh` or `.\run-e2e.cmd` in another terminal to attach automatically. With the server stopped, run-e2e uses isolated Docker processes. Read per-node stdout, stderr, message flow, and failure detail under `.logs/run-<id>/`.
 
 ### Node and game design
@@ -48,6 +50,10 @@ This .NET 8 starter provides one Session node, Redis hosting, diagnostics, stdin
 `zlink.structure.json` describes initial composition, not runtime placement. This starter declares no application channels or Spots. When adding them, extend the checker to compare their names and types with registration constants.
 
 ## Development from samples
+
+1. When creating a typed message, declare nullability and wire types in the shared contract.
+   - Use nullable reference types such as `string?` or nullable value types such as `long?`. To allow omission, declare a constructor parameter default.
+   - Encode 64-bit integers as decimal strings in JSON. Browser clients also send strings, for example `"handNumber": "42"`. [Message value rules](https://docs.zlink.systems/dotnet/guide/server/20-channel-messaging/#12-message-value-rules)
 
 Download and run a structure from [ZLink Start](https://zlink.systems/start) before designing corresponding features in your game project. The sample collection contains nine structures in five server languages. Keep the sample separate and transfer only the registrations, application state, and tests required by your feature.
 

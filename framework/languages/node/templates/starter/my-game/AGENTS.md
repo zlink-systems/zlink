@@ -44,6 +44,10 @@ This Node.js 22 starter provides one Session node, Redis hosting, diagnostics, s
 
 ## Development from samples
 
+1. When creating a typed message, declare nullability and wire types in the shared contract.
+   - Declare nullable fields as `T | null`. The template schema generator emits `{ type: "nullable", value }` for the packet. Use `?` separately to allow omission.
+   - Encode 64-bit integers as decimal strings in JSON. Browser clients also send strings, for example `"handNumber": "42"`. [Message value rules](https://docs.zlink.systems/node/guide/server/20-channel-messaging/#12-message-value-rules)
+
 Download and run a structure from [ZLink Start](https://zlink.systems/start) before introducing its features here. The sample collection contains nine structures in five server languages. Keep the sample separate and transfer only the registrations, application state, and tests required by your feature.
 
 Choose the sample according to the composition your game needs.
@@ -90,6 +94,8 @@ Use public APIs and the Framework default typed JSON serializer. Do not introduc
 Each fact has one state owner. When gameplay is added, replies inside an Actor handler go through that Actor's bound Session. Other pushes address the Actor by player ID; the receiving Actor handler forwards them through its bound Session. A Spot must not retain Actor references for later delivery because host relocation does not repeat `onJoinedActor` on the target. Framework owns routing, leases, execution gates, and membership; relocation adapters capture application state only.
 
 ## Run the server and e2e
+
+Run one scenario with `./run-e2e.sh --scenario connect`. Close the connection only after receiving the reply to the last request. The server may miss a send that is immediately followed by close.
 
 Run `./run-server.sh` or `.\run-server.cmd` to build and start the local nodes and Redis. Use the WebSocket endpoint printed by `Server ready` and stop the server with Ctrl+C. In another terminal, `./run-e2e.sh` or `.\run-e2e.cmd` detects that server and runs compatible scenarios. Stop the server for full Docker isolation. On PowerShell 7 the corresponding scripts are `run-server.ps1` and `run-e2e.ps1`.
 

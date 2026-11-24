@@ -121,8 +121,13 @@ public final class Scenarios {
     }
 
     private static void cancelMatch(String endpoint) throws Exception {
-        try (var client = new Client(endpoint, null, null)) {
-            var queued = client.findMatch();
+        var suffix = UUID.randomUUID().toString();
+        try (var client = new Client(endpoint, "p0-" + suffix, "table-" + suffix)) {
+            client.sendJoin(true);
+            check(client.next(ActionRejected.class).equals(new ActionRejected(Rules.NOT_SEATED, 0)),
+                    "An unseated player was allowed to reconnect");
+            client.send(new FindMatch());
+            var queued = client.next(MatchQueued.class);
             client.send(new CancelMatch(queued.ticketId()));
             var cancelled = client.next(MatchCancelled.class);
             check(
@@ -261,7 +266,7 @@ public final class Scenarios {
                 case RECONNECT -> {
                     p2.close();
                     p2 = new Client(server.endpoint(), p2.playerId, tableId);
-                    var rejoined = p2.connect();
+                    var rejoined = p2.connect(true);
                     var session = p2.sessionInfo();
                     check(
                             !session.sessionId().equals(session2.sessionId())
@@ -344,17 +349,23 @@ public final class Scenarios {
                 else throw cleanup;
             }
         }
-        if (id == Scenario.PERSIST) verifyReload(server, persisted);
+        if (id == Scenario.PERSIST) verifyReload(server, tableId, persisted);
     }
 
-    private static void verifyReload(ServerControl.Connection server, SeatView balance)
+    private static void verifyReload(ServerControl.Connection server, String tableId, SeatView balance)
             throws Exception {
         check(balance.chips() != Rules.INITIAL_CHIPS, "Test round did not change the balance");
         try (var host = new ServerHost(server.root(), 0, false)) {
             var fresh = host.startPersistenceProbe(server.endpoints());
+            try (var stale = new Client(fresh.endpoint(), balance.playerId(), tableId)) {
+                stale.sendJoin(true);
+                check(
+                        stale.next(ActionRejected.class).equals(new ActionRejected(Rules.NOT_SEATED, 0)),
+                        "Reconnect accepted a seat lost on restart");
+            }
             try (var reconnected =
                     new Client(
-                            fresh.endpoint(), balance.playerId(), "table-" + UUID.randomUUID())) {
+                            fresh.endpoint(), balance.playerId(), tableId)) {
                 var view = reconnected.connect();
                 check(
                         reconnected.sessionInfo().actorId().equals(balance.playerId()),

@@ -1,5 +1,13 @@
 # MyGame Node.js starter
 
+## 메시지 계약과 연결 종료
+
+1. 공유 DTO에 null 허용과 JSON 표현을 선언합니다.
+   - null을 허용하는 필드는 `T | null`로 선언합니다. 템플릿의 스키마 생성기는 해당 패킷에 `{ type: "nullable", value }`를 생성합니다. 필드 생략을 허용하려면 별도로 `?`를 붙입니다.
+   - 64비트 정수는 JSON에서 10진 문자열로 표현합니다. 브라우저 클라이언트도 `"handNumber": "42"`처럼 문자열을 보냅니다. [메시지 모델](https://docs.zlink.systems/node/guide/server/20-channel-messaging/#12-message-value-rules)
+
+시나리오 하나만 실행하려면 `./run-e2e.sh --scenario connect`를 사용합니다. 마지막 request의 응답을 받은 뒤 연결을 닫습니다. send 직후 연결을 닫으면 서버가 메시지를 처리하지 못할 수 있습니다.
+
 Session node 한 개가 WebSocket으로 STREAM 연결을 받습니다. Redis는 Location Store와 relocation 데이터를 저장합니다. 호스팅, 진단, stdin 제어와 연결 검증을 제공합니다. 게임 패킷, 인증, Actor, Spot, Entry, 구독은 등록하지 않습니다.
 
 ```mermaid

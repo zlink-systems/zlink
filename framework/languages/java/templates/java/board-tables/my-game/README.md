@@ -70,6 +70,8 @@ Register push handlers before sending either first packet:
 
 Send these packets using `send(...).submit()`. Once the player is seated, use `request(new SessionInfoRequest()).submit(SessionInfo.class)` to read Session identity. Add authentication before binding a player ID in a production deployment.
 
+Set `reconnect: true` in `JoinTableRequest` when resuming a previously assigned seat. The Actor’s existing Table membership handles the request. Entry responds with `ActionRejected` (`not-seated`) when membership is missing. Discard the previous table ID and return to matchmaking with `FindMatch` on the bound Session. Omit `reconnect` or send `false` for first entry.
+
 ### Connector installation
 
 Use the same connector release as `build.gradle.kts` extra `frameworkVersion`; `e2e/build.gradle.kts` uses that value for `systems.zlink:zlink-stream-connector`. In the commands below, `<version>` means that pinned release. The linked guides may describe newer releases. All clients must use this template's packets and the transport described above; engine sample packet names do not apply.
@@ -174,7 +176,7 @@ The runner validates `zlink.structure.json` and uses the same Java server host a
 | `reconnect` | The Session ID changes while the Actor ID/generation, seat, chips, private cards, and pending turn persist. Settlement clears every hand, and a later private-hand query returns an empty list. |
 | `match` | Two queued clients receive distinct seats in the same room, then complete a hand. |
 | `match-cancel` | A queued client cancels its ticket. Two later clients match and complete a hand. |
-| `persist` | A new Actor in a separate Play and Session pair loads the same player ID’s settled chips through the original API node. |
+| `persist` | A new Actor in a separate Play and Session pair loads the same player ID’s settled chips through the original API node. The previous table ID returns `not-seated` on reconnect before a fresh join. |
 | `update` | Table state and client connections persist through drain, settlement on another node, source replacement, and a new hand. Settlement clears every hand, and a later private-hand query returns an empty list. |
 
 Use `./run-e2e.sh --check-structure` or `.\run-e2e.cmd -CheckStructure` to validate the actual structure files without starting Redis or nodes.
@@ -192,6 +194,8 @@ Before the scenarios, the runner executes the server table's `--check-domain` mo
 - **READY and Serving** — The Framework host prints `READY` after observing runtime `Serving`. [Guide](https://docs.zlink.systems/java/guide/server/12-operations/#wait-for-serving). [server/shared/src/main/java/MyGame/Hosting.java:95](server/shared/src/main/java/MyGame/Hosting.java#L95); [server/shared/src/main/java/MyGame/Hosting.java:102](server/shared/src/main/java/MyGame/Hosting.java#L102).
 
 ## Known issues
+
+Drain confirmation takes about 30 seconds, so a turn clock may expire during the wait. For an update scenario in a game with turn clocks, finish the round before relocating it. Verify that relocation preserves the remaining time in a domain check with a controlled clock.
 
 The scenarios were validated against the published packages pinned in `build.gradle.kts`.
 

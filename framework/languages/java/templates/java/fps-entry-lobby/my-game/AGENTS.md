@@ -31,6 +31,8 @@ Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/jav
 
 ## Local server and E2E
 
+Run one scenario with `./run-e2e.sh --scenario matchmaking`. Close the connection only after receiving the reply to the last request. The server may miss a send that is immediately followed by close.
+
 Start the server with `./run-server.sh` or `.\run-server.cmd` on Windows. Use its reported `ws://` endpoint and press Ctrl+C in its terminal to stop the nodes and Redis.
 
 Run `./run-e2e.sh` or `.\run-e2e.cmd` in another terminal. The runner attaches using `.logs/server.json` while the server is running and otherwise starts an isolated Docker stack. The [README](README.md#local-server) describes the checks that require isolation. Use `.logs/run-<id>/` for stdout, stderr, Framework message-flow logs and failure details. Docker build and cleanup output is under `.logs/docker-*/`.
@@ -61,6 +63,10 @@ PowerShell 7 provides the same runner commands:
 For host-process debugging, install JDK 25 and add `--local` or `-Local`. The scripts preserve logs under `.logs/`; inspect the first failing run before rerunning it.
 
 ## Modules and ownership
+
+1. When creating a typed message, declare nullability and wire types in the shared contract.
+   - Mark a nullable record component with `@Nullable`. Use `@ZLinkJsonOptional` separately to allow omission.
+   - Encode 64-bit integers as decimal strings in JSON. Browser clients also send strings, for example `"handNumber": "42"`. [Message value rules](https://docs.zlink.systems/java/guide/server/20-channel-messaging/#12-message-value-rules)
 
 - `server/shared/src/main/java/MyGame/Geometry.java` owns Vec3, closed slab ray/AABB intersection, map bounds, walls and spawns. The adjacent typed records and `Rules.java` own shared message names and limits.
 - `server/match/src/main/java/MyGame/match/domain/RoomState.java` is the sole owner of position, HP, phase, winner, shared sequences, movement budget, fire interval and hit selection. Production uses a monotonic clock; tests inject a clock through the domain constructor. `RoomSnapshot` stores remaining milliseconds, not process clock readings.

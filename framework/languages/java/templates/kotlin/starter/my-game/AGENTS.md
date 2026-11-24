@@ -1,5 +1,7 @@
 # MyGame development guide
 
+Run one scenario with `./run-e2e.sh --scenario connect`. Close the connection only after receiving the reply to the last request. The server may miss a send that is immediately followed by close.
+
 ## Template reference
 
 This template is a reference. To build a new game, create a new project and design its nodes, Spots, Actors and messages for that game, using this template's structure and rules as reference; do not rename or edit this template in place into the game.
@@ -47,6 +49,10 @@ This Kotlin starter (Kotlin 2.3.21 on a Java 25 toolchain) provides one Session 
 `zlink.structure.json` describes initial composition, not runtime placement. This starter declares no application channels or Spots. When adding them, extend the checker to compare their names and types with registration constants.
 
 ## Development from samples
+
+1. When creating a typed message, declare nullability and wire types in the shared contract.
+   - Use a nullable Kotlin type such as `String?` in a DTO. A Java record used from Kotlin declares nullability with `@Nullable`. To allow omission in a Kotlin DTO, declare a primary-constructor default.
+   - Encode 64-bit integers as decimal strings in JSON. Browser clients also send strings, for example `"handNumber": "42"`. [Message value rules](https://docs.zlink.systems/kotlin/guide/server/20-channel-messaging/#12-message-value-rules)
 
 Download and run a structure from [ZLink Start](https://zlink.systems/start) before introducing its features here. The sample collection contains nine structures in five server languages. Keep the sample separate and transfer only the registrations, application state, and tests required by your feature.
 

@@ -184,6 +184,8 @@ The runner checks `zlink.structure.json`, creates its own Redis Compose project 
 
 ## Known issues
 
+Drain confirmation takes about 30 seconds, so a turn clock may expire during the wait. For an update scenario in a game with turn clocks, finish the round before relocating it. Verify that relocation preserves the remaining time in a domain check with a controlled clock.
+
 Validated against the published Framework 0.34.0 packages.
 
 ## Deployment sequence

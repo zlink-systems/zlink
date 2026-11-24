@@ -1,5 +1,13 @@
 # MyGame MMO 월드와 채널
 
+## 메시지 계약과 연결 종료
+
+1. 공유 DTO에 null 허용과 JSON 표현을 선언합니다.
+   - Kotlin DTO에서 null을 허용하는 필드는 `String?`처럼 선언합니다. Kotlin에서 사용하는 Java 레코드는 `@Nullable`로 null 허용을 표시합니다. Kotlin DTO에서 필드 생략을 허용하려면 주 생성자 매개변수에 기본값을 지정합니다.
+   - 64비트 정수는 JSON에서 10진 문자열로 표현합니다. 브라우저 클라이언트도 `"handNumber": "42"`처럼 문자열을 보냅니다. [메시지 모델](https://docs.zlink.systems/kotlin/guide/server/20-channel-messaging/#12-message-value-rules)
+
+시나리오 하나만 실행하려면 `./run-e2e.sh --scenario worlds`를 사용합니다. 마지막 request의 응답을 받은 뒤 연결을 닫습니다. send 직후 연결을 닫으면 서버가 메시지를 처리하지 못할 수 있습니다.
+
 [English](README.md)
 
 두 월드는 각자의 RouteMesh와 Redis를 사용합니다. Accounts API node가 월드 목록을 HTTP로 제공하고, Session node가 STREAM 메시지를 Player Actor에 전달합니다. `GoldBalance`가 재화와 획득 간격을, Zone이 접속한 플레이어 ID를 관리합니다.
@@ -171,3 +179,7 @@ Redis를 시작하고 `server/config/`에서 노드별 Redis 주소, 배포 전�
 월드 A의 channelA1과 channelA2는 각각 Zone 용량 1과 2를 사용합니다. channelA1의 `READY`를 확인한 뒤 channelA2를 시작합니다. 교체 후 `create-update-zone`으로 `field@3`을 생성하고 `UPDATE_ZONE_CREATED`를 확인합니다. 연결 플레이어 ID 목록은 Zone relocation snapshot에 저장합니다.
 
 Message Follow는 30초입니다. Safe-to-shutdown 관찰 시에는 기존 relocation 작업 시간에 이 기간을 더합니다.
+
+## 알려진 문제
+
+drain 확인에 약 30초가 걸리므로 대기하는 동안 진행 중인 판의 턴 시간이 끝날 수 있습니다. 턴 시계가 있는 게임의 update 시나리오에서는 판을 끝낸 뒤 옮깁니다. 남은 시간이 이전되는지는 시계를 제어하는 도메인 검사에서 확인합니다.

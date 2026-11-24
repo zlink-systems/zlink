@@ -35,6 +35,8 @@ The project layout below describes where to add gameplay, and "Extend this templ
 
 ## Development commands
 
+Run one scenario with `./run-e2e.sh --scenario reconnect`. Close the connection only after receiving the reply to the last request. The server may miss a send that is immediately followed by close.
+
 Run `./run-server.sh` or `.\run-server.cmd` with JDK 25 and Docker Compose v2 to start a local server. Keep the process in the foreground and use its printed Session STREAM address for clients. From a second terminal, select `match` to exercise the live server. Use Ctrl+C in the server terminal to clean it up.
 
 Default builds and isolated e2e run nodes and the client in Docker. Run these commands from this directory.
@@ -116,7 +118,7 @@ Relocation changes an object's execution host; drain moves a host's workload els
 Requests in the example game follow this path. Reading the code along this path before adding or transferring a feature locates the places to change.
 
 1. The client connects to the Session node over STREAM and sends the first packet, `JoinTableRequest`. `GameSession` checks the first packet type, calls `getOrCreate` for the Player Actor by `playerId`, binds it with `bindOrGet`, and relays the original packet.
-2. A new Actor starts in the Entry Spot. `Join.join` checks the identity, creates the Table with `getOrCreate(tableId, Names.TABLE)` on first use, and requests `joinSpot(...).defer()` for it.
+2. A new Actor starts in the Entry Spot. `Join.join` checks the identity. For first entry, it creates the Table with `getOrCreate(tableId, Names.TABLE)` on first use, and requests `joinSpot(...).defer()` for it. Entry rejects a reconnect with `not-seated`.
 3. `Table.onActorJoin` seats the player or rejects when all seats are taken; the client receives a rejection as `ActionRejected` from `Player.onJoinCompleted`. After admission, `Actions.join` and `Actions.view` answer with the current `TableView`.
 4. `StartHandRequest` and `BetRequest` are delivered to `Table.start` and `Table.bet` through `Actions`. `Table` sends each player's private `HandDealt` by player ID and broadcasts `TableView`; `Actions.forward` delivers these messages through the receiving Actor's bound Session.
 5. To replace a node, the `drain` control in `Hosting.run` requests relocation. Framework takes the game state from `capture` in `TableTransfer` and `PlayerTransfer` and calls `restore` on another node.
@@ -132,6 +134,8 @@ Before adding a rule, run the commands in [Development commands](#development-co
 ### Add a game rule
 
 1. Add typed request and result records under `server/shared/src/main/java/MyGame/`. Put the shared integer limit and rejection reasons in `server/shared/src/main/java/MyGame/Rules.java`. Clients submit requested actions; `Table` validates amounts and calculates resulting state.
+   - Mark a nullable record component with `@Nullable`. Use `@ZLinkJsonOptional` separately to allow omission.
+   - Encode 64-bit integers as decimal strings in JSON. Browser clients also send strings, for example `"handNumber": "42"`. [Message value rules](https://docs.zlink.systems/java/guide/server/20-channel-messaging/#12-message-value-rules)
 2. Add domain state and decisions in `server/table/src/main/java/MyGame/table/Table.java`. Keep state in `TableState.java`; `TableTransfer` captures it. If a rule depends on time, use a monotonic clock at this domain decision, pass a test clock only through the `Table` constructor, and store remaining milliseconds in relocation state.
 3. Add only client-to-server request types to the allowlist in `server/session/src/main/java/MyGame/session/GameSession.java`. Reject other packets as `packet-not-allowed`.
 4. Add client-observable checks in `e2e/src/main/java/MyGame/e2e/Scenarios.java`. Preserve `table`, `reconnect`, and `update`. When adding a scenario ID, update `Scenario.java`, `zlink.structure.json`, and the README table together.
@@ -152,6 +156,8 @@ Compose public asynchronous calls as `CompletionStage` chains as the template do
 Keep type registration and per-instance callbacks in their defined lifecycle phases. The `Table` User Spot is created on demand with `getOrCreate`; [Activation and lifetime](https://docs.zlink.systems/java/guide/server/34-activation-lifetime/) explains creation and initialization. Use `joinSpot(...).defer()` and the public completion callback `onJoinCompleted` for Spot changes, and relocation with runtime observations for host shutdown, so request acceptance is not mistaken for completion. Handlers are registered by `options.addHandlersFromPackageOf(...)` in each `Program.java`; a new handler class outside the packages those calls cover is not registered unless you register it explicitly.
 
 ### Reconnection and failure handling
+
+Set `reconnect: true` in `JoinTableRequest` when resuming a previously assigned seat. The Actor’s existing Table membership handles the request. Entry responds with `ActionRejected` (`not-seated`) when membership is missing. Discard the previous table ID and return to matchmaking with `FindMatch` on the bound Session. Omit `reconnect` or send `false` for first entry.
 
 In the named-Table flow, reconnect with the same Actor ID and bind the new Session to continue the game. Framework manages current placement, so do not add an application route cache or reset player state during reconnect. Backpressure is the behavior that delays or rejects calls when processing capacity is unavailable; observe the public results described in the [Backpressure guide](https://docs.zlink.systems/java/guide/server/33-backpressure/).
 

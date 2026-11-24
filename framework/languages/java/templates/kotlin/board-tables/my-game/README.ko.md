@@ -1,5 +1,13 @@
 [English](README.md)
 
+## 메시지 계약과 연결 종료
+
+1. 공유 DTO에 null 허용과 JSON 표현을 선언합니다.
+   - Kotlin DTO에서 null을 허용하는 필드는 `String?`처럼 선언합니다. Kotlin에서 사용하는 Java 레코드는 `@Nullable`로 null 허용을 표시합니다. Kotlin DTO에서 필드 생략을 허용하려면 주 생성자 매개변수에 기본값을 지정합니다.
+   - 64비트 정수는 JSON에서 10진 문자열로 표현합니다. 브라우저 클라이언트도 `"handNumber": "42"`처럼 문자열을 보냅니다. [메시지 모델](https://docs.zlink.systems/kotlin/guide/server/20-channel-messaging/#12-message-value-rules)
+
+시나리오 하나만 실행하려면 `./run-e2e.sh --scenario reconnect`를 사용합니다. 마지막 request의 응답을 받은 뒤 연결을 닫습니다. send 직후 연결을 닫으면 서버가 메시지를 처리하지 못할 수 있습니다.
+
 # MyGame 보드 테이블
 
 네 명이 앉는 카드 테이블을 위한 Kotlin 서버 템플릿입니다. Session node는 STREAM 연결을 받고 Player Actor에 바인딩해 메시지를 전달합니다. Table User Spot은 좌석, 칩, 카드와 차례를 관리합니다. Player Actor는 자신의 매칭 티켓을 보관하고, Matchmaker node의 Pool Spot은 매칭을 결정합니다. Play node는 ClientServer Channel로 API node를 호출합니다. Player Actor는 착석 전에 칩을 한 번 읽습니다. Table Spot은 모든 좌석의 정산 잔액을 한 번에 Redis에 저장한 뒤 판 결과를 보냅니다. 게임 규칙을 추가할 위치는 [AGENTS.md](AGENTS.md)를 참고합니다.
@@ -15,6 +23,8 @@ flowchart LR
   api -->|Player balances| location[Redis]
   table -->|Location / lease| location
 ```
+
+이전에 배정된 좌석으로 재접속할 때는 `JoinTableRequest`에 `reconnect: true`를 보냅니다. Actor가 속한 Table에서 요청을 처리합니다. 소속 Table이 없으면 Entry가 `ActionRejected`(`not-seated`)로 응답합니다. 이전 테이블 ID를 버리고 현재 세션에서 `FindMatch`를 보내 매칭으로 돌아갑니다. 첫 입장에서는 `reconnect`를 생략하거나 `false`를 보냅니다.
 
 ## 사전 요구 사항
 
@@ -48,7 +58,7 @@ Docker를 시작하고 전용 터미널에서 서버를 실행합니다.
 
 스크립트는 서버를 빌드하고 Redis, API node, 두 Table node, Matchmaker, Session을 시작합니다. 모든 node가 준비되면 `Server ready: ws://127.0.0.1:<port>` 줄에 Session STREAM 주소가 표시됩니다. 같은 터미널에서 Ctrl+C를 누르면 node를 종료하고 해당 실행의 Redis Compose 프로젝트를 삭제합니다.
 
-다른 터미널에서 `./run-e2e.sh` 또는 `.\run-e2e.cmd`를 실행합니다. 스크립트는 `.logs/server.json`에서 실행 중인 서버를 찾아 `table`, `reconnect`, `match`, `match-cancel`을 실행합니다. `--scenario match` 또는 `-Scenario match`로 시나리오를 선택할 수 있습니다. `update`와 `persist`는 Play node를 교체하므로 격리 실행에서만 동작합니다. 두 시나리오를 실행하려면 먼저 로컬 서버를 종료합니다.
+다른 터미널에서 `./run-e2e.sh` 또는 `.\run-e2e.cmd`를 실행합니다. 스크립트는 `.logs/server.json`에서 실행 중인 서버를 찾아 `table`, `reconnect`, `match`, `match-cancel`을 실행합니다. `--scenario match` 또는 `-Scenario match`로 시나리오를 선택할 수 있습니다. `update`와 `persist`는 노드를 재시작하므로 격리 실행에서만 동작합니다. 두 시나리오를 실행하려면 먼저 로컬 서버를 종료합니다.
 
 ## 클라이언트 연결
 
@@ -165,7 +175,7 @@ suspend fun connectOnce(endpoint: String, playerId: String) {
 | `match` | 대기 중인 두 플레이어가 같은 방의 서로 다른 좌석을 받고 한 판을 정산합니다. |
 | `match-cancel` | 대기 중인 플레이어가 티켓을 취소하고 `cancelled`를 받습니다. 뒤이어 두 플레이어가 매칭됩니다. |
 | `update` | drain 전후에 두 클라이언트의 `SessionInfo`가 유지됩니다. 다른 node에서 정산하고 원래 node를 교체하는 동안 테이블 상태가 보존됩니다. 정산 후 비공개 패 조회는 빈 목록을 반환합니다. |
-| `persist` | API node와 Redis를 유지한 채 Play 프로세스를 교체합니다. 같은 player ID로 만든 새 Actor가 정산 잔액을 읽습니다. |
+| `persist` | API node와 Redis를 유지한 채 Session, Play, Matchmaker를 재시작합니다. 이전 Table ID의 재접속은 `not-seated`로 거절됩니다. 같은 player ID로 만든 새 Actor가 새 Table에 입장해 정산 잔액을 읽습니다. |
 
 `SessionInfo`는 Session ID와 바인딩된 Actor의 ID 및 세대를 전달합니다. `TableView`는 테이블 상태를 전달합니다. Session node가 `SessionInfoRequest`에 응답합니다. 요청 처리기는 요청한 Actor의 Session으로 응답을 보내고, 다른 플레이어에게 상태를 전달할 때는 공개 Actor send API를 사용합니다.
 
@@ -208,3 +218,7 @@ Windows runner는 Gradle이 선택한 JDK 25를 직접 실행합니다. `lib/*` 
 격리 e2e는 공개 Table stable-type 한도를 사용하여 각 node의 `tableCapacity`를 해당 배포에서 실행할 시나리오 수로 설정합니다. 시나리오마다 테이블 하나가 남습니다. `update`가 원래 node를 drain한 뒤에는 남은 node가 한도에 도달하므로 교체 node에서 새 테이블을 생성합니다. 두 플레이어가 모두 교체 node ID를 확인해야 합니다. 배포 설정에서 값을 생략하거나 0으로 두면 용량을 제한하지 않습니다. Entry Spot은 Table node에 있으며 Matchmaker는 고정된 `pool-board` Instance Spot을 시작합니다.
 
 runner는 격리 시나리오 전에 Table 서버의 `--check-domain` 모드를 실행합니다. 도메인 경계 일곱 개를 확인해 `Domain checks: 7/7 passed`를 출력하고 `ActionRejected`의 JSON 계약을 검증합니다. `retryAfterMs`는 lower camel case 키를 갖는 부호 있는 32비트 정수입니다. 칩, 팟, 핸드 번호는 64비트 정수입니다.
+
+## 알려진 문제
+
+drain 확인에 약 30초가 걸리므로 대기하는 동안 진행 중인 판의 턴 시간이 끝날 수 있습니다. 턴 시계가 있는 게임의 update 시나리오에서는 판을 끝낸 뒤 옮깁니다. 남은 시간이 이전되는지는 시계를 제어하는 도메인 검사에서 확인합니다.

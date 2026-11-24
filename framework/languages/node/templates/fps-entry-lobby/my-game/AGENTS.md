@@ -29,6 +29,8 @@ Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/nod
 
 ## Project and development
 
+Run one scenario with `./run-e2e.sh --scenario matchmaking`. Close the connection only after receiving the reply to the last request. The server may miss a send that is immediately followed by close.
+
 This Node.js 22 project uses TypeScript and NestJS to run a Session node, play nodes A and B (match), and a Redis Location Store. Entry Spots forward players to a fixed Matchmaking User Spot; same-mode players join dynamic Room User Spots. Public Framework and connector packages are pinned to `0.34.0` in `package.json`. The [README](README.md) owns execution, deployment, and known issues; [zlink.structure.json](zlink.structure.json) describes initial topology and ordered scenarios.
 
 Run from this project root with Docker Compose v2 and Linux containers:
@@ -56,6 +58,10 @@ For host process debugging, install Node.js 22 or later and npm, then add `--loc
 `--check-domain` (`-CheckDomain` in PowerShell) runs 46 game domain checks and one separate wire golden check for four samples. The wire check runs in the Framework execution image; the runner does not load Framework. It briefly starts one local typed Session node and observes its public connector payloads; Redis and game scenario nodes are not started.
 
 ## Modules and extension points
+
+1. When creating a typed message, declare nullability and wire types in the shared contract.
+   - Declare nullable fields as `T | null`. The template schema generator emits `{ type: "nullable", value }` for the packet. Use `?` separately to allow omission.
+   - Encode 64-bit integers as decimal strings in JSON. Browser clients also send strings, for example `"handNumber": "42"`. [Message value rules](https://docs.zlink.systems/node/guide/server/20-channel-messaging/#12-message-value-rules)
 
 - `server/shared/messages.ts`: typed client and internal contracts. `constants.ts`: action limits, protocol names, and rejection reasons. `geometry.ts`: `Vec3`, closed slab ray/AABB intersection, static map, spawn points, and player boxes.
 - `server/match/domain.ts`: authoritative positions, HP, phase, winner, shared sequences, movement budgets, cooldowns, and hit selection. Extend this domain for weapons, scoring, and match rules. Production time is monotonic; only the `RoomState` constructor accepts a test clock. Snapshot objects contain remaining milliseconds rather than process clock readings.

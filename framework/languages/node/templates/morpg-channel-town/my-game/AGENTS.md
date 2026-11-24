@@ -37,6 +37,8 @@ The project layout and feature procedure below describe where to add gameplay. T
 
 ## Development commands
 
+Run one scenario with `./run-e2e.sh --scenario channel`. Close the connection only after receiving the reply to the last request. The server may miss a send that is immediately followed by close.
+
 With the local server stopped, builds and e2e run the nodes and runner in Docker without a host Node.js installation. Run these commands from this directory.
 
 ```powershell
@@ -125,6 +127,10 @@ Requests in the example game follow this path. Reading the code along this path 
 6. To replace a node, the `drain` command in `runHost` requests relocation. Framework takes the game state from `capture` in `TownRelocation` and `DungeonRelocation` and calls `restore` on another node.
 
 ## Extending the template domain
+
+1. When creating a typed message, declare nullability and wire types in the shared contract.
+   - Declare nullable fields as `T | null`. The template schema generator emits `{ type: "nullable", value }` for the packet. Use `?` separately to allow omission.
+   - Encode 64-bit integers as decimal strings in JSON. Browser clients also send strings, for example `"handNumber": "42"`. [Message value rules](https://docs.zlink.systems/node/guide/server/20-channel-messaging/#12-message-value-rules)
 
 Extend this template's domain to build a MORPG server. Follow the [README](README.md) for execution and deployment.
 

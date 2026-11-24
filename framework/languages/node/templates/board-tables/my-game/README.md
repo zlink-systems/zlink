@@ -62,6 +62,8 @@ The default listener is reachable from the same host/network namespace. Docker e
 
 The first application packet is `JoinTableRequest{playerId, tableId}` for direct join or `FindMatch{playerId}` for matchmaking. Send it with `send(...).submit()`, as `e2e/client.mts` does. Register receivers before sending. A match request returns `MatchQueued{ticketId}`. After both players enter their assigned room, each receives `MatchFound{ticketId, roomId, seat}` followed by the table view. To leave the waiting queue, send `CancelMatch{ticketId}` and read `MatchCancelled{ticketId, reason}`. A waiting player can reconnect within 15 seconds and keep the same ticket. Successful seating produces a `TableView` containing `tableId`, `nodeId`, `yourSeat`, `handNumber`, `inHand`, `turnSeat`, `pot`, and `seats`. `ActionRejected` reports a rejected action. After joining, `SessionInfoRequest` can use `request(...).submit()` to receive `SessionInfo` (`sessionId`, `actorId`, `objectGeneration`). Validate identity before binding in a production game.
 
+Set `reconnect: true` in `JoinTableRequest` when resuming a previously assigned seat. The Actor’s existing Table membership handles the request. Entry responds with `ActionRejected` (`not-seated`) when membership is missing. Discard the previous table ID and return to matchmaking with `FindMatch` on the bound Session. Omit `reconnect` or send `false` for first entry.
+
 ### Matchmaking
 
 Send `FindMatch{playerId}` and receive `MatchQueued{ticketId}`. Once both players enter the assigned table, each receives `MatchFound{ticketId, roomId, seat}` followed by `TableView`. The two players receive the same `roomId` and different seats. Send `CancelMatch{ticketId}` while waiting to receive `MatchCancelled{ticketId, reason}`. Use the same gameplay messages as for direct join.
@@ -166,7 +168,7 @@ Both modes print a heading and a pass or fail line for each scenario, followed b
 | `match`        | Two players receive the same dynamically assigned room, take distinct seats, and settle a hand.                                                                                                                                                                                                                                                           |
 | `match-cancel` | A waiting player reconnects and cancels the same ticket. Two other players then match and settle a hand.                                                                                                                                                                                                                                                  |
 | `update`       | Both clients retain their connection and game state through relocation. The hand settles on the replacement node with every hand cleared; a post-settlement private-hand query is empty. The replacement then hosts a new table.                                                                                                                          |
-| `persist`      | Both players settle a hand. After the Table processes restart, newly created Actors with the same player IDs load the settled chips.                                                                                                                                                                                                                      |
+| `persist`      | Both players settle a hand. After the Table processes restart, newly created Actors with the same player IDs load the settled chips. The previous table ID returns `not-seated` on reconnect before a fresh join. |
 
 The runner executes these scenarios in the order listed in `zlink.structure.json`.
 
@@ -225,3 +227,7 @@ When extending, follow the public API boundaries and state ownership rules in [A
 The runner starts child processes with `windowsHide: true`. Run it in PowerShell 7; no Unix shell is required. The project includes a native addon, so check the Node support range and the CPU architecture. The project does not use an npm install at the repository root or a local package feed.
 
 The isolated e2e runner sets each Table node's optional `tableCapacity` to the number of selected scenarios excluding `persist` through the public Table stable-type limit. Each scenario before update retains one table. After update drains the source, the surviving node is at capacity, so the replacement hosts the new table. Both new players must observe the replacement node ID. Omitted or zero capacity leaves deployment capacity unlimited. Entry Spots run on the Table nodes, and the fixed Pool Instance Spot runs on the Matchmaker node.
+
+## Known issues
+
+Drain confirmation takes about 30 seconds, so a turn clock may expire during the wait. For an update scenario in a game with turn clocks, finish the round before relocating it. Verify that relocation preserves the remaining time in a domain check with a controlled clock.

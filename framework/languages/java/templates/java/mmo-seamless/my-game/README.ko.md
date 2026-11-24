@@ -1,5 +1,13 @@
 # MyGame MMO 심리스 월드
 
+## 메시지 계약과 연결 종료
+
+1. 공유 DTO에 null 허용과 JSON 표현을 선언합니다.
+   - null을 허용하는 레코드 컴포넌트에는 `@Nullable`을 붙입니다. 필드 생략을 허용하려면 별도로 `@ZLinkJsonOptional`을 붙입니다.
+   - 64비트 정수는 JSON에서 10진 문자열로 표현합니다. 브라우저 클라이언트도 `"handNumber": "42"`처럼 문자열을 보냅니다. [메시지 모델](https://docs.zlink.systems/java/guide/server/20-channel-messaging/#12-message-value-rules)
+
+시나리오 하나만 실행하려면 `./run-e2e.sh --scenario cross`를 사용합니다. 마지막 request의 응답을 받은 뒤 연결을 닫습니다. send 직후 연결을 닫으면 서버가 메시지를 처리하지 못할 수 있습니다.
+
 [English](README.md)
 
 Session이 플레이어를 Actor에 바인딩합니다. play 노드가 6개 Zone과 요청 시 생성하는 Dungeon User Spot을 호스팅합니다. 이웃 Zone은 경계 이벤트를 주고받습니다.
@@ -177,3 +185,7 @@ Redis를 준비하고 Zone 소유자를 순서대로 시작해 설정된 고정 
 계획된 교체 시 노드 표준 입력에 `drain`을 보내고 `RELOCATION_REQUESTED`, `RELOCATED`, `SAFE_TO_SHUTDOWN`을 확인합니다. `shutdown` 뒤 `STOPPED`와 정상 종료를 확인한 다음 교체 노드를 시작합니다.
 
 등록과 구조 검사 변경 지침은 [개발 가이드](AGENTS.md)를 참고합니다.
+
+## 알려진 문제
+
+drain 확인에 약 30초가 걸리므로 대기하는 동안 진행 중인 판의 턴 시간이 끝날 수 있습니다. 턴 시계가 있는 게임의 update 시나리오에서는 판을 끝낸 뒤 옮깁니다. 남은 시간이 이전되는지는 시계를 제어하는 도메인 검사에서 확인합니다.

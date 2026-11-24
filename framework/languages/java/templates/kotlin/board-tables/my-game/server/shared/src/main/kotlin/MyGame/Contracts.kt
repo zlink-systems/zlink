@@ -54,7 +54,11 @@ object Rules {
 
 @JsonSerialize class SessionInfoRequest
 
-data class JoinTableRequest(val playerId: String = "", val tableId: String = "")
+data class JoinTableRequest(
+    val playerId: String = "",
+    val tableId: String = "",
+    val reconnect: Boolean = false,
+)
 
 @JsonSerialize class TableViewRequest
 

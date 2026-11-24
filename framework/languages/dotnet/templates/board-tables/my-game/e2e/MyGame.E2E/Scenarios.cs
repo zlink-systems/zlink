@@ -34,7 +34,8 @@ internal static class Scenarios
 
     public static async Task RunAsync(
         string endpoint,
-        TableRun run,
+        TableRun? run,
+        RunOutcome outcome,
         string[] selected,
         CancellationToken ct
     )
@@ -46,7 +47,7 @@ internal static class Scenarios
             {
                 try
                 {
-                    await PlayAsync(endpoint, scenario, run, run.Outcome, ct);
+                    await PlayAsync(endpoint, scenario, run, outcome, ct);
                     Console.WriteLine($"✓ {scenario}");
                     passed++;
                 }
@@ -210,7 +211,7 @@ internal static class Scenarios
                 p2.PlayerId,
                 ct
             );
-            var restored = await reconnected.JoinAsync(table, ct);
+            var restored = await reconnected.JoinAsync(table, ct, reconnect: true);
             var restoredCards = await reconnected.WaitAsync<HandDealt>(_ => true, ct);
             var restoredSession = await reconnected.SessionAsync(ct);
             Require(
@@ -260,6 +261,36 @@ internal static class Scenarios
         );
         if (scenario != "reconnect")
             Require(!p2.Disconnected && p2.Connector.IsConnected, "Second player disconnected.");
+        else if (run is not null)
+        {
+            await run.ProbeFreshWorldAsync(
+                async (freshEndpoint, deadline) =>
+                {
+                    await using (
+                        var stale = await GameClient.ConnectAsync(
+                            outcome, freshEndpoint, p2.PlayerId, deadline
+                        )
+                    )
+                    {
+                        await stale.SendJoinAsync(table, reconnect: true, deadline);
+                        var rejection = await stale.WaitAsync<ActionRejected>(_ => true, deadline);
+                        Require(
+                            rejection == new ActionRejected(Rejection.NotSeated, 0),
+                            "Reconnect accepted a seat missing from the fresh deployment."
+                        );
+                    }
+                    await using var fresh = await GameClient.ConnectAsync(
+                        outcome, freshEndpoint, p1.PlayerId, deadline
+                    );
+                    var joined = await fresh.JoinAsync(table, deadline);
+                    Require(
+                        joined.YourSeat == 0 && joined.Seats.Length == 1,
+                        "Rejected reconnect left a seat in the table."
+                    );
+                },
+                ct
+            );
+        }
     }
 
     private static void SameState(TableView before, TableView after) =>

@@ -76,11 +76,19 @@ public final class Client implements AutoCloseable {
     }
 
     TableView connect() throws Exception {
-        open();
-        send(new JoinTableRequest(playerId, tableId));
+        return connect(false);
+    }
+
+    TableView connect(boolean reconnect) throws Exception {
+        sendJoin(reconnect);
         return next(
                 TableView.class,
                 v -> v.yourSeat() >= 0 && v.seats().get(v.yourSeat()).playerId().equals(playerId));
+    }
+
+    void sendJoin(boolean reconnect) {
+        open();
+        send(new JoinTableRequest(playerId, tableId, reconnect));
     }
 
     MatchQueued findMatch() throws Exception {

@@ -23,6 +23,9 @@ public final class Join {
             Entry entry, Player actor, ZLinkMessageContext dispatch, JoinTableRequest request) {
         if (!actor.context().actorId().equals(request.playerId()))
             throw new IllegalArgumentException("Player identity differs from Actor");
+        if (request.reconnect()) {
+            return actor.reply(new ActionRejected(Rules.NOT_SEATED, 0));
+        }
         if (actor.state.joining != null || actor.state.ticketId != null) {
             return actor.reply(new ActionRejected(Rules.TABLE_FULL, 0));
         }

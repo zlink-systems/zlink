@@ -41,6 +41,8 @@ The project layout and feature procedure below describe where to add gameplay. T
 
 ## Development commands
 
+Run one scenario with `./run-e2e.sh --scenario channel`. Close the connection only after receiving the reply to the last request. The server may miss a send that is immediately followed by close.
+
 Default builds and e2e run nodes and the client in Docker without a host JDK. Run these commands from this directory.
 
 ```powershell
@@ -126,6 +128,10 @@ Requests in the example game follow this path. Reading the code along this path 
 7. To replace a node, `drain` in `runNode` requests relocation. Framework takes the application state from `capture` in `TownTransfer`, `DungeonTransfer`, and `PlayerTransfer` and calls `restore` on another node.
 
 ## Extending the template domain
+
+1. When creating a typed message, declare nullability and wire types in the shared contract.
+   - Use a nullable Kotlin type such as `String?` in a DTO. A Java record used from Kotlin declares nullability with `@Nullable`. To allow omission in a Kotlin DTO, declare a primary-constructor default.
+   - Encode 64-bit integers as decimal strings in JSON. Browser clients also send strings, for example `"handNumber": "42"`. [Message value rules](https://docs.zlink.systems/kotlin/guide/server/20-channel-messaging/#12-message-value-rules)
 
 Extend this template's domain to build a MORPG server. Follow the [README](README.md) for execution and deployment.
 

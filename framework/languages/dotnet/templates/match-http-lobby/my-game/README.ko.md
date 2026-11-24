@@ -1,5 +1,13 @@
 # MyGame HTTP 매치 로비
 
+## 메시지 계약과 연결 종료
+
+1. 공유 DTO에 null 허용과 JSON 표현을 선언합니다.
+   - null을 허용하는 필드는 `string?`과 같은 nullable 참조 타입이나 `long?`과 같은 nullable 값 타입으로 선언합니다. 필드 생략을 허용하려면 생성자 매개변수에 기본값을 지정합니다.
+   - 64비트 정수는 JSON에서 10진 문자열로 표현합니다. 브라우저 클라이언트도 `"handNumber": "42"`처럼 문자열을 보냅니다. [메시지 모델](https://docs.zlink.systems/dotnet/guide/server/20-channel-messaging/#12-message-value-rules)
+
+시나리오 하나만 실행하려면 `./run-e2e.sh --scenario lobby`를 사용합니다. 마지막 request의 응답을 받은 뒤 연결을 닫습니다. send 직후 연결을 닫으면 서버가 메시지를 처리하지 못할 수 있습니다.
+
 API node는 HTTP 매치메이킹을 담당하고 Session node는 STREAM 게임 연결을 받습니다. API node는 RoomPrepared를 받은 뒤 Room ID와 Session 주소를 반환합니다. RoomRoster가 입장 명단을 관리하고 RoomState가 위치, 체력, 시퀀스, 이동 예산, 발사 간격, 경기 결과와 벽 판정을 관리합니다. play node는 my-game-arena에 Player Actor, Entry Spot, 동적 Room을 등록합니다.
 
 ```mermaid
@@ -173,3 +181,7 @@ await Task.WhenAll(JoinAsync(0), JoinAsync(1));
 Redis, match A, match B, Session, API node 순으로 시작합니다. Session의 READY 주소를 API node의 SessionEndpoint로 설정합니다. API node를 재시작하기 전에 HTTP 요청 수락을 중단하고 대기 중인 매치를 완료하거나 취소합니다. Room snapshot은 RoomRoster와 게임 상태를 보관합니다.
 
 server/config/*.json에 접근 가능한 Redis, mesh, STREAM 주소와 배포별 KeyPrefix를 설정합니다. 노드 실행 파일에 --config <경로>를 전달하고 READY를 확인합니다. 교체 대상 표준 입력에 drain을 보내고 RELOCATION_REQUESTED, RELOCATED, SAFE_TO_SHUTDOWN을 확인한 뒤 shutdown을 보내 종료를 기다립니다. 교체 노드는 같은 논리 노드 설정으로 시작합니다. 배포 전에 플레이어 인증과 접근 가능한 listener를 구성합니다. Framework가 배치, bind, membership, 라우팅과 relocation 완료를 관리합니다.
+
+## 알려진 문제
+
+drain 확인에 약 30초가 걸리므로 대기하는 동안 진행 중인 판의 턴 시간이 끝날 수 있습니다. 턴 시계가 있는 게임의 update 시나리오에서는 판을 끝낸 뒤 옮깁니다. 남은 시간이 이전되는지는 시계를 제어하는 도메인 검사에서 확인합니다.

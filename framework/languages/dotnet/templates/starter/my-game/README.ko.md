@@ -1,5 +1,13 @@
 # MyGame .NET 스타터
 
+## 메시지 계약과 연결 종료
+
+1. 공유 DTO에 null 허용과 JSON 표현을 선언합니다.
+   - null을 허용하는 필드는 `string?`과 같은 nullable 참조 타입이나 `long?`과 같은 nullable 값 타입으로 선언합니다. 필드 생략을 허용하려면 생성자 매개변수에 기본값을 지정합니다.
+   - 64비트 정수는 JSON에서 10진 문자열로 표현합니다. 브라우저 클라이언트도 `"handNumber": "42"`처럼 문자열을 보냅니다. [메시지 모델](https://docs.zlink.systems/dotnet/guide/server/20-channel-messaging/#12-message-value-rules)
+
+시나리오 하나만 실행하려면 `./run-e2e.sh --scenario connect`를 사용합니다. 마지막 request의 응답을 받은 뒤 연결을 닫습니다. send 직후 연결을 닫으면 서버가 메시지를 처리하지 못할 수 있습니다.
+
 Session node가 WebSocket으로 STREAM 연결을 받습니다. Redis는 Location Store와 relocation 저장소에 사용합니다. 호스팅, 진단, 프로세스 제어, 연결 e2e를 제공합니다. 게임 패킷, 인증, 구독, 애플리케이션 Spot 및 Actor 등록은 게임 프로젝트에서 추가합니다.
 
 ```mermaid

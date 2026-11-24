@@ -37,6 +37,8 @@ Follow `e2e/client.mts`: connect, register listeners, and submit `JoinTableReque
 
 ## Development commands
 
+Run one scenario with `./run-e2e.sh --scenario reconnect`. Close the connection only after receiving the reply to the last request. The server may miss a send that is immediately followed by close.
+
 From this directory, run `./run-server.sh` on Linux or WSL, or `.\run-server.cmd` on Windows. It builds with Node.js 22 and npm, starts Redis in Docker and keeps the Node.js server processes running in the foreground. Wait for the printed Session WebSocket URL before connecting a client. Ctrl+C shuts down the server.
 
 Run `./run-e2e.sh` or `.\run-e2e.cmd` from a second terminal. If `.logs/server.json` identifies a live server, the runner attaches and runs the scenarios that preserve the deployment. Stop that server to run the default isolated Docker suite, including the `update` and `persist` scenarios. Use `--attach` or `-Attach` to require an active server. Docker builds and isolated Docker runs work without a host Node.js installation.
@@ -120,7 +122,7 @@ Relocation changes an object's execution host; drain moves a host's workload els
 Requests in the example game follow this path. Reading the code along this path before adding or transferring a feature locates the places to change.
 
 1. The client connects to the Session node over STREAM and sends the first packet, `JoinTableRequest`. `Session` checks the first packet name, calls `getOrCreate` for the Player Actor by `playerId`, binds it to the Session, and relays the original packet.
-2. A new Actor starts in the Entry Spot `Entry`. The `EntryJoin` handler checks the identity, calls `getOrCreate` for the Table by `tableId`, and requests `joinSpot(...).defer()`.
+2. A new Actor starts in the Entry Spot `Entry`. The `EntryJoin` handler checks the identity. For first entry, it calls `getOrCreate` for the Table by `tableId`, and requests `joinSpot(...).defer()`. Entry rejects a reconnect with `not-seated`.
 3. `Table.onActorJoin` seats the player through `TableState.admit`. When the table is full, `Player.onJoinCompleted` sends `ActionRejected` through the bound Session. After admission, `Table.onJoinedActor` publishes `TableView` to every seat by player ID, and the `Deliver` handler forwards it through each bound Session.
 4. `Start` and `Bet` call `TableState.start` and `TableState.bet`. A valid action publishes `TableView`, `HandDealt`, or `HandResult` to the seats. For settlement, the Table commits the round through the API before publishing `TableView` and `HandResult`. An invalid action sends `ActionRejected` to the requester through its bound Session.
 5. After a reconnect, the new Session sends `JoinTableRequest` again. The `Rejoin` handler sends the table view and the player's cards directly through the bound Session.
@@ -133,6 +135,8 @@ Extend this template's domain to build a board-game server. `TableState` in `ser
 ### Add a rule
 
 1. Add typed request and result classes to `server/shared/messages.ts`. Keep packet names and rejection reasons in `server/shared/constants.ts`; `messages.ts` owns the shared integer limit.
+   - Declare nullable fields as `T | null`. The template schema generator emits `{ type: "nullable", value }` for the packet. Use `?` separately to allow omission.
+   - Encode 64-bit integers as decimal strings in JSON. Browser clients also send strings, for example `"handNumber": "42"`. [Message value rules](https://docs.zlink.systems/node/guide/server/20-channel-messaging/#12-message-value-rules)
 2. Add state and decisions to `TableState`. Keep Framework callbacks and I/O in `server/table/infrastructure/`, and preserve the application snapshot through `TableRelocation`. For a time-based rule, make `TableState` the only decision owner, use a monotonic clock, accept a test clock only through its constructor, and store remaining milliseconds in the snapshot.
 3. Add only client-to-server requests to the allowlist in `server/session/session.ts`. Reject other packets with `packet-not-allowed`.
 4. Add client-visible checks to `e2e/client.mts` and domain-boundary tests to `e2e/domain.test.ts`. Keep the existing scenarios and align their order with the README table and `run.scenarios` in `zlink.structure.json`.
@@ -154,6 +158,8 @@ Await public asynchronous calls as the template does, and do not block handler e
 Keep type registration and per-instance callbacks in their defined lifecycle phases. Apply the User Spot contract to `Table`, which is created on demand by its ID; [Activation and lifetime](https://docs.zlink.systems/node/guide/server/34-activation-lifetime/) explains creation and initialization. Use `joinSpot(...).defer()` and the public completion callback to take a seat, and relocation with runtime observations for host shutdown, so request acceptance is not mistaken for completion.
 
 ### Reconnection and failure handling
+
+Set `reconnect: true` in `JoinTableRequest` when resuming a previously assigned seat. The Actor’s existing Table membership handles the request. Entry responds with `ActionRejected` (`not-seated`) when membership is missing. Discard the previous table ID and return to matchmaking with `FindMatch` on the bound Session. Omit `reconnect` or send `false` for first entry.
 
 Reconnect with the same Actor ID and bind the new Session to continue using the existing seat. Framework manages current placement, so do not add an application route cache or reset the table during reconnect. Backpressure is the behavior that delays or rejects calls when processing capacity is unavailable; observe the public results described in the [Backpressure guide](https://docs.zlink.systems/node/guide/server/33-backpressure/).
 
