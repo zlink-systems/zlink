@@ -4,7 +4,13 @@ A Java MORPG template with two fixed town channels and dynamic party dungeons. T
 
 ```mermaid
 flowchart LR
-  players -->|STREAM| session
+  subgraph playNodes["Play nodes"]
+    townA["Play node A (town)"]
+    townB["Play node B (town)"]
+    instanceA["Play node A (dungeon)"]
+    instanceB["Play node B (dungeon)"]
+  end
+  players -->|STREAM| session["Session node"]
   session -->|relay| townA
   townA -->|relocation| townB
   townB -->|GetOrCreate| instanceA
@@ -157,12 +163,12 @@ Validated against the published Framework 0.32.0 packages.
 
 Bootstrap Town providers sequentially and wait for each READY before starting the next. Each provider's public Town stable-type capacity must equal its configured fixed Town count; the structure checker enforces this. Earlier providers are full and later providers are absent, making each fixed Town's declared initial owner deterministic. Entry declarations describe the application Entry registered by Town and Instance, excluding Framework default Entries.
 
-Start Redis, townA, townB, both instance nodes, and then the Session node. Wait for each node to print READY before starting the next; each town bootstraps its configured fixed Town Spot before READY. Configure unique node IDs and Redis key prefixes in `server/config/`. Start each role using its installed distribution under `server/<role>/build/install/<role>/bin/`, supplying the corresponding configuration path. Instance nodes register `Dungeon` with capacity one and the shared application Entry.
+Start Redis, townA, townB, both play nodes (dungeon), and then the Session node. Wait for each node to print READY before starting the next; each town bootstraps its configured fixed Town Spot before READY. Configure unique node IDs and Redis key prefixes in `server/config/`. Start each role using its installed distribution under `server/<role>/build/install/<role>/bin/`, supplying the corresponding configuration path. Play nodes (dungeon) register `Dungeon` with capacity one and the shared application Entry.
 
 Each process prints `READY` with actual listener endpoints. Send `drain` on standard input to request planned maintenance. Wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`; send `shutdown` and require `STOPPED` before replacing the process with the same configuration. Town and Dungeon adapters preserve application state only; Framework owns memberships, routes, leases, queues, and relocation progress.
 
 The first party member is the leader. A party accepts at most four distinct players from its town channel. `CreatePartyRequest` has no ID input: the server issues PartyIds as `party-` plus 32 lowercase hexadecimal characters. A leader starts a run with a similarly formatted RunId; each dungeon is named `dungeon-<runId>`. Run phases are `Forming`, `Preparing`, `Entering`, `Active`, and `Completed`. A member leaving during Forming is removed from the party; after preparation begins, the run roster stays recorded. Only the leader can enter the dungeon. Dungeon preparation is idempotent for the same RunId, owner Town, and roster. Pushes use Actor IDs, and Actor delivery handlers forward the typed payload to the bound Session. `SessionInfo` reads Actor identity from the Session binding rather than game state.
 
-All Object Servers that register Player factories also register the shared Entry and first-admission handler, including both Instance nodes. Entry admission joins the requested fixed Town channel. Each Instance declares its dynamic Dungeon factory in `zlink.structure.json`.
+All Object Servers that register Player factories also register the shared Entry and first-admission handler, including both play nodes (dungeon). Entry admission joins the requested fixed Town channel. Each Instance declares its dynamic Dungeon factory in `zlink.structure.json`.
 
 The e2e configuration uses one Dungeon slot per Instance. After drain, the surviving Instance is full, so only the replacement can accept the fresh Dungeon. The structure checker enforces this configuration. Message Follow remains 30 seconds; the SafeToShutdown observation budget is derived from that duration plus the existing relocation operation budget.

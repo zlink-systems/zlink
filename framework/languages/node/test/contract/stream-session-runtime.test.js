@@ -1522,6 +1522,62 @@ test('configured heartbeat interval and timeout control session liveness', async
   assert.deepEqual(socket.disconnects, ['configured-heartbeat']);
 });
 
+test('staggered STREAM heartbeats keep their phase when a timer runs late', async (t) => {
+  const socket = new FakeStreamSocket();
+  const clock = new FakeLivenessClock();
+  const runtime = createStreamRuntime({
+    socket, livenessClock: clock, heartbeatIntervalMs: 1000, heartbeatTimeoutMs: 5000,
+    sessionFactory(context) { return { context }; }
+  });
+  t.after(() => runtime.dispose());
+  runtime.start();
+  runtime.markConnected('early');
+  await clock.advance(100);
+  await clock.advance(300);
+  runtime.markConnected('late');
+  await clock.flush();
+
+  await clock.advance(599);
+  assert.equal(socket.sent.length, 0);
+  await clock.advance(1);
+  assert.deepEqual(socket.sent.map((frame) => frame.routingId), ['early']);
+  await clock.advance(400);
+  assert.deepEqual(socket.sent.map((frame) => frame.routingId), ['early', 'late']);
+
+  const delayed = [...clock.timers.entries()].find(([, timer]) => timer.due === 2000);
+  assert.ok(delayed);
+  const [id, timer] = delayed;
+  clock.timers.delete(id);
+  clock.current = 3250;
+  timer.callback();
+  await clock.flush();
+  const earlyPings = () => socket.sent.filter((frame) => frame.routingId === 'early').length;
+  assert.equal(earlyPings(), 2);
+  await clock.advance(749);
+  assert.equal(earlyPings(), 2);
+  await clock.advance(1);
+  assert.equal(earlyPings(), 3);
+});
+
+test('heartbeat timeout takes precedence when STREAM idle and inbound deadlines coincide', async (t) => {
+  const socket = new FakeStreamSocket();
+  const clock = new FakeLivenessClock();
+  const runtime = createStreamRuntime({
+    socket, livenessClock: clock, heartbeatIntervalMs: 1000, heartbeatTimeoutMs: 5000,
+    idleTimeoutMs: 5000, sessionFactory(context) { return { context }; }
+  });
+  t.after(() => runtime.dispose());
+  runtime.start();
+  runtime.markConnected('silent');
+  await clock.flush();
+  await clock.advance(4999);
+  assert.deepEqual(socket.disconnects, []);
+  await clock.advance(1);
+  assert.equal(decodeSessionClosing(socket.sent.at(-1)).payload[1],
+    streamProtocol.ZLinkStreamCloseReasonCode.HeartbeatTimeout);
+  assert.deepEqual(socket.disconnects, ['silent']);
+});
+
 test('configured idle deadline shorter than heartbeat interval closes at that deadline', async (t) => {
   const socket = new FakeStreamSocket();
   const clock = new FakeLivenessClock();
@@ -3262,7 +3318,7 @@ class FakeLivenessClock {
       if (next === undefined) break;
       const [id, timer] = next;
       this.timers.delete(id);
-      this.current = timer.due;
+      this.current = Math.max(this.current, timer.due);
       timer.callback();
       await this.flush();
     }

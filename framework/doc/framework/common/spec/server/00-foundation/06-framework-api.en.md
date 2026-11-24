@@ -851,8 +851,8 @@ replacement lifecycle. The MeshNode descriptor publishes the relationship betwee
 Entry Spot ID and lifecycle generation, and Actor placement and Entry Spot join use this
 mapping. Node relationships aren't inferred by parsing the Spot ID string.
 
-If the Entry Spot ID conflicts with global Spot ID authority, startup ends immediately with
-`AlreadyExists` instead of generating a new UUID or reservation. If a caller specifies the
+The Framework issues the Entry Spot ID as a new UUID v4 for each lifecycle, so the Store doesn't
+judge its conflicts ([Transport RID and Spot ID Policy §6.3](../02-channel-transport/04-network-listener-identity.en.md#63-entry-spot-id)). If a caller specifies the
 reserved format `<prefix>-entry-<lowercase-canonical-uuid-v4>` as a User/Instance Spot ID,
 it's rejected as a startup configuration error before starting a Store operation or factory.
 Instance Spot uses an actor-free lifecycle and can't register an Actor handler, Actor

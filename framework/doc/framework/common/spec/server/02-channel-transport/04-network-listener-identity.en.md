@@ -378,9 +378,11 @@ default diagnostic prefix used for the MeshNode's automatic RID is also used.
 The same Entry Spot ID is kept for the same MeshNode lifecycle,
 and a new UUID-based Spot ID is issued on a replacement lifecycle.
 
-- **If the Location Store confirms an [active conflict in the global Spot ID
-  authority](../00-foundation/02-glossary.en.md#spot-id-conflict), the Framework doesn't generate a new UUID or retry the
-  reservation — it ends immediately with a startup configuration error.**
+- **Entry Spot ID uniqueness isn't recorded separately in the Location Store.** Only the
+  Framework issues it, each lifecycle uses a new UUID v4, and a caller-provided User/Instance
+  Spot ID in the reserved format below is rejected before Store access, so it can't collide
+  with another Spot. Store authority records and MeshNode descriptor writes don't judge Entry
+  Spot ID conflicts, and the in-memory and Redis providers judge the same way (#4046).
   The MeshNode descriptor publishes the mapping between the lifecycle
   generation and that Entry Spot ID. Actor placement, Entry Spot
   join, and relocation use this mapping and don't parse the Spot ID
@@ -447,9 +449,9 @@ result.
   generated UUID v4.
 - A replacement MeshNode lifecycle issues a new Entry Spot ID and the
   descriptor publishes that mapping.
-- On Entry Spot ID conflict, a second reservation isn't attempted, and a
-  caller-provided Spot ID in the reserved format is rejected before
-  Store access.
+- A caller-provided Spot ID in the reserved format is rejected before Store
+  access, and neither the in-memory nor the Redis provider judges an Entry
+  Spot ID conflict on a MeshNode descriptor write.
 
 **Kubernetes Deployment**
 

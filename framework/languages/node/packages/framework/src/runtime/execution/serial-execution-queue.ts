@@ -232,7 +232,18 @@ export class ZLinkSerialExecutionQueue {
   }
 
   discardPendingApplication(error: unknown): void {
-    for (const record of this.application.records.splice(0)) {
+    this.discardPendingLane(this.application, error);
+  }
+
+  /** Seals the gate and rejects both lanes' unstarted work. */
+  discardPending(error: unknown): void {
+    this.closeAdmission();
+    this.discardPendingLane(this.application, error);
+    this.discardPendingLane(this.lifecycle, error);
+  }
+
+  private discardPendingLane(lane: ZLinkSerialAdmissionLane, error: unknown): void {
+    for (const record of lane.records.splice(0)) {
       if (record.mailbox !== undefined) {
         record.mailbox.ownerMembership = undefined;
         record.mailbox.discardPendingApplication(error);

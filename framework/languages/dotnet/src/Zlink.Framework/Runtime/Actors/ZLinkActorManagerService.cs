@@ -13,10 +13,6 @@ namespace Zlink.Framework.Runtime.Actors;
 
 internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : IZLinkActorManager
 {
-    private long _nextPlacementSelection;
-    private readonly IZLinkMeshNodeLocationResolver? _locationResolver =
-        runtime.Services.GetService<IZLinkMeshNodeLocationResolver>()
-        ?? runtime.Services.GetService<ZLinkStoreLocationResolvers>();
     private readonly ZLinkOwnerLeaseTracker? _leaseTracker =
         runtime.Services.GetService<ZLinkOwnerLeaseTracker>();
 
@@ -293,13 +289,6 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
             );
         var selectedMesh =
             source.Registration.SpotMeshChannelName ?? source.Registration.SpotNodeName;
-        var placementEligible = await ListCreationCandidatesAsync(
-                selectedMesh,
-                actorType,
-                deadlineToken
-            )
-            .ConfigureAwait(false);
-        var eligible = FilterRouteReadyCandidates(source, placementEligible);
         var encoded = createRequest.Encode(runtime.Registration.Codecs);
         var applicationPayload = ZLinkApplicationPayloadEnvelopeCodec.Encode(
             ZLinkApplicationPayloadEnvelopeCodec.CreationPacketName,
@@ -309,56 +298,64 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
         var applicationHash = System.Security.Cryptography.SHA256.HashData(applicationPayload);
         var contentReference = ZLinkInlineCreationIntentCodec.Encode(applicationPayload);
         var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId);
-        var reservationRefreshAttempt = 0;
+        var creationRelocationPolicy = source.Registration.ActorFactories.TryGetValue(
+            actorType,
+            out var relocation
+        )
+            ? relocation.Relocation.PolicyKind
+            : (byte?)null;
+        var resolver =
+            runtime.Services.GetService<ZLinkStoreLocationResolvers>()
+            ?? throw new ZLinkConfigurationException(
+                "Actor creation requires the live MeshNode resolver."
+            );
+        var excluded = new HashSet<(RoutingId Rid, ulong Generation)>();
         var joinRetryAttempt = 0;
         while (true)
         {
-            var target = ZLinkWeightedSelector.Select(
-                eligible,
-                static candidate => candidate.PlacementWeight,
-                ref _nextPlacementSelection
-            );
-            if (target is null && placementEligible.Count == 0 && reservationRefreshAttempt == 0)
-            {
-                //  The Entry Spot condition selects only where a new Actor is
-                //  created; GetOrCreate still returns an Actor that is
-                //  already Ready (Actor model §6.3).
-                if (
-                    !createOnly
-                    && await store.ReadAuthorityAsync(key, deadlineToken).ConfigureAwait(false)
-                        is ZLinkAuthorityReadResult.Found current
-                    && await JoinExistingAsync(
-                            store,
-                            key,
-                            actorId,
-                            actorType,
-                            current.Snapshot,
-                            deadlineToken
-                        )
-                        .ConfigureAwait(false)
-                        is { } existingActor
+            if (
+                !createOnly
+                && await store.ReadAuthorityAsync(key, deadlineToken).ConfigureAwait(false)
+                    is ZLinkAuthorityReadResult.Found
+                    {
+                        Snapshot.Allocation.State: ZLinkPlacementAllocationState.Active
+                    } current
+                && await JoinExistingAsync(
+                        store,
+                        key,
+                        actorId,
+                        actorType,
+                        current.Snapshot,
+                        creationRelocationPolicy,
+                        deadlineToken
+                    )
+                    .ConfigureAwait(false)
+                    is { } existingActor
+            )
+                return existingActor;
+
+            var target = await resolver
+                .SelectPlacementAsync(
+                    selectedMesh,
+                    ZLinkPlacementObjectKind.Actor,
+                    actorType,
+                    candidates =>
+                        ZLinkMeshNodeTargetAvailability.FilterAdmitted(
+                            source.Node.RoutingId,
+                            source.Node.LifecycleGeneration,
+                            candidates,
+                            source.Node.MeshPeers()
+                        ),
+                    excluded,
+                    deadlineToken
                 )
-                    return existingActor;
+                .ConfigureAwait(false);
+            if (target is null)
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.Unavailable,
                     $"No compatible Actor target is available for '{actorType}'.",
                     ZLinkRetryAdvice.RetryAfterBackoff
                 );
-            }
-            if (target is null)
-            {
-                var backoffMilliseconds = 1 << Math.Min(reservationRefreshAttempt++, 6);
-                await Task.Delay(TimeSpan.FromMilliseconds(backoffMilliseconds), deadlineToken)
-                    .ConfigureAwait(false);
-                placementEligible = await ListCreationCandidatesAsync(
-                        selectedMesh,
-                        actorType,
-                        deadlineToken
-                    )
-                    .ConfigureAwait(false);
-                eligible = FilterRouteReadyCandidates(source, placementEligible);
-                continue;
-            }
             var owner = new ZLinkLocationOwnerToken(target.OwnerId, target.LeaseGeneration);
             var creating = ZLinkActorAuthorityPayloadCodec.Encode(
                 new ZLinkActorAuthorityPayload(
@@ -389,19 +386,19 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                         owner,
                         creating,
                         new ZLinkCapacityVector(1, 0, null),
-                        source.Registration.ActorFactories.TryGetValue(
-                            actorType,
-                            out var relocation
-                        )
-                            ? relocation.Relocation.PolicyKind
-                            : null
+                        creationRelocationPolicy
                     ),
                     deadlineToken
                 )
                 .ConfigureAwait(false);
-            if (reserve is ZLinkObjectReserveResult.PlacementCapacityExhausted)
+            if (
+                reserve
+                is ZLinkObjectReserveResult.PlacementCapacityExhausted
+                    or ZLinkObjectReserveResult.Conflict
+                    (ZLinkAuthorityReadResult.Missing)
+            )
             {
-                eligible.Remove(target);
+                excluded.Add((target.Rid, target.LifecycleGeneration));
                 continue;
             }
             if (reserve is ZLinkObjectReserveResult.TypeMismatch)
@@ -422,6 +419,7 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                         actorId,
                         actorType,
                         existing.Current,
+                        creationRelocationPolicy,
                         deadlineToken
                     )
                     .ConfigureAwait(false);
@@ -443,6 +441,7 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                         actorId,
                         actorType,
                         found.Snapshot,
+                        creationRelocationPolicy,
                         deadlineToken
                     )
                     .ConfigureAwait(false);
@@ -450,20 +449,6 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                     return joined;
                 await DelayJoinRetryAsync(actorId, joinRetryAttempt++, deadlineToken)
                     .ConfigureAwait(false);
-                continue;
-            }
-            if (reserve is ZLinkObjectReserveResult.Conflict(ZLinkAuthorityReadResult.Missing))
-            {
-                var backoffMilliseconds = 1 << Math.Min(reservationRefreshAttempt++, 6);
-                await Task.Delay(TimeSpan.FromMilliseconds(backoffMilliseconds), deadlineToken)
-                    .ConfigureAwait(false);
-                placementEligible = await ListCreationCandidatesAsync(
-                        selectedMesh,
-                        actorType,
-                        deadlineToken
-                    )
-                    .ConfigureAwait(false);
-                eligible = FilterRouteReadyCandidates(source, placementEligible);
                 continue;
             }
             if (reserve is not ZLinkObjectReserveResult.Reserved reserved)
@@ -573,7 +558,7 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
             //  The target cannot host this creation in the host run generation
             //  the requester selected (Location runtime §7): exclude it and
             //  choose another candidate before the deadline.
-            eligible.Remove(target);
+            excluded.Add((target.Rid, target.LifecycleGeneration));
         }
     }
 
@@ -620,68 +605,13 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
             innerException
         );
 
-    //  Creation and Entry Spot Join share the registered Entry Spot's acceptance
-    //  of the Actor stable type (Actor model §6.3, membership §4).
-    private static bool IsCreationCandidate(ZLinkMeshNodeDescriptor candidate, string actorType) =>
-        FindActorCapability(candidate, actorType) is { EntryAccepted: true };
-
-    private static ZLinkObjectCapability? FindActorCapability(
-        ZLinkMeshNodeDescriptor candidate,
-        string actorType
-    ) =>
-        candidate.State == ZLinkFrameworkRuntimeState.Serving
-        && candidate.ObjectRole == ZLinkMeshNodeObjectRole.Server
-        && candidate.PlacementWeight > 0
-        && candidate.EntrySpotId is not null
-            ? candidate.ObjectCapabilities.FirstOrDefault(capability =>
-                capability.ObjectKind == ZLinkPlacementObjectKind.Actor
-                && string.Equals(capability.StableType, actorType, StringComparison.Ordinal)
-            )
-            : null;
-
-    private async ValueTask<List<ZLinkMeshNodeDescriptor>> ListCreationCandidatesAsync(
-        string meshName,
-        string actorType,
-        CancellationToken cancellationToken
-    ) =>
-        (await ListLiveMeshNodesAsync(meshName, cancellationToken).ConfigureAwait(false))
-            .Where(candidate => IsCreationCandidate(candidate, actorType))
-            .OrderBy(static candidate => candidate.Rid, ZLinkRoutingIdOrder.Instance)
-            .ToList();
-
-    private static bool HasActorCapacity(ZLinkMeshNodeDescriptor candidate) =>
-        candidate.Capacity.Actors.Limit == 0
-        || candidate.Capacity.Actors.Active + (long)candidate.Capacity.Actors.Reserved
-            < candidate.Capacity.Actors.Limit;
-
     internal static bool IsEligibleCandidate(ZLinkMeshNodeDescriptor candidate, string actorType) =>
-        IsCreationCandidate(candidate, actorType) && HasActorCapacity(candidate);
-
-    private static List<ZLinkMeshNodeDescriptor> FilterRouteReadyCandidates(
-        ZLinkSpotNodeRuntime source,
-        IReadOnlyList<ZLinkMeshNodeDescriptor> candidates,
-        IReadOnlySet<ZLinkMeshNodeTargetAvailability.PeerEpoch>? unavailablePeerEpochs = null
-    ) =>
-        ZLinkMeshNodeTargetAvailability
-            .FilterAdmitted(
-                source.Node.RoutingId,
-                candidates,
-                source.Node.MeshPeers(),
-                unavailablePeerEpochs
-            )
-            .ToList();
-
-    private ValueTask<IReadOnlyList<ZLinkMeshNodeDescriptor>> ListLiveMeshNodesAsync(
-        string meshName,
-        CancellationToken cancellationToken
-    )
-    {
-        if (_locationResolver is null)
-            throw new ZLinkConfigurationException(
-                "Actor creation requires the live MeshNode resolver."
-            );
-        return _locationResolver.ListLiveMeshNodesAsync(meshName, cancellationToken);
-    }
+        candidate.State == ZLinkFrameworkRuntimeState.Serving
+        && ZLinkStoreLocationResolvers.HasPlacementCapacity(
+            candidate,
+            ZLinkPlacementObjectKind.Actor,
+            actorType
+        );
 
     private async ValueTask<ZLinkActorCreateResult?> JoinExistingAsync(
         IZLinkLocationRepository store,
@@ -689,29 +619,50 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
         string actorId,
         string actorType,
         ZLinkAuthoritySnapshot current,
+        byte? creationRelocationPolicy,
         CancellationToken cancellationToken
     )
     {
         while (true)
         {
-            //  A lost owner ends the operation here, for the same reason the
-            //  User Spot join does: the authority record stays put and no
-            //  other node takes the Actor over
-            //  (05-location-relocation/06-failure-failover-policy §4.2, §4.4).
-            //  `null` stays reserved for "the record moved on".
-            if (!await HasLiveOwnerAsync(current, cancellationToken).ConfigureAwait(false))
+            var matchesType =
+                current.Allocation.ObjectKind == ZLinkPlacementObjectKind.Actor
+                && string.Equals(
+                    current.Allocation.StableType,
+                    actorType,
+                    StringComparison.Ordinal
+                );
+            if (
+                matchesType
+                && !await HasLiveOwnerAsync(current, cancellationToken).ConfigureAwait(false)
+            )
+            {
+                await store
+                    .ReleaseEndedReservationAsync(
+                        key,
+                        current.StoreVersion,
+                        new ZLinkCreationAuthorityRecovery(creationRelocationPolicy),
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
+                var ownerRead = await store
+                    .ReadAuthorityAsync(key, cancellationToken)
+                    .ConfigureAwait(false);
+                if (ownerRead is not ZLinkAuthorityReadResult.Found reobserved)
+                    return null;
+                if (reobserved.Snapshot.StoreVersion != current.StoreVersion)
+                {
+                    current = reobserved.Snapshot;
+                    continue;
+                }
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.Unavailable,
                     $"Actor '{actorId}' owner lease is not live.",
                     ZLinkRetryAdvice.RetryAfterStateChange
                 );
+            }
             if (
-                current.Allocation.ObjectKind != ZLinkPlacementObjectKind.Actor
-                || !string.Equals(
-                    current.Allocation.StableType,
-                    actorType,
-                    StringComparison.Ordinal
-                )
+                !matchesType
                 || !ZLinkActorAuthorityPayloadCodec.TryDecode(
                     current.Payload.Span,
                     out var authority

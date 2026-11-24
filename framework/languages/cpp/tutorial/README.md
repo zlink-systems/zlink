@@ -82,9 +82,9 @@ no RPATH; the loader only looks beside the image).
 ## Run
 
 Redis must be at `127.0.0.1:6379`; the Spot, Actor and Location steps use it as the Location
-Store. The block below starts Redis with Docker, then the Server and the Client, and confirms
-with the first request that the two processes are connected over the mesh. Handler and filter
-logs go to **stderr**.
+Store. The block below starts Redis with Docker, starts the Server and Client, and waits for
+both `/ops/ready` endpoints to return HTTP 200. Send Actor requests once both hosts reach
+`Serving`. Handler and filter logs go to **stderr**.
 
 **Linux · macOS · WSL — bash**
 
@@ -94,7 +94,19 @@ docker run -d --rm --name zlink-tutorial-redis -p 127.0.0.1:6379:6379 redis:7-al
 echo $! > server.pid
 ./build/tutorial_client > client.log 2>&1 &
 echo $! > client.pid
-for i in $(seq 1 60); do curl -sf http://127.0.0.1:5180/players/p1/profile > /dev/null && break; sleep 1; done
+ready=0
+for i in $(seq 1 60); do
+  if curl -sf http://127.0.0.1:5180/ops/ready > /dev/null &&
+     curl -sf http://127.0.0.1:5181/ops/ready > /dev/null; then
+    ready=1
+    break
+  fi
+  sleep 1
+done
+if [ "$ready" -ne 1 ]; then
+  echo 'Tutorial Server and Client did not become ready' >&2
+  exit 1
+fi
 ```
 
 **Windows — PowerShell 7**
@@ -105,8 +117,19 @@ $server = Start-Process -NoNewWindow .\build\Release\tutorial_server.exe -Redire
 $server.Id | Set-Content server.pid
 $client = Start-Process -NoNewWindow .\build\Release\tutorial_client.exe -RedirectStandardOutput client.out -RedirectStandardError client.log -PassThru
 $client.Id | Set-Content client.pid
-foreach ($i in 1..60) { $answer = curl.exe -s http://127.0.0.1:5180/players/p1/profile; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep -Seconds 1 }
-if ($LASTEXITCODE -ne 0) { throw 'tutorial-http did not come up' }
+$ready = $false
+foreach ($i in 1..60) {
+  curl.exe -sf http://127.0.0.1:5180/ops/ready | Out-Null
+  if ($LASTEXITCODE -eq 0) {
+    curl.exe -sf http://127.0.0.1:5181/ops/ready | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+      $ready = $true
+      break
+    }
+  }
+  Start-Sleep -Seconds 1
+}
+if (-not $ready) { throw 'Tutorial Server and Client did not become ready' }
 ```
 
 In PowerShell `curl` is an alias of `Invoke-WebRequest`, so use `curl.exe`.

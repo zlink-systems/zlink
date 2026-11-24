@@ -6,7 +6,7 @@ const {
 } = require('../../packages/framework/dist/runtime/locations/authority-relocation-record.js');
 
 const fence = {
-  nodeRid: 'node-a',
+  nodeRid: '6e6f64652d61',
   nodeGeneration: 9007199254740993n,
   ownerId: 'owner-a',
   ownerLeaseGeneration: 9007199254740995n
@@ -118,6 +118,56 @@ test('authority aggregate rejects empty, partial marker, partial target and wron
   ]) {
     assert.throws(() => decodeAuthorityAggregate(invalid));
   }
+});
+
+for (const field of ['source', 'target', 'coordinator']) {
+  const invalidValues = [
+    ['empty RID', { nodeRid: '' }],
+    ['nonhex RID', { nodeRid: 'aazz' }],
+    ['odd length RID', { nodeRid: 'abc' }],
+    ['uppercase RID', { nodeRid: 'AB' }],
+    ['oversized RID', { nodeRid: 'aa'.repeat(256) }],
+    ['zero node generation', { nodeGeneration: '0' }],
+    ['zero lease generation', { ownerLeaseGeneration: '0' }],
+    ...(field === 'target' ? [['zero attempt generation', { attemptGeneration: '0' }]] : [])
+  ];
+  for (const [name, invalid] of invalidValues) {
+    test(`authority relocation rejects ${field} fence with ${name}`, () => {
+      const encoded = encodeAuthorityAggregate(undefined, {
+        ...relocation,
+        phase: 'prepared',
+        target: { ...fence, attemptGeneration: 1n }
+      });
+      const malformed = {
+        relocation: {
+          ...encoded.relocation,
+          [field]: { ...encoded.relocation[field], ...invalid }
+        }
+      };
+      assert.throws(() => decodeAuthorityAggregate(malformed), TypeError);
+    });
+  }
+}
+
+test('authority relocation accepts the maximum RID length and full uint64 fence values', () => {
+  const maxFence = {
+    ...fence,
+    nodeRid: 'ab'.repeat(255),
+    nodeGeneration: 0xffffffffffffffffn,
+    ownerLeaseGeneration: 0xffffffffffffffffn
+  };
+  const prepared = {
+    ...relocation,
+    phase: 'prepared',
+    source: maxFence,
+    target: { ...maxFence, attemptGeneration: 0xffffffffffffffffn },
+    coordinator: { ...relocation.coordinator, ...maxFence },
+    applicationVersion: 0n
+  };
+  assert.deepEqual(
+    decodeAuthorityAggregate(encodeAuthorityAggregate(undefined, prepared)).relocation,
+    prepared
+  );
 });
 
 const golden = require('../../../../runtime/protocol/golden/authority-aggregate-relocation-v1.json');

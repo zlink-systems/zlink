@@ -8,9 +8,12 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchFailure
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
+import systems.zlink.framework.runtime.internal.json.ZLinkJsonDiagnostic;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
 
 import java.lang.reflect.InvocationTargetException;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicLong;
@@ -254,7 +257,19 @@ public final class ZLinkDispatchErrorReporter {
                 && current.getCause() != null) {
             current = current.getCause();
         }
-        String message = current.getMessage();
+        Throwable diagnostic = current;
+        if (!(current instanceof ZLinkJsonDiagnostic) && current.getCause() != null) {
+            var visited = Collections.newSetFromMap(new IdentityHashMap<Throwable, Boolean>());
+            for (Throwable cause = current.getCause();
+                    cause != null && visited.add(cause);
+                    cause = cause.getCause()) {
+                if (cause instanceof ZLinkJsonDiagnostic) {
+                    diagnostic = cause;
+                    break;
+                }
+            }
+        }
+        String message = diagnostic.getMessage();
         if (message == null) {
             message = "";
         }

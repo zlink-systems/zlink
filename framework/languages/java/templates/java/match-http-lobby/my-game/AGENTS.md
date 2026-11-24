@@ -6,14 +6,14 @@ Use [Client connection in README](README.md#client-connection) for this template
 
 ## Rules for AI
 
-`server/lobby` is an HTTP lobby that holds no game state; every other server process is a stateful ZLink node. Before writing code, decide which kind you are editing.
+`server/lobby` is an API node that holds no game state; the session node manages client connections, and the play nodes host the game Spots. Before writing code, decide which kind you are editing.
 
-- A game node is not a REST server. A player's state is owned by one session-bound Actor (or the Spot that owns a shared value). Load it once on connect; do not read the database while handling a request.
+- A play node hosts Spots. A session-bound Actor owns the player's state, and a Spot owns shared state. Load it once on connect; do not read the database while handling a request.
 - Write only results to the database, one transaction per round. Check duplicate requests in Actor or Spot memory.
 - While a game is running, a Spot handler never awaits a remote request or a database reply: the await holds the Spot's turn and stops every message and timer in it. When a round ends, the Spot writes the results of all its Actors in one transaction, then tells each Actor after the commit.
 - Values many players see live in node memory or one owning Spot; values many requests update are applied by that one owning Spot. A process that does not own a value sends a request to its owner instead of writing it.
 - Spots and Actors already process one message at a time. Do not guard their state with locks, semaphores or process-wide static stores, and do not update memory from database commit hooks; the writer updates its owner's memory after commit, others send a message to the owner.
-- Split roles so the game can scale out from day one: game nodes host lobby and room Spots and player Actors and are the only processes you add; a shared node hosts only game-wide Instance Spots (matchmaking, game-wide values), and game nodes do not register those factories. Send and request by Spot ID only; placement is configuration. Keep shared-Spot values recoverable from room resends or a database read at startup.
+- Split roles so the game can scale out from day one: play nodes host lobby and room Spots and player Actors and are the only processes you add; a dedicated play node hosts only game-wide Instance Spots (matchmaking, game-wide values), and the API node and room hosts omit those factories. Send and request by Spot ID only; placement is configuration. Keep shared-Spot values recoverable from room resends or a database read at startup.
 - Never have two Actors or Spots wait on requests to each other inside a turn; notify with send and let the state owner decide.
 - Actors move between nodes when they join a Spot or relocate. Keep all mutable Actor fields in one state record, register stateful Actors with the state-preserving relocation policy, and test that save and restore preserve every field.
 - Player data reaches a Spot with the Actor that joins it; do not request it per player at Spot entry. If a Spot truly needs extra data, fetch it for all players in one request before the game starts.
@@ -23,13 +23,13 @@ Use [Client connection in README](README.md#client-connection) for this template
 - Send money or reward results only after the database commit.
 - One decision has one owner; find the existing one before adding another. Take test expectations from the spec, not from the implementation.
 
-The HTTP lobby may read and write the database per request, but it holds no game state and changes game state only by sending requests to game nodes.
+The API node may read and write the database per request, but it holds no game state and changes game state only by sending requests to play nodes.
 
-Details: [Stateful game nodes and the HTTP lobby](https://docs.zlink.systems/java/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
+Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/java/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
 
 ## Project overview
 
-This Java 25 project is a match server example in which an HTTP lobby pairs two players and their duel runs over ZLink STREAM. It runs an HTTP lobby, a Session gateway for connections, Match hosts A and B with dynamic Room Spots, and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework to `0.32.0` and the binding to `1.23.0`.
+This Java 25 project is a match server example in which an API node pairs two players and their duel runs over ZLink STREAM. It runs an API node, a Session node for connections, play nodes A and B (match) with dynamic Room Spots, and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework to `0.32.0` and the binding to `1.23.0`.
 
 The project layout below describes where to add gameplay, and "Developing from this sample" describes how to carry its features into your own project. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 
@@ -61,11 +61,11 @@ For host process debugging, install JDK 25 and add `--local` or `-Local`. Add `-
 
 ## Project layout and extension points
 
-### Session gateway
+### Session node
 
 `server/session/src/main/java/MyGame/session/Program.java` registers STREAM and the mesh listener, and `server/session/src/main/java/MyGame/session/GameSession.java` handles connection callbacks and forwards incoming packets. A Session is a communication object for a connection; Framework provides binding to associate it with a player state object. `GameSession.onDispatch` accepts only `JoinRoomRequest`, `RoomViewRequest`, `MoveRequest`, `ShootRequest`, and `SessionInfoRequest`, requires `JoinRoomRequest` first, gets or creates the Player Actor by `playerId`, binds it, and relays the original typed packet. Other packets, including internal requests, receive `ActionRejected("packet-not-allowed", 0)`. Add authentication before binding and retain the typed relay so Framework can identify the connection for replies to that player.
 
-### HTTP lobby
+### API node
 
 `server/lobby/src/main/java/MyGame/lobby/Program.java` joins the mesh as an object client only and creates the `HttpLobby` bean. `server/lobby/src/main/java/MyGame/lobby/infrastructure/HttpLobby.java` is the Netty HTTP endpoint for `POST /match` (`Names.MATCH_PATH`); it decodes `MatchRequest` and holds the response until a partner arrives. `server/lobby/src/main/java/MyGame/lobby/application/Matchmaker.java` pairs requests of the same mode, defaults omitted mode to `duel`, assigns `room-` plus a lowercase 32-character UUID, and passes the matched members to `RoomProvisioner.prepare`. `server/lobby/src/main/java/MyGame/lobby/infrastructure/ZLinkRooms.java` creates the Room with `getOrCreate`, sends `PrepareRoom`, waits for the matching `RoomPrepared`, and then returns the Session endpoint from `server/config/lobby.json`. Keep matching decisions in `Matchmaker` and ZLink calls in `ZLinkRooms`.
 
@@ -89,7 +89,7 @@ A RouteMesh connects nodes that exchange messages between processes; this projec
 
 ### Spots and Actors
 
-`Entry` accepts a player's first entry and `Room` is a User Spot that the lobby creates on demand before it answers the HTTP request. The [Spot guide](https://docs.zlink.systems/java/guide/server/21-spot/) describes registration and calls for these objects. `Player` is addressed by player ID; the [Actor guide](https://docs.zlink.systems/java/guide/server/22-actor/) describes Actor creation and calls.
+`Entry` accepts a player's first entry and `Room` is a User Spot that the API node creates on demand before it answers the HTTP request. The [Spot guide](https://docs.zlink.systems/java/guide/server/21-spot/) describes registration and calls for these objects. `Player` is addressed by player ID; the [Actor guide](https://docs.zlink.systems/java/guide/server/22-actor/) describes Actor creation and calls.
 
 ### STREAM and Sessions
 
@@ -105,18 +105,18 @@ A membership change moves an Actor from one Spot to another. Admission is the ta
 
 ### Host relocation and drain
 
-Relocation changes an object's execution host; drain moves a host's workload elsewhere so the host can shut down. Application adapters (`RoomTransfer`, `PlayerTransfer`), registered with `preserveStateWith(...)`, capture and restore game state, while Framework transfers workload and routes. The lobby keeps its queue in process memory and is not a relocation target. `Hosting.run` handles the `drain` control by requesting a public planned-maintenance relocation and observing safe shutdown; the [Relocation guide](https://docs.zlink.systems/java/guide/server/37-relocation/) explains the procedure.
+Relocation changes an object's execution host; drain moves a host's workload elsewhere so the host can shut down. Application adapters (`RoomTransfer`, `PlayerTransfer`), registered with `preserveStateWith(...)`, capture and restore game state, while Framework transfers workload and routes. The API node keeps its queue in process memory and is not a relocation target. `Hosting.run` handles the `drain` control by requesting a public planned-maintenance relocation and observing safe shutdown; the [Relocation guide](https://docs.zlink.systems/java/guide/server/37-relocation/) explains the procedure.
 
 ## Request flow
 
 Requests in the example game follow this path. Reading the code along this path before adding or transferring a feature locates the places to change.
 
-1. The client sends `POST /match` with `MatchRequest` (`playerId`, optional `mode`) to the lobby. Omitted mode defaults to `duel`. `Matchmaker.match` holds the response until another player of the same mode arrives.
+1. The client sends `POST /match` with `MatchRequest` (`playerId`, optional `mode`) to the API node. Omitted mode defaults to `duel`. `Matchmaker.match` holds the response until another player of the same mode arrives.
 2. When the second request arrives, `Matchmaker` assigns a UUID Room ID and passes both member IDs to `ZLinkRooms.prepare`. `ZLinkRooms` creates the Room, sends `PrepareRoom(matchId, members)`, and waits for the matching `RoomPrepared` before completing both HTTP responses with `MatchResponse` (`roomId`, `sessionEndpoint`).
 3. Each client connects to the returned Session endpoint over STREAM and sends the first packet, `JoinRoomRequest`. `GameSession` checks the first packet type, calls `getOrCreate` for the Player Actor by `playerId`, binds it with `bindOrGet`, and relays the original packet.
 4. A new Actor starts in the Entry Spot. `Join.join` checks the identity and requests `joinSpot(request.roomId(), request).defer()`. `Room.onActorJoin` asks `RoomRoster` to admit only a prepared member, then lets `RoomState` allocate the server spawn and phase. An outsider receives `ActionRejected("admission-rejected", 0)`.
 5. `MoveRequest(Dx, Dy, Sequence)` and `ShootRequest` are delivered to `Room` through `Actions`. `RoomState` validates and calculates results. Only accepted actions advance sequence or change game state. Every rejection is `ActionRejected(Reason, RetryAfterMs)`; only time-limited rejections have a positive retry value.
-6. To replace a Match node, the `drain` control in `Hosting.run` requests relocation. `RoomTransfer` captures `{game, roster}`; game snapshots store move and fire timers as remaining milliseconds, not process timestamps. Framework restores both domain snapshots on another node. The lobby is outside host relocation.
+6. To replace a play node (match), the `drain` control in `Hosting.run` requests relocation. `RoomTransfer` captures `{game, roster}`; game snapshots store move and fire timers as remaining milliseconds, not process timestamps. Framework restores both domain snapshots on another node. The API node is outside host relocation.
 
 ## Developing this template
 
@@ -140,7 +140,7 @@ Use public Maven Central packages at the versions pinned centrally in `build.gra
 
 Compose public asynchronous calls as `CompletionStage` chains as the template does, and avoid `.join()`, `.get()`, `Thread.sleep`, or blocking I/O in handlers and callbacks; the `.join()` calls in `Hosting.java` run on the startup and control thread, outside any handler. Framework's execution gate limits concurrent turns over the same state, so do not protect that state again with another lock or queue. Awaiting can retain the turn, so do not wait for work that requires that turn to finish, such as a request back to the same Spot; perform long-running work outside handlers. The [Execution model](https://docs.zlink.systems/java/guide/server/32-execution-model/) explains these execution boundaries.
 
-Keep type registration and per-instance callbacks in their defined lifecycle phases. `Room` is a User Spot created on demand with `getOrCreate`; [Activation and lifetime](https://docs.zlink.systems/java/guide/server/34-activation-lifetime/) explains creation and initialization. The HTTP adapter removes an unpaired request when its client disconnects, and shutdown fails pending requests (README Deployment sequence). Use `joinSpot(...).defer()` and the public completion callback `onJoinCompleted` for Spot changes, and relocation with runtime observations for host shutdown, so request acceptance is not mistaken for completion. Handlers are registered by `options.addHandlersFromPackageOf(...)` in each `Program.java`; a new handler class outside the packages those calls cover is not registered unless you register it explicitly (in this sample, `match` registers the handlers under `server/match/src/main/java/MyGame/match/infrastructure/zlink/`, and the lobby registers none).
+Keep type registration and per-instance callbacks in their defined lifecycle phases. `Room` is a User Spot created on demand with `getOrCreate`; [Activation and lifetime](https://docs.zlink.systems/java/guide/server/34-activation-lifetime/) explains creation and initialization. The HTTP adapter removes an unpaired request when its client disconnects, and shutdown fails pending requests (README Deployment sequence). Use `joinSpot(...).defer()` and the public completion callback `onJoinCompleted` for Spot changes, and relocation with runtime observations for host shutdown, so request acceptance is not mistaken for completion. Handlers are registered by `options.addHandlersFromPackageOf(...)` in each `Program.java`; a new handler class outside the packages those calls cover is not registered unless you register it explicitly (in this sample, `match` registers the handlers under `server/match/src/main/java/MyGame/match/infrastructure/zlink/`, and the API node registers none).
 
 ### Reconnection and failure handling
 

@@ -22,7 +22,13 @@ turns them on.
 
 The settings live in the STREAM session registration options. Each language names them following its session
 registration option conventions, as fixed by that language's exact interface documents. A limit of zero or less, or
-a delay of zero or less, is a configuration error at startup.
+a delay of zero or less, is a configuration error at startup. The limit and the delay are
+integers in `1..2147483647` (the delay in ms); a value outside that range is also a configuration error at startup.
+The effective CPU core count is the usable processor count the language runtime reports (reflecting container CPU
+quota and affinity), and a computed default above `2147483647` uses `2147483647`. A node keeps one in-flight
+authentication count and one limit even with several STREAM registrations — registrations that specify different
+`AuthenticationPacketName`, `MaxConcurrentAuthentications` or `AuthenticationRetryDelay` values are a configuration
+error at startup.
 
 ### 1.2 Decision
 

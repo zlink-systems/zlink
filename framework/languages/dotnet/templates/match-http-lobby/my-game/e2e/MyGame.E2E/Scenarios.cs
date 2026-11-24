@@ -612,7 +612,7 @@ internal static class Scenarios
         await b.WaitViewAsync(view => view.Players.Length == GameNames.PlayersPerRoom, ct);
         Require(
             room.RoomId == assignment.RoomId && room.NodeId == replacementId,
-            "New Room is not on the replacement match node."
+            "New Room is not on the replacement play node (match)."
         );
     }
 

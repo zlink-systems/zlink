@@ -810,7 +810,10 @@ internal sealed partial class ZLinkProviderLocationRepository
         // Relocation authority retains its own recovery protocol.
         if (current.Meta.AggregateFence is not null)
             return StaleAuthorityReclaimResult.RecoveryRequired;
-        if (ZLinkRelocationAuthorityPayloadCodec.TryDecode(current.Snapshot.Payload.Span, out _))
+        if (
+            current.Snapshot.Relocation is not null
+            || ZLinkRelocationAuthorityPayloadCodec.TryDecode(current.Snapshot.Payload.Span, out _)
+        )
             return StaleAuthorityReclaimResult.RecoveryRequired;
         var descriptorKey = MeshKey(
             current.Snapshot.Allocation.Descriptor.MeshName,
@@ -2107,6 +2110,9 @@ internal sealed partial class ZLinkProviderLocationRepository
                                     authority.Meta with
                                     {
                                         Payload = participant.AuthorityPayload.ToArray(),
+                                        Aggregate = aggregate.Header.ApplyRelocation(
+                                            authority.Meta.Aggregate
+                                        ),
                                         AuthorityOwnerGeneration = nextGeneration,
                                         OwnerId = changesOwner
                                             ? request.TargetOwner.OwnerId
@@ -2339,6 +2345,12 @@ internal sealed partial class ZLinkProviderLocationRepository
                 authority.Snapshot.Payload.Span,
                 participant.AuthorityPayload.Span
             )
+        )
+            return false;
+        if (
+            aggregate.Header.ClearRelocation && authority.Snapshot.Relocation is not null
+            || aggregate.Header.Relocation is { } relocation
+                && authority.Snapshot.Relocation != relocation
         )
             return false;
         if (!changesOwner)
@@ -4172,7 +4184,11 @@ internal sealed partial class ZLinkProviderLocationRepository
             aggregate.Header.TargetDescriptorLifecycleGeneration,
             aggregate.Header.Capacity,
             aggregate.Header.TargetOwner
-        );
+        )
+        {
+            Relocation = aggregate.Header.Relocation,
+            ClearRelocation = aggregate.Header.ClearRelocation,
+        };
 
     private static AggregateHeader CreateAggregateHeader(ZLinkAggregatePrepareRequest request) =>
         new(
@@ -4183,7 +4199,11 @@ internal sealed partial class ZLinkProviderLocationRepository
             request.TargetDescriptorLifecycleGeneration,
             request.Capacity,
             request.TargetOwner
-        );
+        )
+        {
+            Relocation = request.Relocation,
+            ClearRelocation = request.ClearRelocation,
+        };
 
     private static bool AggregateHeaderEquals(AggregateHeader left, AggregateHeader right) =>
         EncodeAggregateHeader(left).AsSpan().SequenceEqual(EncodeAggregateHeader(right));
@@ -4235,6 +4255,12 @@ internal sealed partial class ZLinkProviderLocationRepository
             stream.WriteByte(0);
         WriteInventoryString(stream, header.TargetOwner.OwnerId);
         WriteInventoryInt64(stream, header.TargetOwner.LeaseGeneration);
+        if (header.ClearRelocation || header.Relocation is not null)
+        {
+            stream.WriteByte(header.ClearRelocation ? (byte)0 : (byte)1);
+            if (header.Relocation is { } relocation)
+                WriteInventoryHash(stream, SHA256.HashData(Encode(relocation)));
+        }
         return stream.ToArray();
     }
 
@@ -4613,6 +4639,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                     meta = meta with
                     {
                         Payload = participant.Payload.ToArray(),
+                        Aggregate = aggregate.Record.Header.ApplyRelocation(meta.Aggregate),
                         AuthorityOwnerGeneration = changesOwner
                             ? targetAuthorityOwnerGeneration
                             : meta.AuthorityOwnerGeneration,
@@ -5602,7 +5629,19 @@ internal sealed partial class ZLinkProviderLocationRepository
         ulong TargetDescriptorLifecycleGeneration,
         ZLinkCapacityVector Capacity,
         ZLinkLocationOwnerToken TargetOwner
-    );
+    )
+    {
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public ZLinkAuthorityRelocation? Relocation { get; init; }
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public bool ClearRelocation { get; init; }
+
+        internal JsonElement? ApplyRelocation(JsonElement? aggregate) =>
+            ClearRelocation || Relocation is not null
+                ? ZLinkAuthorityAggregateCodec.Replace(aggregate, Relocation)
+                : aggregate;
+    }
 
     private sealed record AggregateRecord(
         AggregateHeader Header,

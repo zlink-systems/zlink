@@ -116,7 +116,7 @@ public final class Structure {
         for (var spot : spots) {
             require(
                     Set.of(Roles.FIELD, Roles.INSTANCE).contains(roles.get(owner(spot, roles))),
-                    "Spot owner must be a Field or Instance node");
+                    "Spot owner must be a play node (field or dungeon)");
             switch (text(spot, "kind")) {
                 case "entry" ->
                         require(

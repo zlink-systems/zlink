@@ -381,7 +381,14 @@ internal sealed record ZLinkAggregatePrepareRequest(
     ZLinkCapacityVector Capacity,
     ZLinkLocationOwnerToken TargetOwner,
     bool AllowPreparingTarget = false
-);
+)
+{
+    internal ZLinkAuthorityRelocation? Relocation { get; init; }
+    internal bool ClearRelocation { get; init; }
+
+    internal ZLinkAuthorityRelocation? ApplyRelocation(ZLinkAuthorityRelocation? current) =>
+        ClearRelocation ? null : Relocation ?? current;
+}
 
 internal readonly record struct ZLinkAggregateFence(Guid AggregateId, ulong AggregateGeneration);
 

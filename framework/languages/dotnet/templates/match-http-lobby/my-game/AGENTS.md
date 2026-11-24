@@ -2,14 +2,14 @@
 
 ## Rules for AI
 
-`server/MyGame.Lobby` is an HTTP lobby that holds no game state; every other server process is a stateful ZLink node. Before writing code, decide which kind you are editing.
+`server/MyGame.Lobby` is an API node that holds no game state; the session node manages client connections, and the play nodes host the game Spots. Before writing code, decide which kind you are editing.
 
-- A game node is not a REST server. A player's state is owned by one session-bound Actor (or the Spot that owns a shared value). Load it once on connect; do not read the database while handling a request.
+- A play node hosts Spots. A session-bound Actor owns the player's state, and a Spot owns shared state. Load it once on connect; do not read the database while handling a request.
 - Write only results to the database, one transaction per round. Check duplicate requests in Actor or Spot memory.
 - While a game is running, a Spot handler never awaits a remote request or a database reply: the await holds the Spot's turn and stops every message and timer in it. When a round ends, the Spot writes the results of all its Actors in one transaction, then tells each Actor after the commit.
 - Values many players see live in node memory or one owning Spot; values many requests update are applied by that one owning Spot. A process that does not own a value sends a request to its owner instead of writing it.
 - Spots and Actors already process one message at a time. Do not guard their state with locks, semaphores or process-wide static stores, and do not update memory from database commit hooks; the writer updates its owner's memory after commit, others send a message to the owner.
-- Split roles so the game can scale out from day one: game nodes host lobby and room Spots and player Actors and are the only processes you add; a shared node hosts only game-wide Instance Spots (matchmaking, game-wide values), and game nodes do not register those factories. Send and request by Spot ID only; placement is configuration. Keep shared-Spot values recoverable from room resends or a database read at startup.
+- Split roles so the game can scale out from day one: play nodes host lobby and room Spots and player Actors and are the only processes you add; a dedicated play node hosts only game-wide Instance Spots (matchmaking, game-wide values), and the API node and room hosts omit those factories. Send and request by Spot ID only; placement is configuration. Keep shared-Spot values recoverable from room resends or a database read at startup.
 - Never have two Actors or Spots wait on requests to each other inside a turn; notify with send and let the state owner decide.
 - Actors move between nodes when they join a Spot or relocate. Keep all mutable Actor fields in one state record, register stateful Actors with the state-preserving relocation policy, and test that save and restore preserve every field.
 - Player data reaches a Spot with the Actor that joins it; do not request it per player at Spot entry. If a Spot truly needs extra data, fetch it for all players in one request before the game starts.
@@ -19,13 +19,13 @@
 - Send money or reward results only after the database commit.
 - One decision has one owner; find the existing one before adding another. Take test expectations from the spec, not from the implementation.
 
-The HTTP lobby may read and write the database per request, but it holds no game state and changes game state only by sending requests to game nodes.
+The API node may read and write the database per request, but it holds no game state and changes game state only by sending requests to play nodes.
 
-Details: [Stateful game nodes and the HTTP lobby](https://docs.zlink.systems/dotnet/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
+Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/dotnet/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
 
 ## Project overview
 
-This C#/.NET 8 project is a match server example in which an HTTP lobby pairs players and prepares a Room before they connect over STREAM to fight in it. It runs an HTTP lobby, a Session gateway for connections, Match hosts A and B, and Redis for location and relocation state. `Directory.Packages.props` pins the ZLink Framework and connector packages to `0.32.0`.
+This C#/.NET 8 project is a match server example in which an API node pairs players and prepares a Room before they connect over STREAM to fight in it. It runs an API node, a Session node for connections, play nodes A and B (match), and Redis for location and relocation state. `Directory.Packages.props` pins the ZLink Framework and connector packages to `0.32.0`.
 
 The project layout and feature procedure below describe where to add gameplay. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 
@@ -55,15 +55,15 @@ For host process debugging, install the .NET 8 SDK and add `--local` or `-Local`
 
 ## Project layout and extension points
 
-### HTTP lobby
+### API node
 
 `server/MyGame.Lobby/Program.cs` maps `POST /match` (`GameNames.MatchPath`) and joins the mesh as a client without hosting objects. `server/MyGame.Lobby/Application/Matchmaker.cs` keeps the in-memory queue, pairs players by mode, and holds each HTTP response until its partner arrives. `server/MyGame.Lobby/Infrastructure/ZLink/RoomProvisioner.cs` creates the Room through the public `GetOrCreate` before the response returns the room ID and the Session endpoint. The example has no authentication; add identity validation before matchmaking and before Session binding.
 
-### Session gateway
+### Session node
 
 `server/MyGame.Session/Program.cs` registers connection handling, and `server/MyGame.Session/PlayerSession.cs` handles connection callbacks and forwards incoming packets. A Session is a communication object for a connection; Framework provides binding to associate it with a player state object. The first STREAM packet must be `JoinRoomRequest`; add authentication before binding and retain the existing typed packet relay so Framework can identify the connection for replies to that player.
 
-### Match host
+### play node (match)
 
 An Actor is a game state object addressed by ID; `PlayerActor` in `server/MyGame.Match/Infrastructure/ZLink/PlayerActor.cs` holds only the player's identity and the bound Session. A Spot is a state object that accepts Actors and executes shared game rules; `RoomSpot` in `server/MyGame.Match/Infrastructure/ZLink/RoomSpot.cs` hosts one fight. `MatchEntry.cs` receives the first packet, and `Handlers.cs` holds the Room handlers and the delivery handlers that forward pushes to the client.
 
@@ -75,17 +75,17 @@ An Actor is a game state object addressed by ID; `PlayerActor` in `server/MyGame
 
 ### E2E client
 
-`e2e/MyGame.E2E/GameClient.cs` connects through the public connector, and `e2e/MyGame.E2E/Scenarios.cs` checks results observable by the client, including HTTP lobby calls. `DomainChecks.cs` and `LobbyDomainChecks.cs` check domain boundaries before E2E scenarios. `MatchRun.cs` manages processes and infrastructure for each run, while `StructureCheck.cs` validates composition. The project includes no separate unit-test project or formatter configuration.
+`e2e/MyGame.E2E/GameClient.cs` connects through the public connector, and `e2e/MyGame.E2E/Scenarios.cs` checks results observable by the client, including API node calls. `DomainChecks.cs` and `LobbyDomainChecks.cs` check domain boundaries before E2E scenarios. `MatchRun.cs` manages processes and infrastructure for each run, while `StructureCheck.cs` validates composition. The project includes no separate unit-test project or formatter configuration.
 
 ## ZLink concepts in this project
 
 ### RouteMesh
 
-A RouteMesh connects nodes that exchange messages between processes; this project uses `GameNames.WorldMesh`. The lobby joins it as a client, and the Match nodes host the objects. The project registers no application channels, so `channels` in `zlink.structure.json` is empty. [Channel messaging](https://docs.zlink.systems/dotnet/guide/server/20-channel-messaging/) describes registration and calls.
+A RouteMesh connects nodes that exchange messages between processes; this project uses `GameNames.WorldMesh`. The API node joins it as a client, and the play nodes (match) host the objects. The project registers no application channels, so `channels` in `zlink.structure.json` is empty. [Channel messaging](https://docs.zlink.systems/dotnet/guide/server/20-channel-messaging/) describes registration and calls.
 
 ### Spots and Actors
 
-`MatchEntry` is the Entry Spot that receives the first packet, and `RoomSpot` is a User Spot created on demand by the lobby for each pair. The [Spot guide](https://docs.zlink.systems/dotnet/guide/server/21-spot/) describes registration and calls for these objects. `PlayerActor` is requested by the Session node with `GetOrCreate` and hosted on a Match node; the [Actor guide](https://docs.zlink.systems/dotnet/guide/server/22-actor/) describes Actor creation and calls.
+`MatchEntry` is the Entry Spot that receives the first packet, and `RoomSpot` is a User Spot created on demand by the API node for each pair. The [Spot guide](https://docs.zlink.systems/dotnet/guide/server/21-spot/) describes registration and calls for these objects. `PlayerActor` is requested by the Session node with `GetOrCreate` and hosted on a play node (match); the [Actor guide](https://docs.zlink.systems/dotnet/guide/server/22-actor/) describes Actor creation and calls.
 
 ### STREAM and Sessions
 
@@ -130,7 +130,7 @@ Extend this template's domain to build a `two-dimensional action` server. Keep e
 
 Add a client contract in `Contracts.cs`, implement its state change and validation in `RoomState.cs`, and update the Session allowlist when clients may send it. Add the domain boundary check and an E2E observation in the same change. Store only remaining milliseconds in relocation snapshots; never serialize a process clock reading.
 
-The HTTP lobby flow belongs in `Matchmaker.cs` and `RoomProvisioner.cs`. `RoomRoster` owns Room membership and admission. The lobby returns an assignment only after it receives `RoomPrepared` for the same match ID.
+The API node flow belongs in `Matchmaker.cs` and `RoomProvisioner.cs`. `RoomRoster` owns Room membership and admission. The API node returns an assignment only after it receives `RoomPrepared` for the same match ID.
 
 ## Development considerations
 
@@ -244,6 +244,6 @@ Put the language and the failing behavior in the title (for example, `framework(
 
 The [README client connection section](README.md#client-connection) owns the shared client installation table and minimal C# example. The Session `players` listener defaults to `ws://127.0.0.1:0` in `server/config/session.json` (WebSocket root path `/`, OS-assigned port). Use its actual STREAM address from `READY`; mesh and Redis are internal endpoints. External clients need a running deployment with a reachable interface and exposed port; HTTPS web clients require `wss://`.
 
-Start with two same-mode `POST /match` requests on Lobby HTTP. Use each returned `sessionEndpoint` and assigned `roomId` for the first STREAM packet, `JoinRoomRequest`; successful entry produces `MatchFound` and `RoomView` pushes. Keep the Lobby advertised Session address consistent with Session READY. Register push handlers before sending with `Send(...).Async(ct)`; do not turn admission into request/reply. Request `SessionInfoRequest` only after Actor binding. Retain the default typed JSON path and validate identity before binding when adding authentication.
+Start with two same-mode `POST /match` requests on the API node's HTTP endpoint. Use each returned `sessionEndpoint` and assigned `roomId` for the first STREAM packet, `JoinRoomRequest`; successful entry produces `MatchFound` and `RoomView` pushes. Keep the API node's advertised Session address consistent with Session READY. Register push handlers before sending with `Send(...).Async(ct)`; do not turn admission into request/reply. Request `SessionInfoRequest` only after Actor binding. Retain the default typed JSON path and validate identity before binding when adding authentication.
 
 Match connector versions to `Directory.Packages.props` `PackageVersion` entries `Zlink.Framework` and `Zlink.Stream.Connector` (`Version` attributes); check examples against the public connector source and pinned package. Preserve the endpoint, HTTP preconditions, packet names, and push/reply distinction when updating the README.

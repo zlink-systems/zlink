@@ -1,5 +1,6 @@
 package systems.zlink.framework.runtime.spots;
 
+import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
@@ -26,6 +27,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Supplier;
 
@@ -38,17 +40,15 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                     if (primary != null) {
                         if (secondary != null && secondary != primary)
                             primary.addSuppressed(secondary);
-                        throw new java.util.concurrent.CompletionException(primary);
+                        throw new CompletionException(primary);
                     }
-                    if (secondary != null)
-                        throw new java.util.concurrent.CompletionException(secondary);
+                    if (secondary != null) throw new CompletionException(secondary);
                     return value;
                 });
     }
 
     private static Throwable unwrapCompletion(Throwable failure) {
-        while (failure instanceof java.util.concurrent.CompletionException
-                && failure.getCause() != null) {
+        while (failure instanceof CompletionException && failure.getCause() != null) {
             failure = failure.getCause();
         }
         return failure;
@@ -463,6 +463,9 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
         }
         Message payloadCopy = Message.from(packet.payload());
         String packetName = packet.packetName();
+        ZLinkFlowContext.State inboundFlow = ZLinkFlowContext.current();
+        var sourceRid = received.routingId().orElse(null);
+        String correlationId = requestHeader == null ? null : requestHeader.correlationId();
         releaseRouteParts(received);
         return host.admitApplicationJob(
                         () -> {
@@ -486,26 +489,52 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                                         return host.runWithOutbound(
                                                 context.dispatchOutbound(),
                                                 () -> {
+                                                    CompletionStage<?> handling;
                                                     try {
-                                                        return handlerInvoker.invokePacket(
-                                                                handler,
-                                                                spotSurface,
-                                                                payloadCopy,
-                                                                contentType,
-                                                                metadata,
-                                                                received.receivedAt(),
-                                                                context.handlerInstances()
-                                                                        ::instance);
+                                                        handling =
+                                                                handlerInvoker.invokePacket(
+                                                                        handler,
+                                                                        spotSurface,
+                                                                        payloadCopy,
+                                                                        contentType,
+                                                                        metadata,
+                                                                        received.receivedAt(),
+                                                                        context.handlerInstances()
+                                                                                ::instance);
                                                     } catch (RuntimeException decodeFailure) {
-                                                        // invokePacket returns
-                                                        // handler failures as a
-                                                        // stage;
-                                                        // synchronous failure here
-                                                        // is payload decoding.
                                                         host.recordSpotDrop(
                                                                 context.spotId(), "decode_error");
+                                                        reportRoutedSendFailure(
+                                                                packetName,
+                                                                sourceRid,
+                                                                correlationId,
+                                                                inboundFlow,
+                                                                ZLinkDispatchErrorReason
+                                                                        .PAYLOAD_DECODE_FAILED,
+                                                                decodeFailure);
                                                         throw decodeFailure;
                                                     }
+                                                    return handling.handle(
+                                                            (ignored, failure) -> {
+                                                                if (failure != null) {
+                                                                    reportRoutedSendFailure(
+                                                                            packetName,
+                                                                            sourceRid,
+                                                                            correlationId,
+                                                                            inboundFlow,
+                                                                            ZLinkDispatchErrorReason
+                                                                                    .HANDLER_EXCEPTION,
+                                                                            failure);
+                                                                    throw failure
+                                                                                    instanceof
+                                                                                    CompletionException
+                                                                                            completion
+                                                                            ? completion
+                                                                            : new CompletionException(
+                                                                                    failure);
+                                                                }
+                                                                return null;
+                                                            });
                                                 });
                                     },
                                     admission);
@@ -514,14 +543,42 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                         (ignored, error) -> {
                             payloadCopy.close();
                             if (error == null) {
-                                host.traceSpotRouteFlow(
-                                        ZLinkMessageFlowOutcome.COMPLETED,
-                                        ZLinkDispatchMessageKind.SEND,
-                                        packetName,
-                                        Optional.empty(),
-                                        context.spotId());
+                                try (var flowScope =
+                                        inboundFlow == null
+                                                ? null
+                                                : ZLinkFlowContext.enter(inboundFlow)) {
+                                    host.traceSpotRouteFlow(
+                                            ZLinkMessageFlowOutcome.COMPLETED,
+                                            ZLinkDispatchMessageKind.SEND,
+                                            packetName,
+                                            Optional.empty(),
+                                            context.spotId());
+                                }
                             }
                         });
+    }
+
+    private void reportRoutedSendFailure(
+            String packetName,
+            RoutingId sourceRid,
+            String correlationId,
+            ZLinkFlowContext.State flow,
+            ZLinkDispatchErrorReason reason,
+            Throwable failure) {
+        if (!host.dispatchErrorsEnabled()) return;
+        try (var ignored = ZLinkFlowContext.enter(flow)) {
+            host.reportDispatchError(
+                    DispatchFailureReport.of(
+                                    ZLinkDispatchErrorSurface.SPOT_ROUTE,
+                                    ZLinkDispatchMessageKind.SEND,
+                                    reason,
+                                    ZLinkDispatchErrorAction.DROP)
+                            .packetName(packetName)
+                            .spotId(context.spotId())
+                            .sourceRid(sourceRid)
+                            .correlationId(correlationId)
+                            .error(failure));
+        }
     }
 
     final CompletionStage<Void> handleRoutedBoundSessionSendParts(List<Message> parts) {

@@ -23,6 +23,10 @@ import systems.zlink.framework.locations.ZLinkPlacementCapacity;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
+import systems.zlink.framework.runtime.configuration.ZLinkDispatchOptionsRegistration;
+import systems.zlink.framework.runtime.diagnostics.ZLinkDispatchErrorReporter;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryOwner;
+import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
@@ -30,6 +34,7 @@ import systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationOutcome;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeState;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeStatus;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateRelocationCoordinator;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityDelete;
@@ -69,7 +74,12 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 /**
  * Relocation settlement after relay readiness (spec 28 §4.4–§4.5, spec 01 §6.1/§10): the cutover
@@ -284,6 +294,93 @@ final class ZLinkCanonicalRelocationSettlementTest {
         assertEquals(0, fixture.endpoint.abortedBeforeInstalled.get());
         assertEquals(0, fixture.endpoint.aborted.get());
         assertEquals(0, fixture.commits.get());
+    }
+
+    @Test
+    void targetPrepareFailureReportsOriginalCauseAndIdentityOnce() throws Exception {
+        ZLinkDispatchOptionsRegistration dispatchOptions = new ZLinkDispatchOptionsRegistration();
+        dispatchOptions.messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+        ZLinkTelemetryOwner.Host telemetryHost = ZLinkTelemetryOwner.openHost();
+        var activator =
+                ZLinkHandlerActivator.services().add(ZLinkTelemetryOwner.Host.class, telemetryHost);
+        ZLinkDispatchErrorReporter dispatchErrors =
+                new ZLinkDispatchErrorReporter(dispatchOptions, activator, Runnable::run);
+
+        List<String> records = new CopyOnWriteArrayList<>();
+        CompletableFuture<String> dispatchErrorRecord = new CompletableFuture<>();
+        Logger logger =
+                Logger.getLogger(
+                        systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer.class
+                                .getName());
+        boolean useParentHandlers = logger.getUseParentHandlers();
+        Level previousLevel = logger.getLevel();
+        Handler handler =
+                new Handler() {
+                    @Override
+                    public void publish(LogRecord record) {
+                        String message = record.getMessage();
+                        records.add(message);
+                        if (message.contains("event_id=zlink.dispatch_error")) {
+                            dispatchErrorRecord.complete(message);
+                        }
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+        logger.addHandler(handler);
+        logger.setUseParentHandlers(false);
+        logger.setLevel(Level.ALL);
+        try {
+            Fixture successful = new Fixture(false, dispatchErrors);
+            successful.stage();
+            assertEquals(0L, dispatchErrors.reportedCount());
+            assertEquals(0L, dispatchErrors.flow().tracedCount());
+
+            Fixture failed = new Fixture(false, dispatchErrors);
+            failed.endpoint.stageCompletion = new CompletableFuture<>();
+            var staging = failed.startStage();
+            failed.endpoint.stageEntered.get(3, TimeUnit.SECONDS);
+            assertFalse(
+                    staging.isDone(), "target must not be relay-ready before Restore completes");
+            failed.endpoint.stageCompletion.completeExceptionally(
+                    new IllegalStateException("restore adapter rejected state"));
+            assertThrows(CompletionException.class, staging::join);
+            failed.target
+                    .awaitAcceptedTargetRelocations()
+                    .toCompletableFuture()
+                    .get(3, TimeUnit.SECONDS);
+
+            assertEquals(1, failed.failedReplies.get());
+            assertEquals(List.of(17L), failed.failedFailureCodes);
+            assertEquals(1L, dispatchErrors.reportedCount());
+            assertEquals(1L, dispatchErrors.flow().tracedCount());
+            String event = dispatchErrorRecord.get(3, TimeUnit.SECONDS);
+            assertEquals(1, records.size());
+            assertTrue(event.contains("mesh=mesh"), event);
+            assertTrue(event.contains("source_rid=source-node"), event);
+            assertTrue(event.contains("target_rid=target-node"), event);
+            assertTrue(event.contains("actor=actor-settlement"), event);
+            assertTrue(
+                    event.contains(
+                            "corr="
+                                    + failed.request.fence().aggregateId()
+                                    + "/attempt/"
+                                    + failed.targetAttemptGeneration.get()),
+                    event);
+            assertTrue(event.contains("packet=target_prepare_restore"), event);
+            assertTrue(event.contains("error_type=IllegalStateException"), event);
+            assertTrue(event.contains("error_message=restore adapter rejected state"), event);
+        } finally {
+            ZLinkTelemetryTestFence.awaitIdle();
+            telemetryHost.close();
+            logger.removeHandler(handler);
+            logger.setUseParentHandlers(useParentHandlers);
+            logger.setLevel(previousLevel);
+        }
     }
 
     @Test
@@ -661,14 +758,20 @@ final class ZLinkCanonicalRelocationSettlementTest {
         CompletableFuture<Void> stateDelivery = CompletableFuture.completedFuture(null);
         final CompletableFuture<Void> stateEntered = new CompletableFuture<>();
         final AtomicInteger failedReplies = new AtomicInteger();
+        final AtomicLong targetAttemptGeneration = new AtomicLong();
+        final List<Long> failedFailureCodes = new CopyOnWriteArrayList<>();
         CompletableFuture<Void> prepareCompletion = CompletableFuture.completedFuture(null);
         final CompletableFuture<Void> prepareEntered = new CompletableFuture<>();
 
         Fixture() {
-            this(false);
+            this(false, null);
         }
 
         Fixture(boolean manualManagement) {
+            this(manualManagement, null);
+        }
+
+        Fixture(boolean manualManagement, ZLinkDispatchErrorReporter dispatchErrors) {
             String actorId = "actor-settlement";
             authorityKey = ZLinkAuthorityKeyCodec.actor(actorId);
             sourceOwner = owner("source-owner");
@@ -873,7 +976,8 @@ final class ZLinkCanonicalRelocationSettlementTest {
                                                     delay.toMillis(), TimeUnit.MILLISECONDS)
                                             .execute(task);
                                 }
-                            });
+                            },
+                            dispatchErrors);
             sourceRef.set(source);
             targetRef.set(target);
         }
@@ -887,9 +991,12 @@ final class ZLinkCanonicalRelocationSettlementTest {
         }
 
         void stage() {
-            source.stage(targetRid, request, Duration.ofSeconds(2), STAGE_DEADLINE)
-                    .toCompletableFuture()
-                    .join();
+            startStage().join();
+        }
+
+        CompletableFuture<Void> startStage() {
+            return source.stage(targetRid, request, Duration.ofSeconds(2), STAGE_DEADLINE)
+                    .toCompletableFuture();
         }
 
         ZLinkFrameworkRuntime startTargetHost() throws Exception {
@@ -1009,6 +1116,10 @@ final class ZLinkCanonicalRelocationSettlementTest {
                                         }
                                         case "requestCanonicalRelocationPrepare" -> {
                                             byte[] encoded = ((byte[]) args[1]).clone();
+                                            targetAttemptGeneration.set(
+                                                    ZLinkCanonicalRelocationProtocol.decodePrepare(
+                                                                    encoded)
+                                                            .targetAttemptGeneration());
                                             var reply =
                                                     peer.get()
                                                             .apply(
@@ -1021,8 +1132,14 @@ final class ZLinkCanonicalRelocationSettlementTest {
                                                     encodedReply -> {
                                                         if (Byte.toUnsignedInt(encodedReply[3])
                                                                 == ServiceWireConstants
-                                                                        .COMMAND_RELOCATION_FAILED)
+                                                                        .COMMAND_RELOCATION_FAILED) {
                                                             failedReplies.incrementAndGet();
+                                                            failedFailureCodes.add(
+                                                                    ZLinkCanonicalRelocationProtocol
+                                                                            .decodeFailed(
+                                                                                    encodedReply)
+                                                                            .failureCode());
+                                                        }
                                                         return encodedReply;
                                                     });
                                         }

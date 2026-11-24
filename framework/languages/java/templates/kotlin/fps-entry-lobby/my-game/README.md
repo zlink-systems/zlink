@@ -1,13 +1,17 @@
 # MyGame FPS entry lobby
 
-This Kotlin FPS template pairs players by mode through a fixed Matchmaking User Spot. Entry Spots forward admission; dynamic Room User Spots own positions, HP, action sequences, and the winner. Session binding owns Actor identity. Disconnected players resume the same Actor and Room; draining a Match host relocates ongoing matches without reconnecting clients.
+This Kotlin FPS template pairs players by mode through a fixed Matchmaking User Spot. Entry Spots forward admission; dynamic Room User Spots own positions, HP, action sequences, and the winner. Session binding owns Actor identity. Disconnected players resume the same Actor and Room; draining a play node (match) relocates ongoing matches without reconnecting clients.
 
 ```mermaid
 flowchart LR
-  players[Players] -->|STREAM| session[Session]
-  session -->|relay| matchA[Match A: Entry / Matchmaking / Room]
+  subgraph playNodes["Play nodes"]
+    matchA["Play node A (match): Entry / Matchmaking / Room"]
+    matchB["Play node B (match): Entry / Room"]
+  end
+  players[Players] -->|STREAM| session["Session node"]
+  session -->|relay| matchA
   matchA -->|Location / lease| location[(Redis Location Store)]
-  matchA <-->|host relocation| matchB[Match B: Entry / Room]
+  matchA <-->|host relocation| matchB
 ```
 
 ## Prerequisites
@@ -157,11 +161,11 @@ Message Follow is configured explicitly to 30 seconds. After `RELOCATED`, the sa
 
 ## Deployment sequence
 
-Wait for the bootstrap owner to report `READY` before starting another Match host. Its public GetOrCreate completes while it is the only placement candidate, so the fixed Matchmaking Spot starts on its declared owner.
+Wait for the bootstrap owner to report `READY` before starting another play node (match). Its public GetOrCreate completes while it is the only placement candidate, so the fixed Matchmaking Spot starts on its declared owner.
 
-Start Redis, then Match A with `bootstrap: true`, Match B, and Session. Each node has a separate entry point; both Match nodes use the Match application. Set production endpoints and a deployment-specific Redis key prefix in `server/config/`. The e2e runner overrides Redis addressing and the prefix for each run, sets Room capacity to one per Match host, and obtains actual port-zero endpoints from `READY`. The capacity setting lets the update scenario verify that the replacement accepts a new Room while the surviving host retains the relocated Room.
+Start Redis, then play node A (match) with `bootstrap: true`, play node B (match), and the session node. Each node has a separate entry point; both play nodes (match) use the Match application. Set production endpoints and a deployment-specific Redis key prefix in `server/config/`. The e2e runner overrides Redis addressing and the prefix for each run, sets Room capacity to one per play node (match), and obtains actual port-zero endpoints from `READY`. The capacity setting lets the update scenario verify that the replacement accepts a new Room while the surviving host retains the relocated Room.
 
-For planned maintenance, send `drain` to the Room host's stdin and wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Send `shutdown`, wait for `STOPPED`, and start the replacement with the same configuration; bootstrap uses GetOrCreate and accepts the existing Matchmaking object on the surviving host. The runner performs this sequence through the public relocation API.
+For planned maintenance, send `drain` to the play node's stdin and wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Send `shutdown`, wait for `STOPPED`, and start the replacement with the same configuration; bootstrap uses GetOrCreate and accepts the existing Matchmaking object on the surviving host. The runner performs this sequence through the public relocation API.
 
 ## FPS rules and extension points
 

@@ -4,7 +4,12 @@ A C++ MORPG server template with a stateless lobby entry, dynamic Party User Spo
 
 ```mermaid
 flowchart LR
-  players -->|STREAM| session
+  subgraph playNodes["Play nodes"]
+    lobby["Play node (party lobby)"]
+    instanceA["Play node A (dungeon)"]
+    instanceB["Play node B (dungeon)"]
+  end
+  players -->|STREAM| session["Session node"]
   session -->|relay| lobby
   lobby -->|GetOrCreate| instanceA
   lobby -->|Location / lease| location[(Redis)]

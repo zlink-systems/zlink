@@ -254,7 +254,7 @@ internal static class StructureCheck
         {
             Require(
                 roles[id] != "channel" || entries.GetValueOrDefault(id) == 1,
-                "Channel node requires one Entry Spot."
+                "play node (channel) requires one Entry Spot."
             );
             var configured = config.ZoneIds ?? [];
             Require(

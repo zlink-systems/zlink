@@ -461,7 +461,7 @@ test('in-memory exact MeshNode descriptor and Actor transfer stores enforce thei
     conflictingRidClaim.status,
     locationWrites.ZLinkLocationWriteStatus.RejectedConflict
   );
-  const conflictingEntryDescriptor = {
+  const descriptorWithSameEntryId = {
     ...descriptor,
     rid: rid('game-c'),
     lifecycleGeneration: 8n,
@@ -472,21 +472,18 @@ test('in-memory exact MeshNode descriptor and Actor transfer stores enforce thei
   };
   await assert.rejects(
     store.updateMeshNode(
-      conflictingEntryDescriptor,
+      descriptorWithSameEntryId,
       locationWrites.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
     ),
     { kind: framework.ZLinkFrameworkErrorKind.Unavailable }
   );
   monotonicMs = 30;
-  const conflictingEntryIdentity = await store.updateMeshNode(
-    conflictingEntryDescriptor,
+  const secondEntryDescriptorWrite = await store.updateMeshNode(
+    descriptorWithSameEntryId,
     locationWrites.ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
   );
-  assert.equal(
-    conflictingEntryIdentity.status,
-    locationWrites.ZLinkLocationWriteStatus.RejectedConflict
-  );
-  assert.equal((await store.listMeshNodes('game')).items.length, 1);
+  assert.equal(secondEntryDescriptorWrite.status, locationWrites.ZLinkLocationWriteStatus.Stored);
+  assert.equal((await store.listMeshNodes('game')).items.length, 2);
   assert.equal(
     await store.removeMeshNode({ meshName: 'game', rid: rid('game-a') }, meshLease.token),
     locationWrites.ZLinkLocationWriteStatus.Stored

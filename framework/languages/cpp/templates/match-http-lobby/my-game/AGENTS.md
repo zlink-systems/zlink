@@ -6,14 +6,14 @@
 
 ## Rules for AI
 
-`server/lobby` is an HTTP lobby that holds no game state; every other server process is a stateful ZLink node. Before writing code, decide which kind you are editing.
+`server/lobby` is an API node that holds no game state; the session node manages client connections, and the play nodes host the game Spots. Before writing code, decide which kind you are editing.
 
-- A game node is not a REST server. A player's state is owned by one session-bound Actor (or the Spot that owns a shared value). Load it once on connect; do not read the database while handling a request.
+- A play node hosts Spots. A session-bound Actor owns the player's state, and a Spot owns shared state. Load it once on connect; do not read the database while handling a request.
 - Write only results to the database, one transaction per round. Check duplicate requests in Actor or Spot memory.
 - While a game is running, a Spot handler never awaits a remote request or a database reply: the await holds the Spot's turn and stops every message and timer in it. When a round ends, the Spot writes the results of all its Actors in one transaction, then tells each Actor after the commit.
 - Values many players see live in node memory or one owning Spot; values many requests update are applied by that one owning Spot. A process that does not own a value sends a request to its owner instead of writing it.
 - Spots and Actors already process one message at a time. Do not guard their state with locks, semaphores or process-wide static stores, and do not update memory from database commit hooks; the writer updates its owner's memory after commit, others send a message to the owner.
-- Split roles so the game can scale out from day one: game nodes host lobby and room Spots and player Actors and are the only processes you add; a shared node hosts only game-wide Instance Spots (matchmaking, game-wide values), and game nodes do not register those factories. Send and request by Spot ID only; placement is configuration. Keep shared-Spot values recoverable from room resends or a database read at startup.
+- Split roles so the game can scale out from day one: play nodes host lobby and room Spots and player Actors and are the only processes you add; a dedicated play node hosts only game-wide Instance Spots (matchmaking, game-wide values), and the API node and room hosts omit those factories. Send and request by Spot ID only; placement is configuration. Keep shared-Spot values recoverable from room resends or a database read at startup.
 - Never have two Actors or Spots wait on requests to each other inside a turn; notify with send and let the state owner decide.
 - Actors move between nodes when they join a Spot or relocate. Keep all mutable Actor fields in one state record, register stateful Actors with the state-preserving relocation policy, and test that save and restore preserve every field.
 - Player data reaches a Spot with the Actor that joins it; do not request it per player at Spot entry. If a Spot truly needs extra data, fetch it for all players in one request before the game starts.
@@ -23,13 +23,13 @@
 - Send money or reward results only after the database commit.
 - One decision has one owner; find the existing one before adding another. Take test expectations from the spec, not from the implementation.
 
-The HTTP lobby may read and write the database per request, but it holds no game state and changes game state only by sending requests to game nodes.
+The API node may read and write the database per request, but it holds no game state and changes game state only by sending requests to play nodes.
 
-Details: [Stateful game nodes and the HTTP lobby](https://docs.zlink.systems/cpp/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
+Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/cpp/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
 
 ## Project overview
 
-This C++20 project is an arena example in which an HTTP matchmaking lobby pairs two players and ZLink STREAM carries the gameplay. It runs an HTTP Lobby node, a Session gateway for connections, Match nodes A and B that host Room Spots and Player Actors, and Redis for location and relocation state. `bootstrap.cmake` installs the ZLink Framework prebuilt of the version named by its `ZLINK_FRAMEWORK_CPP_VERSION`, the only place that names the Framework version; no package manager runs.
+This C++20 project is an arena example in which an API node pairs two players and ZLink STREAM carries the gameplay. It runs an API node, a Session node for connections, play nodes A and B (match) that host Room Spots and Player Actors, and Redis for location and relocation state. `bootstrap.cmake` installs the ZLink Framework prebuilt of the version named by its `ZLINK_FRAMEWORK_CPP_VERSION`, the only place that names the Framework version; no package manager runs.
 
 The project layout and feature procedure below describe where to add gameplay. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 
@@ -59,11 +59,11 @@ For host process debugging, install a C++20 compiler (GCC 13 or later, or Visual
 
 ## Project layout and extension points
 
-### HTTP lobby
+### API node
 
-`server/lobby/main.cpp` registers the Lobby node as a RouteMesh client and adds `HttpLobby` from `server/lobby/http.hpp` as a hosted service. `HttpLobby` accepts `POST /match` with `MatchRequest` (`playerId` and `mode`), holds the first response until another player requests the same mode, then calls `get_or_create` for a new Room and answers both players with `MatchResponse` (`roomId` and `sessionEndpoint`). The HTTP listener is written with Boost.Beast in `server/lobby/http.hpp` and `server/shared/http.hpp`; the [HTTP hosting guide](https://docs.zlink.systems/cpp/guide/server/42-http-hosting/) describes the Framework's own HTTP surface. The lobby keeps its queue in process memory and is not a relocation participant. Production authentication and durable matchmaking are extension points of this node.
+`server/lobby/main.cpp` registers the API node as a RouteMesh client and adds `HttpLobby` from `server/lobby/http.hpp` as a hosted service. `HttpLobby` accepts `POST /match` with `MatchRequest` (`playerId` and `mode`), holds the first response until another player requests the same mode, then calls `get_or_create` for a new Room and answers both players with `MatchResponse` (`roomId` and `sessionEndpoint`). The HTTP listener is written with Boost.Beast in `server/lobby/http.hpp` and `server/shared/http.hpp`; the [HTTP hosting guide](https://docs.zlink.systems/cpp/guide/server/42-http-hosting/) describes the Framework's own HTTP surface. The API node keeps its queue in process memory and is not a relocation participant. Production authentication and durable matchmaking are extension points of this node.
 
-### Session gateway
+### Session node
 
 `server/session/main.cpp` registers the STREAM listener and `Session`, and `server/session/session.hpp` handles connection callbacks and forwards incoming packets in `Session::on_packet`. A Session is a communication object for a connection; Framework provides binding to associate it with a player state object. Add authentication before binding and retain the existing typed packet relay so Framework can identify the connection for replies to that player. `Session` answers `SessionInfoRequest` with a `SessionInfo` push built from the bound Actor, because a C++ Session cannot yet send a typed reply that it creates (see Known issues in the README).
 
@@ -79,7 +79,7 @@ An Actor is a game state object addressed by ID; `Player` in `server/match/playe
 
 ### Build and e2e runner
 
-`CMakeLists.txt` builds one executable per role (`my-game-session`, `my-game-match`, `my-game-lobby`) from `server/<role>/main.cpp` and the `my-game-e2e` runner; add a node role to its `foreach(role ...)` list. `e2e/client.hpp` connects through the public stream connector, and `e2e/scenarios.hpp` checks results observable by the client. `e2e/world.hpp` starts the nodes and infrastructure through `e2e/process.hpp`, `e2e/main.cpp` selects and runs scenarios, and `e2e/structure.hpp` validates `zlink.structure.json` against `server/config/` and the names in `contracts.hpp`. Verify new gameplay through received client results; the Room rules and the lobby's HTTP handling are covered by the separate unit test target `my-game-rules`. The project has no formatter configuration.
+`CMakeLists.txt` builds one executable per role (`my-game-session`, `my-game-match`, `my-game-lobby`) from `server/<role>/main.cpp` and the `my-game-e2e` runner; add a node role to its `foreach(role ...)` list. `e2e/client.hpp` connects through the public stream connector, and `e2e/scenarios.hpp` checks results observable by the client. `e2e/world.hpp` starts the nodes and infrastructure through `e2e/process.hpp`, `e2e/main.cpp` selects and runs scenarios, and `e2e/structure.hpp` validates `zlink.structure.json` against `server/config/` and the names in `contracts.hpp`. Verify new gameplay through received client results; the Room rules and the API node's HTTP handling are covered by the separate unit test target `my-game-rules`. The project has no formatter configuration.
 
 ## ZLink concepts in this project
 
@@ -111,7 +111,7 @@ Relocation changes an object's execution host; drain moves a host's workload els
 
 Requests in the example game follow this path. Reading the code along this path before adding or transferring a feature locates the places to change.
 
-1. The client posts `{"playerId":"p1","mode":"duel"}` to `POST /match` on the Lobby node (`HttpLobby::match`). The first response is held until another player requests the same mode.
+1. The client posts `{"playerId":"p1","mode":"duel"}` to `POST /match` on the API node (`HttpLobby::match`). The first response is held until another player requests the same mode.
 2. When two players of one mode are waiting, `HttpLobby` generates a UUID Room ID and calls `get_or_create` for it through the Spot manager, then answers both requests with `MatchResponse`, which carries the `roomId` and the `SessionEndpoint` configured in `lobby.json`.
 3. Each client connects to that Session endpoint over STREAM and sends the first packet, `JoinRoomRequest`. `Session::on_packet` checks the first packet name, calls `get_or_create` for the Player Actor by `playerId`, binds it with `bind_or_get`, and relays the original packet.
 4. A new Actor starts in the Entry Spot `Entry`. `Entry::join` checks the identity and requests `join_spot(...).defer()` for the Room. `Room::on_actor_join` admits the player, and `Room::on_actor_joined` broadcasts `RoomView` to the players through the Actor client; `Room::deliver_view` forwards it to the bound Session.
@@ -135,7 +135,7 @@ Keep each fact in its owner. `RoomState` owns positions, HP, accepted action seq
 
 When a contract or scenario changes, update all of its C++ declarations and observations together. Judge results by replies and events actually received; use only the server-provided `RetryAfterMs` when a retry is needed. Do not add fixed waits or extend deadlines. If `update` loses state, inspect the Room snapshot and then use the message flow in [Debugging](#debugging) to find the first missing transition.
 
-Configure `HttpEndpoint` with port 0 and read the bound port from the lobby's `READY` line. Set `SessionEndpoint` to the endpoint published by the Session node; `e2e/world.hpp` does both for each run. If node roles or composition change, update the type registrations, `server/config/`, `zlink.structure.json`, `CMakeLists.txt`, and the structure check together.
+Configure `HttpEndpoint` with port 0 and read the bound port from the API node's `READY` line. Set `SessionEndpoint` to the endpoint published by the Session node; `e2e/world.hpp` does both for each run. If node roles or composition change, update the type registrations, `server/config/`, `zlink.structure.json`, `CMakeLists.txt`, and the structure check together.
 
 ## Development considerations
 
@@ -163,7 +163,7 @@ Investigate Framework failures using actual replies, events, and lifecycle resul
 
 Preserve the first failing run and read its logs before deciding whether to run it again. An intermittent failure is an observed defect; a subsequent pass does not invalidate it. `.logs/run-<id>/` contains the effective settings that `e2e/world.hpp` writes at node startup and the logs for each node. Each selected scenario starts its own nodes and writes to its own `.logs/run-<id>/` directory.
 
-Settings files are `lobby.json`, `match-a.json`, `match-b.json`, and `session.json`; a replaced Match node uses its file name with the suffix `-replacement`. `e2e/process.hpp` records diagnostic stderr in `<node>.err.log` and readiness/control stdout in `<node>.out.log`, where `<node>` is the settings file name without `.json`. Helper commands (Compose and Docker CLI calls) write `command-<n>.out.log` and `command-<n>.err.log`. Local build output is in `.logs/build.log`. Docker build and outer cleanup logs are in `.logs/docker-<project>/`: `build.log`, `redis-start.log`, `redis.log`, `cleanup.log`, and `containers-stop.log` from the PowerShell runner.
+Settings files are `lobby.json`, `match-a.json`, `match-b.json`, and `session.json`; a replaced play node (match) uses its file name with the suffix `-replacement`. `e2e/process.hpp` records diagnostic stderr in `<node>.err.log` and readiness/control stdout in `<node>.out.log`, where `<node>` is the settings file name without `.json`. Helper commands (Compose and Docker CLI calls) write `command-<n>.out.log` and `command-<n>.err.log`. Local build output is in `.logs/build.log`. Docker build and outer cleanup logs are in `.logs/docker-<project>/`: `build.log`, `redis-start.log`, `redis.log`, `cleanup.log`, and `containers-stop.log` from the PowerShell runner.
 
 ### Diagnostic levels
 

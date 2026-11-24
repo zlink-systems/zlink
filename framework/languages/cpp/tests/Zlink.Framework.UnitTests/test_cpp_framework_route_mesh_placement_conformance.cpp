@@ -5,8 +5,10 @@
 
 #include <zlink/framework.hpp>
 #include "runtime/locations/in_memory_store_providers.hpp"
+#include "runtime/locations/live_location_reader.hpp"
 #include "runtime/dispatch/completion_turn.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
+#include "runtime/mesh/route_mesh_runtime_service.hpp"
 
 #include <nlohmann/json.hpp>
 #include <zlink/json.hpp>
@@ -132,6 +134,7 @@ class hold_t
 
 hold_t hold;
 std::atomic<int> actor_factory_calls{0};
+std::atomic<int> spot_create_calls{0};
 // The User Spot an Actor joins right after its creation (fixture object `actorJoin`).
 std::optional<std::string> join_spot_id;
 std::string join_failure;
@@ -220,6 +223,7 @@ class placement_spot_t final : public fw::spot_t<placement_actor_t>
     fw::task_t<fw::spot_create_response_t> on_create (const fw::message_t &) override
     {
         hold.wait_if ("userSpot");
+        ++spot_create_calls;
         co_return fw::spot_create_response_t::accept ();
     }
     fw::task_t<fw::spot_actor_join_result_t> on_actor_join (std::string_view,
@@ -382,7 +386,9 @@ void configure_host (host_t &host,
                      const nlohmann::json &lease,
                      const nlohmann::json &mesh_nodes,
                      const std::string &prefix,
-                     std::optional<int> startup_weight = std::nullopt)
+                     std::optional<int> startup_weight = std::nullopt,
+                     std::chrono::milliseconds polling_interval = std::chrono::milliseconds (10),
+                     bool automatic_routing_id = false)
 {
     auto &options = host.app.add_zlink_framework ();
     options.add_location_store (host.store);
@@ -395,13 +401,17 @@ void configure_host (host_t &host,
     locations.owner_lease_ttl = std::chrono::milliseconds (lease.at ("ttlMs").get<int> ());
     locations.owner_lease_fencing_margin =
       std::chrono::milliseconds (lease.at ("fencingMarginMs").get<int> ());
-    locations.polling_interval = std::chrono::milliseconds (10);
+    locations.polling_interval = polling_interval;
     for (const auto &node : mesh_nodes) {
         const auto mesh_name = node.at ("meshName").get<std::string> ();
+        const auto endpoint_name = prefix + "-" + mesh_name;
         auto mesh = options.add_route_mesh (mesh_name);
+        if (automatic_routing_id)
+            mesh.set_automatic_routing_id_prefix (endpoint_name);
+        else
+            mesh.set_routing_id (zlink::routing_id_t::from (endpoint_name));
         mesh.set_object_role (fw::object_role_t::server)
-          .set_routing_id (zlink::routing_id_t::from (prefix + "-" + mesh_name))
-          .listen ("inproc://" + prefix + "-" + mesh_name)
+          .listen ("inproc://" + endpoint_name)
           .set_actor_limit (node.at ("actorLimit").get<std::int32_t> ())
           .set_spot_limit (node.at ("spotLimit").get<std::int32_t> ())
           .set_activation_concurrency (node.at ("activationConcurrency").get<std::int32_t> ())
@@ -448,6 +458,205 @@ void stop_host (host_t &host)
     host.app.request_stop ();
     if (host.thread.joinable ())
         host.thread.join ();
+}
+
+class placement_projection_store_t final : public fw::location_store_t
+{
+  public:
+    enum class projection_t
+    {
+        serving,
+        preparing,
+        empty,
+        zero_weight,
+        expired_lease
+    };
+
+    fw::task_t<fw::store_read_result_t> read (fw::store_key_t key) override
+    {
+        return _store.read (std::move (key));
+    }
+    fw::task_t<fw::store_write_result_t> write (fw::store_write_request_t request) override
+    {
+        return _store.write (std::move (request));
+    }
+    fw::task_t<fw::store_scan_result_t> scan (fw::store_scan_request_t request) override
+    {
+        const bool discovery = request.prefix.starts_with ("mesh-node");
+        const auto projection = state.load ();
+        auto scan = co_await _store.scan (std::move (request));
+        if (!discovery)
+            co_return scan;
+        ++scans;
+        if (auto *page = std::get_if<fw::store_scan_page_t> (&scan)) {
+            if (projection == projection_t::empty) {
+                page->items.clear ();
+            } else if (projection != projection_t::serving) {
+                for (auto &row : page->items) {
+                    const auto *bytes = reinterpret_cast<const char *> (row.value.bytes.data ());
+                    auto record = nlohmann::json::parse (bytes, bytes + row.value.bytes.size ());
+                    auto &descriptor = record.at ("descriptor");
+                    descriptor["state"] = "preparing";
+                    if (projection == projection_t::zero_weight)
+                        descriptor["placementWeight"] = 0;
+                    if (projection == projection_t::expired_lease) {
+                        descriptor["leaseGeneration"] = "9223372036854775807";
+                        record["leaseGeneration"] = descriptor["leaseGeneration"];
+                    }
+                    const auto encoded = record.dump ();
+                    const auto *first = reinterpret_cast<const std::byte *> (encoded.data ());
+                    row.value.bytes.assign (first, first + encoded.size ());
+                }
+            }
+        }
+        co_return scan;
+    }
+
+    std::atomic<projection_t> state{projection_t::serving};
+    std::atomic<int> scans{0};
+
+  private:
+    fw::runtime::in_memory_location_store_t _store;
+};
+
+bool discovery_transitions (const nlohmann::json &scenarios)
+{
+    using namespace std::chrono_literals;
+    using projection = placement_projection_store_t::projection_t;
+    hold.reset ({});
+    const auto rows = nlohmann::json::array ({{{"meshName", "discovery"},
+                                               {"actorLimit", 0},
+                                               {"spotLimit", 0},
+                                               {"activationConcurrency", 128},
+                                               {"actorFactory", true},
+                                               {"instanceSpotFactory", false}}});
+    const nlohmann::json lease{{"renewIntervalMs", 10000},
+                               {"renewTimeoutMs", 1000},
+                               {"ttlMs", 30000},
+                               {"fencingMarginMs", 200}};
+    auto store = std::make_shared<placement_projection_store_t> ();
+    host_t host;
+    host.store = store;
+    // A generated RID lets the host publish before the first scheduled lease renewal.
+    configure_host (host, lease, rows, "placement-discovery", std::nullopt, 30s,
+                    /*automatic_routing_id=*/true);
+    // Status-monitoring scans share the Store but do not participate in placement.
+    host.app.advanced ().services ().add_singleton<fw::route_mesh_runtime_t> (
+      std::make_unique<fw::runtime::route_mesh_runtime_service_t> (
+        std::vector<std::shared_ptr<fw::detail::mesh_node_runtime_t>>{}, nullptr));
+    start_host (host);
+    if (!wait_for_host_ready (host, operation_timeout)) {
+        const auto state = host.app.runtime_state ();
+        stop_host (host);
+        std::cerr << "[placement discovery] host did not reach Serving, state="
+                  << static_cast<int> (state) << ", exit=" << host.exit_code << '\n';
+        return false;
+    }
+    auto services = host.app.advanced ().services ().build_provider ();
+    auto &reader = services.get_required<fw::runtime::live_location_reader_t> ();
+    auto &actors = services.get_required<fw::actor_manager_t> ();
+    auto &spots = services.get_required<fw::spot_manager_t> ();
+    const auto refresh = [&] { reader.poll_mesh_sources ("discovery").result ().value (); };
+    int index = 0;
+    int failures = 0;
+    for (const auto &scenario : scenarios) {
+        const auto initial = scenario.at ("initial").get<std::string> ();
+        const auto outcome = scenario.at ("result").get<std::string> ();
+        const auto &transition = scenario.at ("update");
+        for (const bool actor : {true, false}) {
+            store->state = initial == "empty"        ? projection::empty
+                           : initial == "zeroWeight" ? projection::zero_weight
+                                                     : projection::preparing;
+            refresh ();
+            int discovery_scans = store->scans.load ();
+            const int calls = actor ? actor_factory_calls.load () : spot_create_calls.load ();
+            const auto id = "discovery-" + std::to_string (index++);
+            const auto timeout = outcome == "deadlineExceeded" ? 200ms : 1500ms;
+            const auto check = [&] (auto task) {
+                bool pending = true;
+                bool scanned_while_waiting = false;
+                if (initial == "preparing") {
+                    pending = !task.result_for (20ms);
+                    scanned_while_waiting = store->scans.load () != discovery_scans;
+                    if (!transition.is_null ()) {
+                        store->state = transition == "serving"      ? projection::serving
+                                       : transition == "empty"      ? projection::empty
+                                       : transition == "zeroWeight" ? projection::zero_weight
+                                                                    : projection::expired_lease;
+                        refresh ();
+                        ++discovery_scans;
+                    }
+                }
+                const auto result = task.result ();
+                const auto *error = result.error ();
+                const auto expected_kind = outcome == "unavailable"
+                                             ? fw::framework_error_kind_t::unavailable
+                                             : fw::framework_error_kind_t::deadline_exceeded;
+                const auto request_scans = scenario.at ("requestScans").get<int> ();
+                const auto observed_scans = store->scans.load () - discovery_scans;
+                const bool expected_result = outcome == "placed"
+                                               ? result.has_value ()
+                                               : error && error->kind () == expected_kind;
+                if (pending && !scanned_while_waiting && expected_result
+                    && observed_scans == request_scans)
+                    return true;
+                std::cerr << "[placement discovery] pending=" << pending
+                          << ", scanned while waiting=" << scanned_while_waiting << ", result="
+                          << (result  ? "placed"
+                              : error ? error->what ()
+                                      : "unknown failure")
+                          << ", error kind=" << (error ? static_cast<int> (error->kind ()) : -1)
+                          << ", request scans=" << observed_scans << '/' << request_scans << '\n';
+                return false;
+            };
+            bool ok;
+            if (actor) {
+                const std::string type = initial == "incompatible" ? "missing" : "placement-actor";
+                ok = check (actors.get_or_create (fw::actor_id_t (id), type)
+                              .in_mesh ("discovery")
+                              .timeout (timeout)
+                              .async ());
+                if (ok && outcome == "placed") {
+                    store->state = projection::zero_weight;
+                    refresh ();
+                    const auto ready = actors.get_or_create (fw::actor_id_t (id), type)
+                                         .in_mesh ("discovery")
+                                         .timeout (timeout)
+                                         .async ()
+                                         .result ();
+                    ok =
+                      ready && std::holds_alternative<fw::actor_create_existing_t> (ready.value ());
+                }
+            } else {
+                const auto type =
+                  initial == "incompatible" ? std::string ("missing") : spot_type ("discovery");
+                ok = check (spots.get_or_create (fw::spot_id_t (id), type)
+                              .in_mesh ("discovery")
+                              .timeout (timeout)
+                              .async ());
+                if (ok && outcome == "placed") {
+                    store->state = projection::zero_weight;
+                    refresh ();
+                    const auto ready = spots.get_or_create (fw::spot_id_t (id), type)
+                                         .in_mesh ("discovery")
+                                         .timeout (timeout)
+                                         .async ()
+                                         .result ();
+                    ok = ready && ready.value ().state == fw::spot_create_state_t::existing;
+                }
+            }
+            ok = ok
+                 && (actor ? actor_factory_calls.load () : spot_create_calls.load ())
+                      == calls + (outcome == "placed" ? 1 : 0);
+            if (!ok) {
+                ++failures;
+                std::cerr << "[placement discovery] " << (actor ? "Actor " : "Spot ") << initial
+                          << " -> " << transition << ": expected " << outcome << '\n';
+            }
+        }
+    }
+    stop_host (host);
+    return failures == 0;
 }
 
 bool run_scenario (const nlohmann::json &lease, const nlohmann::json &scenario, int index)
@@ -962,6 +1171,8 @@ int main (int argc, char **argv)
         return concurrent_actor_handle_lookup (fixture.at ("ownerLease")) ? 0 : 1;
     if (argc == 2 && std::string_view (argv[1]) == "--2610-completion-progress")
         return actor_creation_releases_completion_workers (fixture.at ("ownerLease")) ? 0 : 1;
+    if (argc == 2 && std::string_view (argv[1]) == "--discovery")
+        return discovery_transitions (fixture.at ("discoveryTransitions")) ? 0 : 1;
     int index = 0;
     int failures = 0;
     int scenarios = 0;
@@ -971,6 +1182,8 @@ int main (int argc, char **argv)
     }
     std::cout << "[placement] " << scenarios - failures << "/" << scenarios
               << " scenarios passed\n";
+    if (!discovery_transitions (fixture.at ("discoveryTransitions")))
+        ++failures;
     if (!zero_weight_at_startup (fixture.at ("ownerLease")))
         ++failures;
     if (!actor_creation_releases_completion_workers (fixture.at ("ownerLease")))

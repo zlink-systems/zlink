@@ -37,9 +37,6 @@ internal partial class ZLinkInMemoryLocationStore : IZLinkLocationRepository
     private readonly Dictionary<string, ZLinkOwnerLease> _leases = [];
     private long _ownerLeaseGeneration;
     private readonly RowTable<ZLinkMeshNodeDescriptor> _meshNodes = new();
-    private readonly Dictionary<string, EntrySpotIdClaim> _entrySpotIdClaims = new(
-        StringComparer.Ordinal
-    );
     private readonly RowTable<ZLinkClientServerServerDescriptor> _clientServers = new();
     private readonly RowTable<ZLinkFanoutPublisherDescriptor> _fanoutPublishers = new();
     private readonly Dictionary<string, ulong> _meshNodeStamps = new(StringComparer.Ordinal);
@@ -142,9 +139,6 @@ internal partial class ZLinkInMemoryLocationStore : IZLinkLocationRepository
                 )
                     return ZLinkLocationWriteResult.IgnoredStale;
             }
-            if (!CanPublishEntrySpotIdNoLock(descriptor, key, now))
-                return ZLinkLocationWriteResult.RejectedConflict;
-
             var generation = intent == ZLinkLocationWriteIntent.Renew ? last : checked(last + 1);
             _meshNodes.Generations[key] = generation;
             _meshNodes.Rows[key] = WithCurrentPlacementCapacity(
@@ -153,7 +147,6 @@ internal partial class ZLinkInMemoryLocationStore : IZLinkLocationRepository
                     UpdatedAt = now,
                 }
             );
-            PublishEntrySpotIdNoLock(current, descriptor, key);
             BumpMeshNodeStamp(descriptor.MeshName);
             _ownerLeaseReleaseWait.ForgetIfTokenMatches(key, releaseWaitToken);
             return ZLinkLocationWriteResult.Stored(generation, now);
@@ -178,7 +171,6 @@ internal partial class ZLinkInMemoryLocationStore : IZLinkLocationRepository
                 return ZLinkLocationWriteStatus.IgnoredStale;
 
             _meshNodes.Rows.Remove(canonicalKey);
-            RemoveEntrySpotIdClaimNoLock(row, canonicalKey);
             BumpMeshNodeStamp(key.MeshName);
             _ownerLeaseReleaseWait.ForgetIfTokenMatches(
                 canonicalKey,
@@ -672,80 +664,6 @@ internal partial class ZLinkInMemoryLocationStore : IZLinkLocationRepository
         capacity is { Active: >= 0, Reserved: >= 0, Limit: >= 0 }
         && (capacity.Limit == 0 || capacity.Active + (long)capacity.Reserved <= capacity.Limit);
 
-    private bool CanPublishEntrySpotIdNoLock(
-        ZLinkMeshNodeDescriptor descriptor,
-        string descriptorKey,
-        DateTimeOffset now
-    )
-    {
-        if (descriptor.EntrySpotId is not { } entrySpotId)
-            return true;
-
-        if (
-            _entrySpotIdClaims.TryGetValue(entrySpotId, out var claim)
-            && (
-                !string.Equals(claim.DescriptorKey, descriptorKey, StringComparison.Ordinal)
-                || claim.DescriptorLifecycleGeneration != descriptor.LifecycleGeneration
-                || claim.Owner
-                    != new ZLinkLocationOwnerToken(descriptor.OwnerId, descriptor.LeaseGeneration)
-            )
-            && MatchesLiveOwnerLease(claim.Owner, now)
-        )
-            return false;
-
-        var authorityKey =
-            Zlink.Framework.Runtime.Spots.ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(
-                entrySpotId
-            );
-        if (_authorities.ContainsKey(authorityKey.Value))
-            return false;
-        return true;
-    }
-
-    private void PublishEntrySpotIdNoLock(
-        ZLinkMeshNodeDescriptor? previous,
-        ZLinkMeshNodeDescriptor descriptor,
-        string descriptorKey
-    )
-    {
-        if (
-            previous is not null
-            && !string.Equals(
-                previous.EntrySpotId,
-                descriptor.EntrySpotId,
-                StringComparison.Ordinal
-            )
-        )
-            RemoveEntrySpotIdClaimNoLock(previous, descriptorKey);
-
-        if (descriptor.EntrySpotId is { } entrySpotId)
-        {
-            _entrySpotIdClaims[entrySpotId] = new EntrySpotIdClaim(
-                descriptorKey,
-                descriptor.LifecycleGeneration,
-                new ZLinkLocationOwnerToken(descriptor.OwnerId, descriptor.LeaseGeneration)
-            );
-        }
-    }
-
-    private void RemoveEntrySpotIdClaimNoLock(
-        ZLinkMeshNodeDescriptor descriptor,
-        string descriptorKey
-    )
-    {
-        if (
-            descriptor.EntrySpotId is not { } entrySpotId
-            || !_entrySpotIdClaims.TryGetValue(entrySpotId, out var claim)
-            || !string.Equals(claim.DescriptorKey, descriptorKey, StringComparison.Ordinal)
-            || claim.DescriptorLifecycleGeneration != descriptor.LifecycleGeneration
-            || claim.Owner
-                != new ZLinkLocationOwnerToken(descriptor.OwnerId, descriptor.LeaseGeneration)
-        )
-            return;
-
-        _entrySpotIdClaims.Remove(entrySpotId);
-    }
-
     private static void ValidateUtf8Value(string value, string name)
     {
         var size = System.Text.Encoding.UTF8.GetByteCount(value);
@@ -774,12 +692,6 @@ internal partial class ZLinkInMemoryLocationStore : IZLinkLocationRepository
                 .SequenceCompareTo(System.Text.Encoding.UTF8.GetBytes(right));
         }
     }
-
-    private sealed record EntrySpotIdClaim(
-        string DescriptorKey,
-        ulong DescriptorLifecycleGeneration,
-        ZLinkLocationOwnerToken Owner
-    );
 
     public ValueTask<ZLinkOwnerLeaseClaimResult> ClaimOwnerLeaseAsync(
         string ownerId,

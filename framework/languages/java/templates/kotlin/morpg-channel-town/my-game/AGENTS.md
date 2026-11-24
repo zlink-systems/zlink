@@ -4,12 +4,12 @@
 
 Every server process in this project is a stateful ZLink node. Before writing code, decide which kind you are editing.
 
-- A game node is not a REST server. A player's state is owned by one session-bound Actor (or the Spot that owns a shared value). Load it once on connect; do not read the database while handling a request.
+- A play node hosts Spots. A session-bound Actor owns the player's state, and a Spot owns shared state. Load it once on connect; do not read the database while handling a request.
 - Write only results to the database, one transaction per round. Check duplicate requests in Actor or Spot memory.
 - While a game is running, a Spot handler never awaits a remote request or a database reply: the await holds the Spot's turn and stops every message and timer in it. When a round ends, the Spot writes the results of all its Actors in one transaction, then tells each Actor after the commit.
 - Values many players see live in node memory or one owning Spot; values many requests update are applied by that one owning Spot. A process that does not own a value sends a request to its owner instead of writing it.
 - Spots and Actors already process one message at a time. Do not guard their state with locks, semaphores or process-wide static stores, and do not update memory from database commit hooks; the writer updates its owner's memory after commit, others send a message to the owner.
-- Split roles so the game can scale out from day one: game nodes host lobby and room Spots and player Actors and are the only processes you add; a shared node hosts only game-wide Instance Spots (matchmaking, game-wide values), and game nodes do not register those factories. Send and request by Spot ID only; placement is configuration. Keep shared-Spot values recoverable from room resends or a database read at startup.
+- Split roles so the game can scale out from day one: play nodes host lobby and room Spots and player Actors and are the only processes you add; a dedicated play node hosts only game-wide Instance Spots (matchmaking, game-wide values), and the lobby and room hosts omit those factories. Send and request by Spot ID only; placement is configuration. Keep shared-Spot values recoverable from room resends or a database read at startup.
 - Never have two Actors or Spots wait on requests to each other inside a turn; notify with send and let the state owner decide.
 - Actors move between nodes when they join a Spot or relocate. Keep all mutable Actor fields in one state record, register stateful Actors with the state-preserving relocation policy, and test that save and restore preserve every field.
 - Player data reaches a Spot with the Actor that joins it; do not request it per player at Spot entry. If a Spot truly needs extra data, fetch it for all players in one request before the game starts.
@@ -19,11 +19,11 @@ Every server process in this project is a stateful ZLink node. Before writing co
 - Send money or reward results only after the database commit.
 - One decision has one owner; find the existing one before adding another. Take test expectations from the spec, not from the implementation.
 
-Details: [Stateful game nodes and the HTTP lobby](https://docs.zlink.systems/kotlin/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
+Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/kotlin/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
 
 ## Project overview
 
-This Kotlin project (Kotlin 2.3.21 on a Java 25 toolchain, built with Gradle) is a MORPG example in which players gather in town channels, form parties, and enter private dungeons. It runs a Session gateway for connections, two Town hosts (`townA` and `townB`), two Instance hosts (`instanceA` and `instanceB`), and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework packages to `0.32.0` (`frameworkVersion`) and the ZLink binding to `1.23.0` (`bindingVersion`).
+This Kotlin project (Kotlin 2.3.21 on a Java 25 toolchain, built with Gradle) is a MORPG example in which players gather in town channels, form parties, and enter private dungeons. It runs a Session node for connections, two play nodes (town) (`townA` and `townB`), two play nodes (dungeon) (`instanceA` and `instanceB`), and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework packages to `0.32.0` (`frameworkVersion`) and the ZLink binding to `1.23.0` (`bindingVersion`).
 
 The project layout and feature procedure below describe where to add gameplay. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 
@@ -55,13 +55,13 @@ For host process debugging, install JDK 25 and add `--local` or `-Local`. Add `-
 
 ## Project layout and extension points
 
-### Session gateway
+### Session node
 
 `server/session/src/main/kotlin/MyGame/session/Program.kt` registers the STREAM node and the RouteMesh client, and `GameSession` (in the same file) handles incoming packets. A Session is a communication object for a connection; Framework provides binding to associate it with a player state object. `GameSession` answers `SessionInfoRequest` from the binding, finds or creates the Player Actor and binds it when it receives `JoinTownRequest`, and relays every other packet to the bound Actor. Add authentication before binding and retain the typed packet relay so Framework can identify the connection for replies to that player.
 
 ### Towns and players
 
-An Actor is a game state object addressed by ID; `Player` in `server/shared/src/main/kotlin/MyGame/Player.kt` keeps no application state and is shared by the Town and Instance nodes. A Spot is a state object that accepts Actors and executes shared game rules; `Town` in `server/town/src/main/kotlin/MyGame/town/Town.kt` is a fixed User Spot (one per channel: `town-1`, `town-2`) that owns the channel's players and parties in `TownState`. `Entry` and `EntryActions` in `server/shared/src/main/kotlin/MyGame/admission/Entry.kt` receive new Actors and send them to the town of the requested channel.
+An Actor is a game state object addressed by ID; `Player` in `server/shared/src/main/kotlin/MyGame/Player.kt` keeps no application state and is shared by the play nodes (town and dungeon). A Spot is a state object that accepts Actors and executes shared game rules; `Town` in `server/town/src/main/kotlin/MyGame/town/Town.kt` is a fixed User Spot (one per channel: `town-1`, `town-2`) that owns the channel's players and parties in `TownState`. `Entry` and `EntryActions` in `server/shared/src/main/kotlin/MyGame/admission/Entry.kt` receive new Actors and send them to the town of the requested channel.
 
 `server/town/src/main/kotlin/MyGame/town/Program.kt` registers the handlers, the Entry Spot, the `Town` factory (`stableTypeLimit(config.townCapacity)`, `SPOT_WIDE`), and the `Player` factory. `Actions` in `server/town/src/main/kotlin/MyGame/town/Handlers.kt` connects player requests (channel change, party, dungeon entry) and pushes to the Town. `Hosting.kt` creates the fixed Towns listed in `townIds` when a node starts. When changing node composition, update registrations, `server/config/`, and the descriptor together so the structure check validates the same composition.
 

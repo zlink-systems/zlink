@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(zlink_framework_cpp VERSION 0.32.0 LANGUAGES C CXX)
+project(zlink_framework_cpp VERSION 0.34.0 LANGUAGES C CXX)
 add_compile_definitions($<$<CONFIG:Debug>:ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD>)
 set(ZLINK_FRAMEWORK_CPP_DIR "${CMAKE_CURRENT_LIST_DIR}")
 include("${ZLINK_FRAMEWORK_CPP_DIR}/cmake/zlink-cpp-project-defaults.cmake")
@@ -2572,6 +2572,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_compile_definitions(test_cpp_framework_execution PRIVATE
     ZLINK_SERIAL_EXECUTION_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/serial-execution-v1.json"
     ZLINK_RUNTIME_OBSERVATION_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/runtime-observation-v1.json")
+  add_zlink_framework_test(
+    test_cpp_framework_spot_timer_generation
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_spot_timer_generation.cpp
+    "framework-unit;framework-contract;framework-regression;spot"
+    unit)
+  target_use_zlink_gtest_main(test_cpp_framework_spot_timer_generation)
+  target_include_directories(test_cpp_framework_spot_timer_generation PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_executable(test_cpp_framework_route_channel_request
     tests/Zlink.Framework.UnitTests/test_cpp_framework_route_channel_request.cpp)
   target_use_zlink_gtest_main(test_cpp_framework_route_channel_request)
@@ -3696,7 +3704,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     TIMEOUT 30)
   if(TARGET redis++::redis++ OR TARGET redis++::redis++_static)
     add_executable(test_cpp_framework_locations_redis
-      tests/Zlink.Framework.UnitTests/test_cpp_framework_locations_redis.cpp)
+      tests/Zlink.Framework.UnitTests/test_cpp_framework_locations_redis.cpp
+      tests/Zlink.Framework.UnitTests/test_cpp_framework_entry_spot_store_parity.cpp)
     zlink_enable_coverage(test_cpp_framework_locations_redis)
     target_compile_definitions(test_cpp_framework_locations_redis PRIVATE
       ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT=1)

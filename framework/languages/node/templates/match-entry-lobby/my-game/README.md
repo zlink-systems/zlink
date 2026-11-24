@@ -1,12 +1,16 @@
 # my-game — Match entry lobby
 
-An action/FPS server template with a Session process and independently deployable match processes. Entry Spots admit Player Actors into a fixed Matchmaking User Spot. Matchmaking pairs players by mode and creates dynamic Room User Spots. Rooms own movement, HP, action sequences, wall intersection, and match results.
+An action/FPS server template with a Session node and independently deployable play nodes (match). Entry Spots admit Player Actors into a fixed Matchmaking User Spot. Matchmaking pairs players by mode and creates dynamic Room User Spots. Rooms own movement, HP, action sequences, wall intersection, and match results.
 
 ```mermaid
 flowchart LR
-  players[Players] -->|STREAM| session[Session]
-  session -->|relay| matchA[Match A: Entry / Matchmaking / Room]
-  matchA <-->|my-game-arena| matchB[Match B: Entry / Room]
+  subgraph playNodes["Play nodes"]
+    matchA["Play node A (match): Entry / Matchmaking / Room"]
+    matchB["Play node B (match): Entry / Room"]
+  end
+  players[Players] -->|STREAM| session["Session node"]
+  session -->|relay| matchA
+  matchA <-->|my-game-arena| matchB
   matchA -->|Location / lease| location[(Redis)]
 ```
 
@@ -60,7 +64,7 @@ Use the same connector release as `package.json` dependencies `@zlink-systems/fr
 
 ### First match example
 
-Save as `e2e/connect-once.mts` in a copy of this template, run `npm run build`, then `node dist/e2e/connect-once.mjs <actual-session-endpoint>`. Keep Session, Match nodes, and Redis running separately from the temporary e2e deployment. The example queues two fresh players and receives their matching pushes. The JSON codec leaves contract int64 values as decimal strings on receipt; this example reads only the room ID.
+Save as `e2e/connect-once.mts` in a copy of this template, run `npm run build`, then `node dist/e2e/connect-once.mjs <actual-session-endpoint>`. Keep Session, play nodes (match), and Redis running separately from the temporary e2e deployment. The example queues two fresh players and receives their matching pushes. The JSON codec leaves contract int64 values as decimal strings on receipt; this example reads only the room ID.
 
 ```typescript
 import '../.zlink-framework-json-schemas.cjs';
@@ -133,9 +137,9 @@ pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 
 `RoomState` owns movement, shooting, action sequence, cooldown, and winner decisions. It places players at `(40, 10)` and `(60, 10)`. `MoveRequest` carries displacement; the server checks finite values, `MaxStep` 2.0, map bounds `[0, 100]` on each axis, the closed wall segment at `x=50, y=20..60`, and movement budget `min(MaxStep, MaxSpeed × elapsed)` with `MaxSpeed` 10 units per second. Shots use server positions and have a 250 ms fire interval. Contract integers are limited to `9,007,199,254,740,991`; values above that limit are rejected. Only accepted moves and shots advance `lastSequence`; rejected actions preserve room state. `ActionRejected` carries `reason` and `retryAfterMs`; only time-limited rejections have a positive delay, and clients wait for that returned value before retrying the same request. `RoomView` includes each player's `lastSequence`, the room `phase`, and `winner`. Relocation snapshots store remaining cooldown and movement-budget time in milliseconds, not process timestamps. The domain test exercises the same boundaries with an injected monotonic test clock.
 
-The runner checks the structure, uses the invocation's isolated Compose project and a unique key prefix per scenario, starts match processes before Session, and waits for public runtime readiness. Listeners bind port zero and publish their actual endpoints. Redis prefixes are unique per run. Logs, generated configuration, message-flow events, and client observations remain in `.logs/run-<id>/`. The runner removes only its own processes and Compose project; cleanup failures produce a nonzero exit code.
+The runner checks the structure, uses the invocation's isolated Compose project and a unique key prefix per scenario, starts play nodes (match) before the session node, and waits for public runtime readiness. Listeners bind port zero and publish their actual endpoints. Redis prefixes are unique per run. Logs, generated configuration, message-flow events, and client observations remain in `.logs/run-<id>/`. The runner removes only its own processes and Compose project; cleanup failures produce a nonzero exit code.
 
-Each scenario uses an isolated Redis key prefix and fresh node containers, with Room capacity set to one per match host. After relocation fills the surviving host, only the replacement has capacity for a new Room. Deployment capacity is configured independently.
+Each scenario uses an isolated Redis key prefix and fresh node containers, with Room capacity set to one per play node (match). After relocation fills the surviving host, only the replacement has capacity for a new Room. Deployment capacity is configured independently.
 
 Message Follow is configured explicitly to 30 seconds. After `RELOCATED`, the safe shutdown observation budget is the follow duration plus the existing relocation observation budget; the relocation operation deadline is unchanged.
 
@@ -157,8 +161,8 @@ The typed push delivery table restores declared DTO classes for the public typed
 
 ## Deployment sequence
 
-Wait for the bootstrap owner to report `READY` before starting another match host. Its public GetOrCreate completes while it is the only placement candidate, so the fixed Matchmaking Spot starts on its declared owner.
+Wait for the bootstrap owner to report `READY` before starting another play node (match). Its public GetOrCreate completes while it is the only placement candidate, so the fixed Matchmaking Spot starts on its declared owner.
 
-Configure Redis and a unique key prefix in `server/config/`. Start `dist/server/match/main.js` with `server/config/match-a.json`, then the same entrypoint with `server/config/match-b.json`. Match A bootstraps the fixed `matchmaking` Spot before peers start. Start `dist/server/session/main.js` with `server/config/session.json`. All roles use the common hosting module and report `READY` with actual listener endpoints.
+Configure Redis and a unique key prefix in `server/config/`. Start `dist/server/match/main.js` with `server/config/match-a.json`, then the same entrypoint with `server/config/match-b.json`. Play node A (match) bootstraps the fixed `matchmaking` Spot before peers start. Start `dist/server/session/main.js` with `server/config/session.json`. All roles use the common hosting module and report `READY` with actual listener endpoints.
 
-Write `drain` to the selected match process's standard input. Wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Write `shutdown`, verify `STOPPED` with outcome `Stopped` and reason `None`, and wait for exit. Start a replacement with the same node configuration and `bootstrapMatchmaking` disabled: the relocated Matchmaking Spot already exists. Wait for `READY` before assigning new work. Redis must remain available during this sequence.
+Write `drain` to the selected play node (match)'s standard input. Wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Write `shutdown`, verify `STOPPED` with outcome `Stopped` and reason `None`, and wait for exit. Start a replacement with the same node configuration and `bootstrapMatchmaking` disabled: the relocated Matchmaking Spot already exists. Wait for `READY` before assigning new work. Redis must remain available during this sequence.

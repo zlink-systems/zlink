@@ -30,7 +30,7 @@
     {
       "id": "session",
       "role": "session",
-      "title": "Session",
+      "title": "Session node",
       "config": "server/config/session.json"
     },
     {

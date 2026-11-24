@@ -297,7 +297,7 @@ async function runScenario(name: string): Promise<boolean> {
       },
       async restartLobby(): Promise<string> {
         const node = [...nodes.values()].find((candidate) => candidate.role === 'http-lobby');
-        assert(node, 'HTTP lobby is missing');
+        assert(node, 'API node is missing');
         await node.stop();
         const replacement = await start({ ...node.config }, node.role);
         return (await replacement.ready()).endpoint;
