@@ -13,7 +13,12 @@ class Prepare {
 @ZLinkHandlerGroup(Names.PLAYER)
 class DungeonActions {
     @ZLinkSpotActorRequest
-    suspend fun leave(spot: Dungeon, actor: Player, request: LeaveDungeonRequest): DungeonLeft {
+    suspend fun leave(
+        spot: Dungeon,
+        actor: Player,
+        context: ZLinkMessageContext,
+        request: LeaveDungeonRequest,
+    ): DungeonLeft {
         val dungeon = spot.context
         dungeon.leaveActor(actor).await()
         return DungeonLeft(dungeon.spotId(), dungeon.objectGeneration())
