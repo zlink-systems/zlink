@@ -36,14 +36,45 @@ covered by [How Channels Work](30-channel-patterns.en.md).
 
 ### 1.1 Message Contracts
 
-A contract is an ordinary record. It needs no separate registration or attribute declaration. A
-one-way message has no matching response type.
+A contract is an ordinary record. A one-way message has no matching response type.
 
 ```kotlin
 --8<-- "framework/languages/java/tutorial/kotlin/Shared/src/main/kotlin/systems/zlink/tutorial/shared/Contracts.kt:channel-contracts"
 ```
 
-### 1.2 A Handler That Returns a Response
+### 1.2 Message Value Rules
+
+A message contract declares requiredness and nullability separately. Only a nullable property
+accepts `null`, and only an omittable property may be left out. A required nullable property
+must appear in the JSON even when its value is `null`.
+
+| Value or property | JSON representation or handling |
+|---|---|
+| Signed or unsigned 64-bit integer | Decimal string with no leading zeros, such as `"9223372036854775807"`. The value must fit the declared type. |
+| Integer of 32 bits or fewer | JSON number with no fraction, such as `42`. |
+| Enum | Case-sensitive string containing a declared name, such as `"Ready"`. |
+| Object property | The default decoder ignores unknown properties and rejects duplicates and missing required properties. |
+
+Add `?` to the type to allow `null`. Give a primary-constructor parameter a default to
+allow omission, as in `data class Profile(val nickname: String?, val level: Int = 1)`.
+To allow omission of `nickname` as well, declare it as `val nickname: String? = null`.
+
+When constructing JSON in a browser for the TypeScript stream connector, put 64-bit values
+in strings, for example `{ "score": "9223372036854775807" }`. The connector's JSON codec also
+converts `bigint` to a string. Java and .NET connectors convert typed 64-bit integers
+automatically, so server E2E tests using those connectors do not exercise the browser case
+that sends a JSON number.
+
+For example, Java reports `failed to serialize message as JSON: Omok.GameSnapshot`
+with the cause `Property 'winner' does not allow null.` A Java server receiving a JSON
+number for a 64-bit field reports the cause `64-bit integers must be decimal JSON strings`.
+The missing message-flow log entry for the Java serialization failure is tracked in
+[#5454](https://github.com/zlink-systems/zlink/issues/5454).
+
+See [Message Model §5](../../../common/spec/server/00-foundation/05-message-model.en.md#5-the-framework-json-v1-typed-payload-profile)
+for the full `framework-json-v1` rules.
+
+### 1.3 A Handler That Returns a Response
 
 The handler's return value becomes the response as it stands.
 
@@ -51,7 +82,7 @@ The handler's return value becomes the response as it stands.
 --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/channel/GetPlayerProfileHandler.kt:channel-request-handler"
 ```
 
-### 1.3 A Handler with No Response
+### 1.4 A Handler with No Response
 
 It receives a message that arrived by `send`. There is no return value, so the caller cannot
 learn the result of the processing.
@@ -60,7 +91,7 @@ learn the result of the processing.
 --8<-- "framework/languages/java/tutorial/kotlin/Server/src/main/kotlin/systems/zlink/tutorial/server/channel/RecordLoginHandler.kt:channel-send-handler"
 ```
 
-### 1.4 A Call Is Sent by Its Terminator
+### 1.5 A Call Is Sent by Its Terminator
 
 Every call in this chapter has **a leading part that assembles it and one last piece that sends
 it**. The leading part that picks the target name and the message only assembles the call;

@@ -34,14 +34,47 @@ title: "Channel 메시징 · Java"
 
 ### 1.1 메시지 계약
 
-계약은 평범한 record다. 별도 등록이나 attribute 선언이 필요하지 않다. 단방향 메시지에는
-대응하는 응답 타입을 두지 않는다.
+계약은 평범한 record다. 단방향 메시지에는 대응하는 응답 타입을 두지 않는다.
 
 ```java
 --8<-- "framework/languages/java/tutorial/java/Shared/src/main/java/systems/zlink/tutorial/shared/Contracts.java:channel-contracts"
 ```
 
-### 1.2 응답을 돌려주는 handler
+### 1.2 메시지 값 규칙
+
+메시지 계약은 속성이 반드시 있어야 하는지와 그 값에 `null`을 허용하는지를 따로 정한다.
+nullable로 선언한 속성만 `null`을 허용하고, 생략을 허용한 속성만 생략할 수 있다.
+필수 속성은 값이 `null`이어도 JSON에 포함해야 한다.
+
+| 값 또는 속성 | JSON 표현 또는 처리 |
+|---|---|
+| 부호 있는 또는 부호 없는 64비트 정수 | `"9223372036854775807"`처럼 앞에 0이 붙지 않은 10진 문자열. 값은 선언한 타입의 범위에 들어야 한다. |
+| 32비트 이하 정수 | `42`처럼 소수부가 없는 JSON 숫자. |
+| enum | `"Ready"`처럼 선언한 이름을 담은 문자열. 대소문자를 구분한다. |
+| 객체 속성 | 기본 decoder는 알 수 없는 속성을 무시하고 중복 속성이나 필수 속성이 누락된 메시지를 거절한다. |
+
+record의 참조 타입 component에서 `null`을 허용하려면 런타임에 읽을 수 있고 단순 이름이
+`Nullable`인 annotation을 붙인다. JSpecify의 타입 사용 annotation과 JSR 305나 Jakarta의
+선언 annotation을 인식한다. 생략은 `@ZLinkJsonOptional`로 허용한다. 둘 다 허용하려면
+`@ZLinkJsonOptional @Nullable String nickname`으로 선언한다. 기본형 component에는
+`null`을 넣을 수 없다.
+
+브라우저에서 TypeScript stream connector로 보낼 JSON을 직접 구성할 때는
+`{ "score": "9223372036854775807" }`처럼 64비트 정수를 문자열로 넣는다. connector의 JSON
+codec은 `bigint`도 문자열로 바꾼다. Java와 .NET connector는 타입이 지정된 64비트 정수를
+자동으로 변환하므로, 이 connector로 실행하는 서버 E2E에서는 브라우저가 JSON 숫자를 보내는
+경우를 검증할 수 없다.
+
+예를 들어 Java는 직렬화에 실패하면 `failed to serialize message as JSON: Omok.GameSnapshot`과
+함께 원인으로 `Property 'winner' does not allow null.`을 보고한다. Java 서버가 64비트
+필드에 JSON 숫자를 받으면 원인은 `64-bit integers must be decimal JSON strings`다.
+Java 직렬화 실패의 원인이 message-flow 로그에 남지 않는 문제는
+[#5454](https://github.com/zlink-systems/zlink/issues/5454)에서 추적한다.
+
+전체 `framework-json-v1` 규칙은
+[메시지 모델 §5](../../../common/spec/server/00-foundation/05-message-model.ko.md#5-framework-json-v1-typed-payload-profile)에 있다.
+
+### 1.3 응답을 돌려주는 handler
 
 handler의 반환값이 그대로 응답이 된다.
 
@@ -49,7 +82,7 @@ handler의 반환값이 그대로 응답이 된다.
 --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/channel/GetPlayerProfileHandler.java:channel-request-handler"
 ```
 
-### 1.3 응답이 없는 handler
+### 1.4 응답이 없는 handler
 
 `send`로 온 메시지를 받는다. 반환값이 없으므로 호출한 쪽은 처리 결과를 알 수 없다.
 
@@ -57,7 +90,7 @@ handler의 반환값이 그대로 응답이 된다.
 --8<-- "framework/languages/java/tutorial/java/Server/src/main/java/systems/zlink/tutorial/server/channel/RecordLoginHandler.java:channel-send-handler"
 ```
 
-### 1.4 호출의 종결자 — 마지막 조각이 호출을 보낸다
+### 1.5 호출의 종결자 — 마지막 조각이 호출을 보낸다
 
 이 장의 호출은 모두 **대상을 정하는 앞부분과 보내는 마지막 한 조각**으로 되어 있다. 대상 이름과
 메시지를 고르는 앞부분은 호출을 준비할 뿐 아직 아무것도 보내지 않는다. 마지막 조각을 호출하는
