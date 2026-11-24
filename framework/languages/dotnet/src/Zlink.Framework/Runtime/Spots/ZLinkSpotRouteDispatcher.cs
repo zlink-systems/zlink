@@ -185,7 +185,7 @@ internal sealed class ZLinkSpotRouteDispatcher(
                     header.CorrelationId,
                     ex
                 );
-                scope.HandlerException(dispatchErrors, ZLinkDispatchErrorAction.ReplyError, ex);
+                scope.DispatchFailure(dispatchErrors, ZLinkDispatchErrorAction.ReplyError, ex);
             }
 
             await SubmitReplyAsync(received, replyParts, cancellationToken).ConfigureAwait(false);

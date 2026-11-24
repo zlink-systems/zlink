@@ -1435,6 +1435,8 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                 var recovery = ZLinkCanonicalParticipantRecoveryCodec.Decode(
                     stage.SourceRecoveries[state.AuthorityKey].Span
                 );
+                // Commit the member's target owner identity while preserving its
+                // relocation phase until steady normalization.
                 return new ZLinkAggregateRelocationParticipant(
                     state with
                     {
@@ -1442,7 +1444,15 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                     },
                     recovery.ExpectedStoreVersion,
                     ZLinkAuthorityGenerationTransition.NewOwner,
-                    recovery.AuthorityPayload,
+                    state.ObjectKind == ZLinkPlacementObjectKind.Actor
+                        ? BuildTargetReadyPayload(
+                            state.ObjectKind,
+                            recovery.AuthorityPayload,
+                            stage,
+                            targetOwner,
+                            ZLinkActorRelocationAuthorityPhase.Activated
+                        )
+                        : recovery.AuthorityPayload,
                     recovery.MembershipMutation
                 );
             })
@@ -2540,7 +2550,8 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         ZLinkPlacementObjectKind kind,
         ReadOnlyMemory<byte> sourcePayload,
         TargetStage stage,
-        ZLinkLocationOwnerToken targetOwner
+        ZLinkLocationOwnerToken targetOwner,
+        ZLinkActorRelocationAuthorityPhase actorPhase = ZLinkActorRelocationAuthorityPhase.Steady
     ) =>
         BuildTargetReadyPayload(
             kind,
@@ -2548,7 +2559,8 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             stage.Node.Node.RoutingId,
             stage.Node.Node.MeshStatus().LifecycleGeneration,
             targetOwner,
-            stage.Envelope.AggregateId
+            stage.Envelope.AggregateId,
+            actorPhase
         );
 
     internal static ReadOnlyMemory<byte> BuildTargetReadyPayload(
@@ -2557,7 +2569,8 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         RoutingId targetNode,
         ulong targetNodeGeneration,
         ZLinkLocationOwnerToken targetOwner,
-        Guid relocationId
+        Guid relocationId,
+        ZLinkActorRelocationAuthorityPhase actorPhase = ZLinkActorRelocationAuthorityPhase.Steady
     )
     {
         var ownerGeneration = checked((ulong)targetOwner.LeaseGeneration);
@@ -2608,7 +2621,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
             return ZLinkActorRelocationAuthorityPayloadCodec.Encode(
                 relocation with
                 {
-                    Phase = ZLinkActorRelocationAuthorityPhase.Steady,
+                    Phase = actorPhase,
                     ApplicationPayload = ZLinkActorAuthorityPayloadCodec.Encode(
                         actor with
                         {
@@ -2998,7 +3011,8 @@ internal sealed record TargetStage(
         ZLinkActorId,
         ulong
     > _preparedActorAuthorityOwnerGenerations = ActorTargetAuthorityOwnerGenerations;
-    private FrozenDictionary<ZLinkAuthorityKey, ulong>? _authorityPublication;
+    private FrozenDictionary<ZLinkAuthorityKey, ZLinkAuthoritySnapshot>? _authorityPublication;
+    internal bool HasAuthorityPublication => _authorityPublication is not null;
     public ulong TargetAuthorityOwnerGeneration
     {
         get => ResolveAuthorityOwnerGeneration(SpotParticipant.AuthorityKey);
@@ -3016,10 +3030,7 @@ internal sealed record TargetStage(
     {
         if (_authorityPublication is not null)
             return;
-        _authorityPublication = publication.ToFrozenDictionary(
-            static entry => entry.Key,
-            static entry => entry.Value.AuthorityOwnerGeneration
-        );
+        _authorityPublication = publication.ToFrozenDictionary();
         foreach (var actor in ActorStates)
             Node.Node.SetLocalActorAuthority(
                 actor.NativeActorRef!.Value,
@@ -3027,14 +3038,20 @@ internal sealed record TargetStage(
             );
     }
 
+    internal ZLinkAuthoritySnapshot GetPublishedActorAuthority(ZLinkActorId actorId) =>
+        GetPublishedAuthority(ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId.Value));
+
+    private ZLinkAuthoritySnapshot GetPublishedAuthority(ZLinkAuthorityKey key) =>
+        _authorityPublication is { } published && published.TryGetValue(key, out var actual)
+            ? actual
+            : throw new ZLinkRelocationDataLostException(
+                "Published target authority is missing from its inventory."
+            );
+
     private ulong ResolveAuthorityOwnerGeneration(ZLinkAuthorityKey key)
     {
-        if (_authorityPublication is { } published)
-            return published.TryGetValue(key, out var actual)
-                ? actual
-                : throw new ZLinkRelocationDataLostException(
-                    "Published target authority is missing from its inventory."
-                );
+        if (HasAuthorityPublication)
+            return GetPublishedAuthority(key).AuthorityOwnerGeneration;
         if (key == SpotParticipant.AuthorityKey)
             return _preparedSpotAuthorityOwnerGeneration;
         if (
