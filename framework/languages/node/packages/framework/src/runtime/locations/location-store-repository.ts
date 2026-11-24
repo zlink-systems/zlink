@@ -224,6 +224,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   private readonly provider: ZLinkLocationStore;
   private readonly confirmedCapacities = new Map<string, ReadonlyMap<string, number> | undefined>();
   private generationFloor?: Promise<bigint>;
+  private storeFormatConverted = false;
   private readonly aggregateInventory: ZLinkAggregateInventoryStore;
 
   constructor(
@@ -305,6 +306,8 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   }
 
   async ensureStoreFormat(signal?: AbortSignal): Promise<void> {
+    // The conversion runs once per repository; later lease renewals skip it (§8.1).
+    if (this.storeFormatConverted) return;
     const floor = await new ZLinkLocationStoreFormat(
       this.provider,
       {
@@ -319,6 +322,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       signal
     ).convert();
     this.generationFloor = Promise.resolve(floor);
+    this.storeFormatConverted = true;
   }
 
   private readGenerationFloor(): Promise<bigint> {

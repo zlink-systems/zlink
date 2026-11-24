@@ -487,3 +487,23 @@ test('a late converter accepts an aggregate created after another startup comple
   await late;
   assert.equal(await read(store, FORMAT), 'converted');
 });
+
+test('lease renewals after a completed conversion do not read the format marker again', async () => {
+  const store = new framework.ZLinkInMemoryProviderLocationStore();
+  let markerReads = 0;
+  const counted = {
+    read(key, signal) {
+      if (key.value === FORMAT) markerReads++;
+      return store.read(key, signal);
+    },
+    write: store.write.bind(store),
+    scan: store.scan.bind(store)
+  };
+  const repository = new framework.ZLinkLocationStoreRepository(counted);
+  await repository.ensureStoreFormat();
+  assert.equal(await read(store, FORMAT), 'converted');
+  const afterConversion = markerReads;
+  await repository.ensureStoreFormat();
+  await repository.ensureStoreFormat();
+  assert.equal(markerReads, afterConversion);
+});
