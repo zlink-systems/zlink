@@ -1,11 +1,9 @@
 import {
+  STORE_COUNTER_MAX,
   ZLINK_PROVIDER_MAX_KEY_BYTES,
-  ZLINK_PROVIDER_MAX_VALUE_BYTES,
-  ZLINK_PROVIDER_MAX_VERSION_BYTES,
-  ZLINK_PROVIDER_MAX_WRITE_KEYS,
-  ZLINK_PROVIDER_MAX_WRITE_BYTES,
   ZLINK_PROVIDER_MAX_SCAN_CURSOR_BYTES,
-  ZLINK_PROVIDER_MAX_PAGE_SIZE
+  ZLINK_PROVIDER_MAX_PAGE_SIZE,
+  validateStoreWriteRequest
 } from './framework-internal';
 import { createHash, randomUUID } from 'node:crypto';
 import type {
@@ -96,6 +94,8 @@ export class ZLinkRedisLocationStore implements ZLinkLocationStore {
     );
     const storeNow = fromUnixMs(toNumber(result[1]));
     const outcome = asString(result[0]);
+    if (outcome === REDIS_STORE_TOKEN.Corrupt)
+      return { kind: 'corrupt', storeNow, putVersions: [] };
     if (outcome === REDIS_STORE_TOKEN.Conflict) return { kind: 'conflict', storeNow };
     if (outcome === REDIS_STORE_TOKEN.Backlog) {
       throw new Error('Redis Location Store version backlog is full.');
@@ -237,55 +237,53 @@ interface EncodedWrite {
 }
 
 function encodeWrite(request: ZLinkStoreWriteRequest): EncodedWrite {
-  const conditionKeys = request.conditions.map((condition) => requireKey(condition.key));
-  const mutationKeys = request.mutations.map((mutation) => requireKey(mutation.key));
-  if (
-    new Set(conditionKeys).size !== conditionKeys.length ||
-    new Set(mutationKeys).size !== mutationKeys.length
-  ) {
-    throw new RangeError('Location Store condition and mutation keys must be unique.');
-  }
-  const keys = [...new Set([...conditionKeys, ...mutationKeys])];
-  if (keys.length > ZLINK_PROVIDER_MAX_WRITE_KEYS) {
-    throw new RangeError(
-      `Location Store write exceeds ${ZLINK_PROVIDER_MAX_WRITE_KEYS.toLocaleString('en-US')} unique keys.`
-    );
-  }
+  const keys = [...validateStoreWriteRequest(request)];
   // Row keys are appended after the six fixed auxiliary keys; the script
   // adds 6 to this 1-based index before indexing into KEYS.
   const keyIndex = new Map(keys.map((key, index) => [key, index + 1]));
-  let encodedBytes = 0;
   const expectedBytes: Buffer[] = [];
   const conditions = request.conditions.map((condition) => {
-    const key = requireKey(condition.key);
-    encodedBytes += Buffer.byteLength(key, 'utf8');
+    if (condition.kind === 'sumAtMost') {
+      const threshold = condition.limit - condition.delta;
+      const maxSum = BigInt(condition.keys.length) * STORE_COUNTER_MAX;
+      return [
+        REDIS_STORE_TOKEN.SumAtMost,
+        condition.keys.map((key) => keyIndex.get(key.value)),
+        clamp(threshold, -1n, maxSum).toString()
+      ];
+    }
+    const key = condition.key.value;
     if (condition.kind === 'missing') return [REDIS_STORE_TOKEN.Missing, keyIndex.get(key), key];
     if (condition.kind === 'value') {
-      requireValue(condition.expected, undefined);
-      encodedBytes += condition.expected.byteLength;
       expectedBytes.push(Buffer.from(condition.expected));
       return [REDIS_STORE_TOKEN.Value, keyIndex.get(key), key, expectedBytes.length + 2];
     }
-    const expected = requireVersion(condition.expected);
-    encodedBytes += Buffer.byteLength(expected, 'utf8');
-    return [REDIS_STORE_TOKEN.Version, keyIndex.get(key), key, expected];
+    return [REDIS_STORE_TOKEN.Version, keyIndex.get(key), key, condition.expected.value];
   });
   const putBytes: Buffer[] = [];
   const mutations = request.mutations.map((mutation) => {
-    const key = requireKey(mutation.key);
-    encodedBytes += Buffer.byteLength(key, 'utf8');
+    const key = mutation.key.value;
     if (mutation.kind === 'delete') return [REDIS_STORE_TOKEN.Delete, keyIndex.get(key), key];
-    const retentionMs = requireValue(mutation.bytes, mutation.retentionMs);
-    encodedBytes += mutation.bytes.byteLength;
+    if (mutation.kind === 'add') {
+      const overflow = STORE_COUNTER_MAX + 1n;
+      return [
+        REDIS_STORE_TOKEN.Add,
+        keyIndex.get(key),
+        key,
+        clamp(mutation.delta, -overflow, overflow).toString()
+      ];
+    }
     putBytes.push(Buffer.from(mutation.bytes));
-    return [REDIS_STORE_TOKEN.Put, keyIndex.get(key), key, retentionMs ?? false];
+    const retentionMs =
+      mutation.retentionMs === undefined ? false : Math.ceil(mutation.retentionMs);
+    return [REDIS_STORE_TOKEN.Put, keyIndex.get(key), key, retentionMs];
   });
-  if (encodedBytes > ZLINK_PROVIDER_MAX_WRITE_BYTES) {
-    throw new RangeError(
-      `Location Store write exceeds ${ZLINK_PROVIDER_MAX_WRITE_BYTES / (1024 * 1024)} MiB encoded input.`
-    );
-  }
   return { keys, conditions, mutations, expectedBytes, putBytes };
+}
+
+function clamp(value: bigint, min: bigint, max: bigint): bigint {
+  if (value < min) return min;
+  return value > max ? max : value;
 }
 
 function requireScanRequest(request: ZLinkStoreScanRequest): void {
@@ -323,17 +321,6 @@ function requireMatchingKey(actual: string, expected: string): void {
   }
 }
 
-function requireVersion(version: ZLinkStoreVersion): string {
-  const value = version.value;
-  const bytes = Buffer.byteLength(value, 'utf8');
-  if (bytes < 1 || bytes > ZLINK_PROVIDER_MAX_VERSION_BYTES) {
-    throw new RangeError(
-      `Location Store version must contain 1..${ZLINK_PROVIDER_MAX_VERSION_BYTES.toLocaleString('en-US')} UTF-8 bytes.`
-    );
-  }
-  return value;
-}
-
 function requireCursor(cursor: ZLinkStoreScanCursor): string {
   const value = cursor.value;
   const bytes = Buffer.byteLength(value, 'utf8');
@@ -343,23 +330,6 @@ function requireCursor(cursor: ZLinkStoreScanCursor): string {
     );
   }
   return value;
-}
-
-function requireValue(bytes: Uint8Array, retentionMs: number | undefined): number | undefined {
-  if (bytes.byteLength > ZLINK_PROVIDER_MAX_VALUE_BYTES) {
-    throw new RangeError(
-      `Location Store value exceeds ${ZLINK_PROVIDER_MAX_VALUE_BYTES / (1024 * 1024)} MiB.`
-    );
-  }
-  if (
-    retentionMs !== undefined &&
-    (!Number.isFinite(retentionMs) ||
-      retentionMs <= 0 ||
-      !Number.isSafeInteger(Math.ceil(retentionMs)))
-  ) {
-    throw new RangeError('Location Store retention must round to a positive safe integer.');
-  }
-  return retentionMs === undefined ? undefined : Math.ceil(retentionMs);
 }
 
 function parseCursor(cursor: ZLinkStoreScanCursor):

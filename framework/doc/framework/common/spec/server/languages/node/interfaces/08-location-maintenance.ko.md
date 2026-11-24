@@ -56,6 +56,12 @@ export type ZLinkStoreCondition =
  readonly kind: 'value';
  readonly key: ZLinkStoreKey;
  readonly expected: Uint8Array;
+ }
+ | {
+ readonly kind: 'sumAtMost';
+ readonly keys: readonly ZLinkStoreKey[];
+ readonly delta: bigint;
+ readonly limit: bigint;
  };
 
 export type ZLinkStoreMutation =
@@ -65,7 +71,8 @@ export type ZLinkStoreMutation =
  readonly bytes: Uint8Array;
  readonly retentionMs?: number;
  }
- | { readonly kind: 'delete'; readonly key: ZLinkStoreKey };
+ | { readonly kind: 'delete'; readonly key: ZLinkStoreKey }
+ | { readonly kind: 'add'; readonly key: ZLinkStoreKey; readonly delta: bigint };
 
 export interface ZLinkStoreWriteRequest {
  readonly conditions: readonly ZLinkStoreCondition[];
@@ -83,7 +90,8 @@ export type ZLinkStoreWriteResult =
  readonly putVersions: readonly ZLinkStorePutVersion[];
  readonly storeNow: Date;
  }
- | { readonly kind: 'conflict'; readonly storeNow: Date };
+ | { readonly kind: 'conflict'; readonly storeNow: Date }
+ | { readonly kind: 'corrupt'; readonly storeNow: Date; readonly putVersions: readonly [] };
 
 export interface ZLinkStoreScanRequest {
  readonly prefix: string;
@@ -139,7 +147,7 @@ buffer로 재사용하지 않는다. Provider는 반환한 `Uint8Array`를 Promi
 
 `write(...)`는 모든 condition을 먼저 검사하고 모두 참일 때만 모든 mutation을 하나의 atomic
 commit으로 적용한다. 조건 하나라도 거짓이면 mutation과 version 증가는 모두 0이고 `conflict`를
-반환한다. Condition은 Missing 또는 Version 비교만 제공한다. Conflict 결과에 domain state나
+반환한다. Condition 종류와 수용 공간 counter 연산(`sumAtMost`·`add`), `corrupt` 결과의 의미는 [Location Store §4](../../../05-location-relocation/02-location-store-redis.ko.md#4-conditional-atomic-batch)·[§4.1](../../../05-location-relocation/02-location-store-redis.ko.md#41-수용-공간-counter)이 정한다. Conflict 결과에 domain state나
 current value를 싣지 않으며 Framework가 필요한 key를 직접 read한다.
 
 한 write request는 condition과 mutation을 합쳐 최대 2,048개의 unique key와 최대 4 MiB의 encoded

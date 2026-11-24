@@ -49,6 +49,7 @@ export * from './runtime/framework-errors-internal';
 export * from './contracts/Configuration/Registration';
 
 export * from './contracts/Locations/Stores';
+export * from './runtime/locations/provider-write-request';
 export { ZLINK_RELOCATION_MAX_BLOB_REFERENCE_BYTES } from './contracts/Configuration/InternalDefaults';
 export { ZLINK_MAX_STABLE_TYPE_BYTES } from './contracts/Common/CoreTypes';
 export {

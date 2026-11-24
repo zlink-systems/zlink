@@ -1,5 +1,6 @@
 import type {
   ZLinkLocationStore,
+  ZLinkStoreCondition,
   ZLinkStoreKey,
   ZLinkStoreReadResult,
   ZLinkStoreValue,
@@ -34,7 +35,7 @@ import {
   MAX_TIME_MS,
   StoreFormatError
 } from './internal/encoding';
-import { bounds, key, validateWrite, validateScan } from './internal/input';
+import { bounds, key, validateScan } from './internal/input';
 import { monotonicMs, ScanCursor, Snapshot } from './internal/cursor';
 
 const range = (key: Buffer, revision?: string) => ({
@@ -48,6 +49,37 @@ const same = (key: Buffer, record: KeyValue | undefined) =>
 const live = (metadata: Metadata | null, clock: bigint) =>
   metadata !== null && (!metadata.hasExpiry || metadata.expiresAtMs > clock);
 const date = (value: bigint) => new Date(Number(value));
+
+interface WriteSubject {
+  readonly logical: Buffer;
+  readonly condition?: ZLinkStoreCondition;
+  counter: boolean;
+}
+
+function writeSubjects(request: ZLinkStoreWriteRequest): Map<string, WriteSubject> {
+  const subjects = new Map<string, WriteSubject>();
+  function addCounter(key: ZLinkStoreKey): void {
+    const subject = subjects.get(key.value);
+    if (subject === undefined)
+      subjects.set(key.value, { logical: Buffer.from(key.value), counter: true });
+    else subject.counter = true;
+  }
+  for (const condition of request.conditions) {
+    if (condition.kind === 'sumAtMost') {
+      for (const key of condition.keys) addCounter(key);
+    } else {
+      subjects.set(condition.key.value, {
+        logical: Buffer.from(condition.key.value),
+        condition,
+        counter: false
+      });
+    }
+  }
+  for (const mutation of request.mutations) {
+    if (mutation.kind === 'add') addCounter(mutation.key);
+  }
+  return subjects;
+}
 
 /** Opaque Location Store SPI backed by etcd linearizable transactions. */
 export class ZLinkEtcdLocationStore implements ZLinkLocationStore {
@@ -91,28 +123,43 @@ export class ZLinkEtcdLocationStore implements ZLinkLocationStore {
     request: ZLinkStoreWriteRequest,
     signal?: AbortSignal
   ): Promise<ZLinkStoreWriteResult> {
-    validateWrite(request);
+    bounds.validateStoreWriteRequest(request, Number(MAX_TIME_MS));
+    const subjects = writeSubjects(request);
+    const observedKeys = [...subjects.values()].map((subject) =>
+      this.keys.metadata(subject.logical)
+    );
     return this.perform(signal, async (operation) => {
       for (;;) {
-        const response = await this.readTxn(
-          [this.keys.clock, ...request.conditions.map((c) => this.keys.metadata(key(c.key)))],
-          operation
-        );
+        const response = await this.readTxn([this.keys.clock, ...observedKeys], operation);
         const clock = this.clock(response);
-        const records = response.responses.slice(1).map((r) => r.response_range.kvs.at(0));
-        const metadata = records.map((r) => (r === undefined ? null : decodeMetadata(r.value)));
-        const payloadIndexes = request.conditions.flatMap((condition, index) =>
-          condition.kind === 'value' &&
-          metadata[index]?.payloadLength === condition.expected.byteLength
-            ? [index]
-            : []
+        const storeNow = date(clock);
+        const observations = new Map(
+          [...subjects.entries()].map(([logical, subject], index) => {
+            const record = response.responses[index + 1].response_range.kvs.at(0);
+            const metadata = record === undefined ? null : decodeMetadata(record.value);
+            return [
+              logical,
+              { subject, record, metadata, payload: undefined as Buffer | undefined }
+            ];
+          })
         );
-        const payloads = new Map<number, KeyValue>();
-        if (payloadIndexes.length > 0) {
+        const payloadReads = [...observations.values()].filter(({ subject, metadata }) => {
+          if (metadata === null) return false;
+          const condition = subject.condition;
+          return (
+            (subject.counter &&
+              live(metadata, clock) &&
+              metadata.payloadLength > 0 &&
+              metadata.payloadLength <= bounds.STORE_COUNTER_MAX_BYTES) ||
+            (condition?.kind === 'value' &&
+              metadata.payloadLength === condition.expected.byteLength)
+          );
+        });
+        if (payloadReads.length > 0) {
           let read: ReadTxnResponse;
           try {
             read = await this.readTxn(
-              payloadIndexes.map((i) => this.keys.payload(key(request.conditions[i].key))),
+              payloadReads.map(({ subject }) => this.keys.payload(subject.logical)),
               operation,
               response.header.revision
             );
@@ -120,40 +167,54 @@ export class ZLinkEtcdLocationStore implements ZLinkLocationStore {
             if (error instanceof EtcdCallError && error.kind === 'compaction') continue;
             throw error;
           }
-          for (const [offset, index] of payloadIndexes.entries()) {
+          for (const [offset, observation] of payloadReads.entries()) {
             const payload = read.responses[offset].response_range.kvs.at(0);
             validateRecord(
-              records[index]!.value,
+              observation.record!.value,
               payload?.value ?? null,
-              records[index]!.mod_revision,
+              observation.record!.mod_revision,
               payload?.mod_revision ?? ''
             );
-            payloads.set(index, payload!);
+            observation.payload = payload!.value;
           }
         }
-        const matched = request.conditions.every((condition, index) => {
-          const record = metadata[index];
-          if (condition.kind === 'missing') return !live(record, clock);
-          if (!live(record, clock)) return false;
-          if (condition.kind === 'version')
-            return (
+
+        const counter = (key: string) => {
+          const { metadata, payload } = observations.get(key)!;
+          if (!live(metadata, clock)) return 0n;
+          return payload === undefined ? undefined : bounds.readStoreCounter(payload);
+        };
+        for (const condition of request.conditions) {
+          if (condition.kind === 'sumAtMost') {
+            const matched = bounds.sumStoreCounters(condition, counter);
+            if (matched === undefined) return { kind: 'corrupt', storeNow, putVersions: [] };
+            if (!matched) return { kind: 'conflict', storeNow };
+            continue;
+          }
+          const { record, metadata, payload } = observations.get(condition.key.value)!;
+          const present = live(metadata, clock);
+          let matches: boolean;
+          if (condition.kind === 'missing') matches = !present;
+          else if (condition.kind === 'version') {
+            matches =
+              present &&
               condition.expected.value ===
-              encodeVersion(response.header.cluster_id, records[index]!.mod_revision)
-            );
-          return payloads.get(index)?.value.equals(Buffer.from(condition.expected)) === true;
-        });
-        if (!matched) return { kind: 'conflict', storeNow: date(clock) };
-        const expiries = request.conditions.flatMap((condition, index) =>
-          condition.kind !== 'missing' && metadata[index]?.hasExpiry === true
-            ? [metadata[index]!.expiresAtMs]
-            : []
-        );
+                encodeVersion(response.header.cluster_id, record!.mod_revision);
+          } else {
+            matches = present && payload?.equals(Buffer.from(condition.expected)) === true;
+          }
+          if (!matches) return { kind: 'conflict', storeNow };
+        }
+
+        const expiries = [];
         const compare: object[] = [
-          { key: this.keys.clock, target: 'CREATE', result: 'GREATER', create_revision: '0' },
-          ...request.conditions.map((condition, index) =>
-            same(this.keys.metadata(key(condition.key)), records[index])
-          )
+          { key: this.keys.clock, target: 'CREATE', result: 'GREATER', create_revision: '0' }
         ];
+        for (const { subject, record, metadata } of observations.values()) {
+          compare.push(same(this.keys.metadata(subject.logical), record));
+          if (metadata?.hasExpiry === true && live(metadata, clock))
+            expiries.push(metadata.expiresAtMs);
+        }
         if (expiries.length > 0)
           compare.push({
             key: this.keys.clock,
@@ -163,17 +224,20 @@ export class ZLinkEtcdLocationStore implements ZLinkLocationStore {
           });
         const success: object[] = [];
         for (const mutation of request.mutations) {
-          const logical = key(mutation.key);
+          const logical = Buffer.from(mutation.key.value);
           if (mutation.kind === 'delete') {
             success.push(
               { request_delete_range: { key: this.keys.metadata(logical) } },
               { request_delete_range: { key: this.keys.payload(logical) } }
             );
           } else {
-            const expiresAtMs =
-              mutation.retentionMs === undefined
-                ? 0n
-                : clock + BigInt(Math.ceil(mutation.retentionMs));
+            const bytes =
+              mutation.kind === 'add'
+                ? bounds.addStoreCounter(counter(mutation.key.value), mutation.delta)
+                : Buffer.from(mutation.bytes);
+            if (bytes === undefined) return { kind: 'corrupt', storeNow, putVersions: [] };
+            const retention = mutation.kind === 'put' ? mutation.retentionMs : undefined;
+            const expiresAtMs = retention === undefined ? 0n : clock + BigInt(Math.ceil(retention));
             if (expiresAtMs > MAX_TIME_MS)
               throw new RangeError('Store expiry exceeds its encoding range');
             success.push(
@@ -181,14 +245,14 @@ export class ZLinkEtcdLocationStore implements ZLinkLocationStore {
                 request_put: {
                   key: this.keys.metadata(logical),
                   value: encodeMetadata({
-                    hasExpiry: mutation.retentionMs !== undefined,
+                    hasExpiry: retention !== undefined,
                     expiresAtMs,
-                    payloadLength: mutation.bytes.byteLength
+                    payloadLength: bytes.byteLength
                   })
                 }
               },
               {
-                request_put: { key: this.keys.payload(logical), value: Buffer.from(mutation.bytes) }
+                request_put: { key: this.keys.payload(logical), value: bytes }
               }
             );
           }
@@ -202,9 +266,9 @@ export class ZLinkEtcdLocationStore implements ZLinkLocationStore {
         if (!applied.succeeded) continue;
         return {
           kind: 'applied',
-          storeNow: date(clock),
+          storeNow,
           putVersions: request.mutations
-            .filter((m) => m.kind === 'put')
+            .filter((m) => m.kind !== 'delete')
             .map((m) => ({
               key: { value: m.key.value } as ZLinkStoreKey,
               version: {
