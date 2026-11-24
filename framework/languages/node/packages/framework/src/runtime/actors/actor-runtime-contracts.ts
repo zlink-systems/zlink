@@ -11,9 +11,13 @@ import type {
   ZLinkMessageSerializer
 } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
-import type { ZLinkBackendMeshNode, ZLinkMeshCompletionTable } from '../backend';
+import type {
+  ZLinkBackendActorRef,
+  ZLinkBackendMeshNode,
+  ZLinkMeshCompletionTable
+} from '../backend';
 import type { ZLinkLocationLifecycle } from '../locations';
-import type { ZLinkActorRuntimeState } from './actor-runtime-state';
+import type { ZLinkActorRuntimeState, ZLinkRemoteBoundSessionTarget } from './actor-runtime-state';
 import type { ZLinkActorTransferRegistry } from './actor-transfer-registry';
 import type { ZLinkRuntimeAdmissionGate } from '../admission';
 import type { ZLinkActivationAdmission } from '../activation-admission';
@@ -41,6 +45,10 @@ export interface ZLinkActorManagerOptions {
   readonly messageSerializers?: ReadonlyMap<string, ZLinkMessageSerializer>;
   readonly nativeActorNode?: ZLinkBackendMeshNode;
   readonly nativeActorNodeProvider?: () => ZLinkBackendMeshNode | undefined;
+  readonly projectBoundSession?: (
+    actor: ZLinkBackendActorRef,
+    meshName: string | undefined
+  ) => ZLinkRemoteBoundSessionTarget | null | undefined;
   readonly nativeActorCompletionTableProvider?: () => ZLinkMeshCompletionTable | undefined;
   readonly actorCreatedNodeRidProvider?: () => RoutingId | undefined;
   readonly actorRefResolver?: ZLinkActorRuntimeLocationLookup;

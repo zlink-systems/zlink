@@ -1,14 +1,20 @@
 """Conan recipe for the zlink C++ framework (HTTP client and stream connector)."""
 
+import json
 import os
+from pathlib import Path
 
 from conan import ConanFile
 from conan.errors import ConanInvalidConfiguration
-from conan.tools.build import check_min_cppstd
+from conan.tools.build import check_min_cppstd, cross_building
 from conan.tools.cmake import CMake, CMakeDeps, CMakeToolchain, cmake_layout
-from conan.tools.files import copy, get
+from conan.tools.files import copy, get, save
 
 required_conan_version = ">=2.1"
+
+# gRPC 1.84.0 and vcpkg baseline 2ec0f1747d resolve comparable versions (#4077).
+# vcpkg uses protobuf 6.33.4, the nearest version in the same series.
+ZLINK_FRAMEWORK_CPP_PROTOBUF_REQUIREMENT = "protobuf/6.33.5"
 
 # This is the authoritative third-party name/version list for the framework.
 # package-prebuilt.sh imports it with the options below, so its CMakeDeps graph
@@ -23,9 +29,7 @@ ZLINK_FRAMEWORK_CPP_THIRD_PARTY_REQUIREMENTS = (
     "yyjson/0.12.0",
     "openssl/[>=3.0 <4]",
     "lz4/1.9.4",
-    # gRPC 1.84.0 and vcpkg baseline 2ec0f1747d both resolve these (#4077); vcpkg has
-    # protobuf 6.33.4, the nearest version to this one in the same series.
-    "protobuf/6.33.5",
+    ZLINK_FRAMEWORK_CPP_PROTOBUF_REQUIREMENT,
     "abseil/20260107.1",
     # 1.3.15 builds its async client with Conan's libuv, but its requirement does
     # not propagate libuv headers to consumers of async_redis.h. Require the same
@@ -33,6 +37,23 @@ ZLINK_FRAMEWORK_CPP_THIRD_PARTY_REQUIREMENTS = (
     "redis-plus-plus/1.3.15",
     "libuv/[>=1 <2]",
 )
+
+
+def generate_framework_cmake(conanfile, toolchain):
+    dependencies = conanfile.dependencies
+    protobuf = (dependencies.build if cross_building(conanfile) else dependencies.host)["protobuf"]
+    protoc_name = "protoc.exe" if conanfile.settings_build.os == "Windows" else "protoc"
+    protoc = Path(protobuf.package_folder, protobuf.cpp_info.bindirs[0], protoc_name)
+    if not protoc.is_file():
+        raise ConanInvalidConfiguration(f"Missing protoc in {protobuf.ref}: {protoc}")
+    provider = Path(conanfile.generators_folder, "zlink-conan-protobuf.json")
+    save(conanfile, str(provider), json.dumps({
+        "protoc": protoc.resolve().as_posix(),
+        "version": str(protobuf.ref.version),
+    }))
+    toolchain.variables["ZLINK_FRAMEWORK_CPP_CONAN_PROTOBUF"] = provider.as_posix()
+    toolchain.generate()
+    CMakeDeps(conanfile).generate()
 
 
 class ZlinkFrameworkConan(ConanFile):
@@ -72,6 +93,10 @@ class ZlinkFrameworkConan(ConanFile):
             self.requires(dependency, transitive_headers=True, transitive_libs=True)
         if self.options.with_etcd:
             self.requires("grpc/1.84.0", transitive_headers=False, transitive_libs=True)
+
+    def build_requirements(self):
+        if cross_building(self):
+            self.tool_requires(ZLINK_FRAMEWORK_CPP_PROTOBUF_REQUIREMENT)
 
     def validate(self):
         if self.settings.compiler.get_safe("cppstd"):
@@ -113,8 +138,7 @@ class ZlinkFrameworkConan(ConanFile):
         zlink_core_dep = self.dependencies["zlink"]
         tc.variables["ZLINK_FRAMEWORK_CPP_LOCAL_ZLINK_CORE_PREFIX"] = \
             zlink_core_dep.package_folder.replace("\\", "/")
-        tc.generate()
-        CMakeDeps(self).generate()
+        generate_framework_cmake(self, tc)
 
     def build(self):
         cmake = CMake(self)

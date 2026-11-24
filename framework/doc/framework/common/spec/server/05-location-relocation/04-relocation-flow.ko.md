@@ -537,6 +537,8 @@ Session owner가 검증하는 값, seal과 route 전환의 정확한 시점·tim
 | `SpotWide` User Spot | Spot과 전환 시점의 member Actor owner·membership을 조건부 batch 하나로 바꾼다. | `ApplicationSignaled`이면 target queue를 열기 전에 relocation-ready completion callback을 실행한다. |
 | Instance Spot | Spot owner와 state·queue·timer를 옮긴다. Actor와 Session 단계는 없다. | Target Restore 뒤 queue를 열고 source에 `OnClosing(RelocationOut)`을 적용한다. |
 
+Cross-node Actor Join의 commit 뒤 callback 실패가 Join 결과와 target publication에 미치는 영향은 [Spot·Actor membership](../03-spot-actor/05-spot-actor-membership.ko.md#actor-join-completion)이 정한다.
+
 각 API의 target 선택, membership callback과 completion payload는 Spot 문서와 Actor가 Spot에
 속하는 관계를 다루는 문서, host operation의 mode와 최종 결과는
 [Host relocation 전체 흐름](05-host-relocation-flow.ko.md)이 정의한다.
@@ -672,6 +674,7 @@ target·source의 request·reply·send 결과, 반환하는 Error·Warning log)�
 
 **정상 handoff와 chunk 전송**
 
+- Cross-node Actor Join의 target Actor에서 Join completion callback 안의 bound session push가 실패해도 Join 결과는 `Accepted`로 남고 target publication은 완료된다.
 - Actor, `PerActor`·`SpotWide` User Spot과 Instance Spot이 같은 target-only CAS 경계를 사용한다.
 - Source가 queue가 빌 때까지 기다리지 않고 이전 주소의 message를 target에 계속 relay한다.
 - Target의 relay 수신 준비 통지 전에 source가 ingress-hold relay를 보내지 않는다.
