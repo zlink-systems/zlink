@@ -39,6 +39,86 @@ import java.util.stream.IntStream;
 
 final class ZLinkJsonMessageSerializerTest {
     @Test
+    void nullDiagnosticsIdentifyWirePathsOnEncodeAndDecode() {
+        var serializer = new ZLinkJsonMessageSerializer();
+        var invalid = new DiagnosticValue(null, 1);
+        String json =
+                """
+                {"wire_text":null,"sequence":"1","private":"payload-secret"}
+                """;
+        assertNullDiagnostic(
+                assertThrows(IllegalArgumentException.class, () -> serializer.serialize(invalid)),
+                "DiagnosticValue",
+                "wire_text");
+        assertNullDiagnostic(
+                assertThrows(
+                        IllegalArgumentException.class,
+                        () -> serializer.decodeJson(utf8(json), DiagnosticValue.class)),
+                "DiagnosticValue",
+                "wire_text");
+
+        var nested = new DiagnosticBatch(List.of(new DiagnosticValue("valid", 1), invalid));
+        assertNullDiagnostic(
+                assertThrows(IllegalArgumentException.class, () -> serializer.serialize(nested)),
+                "DiagnosticBatch",
+                "items[1].wire_text");
+        assertNullDiagnostic(
+                assertThrows(
+                        IllegalArgumentException.class,
+                        () ->
+                                serializer.decodeJson(
+                                        utf8(
+                                                "{\"items\":[{\"wire_text\":\"valid\",\"sequence\":\"1\"},"
+                                                        + json
+                                                        + "]}"),
+                                        DiagnosticBatch.class)),
+                "DiagnosticBatch",
+                "items[1].wire_text");
+    }
+
+    @Test
+    void numericInt64DiagnosticIdentifiesNestedWirePath() {
+        var serializer = new ZLinkJsonMessageSerializer();
+        var failure =
+                assertThrows(
+                        IllegalArgumentException.class,
+                        () ->
+                                serializer.decodeJson(
+                                        utf8(
+                                                """
+                                {"items":[{"wire_text":"payload-secret","sequence":1}]}
+                                """),
+                                        DiagnosticBatch.class));
+        assertEquals(
+                "Message '"
+                        + DiagnosticBatch.class.getName()
+                        + "': Property 'items[0].sequence' expects a decimal string for a 64-bit integer (framework-json-v1 §5).",
+                failure.getMessage());
+    }
+
+    private static void assertNullDiagnostic(
+            IllegalArgumentException failure, String type, String path) {
+        assertEquals(
+                "Message '"
+                        + ZLinkJsonMessageSerializerTest.class.getName()
+                        + "$"
+                        + type
+                        + "': Property '"
+                        + path
+                        + "' does not allow null. Declare it nullable (@Nullable). "
+                        + "@ZLinkJsonOptional only allows omission.",
+                failure.getMessage());
+    }
+
+    private static ByteBuffer utf8(String value) {
+        return StandardCharsets.UTF_8.encode(value);
+    }
+
+    record DiagnosticValue(@JsonProperty("wire_text") String text, long sequence) {}
+
+    record DiagnosticBatch(List<DiagnosticValue> items) {}
+
+    @Test
     void rawArrayDecodeRespectsHeapBufferRange() {
         ZLinkJsonMessageSerializer serializer = new ZLinkJsonMessageSerializer();
         byte[] backing = {9, 1, 2, 3, 8};

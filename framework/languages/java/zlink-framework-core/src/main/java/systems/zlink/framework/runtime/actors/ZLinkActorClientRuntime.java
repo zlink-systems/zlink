@@ -17,6 +17,8 @@ import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAction;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
@@ -277,13 +279,33 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                                                 () -> {
                                                     ZLinkServiceM6BWireCodec.ActorRouteFence actor =
                                                             actorRouteFence(row, actorId);
-                                                    List<Message> parts =
-                                                            createPacketParts(
+                                                    byte[] header =
+                                                            encodePacketHeader(
                                                                     ZLinkStreamMessageKind.SEND,
                                                                     Optional.empty(),
                                                                     packetName,
                                                                     message,
                                                                     metadata);
+                                                    List<Message> parts;
+                                                    try {
+                                                        parts = createPacketParts(header, message);
+                                                    } catch (RuntimeException failure) {
+                                                        if (flowTracer != null) {
+                                                            flowTracer.reportFailure(
+                                                                    ZLinkDispatchErrorSurface
+                                                                            .SPOT_ACTOR,
+                                                                    ZLinkDispatchMessageKind
+                                                                            .ACTOR_SEND,
+                                                                    ZLinkDispatchErrorReason
+                                                                            .PAYLOAD_ENCODE_FAILED,
+                                                                    ZLinkDispatchErrorAction
+                                                                            .FAIL_CALLER,
+                                                                    packetName,
+                                                                    actorId,
+                                                                    failure);
+                                                        }
+                                                        throw failure;
+                                                    }
                                                     ZLinkInternalSpotNode node = spotNode.get();
                                                     CompletionStage<Void> submission;
                                                     try {
@@ -338,11 +360,13 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                     completion) {
         List<Message> parts =
                 createPacketParts(
-                        ZLinkStreamMessageKind.REQUEST,
-                        Optional.of(1L),
-                        packetName,
-                        request,
-                        metadata);
+                        encodePacketHeader(
+                                ZLinkStreamMessageKind.REQUEST,
+                                Optional.of(1L),
+                                packetName,
+                                request,
+                                metadata),
+                        request);
         try {
             node.requestToActor(
                     actor,
@@ -379,7 +403,7 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
         return mapped;
     }
 
-    private List<Message> createPacketParts(
+    private byte[] encodePacketHeader(
             ZLinkStreamMessageKind kind,
             Optional<Long> requestSeq,
             String packetName,
@@ -394,9 +418,18 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                         requestSeq,
                         packetName,
                         Map.copyOf(metadata));
-        Message headerPart = Message.from(ZLinkStreamHeaderCodec.encode(header));
-        Message payloadPart = ZLinkMessagePayloads.message(ZLinkMessage.of(message), serializer);
-        return List.of(headerPart, payloadPart);
+        return ZLinkStreamHeaderCodec.encode(header);
+    }
+
+    private List<Message> createPacketParts(byte[] header, Object message) {
+        Message headerPart = Message.from(header);
+        try {
+            return List.of(
+                    headerPart, ZLinkMessagePayloads.message(ZLinkMessage.of(message), serializer));
+        } catch (RuntimeException | Error failure) {
+            headerPart.close();
+            throw failure;
+        }
     }
 
     private RuntimeException mapBackendException(Throwable error, String operationName) {

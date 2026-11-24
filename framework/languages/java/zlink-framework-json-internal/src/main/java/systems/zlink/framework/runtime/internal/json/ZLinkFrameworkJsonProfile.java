@@ -511,12 +511,11 @@ public final class ZLinkFrameworkJsonProfile {
                                                                         JsonGenerator generator,
                                                                         SerializerProvider provider)
                                                                         throws IOException {
-                                                                    throw JsonMappingException.from(
-                                                                            generator,
-                                                                            "Property '"
-                                                                                    + writer
-                                                                                            .getName()
-                                                                                    + "' does not allow null.");
+                                                                    throw ZLinkJsonDiagnostic
+                                                                            .nullProperty(
+                                                                                    generator,
+                                                                                    writer
+                                                                                            .getName());
                                                                 }
                                                             });
                                                 }
@@ -616,8 +615,7 @@ public final class ZLinkFrameworkJsonProfile {
                     public Long deserialize(JsonParser parser, DeserializationContext context)
                             throws IOException {
                         if (parser.currentToken() != JsonToken.VALUE_STRING) {
-                            throw JsonMappingException.from(
-                                    parser, "64-bit integers must be decimal JSON strings");
+                            throw ZLinkJsonDiagnostic.decimalStringExpected(parser);
                         }
                         String value = parser.getText();
                         if (!isCanonicalDecimalInteger(value)) {
@@ -790,8 +788,7 @@ public final class ZLinkFrameworkJsonProfile {
 
         @Override
         public Object getNullValue(DeserializationContext context) throws JsonMappingException {
-            throw JsonMappingException.from(
-                    context.getParser(), "Property '" + propertyName + "' does not allow null.");
+            throw ZLinkJsonDiagnostic.nullProperty(context.getParser(), propertyName);
         }
 
         @Override
@@ -816,8 +813,7 @@ public final class ZLinkFrameworkJsonProfile {
 
         @Override
         public Object getNullValue(DeserializationContext context) throws JsonMappingException {
-            throw JsonMappingException.from(
-                    context.getParser(), "Property '" + propertyName + "' does not allow null.");
+            throw ZLinkJsonDiagnostic.nullProperty(context.getParser(), propertyName);
         }
 
         @Override
