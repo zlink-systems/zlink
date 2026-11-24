@@ -394,11 +394,7 @@ export async function serve(
 }
 
 export async function attach(args: string[], endpoints: Endpoints): Promise<void> {
-  const selected = attachedScenarios(
-    selectScenarios(args),
-    Scenarios.filter((name) => name !== 'lobby'),
-    'Dungeon scenarios need unused Instance capacity in an isolated run.'
-  );
+  const selected = attachedScenarios(selectScenarios(args), ['update']);
   const runId = randomUUID();
   const logDir = `.logs/run-${runId}`;
   mkdirSync(logDir, { recursive: true });

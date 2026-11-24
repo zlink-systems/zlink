@@ -50,7 +50,9 @@ Docker와 Compose v2를 준비합니다. 로컬 서버는 Node.js 22 이상과 n
 
 PowerShell 7 스크립트는 `run-server.ps1`과 `run-e2e.ps1`입니다. 서버 실행은 `npm ci`와 빌드를 마친 뒤 Redis와 노드를 띄웁니다. `Server ready`에 WebSocket 주소를 표시하고 해당하는 경우 API 주소를 별도로 표시합니다. Ctrl+C를 누르면 노드와 Redis를 정리합니다. 시작 중이거나 실행 중인 서버가 있으면 두 번째 시작 요청을 거부합니다.
 
-e2e는 `.logs/server.json`에서 준비된 로컬 서버를 확인하고 연결합니다. 연결 실행은 `lobby`에서 로비 입장과 Session 바인딩을 확인합니다. `party`, `reconnect`, `update`는 여유 Instance 용량이 필요하므로 격리 실행으로 검사합니다. 전체 시나리오를 Docker에서 격리 실행하려면 서버를 종료한 뒤 e2e를 실행합니다. `--local` 또는 `-Local`은 별도 로컬 테스트 실행을 선택합니다. 이때도 Redis는 Docker에서 실행합니다. 로컬 빌드를 재사용하려면 `--no-build` 또는 `-NoBuild`를 함께 지정합니다.
+e2e는 `.logs/server.json`에서 준비된 로컬 서버를 확인하고 연결합니다. 연결 실행은 `lobby`, `party`, `reconnect`를 검사합니다. 노드를 교체하는 `update`는 격리 실행에서 검사합니다. 전체 시나리오를 Docker에서 격리 실행하려면 서버를 종료한 뒤 e2e를 실행합니다. `--local` 또는 `-Local`은 별도 로컬 테스트 실행을 선택합니다. 이때도 Redis는 Docker에서 실행합니다. 로컬 빌드를 재사용하려면 `--no-build` 또는 `-NoBuild`를 함께 지정합니다.
+
+Dungeon을 떠날 때는 `LeaveDungeonRequest` 요청에 대한 `DungeonLeft` 응답을 기다립니다. 마지막 멤버가 떠나면 응답 전에 Dungeon을 닫습니다. 연결이 끊기면 재접속을 위해 멤버십을 유지합니다.
 
 `.logs/run-<id>/`에는 노드 설정, `*.out.log`, `*.err.log`, `*.flow.log`와 실패 상세 파일을 저장합니다. 연결 e2e는 별도 폴더에 client 결과를 저장합니다. Docker 빌드와 정리 로그는 `.logs/docker-<project>/`에 저장합니다.
 

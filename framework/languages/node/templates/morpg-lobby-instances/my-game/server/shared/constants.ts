@@ -65,6 +65,7 @@ export const PacketNames = {
   runCompleted: 'RunCompleted',
   enterPartyRun: 'EnterPartyRun',
   actionRejected: 'ActionRejected',
+  leaveDungeonRequest: 'LeaveDungeonRequest',
   sessionInfoRequest: 'SessionInfoRequest',
   sessionInfo: 'SessionInfo'
 } as const;

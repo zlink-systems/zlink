@@ -6,6 +6,7 @@ import { PlayerFactory, PlayerRelocation } from '../shared/player';
 import { Dungeon, DungeonRelocation } from './spots';
 import {
   DungeonNotifications,
+  LeaveDungeon,
   Reconnect,
   View,
   Advance,
@@ -25,6 +26,7 @@ runHost((_builder, config, mesh) => {
   });
   return {
     providers: [
+      LeaveDungeon,
       EntryNotifications,
       DungeonNotifications,
       EnterAgain,

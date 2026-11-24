@@ -60,6 +60,8 @@ export class DungeonOpened {
     readonly nodeId: string = ''
   ) {}
 }
+export class LeaveRegionRequest {}
+export class RegionLeft {}
 export class SessionInfoRequest {}
 export class SessionInfo {
   constructor(

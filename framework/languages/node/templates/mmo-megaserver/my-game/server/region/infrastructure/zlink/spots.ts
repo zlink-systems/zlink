@@ -115,9 +115,14 @@ export class Region implements ZLinkSpot<Player> {
       .submit();
     if (result.state === ZLinkSpotCreateState.Rejected)
       throw new Error('Dungeon creation rejected');
-    const reply = await this.context.outbound
-      .requestToSpot(dungeonId, new DungeonInfoRequest())
-      .submit<DungeonOpened>();
+    let reply: DungeonOpened;
+    try {
+      reply = await this.context.outbound
+        .requestToSpot(dungeonId, new DungeonInfoRequest())
+        .submit<DungeonOpened>();
+    } finally {
+      await this.spots.close(result.spot);
+    }
     await actor.context.boundSession.send(Object.assign(new DungeonOpened(), reply)).submit();
   }
   capture(): Uint8Array {

@@ -56,7 +56,9 @@ The Windows wrappers start PowerShell 7 with UTF-8 output and a process-scoped e
 
 `run-server` runs `npm ci`, builds the project, starts Redis and the local nodes, and prints the WebSocket address next to `Server ready`. When present, HTTP API addresses are printed separately. Use Ctrl+C to stop the nodes and Redis. A second server start is rejected while the first server is starting or running.
 
-`run-e2e` detects a ready server through `.logs/server.json` and runs the compatible scenarios against it. Attached runs check lobby entry and Session binding in `lobby`. The Dungeon scenarios need unused Instance capacity, so `party`, `reconnect`, and `update` run in isolation. Stop the server before running the full Docker e2e. Use `--local` or `-Local` to request a separate local run with Redis in Docker.
+`run-e2e` detects a ready server through `.logs/server.json` and runs the compatible scenarios against it. Attached runs execute lobby, party, and reconnect. The update scenario replaces nodes and runs in isolation. Stop the server before running the full Docker e2e. Use `--local` or `-Local` to request a separate local run with Redis in Docker.
+
+Send `LeaveDungeonRequest` as a request to leave a Dungeon. The last departure closes the Dungeon before the server replies with `DungeonLeft`. A connection loss preserves Dungeon membership for reconnect.
 
 `.logs/run-<id>/` contains generated node settings, separate `*.out.log`, `*.err.log` and `*.flow.log` files, and failure details. Attached runs keep their client results in a new run directory and print the path. The running server continues writing node logs to its own run directory. Docker build and cleanup logs are in `.logs/docker-<project>/`.
 

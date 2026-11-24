@@ -96,6 +96,13 @@ export class ActionRejected {
     readonly retryAfterMs: number = 0
   ) {}
 }
+export class LeaveDungeonRequest {}
+export class DungeonLeft {
+  constructor(
+    readonly dungeonId: string,
+    readonly objectGeneration: bigint
+  ) {}
+}
 export class SessionInfoRequest {}
 export class SessionInfo {
   constructor(

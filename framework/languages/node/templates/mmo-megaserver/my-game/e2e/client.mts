@@ -14,6 +14,8 @@ import {
   RegionView,
   MoveRequest,
   SessionInfo,
+  LeaveRegionRequest,
+  RegionLeft,
   SessionInfoRequest,
   OpenDungeonRequest,
   DungeonOpened,
@@ -54,12 +56,15 @@ export async function scenario(
     }
     return;
   }
+  const members = new Set<PlayerClient>();
   const enter = async (
     client: PlayerClient,
     region = Test.region as string
   ): Promise<RegionView> => {
     await client.enter(region);
-    return client.wait<RegionView>(PacketNames.regionView, 0);
+    const view = await client.wait<RegionView>(PacketNames.regionView, 0);
+    members.add(client);
+    return view;
   };
   const failures: unknown[] = [];
   let a = create('p1');
@@ -161,6 +166,7 @@ export async function scenario(
       assert.equal(opened.nodeId, 'instance');
     } else if (name === 'reconnect') {
       await a.close();
+      members.delete(a);
       a = create('reconnected', a.playerId);
       const restored = await enter(a);
       sameState(before, restored);
@@ -192,6 +198,7 @@ export async function scenario(
     a.verifyConnected();
     b.verifyConnected();
     c?.verifyConnected();
+    for (const member of members) await member.leave();
   } catch (error) {
     failures.push(error);
   } finally {
@@ -294,6 +301,9 @@ class PlayerClient {
     const index = this.messages.length;
     await this.connector.send(new ViewRequest()).submit();
     return this.wait<RegionView>(PacketNames.regionView, index);
+  }
+  async leave(): Promise<void> {
+    await this.connector.request(new LeaveRegionRequest()).submit(RegionLeft);
   }
   async close(): Promise<void> {
     await this.connector.close();

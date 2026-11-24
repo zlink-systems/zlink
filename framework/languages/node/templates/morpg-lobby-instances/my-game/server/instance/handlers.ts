@@ -1,8 +1,13 @@
 import { Injectable } from '@nestjs/common';
-import { zlinkSpotActorSendHandler, zlinkSpotPacketHandler } from '@zlink-systems/nestjs';
+import {
+  zlinkSpotActorRequestHandler,
+  zlinkSpotActorSendHandler,
+  zlinkSpotPacketHandler
+} from '@zlink-systems/nestjs';
 import type { ZLinkMessageContext, ZLinkSpotRequestHandler } from '@zlink-systems/framework';
 import { PacketNames } from '../shared/constants';
 import {
+  DungeonLeft,
   DungeonView,
   PartyView,
   JoinDungeon,
@@ -151,5 +156,18 @@ export class RejectDelivery {
     request: ActionRejected
   ): Promise<void> {
     await actor.deliver(context.packetName, request);
+  }
+}
+
+@Injectable()
+@zlinkSpotActorRequestHandler({
+  spot: () => Dungeon,
+  actor: () => Player,
+  packetName: PacketNames.leaveDungeonRequest
+})
+export class LeaveDungeon {
+  async handle(spot: Dungeon, actor: Player): Promise<DungeonLeft> {
+    await spot.context.leaveActor(actor);
+    return new DungeonLeft(String(spot.context.spotId), spot.context.objectGeneration);
   }
 }

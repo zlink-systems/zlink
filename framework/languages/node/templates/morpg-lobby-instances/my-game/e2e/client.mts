@@ -18,6 +18,8 @@ import {
   EnterDungeonRequest,
   AdvanceRequest,
   ViewRequest,
+  LeaveDungeonRequest,
+  DungeonLeft,
   SessionInfoRequest,
   type SessionInfo,
   PartyView,
@@ -124,6 +126,9 @@ class PlayerClient {
     await this.connector.send(new ViewRequest()).submit();
     return this.wait<DungeonView>(PacketNames.dungeonView, index);
   }
+  async leave(): Promise<void> {
+    await this.connector.request(new LeaveDungeonRequest()).submit(DungeonLeft);
+  }
   async close(): Promise<void> {
     await this.connector.close();
   }
@@ -159,6 +164,7 @@ export async function scenario(
     }
     return;
   }
+  const dungeonMembers = new Set<PlayerClient>();
   async function enter(a: PlayerClient, b: PlayerClient): Promise<DungeonView> {
     await a.login();
     await a.wait(PacketNames.lobbyView, 0);
@@ -254,6 +260,8 @@ export async function scenario(
     // A query from each current Spot confirms deferred joins finished.
     sameState(arrived[0], await a.view());
     sameState(arrived[1], await b.view());
+    dungeonMembers.add(a);
+    dungeonMembers.add(b);
     return arrived[0];
   }
   async function advance(a: PlayerClient, b: PlayerClient, stage: bigint): Promise<DungeonView> {
@@ -299,6 +307,8 @@ export async function scenario(
       const restored = await again.wait<DungeonView>(PacketNames.dungeonView, 0);
       sameState(before, restored);
       assert.equal(restored.nodeId, before.nodeId);
+      dungeonMembers.delete(b);
+      dungeonMembers.add(again);
       const identity = await again.sessionInfo();
       sameActor(sb, identity);
       assert.notEqual(identity.sessionId, sb.sessionId);
@@ -344,6 +354,7 @@ export async function scenario(
     sameState(completed, await a.view());
     assert.equal(a.disconnects, 0);
     if (name !== 'reconnect') assert.equal(b.disconnects, 0);
+    for (const member of dungeonMembers) await member.leave();
   } catch (error) {
     failures.push(error);
   } finally {

@@ -400,11 +400,7 @@ export async function serve(
 }
 
 export async function attach(args: string[], endpoints: Endpoints): Promise<void> {
-  const selected = attachedScenarios(
-    selectScenarios(args),
-    Scenarios.filter((name) => name !== 'connect'),
-    'gameplay scenarios require empty Regions or node replacement in an isolated run.'
-  );
+  const selected = attachedScenarios(selectScenarios(args), ['update']);
   const runId = randomUUID();
   const logDir = `.logs/run-${runId}`;
   mkdirSync(logDir, { recursive: true });

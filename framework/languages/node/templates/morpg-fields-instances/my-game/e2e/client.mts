@@ -13,6 +13,8 @@ import {
   JoinWorldRequest,
   MoveRequest,
   ViewRequest,
+  LeaveDungeonRequest,
+  DungeonLeft,
   SessionInfoRequest,
   CreatePartyRequest,
   JoinPartyRequest,
@@ -134,6 +136,9 @@ class PlayerClient {
   async view(): Promise<DungeonView> {
     return this.send(new ViewRequest(), PacketNames.dungeonView);
   }
+  async leave(): Promise<void> {
+    await this.connector.request(new LeaveDungeonRequest()).submit(DungeonLeft);
+  }
   async close(): Promise<void> {
     await this.connector.close();
   }
@@ -218,6 +223,7 @@ export async function scenario(
     return client;
   };
   const failures: unknown[] = [];
+  const dungeonMembers = new Set<PlayerClient>();
   try {
     const a = await create('p1'),
       b = await create('p2');
@@ -335,6 +341,8 @@ export async function scenario(
           PacketNames.dungeonView,
           (v) => v.stage === stage
         );
+      dungeonMembers.add(a);
+      dungeonMembers.add(b);
       assert.equal(advanced.phase, 'Completed');
       assert.deepEqual(
         await a.send<ActionRejected>(new AdvanceRequest(), PacketNames.actionRejected),
@@ -351,6 +359,8 @@ export async function scenario(
           PacketNames.dungeonView
         );
         assert.deepEqual(restored, advanced);
+        dungeonMembers.delete(b);
+        dungeonMembers.add(again);
         const identity = await again.sessionInfo();
         sameActor(sb, identity);
         assert.notEqual(identity.sessionId, sb.sessionId);
@@ -373,6 +383,8 @@ export async function scenario(
         await c.join(Positions.dungeon);
         await d.join(Positions.dungeon);
         const fresh = await enter(c, d, `replacement-${runId}`);
+        dungeonMembers.add(c);
+        dungeonMembers.add(d);
         assert.notEqual(fresh.runId, advanced.runId);
         assert.notEqual(fresh.dungeonId, advanced.dungeonId);
         assert.equal(fresh.nodeId, advanced.nodeId, 'Replacement instance did not accept new work');
@@ -385,12 +397,15 @@ export async function scenario(
         await c.join(Positions.dungeon);
         await d.join(Positions.dungeon);
         const other = await enter(c, d, '');
+        dungeonMembers.add(c);
+        dungeonMembers.add(d);
         assert.notEqual(other.dungeonId, advanced.dungeonId);
         assert.notEqual(other.runId, advanced.runId);
       }
     }
     assert.equal(a.disconnects, 0);
     if (name !== 'reconnect') assert.equal(b.disconnects, 0);
+    for (const member of dungeonMembers) await member.leave();
   } catch (error) {
     failures.push(error);
   } finally {

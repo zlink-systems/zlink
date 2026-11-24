@@ -15,6 +15,7 @@ const allowedPackets = new Set<string>([
   PacketNames.moveRequest,
   PacketNames.viewRequest,
   PacketNames.openDungeonRequest,
+  PacketNames.leaveRegionRequest,
   PacketNames.sessionInfoRequest
 ]);
 export class Session implements ZLinkSession {
@@ -52,7 +53,7 @@ export class Session implements ZLinkSession {
         .submit();
       return;
     }
-    await actor.relay(payload);
+    await actor.relay(dispatch, payload);
   }
 }
 @Injectable()

@@ -60,6 +60,7 @@ export const PacketNames = {
   openDungeonRequest: 'OpenDungeonRequest',
   dungeonInfoRequest: 'DungeonInfoRequest',
   dungeonOpened: 'DungeonOpened',
+  leaveRegionRequest: 'LeaveRegionRequest',
   sessionInfoRequest: 'SessionInfoRequest',
   sessionInfo: 'SessionInfo'
 } as const;

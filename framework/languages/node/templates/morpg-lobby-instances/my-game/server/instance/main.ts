@@ -7,6 +7,7 @@ import { EntryNotifications, Login, CreateParty, JoinParty } from '../shared/ent
 import { Dungeon, DungeonRelocation } from './dungeon';
 import {
   Prepare,
+  LeaveDungeon,
   Reconnect,
   View,
   Advance,
@@ -27,6 +28,7 @@ runHost((_builder, config, mesh) => {
   });
   return {
     providers: [
+      LeaveDungeon,
       EntryNotifications,
       Entry,
       Login,

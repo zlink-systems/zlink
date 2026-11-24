@@ -35,7 +35,7 @@ export function runDomainChecks(): void {
       Game.allowedRegions.includes('desert'),
     'shared movement and region limits'
   );
-  let now = 0;
+  const now = 0;
   const positions = new Positions(() => now);
   positions.add('p1');
   check(
