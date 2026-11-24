@@ -617,6 +617,31 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         dispatchErrorReporter = Objects.requireNonNull(reporter, "reporter");
     }
 
+    @Override
+    public int[] actorCreateFailure(String actorId, RoutingId sourceRid, Throwable failure) {
+        int[] terminal =
+                ZLinkInternalMeshNode.super.actorCreateFailure(actorId, sourceRid, failure);
+        ZLinkDispatchErrorReporter reporter = dispatchErrorReporter;
+        if (reporter != null
+                && ZLinkRequestFailureMapping.incoming(terminal[1])
+                        == ZLinkFrameworkErrorKind.INTERNAL_FAILURE) {
+            reporter.report(
+                    ZLinkDispatchErrorSurface.SPOT_ACTOR,
+                    ZLinkDispatchMessageKind.ACTOR_REQUEST,
+                    ZLinkDispatchErrorReporter.reasonFrom(failure, terminal[1]),
+                    ZLinkDispatchErrorAction.REPLY_ERROR,
+                    "zlink.actor-create",
+                    null,
+                    null,
+                    null,
+                    actorId,
+                    sourceRid,
+                    null,
+                    unwrap(failure));
+        }
+        return terminal;
+    }
+
     void reportStaleBoundSessionRelay(
             String actorId,
             RoutingId sourceNodeRid,
@@ -4628,7 +4653,8 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             if (intent.reservation().targetNodeGeneration() != localGeneration
                     || actorCreateOperationHandler == null) {
                 return CompletableFuture.failedFuture(
-                        new IllegalStateException(
+                        new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.UNAVAILABLE,
                                 "local Actor create handler or lifecycle is unavailable"));
             }
             return actorCreateOperationHandler.create(
@@ -7442,33 +7468,46 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 || !command.reservation().targetNodeRid().equals(routingId)
                 || command.reservation().targetNodeGeneration()
                         != localDescriptor.lifecycleGeneration()) {
-            replyActorCreateFailure(inbound, command, 107, 21);
+            replyActorCreateFailure(
+                    inbound,
+                    command,
+                    new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.UNAVAILABLE,
+                            "Actor create target or source lifecycle is unavailable"));
             return;
         }
         CompletionStage<ZLinkInternalMeshNode.ActorCreateResponse> completion;
         try {
             completion =
-                    handler.create(
-                            new ZLinkInternalMeshNode.ActorCreateRequest(
-                                    command.sourceNodeRid(),
-                                    command.sourceNodeGeneration(),
-                                    command.operationHigh(),
-                                    command.operationLow(),
-                                    new ZLinkInternalMeshNode.ActorCreateIntent(
-                                            command.actorId(),
-                                            command.stableType(),
-                                            command.reservation(),
+                    Objects.requireNonNull(
+                            handler.create(
+                                    new ZLinkInternalMeshNode.ActorCreateRequest(
+                                            command.sourceNodeRid(),
+                                            command.sourceNodeGeneration(),
                                             command.operationHigh(),
                                             command.operationLow(),
-                                            command.deadlineUnixMs())));
+                                            new ZLinkInternalMeshNode.ActorCreateIntent(
+                                                    command.actorId(),
+                                                    command.stableType(),
+                                                    command.reservation(),
+                                                    command.operationHigh(),
+                                                    command.operationLow(),
+                                                    command.deadlineUnixMs()))),
+                            "Actor create handler returned no completion");
         } catch (RuntimeException failure) {
-            replyActorCreateFailure(inbound, command, 105, 2);
+            replyActorCreateFailure(inbound, command, failure);
             return;
         }
         completion.whenComplete(
                 (response, failure) -> {
                     if (failure != null || response == null) {
-                        replyActorCreateFailure(inbound, command, 105, 2);
+                        replyActorCreateFailure(
+                                inbound,
+                                command,
+                                failure != null
+                                        ? failure
+                                        : new IllegalStateException(
+                                                "Actor create handler returned no response"));
                         return;
                     }
                     sendActorCreateTerminal(inbound, command, response.terminalEnvelope());
@@ -7598,14 +7637,11 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
     private void replyActorCreateFailure(
             ZLinkJavaRawServicePort.Inbound inbound,
             ZLinkServiceM6BWireCodec.ActorCreate command,
-            int terminalResult,
-            int failureCode) {
-        if (inbound.requestSequence() == null) {
-            return;
-        }
+            Throwable failure) {
+        int[] response = actorCreateFailure(command.actorId(), inbound.source(), failure);
         var terminal =
                 new ZLinkServiceM6BWireCodec.ActorCreationTerminal(
-                        terminalResult, failureCode, null, null);
+                        response[0], response[1], null, null);
         port.reply(
                 requireStarted(),
                 inbound.source(),

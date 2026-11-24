@@ -4,9 +4,15 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
+import systems.zlink.framework.runtime.diagnostics.ZLinkDispatchErrorReporter;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkRequestFailureMapping;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeState;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAction;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchFailure;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateRelocationCoordinator;
@@ -80,6 +86,7 @@ final class ZLinkCanonicalRelocationStateMachine
     private final DelayScheduler delayScheduler;
     private final ZLinkRelocationPayloadTransfer.Options transferOptions;
     private final ZLinkRelocationPayloadTransfer.Budget budget;
+    private final ZLinkDispatchErrorReporter dispatchErrors;
     private final RoutingId localNodeRid;
     private final long localNodeGeneration;
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
@@ -262,6 +269,59 @@ final class ZLinkCanonicalRelocationStateMachine
                 targetAdmissionSealed);
     }
 
+    ZLinkCanonicalRelocationStateMachine(
+            ZLinkInternalMeshNode node,
+            String meshName,
+            String entrySpotId,
+            ZLinkLocationRepository locations,
+            ZLinkAggregateRelocationCoordinator coordinator,
+            ZLinkSpotRetireControl.TargetEndpoint target,
+            RetentionScheduler retentionScheduler,
+            ZLinkRelocationPayloadTransfer.Options transferOptions,
+            java.util.function.BooleanSupplier targetAdmissionSealed,
+            ZLinkDispatchErrorReporter dispatchErrors) {
+        this(
+                node,
+                meshName,
+                entrySpotId,
+                locations,
+                coordinator,
+                target,
+                retentionScheduler,
+                transferOptions,
+                System::nanoTime,
+                ZLinkCanonicalRelocationStateMachine::scheduleAfter,
+                targetAdmissionSealed,
+                dispatchErrors);
+    }
+
+    ZLinkCanonicalRelocationStateMachine(
+            ZLinkInternalMeshNode node,
+            String meshName,
+            String entrySpotId,
+            ZLinkLocationRepository locations,
+            ZLinkAggregateRelocationCoordinator coordinator,
+            ZLinkSpotRetireControl.TargetEndpoint target,
+            RetentionScheduler retentionScheduler,
+            ZLinkRelocationPayloadTransfer.Options transferOptions,
+            LongSupplier monotonicNanos,
+            DelayScheduler delayScheduler,
+            ZLinkDispatchErrorReporter dispatchErrors) {
+        this(
+                node,
+                meshName,
+                entrySpotId,
+                locations,
+                coordinator,
+                target,
+                retentionScheduler,
+                transferOptions,
+                monotonicNanos,
+                delayScheduler,
+                () -> false,
+                dispatchErrors);
+    }
+
     private ZLinkCanonicalRelocationStateMachine(
             ZLinkInternalMeshNode node,
             String meshName,
@@ -274,6 +334,34 @@ final class ZLinkCanonicalRelocationStateMachine
             LongSupplier monotonicNanos,
             DelayScheduler delayScheduler,
             java.util.function.BooleanSupplier targetAdmissionSealed) {
+        this(
+                node,
+                meshName,
+                entrySpotId,
+                locations,
+                coordinator,
+                target,
+                retentionScheduler,
+                transferOptions,
+                monotonicNanos,
+                delayScheduler,
+                targetAdmissionSealed,
+                null);
+    }
+
+    private ZLinkCanonicalRelocationStateMachine(
+            ZLinkInternalMeshNode node,
+            String meshName,
+            String entrySpotId,
+            ZLinkLocationRepository locations,
+            ZLinkAggregateRelocationCoordinator coordinator,
+            ZLinkSpotRetireControl.TargetEndpoint target,
+            RetentionScheduler retentionScheduler,
+            ZLinkRelocationPayloadTransfer.Options transferOptions,
+            LongSupplier monotonicNanos,
+            DelayScheduler delayScheduler,
+            java.util.function.BooleanSupplier targetAdmissionSealed,
+            ZLinkDispatchErrorReporter dispatchErrors) {
         this.targetAdmissionSealed =
                 Objects.requireNonNull(targetAdmissionSealed, "targetAdmissionSealed");
         this.node = Objects.requireNonNull(node, "node");
@@ -286,6 +374,7 @@ final class ZLinkCanonicalRelocationStateMachine
         this.monotonicNanos = Objects.requireNonNull(monotonicNanos, "monotonicNanos");
         this.delayScheduler = Objects.requireNonNull(delayScheduler, "delayScheduler");
         this.transferOptions = Objects.requireNonNull(transferOptions, "transferOptions");
+        this.dispatchErrors = dispatchErrors;
         this.budget =
                 new ZLinkRelocationPayloadTransfer.Budget(
                         transferOptions.chunkLimitBytes(),
@@ -850,28 +939,43 @@ final class ZLinkCanonicalRelocationStateMachine
                                 }
                             });
         }
-        target.beginPrepare(
-                        prepare.id(),
-                        attempt.terminal(),
-                        () ->
-                                discardTarget(
-                                        fence,
-                                        attempt,
-                                        new ZLinkFrameworkException(
-                                                ZLinkFrameworkErrorKind.UNAVAILABLE,
-                                                "canonical relocation target was superseded")))
-                .thenCompose(ignored -> attempt.assembler().assembled())
-                .thenCompose(payload -> reconstruct(prepare, payload))
+        withTargetPreparationStage(
+                        target.beginPrepare(
+                                prepare.id(),
+                                attempt.terminal(),
+                                () ->
+                                        discardTarget(
+                                                fence,
+                                                attempt,
+                                                new ZLinkFrameworkException(
+                                                        ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                                        "canonical relocation target was superseded"))),
+                        "temporary_queue")
+                .thenCompose(
+                        ignored ->
+                                withTargetPreparationStage(
+                                        attempt.assembler().assembled(), "assembly"))
+                .thenCompose(
+                        payload ->
+                                withTargetPreparationStage(
+                                        reconstruct(prepare, payload), "reconstruct"))
                 .thenCompose(
                         restore -> {
-                            return target.stage(restore.request())
+                            return withTargetPreparationStage(
+                                            target.stage(restore.request()), "restore")
                                     .thenRun(() -> attempt.request().complete(restore.request()))
                                     .thenCompose(
                                             ignored ->
-                                                    secureSessionRoutes(restore.request(), attempt))
+                                                    withTargetPreparationStage(
+                                                            secureSessionRoutes(
+                                                                    restore.request(), attempt),
+                                                            "session_route"))
                                     .thenCompose(
                                             ignored ->
-                                                    coordinator.prepare(restore.authority(), OPEN))
+                                                    withTargetPreparationStage(
+                                                            coordinator.prepare(
+                                                                    restore.authority(), OPEN),
+                                                            "store_prepare"))
                                     .thenAccept(attempt.prepared()::complete);
                         })
                 .whenComplete(
@@ -879,7 +983,18 @@ final class ZLinkCanonicalRelocationStateMachine
                             if (failure == null) {
                                 attempt.ready().complete(null);
                             } else {
-                                Throwable cause = unwrap(failure);
+                                TargetPreparationFailure preparationFailure =
+                                        targetPreparationFailure(failure);
+                                Throwable cause =
+                                        preparationFailure == null
+                                                ? unwrap(failure)
+                                                : preparationFailure.getCause();
+                                reportTargetPreparationFailure(
+                                        attempt,
+                                        preparationFailure == null
+                                                ? "prepare_admission"
+                                                : preparationFailure.stage(),
+                                        cause);
                                 attempt.request().completeExceptionally(cause);
                                 attempt.prepared().completeExceptionally(cause);
                                 if (request) {
@@ -910,6 +1025,70 @@ final class ZLinkCanonicalRelocationStateMachine
                             return null;
                         });
         return CompletableFuture.completedFuture(null);
+    }
+
+    private void reportTargetPreparationFailure(
+            TargetAttempt attempt, String stage, Throwable failure) {
+        ZLinkDispatchErrorReporter reporter = dispatchErrors;
+        if (reporter == null || !reporter.errorsEnabled()) {
+            return;
+        }
+        var prepare = attempt.prepare();
+        var object = prepare.object();
+        String relocationIdentity = prepare.id() + "/attempt/" + prepare.targetAttemptGeneration();
+        boolean userSpot = object.kind() == 3;
+        reporter.report(
+                new ZLinkDispatchFailure(
+                        ZLinkDispatchErrorSurface.ACTOR_RELOCATION,
+                        ZLinkDispatchMessageKind.CONTROL,
+                        ZLinkDispatchErrorReason.HANDLER_EXCEPTION,
+                        ZLinkDispatchErrorAction.FAIL_CALLER,
+                        "target_prepare_" + stage,
+                        null,
+                        null,
+                        userSpot ? object.objectId() : null,
+                        userSpot ? null : object.objectId(),
+                        prepare.sourceNodeRid().toString(),
+                        relocationIdentity,
+                        null,
+                        null,
+                        meshName,
+                        prepare.target().nodeRid().toString(),
+                        failure));
+    }
+
+    private static <T> CompletionStage<T> withTargetPreparationStage(
+            CompletionStage<T> stage, String name) {
+        return stage.handle(
+                (value, failure) -> {
+                    if (failure != null) {
+                        throw new CompletionException(
+                                new TargetPreparationFailure(name, unwrap(failure)));
+                    }
+                    return value;
+                });
+    }
+
+    private static TargetPreparationFailure targetPreparationFailure(Throwable failure) {
+        Throwable cause = unwrap(failure);
+        return cause instanceof TargetPreparationFailure preparationFailure
+                ? preparationFailure
+                : null;
+    }
+
+    private static final class TargetPreparationFailure extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+
+        private final String stage;
+
+        TargetPreparationFailure(String stage, Throwable cause) {
+            super(cause);
+            this.stage = stage;
+        }
+
+        String stage() {
+            return stage;
+        }
     }
 
     /**

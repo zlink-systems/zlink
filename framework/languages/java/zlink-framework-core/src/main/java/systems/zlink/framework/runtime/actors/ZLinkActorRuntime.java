@@ -1150,15 +1150,14 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 .thenCompose(stage -> stage)
                 .thenCompose(
                         actor -> {
-                            if (!locations.isOwnerAdmissionOpen()) {
+                            try {
+                                locations.ensureOwnerAdmissionOpen();
+                            } catch (ZLinkFrameworkException admissionClosed) {
                                 return spotNode.destroyActor(actorRef, defaultRequestTimeout)
                                         .thenCompose(
                                                 ignored ->
                                                         CompletableFuture.failedFuture(
-                                                                new IllegalStateException(
-                                                                        "The owner lease admission"
-                                                                                + " deadline has"
-                                                                                + " expired.")));
+                                                                admissionClosed));
                             }
                             context.setActor(actor);
                             actorRegistry.register(actorId, actorType, actor, context);

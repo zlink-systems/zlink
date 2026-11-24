@@ -1,10 +1,12 @@
 package systems.zlink.framework.runtime.spots;
 
+import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatchEvent;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatchInfo;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec.InstanceRouteFence;
@@ -298,10 +300,10 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
         CompletionStage<Void> admitted;
         try {
             ParsedPacket observed = null;
-            systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext.State flow = null;
+            ZLinkFlowContext.State flow = null;
             if (host.flowCaptureEnabled()) {
                 try {
-                    observed = ZLinkSpotRuntime.parsePacket(received.parts());
+                    observed = ZLinkSpotRuntime.parsePacket(received.parts(), true);
                     if (observed.header() != null) {
                         flow = ZLinkSpotFlowFrame.fromEnvelopeHeader(observed.header());
                     }
@@ -312,18 +314,17 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                     return CompletableFuture.completedFuture(null);
                 }
             }
+            var inboundFlow =
+                    observed != null && flow == null
+                            ? ZLinkFlowContext.create(ZLinkFlowOrigin.INBOUND)
+                            : flow;
             admitted =
                     context.enqueueMessage(
                             received,
-                            () -> host.dispatchQueuedInstanceMessage(this, received),
+                            () -> host.dispatchQueuedInstanceMessage(this, received, inboundFlow),
                             accepted);
             if (observed != null) {
-                try (var ignored =
-                        systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext
-                                .enterOrCreate(
-                                        flow,
-                                        systems.zlink.framework.monitoring.ZLinkFlowOrigin
-                                                .INBOUND)) {
+                try (var ignored = ZLinkFlowContext.enter(inboundFlow)) {
                     host.traceSpotRouteFlow(
                             systems.zlink.framework.runtime.internal.diagnostics
                                     .ZLinkMessageFlowOutcome.RECEIVED,
@@ -398,7 +399,7 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                         () -> closeOnLifecycle(reason, deadline).thenAccept(result::complete),
                         message ->
                                 host.dispatchQueuedInstanceMessage(
-                                        this, (ZLinkBackendReceived) message),
+                                        this, (ZLinkBackendReceived) message, null),
                         this::hasCommittedClose)
                 .whenComplete(
                         (ignored, failure) -> {
@@ -554,13 +555,17 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                         });
     }
 
-    CompletionStage<Void> replayMessage(ZLinkBackendReceived received) {
+    CompletionStage<Void> replayMessage(
+            ZLinkBackendReceived received, ZLinkFlowContext.State inboundFlow) {
         // Pending frames belong to the accepted queue record. Only the executing handler
         // is registered for terminal dispatch cleanup, on the current incarnation.
         trackRouteReceived(received);
+        boolean captureFlow = host.flowCaptureEnabled();
         ParsedPacket packet;
         try {
-            packet = ZLinkSpotRuntime.parsePacket(received.parts());
+            packet =
+                    ZLinkSpotRuntime.parsePacket(
+                            received.parts(), inboundFlow == null && captureFlow);
         } catch (systems.zlink.framework.errors.ZLinkFrameworkException invalidEnvelope) {
             failRouteInvalidFlow(received, invalidEnvelope);
             return CompletableFuture.completedFuture(null);
@@ -568,7 +573,18 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
             closeRouteReceived(received);
             return CompletableFuture.failedFuture(failure);
         }
-        return context.runLifecycleExecution(() -> dispatchSpotRouteHandler(received, packet));
+        ZLinkFlowContext.State flow = captureFlow ? inboundFlow : null;
+        if (captureFlow && flow == null && packet.header() != null) {
+            flow = ZLinkSpotFlowFrame.fromEnvelopeHeader(packet.header());
+        }
+        ZLinkFlowContext.State dispatchFlow = flow;
+        return context.runLifecycleExecution(
+                () -> {
+                    try (var flowScope =
+                            dispatchFlow == null ? null : ZLinkFlowContext.enter(dispatchFlow)) {
+                        return dispatchSpotRouteHandler(received, packet);
+                    }
+                });
     }
 
     CompletionStage<Void> closeResourcesAsync() {
