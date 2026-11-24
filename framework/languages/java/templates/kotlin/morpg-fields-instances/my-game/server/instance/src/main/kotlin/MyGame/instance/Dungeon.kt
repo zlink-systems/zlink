@@ -34,21 +34,29 @@ class Dungeon(
     }
 
     override suspend fun onJoinedActorSuspending(actor: Player) {
+        println("EVENT Dungeon joined: ${context.spotId()}")
         val actorId = actor.context.actorId()
         state.arrived(actorId)
         val entered =
-            context.outbound().kotlin().requestToSpot<PartyCommandResult>(
-                state.partyId,
-                DungeonMemberEntered(state.runId, actorId),
-            ).await()
-        check(entered.rejection == null) { entered.rejection?.reason ?: "Party rejected member arrival" }
+            context
+                .outbound()
+                .kotlin()
+                .requestToSpot<PartyCommandResult>(
+                    state.partyId,
+                    DungeonMemberEntered(state.runId, actorId),
+                )
+                .await()
+        check(entered.rejection == null) {
+            entered.rejection?.reason ?: "Party rejected member arrival"
+        }
         if (state.phase != RunPhase.Active) return
 
         val started =
-            context.outbound().kotlin().requestToSpot<PartyCommandResult>(
-                state.partyId,
-                RunStarted(state.runId),
-            ).await()
+            context
+                .outbound()
+                .kotlin()
+                .requestToSpot<PartyCommandResult>(state.partyId, RunStarted(state.runId))
+                .await()
         check(started.rejection == null) { started.rejection?.reason ?: "Party rejected run start" }
         sendToMembers(view())
     }
@@ -79,11 +87,13 @@ class Dungeon(
             return
         }
         if (state.phase == RunPhase.Completed) {
+            println("EVENT Dungeon completed: ${context.spotId()}")
             val completed =
-                context.outbound().kotlin().requestToSpot<PartyCommandResult>(
-                    state.partyId,
-                    RunCompleted(state.runId),
-                ).await()
+                context
+                    .outbound()
+                    .kotlin()
+                    .requestToSpot<PartyCommandResult>(state.partyId, RunCompleted(state.runId))
+                    .await()
             check(completed.rejection == null) {
                 completed.rejection?.reason ?: "Party rejected run completion"
             }
@@ -96,7 +106,11 @@ class Dungeon(
     suspend fun enter(actor: Player) = show(actor)
 
     suspend fun rejectTownRequest(actor: Player) {
-        actor.context.boundSession().kotlin().send(ActionRejected(Rejection.RUN_IN_PROGRESS)).await()
+        actor.context
+            .boundSession()
+            .kotlin()
+            .send(ActionRejected(Rejection.RUN_IN_PROGRESS))
+            .await()
     }
 
     private suspend fun sendToMembers(current: DungeonView) {

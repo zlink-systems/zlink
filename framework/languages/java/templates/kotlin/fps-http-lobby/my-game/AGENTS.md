@@ -1,5 +1,15 @@
 # MyGame FPS development guide
 
+## Template reference
+
+This template is a reference. To build a new game, create a new project and design its nodes, Spots, Actors and messages for that game, using this template's structure and rules as reference; do not rename or edit this template in place into the game.
+
+## Local execution
+
+Start the local deployment with `./run-server.sh` or `.\run-server.cmd`. From another terminal run `./run-e2e.sh` or `.\run-e2e.cmd`. The e2e runner attaches when the server is ready and otherwise starts an isolated Docker deployment. The `lobby` and `update` scenarios start or replace nodes and require an isolated run. Use `--isolated` or `-Isolated` to force isolation. Stop the local server with Ctrl+C.
+
+Node stdout, stderr, message flow and scenario failure details are under `.logs/run-<id>/`. Follow the paths printed by both commands when diagnosing an attached run.
+
 ## Rules for AI
 
 `server/lobby` is an API node that holds no game state; the session node manages client connections, and the play nodes host the game Spots. Before writing code, decide which kind you are editing.
@@ -39,10 +49,10 @@ Run from this project root with Docker Compose v2 and Linux containers:
 PowerShell 7 provides the same commands:
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
-pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario lobby,hit,wall,input,reconnect,update
-pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+.\run-e2e.cmd -BuildOnly
+.\run-e2e.cmd
+.\run-e2e.cmd -Scenario lobby,hit,wall,input,reconnect,update
+.\run-e2e.cmd -CheckStructure
 ```
 
 For host-process debugging, install JDK 25 and add `--local` or `-Local`. After a local build, `--no-build` or `-NoBuild` skips compilation. Keep scenario assertions and inspect the first failure before rerunning.
@@ -70,7 +80,7 @@ Use the [ZLink documentation](https://docs.zlink.systems/), [Kotlin server guide
 
 ## Diagnostics and defects
 
-Dispatch diagnostics are Normal in `Hosting.kt`; node stderr contains message-flow records. Preserve the first `.logs/run-<id>/` settings, stdout, and stderr before modifying or rerunning a failing case. Compare operation, Actor, flow/corr, and transition order between passing and failing traces. A single isolated failure remains a defect even if a later run passes. Preserve startup exceptions when no flow record exists yet.
+Dispatch diagnostics are Normal in `Hosting.kt`; the runner saves message-flow records in each node’s `*-message-flow.log`. Preserve the first `.logs/run-<id>/` settings, stdout, and stderr before modifying or rerunning a failing case. Compare operation, Actor, flow/corr, and transition order between passing and failing traces. A single isolated failure remains a defect even if a later run passes. Preserve startup exceptions when no flow record exists yet.
 
 For local process discovery diagnostics, set `ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY=1` before launching nodes. Docker nodes do not inherit arbitrary host environment variables. Do not change timeout, fixed waits, or assertions to hide failures. The runner cleans up its own processes and Compose project; retain cleanup errors and do not stop other workloads.
 

@@ -8,6 +8,10 @@ flowchart LR
     Session -->|Location / relocation store| Redis
 ```
 
+[한국어](README.ko.md)
+
+This template is a reference. To build a new game, create a new project and design its nodes, Spots, Actors and messages for that game, using this template's structure and rules as reference; do not rename or edit this template in place into the game.
+
 ## Prerequisites
 
 Install Docker with Compose v2 and access to a Linux container daemon. Bash or PowerShell 7 runs the scripts. Docker builds use Eclipse Temurin JDK and JRE `25.0.2+10` and Docker CLI `28.5.1`; the image references are at the top of `Dockerfile`. Network access to Maven Central and the Redis container registry is required. Host debugging also requires JDK 25 (Gradle resolves Kotlin 2.3.21).
@@ -29,16 +33,34 @@ Build the node and runner images from this directory.
 The build command removes its image tags after checking the build; Docker retains reusable build layers. PowerShell provides the same command.
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
+.\run-e2e.cmd -BuildOnly
 ```
 
 Both commands build the modules listed in `settings.gradle.kts`.
+
+## Local server and e2e
+
+Run the first command from this directory to build and start Redis and the application nodes. Run the second command from a separate terminal to connect the scenarios to that deployment. When the server is ready, `Server ready` shows the WebSocket address for game clients. Press Ctrl+C in the server terminal to stop its processes and Redis. On Windows the `.cmd` files use PowerShell 7 (`pwsh`).
+
+```bash
+./run-server.sh
+./run-e2e.sh
+```
+
+```powershell
+.\run-server.cmd
+.\run-e2e.cmd
+```
+
+With no running server, `run-e2e` creates and removes an isolated Docker deployment. The isolated `connect` also checks the Session drain. Use `--isolated` (`-Isolated` on Windows) to force isolation while a server is running.
+
+The server publishes its endpoints in `.logs/server.json`. Each run keeps node stdout, stderr, Framework message-flow records and failure details under `.logs/run-<id>/`. For an attached run, find the node logs under the directory printed by `run-server` and the scenario details under the directory printed by `run-e2e`. Docker build and cleanup logs are under `.logs/docker-<project>/`.
 
 ## Client connection
 
 ### Endpoint and first packet
 
-The Session client STREAM listener defaults to `tcp://127.0.0.1:0` in `server/config/session.json`. Port `0` asks the OS for a free port; use the actual `streamEndpoint` in the process line `READY <json>`, which also contains `id` and `meshEndpoint`. TCP has no URL path. Web browsers, Unity WebGL, and Cocos Creator web cannot connect to this default TCP listener; they require a separately configured WebSocket deployment.
+The Session client STREAM listener defaults to `ws://127.0.0.1:0` in `server/config/session.json`. Port `0` asks the OS for a free port; use the actual `streamEndpoint` in the process line `READY <json>`, which also contains `id` and `meshEndpoint`. Use the WebSocket address printed by `run-server` for browser clients.
 
 Loopback is reachable only inside the same host/network namespace. Keep a deployment running for external clients, bind to a reachable interface and port, and expose that port from containers. The Docker e2e deployment is temporary and is removed after the run. Mesh listeners and Redis are not game-client endpoints.
 
@@ -99,7 +121,7 @@ suspend fun connectOnce(endpoint: String) {
 }
 ```
 
-## Local e2e
+## Scenario selection and validation
 
 Run the default Docker scenario from this directory.
 
@@ -108,11 +130,11 @@ Run the default Docker scenario from this directory.
 ./run-e2e.sh --scenario connect
 ```
 
-The `connect` scenario waits for node READY, connects and closes one public STREAM connector, then checks the drain markers. The runner verifies a successful shutdown while it cleans up. PowerShell selects the same scenario.
+The `connect` scenario waits for node READY, connects and closes one public STREAM connector, then checks the drain markers in an isolated run. The runner verifies a successful shutdown while it cleans up. PowerShell selects the same scenario.
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario connect
+.\run-e2e.cmd
+.\run-e2e.cmd -Scenario connect
 ```
 
 A successful run prints `✓ connect` and `Scenarios: 1/1 passed`. Cleanup failures return a nonzero exit code.
@@ -126,7 +148,7 @@ Validate the structure without starting Redis or the node.
 ```
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+.\run-e2e.cmd -CheckStructure
 ```
 
 Changes to registrations, settings, structure, and scenarios must be made together; see [the development guide](AGENTS.md).
