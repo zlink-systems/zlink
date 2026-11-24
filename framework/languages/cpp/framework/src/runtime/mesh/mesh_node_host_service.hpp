@@ -98,10 +98,6 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
                                   spot_ref_t spot,
                                   std::chrono::steady_clock::time_point deadline,
                                   std::uint64_t wire_deadline);
-    task_t<std::vector<mesh_node_descriptor_t>>
-    actor_placement_targets (std::string mesh_name,
-                             std::string stable_type,
-                             std::shared_ptr<detail::mesh_node_runtime_t> source);
     task_t<actor_create_result_t> create_actor (bool exclusive,
                                                 actor_id_t actor_id,
                                                 std::string stable_type,

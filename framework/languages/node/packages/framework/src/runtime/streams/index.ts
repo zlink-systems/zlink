@@ -123,7 +123,8 @@ export interface ZLinkStreamBindingRuntimeOptions {
   readonly actorRefResolver?: (actor: ZLinkActor) => ActorRef;
   readonly actorAuthorityFenceResolver?: (
     actorId: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    bindTarget?: ActorRef
   ) => Promise<ZLinkActorSessionAuthorityFence | undefined>;
   readonly nativeActorNodeProvider?: () =>
     | {

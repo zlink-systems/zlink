@@ -302,7 +302,7 @@ export class ZLinkActorTransferRuntime {
     completion: ZLinkDeferredJoinCompletion,
     actor: ZLinkActor,
     actorRef: ActorRef,
-    submitMailbox: <T>(operation: () => Promise<T>) => Promise<T>,
+    submitMailbox: (operation: () => Promise<void>) => Promise<void>,
     signal?: AbortSignal
   ): Promise<void> {
     const terminalKey = deferredJoinTerminalKey(completion);
@@ -339,7 +339,7 @@ export class ZLinkActorTransferRuntime {
     completion: ZLinkDeferredJoinCompletion,
     actor: ZLinkActor,
     actorRef: ActorRef,
-    submitMailbox: <T>(operation: () => Promise<T>) => Promise<T>
+    submitMailbox: (operation: () => Promise<void>) => Promise<void>
   ): Promise<void> {
     const targetActorRef = this.options
       .actorManager()
@@ -1138,7 +1138,8 @@ export class ZLinkActorTransferRuntime {
     const state = this.options.actorManager()?.getState(actor.context.actorId);
     state?.setJoinedSpot(spotId, spot);
     const actorRef = state?.nativeActorRef;
-    const binding = state?.boundSession;
+    // The legacy routed transfer stages this input before its native Actor exists.
+    const binding = state?.boundSessionValue;
     if (
       actorRef !== undefined &&
       binding?.sessionNodeRid !== undefined &&
@@ -1151,7 +1152,8 @@ export class ZLinkActorTransferRuntime {
           actorRef,
           binding.sessionNodeRid,
           binding.sessionRid,
-          binding.bindingGeneration
+          binding.bindingGeneration,
+          binding
         );
     }
   }

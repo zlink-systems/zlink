@@ -328,18 +328,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
     }
 
     private <T> T inStateLane(Supplier<T> work) {
-        try {
-            return stateLane.runAsync(work).toCompletableFuture().join();
-        } catch (CompletionException failure) {
-            Throwable cause = failure.getCause();
-            if (cause instanceof RuntimeException runtimeFailure) {
-                throw runtimeFailure;
-            }
-            if (cause instanceof Error error) {
-                throw error;
-            }
-            throw failure;
-        }
+        return stateLane.awaitResult(work);
     }
 
     public void beginDrain() {
@@ -2494,36 +2483,14 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
 
     CompletionStage<Void> prepareRemoteSessionBinding(ZLinkBackendActorRef actor) {
         return locations
-                .resolveStoredActorRoute(actor.actorId())
+                .resolveSessionBindingRoute(actor)
                 .thenAccept(
-                        route -> {
-                            // Session-Actor binding §12: a row of this ActorId with another
-                            // ObjectGeneration is InvalidOperation; every other mismatch has no
-                            // route and ends Unavailable.
-                            if (route != null
-                                    && route.actorRef() != null
-                                    && route.actorRef().objectGeneration() != actor.generation()) {
-                                throw new ZLinkFrameworkException(
-                                        ZLinkFrameworkErrorKind.INVALID_OPERATION,
-                                        "Actor session binding ObjectGeneration differs from the"
-                                                + " current Actor: "
-                                                + actor.actorId());
-                            }
-                            if (route == null
-                                    || route.actorRef() == null
-                                    || !route.actorRef().nodeRid().equals(actor.nodeRid())
-                                    || route.authorityOwnerGeneration() <= 0) {
-                                throw new ZLinkFrameworkException(
-                                        ZLinkFrameworkErrorKind.UNAVAILABLE,
-                                        "Actor session binding route is unavailable: "
-                                                + actor.actorId());
-                            }
-                            spotNode.observeActorAuthority(
-                                    actor,
-                                    route.authorityOwnerGeneration(),
-                                    route.ownerLeaseGeneration(),
-                                    route.targetNodeGeneration());
-                        });
+                        route ->
+                                spotNode.observeActorAuthority(
+                                        actor,
+                                        route.authorityOwnerGeneration(),
+                                        route.ownerLeaseGeneration(),
+                                        route.targetNodeGeneration()));
     }
 
     void prepareRelocatedSessionBinding(
@@ -4913,18 +4880,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         private final ZLinkStateLane stateLane = new ZLinkStateLane();
 
         private <T> T inStateLane(Supplier<T> work) {
-            try {
-                return stateLane.runAsync(work).toCompletableFuture().join();
-            } catch (CompletionException failure) {
-                Throwable cause = failure.getCause();
-                if (cause instanceof RuntimeException runtimeFailure) {
-                    throw runtimeFailure;
-                }
-                if (cause instanceof Error error) {
-                    throw error;
-                }
-                throw failure;
-            }
+            return stateLane.awaitResult(work);
         }
 
         void register(

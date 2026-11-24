@@ -2291,18 +2291,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     }
 
     private <T> T inCapacityStateLane(Supplier<T> work) {
-        try {
-            return capacityStateLane.runAsync(work).toCompletableFuture().join();
-        } catch (CompletionException failure) {
-            Throwable cause = failure.getCause();
-            if (cause instanceof RuntimeException runtimeFailure) {
-                throw runtimeFailure;
-            }
-            if (cause instanceof Error error) {
-                throw error;
-            }
-            throw failure;
-        }
+        return capacityStateLane.awaitResult(work);
     }
 
     private static IllegalStateException inactiveCapacityContext() {

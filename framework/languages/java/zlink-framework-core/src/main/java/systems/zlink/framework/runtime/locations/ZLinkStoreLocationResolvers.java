@@ -11,9 +11,12 @@ import systems.zlink.framework.locations.ZLinkObjectCapability;
 import systems.zlink.framework.locations.ZLinkPageRequest;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshNodeState;
 import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityMissing;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityReadResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectPeer;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectPeerResolver;
@@ -136,13 +139,50 @@ public final class ZLinkStoreLocationResolvers
         return readActor(actorId, null);
     }
 
+    public CompletionStage<ActorRoute> readActorSessionBindingRoute(ZLinkBackendActorRef actor) {
+        return readActorAuthority(actor.actorId())
+                .thenCompose(
+                        read ->
+                                resolveReadyActor(actor.actorId(), read, actorRoutes)
+                                        .thenApply(
+                                                route ->
+                                                        requireSessionBindingRoute(
+                                                                actor, read, route)));
+    }
+
+    private static ActorRoute requireSessionBindingRoute(
+            ZLinkBackendActorRef actor, ZLinkAuthorityReadResult authority, ActorRoute route) {
+        if (authority instanceof ZLinkAuthorityMissing) {
+            throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.NOT_FOUND,
+                    "Actor authority was not found: " + actor.actorId());
+        }
+        if (route != null && route.actorRef().objectGeneration() != actor.generation()) {
+            throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                    "Actor session binding ObjectGeneration differs from the current Actor: "
+                            + actor.actorId());
+        }
+        if (route == null
+                || !route.actorRef().nodeRid().equals(actor.nodeRid())
+                || route.authorityOwnerGeneration() <= 0) {
+            throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    "Actor session binding route is unavailable: " + actor.actorId());
+        }
+        return route;
+    }
+
     private CompletionStage<ActorRoute> readActor(
             String actorId, Map<String, CachedRoute<ActorRoute>> cache) {
+        return readActorAuthority(actorId)
+                .thenCompose(read -> resolveReadyActor(actorId, read, cache));
+    }
+
+    private CompletionStage<ZLinkAuthorityReadResult> readActorAuthority(String actorId) {
         routeReadAdmission.run();
         return observeAuthorityRead(
-                        stores.unifiedStore()
-                                .read(ZLinkAuthorityKeyCodec.actor(actorId), () -> false))
-                .thenCompose(read -> resolveReadyActor(actorId, read, cache));
+                stores.unifiedStore().read(ZLinkAuthorityKeyCodec.actor(actorId), () -> false));
     }
 
     @Override
