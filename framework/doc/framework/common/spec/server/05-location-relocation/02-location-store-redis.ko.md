@@ -268,9 +268,8 @@ incarnation과 owner 순서만 구분하고, 서로 다른 ID의 값을 비교�
   사라진 뒤 같은 ID가 낮은 값을 다시 받으면 옛 ref의 제어가 새 incarnation에 닿을 수 있다. 저장 공간은
   발급한 ID 수에 비례한다.
 - **전환 기준값:** 행이 없을 때 다음 값은 `1`이 아니라 `zlink:v12:generation-floor`(bare decimal)의 값이다.
-  v11에서 전환할 때 Store마다 한 번, v11 `object-counter`와 `authority-owner-counter` 중 큰 값을 이 key에
-  쓴다. 새로 만드는 Store는 `1`을 쓴다. 이 key는 그 뒤 바꾸지 않는다. 전환 전에 발급된 어떤 값도 전환 뒤
-  같은 ID에 다시 발급되지 않는다.
+  이 key는 한 번 쓴 뒤 바꾸지 않으며, 전환 전에 발급된 어떤 값도 전환 뒤 같은 ID에 다시 발급되지 않게
+  한다. 새로 만드는 Store는 `1`을 쓰고, v11 Store의 초기화는 [§8.1](#81-v11에서-v12로-전환)이 정한다.
 - **Relocation:** aggregate relocation은 participant마다 그 ID의 `authority-owner-counter`에서 하나씩
   발급한다. 전역 연속 범위를 나눠 주지 않는다.
 
@@ -296,19 +295,26 @@ mapping으로 literal마다 physical key를 다시 계산하며 record나 scan p
 
 ### 8.1 v11에서 v12로 전환
 
-ID별 counter(§8)와 수용 공간 counter key(§4.1)는 v11 Store 형식과 함께 쓸 수 없다. 한 Location
-Store를 공유하는 모든 node는 같은 형식을 쓴다 — v11 node와 v12 node가 같은 Store를 동시에 쓰지
-않는다. v12 node는 v11 counter만 있는 Store에서 시작할 때 첫 placement·생성 전에 다음 전환을 한 번
-실행하고, 끝나기 전에는 `Serving`을 게시하지 않는다.
+ID별 counter(§8)와 수용 공간 counter key([§4.1](#41-수용-공간-counter))는 v11 Store 형식과 함께 쓸 수 없다. 한
+Location Store를 공유하는 모든 node는 같은 형식을 쓴다 — v11 node를 모두 멈춘 뒤 v12 node를 시작하며, 두
+형식의 node가 같은 Store를 동시에 쓰지 않는다.
 
-1. `zlink:v12:generation-floor`가 없으면 v11 `object-counter`와 `authority-owner-counter` 중 큰
-   값(둘 다 없으면 `1`)을 `Missing` 조건으로 Put한다. 이미 있으면 바꾸지 않는다.
-2. MeshNode 수용 공간 record마다 같은 batch에서 그 record의 active·pending 값을 §4.1 counter key로
-   Put하고(counter key에 `Missing` 조건) 옛 record를 지운다.
+전환 완료는 `zlink:v12:format` key(값 `converted`)가 있는 것으로 판정한다. 이 key가 없으면 v12 node는
+[MeshNode §6](../03-spot-actor/03-mesh-node.ko.md#6-등록과-startup-순서) 2단계에서 Location Store를 쓰는 초기화·복구
+(Entry Spot 발급, startup 반납, 예약·commit·반납)를 시작하기 전에 다음 절차를 실행한다. 절차의 모든 쓰기는
+[§4](#4-conditional-atomic-batch)의 conditional batch이고, 조건 하나라도 거짓이면 batch 전체가 적용되지 않는다.
+여러 node가 동시에 실행하거나 중간에 멈춘 뒤 다시 실행해도 결과가 같다.
 
-두 단계는 조건부 write라 여러 node가 동시에 시작해도 한 번만 적용되고, 중간에 멈춰도 다음 시작이
-남은 record부터 이어 간다. 전환이 끝난 Store에 v11 node가 다시 붙으면 v11 counter가 낮은 값을
-발급할 수 있으므로 되돌리지 않는다(되돌리려면 §8의 clean break로 Store를 비운다).
+1. `zlink:v12:generation-floor`가 없으면 `zlink:v11:object-counter`와 `zlink:v11:authority-owner-counter` 중 큰
+   값(둘 다 없으면 `1`)을 `Missing` 조건으로 Put한다.
+2. 남은 v11 MeshNode 수용 공간 record마다 batch 하나로 그 record의 active·pending 값을 §4.1 counter key에 Put하고
+   옛 record를 Delete한다. 조건은 옛 record의 `Value`(읽은 bytes)와 대상 counter key 전부의 `Missing`이다.
+   `Conflict`나 응답 유실이면 그 record와 counter key를 다시 읽어, 옛 record가 없고 counter key가 있으면 끝난
+   것으로 보고 아니면 다시 시도한다.
+3. Scan해서 옛 수용 공간 record가 하나도 남지 않았으면 `zlink:v12:format`을 `Missing` 조건으로 Put한다.
+
+`zlink:v12:format`이 생기기 전에는 어떤 v12 node도 예약·commit·반납을 하지 않으므로, 전환 중인 record를 일반
+수용 공간 변경이 건드리지 않는다. 전환은 되돌리지 않는다. v11로 돌아가려면 새 Store를 쓴다.
 
 ## 9. 공식 Redis provider — opaque 저장 형식
 

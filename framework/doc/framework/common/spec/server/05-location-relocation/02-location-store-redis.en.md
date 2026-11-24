@@ -323,9 +323,9 @@ condition.
   so if the row disappeared and the same ID received a lower value again, an old ref's control could
   reach the new incarnation. Storage grows with the number of IDs issued.
 - **Transition floor:** when the row is absent, the next value is not `1` but the value of
-  `zlink:v12:generation-floor` (a bare decimal). When moving from v11, write once per Store the larger of
-  the v11 `object-counter` and `authority-owner-counter` to this key; a new Store writes `1`. The key is
-  never changed afterwards. No value issued before the transition is issued again for the same ID.
+  `zlink:v12:generation-floor` (a bare decimal). The key is written once and never changed, so no value
+  issued before the transition is issued again for the same ID. A new Store writes `1`; [§8.1](#81-converting-from-v11-to-v12)
+  owns initializing it from a v11 Store.
 - **Relocation:** an aggregate relocation issues one value per participant from that ID's
   `authority-owner-counter`. It does not hand out a global contiguous range.
 
@@ -357,25 +357,30 @@ prefix.
 
 ### 8.1 Converting from v11 to v12
 
-Per-ID counters (§8) and capacity counter keys (§4.1) can't coexist with the
-v11 Store format. Every node sharing one Location Store uses the same format —
-v11 and v12 nodes never write the same Store at the same time. A v12 node that
-starts on a Store holding only v11 counters runs the following conversion once,
-before its first placement or creation, and doesn't publish `Serving` until it
-finishes.
+Per-ID counters (§8) and capacity counter keys ([§4.1](#41-capacity-counters)) can't coexist with the
+v11 Store format. Every node sharing one Location Store uses the same format — stop all v11 nodes
+before starting v12 nodes; nodes of the two formats never write the same Store at the same time.
 
-1. If `zlink:v12:generation-floor` is absent, Put the larger of the v11
-   `object-counter` and `authority-owner-counter` values (or `1` when both are
-   absent) under a `Missing` condition. An existing floor is left unchanged.
-2. For each MeshNode capacity record, in one batch, Put its active and pending
-   values into the §4.1 counter keys (only when the counter key is absent, under
-   a `Missing` condition) and delete the old record.
+The conversion is complete when the `zlink:v12:format` key (value `converted`) exists. Without that
+key, a v12 node runs the following procedure in step 2 of
+[MeshNode §6](../03-spot-actor/03-mesh-node.en.md#6-registration-and-startup-order), before any
+initialization or recovery that uses the Location Store (Entry Spot issuance, startup release,
+reservation, commit, or release). Every write in the procedure is a [§4](#4-conditional-atomic-batch)
+conditional batch; if any condition is false, none of the batch applies. Running it from several
+nodes at once, or rerunning it after an interruption, gives the same result.
 
-Both steps are conditional writes, so nodes starting at the same time apply
-each step once, and a conversion interrupted partway resumes from the remaining
-records on the next start. Don't roll back: a v11 node rejoining a converted
-Store could issue lower counter values (rolling back requires the §8 clean break
-to empty the Store).
+1. If `zlink:v12:generation-floor` is absent, Put the larger of `zlink:v11:object-counter` and
+   `zlink:v11:authority-owner-counter` (or `1` when both are absent) under a `Missing` condition.
+2. For each remaining v11 MeshNode capacity record, one batch Puts its active and pending values into
+   the §4.1 counter keys and Deletes the old record. Its conditions are `Value` on the old record (the
+   bytes read) and `Missing` on every target counter key. On `Conflict` or a lost response, read that
+   record and its counter keys again: if the old record is gone and the counter keys exist, it is done;
+   otherwise retry.
+3. When a scan finds no old capacity record left, Put `zlink:v12:format` under a `Missing` condition.
+
+Until `zlink:v12:format` exists, no v12 node reserves, commits, or releases, so ordinary capacity changes
+never touch a record that is being converted. The conversion isn't rolled back; going back to v11 uses a
+new Store.
 
 ## 9. The Official Redis Provider — Opaque Storage Format
 
