@@ -504,9 +504,11 @@ test('physical disconnect preserves its captured binding while close uses the cu
   const closes = [];
   const fallback = new ZLinkNativeFallbackBoundSession({
     actorId: 'actor',
-    actorRefProvider: () => currentActor,
+    targetProvider: () => ({
+      actorRef: currentActor,
+      remoteTarget: target
+    }),
     nativeActorNodeProvider: () => owner,
-    remoteBoundSessionTargetProvider: () => target,
     requestTimeoutMs: 1234,
     runtime: {
       async disconnectNativeBoundSession(...args) {

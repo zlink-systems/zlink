@@ -146,9 +146,12 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
         return actors;
     }
 
-    CompletionStage<Void> notifyBoundActorsDisconnected(Duration timeout) {
+    CompletionStage<Void> notifyBoundActorsDisconnected(
+            CompletionStage<Void> acceptedPackets,
+            Duration timeout,
+            CompletableFuture<Void> forcedStop) {
         if (actors instanceof ZLinkSessionActorsRuntime runtime) {
-            return runtime.notifyDisconnectedAll(timeout);
+            return runtime.notifyDisconnectedAll(acceptedPackets, timeout, forcedStop);
         }
         return CompletableFuture.completedFuture(null);
     }

@@ -670,7 +670,8 @@ target_compile_features(zlink_framework_locations_redis PUBLIC cxx_std_20)
 target_include_directories(zlink_framework_locations_redis PUBLIC
   $<BUILD_INTERFACE:${ZLINK_FRAMEWORK_CPP_DIR}/extensions/framework-locations-redis/include>
   $<BUILD_INTERFACE:${ZLINK_FRAMEWORK_CPP_DIR}/connector/core/include>
-  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+  PRIVATE "${ZLINK_FRAMEWORK_CPP_DIR}/framework/src")
 target_link_libraries(zlink_framework_locations_redis PUBLIC
   zlink::framework_provider_abstractions
   zlink::framework)
@@ -3693,6 +3694,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT=1)
   target_include_directories(test_cpp_framework_redis_blob_bound BEFORE PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/tests/support/fake_redis
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
     ${ZLINK_FRAMEWORK_CPP_DIR}/extensions/framework-locations-redis/include)
   target_use_zlink_gtest_main(test_cpp_framework_redis_blob_bound)
   target_link_libraries(test_cpp_framework_redis_blob_bound PRIVATE
@@ -3731,6 +3733,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   if(ZLINK_FRAMEWORK_CPP_WITH_ETCD)
     add_executable(test_cpp_framework_locations_etcd
       extensions/framework-locations-etcd/tests/test_etcd.cpp
+      extensions/framework-locations-etcd/tests/test_etcd_counters.cpp
       ${ZLINK_ETCD_GENERATED_HEADERS})
     zlink_enable_coverage(test_cpp_framework_locations_etcd)
     target_use_zlink_gtest_main(test_cpp_framework_locations_etcd)
@@ -3753,6 +3756,41 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       LABELS "framework-extension;framework-location"
       TIER integration
       TIMEOUT 120)
+  endif()
+  add_executable(test_cpp_framework_location_store_counters
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_location_store_counters.cpp)
+  target_use_zlink_gtest_main(test_cpp_framework_location_store_counters)
+  target_link_libraries(test_cpp_framework_location_store_counters PRIVATE zlink::framework)
+  target_include_directories(test_cpp_framework_location_store_counters PRIVATE framework/src)
+  zlink_framework_cpp_add_boost_headers(test_cpp_framework_location_store_counters)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_location_store_counters
+    COMMAND test_cpp_framework_location_store_counters --gtest_filter=InMemory/*
+    LABELS "framework-unit;framework-location"
+    TIMEOUT 30)
+  if(_zlink_framework_redis_target)
+    target_link_libraries(test_cpp_framework_location_store_counters PRIVATE
+      zlink::framework_locations_redis)
+    target_compile_definitions(test_cpp_framework_location_store_counters PRIVATE
+      ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT=1)
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_framework_location_store_counters_redis
+      COMMAND test_cpp_framework_location_store_counters --gtest_filter=Redis/*
+      LABELS "framework-extension;framework-location;redis"
+      TIER integration
+      TIMEOUT 30)
+  endif()
+  if(ZLINK_FRAMEWORK_CPP_WITH_ETCD)
+    target_link_libraries(test_cpp_framework_location_store_counters PRIVATE
+      zlink::framework_locations_etcd)
+    target_compile_definitions(test_cpp_framework_location_store_counters PRIVATE
+      ZLINK_TEST_LOCATION_COUNTERS_ETCD)
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_framework_location_store_counters_etcd
+      COMMAND test_cpp_framework_location_store_counters --gtest_filter=Etcd/*
+      LABELS "framework-extension;framework-location"
+      TIER integration
+      TIMEOUT 60)
   endif()
   # TEST_PROBES forces INSTALL_FRAMEWORK=OFF, so that build has no package to consume.
   if(NOT ZLINK_FRAMEWORK_CPP_TEST_PROBES)

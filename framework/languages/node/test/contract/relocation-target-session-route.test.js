@@ -65,9 +65,12 @@ function fixture() {
   runtime.reserveTargetForPrepare = async () => ({ prepared: {} });
   const session = new ZLinkNativeFallbackBoundSession({
     runtime: {}, actorId: 'a', reportError() {}, flowCreationEnabled: () => false,
-    actorRefProvider: () => undefined, nativeActorNodeProvider: () => undefined,
+    targetProvider: () => ({
+      actorRef: undefined,
+      remoteTarget: { routerChannelId: 'mesh', targetNodeRid: 'session-owner', spotId: 'entry' }
+    }),
+    nativeActorNodeProvider: () => undefined,
     localActorProvider: () => false,
-    remoteBoundSessionTargetProvider: () => ({ routerChannelId: 'mesh', targetNodeRid: 'session-owner', spotId: 'entry' }),
     remoteActorPacketTargetProvider: () => undefined,
     routedTransport: { async submitInfrastructure() { return { status: ready ? ZLinkSubmitStatus.Submitted : ZLinkSubmitStatus.RouteNotConnected }; } }
   });

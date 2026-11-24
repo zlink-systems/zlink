@@ -59,6 +59,7 @@
         <Compile Include="Runtime/BoundSessionDisconnectTests.cs"/>
         <Compile Include="Runtime/OrderedBoundSessionPushTests.cs"/>
         <Compile Include="Runtime/BoundSessionRelayPushOrderTests.cs"/>
+        <Compile Include="Runtime/OrderedBoundSessionSendTests.cs"/>
         <Compile Include="Runtime/BoundSessionCloseOrderTests.cs"/>
         <Compile Include="Runtime/BoundSessionReplacementCloseTests.cs"/>
         <Compile Include="Runtime/SameNodeDuplicateBindTests.cs"/>
@@ -225,6 +226,7 @@
         <Compile Include="Runtime/LocationLifecycleTests.cs"/>
         <Compile Include="Runtime/LayeringConvergenceTests.cs"/>
         <Compile Include="Runtime/LocationResolverTests.cs"/>
+        <Compile Include="Runtime/ActorRouteCacheConfirmationTests.cs"/>
         <Compile Include="Runtime/LocationRuntimeQueryTests.cs"/>
         <Compile Include="Runtime/InstanceSpotActivationJournalTests.cs"/>
         <Compile Include="Runtime/SameTargetInstanceActivationTests.cs"/>
