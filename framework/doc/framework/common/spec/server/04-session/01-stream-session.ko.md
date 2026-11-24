@@ -238,6 +238,11 @@ session 오류 callback을 `TransportError` 종류로 한 번 실행한 뒤 기�
 오류에만 있고, `UNKNOWN`(0)도 값이 있는 것으로 본다([Core monitoring §3.2](../../../../../../../core/doc/spec/core/06-monitoring.ko.md#32-value와-flags)). Framework는 이 값을 해석하거나 다른 종료 사유로 바꾸지 않는다.
 
 서버 STREAM session의 liveness는 [Stream Connector §6](../../stream-connector/32-stream-connector.ko.md#6-연결-생명주기)의 heartbeat 규칙을 따른다. Heartbeat interval과 timeout의 기본값은 그 절의 기본값이며 Stream node 설정으로 바꿀 수 있다. 서버에서 무수신 timeout의 결과는 reconnect가 아니라 `heartbeat_timeout`으로 session을 닫는 것이다.
+
+Session reader가 다음 frame을 읽기 전에 host의 application job permit을 기다리는 동안([인증 입장 제한 §1.2](03-authentication-admission.ko.md#12-판정),
+[application job queue §3](../01-execution/04-application-job-queue-and-backpressure.ko.md#3-ordinary-ingress-permit-순서))은 그 session의 무수신 기한과
+idle 기한을 판정하지 않는다. 기다리는 원인이 peer가 아니라 host이기 때문이다. Permit을 받으면 두 기한을 그 시각부터
+다시 잰다. 기다리는 동안에도 서버의 heartbeat ping 송신은 interval대로 계속한다. (#5583)
 Session마다 ping 시각은 연결이 성립한 시각에 interval의 배수를 더한 시각이다. 첫 ping은 연결 시각 + interval에 보낸다. 실행이 늦어 여러 시각을 지나쳤으면 ping을 한 번만 보내고, 다음 ping은 같은 배수 위의 다음 미래 시각에 보낸다.
 
 애플리케이션 유휴 종료는 Stream node의 idle timeout을 양수로 설정했을 때만 동작한다. 기본값은 0이며 0은 유휴 종료를 하지 않음을 뜻한다. 켜면 마지막 애플리케이션 packet을 받은 뒤 idle timeout이 지난 session을 `idle_timeout`으로 닫는다. Heartbeat control frame은 애플리케이션 활동으로 세지 않는다. 무수신 기한과 idle 기한이 함께 지났으면 `heartbeat_timeout`으로 닫는다.
