@@ -475,6 +475,19 @@ TEST_F (ActorAuthorityRelocation, PreparedTargetFenceControlsCommit)
     EXPECT_GT (committed.authority_owner_generation, original.authority_owner_generation);
 }
 
+TEST_F (ActorAuthorityRelocation, SteadySourceCannotRecordPrepared)
+{
+    const auto before = read ();
+    ASSERT_FALSE (before.aggregate);
+    const auto written =
+      authority->record_target_prepared (actor, target_prepare (wire ())).result ().value ();
+    EXPECT_FALSE (written);
+    const auto after = read ();
+    EXPECT_EQ (after.store_version, before.store_version);
+    EXPECT_EQ (after.payload, before.payload);
+    EXPECT_FALSE (after.aggregate);
+}
+
 TEST_F (ActorAuthorityRelocation, FailedReadyPreservesPreparedSource)
 {
     capture_until (false);

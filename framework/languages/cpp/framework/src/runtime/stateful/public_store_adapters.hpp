@@ -309,24 +309,14 @@ class public_authority_store_adapter_t final : public authority_relocation_port_
             || snapshot->authority_owner_generation != source.authority_owner_generation
             || !source_claim_matches (prepare) || !holds_target_precommit_fence (*snapshot, fence))
             co_return false;
-        std::vector<std::byte> payload;
-        if (snapshot->aggregate && snapshot->aggregate->relocation) {
-            if (snapshot->aggregate->relocation->phase == "prepared")
-                co_return true;
-        } else {
-            // Preserve compatibility with sources that use a legacy payload
-            // capture or the original steady StoreVersion.
-            const auto node = zlink::routing_id_t::from (prepare.target.target_node_routing_id);
-            auto projected =
-              target_authority_payload (source.kind, snapshot->payload, node.to_string (),
-                                        fence.target_owner, prepare.target.target_node_generation);
-            if (!projected)
-                co_return false;
-            payload = std::move (*projected);
-            if (source.kind == object_kind_t::actor)
-                clear_legacy_capture (snapshot->payload);
-        }
-        auto record = target_record (*snapshot, key, payload, prepare, "prepared");
+        // Prepared follows the source's durable Captured (01-location-runtime §3.4 1466-1467, 1493).
+        if (!snapshot->aggregate || !snapshot->aggregate->relocation)
+            co_return false;
+        if (snapshot->aggregate->relocation->phase == "prepared")
+            co_return true;
+        if (snapshot->aggregate->relocation->phase != "captured")
+            co_return false;
+        auto record = target_record (*snapshot, key, {}, prepare, "prepared");
         co_return std::holds_alternative<authority_stored_t> (
           co_await write_relocation (key, std::move (*snapshot), std::move (record)));
     }
