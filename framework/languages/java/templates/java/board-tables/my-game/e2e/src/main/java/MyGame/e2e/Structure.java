@@ -132,12 +132,13 @@ public final class Structure {
         var logical = new ArrayList<String>();
         boolean dynamic = false;
         int pools = 0;
+        int provisioners = 0;
         for (var spot : spots) {
             String role = roles.get(owner(spot, roles));
             if (spot.path("type").asText().equals(Names.POOL)) {
                 require(
                         role.equals("matchmaker")
-                                && text(spot, "kind").equals("user")
+                                && text(spot, "kind").equals("instance")
                                 && text(spot, "logicalId").equals(Names.POOL_KEY)
                                 && !spot.has("dynamic"),
                         "Invalid Pool spot declaration");
@@ -153,6 +154,15 @@ public final class Structure {
                                         && !spot.has("logicalId")
                                         && !spot.has("dynamic"),
                                 "Invalid Entry Spot declaration");
+                case "instance" -> {
+                    require(
+                            text(spot, "type").equals(Names.ROOM_PROVISIONER)
+                                    && text(spot, "logicalId").equals(Names.ROOM_PROVISIONER_KEY)
+                                    && !spot.has("dynamic"),
+                            "Invalid RoomProvisioner Spot declaration");
+                    logical.add(Names.ROOM_PROVISIONER_KEY);
+                    provisioners++;
+                }
                 case "user" -> {
                     require(text(spot, "type").equals(Names.TABLE), "Unregistered stable type");
                     if (spot.has("dynamic"))
@@ -167,6 +177,7 @@ public final class Structure {
         }
         unique(logical);
         require(pools == 1, "Matchmaker must declare exactly one Pool Spot");
+        require(provisioners == 1, "Declare exactly one RoomProvisioner Spot");
         require(dynamic, "Missing dynamic Table family");
         for (var node : nodes)
             if (roles.get(text(node, "id")).equals("table"))

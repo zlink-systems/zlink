@@ -11,6 +11,8 @@ public final class Names {
             STREAM = "players",
             PLAYER = "Player",
             TABLE = "Table",
+            ROOM_PROVISIONER = "RoomProvisioner",
+            ROOM_PROVISIONER_KEY = "room-provisioner-board",
             POOL = "Pool",
             POOL_KEY = "pool-board";
     public static final List<String> SCENARIOS =

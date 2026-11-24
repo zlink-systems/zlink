@@ -46,6 +46,7 @@ public final class Table implements ZLinkSpot<Player> {
     }
 
     public void configure() {
+        context.handlers().addHandler(RoomPackets.Prepare.class);
         context.handlers().addHandler(RoomPackets.Commit.class);
         context.handlers().addHandler(RoomPackets.Withdraw.class);
     }

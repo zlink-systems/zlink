@@ -43,6 +43,10 @@ public class Program {
                                     b.stableTypeLimit(config.tableCapacity());
                                 b.preserveStateWith(TableTransfer.class);
                             })
+                    .addInstanceSpotFactory(
+                            Names.ROOM_PROVISIONER,
+                            RoomProvisioner.class,
+                            b -> b.recreateOnRelocation())
                     .addActorFactory(
                             Names.PLAYER,
                             Player.class,

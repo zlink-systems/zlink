@@ -2,7 +2,11 @@ package MyGame.matchmaker;
 
 import MyGame.*;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import systems.zlink.framework.actors.*;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.spots.*;
 
 import java.time.Duration;
@@ -10,24 +14,24 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.stream.Collectors;
 
-public final class Pool implements ZLinkSpot<ZLinkActor> {
-    private final ZLinkSpotContext context;
-    private final ZLinkSpotManager spots;
+public final class Pool implements ZLinkInstanceSpot {
+    private static final Logger LOG = LoggerFactory.getLogger(Pool.class);
+    private final ZLinkInstanceSpotContext context;
     private final ZLinkActorClient actors;
     private final MatchQueue queue = new MatchQueue();
 
-    public Pool(ZLinkSpotContext context, ZLinkSpotManager spots, ZLinkActorClient actors) {
+    public Pool(ZLinkInstanceSpotContext context, ZLinkActorClient actors) {
         this.context = context;
-        this.spots = spots;
         this.actors = actors;
     }
 
-    public ZLinkSpotContext context() {
+    public ZLinkInstanceSpotContext context() {
         return context;
     }
 
     public void configure() {
-        context.handlers().addHandler(PoolPackets.Enter.class);
+        context.handlers().addPacket(PoolPackets.Enter.class);
+        context.handlers().addPacket(PoolPackets.Prepared.class);
     }
 
     public CompletionStage<Void> onInitialize() {
@@ -37,14 +41,6 @@ public final class Pool implements ZLinkSpot<ZLinkActor> {
                         PoolPackets.Tick.class,
                         new ZLinkTimerOptions(ZLinkTimerOverrunPolicy.SKIP_LATE_TICKS, 1, false))
                 .thenAccept(timer -> {});
-    }
-
-    public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
-        return CompletableFuture.completedFuture(null);
-    }
-
-    public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
-        return CompletableFuture.completedFuture(null);
     }
 
     CompletionStage<MatchQueued> request(MatchRequest request) {
@@ -68,7 +64,9 @@ public final class Pool implements ZLinkSpot<ZLinkActor> {
 
     CompletionStage<Void> report(EnterReport report) {
         var assignment = queue.assignment(report.ticketId());
-        if (assignment == null || !assignment.id.equals(report.assignmentId()))
+        if (assignment == null
+                || assignment.entered == null
+                || !assignment.id.equals(report.assignmentId()))
             return CompletableFuture.completedFuture(null);
         if (System.nanoTime() - assignment.deadline >= 0) return expire(assignment);
         if (!report.ok())
@@ -102,55 +100,43 @@ public final class Pool implements ZLinkSpot<ZLinkActor> {
         return work.thenCompose(
                 ignored -> {
                     var assignment = queue.pair("room-" + UUID.randomUUID(), System.nanoTime());
-                    return assignment == null
-                            ? CompletableFuture.completedFuture(null)
-                            : prepare(assignment);
+                    if (assignment == null) return CompletableFuture.completedFuture(null);
+                    var members =
+                            assignment.members.stream().map(MatchQueue.Ticket::playerId).toList();
+                    return context.outbound()
+                            .sendToSpot(
+                                    Names.ROOM_PROVISIONER_KEY,
+                                    new PrepareRoom(assignment.id, members))
+                            .instanceSpot(Names.ROOM_PROVISIONER)
+                            .inMesh(Names.MESH)
+                            .submit()
+                            .exceptionally(
+                                    failure -> {
+                                        var cause =
+                                                failure instanceof CompletionException
+                                                        ? failure.getCause()
+                                                        : failure;
+                                        if (!(cause instanceof ZLinkFrameworkException))
+                                            throw new CompletionException(cause);
+                                        LOG.warn(
+                                                "Room preparation send failed for {}",
+                                                assignment.id,
+                                                cause);
+                                        // The reservation still follows its entry deadline.
+                                        return null;
+                                    });
                 });
     }
 
-    private CompletionStage<Void> prepare(MatchQueue.Assignment assignment) {
-        var members = assignment.members.stream().map(MatchQueue.Ticket::playerId).toList();
-        return spots.getOrCreate(assignment.id, Names.TABLE)
-                .inMesh(Names.MESH)
-                .submit()
-                .thenCompose(
-                        result -> {
-                            if (result.state() == ZLinkSpotCreateState.REJECTED)
-                                return failPreparation(assignment);
-                            return context.outbound()
-                                    .requestToSpot(
-                                            assignment.id, new PrepareRoom(assignment.id, members))
-                                    .submit(RoomPrepared.class)
-                                    .thenCompose(
-                                            prepared -> {
-                                                if (!prepared.ok()
-                                                        || !assignment.id.equals(
-                                                                prepared.assignmentId()))
-                                                    return failPreparation(assignment);
-                                                if (System.nanoTime() - assignment.deadline >= 0)
-                                                    return expire(assignment);
-                                                CompletionStage<Void> sends =
-                                                        CompletableFuture.completedFuture(null);
-                                                for (var ticket : assignment.members)
-                                                    sends =
-                                                            sends.thenCompose(
-                                                                    ignored ->
-                                                                            notify(
-                                                                                    ticket,
-                                                                                    new MatchAssigned(
-                                                                                            ticket
-                                                                                                    .id(),
-                                                                                            assignment
-                                                                                                    .id,
-                                                                                            assignment
-                                                                                                    .id)));
-                                                return sends;
-                                            });
-                        });
-    }
+    CompletionStage<Void> prepared(RoomPrepared message) {
+        var assignment = queue.findAssignment(message.assignmentId());
+        if (assignment == null) return withdrawLatePreparation(message);
+        if (assignment.entered != null) return CompletableFuture.completedFuture(null);
+        if (System.nanoTime() - assignment.deadline >= 0)
+            return expire(assignment).thenCompose(ignored -> withdrawLatePreparation(message));
+        if (!message.ok()) return failPreparation(assignment);
 
-    private CompletionStage<Void> failPreparation(MatchQueue.Assignment assignment) {
-        queue.settle(assignment, Set.of());
+        assignment.entered = new HashSet<>();
         CompletionStage<Void> sends = CompletableFuture.completedFuture(null);
         for (var ticket : assignment.members)
             sends =
@@ -158,15 +144,33 @@ public final class Pool implements ZLinkSpot<ZLinkActor> {
                             ignored ->
                                     notify(
                                             ticket,
-                                            new MatchCancelled(
-                                                    ticket.id(), MatchCancelled.CANCELLED)));
+                                            new MatchAssigned(
+                                                    ticket.id(), assignment.id, assignment.id)));
         return sends;
+    }
+
+    private CompletionStage<Void> withdrawLatePreparation(RoomPrepared message) {
+        return message.ok()
+                ? context.outbound()
+                        .sendToSpot(
+                                message.assignmentId(), new WithdrawRoom(message.assignmentId()))
+                        .submit()
+                : CompletableFuture.completedFuture(null);
+    }
+
+    private CompletionStage<Void> failPreparation(MatchQueue.Assignment assignment) {
+        return withdraw(
+                assignment,
+                assignment.members.stream().map(MatchQueue.Ticket::id).collect(Collectors.toSet()),
+                MatchCancelled.CANCELLED,
+                true);
     }
 
     private CompletionStage<Void> expire(MatchQueue.Assignment assignment) {
         var failed = new HashSet<String>();
         for (var ticket : assignment.members)
-            if (!assignment.entered.contains(ticket.id())) failed.add(ticket.id());
+            if (assignment.entered == null || !assignment.entered.contains(ticket.id()))
+                failed.add(ticket.id());
         return withdraw(assignment, failed, MatchCancelled.EXPIRED, true);
     }
 
@@ -180,9 +184,13 @@ public final class Pool implements ZLinkSpot<ZLinkActor> {
             if (!failed.contains(ticket.id())) survivors.add(ticket.id());
         queue.settle(assignment, survivors);
         var withdrawn = new WithdrawRoom(assignment.id);
-        var sends = context.outbound().sendToSpot(assignment.id, withdrawn).submit();
+        CompletionStage<Void> sends =
+                assignment.entered == null
+                        ? CompletableFuture.completedFuture(null)
+                        : context.outbound().sendToSpot(assignment.id, withdrawn).submit();
         for (var ticket : assignment.members) {
-            sends = sends.thenCompose(ignored -> notify(ticket, withdrawn));
+            if (assignment.entered != null)
+                sends = sends.thenCompose(ignored -> notify(ticket, withdrawn));
             if (notifyFailed && failed.contains(ticket.id()))
                 sends =
                         sends.thenCompose(

@@ -65,7 +65,7 @@ For host process debugging, install JDK 25 and add `--local` or `-Local`. Add `-
 
 ### Matchmaker
 
-The Matchmaker node registers one Pool factory and starts the SpotWide `pool-board` Spot. `MatchQueue` owns the in-memory queue, and `MatchRule` selects the oldest eligible pair. Keep pairing policy in `MatchRule`. `Pool` prepares each room, receives the Actors' entry reports, and decides commit or withdrawal. A Player stores and forwards its own ticket and reports connection loss from its current Spot. The Table admits prepared members and assigns seats on commit.
+The Matchmaker node registers a Pool Instance Spot factory. A message addressed to `pool-board` activates it. `MatchQueue` owns the in-memory queue, and `MatchRule` selects the oldest eligible pair. Keep pairing policy in `MatchRule`. The Pool records the pair as preparing and sends `PrepareRoom` to the Play nodes’ `room-provisioner-board` Instance Spot. That Spot creates the Table User Spot and forwards `PrepareRoom` to it. The Table sends `RoomPrepared` to the Pool, which handles it in a new turn. Only a successful result within the entry deadline moves the assignment to awaiting entry and notifies both Players. A Player tracks its ticket and reports entry or connection loss from its current Spot. The Pool decides commit or withdrawal. The Table admits prepared members and assigns seats on commit.
 
 ### API node
 

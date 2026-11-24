@@ -112,8 +112,15 @@
       "dynamic": true
     },
     {
+      "id": "room-provisioner",
+      "kind": "instance",
+      "type": "RoomProvisioner",
+      "owner": "playA",
+      "logicalId": "room-provisioner-board"
+    },
+    {
       "id": "pool",
-      "kind": "user",
+      "kind": "instance",
       "type": "Pool",
       "owner": "matchmaker",
       "logicalId": "pool-board"

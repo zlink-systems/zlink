@@ -15,7 +15,13 @@ public final class PoolPackets {
         }
     }
 
-    public static final class Tick implements ZLinkSpotTimerHandler<Pool> {
+    public static final class Prepared implements ZLinkSpotPacketHandler<Pool, RoomPrepared> {
+        public CompletionStage<Void> handle(Pool pool, RoomPrepared message) {
+            return pool.prepared(message);
+        }
+    }
+
+    public static final class Tick {
         public CompletionStage<Void> handle(Pool pool, ZLinkTimerTick tick) {
             return pool.tick();
         }

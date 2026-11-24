@@ -2,16 +2,23 @@ package MyGame.table;
 
 import MyGame.*;
 
-import systems.zlink.framework.handlers.*;
 import systems.zlink.framework.spots.ZLinkSpotPacketHandler;
 
-import java.util.concurrent.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
-@ZLinkHandlerGroup(Names.TABLE)
 public final class RoomPackets {
-    @ZLinkSpotRequest
-    public CompletionStage<RoomPrepared> prepare(Table table, PrepareRoom request) {
-        return CompletableFuture.completedFuture(table.prepare(request));
+    private RoomPackets() {}
+
+    public static final class Prepare implements ZLinkSpotPacketHandler<Table, PrepareRoom> {
+        public CompletionStage<Void> handle(Table table, PrepareRoom message) {
+            return table.context()
+                    .outbound()
+                    .sendToSpot(Names.POOL_KEY, table.prepare(message))
+                    .instanceSpot(Names.POOL)
+                    .inMesh(Names.MESH)
+                    .submit();
+        }
     }
 
     public static final class Commit implements ZLinkSpotPacketHandler<Table, CommitRoom> {
