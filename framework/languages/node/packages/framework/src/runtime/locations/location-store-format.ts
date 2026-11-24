@@ -375,22 +375,27 @@ function capacityPuts(key: ZLinkStoreKey, bytes: Uint8Array, mesh: string, ridHe
     );
 
     const nested = Object.hasOwn(root, 'active') || Object.hasOwn(root, 'pending');
+    const typeDelimiter = nested ? '\0' : ':';
+    // C++ v11 flat rows store the placement_object_kind_t ordinal as decimal.
+    const userSpotKind = nested ? 'user_spot' : '2';
+    const instanceSpotKind = nested ? 'instance_spot' : '3';
     for (const state of ['active', 'pending'] as const) {
       const suffix = state === 'active' ? 'Active' : 'Pending';
       const usage = nested ? jsonObject(root[state]) : root;
       add('actors', state, usage[nested ? 'actors' : 'actors' + suffix]);
       add('spots', state, usage[nested ? 'spots' : 'spots' + suffix]);
       for (const [type, value] of Object.entries(jsonObject(usage.spotTypes))) {
-        const separator = type.indexOf('\0');
-        const objectKind = type.slice(0, separator);
+        const separator = type.indexOf(typeDelimiter);
+        const legacyKind = type.slice(0, separator);
         const stableType = type.slice(separator + 1);
         if (
           separator < 0 ||
-          (objectKind !== 'user_spot' && objectKind !== 'instance_spot') ||
+          (legacyKind !== userSpotKind && legacyKind !== instanceSpotKind) ||
           stableType.length === 0 ||
           stableType.includes('\0')
         )
           throw new TypeError('Invalid capacity spot type.');
+        const objectKind = legacyKind === userSpotKind ? 'user_spot' : 'instance_spot';
         add(
           spotTypeDimension({ objectKind, stableType }),
           state,

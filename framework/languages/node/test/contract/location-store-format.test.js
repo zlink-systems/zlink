@@ -12,7 +12,8 @@ const {
 const { connectTestRedis, testRedisUrl } = require('./helpers/test-redis');
 const { ownerLeaseClaimMutation } = require('./helpers/owner-lease-claim-mutation');
 const {
-  concurrentStartupConversion: fixture
+  concurrentStartupConversion: fixture,
+  v11ConversionCases
 } = require('../../../../runtime/conformance/location-contention-v1.json');
 
 const FORMAT = 'zlink:v12:format';
@@ -46,25 +47,25 @@ function counter(ridHex, dimension, state) {
   return `zlink:v12:capacity\0${fixture.mesh}\0${ridHex}\0${dimension}\0${state}`;
 }
 
-function createRuntime(provider) {
+function createRuntime(provider, mesh = fixture.mesh) {
   const { host } = createMeshHost({
     registration: framework.createFrameworkRegistration({ locations: { storeInstance: provider } })
   });
-  return host.locationOwner.ensureRuntime(fixture.mesh);
+  return host.locationOwner.ensureRuntime(mesh);
 }
 
-function startup(t, provider, index, signal) {
-  const runtime = createRuntime(provider);
+function startup(t, provider, index, signal, mesh) {
+  const runtime = createRuntime(provider, mesh);
   t.after(() => runtime.stop());
   return runtime.start(`conversion-${index}`, signal);
 }
 
-async function seedDescriptor(store, ridHex) {
+async function seedDescriptor(store, ridHex, mesh = fixture.mesh) {
   const repository = new framework.ZLinkLocationStoreRepository(store);
   const lease = await repository.claimOwnerLease(randomUUID(), 60_000);
   assert.equal(lease.kind, 'claimed');
   const target = {
-    meshName: fixture.mesh,
+    meshName: mesh,
     nodeRid: RoutingId.fromHex(ridHex),
     nodeLifecycleGeneration: 1n,
     owner: lease.token
@@ -83,6 +84,37 @@ async function seedDescriptor(store, ridHex) {
 
 function intercept(store, write, scan = store.scan.bind(store)) {
   return { read: store.read.bind(store), write, scan };
+}
+
+for (const [name, { descriptorRoutingIdHexes, rows, expected }] of Object.entries(
+  v11ConversionCases.cases
+)) {
+  test(`shared v11 conversion fixture: ${name}`, async (t) => {
+    const store = new framework.ZLinkInMemoryProviderLocationStore();
+    for (const ridHex of descriptorRoutingIdHexes) {
+      await seedDescriptor(store, ridHex, v11ConversionCases.mesh);
+    }
+    for (const { key, value } of rows) await put(store, key, value);
+
+    const starting = startup(t, store, 0, undefined, v11ConversionCases.mesh);
+    if (expected.startup === 'configurationError') {
+      await assert.rejects(starting, { name: 'ZLinkConfigurationException' });
+      assert.equal(await read(store, FORMAT), undefined);
+      for (const { key, value } of rows) assert.equal(await read(store, key), value, key);
+      return;
+    }
+
+    assert.equal(expected.startup, 'converted');
+    await starting;
+    assert.equal(await read(store, FORMAT), 'converted');
+    for (const { key } of rows) assert.equal(await read(store, key), undefined, key);
+    for (const [key, value] of Object.entries(expected.counters)) {
+      assert.equal(await read(store, key), value, key);
+    }
+    for (const key of expected.absentCounters) {
+      assert.equal(await read(store, key), undefined, key);
+    }
+  });
 }
 
 for (const backend of ['memory', 'redis']) {
@@ -183,7 +215,7 @@ test('startup converts flat usage and preserves signed-64-bit counts exactly', a
   await put(
     store,
     legacyKey('flat'),
-    '{"actorsActive":9007199254740993,"actorsPending":0,"spotsActive":3,"spotsPending":4,"spotTypes":{"user_spot\\u0000lobby":{"active":2,"pending":1},"instance_spot\\u0000arena":{"active":0,"pending":9223372036854775807}}}'
+    '{"actorsActive":9007199254740993,"actorsPending":0,"spotsActive":3,"spotsPending":4,"spotTypes":{"2:lobby":{"active":2,"pending":1},"3:stage:arena":{"active":0,"pending":9223372036854775807}}}'
   );
   await startup(t, store, 0);
   const rid = Buffer.from('flat').toString('hex');
@@ -191,10 +223,40 @@ test('startup converts flat usage and preserves signed-64-bit counts exactly', a
   assert.equal(await read(store, counter(rid, 'spots', 'pending')), '4');
   assert.equal(await read(store, counter(rid, 'spot-type\0userSpot\0lobby', 'active')), '2');
   assert.equal(
-    await read(store, counter(rid, 'spot-type\0instanceSpot\0arena', 'pending')),
+    await read(store, counter(rid, 'spot-type\0instanceSpot\0stage:arena', 'pending')),
     '9223372036854775807'
   );
 });
+
+for (const [format, legacyType] of [
+  ['flat', 'user_spot\0lobby'],
+  ['nested', '2:lobby'],
+  ['flat', '02:lobby'],
+  ['flat', '1:lobby']
+]) {
+  test(`startup rejects a ${format} row with spot type key ${JSON.stringify(legacyType)}`, async (t) => {
+    const store = new framework.ZLinkInMemoryProviderLocationStore();
+    const oldKey = legacyKey('invalid-type');
+    const row =
+      format === 'nested'
+        ? { active: { ...usage(), spotTypes: { [legacyType]: 1 } }, pending: usage() }
+        : {
+            actorsActive: 0,
+            actorsPending: 0,
+            spotsActive: 1,
+            spotsPending: 0,
+            spotTypes: { [legacyType]: { active: 1, pending: 0 } }
+          };
+    const bytes = JSON.stringify(row);
+    await put(store, oldKey, bytes);
+    await assert.rejects(startup(t, store, 0), {
+      name: 'ZLinkConfigurationException',
+      message: /invalid capacity spot type/i
+    });
+    assert.equal(await read(store, FORMAT), undefined);
+    assert.equal(await read(store, oldKey), bytes);
+  });
+}
 
 test('unfinished v11 aggregate blocks both floor and marker until v11 terminates it', async (t) => {
   const store = new framework.ZLinkInMemoryProviderLocationStore();
