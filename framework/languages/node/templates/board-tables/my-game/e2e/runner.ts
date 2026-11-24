@@ -122,9 +122,8 @@ class NodeProcess {
     });
   }
   async ready(): Promise<{ id: string; endpoint: string }> {
-    return JSON.parse(
-      (await this.wait(Control.ready, Limits.startupMs)).slice(Control.ready.length)
-    ) as {
+    const line = await this.wait(Control.ready, Limits.startupBudgetMs + Limits.shutdownMs);
+    return JSON.parse(line.slice(Control.ready.length)) as {
       id: string;
       endpoint: string;
     };

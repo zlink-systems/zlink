@@ -631,8 +631,8 @@ export async function scenario(
       } else if (name === 'wall') {
         await walk(a, b, a, Game.firstSpawnX, 40);
         await walk(a, b, b, Game.secondSpawnX, 40);
-        let viewA = await a.view(),
-          sequenceA = playerView(viewA, a.playerId).lastSequence + 1n;
+        let viewA = await a.view();
+        const sequenceA = playerView(viewA, a.playerId).lastSequence + 1n;
         await rejectShot(a, b, sequenceA, Rejection.blockedByWall);
         const viewB = await b.view(),
           sequenceB = playerView(viewB, b.playerId).lastSequence + 1n;

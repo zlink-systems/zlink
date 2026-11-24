@@ -368,8 +368,8 @@ async function inputAsync(a: PlayerClient, b: PlayerClient): Promise<void> {
   assert.equal(player(afterMove, a).hp, player(beforeMove, a).hp);
   assert.equal(player(afterMove, b).hp, player(beforeMove, b).hp);
 
-  let view = await viewAsync(a),
-    sequence = player(view, a).lastSequence;
+  const view = await viewAsync(a);
+  let sequence = player(view, a).lastSequence;
   await rejectedAsync(a, new MoveRequest(new Vec3(0, 0, 1), sequence), Rejection.staleSequence);
   await rejectedAsync(
     a,

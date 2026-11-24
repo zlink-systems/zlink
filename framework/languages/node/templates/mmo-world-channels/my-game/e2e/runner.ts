@@ -139,9 +139,8 @@ class NodeProcess {
     });
   }
   async ready(): Promise<{ id: string; endpoint: string }> {
-    const ready = JSON.parse(
-      (await this.wait(Control.ready, Limits.startupMs)).slice(Control.ready.length)
-    ) as { id: string; endpoint: string };
+    const line = await this.wait(Control.ready, Limits.startupBudgetMs + Limits.shutdownMs);
+    const ready = JSON.parse(line.slice(Control.ready.length)) as { id: string; endpoint: string };
     assert.equal(ready.id, this.config.id);
     assert(!ready.endpoint.endsWith(':0'), 'Unbound endpoint');
     return ready;
