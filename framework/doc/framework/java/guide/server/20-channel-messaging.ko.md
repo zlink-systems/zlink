@@ -53,8 +53,8 @@ nullable로 선언한 속성만 `null`을 허용하고, 생략을 허용한 속�
 | enum | `"Ready"`처럼 선언한 이름을 담은 문자열. 대소문자를 구분한다. |
 | 객체 속성 | 기본 decoder는 알 수 없는 속성을 무시하고 중복 속성이나 필수 속성이 누락된 메시지를 거절한다. |
 
-record의 참조 타입 component에서 `null`을 허용하려면 런타임에 읽을 수 있고 단순 이름이
-`Nullable`인 annotation을 붙인다. JSpecify의 타입 사용 annotation과 JSR 305나 Jakarta의
+record의 참조 타입 component에서 `null`을 허용하려면 런타임에 읽을 수 있는
+`@Nullable` annotation을 붙인다(패키지는 상관없고 단순 이름으로 인식한다). JSpecify의 타입 사용 annotation과 JSR 305나 Jakarta의
 선언 annotation을 인식한다. 생략은 `@ZLinkJsonOptional`로 허용한다. 둘 다 허용하려면
 `@ZLinkJsonOptional @Nullable String nickname`으로 선언한다. 기본형 component에는
 `null`을 넣을 수 없다.
