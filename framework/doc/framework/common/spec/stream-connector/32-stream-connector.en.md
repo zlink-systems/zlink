@@ -689,7 +689,7 @@ packet.
 | `HeartbeatTimeout` | Disconnected because heartbeat didn't respond |
 | `ServerDrain` | The server closed the session with **graceful drain** |
 | `ProtocolError` | Disconnected due to a protocol violation |
-| `TransportError` | Disconnected due to a transport-level failure |
+| `TransportError` | Disconnected due to a transport-level failure, or because the server couldn't build the session object for that connection |
 
 A client that received `ServerDrain` looks at this value to **decide
 reconnection and backoff**
