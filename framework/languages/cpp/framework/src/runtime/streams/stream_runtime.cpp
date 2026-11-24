@@ -106,6 +106,16 @@ std::string_view stream_content_type (stream_codec_t codec) noexcept
     return "application/octet-stream";
 }
 
+stream_reply_submission_t::stream_reply_submission_t (std::shared_ptr<void> admission_lease,
+                                                      std::stop_token closed)
+{
+    auto completion = terminal ();
+    detail::observe_task_terminal (
+      completion,
+      [lease = std::move (admission_lease)] (const result_t<void> &) mutable { lease.reset (); });
+    _cancel.emplace (closed, cancel_t{this});
+}
+
 stream_codec_t stream_codec_from_content_type (std::string_view content_type) noexcept
 {
     if (content_type == "application/json")
@@ -239,7 +249,7 @@ class stream_write_call_state_t
             header.with_actor_slot (*actor_slot);
         }
         auto submitted = _submit (header, payload);
-        if (_reply_submission) {
+        if (_reply_submission && !_reply_submission->admission_limited ()) {
             const auto reply_submission = _reply_submission;
             detail::observe_task_completion (
               submitted,
@@ -248,7 +258,7 @@ class stream_write_call_state_t
         return submitted;
     }
     catch (...) {
-        if (_reply_submission)
+        if (_reply_submission && !_reply_submission->admission_limited ())
             _reply_submission->complete ();
         return task_t<void> (current_exception_result<void> ());
     }
@@ -366,10 +376,16 @@ class stream_session_dispatcher_t
             const std::lock_guard<std::mutex> dispatch_lock (_stream.dispatch_mutex);
             if (!_stream.session_serial_executor) {
                 _stream.session_serial_executor =
-                  std::make_shared<runtime::session_serial_executor_t> (worker_executor);
+                  std::make_shared<runtime::session_serial_executor_t> (
+                    std::move (worker_executor), _stream.shutdown_cancellation);
             }
             session_executor = _stream.session_serial_executor;
         }
+        // The gate delivers the terminal for discarded work. The started
+        // turn delivers its terminal after the callback task settles.
+        runtime::session_serial_executor_t::discard_t discarded;
+        if (_stream.shutdown_cancellation.stop_possible ())
+            discarded = completion;
         auto work = [session_executor, callback = std::move (callback),
                      completion = std::move (completion),
                      started = std::move (started)] (auto complete) mutable {
@@ -417,19 +433,20 @@ class stream_session_dispatcher_t
         bool posted = false;
         switch (kind) {
             case work_kind_t::application:
-                posted =
-                  session_executor->execute_application (std::move (work), std::move (cancelled));
+                posted = session_executor->execute_application (
+                  std::move (work), std::move (cancelled), std::move (discarded));
                 break;
             case work_kind_t::control:
-                posted =
-                  session_executor->execute_control (std::move (work), std::move (cancelled));
+                posted = session_executor->execute_control (std::move (work), std::move (cancelled),
+                                                            std::move (discarded));
                 break;
             case work_kind_t::infrastructure:
-                posted = session_executor->execute_infrastructure (std::move (work),
-                                                                   std::move (cancelled));
+                posted = session_executor->execute_infrastructure (
+                  std::move (work), std::move (cancelled), std::move (discarded));
                 break;
             case work_kind_t::final:
-                posted = session_executor->execute_final (std::move (work), std::move (cancelled));
+                posted = session_executor->execute_final (std::move (work), std::move (cancelled),
+                                                          std::move (discarded));
                 break;
         }
         if (!posted) {
@@ -477,6 +494,12 @@ message_flow_event_t stream_packet_flow_event (message_flow_outcome_t outcome,
 struct packet_dispatch_state_t
 {
     explicit packet_dispatch_state_t (const stream_header_t &value) : header (value) {}
+    ~packet_dispatch_state_t ()
+    {
+        // The queue retires the same invocation on refusal or callback exit.
+        if (reply_submission)
+            reply_submission->complete_at_dispatch_end ();
+    }
     stream_header_t header;
     std::shared_ptr<stream_reply_submission_t> reply_submission;
     session_message_context_t context;
@@ -487,18 +510,12 @@ task_t<void> dispatch_packet_session_callback (packet_stream_session_t *session,
                                                stream_t stream,
                                                std::shared_ptr<packet_dispatch_state_t> packet)
 {
-    struct reply_submission_handler_guard_t
-    {
-        std::shared_ptr<stream_reply_submission_t> submission;
-        ~reply_submission_handler_guard_t ()
-        {
-            if (submission)
-                submission->complete_if_unclaimed ();
-        }
-    } reply_submission_guard{packet->reply_submission};
+    // The callback arguments retire before the coroutine publishes its result.
+    auto invocation = std::move (packet);
     auto task = [&] {
-        const stream_relay_dispatch_scope_t relay_scope (packet->header, packet->reply_submission);
-        return session->on_packet (stream, packet->context, packet->payload);
+        const stream_relay_dispatch_scope_t relay_scope (invocation->header,
+                                                         invocation->reply_submission);
+        return session->on_packet (stream, invocation->context, invocation->payload);
     }();
     co_return co_await task;
 }
@@ -869,28 +886,37 @@ session_actor_manager_t &stream_t::actors ()
 
 task_t<void> stream_t::close ()
 {
-    _state->closed.store (true, std::memory_order_release);
+    _state->closed.request_stop ();
     return task_t<void> (result_t<void>::success ());
 }
 
 namespace detail
 {
 
-std::function<task_t<void> (const stream_header_t &, const zlink::message_t &)>
-stream_runtime_t::stream_submitter (std::shared_ptr<stream_state_t> state)
+static void check_stream_shutdown (const stream_state_t &state)
 {
-    return [state = std::move (state)] (const stream_header_t &submitted_header,
-                                        const zlink::message_t &submitted_payload) -> task_t<void> {
-        if (state->closed.load (std::memory_order_acquire)) {
+    if (state.shutdown_cancellation.stop_requested ())
+        throw framework_exception_t (framework_error_kind_t::shutting_down,
+                                     "STREAM session Host is shutting down");
+}
+
+std::function<task_t<void> (const stream_header_t &, const zlink::message_t &)>
+stream_runtime_t::stream_submitter (std::shared_ptr<stream_state_t> state,
+                                    std::shared_ptr<stream_reply_submission_t> admission_reply)
+{
+    return [state = std::move (state), admission_reply = std::move (admission_reply)] (
+             const stream_header_t &submitted_header,
+             const zlink::message_t &submitted_payload) -> task_t<void> {
+        check_stream_shutdown (*state);
+        if (state->closed.stop_requested ()) {
             throw framework_exception_t (framework_error_kind_t::unavailable,
                                          "STREAM session is disconnected");
         }
-        std::shared_ptr<
-          std::function<task_t<void> (const stream_header_t &, const zlink::message_t &)>>
-          writer;
+        std::shared_ptr<stream_state_t::transport_writer_t> writer;
         {
             const std::lock_guard<std::mutex> lock (state->transport_writer_mutex);
-            if (state->closed.load (std::memory_order_acquire)) {
+            check_stream_shutdown (*state);
+            if (state->closed.stop_requested ()) {
                 throw framework_exception_t (framework_error_kind_t::unavailable,
                                              "STREAM session is disconnected");
             }
@@ -898,17 +924,21 @@ stream_runtime_t::stream_submitter (std::shared_ptr<stream_state_t> state)
         }
         const auto submit = [&] (const stream_header_t &header, const zlink::message_t &payload) {
             if (writer && *writer) {
-                auto submitted = (*writer) (header, payload);
+                auto submitted = (*writer) (header, payload, admission_reply);
                 detail::observe_task_completion (submitted, [writer] (const result_t<void> &) {});
                 return submitted;
             }
-            if (state->closed.load (std::memory_order_acquire)) {
+            if (state->closed.stop_requested ()) {
                 throw framework_exception_t (framework_error_kind_t::unavailable,
                                              "STREAM session is disconnected");
             }
-            const std::lock_guard<std::mutex> lock (state->state_mutex);
-            state->written_headers.push_back (header);
-            state->written_payloads.push_back (payload);
+            {
+                const std::lock_guard<std::mutex> lock (state->state_mutex);
+                state->written_headers.push_back (header);
+                state->written_payloads.push_back (payload);
+            }
+            if (admission_reply)
+                admission_reply->complete ();
             return task_t<void> (result_t<void>::success ());
         };
         return detail::session_actor_manager_access_t::submit_terminal (
@@ -920,11 +950,13 @@ stream_runtime_t::stream_submitter (std::shared_ptr<stream_state_t> state)
 
 stream_send_call_t stream_t::write_packet (const zlink::framework::message_t &payload)
 {
-    if (!_state->serializers) {
-        return stream_send_call_t (result_t<void>::failure (
-          framework_error_kind_t::protocol_error, "STREAM write requires a serializer registry"));
-    }
     try {
+        detail::check_stream_shutdown (*_state);
+        if (!_state->serializers) {
+            return stream_send_call_t (
+              result_t<void>::failure (framework_error_kind_t::protocol_error,
+                                       "STREAM write requires a serializer registry"));
+        }
         auto raw_payload = detail::message_to_raw (payload, *_state->serializers);
         stream_header_t header (stream_message_kind_t::send,
                                 _state->application_codec.load (std::memory_order_acquire),
@@ -938,12 +970,15 @@ stream_send_call_t stream_t::write_packet (const zlink::framework::message_t &pa
     }
 }
 
-stream_write_call_t stream_t::write_packet_with_header (detail::stream_header_t header,
-                                                        zlink::message_t payload)
+stream_write_call_t stream_t::write_packet_with_header (
+  detail::stream_header_t header,
+  zlink::message_t payload,
+  std::shared_ptr<detail::stream_reply_submission_t> admission_reply)
 {
     detail::stream_runtime_t::propagate_flow (header);
-    return stream_write_call_t (std::move (header), std::move (payload), _state->compression_codec,
-                                detail::stream_runtime_t::stream_submitter (_state));
+    return stream_write_call_t (
+      std::move (header), std::move (payload), _state->compression_codec,
+      detail::stream_runtime_t::stream_submitter (_state, std::move (admission_reply)));
 }
 
 stream_write_call_t stream_t::reply_packet (const zlink::framework::message_t &payload)
@@ -957,15 +992,20 @@ stream_write_call_t stream_t::reply_packet (const zlink::framework::message_t &p
         return stream_write_call_t (result_t<void>::failure (
           framework_error_kind_t::protocol_error, "STREAM reply requires request sequence"));
     }
-    if (!_state->serializers) {
-        return stream_write_call_t (result_t<void>::failure (
-          framework_error_kind_t::protocol_error, "STREAM reply requires a serializer registry"));
-    }
     try {
+        detail::check_stream_shutdown (*_state);
+        if (!_state->serializers) {
+            return stream_write_call_t (
+              result_t<void>::failure (framework_error_kind_t::protocol_error,
+                                       "STREAM reply requires a serializer registry"));
+        }
         auto raw_payload = detail::message_to_raw (payload, *_state->serializers);
         auto reply_header = detail::stream_runtime_t::make_terminal_header (
           stream_message_kind_t::response, *request_header);
-        auto call = write_packet_with_header (std::move (reply_header), std::move (raw_payload));
+        auto call = write_packet_with_header (
+          std::move (reply_header), std::move (raw_payload),
+          _reply_submission && _reply_submission->admission_limited () ? _reply_submission
+                                                                       : nullptr);
         call._state->reply_submission (_reply_submission);
         return call;
     }
@@ -1032,6 +1072,13 @@ stream_builder_t &stream_builder_t::set_advertise_host (std::string host)
 stream_builder_t &stream_builder_t::set_liveness (detail::stream_liveness_options_t options)
 {
     _state->snapshot.liveness = options;
+    return *this;
+}
+
+stream_builder_t &
+stream_builder_t::set_authentication (detail::stream_authentication_options_t options)
+{
+    _state->snapshot.authentication = std::move (options);
     return *this;
 }
 
@@ -1561,16 +1608,18 @@ stream_runtime_t::decode_frame (const std::vector<zlink::message_t> &parts, bool
 }
 
 stream_header_t stream_runtime_t::make_terminal_header (stream_message_kind_t kind,
-                                                        const stream_header_t &request_header)
+                                                        const stream_header_t &request_header,
+                                                        stream_metadata_t admission_metadata)
 {
     const auto codec =
       kind == stream_message_kind_t::error ? stream_codec_t::json : request_header.codec ();
+    const bool include_actor_slot = admission_metadata.empty ();
     stream_header_t header (kind, codec, stream_header_flags_t::has_request_seq,
-                            request_header.request_seq (), "", {});
+                            request_header.request_seq (), "", std::move (admission_metadata));
     if (auto correlation = request_header.correlation_id ()) {
         header.with_correlation_id (std::string (*correlation));
     }
-    if (auto actor_slot = request_header.actor_slot ())
+    if (auto actor_slot = request_header.actor_slot (); include_actor_slot && actor_slot)
         header.with_actor_slot (*actor_slot);
     return header;
 }
@@ -1904,14 +1953,17 @@ void stream_runtime_t::dispatch_control_frame (stream_t &stream,
     }
 }
 
-stream_t stream_runtime_t::open_session (std::string stream_name) const
+stream_t stream_runtime_t::open_session (std::string stream_name,
+                                         std::stop_token shutdown_cancellation) const
 {
     if (_state->streams.find (stream_name) == _state->streams.end ()) {
         throw framework_exception_t (framework_error_kind_t::not_found,
                                      "STREAM endpoint is not registered");
     }
     auto state = std::make_shared<stream_state_t> ();
-    state->session_id = std::move (stream_name) + ":" + std::to_string (_state->next_session_id++);
+    const auto session_id = _state->next_session_id.fetch_add (1, std::memory_order_relaxed);
+    state->session_id = std::move (stream_name) + ":" + std::to_string (session_id);
+    state->shutdown_cancellation = std::move (shutdown_cancellation);
     state->serializers = _state->serializers;
     state->compression_codec = _state->compression_codec;
     return stream_t (state);
@@ -1925,6 +1977,12 @@ void stream_runtime_t::set_session_identity (stream_t &stream,
     stream._state->routing_id = std::move (routing_id);
     stream._state->local_address = std::move (local_address);
     stream._state->remote_address = std::move (remote_address);
+}
+
+void stream_runtime_t::set_session_codec (stream_t &stream, stream_codec_t codec) const
+{
+    if (auto *actors = stream._state->actors.load (std::memory_order_acquire))
+        detail::session_actor_manager_access_t::set_codec (*actors, codec);
 }
 
 result_t<void>
@@ -2078,8 +2136,15 @@ result_t<void> stream_runtime_t::dispatch_packet_async (packet_stream_session_t 
                                                         const zlink::message_t &payload,
                                                         async_dispatch_completion_t completion,
                                                         async_dispatch_started_t started,
-                                                        async_dispatch_cancel_t cancelled) const
+                                                        async_dispatch_cancel_t cancelled,
+                                                        std::shared_ptr<void> admission_lease) const
 {
+    std::shared_ptr<packet_dispatch_state_t> packet;
+    if (admission_lease) {
+        packet = std::make_shared<packet_dispatch_state_t> (header);
+        packet->reply_submission = std::make_shared<stream_reply_submission_t> (
+          std::move (admission_lease), stream._state->closed.get_token ());
+    }
     if (auto valid = validate_header (header); !valid) {
         return valid;
     }
@@ -2123,11 +2188,12 @@ result_t<void> stream_runtime_t::dispatch_packet_async (packet_stream_session_t 
     auto current_flow = runtime::flow_context_t::current ();
     auto dispatch_stream = stream;
     dispatch_stream._reply_header = header;
-    dispatch_stream._reply_submission.reset ();
-    if (header.request_seq ())
-        dispatch_stream._reply_submission = std::make_shared<stream_reply_submission_t> ();
-    auto packet = std::make_shared<packet_dispatch_state_t> (header);
-    packet->reply_submission = dispatch_stream._reply_submission;
+    if (!packet) {
+        packet = std::make_shared<packet_dispatch_state_t> (header);
+        if (header.request_seq ())
+            packet->reply_submission = std::make_shared<stream_reply_submission_t> ();
+    }
+    dispatch_stream._reply_submission = packet->reply_submission;
     packet->context.packet_name = std::string (header.packet_name ());
     packet->context.metadata = message_metadata_t (header.metadata ().values ());
     packet->context.can_reply = header.request_seq ().has_value ();
@@ -2137,6 +2203,11 @@ result_t<void> stream_runtime_t::dispatch_packet_async (packet_stream_session_t 
       [session = &session, dispatch_stream = std::move (dispatch_stream),
        packet = std::move (packet), current_flow = std::move (current_flow),
        flow_tracer] () mutable {
+          if (packet->reply_submission && packet->reply_submission->admission_limited ()
+              && dispatch_stream._state->closed.stop_requested ()) {
+              return task_t<void> (result_t<void>::failure (framework_error_kind_t::shutting_down,
+                                                            "STREAM session is disconnected"));
+          }
           runtime::flow_context_t::scope_t callback_flow (std::move (current_flow));
           auto *actors = dispatch_stream._state->actors.load (std::memory_order_acquire);
           return dispatch_packet_session (session, std::move (dispatch_stream), std::move (packet),
@@ -2148,7 +2219,7 @@ result_t<void> stream_runtime_t::dispatch_packet_async (packet_stream_session_t 
 result_t<void> stream_runtime_t::dispatch_disconnected (packet_stream_session_t &session,
                                                         stream_t &stream) const
 {
-    stream._state->closed.store (true, std::memory_order_release);
+    stream._state->closed.request_stop ();
     return dispatch_final (stream, [&] { return session.on_disconnected (stream); });
 }
 
@@ -2159,7 +2230,7 @@ result_t<void> stream_runtime_t::dispatch_disconnected_async (
     return dispatch_final_async (
       stream,
       [session = &session, dispatch_stream = std::move (dispatch_stream)] () mutable {
-          dispatch_stream._state->closed.store (true, std::memory_order_release);
+          dispatch_stream._state->closed.request_stop ();
           return session->on_disconnected (dispatch_stream);
       },
       std::move (completion));
@@ -2192,7 +2263,7 @@ void stream_runtime_t::drain_async_dispatch (stream_t &stream) const
 
 void stream_runtime_t::mark_disconnected (stream_t &stream) const
 {
-    stream._state->closed.store (true, std::memory_order_release);
+    stream._state->closed.request_stop ();
     const std::lock_guard<std::mutex> lock (stream._state->transport_writer_mutex);
     stream._state->transport_writer = {};
 }
@@ -2222,12 +2293,29 @@ void stream_runtime_t::attach_transport_writer (
   stream_t &stream,
   std::function<task_t<void> (const stream_header_t &, const zlink::message_t &)> writer) const
 {
-    std::shared_ptr<std::function<task_t<void> (const stream_header_t &, const zlink::message_t &)>>
-      retained;
-    if (writer)
-        retained = std::make_shared<
-          std::function<task_t<void> (const stream_header_t &, const zlink::message_t &)>> (
-          std::move (writer));
+    if (writer) {
+        attach_transport_writer (
+          stream, [writer = std::move (writer)] (const auto &header, const auto &payload,
+                                                 const auto &admission_reply) {
+              auto submitted = writer (header, payload);
+              if (admission_reply) {
+                  detail::observe_task_terminal (submitted, [admission_reply] (const auto &result) {
+                      if (result)
+                          admission_reply->complete ();
+                  });
+              }
+              return submitted;
+          });
+    } else {
+        attach_transport_writer (stream, stream_state_t::transport_writer_t{});
+    }
+}
+
+void stream_runtime_t::attach_transport_writer (stream_t &stream,
+                                                stream_state_t::transport_writer_t writer) const
+{
+    auto retained =
+      writer ? std::make_shared<stream_state_t::transport_writer_t> (std::move (writer)) : nullptr;
     const std::lock_guard<std::mutex> lock (stream._state->transport_writer_mutex);
     stream._state->transport_writer = std::move (retained);
 }

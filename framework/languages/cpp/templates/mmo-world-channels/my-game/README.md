@@ -4,7 +4,16 @@ This C++ MMORPG template runs an accounts HTTP service, two independent worlds, 
 
 ```mermaid
 flowchart LR
-    players -->|HTTP| accounts
+    subgraph sessionNodes["Session nodes"]
+      sessionA["Session node A"]
+      sessionB["Session node B"]
+    end
+    subgraph playNodes["Play nodes"]
+      channelA1["Play node A1 (channel)"]
+      channelB["Play node B (channel)"]
+      channelA2["Play node A2 (channel)"]
+    end
+    players -->|HTTP| accounts["API node (accounts)"]
     players -->|STREAM| sessionA
     players -->|STREAM| sessionB
     sessionA -->|relay| channelA1
@@ -137,7 +146,7 @@ The runner checks the project structure before starting its Redis containers and
 
 | Scenario | Assertions |
 | --- | --- |
-| `worlds` | Accounts lists both actual Session endpoints. A repeated earn is rejected without changing gold, returns `earn-too-soon` with `retryAfterMs`, and succeeds after that duration. The same player starts with zero gold in B. |
+| `worlds` | The accounts API node lists both actual Session endpoints. A repeated earn is rejected without changing gold, returns `earn-too-soon` with `retryAfterMs`, and succeeds after that duration. The same player starts with zero gold in B. |
 | `channel` | Players in one channel see each other in `ChannelView`; another channel is isolated. Oversized channel requests return `integer-out-of-range` without changing membership. A move and disconnect remove players from the previous list. Session rejects internal packets with `packet-not-allowed`; channel relocation preserves gold, Actor identity, and physical Session. |
 | `reconnect` | A new physical connection binds the same Actor generation, channel, and gold. |
 | `update` | Draining channelA1 moves its Zone and Actors to channelA2, leaves B unchanged, and verifies a new Zone and Player work on the replacement. |

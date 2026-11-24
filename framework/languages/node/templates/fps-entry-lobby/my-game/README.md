@@ -1,12 +1,16 @@
 # my-game — FPS entry lobby
 
-This Node.js FPS server template has a Session gateway and independently deployable Match nodes. Entry Spots admit Player Actors to a fixed Matchmaking User Spot. Matchmaking pairs players by mode and creates a Room User Spot for each pair. Each Room owns movement, HP, action sequences, wall intersection, cooldowns, and match results.
+This Node.js FPS server template has a Session node and independently deployable play nodes (match). Entry Spots admit Player Actors to a fixed Matchmaking User Spot. Matchmaking pairs players by mode and creates a Room User Spot for each pair. Each Room owns movement, HP, action sequences, wall intersection, cooldowns, and match results.
 
 ```mermaid
 flowchart LR
-  players[Players] -->|STREAM| session[Session]
-  session -->|relay| matchA[Match A: Entry / Matchmaking / Room]
-  matchA <-->|my-game-arena| matchB[Match B: Entry / Room]
+  subgraph playNodes["Play nodes"]
+    matchA["Play node A (match): Entry / Matchmaking / Room"]
+    matchB["Play node B (match): Entry / Room"]
+  end
+  players[Players] -->|STREAM| session["Session node"]
+  session -->|relay| matchA
+  matchA <-->|my-game-arena| matchB
   matchA -->|Location / lease| location[(Redis)]
 ```
 
@@ -60,7 +64,7 @@ Use the same connector release as `package.json` dependencies `@zlink-systems/fr
 
 ### First match example
 
-Save as `e2e/connect-once.mts` in a copy of this template, run `npm run build`, then `node dist/e2e/connect-once.mjs <actual-session-endpoint>`. Keep Session, Match nodes, and Redis running separately from the temporary e2e deployment. The example queues two fresh players and receives their matching pushes. The JSON codec leaves contract int64 values as decimal strings on receipt; this example reads only the room ID.
+Save as `e2e/connect-once.mts` in a copy of this template, run `npm run build`, then `node dist/e2e/connect-once.mjs <actual-session-endpoint>`. Keep Session, play nodes (match), and Redis running separately from the temporary e2e deployment. The example queues two fresh players and receives their matching pushes. The JSON codec leaves contract int64 values as decimal strings on receipt; this example reads only the room ID.
 
 ```typescript
 import '../.zlink-framework-json-schemas.cjs';
@@ -123,7 +127,7 @@ pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
 ```
 
-The default run executes `matchmaking`, `hit`, `wall`, `input`, `reconnect`, and `update` in that order. The runner checks the structure before starting nodes, assigns a unique Redis key prefix to each scenario, starts Match nodes before Session, and waits for public runtime readiness. Listeners bind port zero and publish their actual endpoints. The runner removes only processes and the Compose project that it created; cleanup failures produce a nonzero exit code.
+The default run executes `matchmaking`, `hit`, `wall`, `input`, `reconnect`, and `update` in that order. The runner checks the structure before starting nodes, assigns a unique Redis key prefix to each scenario, starts play nodes (match) before the session node, and waits for public runtime readiness. Listeners bind port zero and publish their actual endpoints. The runner removes only processes and the Compose project that it created; cleanup failures produce a nonzero exit code.
 
 | Scenario | Client observations |
 |---|---|
@@ -150,7 +154,7 @@ Hit detection uses the current server state. The template has no lag compensatio
 
 Message Follow is configured explicitly to 30 seconds. After `RELOCATED`, the safe shutdown observation budget is the follow duration plus the existing relocation observation budget; the relocation operation deadline is unchanged.
 
-`--check-domain` (`-CheckDomain` in PowerShell) runs 46 game domain checks and one separate wire golden check for four samples. The wire check runs in the Framework execution image; the runner does not load Framework. It briefly starts one local typed Session host and observes its public connector payloads; Redis and game scenario nodes are not started.
+`--check-domain` (`-CheckDomain` in PowerShell) runs 46 game domain checks and one separate wire golden check for four samples. The wire check runs in the Framework execution image; the runner does not load Framework. It briefly starts one local typed Session node and observes its public connector payloads; Redis and game scenario nodes are not started.
 
 ## Framework behavior to know
 
@@ -168,8 +172,8 @@ Validated against the published Framework 0.32.0 packages. The typed push delive
 
 ## Deployment sequence
 
-Wait for the bootstrap owner to report `READY` before starting another Match host. Its public `getOrCreate` completes while it is the only placement candidate, so the fixed Matchmaking Spot starts on its declared owner.
+Wait for the bootstrap owner to report `READY` before starting another play node (match). Its public `getOrCreate` completes while it is the only placement candidate, so the fixed Matchmaking Spot starts on its declared owner.
 
-Configure Redis and a unique key prefix in `server/config/`. Start `dist/server/match/main.js` with `server/config/match-a.json`, then the same entrypoint with `server/config/match-b.json`. Match A bootstraps the fixed `matchmaking` Spot before peers start. Start `dist/server/session/main.js` with `server/config/session.json`. All roles use the common hosting module and report `READY` with actual listener endpoints.
+Configure Redis and a unique key prefix in `server/config/`. Start `dist/server/match/main.js` with `server/config/match-a.json`, then the same entrypoint with `server/config/match-b.json`. Play node A (match) bootstraps the fixed `matchmaking` Spot before peers start. Start `dist/server/session/main.js` with `server/config/session.json`. All roles use the common hosting module and report `READY` with actual listener endpoints.
 
-Write `drain` to the selected Match process's standard input. Wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Write `shutdown`, verify `STOPPED` with outcome `Stopped` and reason `None`, and wait for exit. Start a replacement with the same node configuration and `bootstrapMatchmaking` disabled because the relocated Matchmaking Spot already exists. Wait for `READY` before assigning new work. Redis must remain available during this sequence.
+Write `drain` to the selected play node (match)'s standard input. Wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Write `shutdown`, verify `STOPPED` with outcome `Stopped` and reason `None`, and wait for exit. Start a replacement with the same node configuration and `bootstrapMatchmaking` disabled because the relocated Matchmaking Spot already exists. Wait for `READY` before assigning new work. Redis must remain available during this sequence.

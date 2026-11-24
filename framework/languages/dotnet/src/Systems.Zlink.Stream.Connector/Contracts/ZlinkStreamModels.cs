@@ -133,3 +133,10 @@ public readonly struct ZlinkStreamResult<T>
         return new ZlinkStreamResult<T>(default, error);
     }
 }
+
+/// <summary>A request is waiting to retry after a server admission rejection.</summary>
+public sealed record ZlinkStreamAdmissionWaiting(
+    string RequestPacketName,
+    string? ActorId,
+    TimeSpan RetryAfter
+);

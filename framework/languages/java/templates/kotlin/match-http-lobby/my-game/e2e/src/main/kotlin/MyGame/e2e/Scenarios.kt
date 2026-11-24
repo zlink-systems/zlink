@@ -265,7 +265,7 @@ private suspend fun verifyNewRoom(
         val room = both(a, b) { it.players.size == Rules.PLAYERS }
         check(room.roomId == assignment.roomId && room.phase == Rules.PLAYING && room.winner == null)
         if (expectedNodeId != null) check(room.nodeId == expectedNodeId) {
-            "New Room is not on the replacement match node"
+            "New Room is not on the replacement play node (match)"
         }
     }
 }

@@ -13,6 +13,7 @@ import type {
   ZlinkStreamError,
   ZlinkStreamMessage,
   ZlinkStreamRequestSendingContext,
+  ZlinkStreamAdmissionWaitingContext,
   ZlinkStreamReplyReceivedContext
 } from './ZlinkStreamModels';
 import type { ZlinkStreamCloseReason, ZlinkStreamConnectionState } from './ZlinkStreamEnums';
@@ -50,6 +51,12 @@ export interface ZlinkStreamConnector {
     ) => Promise<void> | void
   ): Disposable;
   onRequestSending(handler: (context: ZlinkStreamRequestSendingContext) => void): Disposable;
+  onAdmissionWaiting(
+    handler: (
+      context: ZlinkStreamAdmissionWaitingContext,
+      signal?: AbortSignal
+    ) => Promise<void> | void
+  ): Disposable;
   onReplyReceived(
     handler: (
       context: ZlinkStreamReplyReceivedContext,

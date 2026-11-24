@@ -31,7 +31,11 @@ import {
 import type { ServiceActorRef } from '../foundation/service-stateful-registry';
 import type { ServiceRetiredBoundSessionRouteFence } from '../foundation/service-stateful-wire-codec';
 import { ZLinkFrameworkInternalErrorKind } from '../framework-errors-internal';
-import { type ZLinkSubmitResult, requireOneWayCompletion } from '../messaging/submission-result';
+import {
+  ZLinkSubmitStatus,
+  type ZLinkSubmitResult,
+  requireOneWayCompletion
+} from '../messaging/submission-result';
 
 import {
   ZLinkStreamHeaderFlags,
@@ -121,6 +125,7 @@ export class DefaultZLinkSessionContext implements ZLinkSessionContext {
   readonly handlers: ZLinkSessionHandlerRegistry;
   private readonly localActors = new ZLinkSessionLocalActorBindings<DefaultZLinkSessionActor>();
   private currentDispatchHeader: ZLinkStreamFrameHeader | undefined;
+  private completeDispatchAdmission: (() => void) | undefined;
   private currentReplyClaimed = false;
   private actorBindingReplacementHandler?: ZLinkActorBindingReplacementHandler;
   private frameWrittenObserver?: (
@@ -290,19 +295,35 @@ export class DefaultZLinkSessionContext implements ZLinkSessionContext {
     compressed: boolean,
     payload: unknown
   ): Promise<ZLinkSubmitResult> {
-    return this.runtime.submitReply(this, requestHeader, kind, metadata, compressed, payload);
+    const reply = this.runtime.submitReply(
+      this,
+      requestHeader,
+      kind,
+      metadata,
+      compressed,
+      payload
+    );
+    const complete =
+      this.currentDispatchHeader === requestHeader ? this.completeDispatchAdmission : undefined;
+    if (complete === undefined) return reply;
+    return reply.then((result) => {
+      if (result.status === ZLinkSubmitStatus.Submitted) complete();
+      return result;
+    });
   }
 
-  enterDispatch(header: ZLinkStreamFrameHeader): void {
+  enterDispatch(header: ZLinkStreamFrameHeader, completeAdmission?: () => void): void {
     if (this.closingForActorReplacement) {
       throw new Error('Session is closing after its Actor binding was replaced.');
     }
     this.currentDispatchHeader = header;
+    this.completeDispatchAdmission = completeAdmission;
     this.currentReplyClaimed = false;
   }
 
   exitDispatch(): void {
     this.currentDispatchHeader = undefined;
+    this.completeDispatchAdmission = undefined;
     this.currentReplyClaimed = false;
   }
 

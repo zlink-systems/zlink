@@ -256,6 +256,14 @@ connector owns a per-connector-instance typed codec option
 | Handshake failure | A failure before the session was built, so there's no target for a session callback. It is recorded only in runtime monitoring. |
 | A socket/node-level error | Can't be attributed to a single specific session, so a session callback isn't run — it's recorded in runtime monitoring. |
 | An application handler exception | Not a transport error, so the session error callback isn't run — the handler exception-handling path is used instead. |
+| Session object creation failure (the registered session type's factory or DI ends with an exception) | Follows the "Session creation failure" rule below. There is no session, so the session error callback isn't run. |
+
+**Session creation failure.** When the framework can't build the session object for one connection (at connection setup or at the first packet), it does the following exactly once at that connection's session admission boundary — once even if connection setup and the first packet both see the same failure.
+
+- It records the original exception once in the existing runtime logger at `Error` level, regardless of debug settings.
+- If a packet triggered the creation, it doesn't deliver that packet to a handler and ends that packet's message flow with `outcome=failed`, `reason=session_creation_failed` ([Message-flow tracing §3.1](../06-observability/03-message-flow-tracing.en.md#31-closed-values-shared-by-every-language)). A `Request` ends with an `Error` reply (`InternalFailure`) carrying the same sequence; that reply is submitted first, then the `session-closing` below, and then the transport close of [§4.1](#41-transport-operation-teardown-boundary) starts. With connection setup only and no packet, there is no message, so no message-flow record is made.
+- It closes that connection with the `session-closing` control packet's close reason `TransportError`, and the diagnostic text states that session creation failed. No new close reason is added — the meaning of `TransportError` covers this case, and the close reason is the closed set of [Stream Connector §6.2](../../stream-connector/32-stream-connector.en.md#62-close-reason), and the client treats this connection like a transport failure in which the server couldn't open a session. `ProtocolError` means a client violation and isn't used.
+- A creation failure of one connection doesn't end the process or any other connection.
 
 The session error callback is limited to surfacing a monitor-observable
 transport error at the session level. When a connection ends with Core monitor's `DISCONNECTED`
@@ -269,7 +277,15 @@ turn it into another close reason.
 
 A server STREAM session follows the heartbeat rule of [Stream Connector §6](../../stream-connector/32-stream-connector.en.md#6-connection-lifecycle). The heartbeat interval and timeout default to that section's defaults and can be changed in the Stream node configuration. On the server, the result of the no-inbound timeout is closing the session with `heartbeat_timeout`, not reconnecting.
 
-Application idle closing runs only when the Stream node idle timeout is set to a positive value. The default is 0, and 0 means no idle closing. When enabled, a session whose last application packet arrived more than the idle timeout ago is closed with `idle_timeout`. Heartbeat control frames don't count as application activity.
+While a session reader is waiting for a host application job permit before reading its next frame
+([authentication admission §1.2](03-authentication-admission.en.md#12-decision),
+[application job queue §3](../01-execution/04-application-job-queue-and-backpressure.en.md#3-ordinary-ingress-permit-order)), the session's no-inbound
+deadline and idle deadline aren't evaluated, because the wait is caused by the host, not the peer. Once the permit is
+granted, both deadlines are measured again from that moment. The server keeps sending heartbeat pings at the
+interval during the wait. (#5583)
+Each session's ping times are the time the connection was established plus multiples of the interval. The first ping is sent at connection time + interval. If execution is late and several ping times have passed, one ping is sent, and the next ping is sent at the next future time on the same multiples.
+
+Application idle closing runs only when the Stream node idle timeout is set to a positive value. The default is 0, and 0 means no idle closing. When enabled, a session whose last application packet arrived more than the idle timeout ago is closed with `idle_timeout`. Heartbeat control frames don't count as application activity. If the no-inbound deadline and the idle deadline have both passed, the session closes with `heartbeat_timeout`.
 
 The heartbeat interval and timeout must be positive, and the timeout must be greater than the interval. The idle timeout must be 0 or greater. A configuration that breaks these conditions is rejected as a configuration error before the host starts.
 
@@ -399,6 +415,7 @@ and the inter-node wire records. Each item leads to one contract test.
   client matches by request sequence alone to complete normally.
 - Handshake failure and socket-level errors don't run the session error
   callback and are only recorded in runtime monitoring.
+- When the session factory throws, at connection setup and at the first packet alike the original exception is recorded once at Error and the client observes the disconnect with close reason `TransportError`. If the first packet is a `Request`, it receives an `Error(InternalFailure)` reply. Other connections on the same host keep working.
 - In the error callback of a session that ended with Core's `DISCONNECTED` event, the event's
   `zlink_disconnect_reason_t` value can be read, and it equals the value Core reported.
 

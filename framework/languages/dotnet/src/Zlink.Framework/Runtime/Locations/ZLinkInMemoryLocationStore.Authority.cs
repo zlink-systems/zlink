@@ -431,19 +431,6 @@ internal sealed partial class ZLinkInMemoryLocationStore
         {
             var now = _time.GetUtcNow();
             RemoveExpiredCreationTerminals(now);
-            if (
-                request.ObjectKind
-                    is ZLinkPlacementObjectKind.UserSpot
-                        or ZLinkPlacementObjectKind.InstanceSpot
-                && Zlink.Framework.Runtime.Spots.ZLinkUserSpotAuthorityPayloadCodec.TryGetSpotId(
-                    request.Key,
-                    out var spotId
-                )
-                && _entrySpotIdClaims.ContainsKey(spotId)
-            )
-                return new ZLinkObjectReserveResult.Conflict(
-                    new ZLinkAuthorityReadResult.Missing(now)
-                );
             if (_authorities.TryGetValue(request.Key.Value, out var existing))
             {
                 if (
@@ -456,8 +443,10 @@ internal sealed partial class ZLinkInMemoryLocationStore
                         request.Key,
                         existing,
                         now,
-                        request.Key,
-                        request.ObjectRelocationPolicy
+                        new ZLinkCreationAuthorityRecovery(
+                            request.TargetDescriptor,
+                            request.TargetNodeLifecycleGeneration
+                        )
                     )
                 )
                     return existing.Allocation.State == ZLinkPlacementAllocationState.Active
@@ -758,7 +747,7 @@ internal sealed partial class ZLinkInMemoryLocationStore
     public ValueTask<bool> ReleaseEndedReservationAsync(
         ZLinkAuthorityKey key,
         string expectedStoreVersion,
-        ZLinkCreationAuthorityRecovery? creationRecovery = null,
+        ZLinkCreationAuthorityRecovery? creationTarget = null,
         CancellationToken cancellationToken = default
     )
     {
@@ -766,13 +755,7 @@ internal sealed partial class ZLinkInMemoryLocationStore
         return _lane.RunAsync(() =>
             _authorities.TryGetValue(key.Value, out var current)
             && current.StoreVersion == expectedStoreVersion
-            && TryReleaseEndedReservation(
-                key,
-                current,
-                _time.GetUtcNow(),
-                creationRecovery is null ? null : key,
-                creationRecovery?.RelocationPolicy
-            )
+            && TryReleaseEndedReservation(key, current, _time.GetUtcNow(), creationTarget)
         );
     }
 
@@ -800,21 +783,26 @@ internal sealed partial class ZLinkInMemoryLocationStore
         ZLinkAuthorityKey key,
         ZLinkAuthoritySnapshot current,
         DateTimeOffset now,
-        ZLinkAuthorityKey? creationKey = null,
-        byte? creationRelocationPolicy = null,
+        ZLinkCreationAuthorityRecovery? creationTarget = null,
         bool discarded = false
     )
     {
         if (
             (
                 current.Allocation.State == ZLinkPlacementAllocationState.Active
-                    ? creationKey is null && !discarded
+                    ? creationTarget is null && !discarded
                     : current.ReservedCreation is null
             ) || IsAuthorityInPreparedAggregate(key)
         )
             return false;
         var active = current.Allocation.State == ZLinkPlacementAllocationState.Active;
-        if (active && ZLinkRelocationAuthorityPayloadCodec.TryDecode(current.Payload.Span, out _))
+        if (
+            active
+            && (
+                current.Relocation is not null
+                || ZLinkRelocationAuthorityPayloadCodec.TryDecode(current.Payload.Span, out _)
+            )
+        )
             return false;
         var descriptorKey = ZLinkLocationKeyCodec.EncodeMeshNodeKey(current.Allocation.Descriptor);
         var owner = new ZLinkLocationOwnerToken(current.OwnerId, current.OwnerLeaseGeneration);
@@ -824,17 +812,14 @@ internal sealed partial class ZLinkInMemoryLocationStore
         {
             if (ownerLive)
                 return false;
-            if (
-                !discarded
-                && creationRelocationPolicy != ZLinkObjectRelocationRegistration.DisabledPolicy
-            )
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.Unavailable,
-                    current.Allocation.ObjectKind == ZLinkPlacementObjectKind.UserSpot
-                    && ZLinkAuthorityKeyCodec.TryDecodeSpot(key, out var unavailableSpotId)
-                        ? $"User Spot '{unavailableSpotId}' owner lease is not live."
-                        : "Object owner lease is unavailable.",
-                    ZLinkRetryAdvice.RetryAfterStateChange
+            if (!discarded && creationTarget is { } target)
+                ZLinkAuthorityCleanup.RequireDisabledCreationPolicy(
+                    key,
+                    current.Allocation,
+                    target.TargetNodeLifecycleGeneration,
+                    _meshNodes.Rows.GetValueOrDefault(
+                        ZLinkLocationKeyCodec.EncodeMeshNodeKey(target.TargetDescriptor)
+                    )
                 );
         }
         else if (
@@ -847,8 +832,14 @@ internal sealed partial class ZLinkInMemoryLocationStore
         var endedUserSpotId = active ? ZLinkAuthorityCleanup.RequireSteadyReady(current) : null;
         if (active && !ownerLive)
             _ownerLeaseReleaseWait.Observe(owner);
-        if (endedUserSpotId is not null && !discarded)
-            members = EndedUserSpotMembers(key, current, endedUserSpotId, now);
+        if (endedUserSpotId is not null && !discarded && creationTarget is { } spotTarget)
+            members = EndedUserSpotMembers(
+                key,
+                current,
+                endedUserSpotId,
+                spotTarget.TargetDescriptor,
+                now
+            );
         if (active)
         {
             releaseWaitElapsed = _ownerLeaseReleaseWait.HasElapsed(owner, _ownerLeaseFencingMargin);
@@ -890,11 +881,12 @@ internal sealed partial class ZLinkInMemoryLocationStore
     // ended-owner member: steady Ready, not in an aggregate, activated, and
     // its owner lease invalid. The release must fit one provider batch; the
     // key set mirrors the provider repository batch (authority, owner,
-    // descriptor and capacity records).
+    // source and factory target descriptors, and capacity records).
     private List<KeyValuePair<string, ZLinkAuthoritySnapshot>> EndedUserSpotMembers(
         ZLinkAuthorityKey spotKey,
         ZLinkAuthoritySnapshot spot,
         string spotId,
+        ZLinkMeshNodeDescriptorKey targetDescriptor,
         DateTimeOffset now
     )
     {
@@ -904,6 +896,7 @@ internal sealed partial class ZLinkInMemoryLocationStore
             "authority:" + spotKey.Value,
             "owner:" + spot.OwnerId,
             "descriptor:" + ZLinkLocationKeyCodec.EncodeMeshNodeKey(spot.Allocation.Descriptor),
+            "descriptor:" + ZLinkLocationKeyCodec.EncodeMeshNodeKey(targetDescriptor),
             "capacity:" + ZLinkLocationKeyCodec.EncodeMeshNodeKey(spot.Allocation.Descriptor),
         };
         foreach (var entry in _authorities)
@@ -1158,6 +1151,7 @@ internal sealed partial class ZLinkInMemoryLocationStore
                 {
                     StoreVersion = Next(ref _authorityRevision).ToString(),
                     Payload = participant.AuthorityPayload.ToArray(),
+                    Relocation = aggregate.Request.ApplyRelocation(current.Relocation),
                     AuthorityOwnerGeneration = changesOwner
                         ? aggregate.TargetAuthorityOwnerGenerations[participant.Key]
                         : current.AuthorityOwnerGeneration,
@@ -1571,6 +1565,8 @@ internal sealed partial class ZLinkInMemoryLocationStore
             || left.TargetDescriptorLifecycleGeneration != right.TargetDescriptorLifecycleGeneration
             || left.Capacity != right.Capacity
             || left.AllowPreparingTarget != right.AllowPreparingTarget
+            || left.Relocation != right.Relocation
+            || left.ClearRelocation != right.ClearRelocation
             || !left.InventoryDigest.Span.SequenceEqual(right.InventoryDigest.Span)
             || left.Participants.Count != right.Participants.Count
         )

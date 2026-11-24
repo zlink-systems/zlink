@@ -4,7 +4,6 @@ import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.*;
-import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityRestore;
@@ -33,7 +32,6 @@ final class ZLinkInMemoryAuthorityStore {
     private final Predicate<ZLinkLocationOwnerToken> ownerLeaseIsLive;
     private final ZLinkOwnerLeaseWaitTracker ownerLeaseWait;
     private final DescriptorLookup descriptorLookup;
-    private final Predicate<String> spotIdentityClaimed;
     private final Map<String, Row> rows = new HashMap<>();
     private final Map<String, ReservationState> reservations = new HashMap<>();
     private final Map<ZLinkCreationOperationIdentity, ZLinkCreationOperationTerminal>
@@ -56,7 +54,6 @@ final class ZLinkInMemoryAuthorityStore {
                 clock,
                 ownerLeaseIsLive,
                 (key, generation, owner) -> null,
-                ignored -> false,
                 new ZLinkOwnerLeaseWaitTracker(System::nanoTime, java.time.Duration.ZERO));
     }
 
@@ -69,7 +66,6 @@ final class ZLinkInMemoryAuthorityStore {
                 clock,
                 ownerLeaseIsLive,
                 descriptorLookup,
-                ignored -> false,
                 new ZLinkOwnerLeaseWaitTracker(System::nanoTime, java.time.Duration.ZERO));
     }
 
@@ -78,37 +74,12 @@ final class ZLinkInMemoryAuthorityStore {
             Clock clock,
             Predicate<ZLinkLocationOwnerToken> ownerLeaseIsLive,
             DescriptorLookup descriptorLookup,
-            Predicate<String> spotIdentityClaimed) {
-        this(
-                stateLane,
-                clock,
-                ownerLeaseIsLive,
-                descriptorLookup,
-                spotIdentityClaimed,
-                new ZLinkOwnerLeaseWaitTracker(System::nanoTime, java.time.Duration.ZERO));
-    }
-
-    ZLinkInMemoryAuthorityStore(
-            ZLinkStateLane stateLane,
-            Clock clock,
-            Predicate<ZLinkLocationOwnerToken> ownerLeaseIsLive,
-            DescriptorLookup descriptorLookup,
-            Predicate<String> spotIdentityClaimed,
             ZLinkOwnerLeaseWaitTracker ownerLeaseWait) {
         this.stateLane = stateLane;
         this.clock = clock;
         this.ownerLeaseIsLive = ownerLeaseIsLive;
         this.descriptorLookup = descriptorLookup;
-        this.spotIdentityClaimed = spotIdentityClaimed;
         this.ownerLeaseWait = ownerLeaseWait;
-    }
-
-    boolean containsAuthority(String key) {
-        return inStateLane(() -> containsAuthorityOnLane(key));
-    }
-
-    boolean containsAuthorityOnLane(String key) {
-        return rows.containsKey(key);
     }
 
     public CompletionStage<ZLinkAuthorityReadResult> read(
@@ -442,11 +413,17 @@ final class ZLinkInMemoryAuthorityStore {
                 throw new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.UNAVAILABLE,
                         "Ended authority requires relocation recovery");
-            if (!discarded
-                    && !(request.relocationPolicy()
-                            instanceof ZLinkObjectFactoryRegistration.RelocationPolicy.Disabled))
-                throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.UNAVAILABLE, "Object owner lease is unavailable");
+            if (!discarded) {
+                var target = request.targetDescriptor();
+                var targetDescriptor =
+                        target.equals(current.allocation.descriptor())
+                                ? descriptor
+                                : descriptorLookup.find(
+                                        target,
+                                        request.targetDescriptorLifecycleGeneration(),
+                                        request.targetOwner());
+                ZLinkAuthorityCleanup.requireDisabledCreationPolicy(request, targetDescriptor);
+            }
             if (current.allocation.objectKind() != ZLinkPlacementObjectKind.ACTOR) {
                 var spot = new ZLinkServiceAuthorityPayloadCodec().decode(current.payload);
                 if (spot.isEmpty()
@@ -460,7 +437,11 @@ final class ZLinkInMemoryAuthorityStore {
                 }
                 if (spot.get().user().isPresent()) {
                     var endedMembers =
-                            endedSpotMembers(key, current, spot.get().spotId(), discarded);
+                            endedSpotMembers(
+                                    key,
+                                    current,
+                                    spot.get().spotId(),
+                                    discarded ? null : request.targetDescriptor());
                     if (discarded && !endedMembers.members().isEmpty()) return false;
                     members = endedMembers.members();
                     ownerLeaseReleaseBlocked |= endedMembers.ownerLeaseReleaseBlocked();
@@ -506,13 +487,14 @@ final class ZLinkInMemoryAuthorityStore {
     private record EndedSpotMembers(List<String> members, boolean ownerLeaseReleaseBlocked) {}
 
     private EndedSpotMembers endedSpotMembers(
-            String spotKey, Row spot, String spotId, boolean discarded) {
+            String spotKey, Row spot, String spotId, ZLinkMeshNodeDescriptorKey creationTarget) {
         List<String> members = new ArrayList<>();
         Set<String> batchKeys = new HashSet<>();
         boolean ownerLeaseReleaseBlocked = false;
         batchKeys.add("authority:" + spotKey);
         batchKeys.add("owner:" + spot.owner.ownerId());
         batchKeys.add("descriptor:" + spot.allocation.descriptor());
+        if (creationTarget != null) batchKeys.add("descriptor:" + creationTarget);
         batchKeys.add("capacity:" + spot.allocation.descriptor());
         for (var entry : rows.entrySet()) {
             Row row = entry.getValue();
@@ -522,7 +504,7 @@ final class ZLinkInMemoryAuthorityStore {
                             != systems.zlink.framework.spots.ZLinkSpotKind.USER.value()
                     || !actor.get().currentSpotId().equals(spotId)
                     || actor.get().currentSpotGeneration() != spot.objectGeneration) continue;
-            if (discarded) return new EndedSpotMembers(List.of(entry.getKey()), false);
+            if (creationTarget == null) return new EndedSpotMembers(List.of(entry.getKey()), false);
             if (row.relocation != null
                     || participantIsPrepared(entry.getKey())
                     || !ZLinkAuthoritySnapshot.steadyReady(row.payload, row.allocation))
@@ -547,12 +529,6 @@ final class ZLinkInMemoryAuthorityStore {
             ZLinkObjectReservationRequest request, ZLinkStoreCancellation cancellation) {
         return inStateLane(
                 () -> {
-                    if (request.objectKind() != ZLinkPlacementObjectKind.ACTOR
-                            && spotIdentityClaimed.test(request.authorityKey())) {
-                        return completed(
-                                new ZLinkObjectConflict(
-                                        new ZLinkAuthorityMissing(clock.instant())));
-                    }
                     Instant now = clock.instant();
                     Row current = rows.get(request.authorityKey());
                     if (current != null

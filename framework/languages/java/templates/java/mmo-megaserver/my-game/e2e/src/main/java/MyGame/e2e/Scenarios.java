@@ -156,7 +156,7 @@ public final class Scenarios {
                                 admitted.nodeId().equals(moved.nodeId())
                                         && admitted.players()
                                                 .equals(List.of(new PlayerPosition("p4", 0, 0))),
-                                "New Region was not accepted by the replacement Region node");
+                                "New Region was not accepted by the replacement play node (region)");
                     }
                 }
                 for (var client : clients)

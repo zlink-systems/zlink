@@ -122,7 +122,6 @@ final class ZLinkSpotActivationFactory {
                                 host.serialExecutor(), ZLinkExecutionLanePolicy.spot()),
                         executionModes.getOrDefault(spotType, ZLinkUserSpotExecutionMode.SPOT_WIDE),
                         ZLinkInstanceSpot.class.isAssignableFrom(spotType),
-                        null,
                         relocationCoordinationModes.getOrDefault(
                                 spotType, ZLinkSpotRelocationCoordinationMode.FRAMEWORK_MANAGED));
         return context.prepareActivation(
@@ -189,7 +188,6 @@ final class ZLinkSpotActivationFactory {
                                 host.serialExecutor(), ZLinkExecutionLanePolicy.spot()),
                         executionModes.getOrDefault(spotType, ZLinkUserSpotExecutionMode.SPOT_WIDE),
                         ZLinkInstanceSpot.class.isAssignableFrom(spotType),
-                        null,
                         relocationCoordinationModes.getOrDefault(
                                 spotType, ZLinkSpotRelocationCoordinationMode.FRAMEWORK_MANAGED));
         return context.prepareRelocationTarget(
@@ -339,7 +337,7 @@ final class ZLinkSpotActivationFactory {
         }
         EntrySpotActivation activation =
                 new EntrySpotActivation(host, handlerInvoker, entrySpot, backendSpot, context);
-        return context.enqueueDispatch(
+        return context.enqueueLifecycle(
                         () ->
                                 host.runWithOutbound(
                                         context.dispatchOutbound(),

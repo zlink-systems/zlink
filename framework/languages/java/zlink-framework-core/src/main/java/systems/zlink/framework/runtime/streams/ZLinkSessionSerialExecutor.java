@@ -20,19 +20,34 @@ final class ZLinkSessionSerialExecutor {
     }
 
     CompletionStage<Void> executeControl(Supplier<CompletionStage<Void>> operation) {
-        return queue.enqueue(operation, null);
+        return queue.enqueueLifecycleBarrier(operation);
     }
 
-    CompletionStage<Void> executeInfrastructure(Supplier<CompletionStage<Void>> operation) {
-        return queue.enqueue(operation, null);
+    // The STREAM registry's state lane serializes all close callers for this queue.
+    boolean sealAdmission() {
+        if (admissionSealed()) return false;
+        queue.sealClosingAdmission();
+        return true;
+    }
+
+    boolean admissionSealed() {
+        return !queue.steady();
+    }
+
+    CompletionStage<Void> acceptedPackets() {
+        return queue.awaitQuiescence(ZLinkSerialExecutionQueue.Quiescence.APPLICATION);
     }
 
     CompletionStage<Void> executeFinal(Supplier<CompletionStage<Void>> operation) {
-        return queue.enqueue(operation, null);
+        return queue.enqueuePreviouslyAccepted(operation);
     }
 
     CompletionStage<Void> executeLifecycleNext(Supplier<CompletionStage<Void>> operation) {
         return queue.enqueueBarrierNext(operation, null);
+    }
+
+    void discardPending() {
+        queue.discardApplications();
     }
 
     CompletionStage<Void> awaitQuiescence() {

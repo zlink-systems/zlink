@@ -97,7 +97,7 @@ export function checkStructure(path = 'zlink.structure.json'): void {
   for (const node of nodes.filter((n) => n.role === 'match')) {
     assert(
       spots.filter((s) => s.owner === node.id && s.kind === 'entry').length === 1,
-      'Room node lacks Entry Spot'
+      'play node (match) lacks Entry Spot'
     );
     const cfg = object(JSON.parse(readFileSync(text(node.config), 'utf8')));
     assert(

@@ -115,8 +115,15 @@ struct store_value_condition_t {
  std::vector<std::byte> expected;
 };
 
+struct store_sum_at_most_condition_t {
+ std::vector<store_key_t> keys;
+ std::int64_t delta = 0;
+ std::int64_t limit = 0;
+};
+
 using store_condition_t =
- std::variant<store_missing_condition_t, store_version_condition_t, store_value_condition_t>;
+ std::variant<store_missing_condition_t, store_version_condition_t, store_value_condition_t,
+              store_sum_at_most_condition_t>;
 
 struct store_put_t {
  store_key_t key;
@@ -128,7 +135,12 @@ struct store_delete_t {
  store_key_t key;
 };
 
-using store_mutation_t = std::variant<store_put_t, store_delete_t>;
+struct store_add_t {
+ store_key_t key;
+ std::int64_t delta = 0;
+};
+
+using store_mutation_t = std::variant<store_put_t, store_delete_t, store_add_t>;
 
 struct store_write_request_t {
  std::vector<store_condition_t> conditions;
@@ -149,8 +161,12 @@ struct store_write_conflict_t {
  std::chrono::system_clock::time_point store_now{};
 };
 
+struct store_write_corrupt_t {
+ std::chrono::system_clock::time_point store_now{};
+};
+
 using store_write_result_t =
- std::variant<store_write_applied_t, store_write_conflict_t>;
+ std::variant<store_write_applied_t, store_write_conflict_t, store_write_corrupt_t>;
 
 struct store_scan_request_t {
  std::string prefix;
@@ -198,8 +214,9 @@ for TTL judgment. The specified `retention` must be positive.
 `write(...)` first checks every condition, and only if all are true
 does it apply every mutation as one atomic commit. If even one
 condition is false, both mutation and version increase are 0, and it
-returns `store_write_conflict_t`. Condition only provides Missing or
-Version comparison. The conflict result doesn't carry domain
+returns `store_write_conflict_t`. The condition kinds, the capacity counter operations
+(`store_sum_at_most_condition_t`, `store_add_t`), and `store_write_corrupt_t`
+follow [Location Store §4](../../../05-location-relocation/02-location-store-redis.en.md#4-conditional-atomic-batch) and [§4.1](../../../05-location-relocation/02-location-store-redis.en.md#41-capacity-counters). The conflict result doesn't carry domain
 state or the current value — the Framework does a direct read of the
 needed key.
 

@@ -23,23 +23,15 @@ internal sealed class ZLinkRouteHandlerInvoker(
             codecs
         );
 
-        var context = new ZLinkRouteMessageContext(
-            routerChannelId,
-            null,
-            sourceRid,
-            header.MessageName!,
-            header.ContentType,
-            metadata,
-            header.CorrelationId,
-            receivedAt
-        );
-        await dispatcher
-            .DispatchRouteAsync(
+        await InvokeDecodedSendAsync(
                 descriptor,
+                routerChannelId,
+                sourceRid,
+                header,
                 message,
-                context,
-                ZLinkHandlerDispatchKind.NodeDirectSend,
-                cancellationToken
+                cancellationToken,
+                metadata,
+                receivedAt
             )
             .ConfigureAwait(false);
     }
@@ -61,33 +53,50 @@ internal sealed class ZLinkRouteHandlerInvoker(
             header.ContentType,
             codecs
         );
-        var ownedMessage = message as Message;
-        try
-        {
-            var context = new ZLinkRouteMessageContext(
+        using var ownedMessage = message as Message;
+        await InvokeDecodedSendAsync(
+                descriptor,
                 routerChannelId,
-                null,
                 sourceRid,
-                header.MessageName!,
-                header.ContentType,
+                header,
+                message,
+                cancellationToken,
                 metadata,
-                header.CorrelationId,
                 receivedAt
-            );
-            await dispatcher
-                .DispatchRouteAsync(
-                    descriptor,
-                    message,
-                    context,
-                    ZLinkHandlerDispatchKind.NodeDirectSend,
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-        }
-        finally
-        {
-            ownedMessage?.Dispose();
-        }
+            )
+            .ConfigureAwait(false);
+    }
+
+    internal async ValueTask InvokeDecodedSendAsync(
+        ZLinkRouteHandlerDescriptor descriptor,
+        string routerChannelId,
+        RoutingId sourceRid,
+        ZLinkEnvelopeHeader header,
+        object? message,
+        CancellationToken cancellationToken,
+        ZLinkMessageMetadata? metadata,
+        DateTimeOffset? receivedAt
+    )
+    {
+        var context = new ZLinkRouteMessageContext(
+            routerChannelId,
+            null,
+            sourceRid,
+            header.MessageName!,
+            header.ContentType,
+            metadata,
+            header.CorrelationId,
+            receivedAt
+        );
+        await dispatcher
+            .DispatchRouteAsync(
+                descriptor,
+                message,
+                context,
+                ZLinkHandlerDispatchKind.NodeDirectSend,
+                cancellationToken
+            )
+            .ConfigureAwait(false);
     }
 
     public async ValueTask<ZLinkRouteHandlerReply> InvokeRequestAsync(

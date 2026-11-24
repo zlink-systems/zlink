@@ -955,7 +955,7 @@ retention does not shorten §6.1's release wait.
   token-replacement CAS. Only normal expiry requires a new claim issuing a new `LeaseGeneration`
   and per-object token-replacement CAS. After a successful new claim, recompute the admission
   deadline as for the first renewal under §5, then republish the descriptor with the new
-  `LeaseGeneration` under §5's publication rules (`Renew` intent) before submitting per-object
+  `LeaseGeneration` under §4's Revision increment and §5's publication rules (`Renew` intent) before submitting per-object
   replacement CAS. Receive confirmation that publication has taken effect in the Store through
   the existing asynchronous continuation. Recheck an uncertain publication result under §10.
   Replacement CAS does not wait for publication confirmation, but gate reopening requires it.
@@ -1036,6 +1036,26 @@ retention does not shorten §6.1's release wait.
   existing renew interval and resubmit the needed request. Finish cleanup on confirmed deletion
   or release, or a confirmed change to another owner or incarnation. Never reopen the discarded
   incarnation's gate or delete another owner's or incarnation's record.
+
+**Owner lease reclaim by the same process.** When the host confirms that its owner lease expired
+normally, the same process may request a new claim with the same `OwnerId`. This holds even when the host
+is not recovering from a Store outage. After the new claim succeeds, descriptor republication, the
+per-object token replacement CAS, gate reopening and discard follow the single recovery rule above.
+Retained objects are those that were steady `Ready` before the host first observed a Store communication
+failure, so after an expiry without an outage there is no replacement CAS target and the pre-expiry objects
+are cleaned up under the existing discard and cleanup rule. If the reclaim path existed only for outage
+recovery, the host would have no way to regain the owner role.
+
+- **Ordinary new work is accepted only after the republication is confirmed.** After the new claim the
+  host republishes the descriptor that records the new `LeaseGeneration` and does not accept the rest of
+  the work in the §5 blocking table until it confirms that the publication is reflected in the Store.
+  Opening admission on claim success alone would start work under the new token while other hosts still
+  read the old descriptor.
+- **Reclaim does not wait for old handlers and timers to finish.** On confirming normal expiry the host
+  first closes the existing gates and fences and then requests the new claim. A callback that already
+  started can run to completion within the limit below; the Store changes it makes carry the old token,
+  so a CAS that validates the new token rejects them. Making completion a precondition of the claim would
+  let one long-running callback block the whole host from rejoining.
 
 A resumed process performs the same checks at the next turn gate. However, a monotonic clock that
 stops during host suspend cannot reveal actual elapsed time. Nor can the gate prevent a process
@@ -1138,7 +1158,9 @@ reservation's target lifecycle has ended. The Framework then changes `Reserved �
 returns the pending capacity without the eligibility that created the reservation. The request
 checks, as conditions together, the authority `StoreVersion` as first read, the state of the owner
 lease record as read (version or absent), the state of the descriptor record as read, and the
-capacity record. If the capacity record is absent, only the authority changes. There's one capacity record per
+capacity record. Capacity is the counter
+keys of [Location Store §4.1](02-location-store-redis.en.md), which a reservation always creates, so a release whose
+key is absent means Store data corruption (once the v11 capacity records have been moved to counter keys). There's one capacity record per
 Mesh name and RID, and it carries over when the MeshNode lifecycle changes — it counts every
 unreleased allocation and isn't reset when the descriptor is published again. Releasing a previous
 lifecycle's reservation therefore returns capacity to the same record. If the return would
@@ -1151,16 +1173,28 @@ lease is valid and the descriptor is the same lifecycle, the reservation isn't r
 operation that creates a new incarnation of the same ID is an Actor `Create` or `GetOrCreate`, a User
 Spot `GetOrCreate`, or a new message with [Instance intent](../00-foundation/02-glossary.en.md#instance-intent). When such an operation reads a
 steady `Ready` record whose owner lease is missing, has a different `LeaseGeneration`, or has
-expired, and the relocation policy registered for that type on the node that `Reserve`s the new
-incarnation is `Disabled`, the Location repository releases that record. A User Spot's `Closing` and
+expired, and the relocation policy registered for that type on the node that will run the new
+incarnation's factory is `Disabled`, the Location repository releases that record. A User Spot's `Closing` and
 an incomplete initial activation aren't eligible merely because their allocation is `Active`; they
 follow their own lifecycle or recovery procedures. An Actor's `Closing` is a state in which the destroy
 has already closed admission, so if its owner lease is missing, has a different `LeaseGeneration`, or
 has expired, it's released by the same conditional batch. In that case the relocation policy condition
 doesn't apply, and both a creating operation and a call that destroys the same generation start this
-release. The node that `Reserve`s is the node that requested
-creation for an Actor or User Spot, and the target that received the activation envelope for an
-Instance Spot. If the type isn't registered on that node, the policy isn't treated as `Disabled`. A
+release. The node that runs the factory is the target the create operation selected for this attempt for an
+Actor or User Spot, and the target that received the activation envelope for an Instance Spot. When
+an Actor or User Spot create operation reads a steady `Ready` record whose owner lease is invalid, it
+first selects this attempt's target by the existing placement rules ([Actor model §6.3](../03-spot-actor/04-actor-model.en.md#63-selecting-mesh-and-placement-target),
+User Spot creation target selection) before deciding the release. If `Reserve` fails after the
+release commits and another target is chosen, the record is already `Missing`, so the ordinary
+creation procedure applies. The node
+that requested creation doesn't need to register the type — in a deployment that splits session
+nodes from play nodes, the requesting node has no factory. The policy is read from the `policy` of
+the `objectCapabilities` element ([§3.4](#34-how-different-languages-read-and-write-the-same-redis-record)) with the same `objectKind` and `stableType` in the MeshNode
+descriptor that target published; when the requesting node is the target, this equals its own
+registration. Only `disabled` counts as `Disabled`; a missing element or any other value doesn't.
+Only in a release that checks the policy, the same batch also conditions on the `StoreVersion` of
+the target descriptor record the policy was read from, in addition to the batch conditions below.
+The Actor `Closing` release and the §5.1 cleanup, which don't check the policy, don't add this condition. A
 User Spot is released only when every Actor membership remaining for that SpotId and
 `ObjectGeneration` belongs to an **ended-owner member**; no membership at all satisfies this. An
 ended-owner member is an Actor whose authority is a steady `Ready` record pointing at the same
@@ -2031,7 +2065,7 @@ route depends on the reread owner.
   received by the current owner holding that value.
 - **If the owner is neither the first target nor the source** (a further move followed from the first
   target), the reread authority no longer holds the first target's commit value, and the Store issues
-  generations from a global counter, so the source cannot know it. The source installs no §7.3 route.
+  a new generation from that ID's counter on each later move, so the source cannot know it. The source installs no §7.3 route.
   Under this **chained-move exception**, a message that later reaches the source ends with §7.3's
   no-route result (`Unavailable`). The source neither creates a route straight to the reread current
   owner nor guesses the first target's generation. Bound Session routes are moved by each target's command 44
@@ -2145,6 +2179,12 @@ store record golden fixture. Each item maps to one test.
   `StoreOutageRetention` defaults to `false`; `T` is not an independent setting. Domain-wide
   margin equality is an operational prerequisite, not a Framework validation item. With the same
   margin, different host TTLs must not permit release before the old owner's `T`.
+- A host whose owner lease expired normally without an outage claims again with the same `OwnerId` and
+  republishes a descriptor with the new `LeaseGeneration`. Until that publication is reflected in the
+  Store, new Actor and Spot creation and message admission are rejected, and the pre-expiry objects are
+  cleaned up without reopening.
+- A Store change that a callback running at reclaim time submits with the old token after it finishes is
+  rejected, and the reclaim proceeds without waiting for that callback to finish.
 - Recovery before expiry reopens the gate with the same token after validation and renewal;
   replacement CAS is only for normal expiry. Its request start plus renew timeout must not
   exceed the original `T`. A new claim recomputes the admission deadline. Gate reopening requires
@@ -2241,7 +2281,9 @@ store record golden fixture. Each item maps to one test.
   member whose owner lease is valid or that is moving, members exceeding the provider's single-batch bound, a recovery pointer, a User Spot's `Closing`, an Actor `Closing` with a valid owner lease, aggregate or relocation progress, an ordinary
   message or `Find`) verify that authority, membership, capacity, and factory execution count don't
   change. Inputs whose registered policies differ between the requesting node and the factory
-  target (for an Instance, the source and the receiving target) verify the policy source. Releasing a User
+  target (for an Instance, the source and the receiving target) verify that the policy comes from the
+  factory target, including a split deployment where the requesting node doesn't register the type
+  and the target's `disabled` policy releases the record. Releasing a User
   Spot with only ended-owner members verifies that those member Actor authorities and capacity are released in the same
   batch and that a later creation of the same ActorId starts a new incarnation.
 - A scan with a member after the first page, snapshot expiry, and Store failure aren't treated as

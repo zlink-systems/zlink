@@ -38,13 +38,13 @@
     {
       "id": "tableA",
       "role": "table",
-      "title": "Table node A",
+      "title": "Play node A (table)",
       "config": "server/config/table-a.json"
     },
     {
       "id": "tableB",
       "role": "table",
-      "title": "Table node B",
+      "title": "Play node B (table)",
       "config": "server/config/table-b.json"
     },
     {

@@ -612,7 +612,7 @@ class ZLinkInMemoryLocationStoreTest {
     }
 
     @Test
-    void entrySpotIdentityIsClaimedGloballyAndReleasedByExactOwner() throws Exception {
+    void descriptorRemovalIsFencedWhenEntrySpotIdsMatch() throws Exception {
         ZLinkInMemoryLocationStore store =
                 new ZLinkInMemoryLocationStore(Clock.fixed(NOW, ZoneOffset.UTC));
         ZLinkLocationOwnerToken firstOwner =
@@ -644,7 +644,7 @@ class ZLinkInMemoryLocationStoreTest {
                         .get()
                         .status());
         assertEquals(
-                ZLinkLocationWriteStatus.REJECTED_CONFLICT,
+                ZLinkLocationWriteStatus.STORED,
                 store.updateMeshNode(second, ZLinkLocationWriteIntent.NEW_CLAIM)
                         .toCompletableFuture()
                         .get()
@@ -654,12 +654,7 @@ class ZLinkInMemoryLocationStoreTest {
                 store.removeMeshNode(new ZLinkMeshNodeDescriptorKey("mesh", NODE_A), firstOwner)
                         .toCompletableFuture()
                         .get());
-        assertEquals(
-                ZLinkLocationWriteStatus.STORED,
-                store.updateMeshNode(second, ZLinkLocationWriteIntent.NEW_CLAIM)
-                        .toCompletableFuture()
-                        .get()
-                        .status());
+        assertEquals(secondRid, onlyMeshNode(store).rid());
         assertEquals(
                 ZLinkLocationWriteStatus.IGNORED_STALE,
                 store.removeMeshNode(new ZLinkMeshNodeDescriptorKey("mesh", NODE_A), firstOwner)
@@ -1324,7 +1319,8 @@ class ZLinkInMemoryLocationStoreTest {
                         8,
                         1,
                         "tcp://127.0.0.1:6101",
-                        "ready-next-entry");
+                        "ready-next-entry",
+                        ZLinkObjectMaintenancePolicyKind.DISABLED);
         store.updateMeshNode(nextDescriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
                 .toCompletableFuture()
                 .get();
@@ -1417,9 +1413,7 @@ class ZLinkInMemoryLocationStoreTest {
                 descriptor.lifecycleGeneration(),
                 owner,
                 new byte[] {(byte) generation},
-                ZLinkPlacementCapacityBundle.actor(1),
-                new systems.zlink.framework.runtime.internal.configuration
-                        .ZLinkObjectFactoryRegistration.RelocationPolicy.Disabled());
+                ZLinkPlacementCapacityBundle.actor(1));
     }
 
     private static void assertUnavailable(
@@ -1604,6 +1598,24 @@ class ZLinkInMemoryLocationStoreTest {
             long revision,
             String endpoint,
             String entrySpotId) {
+        return meshNodeDescriptor(
+                owner,
+                rid,
+                lifecycleGeneration,
+                revision,
+                endpoint,
+                entrySpotId,
+                ZLinkObjectMaintenancePolicyKind.SNAPSHOT);
+    }
+
+    private static ZLinkMeshNodeDescriptor meshNodeDescriptor(
+            ZLinkLocationOwnerToken owner,
+            RoutingId rid,
+            long lifecycleGeneration,
+            long revision,
+            String endpoint,
+            String entrySpotId,
+            ZLinkObjectMaintenancePolicyKind policy) {
         return new ZLinkMeshNodeDescriptor(
                 "mesh",
                 rid,
@@ -1616,8 +1628,8 @@ class ZLinkInMemoryLocationStoreTest {
                         new ZLinkObjectCapability(
                                 ZLinkPlacementObjectKind.ACTOR,
                                 "player",
-                                ZLinkObjectMaintenancePolicyKind.SNAPSHOT,
-                                true,
+                                policy,
+                                policy == ZLinkObjectMaintenancePolicyKind.SNAPSHOT,
                                 0)),
                 ZLinkMeshNodeObjectRole.SERVER,
                 Optional.of(entrySpotId),

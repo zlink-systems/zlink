@@ -4,7 +4,12 @@ A Java MORPG template with a lobby, parties, and dungeon instances. The Party Us
 
 ```mermaid
 flowchart LR
-  players -->|STREAM| session
+  subgraph playNodes["Play nodes"]
+    lobby["Play node (party lobby)"]
+    instanceA["Play node A (dungeon)"]
+    instanceB["Play node B (dungeon)"]
+  end
+  players -->|STREAM| session["Session node"]
   session -->|relay| lobby
   lobby -->|GetOrCreate Dungeon| instanceA
   instanceA <-->|relocation| instanceB
@@ -149,7 +154,7 @@ Validated against the published Framework 0.32.0 packages.
 
 ## Deployment sequence
 
-Start Redis, the lobby, both instance nodes, and then the Session node. Configure unique node IDs and Redis key prefixes in `server/config/`. Start each role using its installed distribution under `server/<role>/build/install/<role>/bin/`, supplying the corresponding configuration path. Instance nodes register `Dungeon` with capacity one; they also register the shared stateless Entry Spot.
+Start Redis, the lobby, both play nodes (dungeon), and then the Session node. Configure unique node IDs and Redis key prefixes in `server/config/`. Start each role using its installed distribution under `server/<role>/build/install/<role>/bin/`, supplying the corresponding configuration path. Play nodes (dungeon) register `Dungeon` with capacity one; they also register the shared stateless Entry Spot.
 
 Each process prints `READY` with actual listener endpoints. Send `drain` on standard input to request planned maintenance. Wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`; send `shutdown` and require `STOPPED` before replacing the process with the same configuration. Party and Dungeon adapters preserve application state only; Framework owns memberships, routes, leases, queues, and relocation progress.
 

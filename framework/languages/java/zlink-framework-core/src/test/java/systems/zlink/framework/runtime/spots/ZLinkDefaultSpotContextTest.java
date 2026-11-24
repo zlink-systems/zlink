@@ -1140,7 +1140,6 @@ final class ZLinkDefaultSpotContextTest {
                     new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.spot()),
                     executionMode,
                     false,
-                    null,
                     relocationCoordinationMode);
         }
 

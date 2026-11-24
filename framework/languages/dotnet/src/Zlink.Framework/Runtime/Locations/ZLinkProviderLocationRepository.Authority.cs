@@ -635,8 +635,10 @@ internal sealed partial class ZLinkProviderLocationRepository
                 var reclaim = await TryReclaimStaleAuthorityAsync(
                         current,
                         cancellationToken,
-                        request.Key,
-                        request.ObjectRelocationPolicy,
+                        new ZLinkCreationAuthorityRecovery(
+                            request.TargetDescriptor,
+                            request.TargetNodeLifecycleGeneration
+                        ),
                         noteTakeover
                     )
                     .ConfigureAwait(false);
@@ -796,21 +798,23 @@ internal sealed partial class ZLinkProviderLocationRepository
     private async ValueTask<StaleAuthorityReclaimResult> TryReclaimStaleAuthorityAsync(
         StoredAuthority current,
         CancellationToken cancellationToken,
-        ZLinkAuthorityKey? creationKey = null,
-        byte? creationRelocationPolicy = null,
+        ZLinkCreationAuthorityRecovery? creationTarget = null,
         Action? noteTakeover = null,
         ZLinkLocationOwnerToken? requiredOwner = null,
         bool discarded = false
     )
     {
         var active = current.Snapshot.Allocation.State == ZLinkPlacementAllocationState.Active;
-        if (active && creationKey is null && !discarded)
+        if (active && creationTarget is null && !discarded)
             return StaleAuthorityReclaimResult.NotReclaimable;
 
         // Relocation authority retains its own recovery protocol.
         if (current.Meta.AggregateFence is not null)
             return StaleAuthorityReclaimResult.RecoveryRequired;
-        if (ZLinkRelocationAuthorityPayloadCodec.TryDecode(current.Snapshot.Payload.Span, out _))
+        if (
+            current.Snapshot.Relocation is not null
+            || ZLinkRelocationAuthorityPayloadCodec.TryDecode(current.Snapshot.Payload.Span, out _)
+        )
             return StaleAuthorityReclaimResult.RecoveryRequired;
         var descriptorKey = MeshKey(
             current.Snapshot.Allocation.Descriptor.MeshName,
@@ -842,22 +846,40 @@ internal sealed partial class ZLinkProviderLocationRepository
             return StaleAuthorityReclaimResult.NotReclaimable;
         if (!ownerLive)
             noteTakeover?.Invoke();
-        if (active)
+        if (active && ownerLive)
+            return StaleAuthorityReclaimResult.OwnerLive;
+
+        var sourceDescriptor = descriptorRead is ZLinkStoreReadResult.Found descriptorFound
+            ? DecodeDescriptor<ZLinkMeshNodeDescriptor>(descriptorFound.Value.Bytes).Descriptor
+            : null;
+        ZLinkStoreCondition.Version? targetDescriptorCondition = null;
+        if (active && !discarded && creationTarget is { } target)
         {
-            if (ownerLive)
-                return StaleAuthorityReclaimResult.OwnerLive;
-            if (
-                !discarded
-                && creationRelocationPolicy != ZLinkObjectRelocationRegistration.DisabledPolicy
-            )
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.Unavailable,
-                    current.Snapshot.Allocation.ObjectKind == ZLinkPlacementObjectKind.UserSpot
-                    && ZLinkAuthorityKeyCodec.TryDecodeSpot(current.Key, out var unavailableSpotId)
-                        ? $"User Spot '{unavailableSpotId}' owner lease is not live."
-                        : "Object owner lease is unavailable.",
-                    ZLinkRetryAdvice.RetryAfterStateChange
-                );
+            var targetKey = MeshKey(target.TargetDescriptor.MeshName, target.TargetDescriptor.Rid);
+            var targetDescriptor = sourceDescriptor;
+            if (targetKey != descriptorKey)
+            {
+                var targetRead = await _provider
+                    .ReadAsync(targetKey, cancellationToken)
+                    .ConfigureAwait(false);
+                targetDescriptor = null;
+                if (targetRead is ZLinkStoreReadResult.Found policyRow)
+                {
+                    targetDescriptor = DecodeDescriptor<ZLinkMeshNodeDescriptor>(
+                        policyRow.Value.Bytes
+                    ).Descriptor;
+                    targetDescriptorCondition = new ZLinkStoreCondition.Version(
+                        targetKey,
+                        policyRow.Value.Version
+                    );
+                }
+            }
+            ZLinkAuthorityCleanup.RequireDisabledCreationPolicy(
+                current.Key,
+                current.Snapshot.Allocation,
+                target.TargetNodeLifecycleGeneration,
+                targetDescriptor
+            );
         }
         IReadOnlyList<StoredAuthority> members = [];
         var endedUserSpotId = active
@@ -872,25 +894,16 @@ internal sealed partial class ZLinkProviderLocationRepository
                     cancellationToken
                 )
                 .ConfigureAwait(false);
-        ZLinkStoreCondition descriptorCondition;
-        if (descriptorRead is ZLinkStoreReadResult.Found descriptorFound)
-        {
-            var descriptor = DecodeDescriptor<ZLinkMeshNodeDescriptor>(
-                descriptorFound.Value.Bytes
-            ).Descriptor;
-            if (
-                ownerLive
-                && descriptor.LifecycleGeneration
-                    == current.Snapshot.Allocation.DescriptorLifecycleGeneration
-            )
-                return StaleAuthorityReclaimResult.OwnerLive;
-            descriptorCondition = new ZLinkStoreCondition.Version(
-                descriptorKey,
-                descriptorFound.Value.Version
-            );
-        }
-        else
-            descriptorCondition = new ZLinkStoreCondition.Missing(descriptorKey);
+        if (
+            ownerLive
+            && sourceDescriptor?.LifecycleGeneration
+                == current.Snapshot.Allocation.DescriptorLifecycleGeneration
+        )
+            return StaleAuthorityReclaimResult.OwnerLive;
+        ZLinkStoreCondition descriptorCondition = descriptorRead
+            is ZLinkStoreReadResult.Found sourceRow
+            ? new ZLinkStoreCondition.Version(descriptorKey, sourceRow.Value.Version)
+            : new ZLinkStoreCondition.Missing(descriptorKey);
         if (!active && current.Meta.ReservedCreation is null)
             return StaleAuthorityReclaimResult.RecoveryRequired;
 
@@ -899,6 +912,8 @@ internal sealed partial class ZLinkProviderLocationRepository
             new ZLinkStoreCondition.Version(AuthorityMetaKey(current.Key), current.Version),
             descriptorCondition,
         };
+        if (targetDescriptorCondition is not null)
+            conditions.Add(targetDescriptorCondition);
         var mutations = new List<ZLinkStoreMutation>
         {
             new ZLinkStoreMutation.Delete(AuthorityMetaKey(current.Key)),
@@ -1103,13 +1118,13 @@ internal sealed partial class ZLinkProviderLocationRepository
     public ValueTask<bool> ReleaseEndedReservationAsync(
         ZLinkAuthorityKey key,
         string expectedStoreVersion,
-        ZLinkCreationAuthorityRecovery? creationRecovery = null,
+        ZLinkCreationAuthorityRecovery? creationTarget = null,
         CancellationToken cancellationToken = default
     ) =>
         ReleaseEndedReservationAsync(
             key,
             expectedStoreVersion,
-            creationRecovery,
+            creationTarget,
             cancellationToken,
             null
         );
@@ -1117,7 +1132,7 @@ internal sealed partial class ZLinkProviderLocationRepository
     private async ValueTask<bool> ReleaseEndedReservationAsync(
         ZLinkAuthorityKey key,
         string expectedStoreVersion,
-        ZLinkCreationAuthorityRecovery? creationRecovery,
+        ZLinkCreationAuthorityRecovery? creationTarget,
         CancellationToken cancellationToken,
         ZLinkLocationOwnerToken? requiredOwner
     )
@@ -1132,8 +1147,7 @@ internal sealed partial class ZLinkProviderLocationRepository
             var result = await TryReclaimStaleAuthorityAsync(
                     current,
                     cancellationToken,
-                    creationRecovery is null ? null : key,
-                    creationRecovery?.RelocationPolicy,
+                    creationTarget,
                     requiredOwner: requiredOwner
                 )
                 .ConfigureAwait(false);
@@ -2107,6 +2121,9 @@ internal sealed partial class ZLinkProviderLocationRepository
                                     authority.Meta with
                                     {
                                         Payload = participant.AuthorityPayload.ToArray(),
+                                        Aggregate = aggregate.Header.ApplyRelocation(
+                                            authority.Meta.Aggregate
+                                        ),
                                         AuthorityOwnerGeneration = nextGeneration,
                                         OwnerId = changesOwner
                                             ? request.TargetOwner.OwnerId
@@ -2339,6 +2356,12 @@ internal sealed partial class ZLinkProviderLocationRepository
                 authority.Snapshot.Payload.Span,
                 participant.AuthorityPayload.Span
             )
+        )
+            return false;
+        if (
+            aggregate.Header.ClearRelocation && authority.Snapshot.Relocation is not null
+            || aggregate.Header.Relocation is { } relocation
+                && authority.Snapshot.Relocation != relocation
         )
             return false;
         if (!changesOwner)
@@ -4172,7 +4195,11 @@ internal sealed partial class ZLinkProviderLocationRepository
             aggregate.Header.TargetDescriptorLifecycleGeneration,
             aggregate.Header.Capacity,
             aggregate.Header.TargetOwner
-        );
+        )
+        {
+            Relocation = aggregate.Header.Relocation,
+            ClearRelocation = aggregate.Header.ClearRelocation,
+        };
 
     private static AggregateHeader CreateAggregateHeader(ZLinkAggregatePrepareRequest request) =>
         new(
@@ -4183,7 +4210,11 @@ internal sealed partial class ZLinkProviderLocationRepository
             request.TargetDescriptorLifecycleGeneration,
             request.Capacity,
             request.TargetOwner
-        );
+        )
+        {
+            Relocation = request.Relocation,
+            ClearRelocation = request.ClearRelocation,
+        };
 
     private static bool AggregateHeaderEquals(AggregateHeader left, AggregateHeader right) =>
         EncodeAggregateHeader(left).AsSpan().SequenceEqual(EncodeAggregateHeader(right));
@@ -4235,6 +4266,12 @@ internal sealed partial class ZLinkProviderLocationRepository
             stream.WriteByte(0);
         WriteInventoryString(stream, header.TargetOwner.OwnerId);
         WriteInventoryInt64(stream, header.TargetOwner.LeaseGeneration);
+        if (header.ClearRelocation || header.Relocation is not null)
+        {
+            stream.WriteByte(header.ClearRelocation ? (byte)0 : (byte)1);
+            if (header.Relocation is { } relocation)
+                WriteInventoryHash(stream, SHA256.HashData(Encode(relocation)));
+        }
         return stream.ToArray();
     }
 
@@ -4613,6 +4650,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                     meta = meta with
                     {
                         Payload = participant.Payload.ToArray(),
+                        Aggregate = aggregate.Record.Header.ApplyRelocation(meta.Aggregate),
                         AuthorityOwnerGeneration = changesOwner
                             ? targetAuthorityOwnerGeneration
                             : meta.AuthorityOwnerGeneration,
@@ -5602,7 +5640,19 @@ internal sealed partial class ZLinkProviderLocationRepository
         ulong TargetDescriptorLifecycleGeneration,
         ZLinkCapacityVector Capacity,
         ZLinkLocationOwnerToken TargetOwner
-    );
+    )
+    {
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public ZLinkAuthorityRelocation? Relocation { get; init; }
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public bool ClearRelocation { get; init; }
+
+        internal JsonElement? ApplyRelocation(JsonElement? aggregate) =>
+            ClearRelocation || Relocation is not null
+                ? ZLinkAuthorityAggregateCodec.Replace(aggregate, Relocation)
+                : aggregate;
+    }
 
     private sealed record AggregateRecord(
         AggregateHeader Header,

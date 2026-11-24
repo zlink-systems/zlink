@@ -38,6 +38,7 @@ import systems.zlink.framework.runtime.internal.service.ZLinkInstanceActivationR
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceRequestProgress.InstanceReply;
 import systems.zlink.framework.runtime.internal.streams.ZLinkStreamErrorPayload;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
@@ -713,16 +714,20 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     @Override
     public CompletionStage<Void> destroyActor(
             ZLinkBackendActorRef actor, long authorityOwnerGeneration, Duration timeout) {
-        NativeActorStay departed = nativeActor(actor);
-        if (departed == null
-                || departed.authority().authorityOwnerGeneration() != authorityOwnerGeneration
-                || !actors.remove(actor.actorId(), departed)) {
+        if (!removeActorStay(actor, authorityOwnerGeneration)) {
             return CompletableFuture.completedFuture(null);
         }
         owner.retireOrderedActorRelays(actor.actorId());
         return retireStreamRoute(actor, null, authorityOwnerGeneration)
                 .thenCombine(
                         retireActorBinding(actor, null, authorityOwnerGeneration), (a, b) -> null);
+    }
+
+    private boolean removeActorStay(ZLinkBackendActorRef actor, long authorityOwnerGeneration) {
+        NativeActorStay departed = nativeActor(actor);
+        return departed != null
+                && departed.authority().authorityOwnerGeneration() == authorityOwnerGeneration
+                && actors.remove(actor.actorId(), departed);
     }
 
     @Override
@@ -887,7 +892,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         if (!routingId().equals(actor.nodeRid())) {
             return owner.requestExactActor(actor, parts, timeout, requestAdmission);
         }
-        if (actor == null || !actors.containsKey(actor.actorId())) {
+        if (!actors.containsKey(actor.actorId()) && messageFollowSourceFence(actor) == null) {
             return CompletableFuture.failedFuture(
                     ZLinkFrameworkErrorOrigin.framework(
                             ZLinkFrameworkErrorKind.NOT_FOUND, "Actor is not local"));
@@ -1446,6 +1451,14 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     }
 
     @Override
+    public CompletionStage<Void> retireDepartedActor(
+            ZLinkBackendActorRef actor, RoutingId sessionRid, long authorityOwnerGeneration) {
+        removeActorStay(actor, authorityOwnerGeneration);
+        return ZLinkInternalSpotNode.super.retireDepartedActor(
+                actor, sessionRid, authorityOwnerGeneration);
+    }
+
+    @Override
     public CompletionStage<Void> retireDepartedActorBinding(
             ZLinkBackendActorRef actor, RoutingId sessionRid, long authorityOwnerGeneration) {
         Objects.requireNonNull(sessionRid, "sessionRid");
@@ -1861,6 +1874,27 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             return stay == null ? null : stay.authority();
         }
         return actorAuthorities.get(actor);
+    }
+
+    ZLinkServiceM6BWireCodec.ActorRouteFence localActorRoute(
+            ZLinkBackendActorRef actor, long nodeGeneration) {
+        ActorAuthority authority = actorAuthority(actor);
+        if (authority == null
+                || authority.authorityOwnerGeneration() <= 0
+                || authority.ownerLeaseGeneration() <= 0) {
+            return messageFollowSourceFence(actor);
+        }
+        return new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                actor,
+                nodeGeneration,
+                authority.authorityOwnerGeneration(),
+                authority.ownerLeaseGeneration());
+    }
+
+    private ZLinkServiceM6BWireCodec.ActorRouteFence messageFollowSourceFence(
+            ZLinkBackendActorRef actor) {
+        ZLinkInternalSpotNode.MessageFollowRelayHandler relay = messageFollowRelayHandler;
+        return relay == null ? null : relay.sourceFence(actor);
     }
 
     private NativeActorStay nativeActor(ZLinkBackendActorRef actor) {
@@ -2310,7 +2344,8 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         }
         if (header.boundSession() != null) {
             BindingEntry current = actorBindings.get(actor.actorId());
-            if (current == null
+            if (!currentActor.equals(actor)
+                    || current == null
                     || !current.binding()
                             .identifies(
                                     actor,
@@ -3419,7 +3454,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             ZLinkServiceM6BWireCodec.InstanceSpotMessage header,
             byte[] metadata,
             List<Message> parts,
-            Consumer<List<Message>> reply) {
+            InstanceReply reply) {
         return enqueueRemoteInstanceSpot(
                 sourceNodeRid, header, metadata, parts, null, reply, ignored -> {});
     }
@@ -3430,7 +3465,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             byte[] metadata,
             List<Message> parts,
             String contentType,
-            Consumer<List<Message>> reply) {
+            InstanceReply reply) {
         return enqueueRemoteInstanceSpot(
                 sourceNodeRid, header, metadata, parts, contentType, reply, ignored -> {});
     }
@@ -3441,7 +3476,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             byte[] metadata,
             List<Message> parts,
             String contentType,
-            Consumer<List<Message>> reply,
+            InstanceReply reply,
             Consumer<Throwable> failure) {
         if (header.route() instanceof ZLinkServiceM6BWireCodec.InstanceColdActivation cold) {
             var envelope =
@@ -3463,17 +3498,9 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                             metadata,
                             ZLinkServiceM6AWireCodec.encodeFrameworkMultipartFrame(parts));
             var received =
-                    new ZLinkBackendReceived(
-                            ZLinkBackendRequestResult.OK,
-                            Optional.of(sourceNodeRid),
-                            Optional.ofNullable(header.sourceSpotId()),
-                            Optional.ofNullable(header.replyRouteId()),
-                            metadata,
-                            new byte[0],
-                            parts,
-                            header.request() ? reply : null,
-                            () -> {},
-                            contentType);
+                    reply.progress()
+                            .receiveInstance(
+                                    sourceNodeRid, header, metadata, parts, reply, contentType);
             received.retainActivationMessage(header);
             instanceActivationValidator
                     .apply(envelope)
@@ -3556,7 +3583,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             byte[] metadata,
             List<Message> parts,
             String contentType,
-            Consumer<List<Message>> reply,
+            InstanceReply reply,
             Consumer<Throwable> failure) {
         InstanceAuthority authority = instanceAuthorities.get(header.route().targetSpotId());
         if (authority == null) {
@@ -3566,17 +3593,14 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             owner.executeApplication(
                     () -> {
                         ZLinkBackendReceived received =
-                                new ZLinkBackendReceived(
-                                        ZLinkBackendRequestResult.OK,
-                                        Optional.of(sourceNodeRid),
-                                        Optional.ofNullable(header.sourceSpotId()),
-                                        Optional.ofNullable(header.replyRouteId()),
-                                        metadata,
-                                        new byte[0],
-                                        parts,
-                                        header.request() ? reply : null,
-                                        () -> {},
-                                        contentType);
+                                reply.progress()
+                                        .receiveInstance(
+                                                sourceNodeRid,
+                                                header,
+                                                metadata,
+                                                parts,
+                                                reply,
+                                                contentType);
                         if (header.instanceIntent()) received.retainActivationMessage(header);
                         CompletionStage<Void> retained;
                         try {
@@ -3791,7 +3815,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                     requestAdmission,
                     relay);
         }
-        NativeActorStay current = actors.get(actor.actorId());
+        NativeActorStay current = nativeActor(actor);
         ZLinkBackendActorRef currentActor = current == null ? null : current.actor();
         ZLinkJavaRawSpot target = current == null ? null : spots.get(current.spotId());
         if (currentActor == null || target == null) return null;
@@ -3880,7 +3904,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                 return localRelayTerminal(terminal);
             }
         }
-        NativeActorStay current = actors.get(actor.actorId());
+        NativeActorStay current = nativeActor(actor);
         ZLinkBackendActorRef currentActor = current == null ? null : current.actor();
         ZLinkJavaRawSpot target = current == null ? null : spots.get(current.spotId());
         if (currentActor == null || target == null) {

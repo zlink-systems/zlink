@@ -3,7 +3,7 @@
 
 #include "runtime/execution/state_lane.hpp"
 #include "runtime/locations/location_repository.hpp"
-#include "runtime/locations/location_store_limits.hpp"
+#include "runtime/locations/location_store_write.hpp"
 #include "../../../../../../runtime/protocol/generated/cpp/service_wire_constants.hpp"
 
 #include <zlink/framework/contracts/locations/stores.hpp>
@@ -16,7 +16,6 @@
 #include <mutex>
 #include <optional>
 #include <random>
-#include <set>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -47,29 +46,56 @@ class in_memory_location_store_t final : public location_store_t
 
     task_t<store_write_result_t> write (store_write_request_t request) override
     {
-        validate_write (request);
+        validate_location_write (request, validate_key);
         return _lane.run_task ([this, request = std::move (request)] () mutable {
             const auto now = std::chrono::system_clock::now ();
-            for (const auto &condition : request.conditions)
-                std::visit ([&] (const auto &value) { expire (value.key.value, now); }, condition);
-
+            const auto live_value = [&] (const store_key_t &key) -> const store_value_t * {
+                const auto found = _values.find (key.value);
+                if (found == _values.end () || expired (found->second, now))
+                    return nullptr;
+                return &found->second;
+            };
+            const auto counter = [&] (const store_key_t &key) -> std::optional<std::int64_t> {
+                const auto *value = live_value (key);
+                if (!value)
+                    return 0;
+                if (value->bytes.empty ())
+                    return std::nullopt;
+                return parse_location_counter (
+                  {reinterpret_cast<const char *> (value->bytes.data ()), value->bytes.size ()});
+            };
             for (const auto &condition : request.conditions) {
-                const auto key =
-                  std::visit ([] (const auto &value) { return value.key.value; }, condition);
-                const auto found = _values.find (key);
-                if (std::holds_alternative<store_missing_condition_t> (condition)) {
-                    if (found != _values.end ())
-                        return store_write_result_t{store_write_conflict_t{now}};
-                    continue;
-                }
-                if (found == _values.end ())
+                const auto result = std::visit (
+                  [&] (const auto &item) {
+                      using T = std::decay_t<decltype (item)>;
+                      if constexpr (std::is_same_v<T, store_sum_at_most_condition_t>) {
+                          return evaluate_location_sum (item, counter);
+                      } else {
+                          const auto *value = live_value (item.key);
+                          bool matches;
+                          if constexpr (std::is_same_v<T, store_missing_condition_t>)
+                              matches = !value;
+                          else if constexpr (std::is_same_v<T, store_version_condition_t>)
+                              matches = value && value->version.value == item.expected.value;
+                          else
+                              matches = value && value->bytes == item.expected;
+                          return matches ? location_sum_result_t::matches
+                                         : location_sum_result_t::exceeds;
+                      }
+                  },
+                  condition);
+                if (result == location_sum_result_t::corrupt)
+                    return store_write_result_t{store_write_corrupt_t{now}};
+                if (result == location_sum_result_t::exceeds)
                     return store_write_result_t{store_write_conflict_t{now}};
-                if (const auto *version = std::get_if<store_version_condition_t> (&condition)) {
-                    if (found->second.version.value != version->expected.value)
-                        return store_write_result_t{store_write_conflict_t{now}};
-                } else if (found->second.bytes
-                           != std::get<store_value_condition_t> (condition).expected) {
-                    return store_write_result_t{store_write_conflict_t{now}};
+            }
+
+            for (auto &mutation : request.mutations) {
+                if (const auto *add = std::get_if<store_add_t> (&mutation)) {
+                    auto put = prepare_location_add (*add, counter (add->key));
+                    if (!put)
+                        return store_write_result_t{store_write_corrupt_t{now}};
+                    mutation = std::move (*put);
                 }
             }
 
@@ -182,53 +208,6 @@ class in_memory_location_store_t final : public location_store_t
     {
         if (prefix.size () > location_store_limits::key_bytes)
             throw std::invalid_argument ("location scan prefix must contain at most 1024 bytes");
-    }
-
-    static void validate_write (const store_write_request_t &request)
-    {
-        std::set<std::string> conditions;
-        std::set<std::string> mutations;
-        std::set<std::string> keys;
-        std::size_t encoded_size = 0;
-        for (const auto &condition : request.conditions) {
-            const auto &key = std::visit (
-              [] (const auto &value) -> const store_key_t & { return value.key; }, condition);
-            validate_key (key.value);
-            if (!conditions.insert (key.value).second)
-                throw std::invalid_argument ("location write repeats a condition key");
-            keys.insert (key.value);
-            encoded_size += key.value.size ();
-            if (const auto *version = std::get_if<store_version_condition_t> (&condition)) {
-                if (version->expected.value.empty ()
-                    || version->expected.value.size () > protocol::authorityStoreVersionBytes)
-                    throw std::invalid_argument (
-                      "location version condition requires 1..4096 bytes");
-                encoded_size += version->expected.value.size ();
-            } else if (const auto *value = std::get_if<store_value_condition_t> (&condition)) {
-                if (value->expected.size () > location_store_limits::value_bytes)
-                    throw std::invalid_argument ("location value condition exceeds 1 MiB");
-                encoded_size += value->expected.size ();
-            }
-        }
-        for (const auto &mutation : request.mutations) {
-            const auto *key = std::visit ([] (const auto &value) { return &value.key; }, mutation);
-            validate_key (key->value);
-            if (!mutations.insert (key->value).second)
-                throw std::invalid_argument ("location write repeats a mutation key");
-            keys.insert (key->value);
-            encoded_size += key->value.size ();
-            if (const auto *put = std::get_if<store_put_t> (&mutation)) {
-                if (put->bytes.size () > location_store_limits::value_bytes)
-                    throw std::invalid_argument ("location value exceeds 1 MiB");
-                if (put->retention && *put->retention <= std::chrono::milliseconds::zero ())
-                    throw std::invalid_argument ("location retention must be positive");
-                encoded_size += put->bytes.size ();
-            }
-        }
-        if (keys.size () > location_store_limits::write_keys)
-            throw std::invalid_argument ("location write exceeds 2048 unique keys");
-        if (encoded_size > location_store_limits::write_bytes)
-            throw std::invalid_argument ("location write exceeds 4 MiB");
     }
 
     static bool expired (const store_value_t &value, std::chrono::system_clock::time_point now)

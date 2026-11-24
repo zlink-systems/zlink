@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ZLink connector example</title>
+    <script defer src="dist/browser.bundle.js"></script>
+  </head>
+  <body>
+    <h1>ZLink connector example</h1>
+    <form id="connect">
+      <label for="endpoint">WebSocket endpoint</label>
+      <input id="endpoint" value="ws://127.0.0.1:7301" required />
+      <button id="run">Run</button>
+    </form>
+    <pre id="output" aria-live="polite"></pre>
+  </body>
+</html>

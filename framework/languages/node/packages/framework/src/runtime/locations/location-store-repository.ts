@@ -1,9 +1,11 @@
-import { initialRelocationCompletion } from './authority-relocation-record';
 import {
   type AuthorityAggregateMarker as AggregateParticipantFenceRecord,
   encodeAuthorityAggregate,
-  decodeAuthorityAggregate
+  decodeAuthorityAggregate,
+  commitAuthorityRelocation,
+  isPreparedAuthorityRelocation
 } from './authority-relocation-record';
+import { requireDisabledCreationPolicy } from './ended-authority-creation-policy';
 import { cleanupDiscardedAuthority } from './discarded-authority-cleanup';
 import { sameAuthorityIncarnation, type ZLinkDiscardedAuthorityFence } from './lifecycle-runtime';
 import { validateAuthorityMutation } from './in-memory-authority-store';
@@ -1256,6 +1258,23 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           )
         );
       }
+      const relocationMutations: ZLinkStoreMutation[] = [];
+      for (const row of authorityRows) {
+        const relocation = commitAuthorityRelocation(
+          row.record.snapshot.relocation,
+          fence.aggregateId.value,
+          fence.acceptedRequests?.get(row.entry.authorityKey)
+        );
+        if (relocation === undefined) continue;
+        relocationMutations.push({
+          kind: 'put',
+          key: row.key,
+          bytes: encodeAuthorityRecord({
+            ...row.record,
+            snapshot: { ...row.record.snapshot, relocation }
+          })
+        });
+      }
       const published = await this.provider.write(
         {
           conditions: [
@@ -1280,28 +1299,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
               key: rowKey,
               bytes: encodeJson({ ...aggregate, state: 'committed' } satisfies AggregateRecord)
             },
-            ...authorityRows
-              .filter(
-                (row) =>
-                  row.record.snapshot.relocation !== undefined &&
-                  fence.acceptedRequests?.has(row.entry.authorityKey) === true
-              )
-              .map((row) => ({
-                kind: 'put' as const,
-                key: row.key,
-                bytes: encodeAuthorityRecord({
-                  ...row.record,
-                  snapshot: {
-                    ...row.record.snapshot,
-                    relocation: {
-                      ...row.record.snapshot.relocation!,
-                      completion: initialRelocationCompletion(
-                        fence.acceptedRequests!.get(row.entry.authorityKey)!
-                      )
-                    }
-                  }
-                })
-              })),
+            ...relocationMutations,
             ...capacityMutations
           ]
         },
@@ -1502,7 +1500,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         snapshot.relocation === undefined &&
         !hasRelocationAuthority(snapshot.payload) &&
         (discarded !== undefined ||
-          (creation?.actorRelocationPolicy === 'disabled' &&
+          (creation !== undefined &&
             creation.key.kind === snapshot.allocation.objectKind &&
             creation.intent.stableType === snapshot.allocation.stableType &&
             (readySpot !== undefined || readyActor?.state === 'ready') &&
@@ -1519,11 +1517,31 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         snapshot.allocation.descriptor.meshName,
         String(snapshot.allocation.descriptor.rid)
       );
-      const leaseRead = this.provider.read(leaseKey, signal).then((read) => {
+      const descriptorRead = this.provider.read(descriptorKey, signal);
+      const leaseRead = this.provider.read(leaseKey, signal).then(async (read) => {
         const ownerLive = sameLiveOwner(read, snapshot);
+        let targetCondition: ZLinkStoreCondition | undefined;
+        if (releaseCandidate && !ownerLive && creation !== undefined) {
+          const targetKey = meshKey(creation.target.meshName, creation.target.nodeRid);
+          const sameDescriptor = targetKey.value === descriptorKey.value;
+          const targetRead = await (sameDescriptor
+            ? descriptorRead
+            : this.provider.read(targetKey, signal));
+          requireDisabledCreationPolicy(
+            snapshot.allocation,
+            creation.target.nodeLifecycleGeneration,
+            targetRead.kind === 'found'
+              ? reviveMeshDescriptor(
+                  decodeCanonicalDescriptorRecord<ZLinkMeshNodeDescriptor>(targetRead.value.bytes)
+                    .descriptor
+                )
+              : undefined
+          );
+          if (!sameDescriptor) targetCondition = conditionFor(targetKey, targetRead);
+        }
         const ownerReleaseAllowed =
           releaseCandidate && !ownerLive && this.ownerLeaseReleaseDelay.allowsAuthority(owner);
-        return { read, ownerLive, ownerReleaseAllowed };
+        return { read, ownerLive, ownerReleaseAllowed, targetCondition };
       });
       const memberObservations = leaseRead.then(async (leaseObservation) => {
         if (
@@ -1580,7 +1598,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       });
       const [leaseObservation, descriptor, capacity, memberObservation] = await Promise.all([
         leaseRead,
-        this.provider.read(descriptorKey, signal),
+        descriptorRead,
         this.provider.read(capacityRowKey, signal),
         memberObservations
       ]);
@@ -1598,31 +1616,14 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       if (discarded !== undefined && members.length > 0) return 'notReclaimable';
       if (snapshot.allocation.state === 'active') {
         if (ownerLive) return 'notReclaimable';
-        let unavailable =
-          record.aggregate !== undefined ||
-          snapshot.relocation !== undefined ||
-          hasRelocationAuthority(snapshot.payload);
-        if (discarded === undefined && snapshot.allocation.objectKind !== 'actor') {
-          const spot = readySpot;
-          unavailable ||=
-            spot === undefined ||
-            spot.kind !== creation?.key.kind ||
-            spot.stableType !== creation.intent.stableType ||
-            spot.spotId !== creation.key.globalId ||
-            spot.activationRecovery !== undefined;
-        }
-        if (discarded !== undefined && unavailable) return 'notReclaimable';
-        if (
-          unavailable ||
-          (discarded === undefined && creation?.actorRelocationPolicy !== 'disabled')
-        )
+        if (!releaseCandidate && discarded !== undefined) return 'notReclaimable';
+        if (!releaseCandidate)
           throw new ZLinkFrameworkException(
             ZLinkFrameworkErrorKind.Unavailable,
             'Object owner lease is unavailable.'
           );
-        if (discarded !== undefined && releaseCandidate && !ownerReleaseAllowed)
-          return 'notReclaimable';
-        if (releaseCandidate && !ownerReleaseAllowed)
+        if (discarded !== undefined && !ownerReleaseAllowed) return 'notReclaimable';
+        if (!ownerReleaseAllowed)
           throw new ZLinkFrameworkException(
             ZLinkFrameworkErrorKind.Unavailable,
             'Object owner lease release is waiting for the invalid lease delay.'
@@ -1652,6 +1653,8 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         { kind: 'version', key: rowKey, expected: current.value.version },
         conditionFor(descriptorKey, descriptor)
       ];
+      if (leaseObservation.targetCondition !== undefined)
+        conditions.push(leaseObservation.targetCondition);
       const mutations: ZLinkStoreWriteRequest['mutations'][number][] = [
         { kind: 'delete', key: rowKey }
       ];
@@ -3643,7 +3646,12 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       throw new Error('Aggregate participant references a missing authority record.');
     }
     const aggregate = decodeJson<AggregateRecord>(aggregateRead.value.bytes);
-    if (aggregate.state !== 'committed') {
+    // The publish CAS rewrites both rows. A Prepared snapshot can predate
+    // the aggregate row read and still represents the source owner.
+    if (
+      aggregate.state !== 'committed' ||
+      isPreparedAuthorityRelocation(record.snapshot.relocation, marker.aggregateId)
+    ) {
       return authoritySnapshot(
         record.snapshot,
         { value: marker.expectedStoreVersion } as ZLinkStoreVersion,
@@ -5206,7 +5214,12 @@ function sameFanoutDescriptor(
 }
 
 function canRenewMesh(current: ZLinkMeshNodeDescriptor, next: ZLinkMeshNodeDescriptor): boolean {
-  return sameOwnerGeneration(current, next) && next.descriptorRevision > current.descriptorRevision;
+  return (
+    current.ownerId === next.ownerId &&
+    current.lifecycleGeneration === next.lifecycleGeneration &&
+    current.leaseGeneration <= next.leaseGeneration &&
+    next.descriptorRevision > current.descriptorRevision
+  );
 }
 
 function canRenewClientServer(

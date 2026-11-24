@@ -4,10 +4,14 @@ Two players queue by mode through an Entry Spot and enter a dynamic Room User Sp
 
 ```mermaid
 flowchart LR
-  players[Players] -->|STREAM| session[Session]
-  session -->|relay| matchA[Match A: Entry, Matchmaking, Room]
+  subgraph playNodes["Play nodes"]
+    matchA["Play node A (match): Entry, Matchmaking, Room"]
+    matchB["Play node B (match): Entry, Room"]
+  end
+  players[Players] -->|STREAM| session["Session node"]
+  session -->|relay| matchA
   matchA -->|Location / lease| location[(Redis)]
-  matchA -. host relocation .-> matchB[Match B: Entry, Room]
+  matchA -. host relocation .-> matchB
 ```
 
 ## Prerequisites
@@ -130,7 +134,7 @@ The runner validates `zlink.structure.json`, creates Redis with a unique Compose
 | reconnect | A new Session retains Actor identity and the Room's position, HP, last sequence, phase and winner during and after the match |
 | update | Drain, relocation and SafeToShutdown, unchanged connections/bindings/game state, Stopped, replacement READY, new room on replacement |
 
-The e2e configuration limits each match host to one Room so the replacement has capacity for the new room. Deployment configuration uses `roomCapacity` independently of this test setting. Ports bind to zero and READY reports published listener endpoints.
+The e2e configuration limits each play node (match) to one Room so the replacement has capacity for the new room. Deployment configuration uses `roomCapacity` independently of this test setting. Ports bind to zero and READY reports published listener endpoints.
 
 `QueueRequest` is the first client packet. The Session relays only `QueueRequest`, `RoomViewRequest`, `MoveRequest`, `ShootRequest`, and `SessionInfoRequest`; internal packets receive `ActionRejected("packet-not-allowed", 0)`. The example accepts a claimed player ID; replace this boundary with authenticated identity before deployment. Requests use typed messages and the default Framework serializer. The Framework message model carries only finite JSON numbers, so nonfinite input reaches only the domain checks.
 
@@ -154,11 +158,11 @@ Validated against the published Framework 0.32.0 packages.
 
 ## Deployment sequence
 
-Wait for the bootstrap owner to report `READY` before starting another match host. Its public GetOrCreate completes while it is the only placement candidate, so the fixed Matchmaking Spot starts on its declared owner.
+Wait for the bootstrap owner to report `READY` before starting another play node (match). Its public GetOrCreate completes while it is the only placement candidate, so the fixed Matchmaking Spot starts on its declared owner.
 
 1. Provision Redis; assign a shared `keyPrefix` and reachable `redisEndpoint` to all node configurations.
 2. Start matchA with `server/config/match-a.json`. Its `bootstrap` setting creates the fixed `matchmaking` User Spot before READY. Start matchB with `server/config/match-b.json`.
 3. Start Session with `server/config/session.json`; connect clients to its READY `streamEndpoint`. The installed launchers are `server/match/build/install/match/bin/match` and `server/session/build/install/session/bin/session` (append `.bat` on Windows). Pass the configuration path as their sole argument.
-4. Send `drain` to the match process hosting the room. Wait for RELOCATION_REQUESTED, RELOCATED and SAFE_TO_SHUTDOWN. Send `shutdown`, verify STOPPED and process exit, then start a replacement with the same configuration and wait for READY.
+4. Send `drain` to the play node (match) hosting the room. Wait for RELOCATION_REQUESTED, RELOCATED and SAFE_TO_SHUTDOWN. Send `shutdown`, verify STOPPED and process exit, then start a replacement with the same configuration and wait for READY.
 
 Framework owns Actor identity, Session binding, route and lease state, membership, completion and relocation. Application adapters capture only matchmaking queues/sequence and room combat state. Player has no application state. Extend combat in `RoomState`, matchmaking in `MatchmakingState`, and typed dispatch in `Actions`.

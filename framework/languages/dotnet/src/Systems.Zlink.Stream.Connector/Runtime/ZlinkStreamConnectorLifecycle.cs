@@ -26,6 +26,7 @@ internal sealed class ZlinkStreamConnectorLifecycle(
     private Task? _closeTask;
     private Action? _startActiveConnect;
     private IZlinkStreamConnection? _connection;
+    private TaskCompletionSource<ZlinkStreamError>? _connectionEnd;
     private Task? _heartbeatTask;
     private Task? _receiveTask;
     private Func<CancellationToken, Task>? _runReceiveLoop;
@@ -43,6 +44,28 @@ internal sealed class ZlinkStreamConnectorLifecycle(
             {
                 return _connection;
             }
+        }
+    }
+
+    public (IZlinkStreamConnection Transport, Task<ZlinkStreamError> Ended) RegisterRequest(
+        ZlinkStreamPendingRequests.PendingRequest request,
+        Task<ZlinkStreamError>? expectedEnd = null
+    )
+    {
+        lock (_gate)
+        {
+            if (expectedEnd is { IsCompleted: true })
+                throw new ZlinkStreamException(expectedEnd.GetAwaiter().GetResult());
+
+            if (_connection is null || _sessionCts is null)
+                throw ZlinkStreamConnector.Error(
+                    ZlinkStreamErrorCode.Disconnected,
+                    "Connector is not connected."
+                );
+
+            // Bind the pending entry and write transport to the same session.
+            pending.Register(request, _sessionCts);
+            return (_connection, _connectionEnd!.Task);
         }
     }
 
@@ -148,7 +171,9 @@ internal sealed class ZlinkStreamConnectorLifecycle(
             if (_closeTask is null)
             {
                 _closeCts.Cancel();
-                var snapshot = DetachLocked();
+                var snapshot = DetachLocked(
+                    new ZlinkStreamError(ZlinkStreamErrorCode.Disconnected, "Connector closed.")
+                );
                 var activeConnectTask = _activeConnectTask;
                 var startActiveConnect = _startActiveConnect;
                 _activeConnectTask = null;
@@ -451,8 +476,14 @@ internal sealed class ZlinkStreamConnectorLifecycle(
             }
             else
             {
-                oldSnapshot = DetachLocked();
+                oldSnapshot = DetachLocked(
+                    new ZlinkStreamError(
+                        ZlinkStreamErrorCode.Disconnected,
+                        "Connection was replaced."
+                    )
+                );
                 _connection = connection;
+                _connectionEnd = new(TaskCreationOptions.RunContinuationsAsynchronously);
                 _sessionCts = sessionCts;
                 change = SetStateLocked(ZlinkStreamConnectionState.Connected, null);
             }
@@ -597,6 +628,7 @@ internal sealed class ZlinkStreamConnectorLifecycle(
         bool publishError = false
     )
     {
+        var pendingError = GetPendingDisconnectError(error);
         LifecycleSnapshot snapshot;
         ZlinkStreamConnectionStateChanged? change;
         ActiveConnectStart? reconnectStart = null;
@@ -611,7 +643,7 @@ internal sealed class ZlinkStreamConnectorLifecycle(
             )
                 return false;
 
-            snapshot = DetachLocked();
+            snapshot = DetachLocked(pendingError);
             _lastCloseReason = closeReason;
             var nextState = options.Reconnect.Enabled
                 ? ZlinkStreamConnectionState.Reconnecting
@@ -636,7 +668,8 @@ internal sealed class ZlinkStreamConnectorLifecycle(
             .ConfigureAwait(false);
 
         Capture(() => snapshot.SessionCts?.Dispose());
-        Capture(() => pending.FailAll(GetPendingDisconnectError(error)));
+        if (snapshot.SessionCts is { } session)
+            Capture(() => pending.FailAll(pendingError, session));
         // Spec §10.1.1: a wait is released when the connection it observed ends, here,
         // and not when the reconnect that may follow establishes the next one.
         await CaptureAsync(onConnectionEnded).ConfigureAwait(false);
@@ -698,7 +731,7 @@ internal sealed class ZlinkStreamConnectorLifecycle(
         await NotifyStateChangedAsync(change, cancellationToken).ConfigureAwait(false);
     }
 
-    private LifecycleSnapshot DetachLocked()
+    private LifecycleSnapshot DetachLocked(ZlinkStreamError pendingError)
     {
         var snapshot = new LifecycleSnapshot(
             _connection,
@@ -707,6 +740,8 @@ internal sealed class ZlinkStreamConnectorLifecycle(
             _heartbeatTask
         );
         _connection = null;
+        _connectionEnd?.TrySetResult(pendingError);
+        _connectionEnd = null;
         _sessionCts = null;
         _receiveTask = null;
         _heartbeatTask = null;

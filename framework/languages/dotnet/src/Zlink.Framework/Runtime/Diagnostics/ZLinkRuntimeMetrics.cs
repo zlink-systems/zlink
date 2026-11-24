@@ -264,6 +264,34 @@ internal static class ZLinkRuntimeMetrics
         object,
         Func<ZLinkApplicationJobQueuePressureMetrics>
     > ApplicationJobQueuePressureProviders = new();
+    private static readonly ConcurrentDictionary<
+        object,
+        Func<int>
+    > AuthenticationAdmissionProviders = new();
+    private static readonly ObservableGauge<int> AuthenticationAdmissionInFlight =
+        Meter.CreateObservableGauge(
+            "zlink.host.authentication_admission.in_flight",
+            () =>
+                AuthenticationAdmissionProviders.Values.Select(snapshot => new Measurement<int>(
+                    snapshot()
+                )),
+            "{request}"
+        );
+    private static readonly Counter<long> AuthenticationAdmissionRejections =
+        Meter.CreateCounter<long>("zlink.host.authentication_admission.rejections", "{request}");
+
+    public static IDisposable RegisterAuthenticationAdmission(Func<int> snapshot)
+    {
+        var owner = new object();
+        AuthenticationAdmissionProviders[owner] = snapshot;
+        return new ProviderRegistration(() =>
+            AuthenticationAdmissionProviders.TryRemove(owner, out _)
+        );
+    }
+
+    public static void RecordAuthenticationAdmissionRejection() =>
+        AuthenticationAdmissionRejections.Add(1);
+
     private static readonly ObservableGauge<long> HostState = Meter.CreateObservableGauge(
         "zlink.host.state",
         ObserveHostStates,

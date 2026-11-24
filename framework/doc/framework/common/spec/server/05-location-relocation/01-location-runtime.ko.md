@@ -850,8 +850,8 @@ Downgrade나 이전 버전 host 추가 전에는 보존을 끄고 기존 `T` 보
   기존 token이 아직 유효하면 같은 token의 renew로 admission 기한을 갱신하고 token 교체 CAS 없이
   기존 gate를 다시 연다. 정상 만료된 경우에만 새 claim으로 새 `LeaseGeneration`을 발급하고
   객체별 token 교체 CAS를 수행한다. 새 claim이 성공하면 §5의 첫 갱신과 같이 admission 기한을
-  다시 계산하고, 객체별 교체 CAS 제출 전에 새 `LeaseGeneration`을 기록한 descriptor를 §5의
-  게시 규칙(`Renew` intent)으로 다시 게시한다. 게시가 Store에 반영됐다는 확인은 기존 비동기
+  다시 계산하고, 객체별 교체 CAS 제출 전에 새 `LeaseGeneration`을 기록한 descriptor를 §4의
+  Revision 증가와 §5의 게시 규칙(`Renew` intent)으로 다시 게시한다. 게시가 Store에 반영됐다는 확인은 기존 비동기
   continuation으로 받는다. 게시 결과가 불확정이면 §10으로 재확인한다. 교체 CAS는 게시 확인을
   기다리지 않지만 gate 재개에는 그 확인이 필요하다. 재게시가 확정 거절되면 실행권 상실로
   판정하고 복구하지 않으며 기존 폐기·정리 규칙을 적용한다.
@@ -917,6 +917,21 @@ Downgrade나 이전 버전 host 추가 전에는 보존을 끄고 기존 `T` 보
   interval마다 재확인하고 필요한 요청을 다시 제출한다. 삭제·해제 확인 또는 다른 owner·incarnation으로의
   변경 확인으로 정리를 끝낸다. 폐기한 incarnation의 gate는 다시 열지 않으며, 다른 owner·incarnation의
   record는 삭제하지 않는다.
+
+**같은 process의 owner lease 재claim.** 이 host의 owner lease가 정상 만료된 것을 확인하면 같은 process가
+같은 `OwnerId`로 새 claim을 요청할 수 있다. Store 장애 복구 중이 아니어도 같다. 새 claim이 성공한 뒤의
+descriptor 재게시, 객체별 token 교체 CAS, gate 재개와 폐기는 위 복구 규칙 하나를 따른다. 보존 대상은
+Store 통신 실패를 처음 관측하기 전에 steady `Ready`였던 객체이므로, 장애 없이 만료됐으면 교체 CAS 대상이
+없고 만료 전의 객체는 기존 폐기·정리 규칙으로 정리한다. 재claim 경로를 장애 복구에만 두면 그 host는
+owner 자격을 다시 얻을 방법이 없다.
+
+- **일반 새 작업은 재게시 반영을 확인한 뒤에 받는다.** 새 claim 뒤 host는 새 `LeaseGeneration`을 기록한
+  descriptor를 다시 게시하고, 그 반영을 확인하기 전까지 §5 차단 표의 나머지 작업을 받지 않는다. 새 claim
+  성공만으로 admission을 열면 다른 host가 아직 옛 descriptor를 보는 동안 새 token으로 작업을 시작하기 때문이다.
+- **재claim은 옛 handler·timer의 종료를 기다리지 않는다.** 정상 만료를 확인하면 기존 gate와 fence를
+  먼저 닫고 새 claim을 요청한다. 이미 시작한 callback은 아래 한계대로 끝까지 실행될 수 있으며, 그
+  callback이 만드는 Store 변경은 옛 token을 쓰므로 새 token을 검증하는 CAS가 거절한다. 종료 대기를
+  claim의 선행 조건으로 두면 오래 실행되는 callback 하나가 host 전체의 재참여를 막기 때문이다.
 
 Process 재개 때도 새 turn gate에서 같은 검사를 수행한다. 다만 host suspend 중 monotonic이
 정지하면 실제 경과를 이 clock으로 알 수 없다. Callback 도중 장기 정지한 process가 같은 callback의
@@ -1007,8 +1022,9 @@ authority token의 lease가 무효여야 하며, 복구 owner의 token 교체 CA
 `descriptorLifecycleGeneration`을 가지면 그 reservation의 target lifecycle은 끝난 것이다. 이때
 Framework는 그 reservation을 만든 자격 없이 `Reserved → Missing`으로 바꾸고 pending 수용 공간을
 반납한다. 요청은 처음 읽은 authority `StoreVersion`, 읽은 owner lease record의 상태(version 또는
-없음), 읽은 descriptor record의 상태와 수용 공간 record를 조건으로 함께 검사한다. 수용 공간
-record가 없으면 authority만 바꾼다. 수용 공간 record는 Mesh 이름과 RID마다 하나이고 MeshNode
+없음), 읽은 descriptor record의 상태와 수용 공간 record를 조건으로 함께 검사한다. 수용 공간은
+[Location Store §4.1](02-location-store-redis.ko.md)의 counter key이며 예약이 항상 만들므로, 반납할 key가 없으면
+Store 데이터 손상이다(v11에서 전환할 때 수용 공간 record를 counter key로 옮긴 뒤부터). 수용 공간 record는 Mesh 이름과 RID마다 하나이고 MeshNode
 lifecycle이 바뀌어도 이어진다 — 해제하지 않은 모든 allocation을 집계하며 descriptor를 다시
 게시해도 초기화하지 않는다. 따라서 이전 lifecycle의 reservation을 해제할 때 같은 record에서
 반납한다. 반납 결과가 0보다 작아지면 Store 데이터 손상으로 판정하고
@@ -1019,14 +1035,21 @@ Target owner lease가 유효하고 descriptor가 같은 lifecycle이면 해제�
 **Owner가 끝난 object의 steady `Ready` record도 다시 만들 때 해제한다.** 같은 ID의 새 incarnation을
 만드는 operation은 Actor `Create`·`GetOrCreate`, User Spot `GetOrCreate`, [Instance intent](../00-foundation/02-glossary.ko.md#instance-intent)가 있는 새
 message다. 이 operation이 steady `Ready` record를 읽었고, 그 record의 owner lease가 없거나 다른
-`LeaseGeneration`이거나 만료됐으며, 새 incarnation을 `Reserve`하는 node에 등록된 그 type의 relocation
+`LeaseGeneration`이거나 만료됐으며, 새 incarnation의 factory를 실행할 node에 등록된 그 type의 relocation
 정책이 `Disabled`이면 Location repository가 그 record를 해제한다. User Spot의 `Closing`이나 미완료 최초
 activation은 allocation이 `Active`라는 이유로 이 대상이 되지 않으며 각자의 lifecycle·recovery 절차를 따른다.
 Actor의 `Closing`은 destroy가 admission을 이미 닫은 상태이므로, owner lease가 없거나 다른
 `LeaseGeneration`이거나 만료됐으면 같은 조건부 batch로 해제한다. 이 경우 relocation 정책 조건은 적용하지
-않으며, 생성 operation과 같은 generation을 destroy하려는 호출이 이 해제를 시작한다. `Reserve`하는 node는 Actor와 User Spot에서는 생성을 요청한
-node이고, Instance Spot에서는 activation envelope를 받은 target이다. 그 node에 type이 등록되어 있지
-않으면 `Disabled`로 보지 않는다. User Spot은 그 SpotId와 `ObjectGeneration`에 남은 Actor membership이
+않으며, 생성 operation과 같은 generation을 destroy하려는 호출이 이 해제를 시작한다. factory를 실행할 node는 Actor와 User Spot에서는 생성 operation이 이번 시도에 고른 target이고, Instance Spot에서는
+activation envelope를 받은 target이다. Actor와 User Spot의 생성 operation은 owner lease가 무효인 steady `Ready`를
+읽으면 해제를 판정하기 전에 기존 배치 규칙([Actor model §6.3](../03-spot-actor/04-actor-model.ko.md#63-mesh와-placement-target-선택),
+User Spot 생성의 target 선택)으로 이번 시도의 target을 먼저 고른다. 해제가 commit된 뒤 `Reserve`가 실패해 다른
+target을 고르면 이미 `Missing`이므로 일반 생성 절차를 따른다. 생성을 요청한 node가 그 type을 등록하지 않아도 된다 — 세션 node와
+play node를 나눈 배치에서 요청 node에는 factory가 없기 때문이다. 정책은 그 target이 게시한 MeshNode descriptor의
+`objectCapabilities`([§3.4](#34-여러-언어가-같은-redis-record를-읽고-쓰는-방법)) 중 같은 `objectKind`·`stableType` 원소의 `policy`로 판정하며, 요청 node가 target이면
+자기 등록과 같은 값이다. `policy`가 `disabled`일 때만 `Disabled`로 보고, 원소가 없거나 다른 값이면 `Disabled`로
+보지 않는다. 정책을 검사한 해제에서만, 아래 batch 조건에 더해 정책을 읽은 target descriptor record의 `StoreVersion`을 같은 batch의
+조건으로 검사한다. 정책을 검사하지 않는 Actor `Closing`과 §5.1 정리의 해제에는 이 조건이 없다. User Spot은 그 SpotId와 `ObjectGeneration`에 남은 Actor membership이
 모두 **owner가 끝난 member**일 때만 해제한다. Membership이 없으면 이 조건을 만족한다. Owner가 끝난
 member는 membership이 가리키는 Actor authority가 같은 SpotId·`ObjectGeneration`을 가리키는 steady
 `Ready`이고, 그 authority에 기록된 owner lease가 없거나 다른 `LeaseGeneration`이거나 만료된 Actor다.
@@ -1814,7 +1837,7 @@ owner에 따라 다르다.
   generation을 유지한다), 다른 node를 거쳐 첫 target으로 돌아왔다면 첫 target이 지금 보유한 authority의
   값이다. 어느 경우든 route가 전달하는 message는 그 값을 가진 현재 owner가 받는다.
 - **Owner가 첫 target도 source도 아니면**(첫 target에서 다음 이동이 이어졌다) 다시 읽은 authority에는
-  첫 target의 commit 값이 남지 않고, Store는 generation을 전역 counter로 발급하므로 source는 그 값을
+  첫 target의 commit 값이 남지 않고, Store는 그 뒤 이동마다 그 ID의 counter에서 새 generation을 발급하므로 source는 그 값을
   알 수 없다. Source는 §7.3의 route를 설치하지 않는다. 이 **연속 이동 예외**에서 이후 source로 도착한
   message는 §7.3의 route 없음 결과(`Unavailable`)로 끝난다. Source는 다시 읽은 현재 owner로 직접 가는
   route를 만들거나 첫 target의 generation을 추측하지 않는다. Bound Session의 route는 각 target의 command 44와 이후
@@ -1910,6 +1933,11 @@ provider conformance test가 store record golden fixture로 관찰하는 key·va
 - Domain은 같은 namespace의 전역 authority에 접근하는 모든 host를 포함한다. `StoreOutageRetention`은
   기본 `false`이며 `T`는 독립 설정이 아니다. Domain 전체의 동일 margin은 운영 요구로서
   Framework 검증 항목이 아니다. 동일 margin에서 host별 TTL이 달라도 해제는 옛 owner의 `T`보다 이르지 않다.
+- 장애 없이 owner lease가 정상 만료된 host는 같은 `OwnerId`로 새 claim을 하고 새 `LeaseGeneration`의
+  descriptor를 다시 게시한다. 그 게시가 Store에 반영되기 전에는 새 Actor·Spot 생성과 message 수용이
+  거절되고, 만료 전의 객체는 다시 열리지 않고 정리된다.
+- 재claim 시점에 실행 중이던 callback이 끝난 뒤 옛 token으로 제출한 Store 변경은 거절되고, 재claim은 그
+  callback의 종료를 기다리지 않고 진행한다.
 - 만료 전 복구는 검증·renew 뒤 같은 token으로 gate를 다시 열고, 정상 만료 뒤에만 교체 CAS를 한다.
   교체 CAS의 요청 시작 + renew timeout은 원래 `T` 이하여야 한다. 새 claim은 admission 기한을
   다시 계산하고, gate 재개는 교체 CAS 성공과 새 descriptor의 Store 반영을 원래 `T` 전에 모두
@@ -1989,7 +2017,8 @@ provider conformance test가 store record golden fixture로 관찰하는 key·va
   하나씩 어긴 입력(유효한 lease, `Disabled`가 아니거나 등록되지 않은 type, owner lease가 유효하거나 이동 중인 member가 남은 User Spot, provider 한 batch 상한을 넘는 member, recovery
   pointer, User Spot의 `Closing`, owner lease가 유효한 Actor `Closing`, aggregate·relocation 진행, 일반 message·`Find`)은 authority·membership·수용 공간과
   factory 실행 수가 바뀌지 않음을 확인한다. 생성을 요청한 node와 factory target(Instance는 source와 수신
-  target)의 등록 정책이 다른 입력으로 정책의 출처를 확인한다. Owner가 끝난 member가 남은 User Spot의 해제는 그 member
+  target)의 등록 정책이 다른 입력으로 정책의 출처가 factory target임을 확인하고, 요청 node에 type이 등록되지 않은
+  분리 배치에서 target의 `disabled` 정책으로 해제되는 입력을 넣는다. Owner가 끝난 member가 남은 User Spot의 해제는 그 member
   Actor authority와 수용 공간도 같은 batch에서 해제되고, 이후 같은 ActorId 생성이 새 incarnation으로 시작함을 확인한다.
 - 첫 page 뒤에 member가 있는 scan, snapshot 만료, Store failure를 빈 membership으로 처리하지 않는다. Old
   Spot의 lease 무효화와 늦은 Join commit을 경합시키고, 두 재생성 요청을 경합시켜 old version으로 새

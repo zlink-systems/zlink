@@ -10,7 +10,7 @@ const cppRoot = path.join(root, "framework/languages/cpp");
 const extension = path.join(cppRoot, "extensions/framework-locations-etcd");
 const adapter = path.join(cppRoot, "tests/location-store-provider-adapter");
 const apply =
-  "co_await client.txn (apply_request (*input, *decision, evaluation), operation)";
+  "co_await client.txn (std::move (*apply), operation)";
 const helperPosition = "    task_t<store_write_result_t> write (";
 
 // Only isolated source copies receive these deliberately incorrect decisions.
@@ -36,8 +36,8 @@ ${helperPosition}`,
   "remove-apply-clock-comparison": (s) =>
     replaceExactly(
       s,
-      "if (evaluation.minimum_expiry) {",
-      "if (false && evaluation.minimum_expiry) {",
+      "if (minimum_expiry) {",
+      "if (false && minimum_expiry) {",
     ),
   "immediate-conflict-on-failed-comparison": (s) =>
     replaceExactly(
@@ -177,6 +177,7 @@ target_include_directories(location-store-provider-adapter PRIVATE
   ${boost ? cmake(boost) : ""}
   ${cmake(path.join(cppRoot, "common/include"))}
   ${cmake(path.join(cppRoot, "framework/include"))}
+  ${cmake(path.join(cppRoot, "framework/src"))}
   include ${cmake(generated)})
 target_link_libraries(location-store-provider-adapter PRIVATE
   ${cmake(abstractions)} gRPC::grpc++ protobuf::libprotobuf OpenSSL::Crypto

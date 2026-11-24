@@ -28,10 +28,12 @@ import { currentOrCreateFlow, runWithOutboundFlow } from '../diagnostics/flow-co
 export interface ZLinkNativeFallbackBoundSessionOptions {
   readonly runtime: ZLinkNativeFallbackBoundSessionPort;
   readonly routedTransport: ZLinkActorRoutedJoinTransport;
-  readonly actorRefProvider: () => ActorRef | undefined;
+  readonly targetProvider: () => {
+    readonly actorRef: ActorRef | undefined;
+    readonly remoteTarget: ZLinkRemoteBoundSessionTarget | undefined;
+  };
   readonly nativeActorNodeProvider: () => ZLinkBackendActorSessionNode | undefined;
   readonly localActorProvider?: () => boolean;
-  readonly remoteBoundSessionTargetProvider: () => ZLinkRemoteBoundSessionTarget | undefined;
   readonly remoteActorPacketTargetProvider: () => ZLinkRemoteActorPacketTarget | undefined;
   readonly requestTimeoutMs?: number;
   readonly actorId: string;
@@ -48,7 +50,7 @@ export class ZLinkNativeFallbackBoundSession implements ZLinkBoundSession {
   }
 
   async disconnect(signal?: AbortSignal): Promise<void> {
-    const actorRef = this.options.actorRefProvider();
+    const { actorRef } = this.options.targetProvider();
     const node = this.options.nativeActorNodeProvider();
     if (
       actorRef !== undefined &&
@@ -116,8 +118,7 @@ class ZLinkNativeFallbackBoundSessionSendCall implements ZLinkBoundSessionSendCa
 
   private async executeScoped(packetName: string): Promise<ZLinkSubmitResult> {
     const localActor = this.options.localActorProvider?.() === true;
-    const remoteTarget = this.options.remoteBoundSessionTargetProvider();
-    const actorRef = this.options.actorRefProvider();
+    const { actorRef, remoteTarget } = this.options.targetProvider();
     const sameNodeBinding =
       localActor &&
       currentBindingGeneration(actorRef) !== undefined &&
@@ -138,7 +139,6 @@ class ZLinkNativeFallbackBoundSessionSendCall implements ZLinkBoundSessionSendCa
       }
     }
     if (remoteTarget !== undefined && !sameNodeBinding) {
-      const actorRef = this.options.actorRefProvider();
       const ownershipGeneration = (
         actorRef as (ActorRef & { ownershipGeneration?: bigint }) | undefined
       )?.ownershipGeneration;

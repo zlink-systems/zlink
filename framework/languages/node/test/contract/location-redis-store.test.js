@@ -237,6 +237,55 @@ test('redis Store serializes concurrent first-use connection', async (t) => {
   }
 });
 
+test('redis Location Store reuses a Lua script and recovers after SCRIPT FLUSH', async (t) => {
+  const fixture = await redisFixture(t);
+  if (fixture === undefined) return;
+  const prefix = testPrefix('script-cache');
+  const store = new redisLocations.ZLinkRedisLocationStore({ url: fixture.url, keyPrefix: prefix });
+  const subject = key('script-cache/subject');
+  const put = bytes => store.write({
+    conditions: [], mutations: [{ kind: 'put', key: subject, bytes }]
+  });
+  const scriptCalls = async () => {
+    const stats = await fixture.client.info('commandstats');
+    return {
+      eval: Number(/^cmdstat_eval:calls=(\d+)/m.exec(stats)?.[1] ?? 0),
+      evalsha: Number(/^cmdstat_evalsha:calls=(\d+)/m.exec(stats)?.[1] ?? 0)
+    };
+  };
+  const assertCalls = async (phase, before, expected) => {
+    const after = await scriptCalls();
+    const calls = { eval: after.eval - before.eval, evalsha: after.evalsha - before.evalsha };
+    t.diagnostic(`${phase}: EVAL=${calls.eval}, EVALSHA=${calls.evalsha}`);
+    assert.deepEqual(calls, expected, phase);
+  };
+
+  try {
+    assert.equal((await put(Buffer.from('initial'))).kind, 'applied');
+    const warm = await scriptCalls();
+    for (let index = 0; index < 3; index += 1) {
+      assert.equal((await put(Buffer.from(`warm-${index}`))).kind, 'applied');
+    }
+    await assertCalls('warm cache', warm, { eval: 0, evalsha: 3 });
+
+    await fixture.client.scriptFlush('SYNC');
+    const cold = await scriptCalls();
+    const payload = Buffer.from([0, 255, 17]);
+    assert.equal((await put(payload)).kind, 'applied');
+    await assertCalls('after SCRIPT FLUSH', cold, { eval: 1, evalsha: 1 });
+    assert.equal(await fixture.client.get(`${prefix}:{zlink-location-v3}:opaque:sequence`), '5');
+    assert.deepEqual(Buffer.from((await store.read(subject)).value.bytes), payload);
+
+    const rewarmed = await scriptCalls();
+    assert.equal((await put(payload)).kind, 'applied');
+    await assertCalls('repopulated cache', rewarmed, { eval: 0, evalsha: 1 });
+  } finally {
+    await store.dispose();
+    await cleanup(fixture.client, prefix);
+    await fixture.client.quit();
+  }
+});
+
 test('redis prefix scan excludes unrelated index records from its page work', async t => {
   const fixture = await redisFixture(t);
   if (!fixture) return;
@@ -1466,8 +1515,7 @@ for (const liveMember of [false, true]) {
         },
         target,
         creatingPayload: Buffer.from('creating'),
-        capacity: userSpotCapacity(1),
-        actorRelocationPolicy: 'disabled'
+        capacity: userSpotCapacity(1)
       });
       const reserved = await repository.reserve(spotRequest(old));
       if (reserved.kind !== 'reserved') throw new Error('Spot reservation failed');
@@ -1499,8 +1547,7 @@ for (const liveMember of [false, true]) {
         },
         target: memberTarget,
         creatingPayload: Buffer.from('creating'),
-        capacity: { actors: 1, spots: 0 },
-        actorRelocationPolicy: 'disabled'
+        capacity: { actors: 1, spots: 0 }
       };
       const member = await repository.reserve(actorRequest);
       if (member.kind !== 'reserved') throw new Error('member reservation failed');
@@ -1987,97 +2034,6 @@ test('immediately resolved reservation Abort Conflict terminates at the original
   );
   assert.ok(attempts > 0);
 });
-
-for (const backing of ['repository', 'in-memory']) {
-  test(`completion accepted count is installed atomically at target commit/${backing}`, async () => {
-    const provider = new frameworkInternal.ZLinkInMemoryProviderLocationStore();
-    const repository =
-      backing === 'repository'
-        ? testLocationRepository(provider)
-        : new frameworkInternal.ZLinkInMemoryLocationStore();
-    const sourceOwner = await repository.claimOwnerLease(`completion-source-${backing}`, 60000);
-    const targetOwner = await repository.claimOwnerLease(`completion-target-${backing}`, 60000);
-    assert.equal(sourceOwner.kind, 'claimed');
-    assert.equal(targetOwner.kind, 'claimed');
-    const sourceTarget = {
-      meshName: 'completion-mesh',
-      nodeRid: 'completion-source',
-      nodeLifecycleGeneration: 1n,
-      owner: sourceOwner.token
-    };
-    const target = {
-      meshName: 'completion-mesh',
-      nodeRid: 'completion-target',
-      nodeLifecycleGeneration: 1n,
-      owner: targetOwner.token
-    };
-    for (const descriptor of [sourceTarget, target]) {
-      assert.equal(
-        (
-          await repository.updateMeshNode(
-            aggregateDescriptor(descriptor, 16),
-            frameworkInternal.ZLinkLocationWriteIntent.NewClaim
-          )
-        ).status,
-        frameworkInternal.ZLinkLocationWriteStatus.Stored
-      );
-    }
-    const snapshot = await createReadyUserSpot(repository, `completion-${backing}`, sourceTarget);
-    const request = aggregateRequest(
-      { value: 'cccccccc-cccc-4ccc-8ccc-ccccccccccc1' },
-      1n,
-      [snapshot],
-      target,
-      [`completion-${backing}`]
-    );
-    const sourceFence = {
-      nodeRid: sourceTarget.nodeRid,
-      nodeGeneration: 1n,
-      ownerId: sourceOwner.token.ownerId,
-      ownerLeaseGeneration: sourceOwner.token.leaseGeneration
-    };
-    request.participants[0].relocation = {
-      relocationId: request.aggregateId.value,
-      phase: 'prepared',
-      source: sourceFence,
-      target: {
-        nodeRid: target.nodeRid,
-        nodeGeneration: 1n,
-        ownerId: target.owner.ownerId,
-        ownerLeaseGeneration: target.owner.leaseGeneration,
-        attemptGeneration: 1n
-      },
-      coordinator: { ...sourceFence, expectedStoreVersion: snapshot.storeVersion.value },
-      sourceInventorySha256: 'ab'.repeat(32),
-      applicationVersion: 1n
-    };
-    const prepared = await repository.prepareAggregate(request);
-    assert.equal(prepared.kind, 'prepared');
-    const key = request.participants[0].authorityKey;
-    assert.equal((await repository.readAuthority(key)).relocation.completion, undefined);
-    const fence = { ...prepared.fence, acceptedRequests: new Map([[key.value, 9n]]) };
-    assert.equal((await repository.commitAggregate(fence)).kind, 'committed');
-    const moved = await repository.readAuthority(key);
-    assert.equal(moved.ownerId, target.owner.ownerId);
-    assert.deepEqual(moved.relocation.completion, {
-      acceptedRequests: 9n,
-      completedResults: 0n,
-      pendingDeliveries: 0n,
-      reference: null,
-      sha256: null
-    });
-    assert.equal(
-      (
-        await repository.commitAggregate({
-          ...fence,
-          acceptedRequests: new Map([[key.value, 123n]])
-        })
-      ).kind,
-      'alreadyCommitted'
-    );
-    assert.equal((await repository.readAuthority(key)).relocation.completion.acceptedRequests, 9n);
-  });
-}
 
 for (const transition of ['preserve', 'newOwner']) {
   for (const outcome of ['abort', 'commit']) {

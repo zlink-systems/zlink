@@ -9,6 +9,7 @@ import java.nio.charset.StandardCharsets
 import java.time.Duration
 import java.time.Duration.ofMillis
 import java.time.Duration.ofSeconds
+import java.util.Optional
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.LinkedBlockingQueue
 import kotlinx.coroutines.CompletableDeferred
@@ -21,6 +22,7 @@ import kotlinx.coroutines.future.await
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.yield
 import org.junit.jupiter.api.Assertions
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -32,8 +34,13 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Timeout
 import systems.zlink.contracts.messaging.Message
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions
+import systems.zlink.framework.runtime.streams.ZLinkStreamHeader
+import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec
+import systems.zlink.framework.streams.ZLinkStreamCodec
 import systems.zlink.framework.streams.ZLinkStreamCompressionCodec as FrameworkStreamCompressionCodec
+import systems.zlink.framework.streams.ZLinkStreamMessageKind
 import systems.zlink.stream.connector.ZLinkStreamActorRegistryTestAccess
+import systems.zlink.stream.connector.ZLinkStreamAdmissionWaiting
 import systems.zlink.stream.connector.ZLinkStreamCloseReason
 import systems.zlink.stream.connector.ZLinkStreamCompression
 import systems.zlink.stream.connector.ZLinkStreamCompressionCodec
@@ -119,7 +126,7 @@ final class KotlinConnectorWrapperTest {
     }
 
     @Test
-    fun kotlinCompressionDslPreservesReceivedMessageLimit() {
+    fun kotlinCompressionDslPreservesReceivedMessageAndAdmissionWaitLimits() {
         //  수신 한도를 기본값과 다르게 두어야 복사가 그 값을 보존하는지 볼 수 있다.
         //  `ZLinkStreamConnectorOptions`의 구성 요소 순서를 그대로 따른다.
         val connectorOptions =
@@ -144,12 +151,14 @@ final class KotlinConnectorWrapperTest {
                 null,
                 null,
                 null,
+                ofSeconds(2),
             )
 
         //  Java spec 03 12: 옵션을 복사하는 확장은 지금 정의된 옵션을 모두 보존한다.
         //  수신 한도도 그중 하나다.
         assertEquals(32 * 1024, connectorOptions.maxReceivePayloadSize())
         assertEquals(32 * 1024, connectorOptions.withoutStreamCompression().maxReceivePayloadSize())
+        assertEquals(ofSeconds(2), connectorOptions.withoutStreamCompression().maxAdmissionWait())
         assertEquals(
             32 * 1024,
             connectorOptions.withDefaultStreamCompression().maxReceivePayloadSize(),
@@ -263,6 +272,69 @@ final class KotlinConnectorWrapperTest {
                     assertEquals("reply", reply.payload().toUtf8String())
                 } finally {
                     reply.payload().close()
+                }
+            } finally {
+                connector.close().await()
+            }
+        }
+    }
+
+    @Test
+    fun kotlinAdmissionRetryCompletesTheOriginalRequest() = runBlocking {
+        TcpServer().use { server ->
+            val connector = ZLinkStreamConnectorFactory.create(options(server.endpoint())).kotlin()
+            connector.connect().await()
+            try {
+                supervisorScope {
+                    val waiting = CompletableDeferred<ZLinkStreamAdmissionWaiting>()
+                    val subscription =
+                        connector.onAdmissionWaiting {
+                            waiting.complete(it)
+                            CompletableFuture.completedFuture(null)
+                        }
+                    subscription.use {
+                        val request =
+                            async(start = CoroutineStart.UNDISPATCHED) {
+                                connector
+                                    .request(payload("Login", "login-body"))
+                                    .metadata("locale", "ko")
+                                    .await()
+                            }
+                        val sent = server.readApplicationFrame()
+                        val rejection =
+                            ZLinkStreamHeader(
+                                ZLinkStreamMessageKind.ERROR,
+                                ZLinkStreamCodec.JSON,
+                                null,
+                                Optional.of(requireNotNull(sent.requestSeq)),
+                                "",
+                                mapOf("\$zlink.admission.retryAfterMs" to "0"),
+                            )
+                        server.sendRawFrame(
+                            ZLinkStreamHeaderCodec.encode(rejection),
+                            """{"code":"unavailable","message":"Authentication admission is full."}"""
+                                .toByteArray(StandardCharsets.UTF_8),
+                        )
+                        val event = dispatchUntil(connector, waiting)
+                        assertEquals("Login", event.requestPacketName())
+                        assertEquals(Duration.ZERO, event.retryAfter())
+                        val retried = server.readApplicationFrame(ofSeconds(3))
+                        assertEquals(sent.name, retried.name)
+                        assertTrue(sent.requestSeq != retried.requestSeq)
+                        assertEquals(sent.metadata, retried.metadata)
+                        assertTrue(sent.payload.contentEquals(retried.payload))
+                        server.sendFrame(
+                            Frame(
+                                kind = 3,
+                                requestSeq = retried.requestSeq,
+                                name = "",
+                                payload = "accepted".toByteArray(StandardCharsets.UTF_8),
+                            )
+                        )
+                        request.await().payload().use {
+                            assertEquals("accepted", it.toUtf8String())
+                        }
+                    }
                 }
             } finally {
                 connector.close().await()
@@ -1149,6 +1221,17 @@ final class KotlinConnectorWrapperTest {
                 if (frame.kind != 5) {
                     return frame
                 }
+            }
+        }
+
+        fun readApplicationFrame(timeout: Duration): Frame {
+            val socket = socket()
+            val previousTimeout = socket.soTimeout
+            socket.soTimeout = timeout.toMillis().toInt()
+            try {
+                return readApplicationFrame()
+            } finally {
+                socket.soTimeout = previousTimeout
             }
         }
 

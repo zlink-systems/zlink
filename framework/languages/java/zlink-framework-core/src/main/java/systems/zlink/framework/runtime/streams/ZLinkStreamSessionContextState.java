@@ -10,6 +10,8 @@ import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamSocket;
+import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
+import systems.zlink.framework.runtime.internal.completion.ZLinkTerminalWinner;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAction;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
@@ -39,8 +41,8 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 
 final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
@@ -54,10 +56,14 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
     private final ZLinkStreamCompressionCodec compressionCodec;
     private final ZLinkMessageFlowTracer flow;
     private final Supplier<CompletionStage<Void>> closeAction;
+    private final BooleanSupplier shutdownForced;
+    private final ZLinkSessionSerialExecutor serials;
     private final ConcurrentHashMap<String, ZLinkStreamHeader> requestHeadersByFlow =
             new ConcurrentHashMap<>();
     private final ConcurrentHashMap<ZLinkStreamHeader, Boolean> claimedReplyHeaders =
             new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<RequestIdentity, ZLinkStreamAuthenticationAdmission.Lease>
+            authenticationRequests = new ConcurrentHashMap<>();
     private final Set<ReplyAttempt> replyAttempts = ConcurrentHashMap.newKeySet();
     private final AtomicBoolean replyRetriesClosed = new AtomicBoolean();
 
@@ -81,6 +87,7 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
                 compressionCodec,
                 flow,
                 closeAction,
+                () -> false,
                 null);
     }
 
@@ -94,7 +101,8 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
             ZLinkStreamCompressionCodec compressionCodec,
             ZLinkMessageFlowTracer flow,
             Supplier<CompletionStage<Void>> closeAction,
-            ScheduledExecutorService replyRetryExecutor) {
+            BooleanSupplier shutdownForced,
+            ZLinkSessionSerialExecutor serials) {
         this.sessionId = streamNodeName + ":" + routingId;
         this.stream = stream;
         this.routingId = routingId;
@@ -104,6 +112,11 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
         this.compressionCodec = compressionCodec;
         this.flow = flow;
         this.closeAction = Objects.requireNonNull(closeAction, "closeAction");
+        this.shutdownForced = shutdownForced;
+        this.serials = serials;
+        if (actors instanceof ZLinkSessionActorsRuntime relayRuntime) {
+            relayRuntime.observeReplyAcceptance(this::replyAccepted);
+        }
     }
 
     @Override
@@ -128,8 +141,7 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
 
     @Override
     public ZLinkSessionClient client() {
-        return new ZLinkStreamSessionClient(
-                stream, routingId, this, serializer, defaultCodec, compressionCodec, flow);
+        return new ZLinkStreamSessionClient(this, serializer, defaultCodec, compressionCodec, flow);
     }
 
     @Override
@@ -140,9 +152,12 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
         return actors;
     }
 
-    CompletionStage<Void> notifyBoundActorsDisconnected(Duration timeout) {
+    CompletionStage<Void> notifyBoundActorsDisconnected(
+            CompletionStage<Void> acceptedPackets,
+            Duration timeout,
+            CompletableFuture<Void> forcedStop) {
         if (actors instanceof ZLinkSessionActorsRuntime runtime) {
-            return runtime.notifyDisconnectedAll(timeout);
+            return runtime.notifyDisconnectedAll(acceptedPackets, timeout, forcedStop);
         }
         return CompletableFuture.completedFuture(null);
     }
@@ -151,8 +166,44 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
         if (!replyRetriesClosed.compareAndSet(false, true)) {
             return;
         }
+        authenticationRequests.forEach(
+                (request, lease) ->
+                        finishAuthenticationRequest(
+                                request.header(), ZLinkTerminalWinner.Cause.CANCELLATION));
         for (ReplyAttempt attempt : replyAttempts) {
             attempt.cancel();
+        }
+    }
+
+    void trackAuthenticationRequest(
+            ZLinkStreamHeader header, ZLinkStreamAuthenticationAdmission.Lease lease) {
+        authenticationRequests.put(new RequestIdentity(header), lease);
+        if (replyRetriesClosed.get()) {
+            finishAuthenticationRequest(header, ZLinkTerminalWinner.Cause.CANCELLATION);
+        }
+    }
+
+    void finishAuthenticationRequest(ZLinkStreamHeader header, ZLinkTerminalWinner.Cause cause) {
+        if (authenticationRequests.isEmpty()) {
+            return;
+        }
+        var request = new RequestIdentity(header);
+        var lease = authenticationRequests.get(request);
+        if (lease != null) {
+            lease.finish(cause);
+            authenticationRequests.remove(request, lease);
+        }
+    }
+
+    private record RequestIdentity(ZLinkStreamHeader header) {
+        @Override
+        public boolean equals(Object other) {
+            return other instanceof RequestIdentity request && header == request.header;
+        }
+
+        @Override
+        public int hashCode() {
+            return System.identityHashCode(header);
         }
     }
 
@@ -176,7 +227,27 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
 
     @Override
     public CompletionStage<Void> close() {
-        return closeAction.get();
+        return shutdownForced.getAsBoolean()
+                ? CompletableFuture.completedFuture(null)
+                : closeAction.get();
+    }
+
+    ZLinkSessionSerialExecutor serials() {
+        return serials;
+    }
+
+    CompletionStage<Void> sendAsync(ZLinkStreamHeader header, List<Message> parts) {
+        return submitTransport(() -> stream.sendAsync(routingId, header, parts));
+    }
+
+    CompletionStage<Void> replyAsync(ZLinkStreamHeader header, List<Message> parts) {
+        return submitTransport(() -> stream.replyAsync(routingId, header, parts));
+    }
+
+    private CompletionStage<Void> submitTransport(Supplier<CompletionStage<Void>> submit) {
+        return shutdownForced.getAsBoolean()
+                ? ZLinkOneWayCalls.oneWayStatus(ZLinkOneWayCalls.SHUTDOWN)
+                : submit.get();
     }
 
     CompletionStage<Void> dispatchStage(
@@ -214,8 +285,8 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
             } finally {
                 if (relayRuntime != null) relayRuntime.exitRelayDispatch();
             }
-        } catch (RuntimeException ex) {
-            stage = CompletableFuture.failedFuture(ex);
+        } catch (RuntimeException | Error failure) {
+            stage = CompletableFuture.failedFuture(failure);
         }
         CompletableFuture<Void> result = new CompletableFuture<>();
         stage.whenComplete(
@@ -310,8 +381,18 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
 
     private void completeDispatch(
             ZLinkStreamHeader header, Throwable error, CompletableFuture<Void> result) {
+        finishAuthenticationRequest(
+                header,
+                error == null
+                        ? ZLinkTerminalWinner.Cause.RESPONSE
+                        : ZLinkTerminalWinner.Cause.FAILURE);
         requestHeadersByFlow.entrySet().removeIf(entry -> entry.getValue() == header);
         claimedReplyHeaders.remove(header);
+        if (shutdownForced.getAsBoolean()) {
+            result.completeExceptionally(
+                    ZLinkOneWayCalls.failureForStatus(ZLinkOneWayCalls.SHUTDOWN));
+            return;
+        }
         if (error != null) {
             completeDispatchError(header, error, result);
             return;
@@ -363,14 +444,29 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
                         });
     }
 
+    void traceShutdown(ZLinkStreamHeader header, Throwable error) {
+        if (unwrap(error) instanceof ZLinkFrameworkException failure
+                && failure.kind() == ZLinkFrameworkErrorKind.SHUTTING_DOWN) {
+            traceDispatchError(header, failure, ZLinkDispatchErrorReason.SHUTDOWN);
+        }
+    }
+
     private void traceDispatchError(ZLinkStreamHeader header, Throwable error) {
         traceDispatchError(header, error, ZLinkDispatchErrorReason.HANDLER_EXCEPTION);
     }
 
     private void traceDispatchError(
             ZLinkStreamHeader header, Throwable error, ZLinkDispatchErrorReason reason) {
-        systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer.TracePoint tracePoint =
-                flow.beginDispatchError();
+        traceDispatchError(flow, routingId, header, error, reason);
+    }
+
+    static void traceDispatchError(
+            ZLinkMessageFlowTracer flow,
+            RoutingId routingId,
+            ZLinkStreamHeader header,
+            Throwable error,
+            ZLinkDispatchErrorReason reason) {
+        ZLinkMessageFlowTracer.TracePoint tracePoint = flow.beginDispatchError();
         if (tracePoint == null) {
             return;
         }
@@ -402,13 +498,18 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
         tracePoint.trace(event.withStreamSessionId(routingId.toHex()));
     }
 
-    private CompletionStage<Void> sendErrorReply(ZLinkStreamHeader requestHeader, Throwable error) {
+    CompletionStage<Void> sendErrorReply(ZLinkStreamHeader requestHeader, Throwable error) {
         try (Message payload = Message.from(ZLinkStreamErrorPayload.encode(error))) {
             ZLinkStreamHeader replyHeader =
                     ZLinkStreamHeader.createErrorResponse(
                             requestHeader, requestHeader.packetName());
-            return submitReplyAsync(replyHeader, payload.toByteArray());
+            return submitReplyAsync(replyHeader, payload.toByteArray())
+                    .thenRun(() -> replyAccepted(requestHeader));
         }
+    }
+
+    void replyAccepted(ZLinkStreamHeader requestHeader) {
+        finishAuthenticationRequest(requestHeader, ZLinkTerminalWinner.Cause.RESPONSE);
     }
 
     private CompletionStage<Void> submitReplyAsync(
@@ -446,7 +547,7 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
             Message payload = Message.from(payloadBytes);
             CompletionStage<Void> submitted;
             try {
-                submitted = stream.replyAsync(routingId, replyHeader, List.of(payload));
+                submitted = replyAsync(replyHeader, List.of(payload));
             } catch (RuntimeException failure) {
                 payload.close();
                 completeExceptionally(failure);

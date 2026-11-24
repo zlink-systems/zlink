@@ -233,11 +233,13 @@ internal sealed record ZLinkObjectReservationRequest(
     ulong TargetNodeLifecycleGeneration,
     ZLinkLocationOwnerToken TargetOwner,
     ReadOnlyMemory<byte> CreatingPayload,
-    ZLinkCapacityVector Capacity,
-    byte? ObjectRelocationPolicy = null
+    ZLinkCapacityVector Capacity
 );
 
-internal sealed record ZLinkCreationAuthorityRecovery(byte? RelocationPolicy);
+internal readonly record struct ZLinkCreationAuthorityRecovery(
+    ZLinkMeshNodeDescriptorKey TargetDescriptor,
+    ulong TargetNodeLifecycleGeneration
+);
 
 internal sealed record ZLinkObjectReservation(
     ZLinkAuthorityKey Key,
@@ -381,7 +383,14 @@ internal sealed record ZLinkAggregatePrepareRequest(
     ZLinkCapacityVector Capacity,
     ZLinkLocationOwnerToken TargetOwner,
     bool AllowPreparingTarget = false
-);
+)
+{
+    internal ZLinkAuthorityRelocation? Relocation { get; init; }
+    internal bool ClearRelocation { get; init; }
+
+    internal ZLinkAuthorityRelocation? ApplyRelocation(ZLinkAuthorityRelocation? current) =>
+        ClearRelocation ? null : Relocation ?? current;
+}
 
 internal readonly record struct ZLinkAggregateFence(Guid AggregateId, ulong AggregateGeneration);
 

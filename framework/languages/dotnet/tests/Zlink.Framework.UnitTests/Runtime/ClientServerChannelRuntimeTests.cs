@@ -17,7 +17,9 @@ using Zlink.Framework.Runtime.Service;
 
 namespace Zlink.Framework.UnitTests;
 
-public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutputHelper output)
+public sealed partial class ClientServerChannelRuntimeTests(
+    Xunit.Abstractions.ITestOutputHelper output
+)
 {
     [Fact]
     public async Task ClientServer_client_stop_closes_pending_hello_wrapper()
@@ -1407,58 +1409,6 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             await send.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.Equal(
                 $"admitted-{iteration}",
-                await server
-                    .GetRequiredService<EchoProbe>()
-                    .Received.Task.WaitAsync(TimeSpan.FromSeconds(5))
-            );
-        }
-        finally
-        {
-            await serverRuntime.StopAsync(CancellationToken.None);
-            await clientRuntime.StopAsync(CancellationToken.None);
-        }
-    }
-
-    [Theory]
-    [InlineData(1)]
-    [InlineData(2)]
-    [InlineData(3)]
-    [InlineData(4)]
-    [InlineData(5)]
-    public async Task ClientSendWaitsBeyondThreeDefaultTimeoutsAndCompletesAfterServerStarts(
-        int iteration
-    )
-    {
-        using var reservation = ReserveBoundTcpPort();
-        var port = ((System.Net.IPEndPoint)reservation.LocalEndPoint!).Port;
-        var endpoint = $"tcp://{AdmissionTestServerHost}:{port}";
-        await using var client = CreateClient(endpoint);
-        await using var server = CreateServer(port, bindHost: AdmissionTestServerHost);
-        var clientRuntime = client.GetRequiredService<ZLinkFrameworkRuntime>();
-        var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
-        await clientRuntime.StartAsync(CancellationToken.None);
-        try
-        {
-            var started = Stopwatch.GetTimestamp();
-            var send = client
-                .GetRequiredService<IZLinkRouteClient>()
-                .SendToChannel("work", new EchoSend($"too-late-{iteration}"))
-                .Async()
-                .AsTask();
-            await Task.Delay(TimeSpan.FromMilliseconds(3100));
-            Assert.False(send.IsCompleted);
-
-            reservation.Dispose();
-            await serverRuntime.StartAsync(CancellationToken.None);
-            var clientTransport = clientRuntime.GetClientServerClientRuntime("work");
-            await WaitUntilAsync(
-                clientTransport,
-                () => clientTransport.ReadyCount == 1,
-                TimeSpan.FromSeconds(10)
-            );
-            await send.WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.Equal(
-                $"too-late-{iteration}",
                 await server
                     .GetRequiredService<EchoProbe>()
                     .Received.Task.WaitAsync(TimeSpan.FromSeconds(5))

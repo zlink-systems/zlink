@@ -333,8 +333,7 @@ final class ZLinkStreamSessionContextStateTest {
                 () -> {
                     closes.incrementAndGet();
                     return CompletableFuture.completedFuture(null);
-                },
-                null);
+                });
     }
 
     private static ZLinkMessageFlowTracer flow() {

@@ -678,7 +678,7 @@ export async function scenario(
         await rejectAdmission(a, outsider, before.roomId);
         await control.replace(before.nodeId);
         const fresh = await pair(create('new-a'), create('new-b'));
-        assert.equal(fresh.nodeId, before.nodeId, 'New Room is not on the replacement match node');
+        assert.equal(fresh.nodeId, before.nodeId, 'New Room is not on the replacement play node (match)');
         await hit(a, b, 2n, Game.initialHp - Game.shotDamage * 2);
         assert.deepEqual(await a.sessionInfo(), sa);
         assert.deepEqual(await b.sessionInfo(), sb);

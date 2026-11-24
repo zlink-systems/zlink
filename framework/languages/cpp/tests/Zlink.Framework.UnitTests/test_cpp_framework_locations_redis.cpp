@@ -3,13 +3,13 @@
 #include <zlink/locations/redis.hpp>
 
 #include "../support/aggregate_page_read_fixture.hpp"
+#include "../support/redis_location_options.hpp"
 
 #include <sw/redis++/redis++.h>
 
 #include <gtest/gtest.h>
 
 #include <chrono>
-#include <cstdlib>
 #include <iterator>
 #include <stdexcept>
 #include <string>
@@ -22,6 +22,8 @@ namespace
 using namespace std::chrono_literals;
 using namespace zlink::framework;
 using namespace zlink::framework::redis;
+using zlink::framework::test::find_redis_options;
+using zlink::framework::test::unique_redis_prefix;
 
 std::vector<std::byte> bytes (std::string_view value)
 {
@@ -29,32 +31,11 @@ std::vector<std::byte> bytes (std::string_view value)
     return {first, first + value.size ()};
 }
 
-std::string unique_prefix ()
+long long command_calls (const std::string &stats, std::string_view command)
 {
-    return "zlink:cpp:opaque-redis-test:"
-           + std::to_string (std::chrono::steady_clock::now ().time_since_epoch ().count ());
-}
-
-// ZLINK_REDIS_TEST_ENDPOINT (host:port) names the one Redis a test run uses in
-// every language (#4542). When it is set an unreachable Redis fails the test;
-// without it the tests try 127.0.0.1:6379 and skip when nothing answers.
-std::optional<redis_location_options_t> find_redis_options ()
-{
-#if defined(ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT)
-    const auto *provided = std::getenv ("ZLINK_REDIS_TEST_ENDPOINT");
-    const std::string endpoint =
-      provided != nullptr && *provided != '\0' ? provided : "127.0.0.1:6379";
-    redis_location_options_t options{.connection_string = "tcp://" + endpoint,
-                                     .key_prefix = unique_prefix ()};
-    redis_location_store_t store (options);
-    location_store_t &provider = store;
-    if (provider.read ({.value = "probe"}).result ().has_value ())
-        return options;
-    if (provided != nullptr && *provided != '\0')
-        throw std::runtime_error ("ZLINK_REDIS_TEST_ENDPOINT is set but Redis is unreachable at "
-                                  + endpoint);
-#endif
-    return std::nullopt;
+    const auto prefix = "cmdstat_" + std::string (command) + ":calls=";
+    const auto offset = stats.find (prefix);
+    return offset == std::string::npos ? 0LL : std::stoll (stats.substr (offset + prefix.size ()));
 }
 
 TEST (ZLinkFrameworkLocationsRedis, AggregatePageReadKeepsSourceVersionUntilCommit)
@@ -104,6 +85,78 @@ TEST (ZLinkFrameworkLocationsRedis, InvalidConfigurationIsRejected)
                                              .key_prefix = "zlink:test",
                                              .operation_timeout = 0ms}),
                   std::invalid_argument);
+}
+
+TEST (ZLinkFrameworkLocationsRedis, ScriptsReuseShaAndRecoverAfterFlush)
+{
+    const auto options = find_redis_options ();
+    if (!options)
+        GTEST_SKIP () << "Redis is not reachable at 127.0.0.1:6379; set ZLINK_REDIS_TEST_ENDPOINT";
+
+    sw::redis::Redis raw (
+      zlink::framework::redis::detail::normalize_connection_string (options->connection_string));
+    zlink::framework::test::scope_exit_t cleanup ([&] {
+        EXPECT_NO_THROW ({
+            std::vector<std::string> keys;
+            raw.keys (options->key_prefix + ":*", std::back_inserter (keys));
+            if (!keys.empty ())
+                raw.del (keys.begin (), keys.end ());
+        });
+    });
+    redis_location_store_t location_provider (*options);
+    redis_relocation_store_t relocation_provider (
+      {.connection_string = options->connection_string, .key_prefix = options->key_prefix});
+    location_store_t &location = location_provider;
+    relocation_store_t &relocation = relocation_provider;
+    const store_key_t key{"authority:script-cache"};
+    const auto payload = bytes ("payload");
+
+    const auto exercise_scripts = [&] (int expected_version) {
+        const auto written =
+          location.write ({{}, {store_put_t{key, payload, 30s}}}).result ().value ();
+        const auto *applied = std::get_if<store_write_applied_t> (&written);
+        ASSERT_NE (applied, nullptr);
+        ASSERT_EQ (applied->put_versions.size (), 1u);
+        EXPECT_EQ (applied->put_versions.front ().version.value, std::to_string (expected_version));
+
+        const auto read = location.read (key).result ().value ();
+        const auto *found = std::get_if<store_found_t> (&read);
+        ASSERT_NE (found, nullptr);
+        EXPECT_EQ (found->value.bytes, payload);
+        const auto scan =
+          location.scan ({.prefix = "authority:", .cursor = std::nullopt, .limit = 10})
+            .result ()
+            .value ();
+        const auto *page = std::get_if<store_scan_page_t> (&scan);
+        ASSERT_NE (page, nullptr);
+        ASSERT_EQ (page->items.size (), 1u);
+        EXPECT_EQ (page->items.front ().value.version.value, std::to_string (expected_version));
+
+        const auto put = relocation.put ({"script-cache"}, payload, 30s).result ().value ();
+        EXPECT_TRUE (expected_version == 1 ? std::holds_alternative<blob_stored_t> (put)
+                                           : std::holds_alternative<blob_already_stored_t> (put));
+    };
+    const auto check_command_calls = [&] (const char *phase, int first_version, int count,
+                                          long long expected_eval_calls) {
+        SCOPED_TRACE (phase);
+        const auto before = raw.info ("commandstats");
+        for (int version = first_version; version < first_version + count; ++version)
+            exercise_scripts (version);
+        const auto after = raw.info ("commandstats");
+        const auto evalsha_calls =
+          command_calls (after, "evalsha") - command_calls (before, "evalsha");
+        const auto eval_calls = command_calls (after, "eval") - command_calls (before, "eval");
+        RecordProperty (std::string (phase) + "_evalsha", static_cast<int> (evalsha_calls));
+        RecordProperty (std::string (phase) + "_eval", static_cast<int> (eval_calls));
+        EXPECT_EQ (evalsha_calls, 4 * count);
+        EXPECT_EQ (eval_calls, expected_eval_calls);
+    };
+
+    raw.script_flush ();
+    check_command_calls ("cold", 1, 1, 4);
+    check_command_calls ("warm", 2, 3, 0);
+    raw.script_flush ();
+    check_command_calls ("flushed", 5, 1, 4);
 }
 
 TEST (ZLinkFrameworkLocationsRedis, OpaqueLocationStoreProvidesAtomicCasAndScan)
@@ -228,6 +281,7 @@ TEST (ZLinkFrameworkLocationsRedis, PointReadRejectsCorruptedFormatTag)
                        .result ()
                        .value ();
     ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (put));
+    ASSERT_TRUE (std::holds_alternative<store_found_t> (provider.read (key).result ().value ()));
 
     sw::redis::Redis raw (
       zlink::framework::redis::detail::normalize_connection_string (options->connection_string));
@@ -242,10 +296,14 @@ TEST (ZLinkFrameworkLocationsRedis, PointReadRejectsCorruptedFormatTag)
     raw.zrem (physical_key, scored[0].first);
     raw.zadd (physical_key, corrupted, scored[0].second + 1.0);
 
+    const auto before = raw.info ("commandstats");
     const auto reread = provider.read (key).result ();
+    const auto after = raw.info ("commandstats");
     EXPECT_FALSE (reread.has_value ())
       << "a corrupted (non-0x01) format tag must fail explicitly, not be "
          "silently decoded";
+    EXPECT_EQ (command_calls (after, "evalsha") - command_calls (before, "evalsha"), 1);
+    EXPECT_EQ (command_calls (after, "eval") - command_calls (before, "eval"), 0);
 #else
     GTEST_SKIP () << "built without the async redis client";
 #endif
