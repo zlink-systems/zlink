@@ -62,7 +62,10 @@ Actor와 session을 묶으면 수명이 다른 연결과 Actor가 서로 이어�
 !!! note "받는 쪽 process"
 
     이 절의 코드는 [STREAM](23-stream.ko.md)에서 stream node를 등록한 process에 들어간다.
-    **등록할 때 actor dispatch를 켜 두어야** 이 장의 relay가 동작한다.
+    **등록할 때 actor dispatch를 켜 두어야** 이 장의 relay가 동작한다. STREAM만 받는 session node는
+    같은 process에 **Object Client 역할의 MeshNode**(play node와 같은 mesh·같은 Location Store)도
+    등록해야 한다. 없으면 시작 검증이 실패한다. 세 node(session·play·api) 등록 예시와 session
+    node로 보낼 지연 응답의 경로는 [개요 §5.1 세션 노드](01-overview.ko.md#51-세션-노드)에 있다.
 
 ### 3.1 묶기
 
