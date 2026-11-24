@@ -2180,7 +2180,8 @@ var ZlinkStreamConnectorBundle = (() => {
       __publicField(this, "attempts", /* @__PURE__ */ new Map());
     }
     submit(options) {
-      const { packetName, signal } = options;
+      const packetName = options.packetName;
+      const signal = options.signal;
       const timeoutMs = Number.isFinite(options.timeoutMs) ? Math.max(1, options.timeoutMs) : 1;
       const writeLifetime = new AbortController();
       let requestSeq;
@@ -2954,7 +2955,10 @@ var ZlinkStreamConnectorBundle = (() => {
       queue.failAll(error);
     }
     write(connection, frame, options = {}) {
-      const { signal, beforeWrite, onAccepted, onFailure } = options;
+      const signal = options.signal;
+      const beforeWrite = options.beforeWrite;
+      const onAccepted = options.onAccepted;
+      const onFailure = options.onFailure;
       throwIfAborted(signal);
       const queue = this.queues.get(connection);
       if (queue === void 0) {

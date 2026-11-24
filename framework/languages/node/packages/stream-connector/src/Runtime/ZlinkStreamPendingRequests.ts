@@ -35,7 +35,9 @@ export class ZlinkStreamPendingRequests {
   private readonly attempts = new Map<bigint, PendingRequest>();
 
   submit(options: PendingRequestOptions): Promise<Reply> {
-    const { packetName, signal } = options;
+    // Property reads, not destructuring: emscripten JSDCE deletes destructuring declarations.
+    const packetName = options.packetName;
+    const signal = options.signal;
     const timeoutMs = Number.isFinite(options.timeoutMs) ? Math.max(1, options.timeoutMs) : 1;
     const writeLifetime = new AbortController();
     let requestSeq: bigint | undefined;

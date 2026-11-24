@@ -219,7 +219,11 @@ export class ZlinkStreamFrameSender {
     frame: Uint8Array,
     options: ZlinkStreamWriteOptions = {}
   ): Promise<void> {
-    const { signal, beforeWrite, onAccepted, onFailure } = options;
+    // Property reads, not destructuring: emscripten JSDCE deletes destructuring declarations.
+    const signal = options.signal;
+    const beforeWrite = options.beforeWrite;
+    const onAccepted = options.onAccepted;
+    const onFailure = options.onFailure;
     throwIfAborted(signal);
     const queue = this.queues.get(connection);
     if (queue === undefined) {
