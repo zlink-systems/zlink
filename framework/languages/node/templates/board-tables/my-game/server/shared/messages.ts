@@ -129,6 +129,9 @@ export class RoomPrepared {
     readonly ok: boolean
   ) {}
 }
+export class RoomClosed {
+  constructor(readonly assignmentId: string) {}
+}
 export class MatchAssigned {
   constructor(
     readonly ticketId: string,

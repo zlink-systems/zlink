@@ -85,6 +85,8 @@ export const PacketNames = {
   matchAssigned: 'MatchAssigned',
   enterReport: 'EnterReport',
   prepareRoom: 'PrepareRoom',
+  roomPrepared: 'RoomPrepared',
+  roomClosed: 'RoomClosed',
   roomAdmission: 'RoomAdmission',
   tableAdmission: 'TableAdmission',
   commitRoom: 'CommitRoom',

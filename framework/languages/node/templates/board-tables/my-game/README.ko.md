@@ -2,14 +2,15 @@
 
 [English](README.md)
 
-Session node, Play 역할의 Table node, Pool Spot을 맡는 Matchmaker node, Actor DB를 맡는 API node로 구성한다. 플레이어는 매치메이킹을 요청하거나 테이블 ID로 입장할 수 있다. TypeScript E2E client는 공개 stream connector로 매치메이킹, 게임 진행, 재접속, node 교체를 확인한다. 게임 규칙을 추가할 때는 [개발 가이드](AGENTS.md)의 확장 위치를 따른다.
+Session node, Play 역할의 Table node, Pool Instance Spot을 맡는 Matchmaker node, Actor DB를 맡는 API node로 구성한다. 플레이어는 매치메이킹을 요청하거나 테이블 ID로 입장할 수 있다. TypeScript E2E client는 공개 stream connector로 매치메이킹, 게임 진행, 재접속, node 교체를 확인한다. 게임 규칙을 추가할 때는 [개발 가이드](AGENTS.md)의 확장 위치를 따른다.
 
 ```mermaid
 flowchart LR
     players[플레이어] -->|STREAM| session[Session node]
     session -->|relay| table[Play / Table node ×N]
-    table -->|MatchRequest와 EnterReport| matchmaker[Matchmaker node / Pool Spot]
+    table -->|MatchRequest와 EnterReport| matchmaker[Matchmaker node / Pool Instance Spot]
     matchmaker -->|PrepareRoom과 CommitRoom| table
+    table -->|RoomPrepared 응답| matchmaker
     table -->|ClientServer Channel| api[API node / Actor DB]
     api -->|플레이어 기록| location[(Redis)]
     table -->|Location / lease| location
@@ -67,7 +68,7 @@ TypeScript를 컴파일하고 메시지 DTO에서 Framework의 기본 typed JSON
 
 `FindMatch{playerId}`를 보내면 `MatchQueued{ticketId}`를 받는다. 두 플레이어는 같은 `roomId`와 서로 다른 좌석을 받는다. 대기열에서 나가려면 `CancelMatch{ticketId}`를 보내고 `MatchCancelled{ticketId, reason}`을 받는다. 매칭으로 입장한 뒤에는 직접 입장과 같은 게임 메시지를 사용한다.
 
-Matchmaker node의 Pool Spot ID는 `pool-board`다. Pool은 Spot-wide turn에서 오래 기다린 두 플레이어를 선택하고 방을 확정하거나 철회한다. Table node는 생성된 방과 Player Actor를 호스트하며, 준비 중인 방에는 배정에 명시된 플레이어만 받아들인다. Pool은 요청이 들어올 때와 500ms마다 대기열을 확인한다. 두 플레이어는 10초 안에 입장 성공을 보고해야 한다. 연결이 끊긴 채 15초가 지나면 `disconnected`, 대기가 120초를 넘기면 `expired`로 티켓을 취소한다.
+Matchmaker node는 Pool Instance Spot factory를 등록한다. Play node는 `pool-board`를 Instance Spot으로 지정하며, 첫 요청이 Pool을 활성화한다. Pool은 요청이 들어올 때와 500ms마다 대기열을 확인하고 가장 오래 기다린 두 티켓을 준비 중인 배정에 묶는다. 방 생성과 `PrepareRoom` 요청은 Pool turn 밖에서 진행한다. Pool은 `RoomPrepared` 메시지로 결과를 받아, 성공하면 배정을 입장 대기로 바꾸고 두 Player에 `MatchAssigned`를 보낸다. 준비에 실패하거나 기한이 지나면 티켓을 대기열로 돌려보낸다. 두 플레이어는 배정 시점부터 10초 안에 입장 성공을 보고해야 한다. Table은 배정에 명시된 플레이어만 받아들인다. Pool은 연결이 끊긴 채 15초가 지나면 `disconnected`, 대기 시간이 120초에 이르면 `expired`로 대기 티켓을 취소한다.
 
 ### 플레이어 기록
 
@@ -221,4 +222,4 @@ node --test dist/e2e/domain.test.js
 
 runner는 `windowsHide: true`로 자식 프로세스를 실행한다. Windows에서는 PowerShell 7이나 CMD 래퍼를 사용한다. 프로젝트는 native addon을 사용하므로 설치 전에 Node 버전과 CPU 아키텍처가 지원 범위에 있는지 확인한다. npm 설치는 템플릿 디렉터리에서 공개 registry를 사용한다.
 
-격리 E2E runner는 공개 Table stable-type 제한 `tableCapacity`에 선택한 시나리오에서 `persist`를 제외한 수를 지정한다. `update`에 앞선 시나리오가 각각 테이블을 남기므로 기존 node를 drain하면 남은 프로세스가 용량 한도에 도달한다. 교체 프로세스가 새 테이블을 호스트하고 두 플레이어가 그 node ID를 확인한다. 배포에서 용량 값을 생략하거나 0으로 지정하면 한도를 두지 않는다. Entry Spot은 Table node에, 고정 Pool User Spot은 Matchmaker node에 위치한다.
+격리 E2E runner는 공개 Table stable-type 제한 `tableCapacity`에 선택한 시나리오에서 `persist`를 제외한 수를 지정한다. `update`에 앞선 시나리오가 각각 테이블을 남기므로 기존 node를 drain하면 남은 프로세스가 용량 한도에 도달한다. 교체 프로세스가 새 테이블을 호스트하고 두 플레이어가 그 node ID를 확인한다. 배포에서 용량 값을 생략하거나 0으로 지정하면 한도를 두지 않는다. Entry Spot은 Table node에, 고정 Pool Instance Spot은 Matchmaker node에 위치한다.

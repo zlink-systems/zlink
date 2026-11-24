@@ -8,6 +8,8 @@ import type {
   MatchQueued,
   MatchRequest,
   ReturnReport,
+  RoomClosed,
+  RoomPrepared,
   RoomWithdrawn
 } from '../shared/messages';
 import { Pool } from './pool';
@@ -50,6 +52,20 @@ export class ReportEntry {
 @zlinkSpotPacketHandler({ spot: () => Pool, packetName: PacketNames.returnReport })
 export class ReportReturn {
   async handle(spot: Pool, report: ReturnReport): Promise<void> {
-    await spot.returned(report);
+    spot.returned(report);
+  }
+}
+
+@zlinkSpotPacketHandler({ spot: () => Pool, packetName: PacketNames.roomPrepared })
+export class ReportPreparation {
+  async handle(spot: Pool, message: RoomPrepared): Promise<void> {
+    await spot.roomPrepared(message);
+  }
+}
+
+@zlinkSpotPacketHandler({ spot: () => Pool, packetName: PacketNames.roomClosed })
+export class ReportRoomClosure {
+  async handle(spot: Pool, message: RoomClosed): Promise<void> {
+    spot.roomClosed(message);
   }
 }

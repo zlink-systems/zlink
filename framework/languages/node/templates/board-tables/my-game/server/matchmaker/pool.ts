@@ -1,15 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { Inject, Injectable, Scope } from '@nestjs/common';
-import { ZLINK_ACTOR_CLIENT, ZLINK_SPOT_MANAGER } from '@zlink-systems/nestjs';
+import { ZLINK_ACTOR_CLIENT, ZLINK_SPOT_OUTBOUND, ZLINK_SPOT_MANAGER } from '@zlink-systems/nestjs';
 import {
   ZLinkSpotCreateState,
-  type ZLinkActor,
   type ZLinkActorClient,
-  type ZLinkSpot,
-  type ZLinkSpotContext,
+  type ZLinkInstanceSpot,
+  type ZLinkInstanceSpotContext,
+  type ZLinkSpotOutbound,
   type ZLinkSpotManager,
-  type SpotRef,
   type ZLinkSpotRelocationAdapter,
   type ZLinkSpotTimerHandler
 } from '@zlink-systems/framework';
@@ -21,13 +20,14 @@ import {
   MatchQueued,
   MatchReleased,
   PrepareRoom,
+  RoomClosed,
+  RoomPrepared,
   WithdrawRoom,
   type CancelTicket,
   type EnterReport,
   type MatchPresence,
   type MatchRequest,
   type ReturnReport,
-  type RoomPrepared,
   type RoomWithdrawn
 } from '../shared/messages';
 import {
@@ -39,23 +39,16 @@ import {
 } from './domain/queue';
 
 @Injectable({ scope: Scope.TRANSIENT })
-export class Pool implements ZLinkSpot {
-  readonly context!: ZLinkSpotContext<ZLinkActor, Pool>;
+export class Pool implements ZLinkInstanceSpot {
+  readonly context!: ZLinkInstanceSpotContext;
   readonly tickets = new Map<string, Ticket>();
   readonly assignments = new Map<string, Assignment>();
 
   constructor(
     @Inject(ZLINK_SPOT_MANAGER) private readonly spots: ZLinkSpotManager,
-    @Inject(ZLINK_ACTOR_CLIENT) private readonly actors: ZLinkActorClient
+    @Inject(ZLINK_ACTOR_CLIENT) private readonly actors: ZLinkActorClient,
+    @Inject(ZLINK_SPOT_OUTBOUND) private readonly outbound: ZLinkSpotOutbound
   ) {}
-
-  async onActorJoin() {
-    return { accepted: false };
-  }
-
-  async onJoinedActor(): Promise<void> {}
-
-  async onLeaveActor(): Promise<void> {}
 
   configure(): void {
     this.context.handlers.addTimerHandler(PoolTick);
@@ -114,63 +107,83 @@ export class Pool implements ZLinkSpot {
 
   async advance(): Promise<void> {
     const now = performance.now();
+    for (const assignment of this.assignments.values()) {
+      if (decide(assignment, now) !== 'withdraw') continue;
+      if (assignment.state.phase === 'preparing') this.release(assignment);
+      else await this.withdraw(assignment);
+    }
     for (const ticket of this.tickets.values()) {
       const reason = waitingCancellation(ticket, now);
       if (reason) await this.expire(ticket, reason);
     }
-    for (const assignment of this.assignments.values()) {
-      if (!assignment.withdrawal && decide(assignment, now) === 'withdraw')
-        await this.withdraw(assignment);
-    }
     const members = waitingPair(this.tickets.values());
-    if (members) await this.prepare(members, now);
+    if (members) this.prepare(members, now);
   }
 
-  private async prepare(members: [Ticket, Ticket], now: number): Promise<void> {
+  private prepare(members: [Ticket, Ticket], now: number): void {
     const id = Names.matchRoomPrefix + randomUUID();
-    const deadline = now + Matchmaking.entryMs;
-    const assignment: Assignment = { id, deadline, members, entered: [], returned: [] };
+    const assignment: Assignment = {
+      id,
+      deadline: now + Matchmaking.entryMs,
+      members,
+      entered: [],
+      returned: [],
+      state: { phase: 'preparing' }
+    };
     for (const ticket of members) ticket.assignmentId = id;
     this.assignments.set(id, assignment);
-    let room: SpotRef | undefined;
-    let prepared: boolean;
+    void this.provisionRoom(
+      new PrepareRoom(
+        id,
+        members.map((ticket) => ticket.playerId)
+      )
+    ).catch(console.error);
+  }
+
+  // This operation carries only the request. The result returns through the Pool's handler.
+  private async provisionRoom(request: PrepareRoom): Promise<void> {
+    const id = request.assignmentId;
+    let ok = false;
     try {
       const created = await this.spots.getOrCreate(id, Names.table).inMesh(Names.mesh).submit();
-      if (created.state === ZLinkSpotCreateState.Rejected) {
-        this.releaseUnassigned(assignment);
-        return;
+      if (created.state !== ZLinkSpotCreateState.Rejected) {
+        const reply = await this.outbound.requestToSpot(id, request).submit<RoomPrepared>();
+        ok = reply.ok && reply.assignmentId === id;
       }
-      room = created.spot;
-      const reply = await this.context.outbound
-        .requestToSpot(
-          id,
-          new PrepareRoom(
-            id,
-            members.map((ticket) => ticket.playerId)
-          )
-        )
-        .submit<RoomPrepared>();
-      prepared = reply.ok && reply.assignmentId === id && performance.now() < deadline;
     } catch (error) {
-      this.releaseUnassigned(assignment);
-      if (room) await this.spots.close(room);
-      throw error;
+      console.error('Room preparation failed', id, error);
     }
-    if (!prepared) {
-      this.releaseUnassigned(assignment);
-      await this.spots.close(room);
+    await this.outbound
+      .sendToSpot(Names.poolKey, new RoomPrepared(id, ok))
+      .instanceSpot(Names.pool)
+      .submit();
+  }
+
+  async roomPrepared(message: RoomPrepared): Promise<void> {
+    const assignment = this.assignments.get(message.assignmentId);
+    if (assignment && assignment.state.phase !== 'preparing') return;
+    if (!assignment || !message.ok || decide(assignment, performance.now()) === 'withdraw') {
+      if (assignment) this.release(assignment);
+      void this.closeRoom(message.assignmentId).catch(console.error);
       return;
     }
-    for (const ticket of members) {
+    assignment.state = { phase: 'entering' };
+    for (const ticket of assignment.members) {
       await this.actors
-        .sendToActor(ticket.playerId, new MatchAssigned(ticket.ticketId, id, id))
+        .sendToActor(
+          ticket.playerId,
+          new MatchAssigned(ticket.ticketId, assignment.id, assignment.id)
+        )
         .submit();
     }
   }
 
-  private releaseUnassigned(assignment: Assignment): void {
+  private release(assignment: Assignment): void {
     this.assignments.delete(assignment.id);
-    for (const ticket of assignment.members) delete ticket.assignmentId;
+    for (const ticket of assignment.members) {
+      delete ticket.assignmentId;
+      if (assignment.state.phase !== 'preparing') this.tickets.delete(ticket.playerId);
+    }
   }
 
   async report(report: EnterReport): Promise<void> {
@@ -179,7 +192,7 @@ export class Pool implements ZLinkSpot {
     if (
       !assignment ||
       !ticket ||
-      assignment.withdrawal ||
+      assignment.state.phase !== 'entering' ||
       assignment.entered.includes(ticket.playerId)
     )
       return;
@@ -191,8 +204,7 @@ export class Pool implements ZLinkSpot {
     }
     if (decision === 'commit') {
       await this.context.outbound.sendToSpot(assignment.id, new CommitRoom(assignment.id)).submit();
-      this.assignments.delete(assignment.id);
-      for (const ticket of assignment.members) this.tickets.delete(ticket.playerId);
+      this.release(assignment);
     }
   }
 
@@ -203,13 +215,13 @@ export class Pool implements ZLinkSpot {
         : assignment.members
             .filter((ticket) => ticket.playerId !== failedPlayer)
             .map((ticket) => ticket.playerId);
-    assignment.withdrawal = { requeue };
+    assignment.state = { phase: 'withdrawing', requeue };
     await this.context.outbound.sendToSpot(assignment.id, new WithdrawRoom(assignment.id)).submit();
   }
 
   async roomWithdrawn(message: RoomWithdrawn): Promise<void> {
     const assignment = this.assignments.get(message.assignmentId);
-    if (!assignment?.withdrawal) return;
+    if (assignment?.state.phase !== 'withdrawing') return;
     for (const ticket of assignment.members)
       await this.actors
         .sendToActor(
@@ -217,29 +229,49 @@ export class Pool implements ZLinkSpot {
           new MatchReleased(
             ticket.ticketId,
             assignment.id,
-            assignment.withdrawal.requeue.includes(ticket.playerId)
+            assignment.state.requeue.includes(ticket.playerId)
           )
         )
         .submit();
   }
 
-  async returned(report: ReturnReport): Promise<void> {
+  returned(report: ReturnReport): void {
     const assignment = this.assignments.get(report.assignmentId);
     const ticket = assignment?.members.find((member) => member.ticketId === report.ticketId);
-    if (!assignment?.withdrawal || !ticket || assignment.returned.includes(ticket.playerId)) return;
+    if (
+      assignment?.state.phase !== 'withdrawing' ||
+      !ticket ||
+      assignment.returned.includes(ticket.playerId)
+    )
+      return;
     assignment.returned.push(ticket.playerId);
-    if (assignment.returned.length !== assignment.members.length) return;
-    const room = await this.spots.find(assignment.id);
-    if (room && !(await this.spots.close(room))) throw new Error('Withdrawn room still occupied');
-    this.assignments.delete(assignment.id);
+    if (assignment.returned.length === assignment.members.length)
+      void this.closeWithdrawnRoom(assignment.id).catch(console.error);
+  }
+
+  private async closeRoom(id: string): Promise<void> {
+    const room = await this.spots.find(id);
+    if (room && !(await this.spots.close(room))) throw new Error(`Room still occupied: ${id}`);
+  }
+
+  private async closeWithdrawnRoom(id: string): Promise<void> {
+    await this.closeRoom(id);
+    await this.outbound
+      .sendToSpot(Names.poolKey, new RoomClosed(id))
+      .instanceSpot(Names.pool)
+      .submit();
+  }
+
+  roomClosed(message: RoomClosed): void {
+    const assignment = this.assignments.get(message.assignmentId);
+    if (assignment?.state.phase !== 'withdrawing') return;
+    const { requeue } = assignment.state;
+    this.release(assignment);
+    if (!requeue.length) return;
     const waiting = new Map(this.tickets);
     this.tickets.clear();
     for (const member of assignment.members) {
-      waiting.delete(member.playerId);
-      if (assignment.withdrawal.requeue.includes(member.playerId)) {
-        delete member.assignmentId;
-        this.tickets.set(member.playerId, member);
-      }
+      if (requeue.includes(member.playerId)) this.tickets.set(member.playerId, member);
     }
     for (const [playerId, entry] of waiting) this.tickets.set(playerId, entry);
   }

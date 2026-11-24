@@ -23,7 +23,7 @@ Details: [Stateful game nodes and the HTTP lobby](https://docs.zlink.systems/nod
 
 ## Project overview
 
-This Node.js 22 (TypeScript, NestJS) project is a board-table game server example in which players queue for a match or join a table by ID, play hands, and reconnect to the same seat. It runs a Session gateway, a Matchmaker node that hosts the Pool Spot, Table nodes A and B that host Table Spots and Player Actors, and an API node that stores player records in the same Redis deployment used for location and relocation. `package.json` pins the ZLink Framework and connector packages to `0.34.0`.
+This Node.js 22 (TypeScript, NestJS) project is a board-table game server example in which players queue for a match or join a table by ID, play hands, and reconnect to the same seat. It runs a Session gateway, a Matchmaker node that hosts the Pool Instance Spot, Table nodes A and B that host Table Spots and Player Actors, and an API node that stores player records in the same Redis deployment used for location and relocation. `package.json` pins the ZLink Framework and connector packages to `0.34.0`.
 
 The project layout and feature procedure below describe where to add gameplay. The [README](README.md) covers prerequisites, local execution, and deployment. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 
@@ -67,7 +67,7 @@ For host process debugging, install Node.js 22 or later and npm, then add `--loc
 
 ### Matchmaker
 
-`server/matchmaker/main.ts` registers the Pool factory and starts the fixed `pool-board` Spot. The Entry handler queues a Player; the Pool selects the oldest waiting pair, prepares a Table, and commits after receiving both players' admission reports. The Pool also decides when to withdraw an assignment or remove a waiting ticket. The Pool holds a disconnected waiting player’s ticket for 15 seconds. A reserved ticket remains subject to the 10-second entry deadline. A waiting ticket expires after 120 seconds. The Table checks the assigned members and owns game state. Player Actors retain their own matchmaking state across moves.
+`server/matchmaker/main.ts` registers the Pool Instance Spot factory. Play nodes address `pool-board` with `.instanceSpot(Names.pool)`, and the first request activates it. The Pool reserves the oldest waiting pair in a preparing assignment. Room creation and the `PrepareRoom` request run outside the Pool turn. When a `RoomPrepared` message reaches the Pool, it either releases the tickets or moves the assignment to awaiting entry and sends `MatchAssigned` to both Players. The Pool commits after both admission reports and decides when to withdraw an assignment or cancel a waiting ticket. A reserved ticket is subject to the 10-second entry deadline. A waiting ticket expires after 120 seconds or after 15 seconds disconnected. The Table checks the assigned members and owns game state. Player Actors retain their matchmaking state across moves.
 
 MatchRule in `server/matchmaker/domain/` owns pair selection. Extend it to consider ratings, and apply a competitive acceptance step in the Pool before commitment.
 

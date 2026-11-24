@@ -98,7 +98,7 @@ export function checkStructure(path = 'zlink.structure.json'): void {
   for (const spot of spots) {
     const role = owner(spot.owner).role;
     if (role === 'matchmaker') {
-      assert.equal(spot.kind, 'user');
+      assert.equal(spot.kind, 'instance');
       assert.equal(spot.type, Names.pool);
       assert.equal(spot.logicalId, Names.poolKey);
       assert(!('dynamic' in spot) || spot.dynamic === false);

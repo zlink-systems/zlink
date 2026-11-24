@@ -16,7 +16,10 @@ export interface Assignment {
   members: [Ticket, Ticket];
   entered: string[];
   returned: string[];
-  withdrawal?: { requeue: string[] };
+  state:
+    | { phase: 'preparing' }
+    | { phase: 'entering' }
+    | { phase: 'withdrawing'; requeue: string[] };
 }
 
 export type Decision = 'commit' | 'withdraw';
@@ -43,7 +46,9 @@ export function waitingCancellation(ticket: Ticket, now: number): string | undef
 }
 
 export function decide(assignment: Assignment, now: number, failed = false): Decision | undefined {
-  if (failed || now >= assignment.deadline) return 'withdraw';
+  if (assignment.state.phase === 'withdrawing') return undefined;
+  if (now >= assignment.deadline || failed) return 'withdraw';
+  if (assignment.state.phase === 'preparing') return undefined;
   if (assignment.entered.length === assignment.members.length) return 'commit';
   return undefined;
 }

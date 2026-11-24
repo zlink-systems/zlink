@@ -94,7 +94,7 @@
     },
     {
       "id": "pool",
-      "kind": "user",
+      "kind": "instance",
       "type": "Pool",
       "owner": "matchmaker",
       "logicalId": "pool-board"

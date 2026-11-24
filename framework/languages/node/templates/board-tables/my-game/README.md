@@ -2,14 +2,15 @@
 
 [한국어](README.ko.md)
 
-This project runs a Session node, Table nodes, a Matchmaker node with the Pool Spot, and an API node with the Actor DB. Players can queue for a match or join a table by ID. A TypeScript e2e client uses the public stream connector to verify matching, the game, reconnection, and node replacement. Add game rules at the extension points described in [AGENTS.md](AGENTS.md).
+This project runs a Session node, Table nodes, a Matchmaker node with the Pool Instance Spot, and an API node with the Actor DB. Players can queue for a match or join a table by ID. A TypeScript e2e client uses the public stream connector to verify matching, the game, reconnection, and node replacement. Add game rules at the extension points described in [AGENTS.md](AGENTS.md).
 
 ```mermaid
 flowchart LR
     players[Players] -->|STREAM| session[Session node]
     session -->|relay| table[Play / Table node ×N]
-    table -->|MatchRequest and EnterReport| matchmaker[Matchmaker node / Pool Spot]
+    table -->|MatchRequest and EnterReport| matchmaker[Matchmaker node / Pool Instance Spot]
     matchmaker -->|PrepareRoom and CommitRoom| table
+    table -->|RoomPrepared reply| matchmaker
     table -->|ClientServer Channel| api[API node / Actor DB]
     api -->|Player records| location[(Redis)]
     table -->|Location / lease| location
@@ -65,7 +66,7 @@ The first application packet is `JoinTableRequest{playerId, tableId}` for direct
 
 Send `FindMatch{playerId}` and receive `MatchQueued{ticketId}`. Once both players enter the assigned table, each receives `MatchFound{ticketId, roomId, seat}` followed by `TableView`. The two players receive the same `roomId` and different seats. Send `CancelMatch{ticketId}` while waiting to receive `MatchCancelled{ticketId, reason}`. Use the same gameplay messages as for direct join.
 
-The Matchmaker node hosts the Pool Spot `pool-board`. Its Spot-wide turn selects the two longest-waiting players and decides whether to commit or withdraw their assignment. Table nodes host the dynamically created rooms and Player Actors. A prepared room admits only the players named in the assignment. The Pool checks the queue on arrival and every 500 ms. Both players must report successful entry within 10 seconds. The Pool cancels a waiting ticket after 15 seconds disconnected (`disconnected`) or 120 seconds in the queue (`expired`).
+The Matchmaker node registers the Pool Instance Spot factory. Play nodes address `pool-board` as an Instance Spot, and the first request activates it. The Pool checks the queue on arrival and every 500 ms. It reserves the two longest-waiting tickets in a preparing assignment. Room creation and the `PrepareRoom` request run outside the Pool turn. A `RoomPrepared` message returns the outcome to the Pool, which moves a successful assignment to awaiting entry and sends `MatchAssigned` to both Players. A failed or expired preparation releases the tickets back to the queue. Both players must report successful entry within 10 seconds of reservation. The Table admits only the assigned players. The Pool cancels a waiting ticket after 15 seconds disconnected (`disconnected`) or 120 seconds in the queue (`expired`).
 
 ### Player records
 
@@ -223,4 +224,4 @@ When extending, follow the public API boundaries and state ownership rules in [A
 
 The runner starts child processes with `windowsHide: true`. Run it in PowerShell 7; no Unix shell is required. The project includes a native addon, so check the Node support range and the CPU architecture. The project does not use an npm install at the repository root or a local package feed.
 
-The isolated e2e runner sets each Table node's optional `tableCapacity` to the number of selected scenarios excluding `persist` through the public Table stable-type limit. Each scenario before update retains one table. After update drains the source, the surviving node is at capacity, so the replacement hosts the new table. Both new players must observe the replacement node ID. Omitted or zero capacity leaves deployment capacity unlimited. Entry Spots run on the Table nodes, and the fixed Pool User Spot runs on the Matchmaker node.
+The isolated e2e runner sets each Table node's optional `tableCapacity` to the number of selected scenarios excluding `persist` through the public Table stable-type limit. Each scenario before update retains one table. After update drains the source, the surviving node is at capacity, so the replacement hosts the new table. Both new players must observe the replacement node ID. Omitted or zero capacity leaves deployment capacity unlimited. Entry Spots run on the Table nodes, and the fixed Pool Instance Spot runs on the Matchmaker node.
