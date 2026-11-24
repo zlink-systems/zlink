@@ -5,21 +5,23 @@ import java.net.URI
 import java.net.http.*
 import java.time.Duration
 import java.util.UUID
-import kotlinx.coroutines.delay
 import kotlin.math.hypot
+import kotlinx.coroutines.delay
 import systems.zlink.framework.kotlin.await
 
 private const val WALL_CENTER_Y = (Rules.WALL_MIN_Y + Rules.WALL_MAX_Y) / 2
 
-suspend fun scenario(id: String, nodes: Nodes) {
+suspend fun scenario(id: String, target: ScenarioTarget) {
     val suffix = UUID.randomUUID().toString()
     val playerA = "p1-$suffix"
     val playerB = "p2-$suffix"
-    val assignment = match(nodes, playerA, playerB)
+    val assignment = match(target, playerA, playerB)
     check(Regex("${Names.ROOM_PREFIX}[0-9a-f]{32}").matches(assignment.roomId)) {
         "Lobby returned an invalid Room ID"
     }
-    check(assignment.sessionEndpoint == nodes.endpoint) { "Lobby returned another Session endpoint" }
+    check(assignment.sessionEndpoint == target.endpoint) {
+        "Lobby returned another Session endpoint"
+    }
 
     val a = Client(assignment.sessionEndpoint, playerA, assignment.roomId)
     val b = Client(assignment.sessionEndpoint, playerB, assignment.roomId)
@@ -27,7 +29,9 @@ suspend fun scenario(id: String, nodes: Nodes) {
         a.connect()
         b.connect()
         val initial = both(a, b) { it.players.size == Rules.PLAYERS }
-        check(initial.roomId == assignment.roomId && initial.players.all { it.hp == Rules.INITIAL_HP })
+        check(
+            initial.roomId == assignment.roomId && initial.players.all { it.hp == Rules.INITIAL_HP }
+        )
         check(initial.phase == Rules.PLAYING && initial.winner == null) { "Initial phase differs" }
         check(initial.players.all { it.lastSequence == 0L }) { "Initial action sequence differs" }
         check(
@@ -35,7 +39,9 @@ suspend fun scenario(id: String, nodes: Nodes) {
                 setOf(Rules.SPAWN_AX to Rules.SPAWN_AY, Rules.SPAWN_BX to Rules.SPAWN_BY) &&
                 initial.players.any { it.x < Rules.WALL_X } &&
                 initial.players.any { it.x > Rules.WALL_X }
-        ) { "Server-selected spawn positions differ" }
+        ) {
+            "Server-selected spawn positions differ"
+        }
         check(distance(initial.players[0], initial.players[1]) <= Rules.RANGE) {
             "Players spawned outside shot range"
         }
@@ -45,7 +51,7 @@ suspend fun scenario(id: String, nodes: Nodes) {
                 verifyOutsider(b, initial, assignment, suffix)
                 verifyClientAllowlist(a, b, assignment.roomId)
                 connected(a, b)
-                verifyLobbyRestart(nodes, assignment, suffix)
+                verifyLobbyRestart(target, assignment, suffix)
                 return
             }
             Scenario.HIT -> playHit(a, b, initial)
@@ -55,7 +61,7 @@ suspend fun scenario(id: String, nodes: Nodes) {
                 playReconnect(a, b, initial, assignment.sessionEndpoint)
                 return
             }
-            Scenario.UPDATE -> playUpdate(a, b, nodes, assignment.roomId)
+            Scenario.UPDATE -> playUpdate(a, b, target, assignment.roomId)
         }
         connected(a, b)
     }
@@ -95,14 +101,14 @@ private suspend fun verifyClientAllowlist(a: Client, observer: Client, roomId: S
 }
 
 private suspend fun verifyLobbyRestart(
-    nodes: Nodes,
+    target: ScenarioTarget,
     previous: MatchResponse,
     suffix: String,
 ) {
-    nodes.restartLobby()
+    val replacement = requireNotNull(target.deployment).restartLobby()
     val firstId = "restart-a-$suffix"
     val secondId = "restart-b-$suffix"
-    val next = match(nodes, firstId, secondId)
+    val next = match(replacement, firstId, secondId)
     check(next.roomId != previous.roomId) { "Lobby restart reused a Room ID" }
     verifyNewRoom(next, firstId, secondId, null)
 }
@@ -132,9 +138,7 @@ private suspend fun playHit(a: Client, b: Client, initial: RoomView) {
 
 private suspend fun playInput(a: Client, b: Client) {
     val beforeMove = a.view()
-    val firstSpawn = beforeMove.players.single {
-        it.x == Rules.SPAWN_AX && it.y == Rules.SPAWN_AY
-    }
+    val firstSpawn = beforeMove.players.single { it.x == Rules.SPAWN_AX && it.y == Rules.SPAWN_AY }
     val mover = if (firstSpawn.playerId == a.playerId) a else b
     val other = if (mover === a) b else a
     val source = player(beforeMove, mover)
@@ -143,8 +147,12 @@ private suspend fun playInput(a: Client, b: Client) {
     val moveSequence = source.lastSequence + 1
     move(a, b, mover, moveDelta, 0.0, moveSequence)
     val afterMove = move(a, b, mover, moveDelta, 0.0, moveSequence + 1)
-    check(player(afterMove, mover).lastSequence == moveSequence + 1 &&
-        player(afterMove, other).hp == target.hp) { "Movement changed sequence or player HP." }
+    check(
+        player(afterMove, mover).lastSequence == moveSequence + 1 &&
+            player(afterMove, other).hp == target.hp
+    ) {
+        "Movement changed sequence or player HP."
+    }
     rejectAction(mover, MoveRequest(moveDelta, 0.0, moveSequence + 1), Rules.STALE_SEQUENCE)
 
     val beforeShot = a.view()
@@ -171,11 +179,7 @@ private suspend fun playInput(a: Client, b: Client) {
 
     val outsideStart = moveTo(a, b, mover, 1.0, Rules.SPAWN_AY)
     val outsideSequence = player(outsideStart, mover).lastSequence + 1
-    rejectAction(
-        mover,
-        MoveRequest(-Rules.MAX_STEP, 0.0, outsideSequence),
-        Rules.OUTSIDE_MAP,
-    )
+    rejectAction(mover, MoveRequest(-Rules.MAX_STEP, 0.0, outsideSequence), Rules.OUTSIDE_MAP)
     val beforeWall = moveTo(a, b, mover, Rules.WALL_X - Rules.MAX_STEP, WALL_CENTER_Y)
     val wallSequence = player(beforeWall, mover).lastSequence + 1
     rejectAction(mover, MoveRequest(Rules.MAX_STEP, 0.0, wallSequence), Rules.MOVE_BLOCKED_BY_WALL)
@@ -190,12 +194,7 @@ private suspend fun playInput(a: Client, b: Client) {
     )
 }
 
-private suspend fun playReconnect(
-    a: Client,
-    b: Client,
-    initial: RoomView,
-    endpoint: String,
-) {
+private suspend fun playReconnect(a: Client, b: Client, initial: RoomView, endpoint: String) {
     val previousIdentity = b.sessionInfo()
     var before = initial
     for (sequence in 1L..4L) {
@@ -211,18 +210,27 @@ private suspend fun playReconnect(
             identity.sessionId != previousIdentity.sessionId &&
                 identity.actorId == previousIdentity.actorId &&
                 identity.objectGeneration == previousIdentity.objectGeneration
-        ) { "Reconnect changed Actor identity" }
+        ) {
+            "Reconnect changed Actor identity"
+        }
         sameState(before, restored)
         check(
             restored.winner == a.playerId &&
                 restored.phase == Rules.FINISHED_PHASE &&
                 restored.players.single { it.playerId == a.playerId }.lastSequence == 4L
-        ) { "Reconnect did not restore sequence, phase, and winner" }
+        ) {
+            "Reconnect did not restore sequence, phase, and winner"
+        }
         connected(a, again)
     }
 }
 
-private suspend fun playUpdate(a: Client, b: Client, nodes: Nodes, previousRoomId: String) {
+private suspend fun playUpdate(
+    a: Client,
+    b: Client,
+    target: ScenarioTarget,
+    previousRoomId: String,
+) {
     val identityA = a.sessionInfo()
     val identityB = b.sessionInfo()
     val moved = move(a, b, a, 1.0, 0.0, 1)
@@ -230,19 +238,23 @@ private suspend fun playUpdate(a: Client, b: Client, nodes: Nodes, previousRoomI
     check(before.players.single { it.playerId == a.playerId }.lastSequence == 2L) {
         "Update snapshot omitted the accepted action sequence"
     }
-    check(moved.phase == Rules.PLAYING && moved.winner == null) { "Update input changed match phase" }
-    nodes.drain(before.nodeId)
-    check(a.sessionInfo() == identityA && b.sessionInfo() == identityB) { "Session binding changed" }
+    check(moved.phase == Rules.PLAYING && moved.winner == null) {
+        "Update input changed match phase"
+    }
+    requireNotNull(target.deployment).drain(before.nodeId)
+    check(a.sessionInfo() == identityA && b.sessionInfo() == identityB) {
+        "Session binding changed"
+    }
     val afterA = a.view() { it.nodeId != before.nodeId }
     val afterB = b.view() { it.nodeId != before.nodeId }
     sameState(before, afterA)
     sameState(before, afterB)
-    verifyOutsiderState(a, afterA, nodes.endpoint, "outsider-update-${UUID.randomUUID()}")
-    nodes.replace(before.nodeId)
+    verifyOutsiderState(a, afterA, target.endpoint, "outsider-update-${UUID.randomUUID()}")
+    requireNotNull(target.deployment).replace(before.nodeId)
     val suffix = UUID.randomUUID().toString()
     val firstId = "new-a-$suffix"
     val secondId = "new-b-$suffix"
-    val assignment = match(nodes, firstId, secondId)
+    val assignment = match(target, firstId, secondId)
     check(assignment.roomId != previousRoomId) { "Matchmaker reused a Room ID" }
     verifyNewRoom(assignment, firstId, secondId, before.nodeId)
     hit(a, b, 3, Rules.INITIAL_HP - Rules.DAMAGE * 2)
@@ -263,55 +275,76 @@ private suspend fun verifyNewRoom(
         a.connect()
         b.connect()
         val room = both(a, b) { it.players.size == Rules.PLAYERS }
-        check(room.roomId == assignment.roomId && room.phase == Rules.PLAYING && room.winner == null)
-        if (expectedNodeId != null) check(room.nodeId == expectedNodeId) {
-            "New Room is not on the replacement play node (match)"
-        }
+        check(
+            room.roomId == assignment.roomId && room.phase == Rules.PLAYING && room.winner == null
+        )
+        if (expectedNodeId != null)
+            check(room.nodeId == expectedNodeId) {
+                "New Room is not on the replacement play node (match)"
+            }
     }
 }
 
-private suspend fun match(nodes: Nodes, a: String, b: String): MatchResponse =
+private suspend fun match(target: ScenarioTarget, a: String, b: String): MatchResponse =
     HttpClient.newHttpClient().use { http ->
-        val first = post(http, nodes.lobbyEndpoint, a, null)
-        val second = post(http, nodes.lobbyEndpoint, b, Names.DEFAULT_MODE)
+        val first = post(http, target.httpEndpoint, a, null)
+        val second = post(http, target.httpEndpoint, b, Names.DEFAULT_MODE)
         val assignment = first.await()
-        check(assignment == second.await() && assignment.sessionEndpoint == nodes.endpoint) {
+        check(assignment == second.await() && assignment.sessionEndpoint == target.endpoint) {
             "HTTP assignment mismatch"
         }
         assignment
     }
 
 private fun post(http: HttpClient, endpoint: String, player: String, mode: String?) =
-    http.sendAsync(
-        HttpRequest.newBuilder(URI.create(endpoint + Names.MATCH_PATH))
-            .timeout(Duration.ofSeconds(MESSAGE_SECONDS))
-            .header(HttpProtocol.CONTENT_TYPE, HttpProtocol.JSON)
-            .POST(
-                HttpRequest.BodyPublishers.ofByteArray(
-                    Json.mapper.writeValueAsBytes(
-                        if (mode == null) mapOf("playerId" to player)
-                        else mapOf("playerId" to player, "mode" to mode)
+    http
+        .sendAsync(
+            HttpRequest.newBuilder(URI.create(endpoint + Names.MATCH_PATH))
+                .timeout(Duration.ofSeconds(MESSAGE_SECONDS))
+                .header(HttpProtocol.CONTENT_TYPE, HttpProtocol.JSON)
+                .POST(
+                    HttpRequest.BodyPublishers.ofByteArray(
+                        Json.mapper.writeValueAsBytes(
+                            if (mode == null) mapOf("playerId" to player)
+                            else mapOf("playerId" to player, "mode" to mode)
+                        )
                     )
                 )
-            )
-            .build(),
-        HttpResponse.BodyHandlers.ofByteArray(),
-    ).thenApply { response ->
-        check(response.statusCode() == HttpProtocol.OK) { "HTTP status ${response.statusCode()}" }
-        Json.mapper.readValue(response.body(), MatchResponse::class.java)
-    }
+                .build(),
+            HttpResponse.BodyHandlers.ofByteArray(),
+        )
+        .thenApply { response ->
+            check(response.statusCode() == HttpProtocol.OK) {
+                "HTTP status ${response.statusCode()}"
+            }
+            Json.mapper.readValue(response.body(), MatchResponse::class.java)
+        }
 
-private suspend fun moveTo(a: Client, b: Client, mover: Client, targetX: Double, targetY: Double): RoomView {
+private suspend fun moveTo(
+    a: Client,
+    b: Client,
+    mover: Client,
+    targetX: Double,
+    targetY: Double,
+): RoomView {
     var room = mover.view()
     while (true) {
         val player = room.players.single { it.playerId == mover.playerId }
         if (player.x == targetX && player.y == targetY) return room
         val dx =
             if (player.x == targetX) 0.0
-            else Math.copySign(minOf(Rules.MAX_STEP, kotlin.math.abs(targetX - player.x)), targetX - player.x)
+            else
+                Math.copySign(
+                    minOf(Rules.MAX_STEP, kotlin.math.abs(targetX - player.x)),
+                    targetX - player.x,
+                )
         val dy =
             if (player.x != targetX) 0.0
-            else Math.copySign(minOf(Rules.MAX_STEP, kotlin.math.abs(targetY - player.y)), targetY - player.y)
+            else
+                Math.copySign(
+                    minOf(Rules.MAX_STEP, kotlin.math.abs(targetY - player.y)),
+                    targetY - player.y,
+                )
         room = move(a, b, mover, dx, dy, player.lastSequence + 1)
     }
 }
@@ -344,8 +377,7 @@ private suspend fun move(
         }
         val rejection = result as ActionRejected
         sameState(before, observer.view())
-        if (rejection.reason != Rules.MOVE_BUDGET)
-            error("Movement rejected: ${rejection.reason}")
+        if (rejection.reason != Rules.MOVE_BUDGET) error("Movement rejected: ${rejection.reason}")
         check(rejection.retryAfterMs > 0) { "Move budget rejection omitted RetryAfterMs" }
         delay(rejection.retryAfterMs.toLong())
     }
@@ -402,7 +434,9 @@ private fun sameState(before: RoomView, after: RoomView) {
             before.players == after.players &&
             before.phase == after.phase &&
             before.winner == after.winner
-    ) { "Room state changed" }
+    ) {
+        "Room state changed"
+    }
 }
 
 private fun distance(a: PlayerView, b: PlayerView): Double = hypot(a.x - b.x, a.y - b.y)
@@ -413,7 +447,9 @@ private fun connected(a: Client, b: Client) {
             b.connector.isConnected &&
             a.disconnects.get() == 0 &&
             b.disconnects.get() == 0
-    ) { "Client disconnected" }
+    ) {
+        "Client disconnected"
+    }
 }
 
 private fun player(view: RoomView, client: Client) =
@@ -432,7 +468,6 @@ private suspend fun rejectAction(player: Client, request: Any, reason: String): 
     sameState(before, player.view())
     return rejected
 }
-
 
 private suspend fun playWall(a: Client, b: Client) {
     moveTo(a, b, a, Rules.WALL_X - Rules.MAX_STEP, WALL_CENTER_Y)

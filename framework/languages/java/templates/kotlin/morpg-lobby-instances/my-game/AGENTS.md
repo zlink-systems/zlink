@@ -1,5 +1,15 @@
 # MyGame development guide
 
+## Template reference
+
+This template is a reference. To build a new game, create a new project and design its nodes, Spots, Actors and messages for that game, using this template's structure and rules as reference; do not rename or edit this template in place into the game.
+
+## Local execution
+
+Start the local deployment with `./run-server.sh` or `.\run-server.cmd`. From another terminal run `./run-e2e.sh` or `.\run-e2e.cmd`. The e2e runner attaches when the server is ready and otherwise starts an isolated Docker deployment. The `update` scenario replaces a play node and requires an isolated run. Use `--isolated` or `-Isolated` to force isolation. Stop the local server with Ctrl+C.
+
+Node stdout, stderr, message flow and scenario failure details are under `.logs/run-<id>/`. Follow the paths printed by both commands when diagnosing an attached run.
+
 ## Rules for AI
 
 Every server process in this project is a stateful ZLink node. Before writing code, decide which kind you are editing.
@@ -34,10 +44,10 @@ The project layout and feature procedure below describe where to add gameplay. T
 Default builds and e2e run nodes and the client in Docker without a host JDK. Run these commands from this directory.
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
-pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario party,reconnect,update
-pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+.\run-e2e.cmd -BuildOnly
+.\run-e2e.cmd
+.\run-e2e.cmd -Scenario party,reconnect,update
+.\run-e2e.cmd -CheckStructure
 ```
 
 Bash provides the same workflow:
@@ -163,7 +173,7 @@ options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL)
 
 ### Message flow investigation
 
-Framework logs, including message flow, go to stderr (`server/shared/src/main/resources/logback.xml` configures the appender), so inspect message flow in the `<node>-stderr.log` files; the template creates no separate flow file. A record's `flow` value identifies a message across nodes, and `corr` relates request and reply records. Flow records contain `zlink flow:`; failures have `outcome=failed`, `error_type`, and `error_message`.
+The runner saves Framework message flow to each node’s `*-message-flow.log` and other diagnostics to `*-stderr.log`. A record's `flow` value identifies a message across nodes, and `corr` relates request and reply records. Flow records contain `zlink flow:`; failures have `outcome=failed`, `error_type`, and `error_message`.
 
 Read the failure fields and preceding stage together without filtering categories out. Flow IDs differ between runs, so compare passing and failing runs by logical operation, Actor ID, and stage order to find the first missing or failed stage. If startup fails before message flow recording, preserve the startup exception and stack.
 
