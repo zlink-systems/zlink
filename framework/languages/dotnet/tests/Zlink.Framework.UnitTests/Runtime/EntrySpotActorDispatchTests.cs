@@ -13752,6 +13752,8 @@ public sealed partial class EntrySpotActorDispatchTests
         ILoggerFactory? loggerFactory = null,
         TimeProvider? joinTimeProvider = null,
         TimeSpan? sessionReplacementCallbackTimeout = null,
+        bool objectClient = false,
+        Action<ZLinkSpotNodeRegistration>? configureNode = null,
         EntryTimerSerialProbe? entryTimerProbe = null
     )
     {
@@ -13911,6 +13913,11 @@ public sealed partial class EntrySpotActorDispatchTests
                 .SpotNodes["entry"]
                 .ChannelMemberships.Add(new ZLinkMeshChannelMembership { ChannelName = "entry" });
         }
+        if (objectClient)
+        {
+            registration.Locations._repository = runtimeLocationStore;
+            new ZLinkMeshNodeBuilder(registration.SpotNodes["entry"]).Objects().Client();
+        }
         if (includeActorFactory)
         {
             new Zlink.Framework.Runtime.Configuration.Builders.ZLinkMeshNodeBuilder(
@@ -13972,6 +13979,7 @@ public sealed partial class EntrySpotActorDispatchTests
             registration.SpotNodes["entry"].ObjectRole = ZLinkMeshNodeObjectRole.Server;
             registration.SpotNodes["entry"].ObjectRoleSelected = true;
         }
+        configureNode?.Invoke(registration.SpotNodes["entry"]);
         registration.ActorCatalog.Build(registration.SpotNodes.Values);
         runtime = new ZLinkFrameworkRuntime(
             services,
@@ -14081,7 +14089,12 @@ public sealed partial class EntrySpotActorDispatchTests
                 )
             );
         }
-        if (includeInstanceSpotRoute)
+        if (
+            includeInstanceSpotRoute
+            && registration
+                .SpotNodes["entry"]
+                .InstanceSpotRelocations.ContainsKey("Tests.InstanceSpot")
+        )
         {
             _ = await PublishLocalInstanceSpotAuthorityAsync(
                 locationStore,
