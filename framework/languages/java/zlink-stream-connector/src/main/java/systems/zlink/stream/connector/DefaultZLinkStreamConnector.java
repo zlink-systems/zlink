@@ -19,7 +19,6 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
 import java.util.function.BooleanSupplier;
-import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.logging.Level;
@@ -65,6 +64,12 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     private final AtomicReference<ZLinkStreamCloseReason> lastCloseReason = new AtomicReference<>();
 
     DefaultZLinkStreamConnector(ZLinkStreamConnectorOptions options) {
+        this(options, null);
+    }
+
+    DefaultZLinkStreamConnector(
+            ZLinkStreamConnectorOptions options,
+            Supplier<CompletionStage<? extends ZLinkStreamTransportConnection>> openTransport) {
         this.configuration = ZLinkStreamConnectorConfiguration.from(options);
         this.dispatchQueue = new ZLinkStreamDispatchQueue(this::publishError);
         this.actorRegistry =
@@ -94,7 +99,8 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
                         this::notifyDisconnected,
                         this::recordConnectAttemptFailure,
                         this::sendControl,
-                        sendChain::reset);
+                        sendChain::reset,
+                        openTransport);
     }
 
     @Override
@@ -389,8 +395,9 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
         return sendFrame(
                 header,
                 body,
-                (write, writeFailure) ->
+                (owner, write, writeFailure) ->
                         sendChain.enqueueRequestDeferred(
+                                owner,
                                 () -> traceWrite(header, write.get()),
                                 failure -> {
                                     pendingRequests.fail(requestSeq, failure);
@@ -399,6 +406,7 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
                                 pending -> {
                                     pendingRequests.add(
                                             requestSeq,
+                                            owner,
                                             payload.packetName(),
                                             pending,
                                             onReply,
@@ -489,8 +497,7 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     private <T> CompletionStage<T> sendFrame(
             ZLinkStreamWireProtocol.Header header,
             byte[] payload,
-            BiFunction<Supplier<CompletionStage<Void>>, Consumer<Throwable>, CompletableFuture<T>>
-                    enqueue) {
+            ZLinkStreamConnectionLifecycle.FrameEnqueue<T> enqueue) {
         //  The wire codec is internal and reports structural problems with
         //  plain exceptions. This is the connector boundary, so a rejection
         //  the caller can act on (metadata limits, correlation id, send
