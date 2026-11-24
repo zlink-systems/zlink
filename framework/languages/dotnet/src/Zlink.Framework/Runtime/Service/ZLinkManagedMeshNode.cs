@@ -14,6 +14,7 @@ using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Messaging;
+using Zlink.Framework.Runtime.Streams;
 using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 using MailboxKey = Zlink.Framework.Runtime.Service.MeshMailboxKey;
 using OwnedMailbox = Zlink.Framework.Runtime.Service.ZLinkMeshNodeOwnedMailbox;
@@ -25,6 +26,11 @@ namespace Zlink.Framework.Runtime.Service;
 internal sealed class ZLinkManagedMeshNode : IMeshNode
 {
     internal ZLinkMeshCompletionTable Completions { get; } = new();
+    private Func<
+        IReadOnlyList<ZLinkBackendRouteReceived>,
+        CancellationToken,
+        ValueTask
+    >? _dispatchRemoteSessionPush;
     private const int ReceiveBatchSize = 64;
     private const int MaxInfrastructureControlParts = 64;
     private const long MaxInfrastructureControlBytes = 256 * 1024;
@@ -7242,6 +7248,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         return true;
     }
 
+    internal void SetRemoteSessionPushDispatch(
+        Func<IReadOnlyList<ZLinkBackendRouteReceived>, CancellationToken, ValueTask> handler
+    ) => Volatile.Write(ref _dispatchRemoteSessionPush, handler);
+
     private bool ProcessReceived(ref RawIngressOwnership ownership)
     {
         var received = ownership.Receipt;
@@ -7556,6 +7566,20 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             return false;
         }
         var metadata = application.HasMetadata ? received.Parts[1].ToArray() : null;
+        if (
+            application.Command == ServiceWireConstants.Command.NodeSend
+            && Volatile.Read(ref _dispatchRemoteSessionPush) is { } dispatchPush
+            && ZLinkRemoteSessionPushProtocol.IsPush(parts)
+        )
+            return DispatchRemoteSessionPush(
+                ref ownership,
+                sourceRid,
+                sourceGeneration,
+                parts,
+                metadata,
+                dispatchPush
+            );
+
         var request =
             application.Command
             is ServiceWireConstants.Command.NodeRequest
@@ -7614,6 +7638,46 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             true,
             ownership.TakeApplicationOwner()
         );
+    }
+
+    private bool DispatchRemoteSessionPush(
+        ref RawIngressOwnership ownership,
+        RoutingId sourceRid,
+        ulong sourceGeneration,
+        ZLinkMultipartPayloadView parts,
+        byte[]? metadata,
+        Func<IReadOnlyList<ZLinkBackendRouteReceived>, CancellationToken, ValueTask> dispatchPush
+    )
+    {
+        if (!ZLinkMeshMetadataCodec.TryDecode(metadata ?? [], out var pushMetadata))
+            return false;
+
+        // Keep transport arrival order through admission to the binding's egress lane.
+        // A Node mailbox claim can start its dispatch after the next claim has started.
+        var permit = ownership.TakeAdmission();
+        var push = new ZLinkBackendRouteReceived(
+            [],
+            sourceRid,
+            string.Empty,
+            null,
+            null,
+            metadata: pushMetadata,
+            sourceNodeGeneration: sourceGeneration,
+            payloadOwner: ownership.TakeApplicationOwner(),
+            applicationPayloadView: parts
+        );
+        if (
+            !RunRoutedOperation(() =>
+            {
+                permit?.Dispose();
+                return dispatchPush([push], _stop?.Token ?? CancellationToken.None).AsTask();
+            })
+        )
+        {
+            permit?.Dispose();
+            push.Dispose();
+        }
+        return true;
     }
 
     internal sealed class NativeApplicationReply(
