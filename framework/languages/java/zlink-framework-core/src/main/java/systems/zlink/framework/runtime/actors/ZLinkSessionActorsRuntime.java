@@ -144,6 +144,10 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         CompletionStage<Void> submit(LongFunction<CompletionStage<Void>> operation);
     }
 
+    public void observeReplyAcceptance(java.util.function.Consumer<ZLinkStreamHeader> observer) {
+        relayHeaders.observeReplyAcceptance(observer);
+    }
+
     public void enterRelayDispatch(ZLinkStreamHeader header) {
         relayHeaders.enter(header);
     }

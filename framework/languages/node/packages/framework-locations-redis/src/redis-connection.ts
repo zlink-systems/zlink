@@ -1,4 +1,5 @@
-import { createClient, RESP_TYPES } from 'redis';
+import { createHash } from 'node:crypto';
+import { createClient, ErrorReply, RESP_TYPES } from 'redis';
 import type { RedisClientType } from 'redis';
 import type { ZLinkRedisLocationOptions, ZLinkRedisRelocationOptions } from './redis-options';
 
@@ -7,6 +8,9 @@ export type RedisCommandClient = Pick<
   RedisClientType,
   'isOpen' | 'isReady' | 'connect' | 'disconnect' | 'sendCommand' | 'quit' | 'on'
 >;
+
+const scriptDigests = new Map<RedisCommandValue, string>();
+const neverSettled = () => false;
 
 export class RedisConnection {
   private readonly providedClient?: RedisCommandClient;
@@ -34,17 +38,7 @@ export class RedisConnection {
   }
 
   async command(args: RedisCommandValue[], signal?: AbortSignal): Promise<unknown> {
-    signal?.throwIfAborted();
-    const client = await this.connected(signal);
-    // Store values are opaque bytes. Returning RESP bulk strings as UTF-8
-    // strings would replace invalid byte sequences before the provider can
-    // copy them into Uint8Array.
-    const operation = client.sendCommand(args, {
-      typeMapping: {
-        [RESP_TYPES.BLOB_STRING]: Buffer
-      }
-    });
-    return await waitForOperation(operation, signal, this.operationTimeoutMs);
+    return await this.execute((client) => sendCommand(client, args), signal);
   }
 
   async eval(
@@ -53,7 +47,25 @@ export class RedisConnection {
     args: readonly RedisCommandValue[],
     signal?: AbortSignal
   ): Promise<unknown> {
-    return await this.command(['EVAL', script, String(keys.length), ...keys, ...args], signal);
+    return await this.execute((client, isSettled) => {
+      let digest = scriptDigests.get(script);
+      if (digest === undefined) {
+        digest = createHash('sha1').update(script).digest('hex');
+        scriptDigests.set(script, digest);
+      }
+      const shaCommand = ['EVALSHA', digest, String(keys.length), ...keys, ...args];
+      return sendCommand(client, shaCommand).catch((error: unknown) => {
+        const missingScript =
+          error instanceof ErrorReply &&
+          (error.message === 'NOSCRIPT' || error.message.startsWith('NOSCRIPT '));
+        if (!missingScript || isSettled()) throw error;
+
+        const fallback = shaCommand.slice();
+        fallback[0] = 'EVAL';
+        fallback[1] = script;
+        return sendCommand(client, fallback);
+      });
+    }, signal);
   }
 
   async dispose(): Promise<void> {
@@ -64,6 +76,18 @@ export class RedisConnection {
     if (client !== undefined && client.isOpen === true) {
       await client.quit();
     }
+  }
+
+  private async execute(
+    send: (client: RedisCommandClient, isSettled: () => boolean) => Promise<unknown>,
+    signal?: AbortSignal
+  ): Promise<unknown> {
+    const client = await this.connected(signal);
+    return await waitForOperation(
+      (isSettled) => send(client, isSettled),
+      signal,
+      this.operationTimeoutMs
+    );
   }
 
   private async connected(signal?: AbortSignal): Promise<RedisCommandClient> {
@@ -92,12 +116,24 @@ export class RedisConnection {
         }
       );
     }
-    await waitForOperation(this.connectionAttempt, signal, this.operationTimeoutMs);
+    const attempt = this.connectionAttempt;
+    await waitForOperation(() => attempt, signal, this.operationTimeoutMs);
     if (!isClientReady(client)) {
       throw new Error('Redis client connection completed before it became ready.');
     }
     return client;
   }
+}
+
+function sendCommand(client: RedisCommandClient, args: RedisCommandValue[]): Promise<unknown> {
+  // Store values are opaque bytes. Returning RESP bulk strings as UTF-8
+  // strings would replace invalid byte sequences before the provider can
+  // copy them into Uint8Array.
+  return client.sendCommand(args, {
+    typeMapping: {
+      [RESP_TYPES.BLOB_STRING]: Buffer
+    }
+  });
 }
 
 function isClientReady(client: RedisCommandClient): boolean {
@@ -127,11 +163,12 @@ function requireOptions(options: ZLinkRedisLocationOptions | ZLinkRedisRelocatio
 }
 
 async function waitForOperation<T>(
-  operation: Promise<T>,
+  start: (isSettled: () => boolean) => Promise<T>,
   signal: AbortSignal | undefined,
   timeoutMs: number | undefined
 ): Promise<T> {
-  if (signal === undefined && timeoutMs === undefined) return await operation;
+  signal?.throwIfAborted();
+  if (signal === undefined && timeoutMs === undefined) return await start(neverSettled);
   return await new Promise<T>((resolve, reject) => {
     let timeout: NodeJS.Timeout | undefined;
     let settled = false;
@@ -155,9 +192,13 @@ async function waitForOperation<T>(
         timeoutMs
       );
     }
-    operation.then(
-      (value) => settle(() => resolve(value)),
-      (error) => settle(() => reject(error))
-    );
+    try {
+      start(() => settled).then(
+        (value) => settle(() => resolve(value)),
+        (error) => settle(() => reject(error))
+      );
+    } catch (error) {
+      settle(() => reject(error));
+    }
   });
 }

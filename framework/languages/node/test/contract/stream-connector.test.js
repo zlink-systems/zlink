@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const deferred = require('./helpers/deferred.cjs');
 
 const connector = require('../../packages/stream-connector/dist');
 const protocolCodecs = require('./helpers/stream-protocol-codecs');
@@ -1809,12 +1810,15 @@ test('Manual state and request callbacks run only in dispatch', async (t) => {
   assert.deepEqual(calls, []);
   await instance.dispatch();
   assert.deepEqual(calls, ['state:connecting', 'state:connected']);
+  let now = 0;
+  t.mock.method(performance, 'now', () => now);
   t.mock.timers.enable({ apis: ['setTimeout'] });
   instance
     .request({ codec: connector.ZlinkStreamCodec.Raw, payload: new Uint8Array() })
     .packetName('NoReply')
     .timeout(10)
     .submitCallback((result) => calls.push(result.error.code));
+  now = 10;
   t.mock.timers.tick(10);
   // The timeout has rejected the request; the macrotask boundary lets every
   // continuation of that rejection run before the check.
@@ -4611,4 +4615,351 @@ test('a transport write failure fails its operation as SendFailed and ends the c
   );
   await instance.dispatch();
   assert.deepEqual(errors, [connector.ZlinkStreamErrorCode.SendFailed]);
+});
+
+const loginAdmission = require('../../../../runtime/conformance/login-admission-v1.json');
+
+function admissionTestClock(t) {
+  let now = 0;
+  let jitter = 0;
+  const timers = new Map();
+  t.mock.method(performance, 'now', () => now);
+  t.mock.method(Math, 'random', () => jitter / 51);
+  t.mock.method(globalThis, 'setTimeout', (callback, delayMs) => {
+    const timer = {};
+    timers.set(timer, { callback, due: now + Math.max(1, delayMs) });
+    return timer;
+  });
+  t.mock.method(globalThis, 'clearTimeout', (timer) => timers.delete(timer));
+  return {
+    now: () => now,
+    setJitter(value) { jitter = value; },
+    jump(target) { now = target; },
+    async advance(target) {
+      for (;;) {
+        const next = [...timers.entries()]
+          .filter(([, timer]) => timer.due <= target)
+          .sort(([, left], [, right]) => left.due - right.due)[0];
+        if (next === undefined) break;
+        const [handle, timer] = next;
+        timers.delete(handle);
+        now = Math.max(now, timer.due);
+        timer.callback();
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      now = target;
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  };
+}
+
+function admissionResponse(response) {
+  const isError = response.kind === 'Error';
+  const metadata = response.retryAfterMs == null
+    ? connector.ZlinkStreamMetadataMap.empty
+    : connector.ZlinkStreamMetadataMap.empty.with(
+        loginAdmission.contract.retryMetadataKey, response.retryAfterMs);
+  return protocolCodecs.ZlinkStreamFrameCodec.encode(
+    protocolCodecs.ZlinkStreamHeaderCodec.encode({
+      kind: connector.ZlinkStreamMessageKind[response.kind],
+      codec: connector.ZlinkStreamCodec.Json,
+      flags: connector.ZlinkStreamHeaderFlags.HasRequestSeq,
+      requestSeq: BigInt(response.requestSeq),
+      name: '',
+      metadata
+    }),
+    Buffer.from(JSON.stringify(isError
+      ? { code: response.remoteCode, message: loginAdmission.contract.errorBody.message }
+      : { ok: true }))
+  );
+}
+
+test('stream connector passes the caller payload directly to the first frame encode', async (t) => {
+  const transportFactory = new MemoryTransportFactory();
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory,
+    heartbeat: { enabled: false }
+  });
+  const payload = Uint8Array.of(1, 2, 3);
+  const response = admissionResponse({ kind: 'Response', requestSeq: '1' });
+  const encode = t.mock.method(protocolCodecs.ZlinkStreamFrameCodec, 'encode');
+  await instance.connect();
+  const result = instance
+    .request({ codec: connector.ZlinkStreamCodec.Raw, payload })
+    .packetName('Echo')
+    .submit();
+  transportFactory.connection.pushFrame(response);
+  await instance.dispatch();
+  assert.deepEqual(await result, { ok: true });
+  assert.equal(encode.mock.callCount(), 1);
+  assert.strictEqual(encode.mock.calls[0].arguments[1], payload);
+});
+
+// The v1 fixture covers stage 1 only. Instance Spot, ticket and queue
+// scenarios belong to stage 2 and are outside this runtime driver.
+for (const { name, given, expect } of loginAdmission.connectorScenarios) {
+  test(`login admission connector fixture: ${name}`, async (t) => {
+    const clock = admissionTestClock(t);
+    const factory = new MemoryTransportFactory();
+    const sent = [];
+    factory.connection.write = async (bytes) => {
+      const frame = protocolCodecs.ZlinkStreamFrameCodec.decode(bytes);
+      sent.push({
+        at: clock.now(),
+        header: protocolCodecs.ZlinkStreamHeaderCodec.decode(frame.header),
+        payload: Buffer.from(frame.payload).toString('base64')
+      });
+    };
+    const instance = createStreamConnector({
+      endpoint: 'ws://127.0.0.1:19000',
+      transportFactory: factory,
+      heartbeat: { enabled: false },
+      reconnect: { enabled: false },
+      maxAdmissionWaitMs: given.maxAdmissionWaitMs ?? undefined
+    });
+    try {
+      let sendingHooks = 0;
+      let replyHooks = 0;
+      const waiting = [];
+      const results = [];
+      instance.onRequestSending(({ setMetadata }) => {
+        sendingHooks += 1;
+        for (const [key, value] of Object.entries(given.applicationMetadata)) {
+          setMetadata(key, value);
+        }
+      });
+      instance.onReplyReceived(() => { replyHooks += 1; });
+      instance.onAdmissionWaiting((context) => waiting.push(context));
+
+      await instance.connect();
+      const payload = Buffer.from(given.payloadBase64, 'base64');
+      instance.request({
+        codec: connector.ZlinkStreamCodec.Json,
+        payload
+      }).packetName(given.packetName).timeout(given.requestTimeoutMs).submitCallback((result) => {
+        results.push({
+          at: clock.now(),
+          result: result.isSuccess ? 'success' : result.error.code
+        });
+      });
+      assert.equal(sent.length, 1);
+      payload.fill(0);
+      for (const response of given.responses) {
+        await clock.advance(response.atElapsedMs);
+        clock.setJitter(response.jitterMs ?? 0);
+        factory.connection.pushFrame(admissionResponse(response));
+        await instance.dispatch();
+      }
+      if (expect.terminalAtElapsedMs !== undefined) {
+        await clock.advance(expect.terminalAtElapsedMs - 1);
+        await instance.dispatch();
+        assert.equal(results.length, 0);
+        await clock.advance(expect.terminalAtElapsedMs);
+      }
+      await instance.dispatch();
+      assert.deepEqual(sent.map(({ at }) => at), expect.sendAtElapsedMs);
+      assert.deepEqual(sent.map(({ header }) => String(header.requestSeq)), expect.requestSeqs);
+      for (const { header } of sent) assert.equal(header.name, given.packetName);
+      assert.equal(sent.every(({ payload }) => payload === given.payloadBase64), expect.payloadPreserved);
+      assert.equal(sent.every(({ header }) =>
+        JSON.stringify(Object.fromEntries(header.metadata.values)) ===
+          JSON.stringify(given.applicationMetadata)), expect.applicationMetadataPreserved);
+      assert.ok(sent[0].header.correlationId);
+      assert.equal(sent.every(({ header }) =>
+        header.correlationId === sent[0].header.correlationId), expect.correlationPreserved);
+      assert.equal(waiting.length, expect.waitingCallbacks);
+      assert.equal(sendingHooks, expect.requestSendingHooks);
+      assert.equal(replyHooks, expect.replyReceivedHooks);
+      assert.equal(results.length, expect.requestCallbacks);
+      assert.equal(results[0]?.result, connector.ZlinkStreamErrorCode[expect.result] ?? expect.result);
+      assert.deepEqual(waiting, given.responses
+        .filter(({ retryAfterMs }) => retryAfterMs != null && expect.waitingCallbacks > 0)
+        .map(({ retryAfterMs }) => ({
+          requestPacketName: given.packetName, retryAfterMs: Number(retryAfterMs)
+        })));
+      if (expect.terminalAtElapsedMs !== undefined) {
+        assert.equal(results[0].at, expect.terminalAtElapsedMs);
+      }
+      assert.equal(instance.isConnected, true);
+      assert.equal(factory.connection.closed, false);
+    } finally {
+      await instance.close();
+    }
+  });
+}
+
+test('login admission validates the Connector wait option', () => {
+  for (const maxAdmissionWaitMs of [0, -1, NaN, Infinity]) {
+    assert.throws(() => createStreamConnector({
+      endpoint: 'ws://127.0.0.1:19000', maxAdmissionWaitMs
+    }), /MaxAdmissionWait must be positive/);
+  }
+});
+
+test('login admission retries with the first compressed payload and metadata bytes', async (t) => {
+  const clock = admissionTestClock(t);
+  const transportFactory = new MemoryTransportFactory();
+  const { connection } = transportFactory;
+  let compressCalls = 0;
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory,
+    heartbeat: { enabled: false },
+    compressionCodec: {
+      compress: (bytes) => Uint8Array.of(++compressCalls, ...bytes),
+      decompress: (bytes) => bytes.subarray(1)
+    }
+  });
+  const metadata = connector.ZlinkStreamMetadataMap.empty.with('trace', '\uFEFFvalue');
+  await instance.connect();
+  const payload = Uint8Array.of(2, 3);
+  const result = instance
+    .request({ codec: connector.ZlinkStreamCodec.Raw, payload })
+    .packetName('Login')
+    .metadata(metadata)
+    .compress()
+    .submit();
+  const first = protocolCodecs.ZlinkStreamFrameCodec.decode(connection.frames[0]);
+  payload.fill(0);
+  connection.pushFrame(admissionResponse({
+    kind: 'Error', requestSeq: '1', remoteCode: 'unavailable', retryAfterMs: '10'
+  }));
+  await instance.dispatch();
+  await clock.advance(10);
+  const retry = protocolCodecs.ZlinkStreamFrameCodec.decode(connection.frames[1]);
+  connection.pushFrame(admissionResponse({ kind: 'Response', requestSeq: '2' }));
+  await instance.dispatch();
+  assert.deepEqual(await result, { ok: true });
+  assert.equal(compressCalls, 1);
+  assert.deepEqual(retry.payload, Uint8Array.of(1, 2, 3));
+  assert.deepEqual(retry.payload, first.payload);
+  assert.deepEqual(retry.header, protocolCodecs.ZlinkStreamHeaderCodec.encode({
+    ...protocolCodecs.ZlinkStreamHeaderCodec.decode(first.header),
+    metadata,
+    requestSeq: 2n
+  }));
+});
+
+for (const ending of ['caller cancellation', 'transport loss', 'busy writer']) {
+  test(`login admission connector: ${ending}`, async (t) => {
+    const clock = admissionTestClock(t);
+    const connections = [new MemoryConnection(), new MemoryConnection()];
+    let connects = 0;
+    const instance = createStreamConnector({
+      endpoint: 'ws://127.0.0.1:19000',
+      transportFactory: { async connect() { return connections[connects++]; } },
+      heartbeat: { enabled: false },
+      reconnect: {
+        enabled: ending === 'transport loss', initialDelayMs: 10, maxDelayMs: 10
+      },
+      maxAdmissionWaitMs: 100
+    });
+    const signal = new AbortController();
+    const waiting = [];
+    const replies = [];
+    const writeGate = deferred();
+    try {
+      instance.onAdmissionWaiting((context) => waiting.push(context));
+      instance.onReplyReceived((context) => replies.push(context));
+      await instance.connect();
+      const [connection, replacement] = connections;
+      const raw = { codec: connector.ZlinkStreamCodec.Raw, payload: Uint8Array.of(0) };
+      const result = instance.request(raw).packetName('Login').timeout(1000)
+        .submitEncoded(signal.signal).then(() => 'unexpected success', (error) => error.error.code);
+      await clock.advance(10);
+      clock.setJitter(50);
+      const retryAfterMs = '10';
+      connection.pushFrame(admissionResponse({
+        kind: 'Error', requestSeq: '1', remoteCode: 'unavailable', retryAfterMs
+      }));
+      await instance.dispatch();
+      assert.deepEqual(waiting, [{ requestPacketName: 'Login', retryAfterMs: Number(retryAfterMs) }]);
+      if (ending === 'caller cancellation') signal.abort();
+      if (ending === 'transport loss') {
+        connection.read = async () => { throw new Error('socket disconnected'); };
+        await instance.dispatch();
+      }
+      let blocker;
+      if (ending === 'busy writer') {
+        connection.write = async (frame) => {
+          connection.frames.push(frame);
+          await writeGate.promise;
+        };
+        blocker = instance.send(raw).packetName('Blocker').submit();
+      }
+      if (ending === 'busy writer') {
+        await clock.advance(70);
+        // The queue can advance in a microtask before the overdue timer runs.
+        clock.jump(110);
+      } else {
+        await clock.advance(110);
+      }
+      writeGate.resolve();
+      await blocker;
+      await clock.advance(1000);
+      await instance.dispatch();
+      const disconnected = ending === 'transport loss' || ending === 'caller cancellation';
+      assert.equal(await result, disconnected
+        ? connector.ZlinkStreamErrorCode.Disconnected
+        : connector.ZlinkStreamErrorCode.RequestTimeout);
+      assert.equal(connection.frames.length, ending === 'busy writer' ? 2 : 1);
+      assert.equal(replacement.frames.length, 0);
+      assert.equal(connects, ending === 'transport loss' ? 2 : 1);
+      assert.equal(replies.length, ending === 'caller cancellation' ? 0 : 1);
+      if (ending === 'transport loss') assert.equal(connection.closed, true);
+    } finally {
+      writeGate.resolve();
+      await instance.close();
+    }
+  });
+}
+
+test('login admission connector schedules the maximum wire delay plus jitter without overflow', async (t) => {
+  const clock = admissionTestClock(t);
+  const factory = new MemoryTransportFactory();
+  let read = deferred();
+  factory.connection.read = () => read.promise;
+  const close = factory.connection.close.bind(factory.connection);
+  factory.connection.close = async () => {
+    read.resolve();
+    await close();
+  };
+  const receive = async (response) => {
+    const pendingRead = read;
+    read = deferred();
+    pendingRead.resolve(admissionResponse(response));
+    await new Promise((resolve) => setImmediate(resolve));
+  };
+  const instance = createStreamConnector({
+    endpoint: 'ws://127.0.0.1:19000',
+    transportFactory: factory,
+    heartbeat: { enabled: false },
+    reconnect: { enabled: false }
+  });
+  try {
+    const waiting = [];
+    instance.onAdmissionWaiting((context) => waiting.push(context));
+    await instance.connect();
+    const wireDelay = 2_147_483_647;
+    const result = instance.request({}).packetName('Login').timeout(wireDelay + 1000)
+      .submit().then((reply) => reply, (error) => error.error.code);
+    await clock.advance(10);
+    clock.setJitter(50);
+    await receive({
+      kind: 'Error', requestSeq: '1', remoteCode: 'unavailable', retryAfterMs: String(wireDelay)
+    });
+    await instance.dispatch();
+    assert.deepEqual(waiting, [{ requestPacketName: 'Login', retryAfterMs: wireDelay }]);
+    const retryAt = 10 + wireDelay + 50;
+    await clock.advance(retryAt - 1);
+    assert.equal(factory.connection.frames.length, 1);
+    await clock.advance(retryAt);
+    assert.equal(factory.connection.frames.length, 2);
+    await receive({ kind: 'Response', requestSeq: '2' });
+    await instance.dispatch();
+    assert.deepEqual(await result, { ok: true });
+  } finally {
+    await instance.close();
+  }
 });

@@ -2,10 +2,13 @@
 #include <zlink/locations/redis.hpp>
 #include "runtime/locations/location_store_write.hpp"
 
+#include <array>
 #include <atomic>
+#include <functional>
 #include <random>
 
 #if defined(ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT)
+#include <boost/beast/core/detail/sha1.hpp>
 #include <sw/redis++/redis++.h>
 #include <sw/redis++/async_redis.h>
 #endif
@@ -48,6 +51,62 @@ inline std::unique_ptr<TClient> make_redis (const std::string &connection_string
     return std::make_unique<TClient> (options, uri.connection_pool_options ());
 }
 
+struct redis_script_t
+{
+    explicit redis_script_t (std::string_view source) :
+        body (source), sha1 (2 * boost::beast::detail::sha1_context::digest_size, '\0')
+    {
+        boost::beast::detail::sha1_context hash;
+        std::array<unsigned char, boost::beast::detail::sha1_context::digest_size> digest;
+        boost::beast::detail::init (hash);
+        boost::beast::detail::update (hash, body.data (), body.size ());
+        boost::beast::detail::finish (hash, digest.data ());
+        constexpr auto hex = "0123456789abcdef";
+        for (std::size_t i = 0; i < digest.size (); ++i) {
+            sha1[2 * i] = hex[digest[i] >> 4];
+            sha1[2 * i + 1] = hex[digest[i] & 0xf];
+        }
+    }
+
+    std::string_view body;
+    std::string sha1;
+};
+
+using script_reply_t = std::vector<std::string>;
+
+template <typename TRead, typename TSuccess, typename TFallback>
+auto evalsha_reply (TRead read, TSuccess success, TFallback fallback)
+{
+    script_reply_t reply;
+    try {
+        reply = read ();
+    }
+    catch (const sw::redis::ReplyError &error) {
+        const std::string_view message (error.what ());
+        if (message != "NOSCRIPT" && !message.starts_with ("NOSCRIPT "))
+            throw;
+        return fallback ();
+    }
+    return success (std::move (reply));
+}
+
+script_reply_t eval_script (sw::redis::Redis &redis,
+                            const redis_script_t &script,
+                            const std::vector<std::string> &keys,
+                            const std::vector<std::string> &args)
+{
+    return evalsha_reply (
+      [&] {
+          return redis.evalsha<script_reply_t> (script.sha1, keys.begin (), keys.end (),
+                                                args.begin (), args.end ());
+      },
+      std::identity{},
+      [&] {
+          return redis.eval<script_reply_t> (std::string (script.body), keys.begin (), keys.end (),
+                                             args.begin (), args.end ());
+      });
+}
+
 template <typename T> result_t<T> redis_failure (const std::exception &error)
 {
     const auto *framework_error = dynamic_cast<const framework_exception_t *> (&error);
@@ -56,33 +115,92 @@ template <typename T> result_t<T> redis_failure (const std::exception &error)
                                  error.what ());
 }
 
-template <typename T, typename TDecode>
-task_t<T> eval_location (sw::redis::AsyncRedis &redis,
-                         std::string_view script,
-                         const std::vector<std::string> &keys,
-                         const std::vector<std::string> &args,
-                         TDecode decode)
+class redis_location_client_t
 {
-    auto completion = std::make_shared<task_completion_source_t<T>> ();
-    auto task = completion->task ();
-    try {
-        redis.eval<std::vector<std::string>> (
-          std::string (script), keys.begin (), keys.end (), args.begin (), args.end (),
-          [completion, decode = std::move (decode)] (
-            sw::redis::Future<std::vector<std::string>> result) mutable {
-              try {
-                  completion->complete (result_t<T>::success (decode (result.get ())));
-              }
-              catch (const std::exception &error) {
-                  completion->complete (redis_failure<T> (error));
-              }
-          });
+  public:
+    redis_location_client_t (const std::string &connection_string,
+                             std::chrono::milliseconds operation_timeout) :
+        _redis (make_redis<sw::redis::AsyncRedis> (connection_string, operation_timeout))
+    {
     }
-    catch (const std::exception &error) {
-        completion->complete (redis_failure<T> (error));
+
+    ~redis_location_client_t ()
+    {
+        // Prevent new fallback submissions before redis++ drains its callbacks.
+        std::unique_ptr<sw::redis::AsyncRedis> redis;
+        {
+            std::lock_guard lock (_fallback_gate);
+            redis = std::move (_redis);
+        }
     }
-    return task;
-}
+
+    template <typename T, typename TDecode>
+    task_t<T> eval_script (const redis_script_t &script,
+                           std::vector<std::string> keys,
+                           std::vector<std::string> args,
+                           TDecode decode)
+    {
+        struct request_t
+        {
+            void succeed (script_reply_t reply)
+            {
+                completion.complete (result_t<T>::success (decode (std::move (reply))));
+            }
+
+            void fail (const std::exception &error)
+            {
+                completion.complete (redis_failure<T> (error));
+            }
+
+            std::vector<std::string> keys;
+            std::vector<std::string> args;
+            TDecode decode;
+            task_completion_source_t<T> completion;
+        };
+        auto request =
+          std::make_shared<request_t> (std::move (keys), std::move (args), std::move (decode));
+        auto task = request->completion.task ();
+        try {
+            _redis->evalsha<script_reply_t> (
+              script.sha1, request->keys.begin (), request->keys.end (), request->args.begin (),
+              request->args.end (),
+              [this, body = script.body, request] (sw::redis::Future<script_reply_t> result) {
+                  try {
+                      evalsha_reply (
+                        [&] { return result.get (); },
+                        [&] (script_reply_t reply) { request->succeed (std::move (reply)); },
+                        [&] {
+                            std::lock_guard lock (_fallback_gate);
+                            if (!_redis)
+                                throw sw::redis::Error ("Redis location connection is closing");
+                            _redis->eval<script_reply_t> (
+                              std::string (body), request->keys.begin (), request->keys.end (),
+                              request->args.begin (), request->args.end (),
+                              [request] (sw::redis::Future<script_reply_t> fallback) {
+                                  try {
+                                      request->succeed (fallback.get ());
+                                  }
+                                  catch (const std::exception &error) {
+                                      request->fail (error);
+                                  }
+                              });
+                        });
+                  }
+                  catch (const std::exception &error) {
+                      request->fail (error);
+                  }
+              });
+        }
+        catch (const std::exception &error) {
+            request->fail (error);
+        }
+        return task;
+    }
+
+  private:
+    std::mutex _fallback_gate;
+    std::unique_ptr<sw::redis::AsyncRedis> _redis;
+};
 
 class redis_location_worker_t
 {
@@ -181,8 +299,7 @@ class location_store_backend_t final : public location_store_t
         if (_options.operation_timeout <= std::chrono::milliseconds::zero ())
             throw std::invalid_argument ("Redis location operation timeout must be positive");
 #if defined(ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT)
-        _redis = detail::make_redis<sw::redis::AsyncRedis> (_options.connection_string,
-                                                            _options.operation_timeout);
+        _redis.emplace (_options.connection_string, _options.operation_timeout);
 #endif
     }
 
@@ -193,10 +310,9 @@ class location_store_backend_t final : public location_store_t
     {
         validate_key (key.value);
 #if defined(ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT)
-        const std::vector<std::string> keys{record_key (key.value)};
-        const std::vector<std::string> args{};
-        return detail::eval_location<store_read_result_t> (
-          *_redis, read_script, keys, args, [] (const std::vector<std::string> &result) {
+        static const detail::redis_script_t script (read_script);
+        return _redis->eval_script<store_read_result_t> (
+          script, {record_key (key.value)}, {}, [] (const std::vector<std::string> &result) {
               if (result.size () < 2)
                   throw sw::redis::Error ("invalid opaque location read result");
               const auto now = from_unix_ms (std::stoll (result[1]));
@@ -307,8 +423,9 @@ class location_store_backend_t final : public location_store_t
               mutation);
         }
 
-        return detail::eval_location<store_write_result_t> (
-          *_redis, write_script, keys, args,
+        static const detail::redis_script_t script (write_script);
+        return _redis->eval_script<store_write_result_t> (
+          script, std::move (keys), std::move (args),
           [logical_keys = std::move (logical_keys)] (const std::vector<std::string> &result) {
               if (result.size () < 2)
                   throw sw::redis::Error ("invalid opaque location write result");
@@ -381,17 +498,13 @@ class location_store_backend_t final : public location_store_t
                 snapshot_id = ++_next_snapshot;
                 auto &snapshot = _scan_snapshots[snapshot_id];
                 snapshot.expires_at = steady_now + scan_snapshot_retention;
-                auto &redis = *_redis;
                 // Hashed record keys have a separate logical-key index.
-                // The lexicographic query fixes one snapshot in one Redis round trip.
+                // The lexicographic query fixes one snapshot in Redis.
                 // This worker alone owns the snapshot map.
-                const std::vector<std::string> scan_keys{index_key (), map_key ()};
-                const std::vector<std::string> scan_args{request.prefix};
-                const auto scanned = redis
-                                       .eval<std::vector<std::string>> (
-                                         std::string (scan_script), scan_keys.begin (),
-                                         scan_keys.end (), scan_args.begin (), scan_args.end ())
-                                       .get ();
+                static const detail::redis_script_t script (scan_script);
+                const auto scan = _redis->eval_script<detail::script_reply_t> (
+                  script, {index_key (), map_key ()}, {request.prefix}, std::identity{});
+                const auto &scanned = scan.result ().value ();
                 if (scanned.empty () || (scanned.size () - 1) % 2 != 0)
                     throw sw::redis::Error ("invalid opaque location scan result");
                 snapshot.store_now = from_unix_ms (std::stoll (scanned[0]));
@@ -744,7 +857,7 @@ return result
     std::uint64_t _scan_epoch = detail::next_scan_epoch ();
     std::uint64_t _next_snapshot = 0;
 #if defined(ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT)
-    std::unique_ptr<sw::redis::AsyncRedis> _redis;
+    std::optional<detail::redis_location_client_t> _redis;
     detail::redis_location_worker_t _worker;
 #endif
 };
@@ -791,8 +904,8 @@ class relocation_store_backend_t final : public relocation_store_t
               const auto args = std::vector<std::string>{
                 std::string{reinterpret_cast<const char *> (payload.data ()), payload.size ()},
                 std::to_string (retention.count ())};
-              const auto result = redis.eval<std::vector<std::string>> (
-                std::string (put_script), keys.begin (), keys.end (), args.begin (), args.end ());
+              static const detail::redis_script_t script (put_script);
+              const auto result = detail::eval_script (redis, script, keys, args);
               if (result.size () != 3)
                   throw sw::redis::Error ("invalid opaque relocation put result");
               const auto now = from_unix_ms (std::stoll (result[1]));

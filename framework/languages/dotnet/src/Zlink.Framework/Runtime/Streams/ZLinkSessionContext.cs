@@ -119,7 +119,20 @@ internal sealed class ZLinkSessionContext : IZLinkSessionContext
             Runtime.CleanupActorSessionsForSession(sessionRid);
     }
 
-    internal ZLinkSessionDispatchContext? EnterDispatch(ZlinkStreamHeader header)
+    private ZLinkAuthenticationAdmission.Lease? _authenticationAdmission;
+
+    internal ZLinkAuthenticationAdmission.Lease? AuthenticationAdmissionForReply(
+        ZlinkStreamHeader reply
+    ) =>
+        _currentDispatch?.RuntimeState is ZlinkStreamHeader request
+        && request.RequestSeq == reply.RequestSeq
+            ? _authenticationAdmission
+            : null;
+
+    internal ZLinkSessionDispatchContext? EnterDispatch(
+        ZlinkStreamHeader header,
+        ZLinkAuthenticationAdmission.Lease? authentication = null
+    )
     {
         var actor = header.ActorSlot is { } slot ? ActorCoordinator.FindActor(slot) : null;
         if (header.ActorSlot is not null && actor is null)
@@ -138,12 +151,14 @@ internal sealed class ZLinkSessionContext : IZLinkSessionContext
             actor,
             header
         );
+        _authenticationAdmission = authentication;
         return _currentDispatch;
     }
 
     internal void ExitDispatch()
     {
         _currentDispatch = null;
+        _authenticationAdmission = null;
     }
 
     internal bool Write(Message payload)

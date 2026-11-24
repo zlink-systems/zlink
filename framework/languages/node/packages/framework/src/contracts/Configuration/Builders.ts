@@ -189,6 +189,11 @@ export interface ZLinkFanoutChannelBuilder {
 }
 
 export interface ZLinkStreamNodeBuilder {
+  setAuthenticationAdmission(
+    packetName: string,
+    maxConcurrentAuthentications?: number,
+    authenticationRetryDelayMs?: number
+  ): this;
   setHeartbeat(intervalMs: number, timeoutMs: number): this;
   setIdleTimeout(timeoutMs: number): this;
   bind(endpointOrPort?: string | number): this;
