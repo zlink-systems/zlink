@@ -524,10 +524,13 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
     }
 
     CompletionStage<Void> notifyDisconnected(Duration timeout) {
-        return notifyDisconnected(timeout, null);
+        return notifyDisconnected(timeout, null, null);
     }
 
-    CompletionStage<Void> notifyDisconnected(Duration timeout, CompletableFuture<Void> deadline) {
+    CompletionStage<Void> notifyDisconnected(
+            Duration timeout,
+            CompletableFuture<Void> deadline,
+            CompletableFuture<Void> forcedStop) {
         Objects.requireNonNull(timeout, "timeout");
         CompletableFuture<Void> result;
         boolean bindingCurrent;
@@ -558,6 +561,10 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                                                 .thenCompose(
                                                         cleared ->
                                                                 cleared
+                                                                                && (forcedStop
+                                                                                                == null
+                                                                                        || !forcedStop
+                                                                                                .isDone())
                                                                         ? actors.notifyDisconnected(
                                                                                 managedActor.get(),
                                                                                 disconnectIdentity)
@@ -571,7 +578,9 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                 deadline == null
                         ? notificationTerminal.orTimeout(timeout.toMillis(), TimeUnit.MILLISECONDS)
                         : CompletableFuture.anyOf(notificationTerminal, deadline);
-        boundedTerminal
+        (forcedStop == null
+                        ? boundedTerminal
+                        : CompletableFuture.anyOf(boundedTerminal, forcedStop))
                 .handle((ignored, notifyError) -> notifyError)
                 //  The disconnect notification can complete inline inside the
                 //  transport's reply callback, still inside the native router
@@ -581,19 +590,23 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                 //  shutdown hang that ends in SIGKILL). Always hop off the
                 //  completing thread before the unbind submit.
                 .thenComposeAsync(
-                        notifyError ->
-                                stream.unbindActor(sessionRid, ref.actorId())
-                                        .submit(timeout)
-                                        .handle(
-                                                (ignored, unbindError) -> {
-                                                    if (notifyError != null) {
-                                                        throw new CompletionException(notifyError);
-                                                    }
-                                                    if (unbindError != null) {
-                                                        throw new CompletionException(unbindError);
-                                                    }
-                                                    return null;
-                                                }))
+                        notifyError -> {
+                            if (forcedStop != null && forcedStop.isDone()) {
+                                return CompletableFuture.completedFuture(null);
+                            }
+                            return stream.unbindActor(sessionRid, ref.actorId())
+                                    .submit(timeout)
+                                    .handle(
+                                            (ignored, unbindError) -> {
+                                                if (notifyError != null) {
+                                                    throw new CompletionException(notifyError);
+                                                }
+                                                if (unbindError != null) {
+                                                    throw new CompletionException(unbindError);
+                                                }
+                                                return null;
+                                            });
+                        })
                 .whenComplete(
                         (ignored, error) -> {
                             ZLinkHandlerStages.fromStageSupplier(unbindListener)

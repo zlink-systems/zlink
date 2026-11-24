@@ -1415,12 +1415,15 @@ test('built stream runtime rejects an unbound fallback disconnect without native
   const session = new ZLinkNativeFallbackBoundSession({
     runtime,
     routedTransport: {},
-    actorRefProvider: () => ({
-      actorId: 'actor-unbound-runtime',
-      objectGeneration: 1n,
-      meshName: 'mesh',
-      nodeRid: 'node-a',
-      bindingGeneration: 0n
+    targetProvider: () => ({
+      actorRef: {
+        actorId: 'actor-unbound-runtime',
+        objectGeneration: 1n,
+        meshName: 'mesh',
+        nodeRid: 'node-a',
+        bindingGeneration: 0n
+      },
+      remoteTarget: undefined
     }),
     nativeActorNodeProvider: () => ({
       async closeActorBoundSession() {
@@ -1428,7 +1431,6 @@ test('built stream runtime rejects an unbound fallback disconnect without native
       }
     }),
     localActorProvider: () => true,
-    remoteBoundSessionTargetProvider: () => undefined,
     remoteActorPacketTargetProvider: () => undefined,
     actorId: 'actor-unbound-runtime',
     reportError: () => undefined
@@ -2131,6 +2133,19 @@ test('runtime host bindOrGet preserves the Store error and previous binding', as
   });
 });
 
+function actorStateWithBoundSession({ actor, nativeActorRef, boundSession, locationGeneration }) {
+  const actorId = nativeActorRef?.actorId ?? actor?.actorId ?? 'remote-actor';
+  const state = new framework.ZLinkActorRuntimeState(actorId);
+  if (nativeActorRef !== undefined) state.setNativeActorRef(nativeActorRef);
+  if (actor !== undefined) {
+    const context = { actorId };
+    state.bindActor({ ...actor, context }, context);
+  }
+  if (locationGeneration !== undefined) state.setLocationGeneration(locationGeneration);
+  state.boundSessionValue = boundSession;
+  return state;
+}
+
 test('runtime host bound session uses local stream route before native SessionRelay', async () => {
   const actorRef = { nodeRid: 'node-a', actorId: 'actor-native', generation: 7n };
   const nativeSends = [];
@@ -2202,11 +2217,11 @@ test('runtime host local actor falls back to native SessionRelay when no JavaScr
   host.setActorManager({
     getState(actorId) {
       return actorId === actorRef.actorId
-        ? {
+        ? actorStateWithBoundSession({
             actor: { actorId: actorRef.actorId },
             nativeActorRef: actorRef,
-            boundSessionBindingGeneration: 11n
-          }
+            boundSession: { sessionNodeRid: actorRef.nodeRid, bindingGeneration: 11n }
+          })
         : undefined;
     }
   });
@@ -2252,11 +2267,11 @@ test('native bound-session send awaits binding admission without Framework retry
   });
   host.setActorManager({
     getState() {
-      return {
+      return actorStateWithBoundSession({
         actor: { actorId: actorRef.actorId },
         nativeActorRef: actorRef,
-        boundSessionBindingGeneration: 11n
-      };
+        boundSession: { sessionNodeRid: actorRef.nodeRid, bindingGeneration: 11n }
+      });
     }
   });
 
@@ -2296,11 +2311,11 @@ test('native bound-session send does not add an abort owner after binding admiss
   });
   host.setActorManager({
     getState() {
-      return {
+      return actorStateWithBoundSession({
         actor: { actorId: actorRef.actorId },
         nativeActorRef: actorRef,
-        boundSessionBindingGeneration: 12n
-      };
+        boundSession: { sessionNodeRid: actorRef.nodeRid, bindingGeneration: 12n }
+      });
     }
   });
   const controller = new AbortController();
@@ -2346,11 +2361,11 @@ test('native bound-session send propagates binding admission failure without ret
   });
   host.setActorManager({
     getState() {
-      return {
+      return actorStateWithBoundSession({
         actor: { actorId: actorRef.actorId },
         nativeActorRef: actorRef,
-        boundSessionBindingGeneration: 13n
-      };
+        boundSession: { sessionNodeRid: actorRef.nodeRid, bindingGeneration: 13n }
+      });
     }
   });
 
@@ -2405,14 +2420,14 @@ test('runtime host bound session uses routed Session target before native Sessio
   host.setActorManager({
     getState(actorId) {
       return actorId === actorRef.actorId
-        ? {
+        ? actorStateWithBoundSession({
             nativeActorRef: actorRef,
-            remoteBoundSessionTarget: {
+            boundSession: {
               routerChannelId: 'room.route',
               targetNodeRid: sessionNodeRid,
               spotId: sessionSpotId
             }
-          }
+          })
         : undefined;
     }
   });
@@ -2457,16 +2472,16 @@ test('runtime host local Actor uses its remote Session owner before native deliv
   host.setActorManager({
     getState(actorId) {
       return actorId === actorRef.actorId
-        ? {
+        ? actorStateWithBoundSession({
             actor: { actorId },
             nativeActorRef: actorRef,
-            boundSessionBindingGeneration: 11n,
-            remoteBoundSessionTarget: {
+            boundSession: {
+              bindingGeneration: 11n,
               routerChannelId: 'room.route',
               targetNodeRid: 'session-node',
               spotId: 'session-entry'
             }
-          }
+          })
         : undefined;
     }
   });
@@ -2512,11 +2527,10 @@ test('runtime host local relocated Actor pushes to its Session owner without wai
   host.setActorManager({
     getState(actorId) {
       return actorId === actorRef.actorId
-        ? {
+        ? actorStateWithBoundSession({
             actor: { actorId },
             nativeActorRef: actorRef,
-            boundSessionBindingGeneration: 11n,
-            remoteBoundSessionTarget: {
+            boundSession: {
               routerChannelId: 'room.route',
               targetNodeRid: 'session-node',
               spotId: 'session-entry',
@@ -2524,7 +2538,7 @@ test('runtime host local relocated Actor pushes to its Session owner without wai
               sessionRid: 'session-rid',
               bindingGeneration: 11n
             }
-          }
+          })
         : undefined;
     }
   });
@@ -2572,11 +2586,14 @@ test('runtime host bound session disconnect awaits the native close terminal for
     }
   });
   host.setActorManager({
-    getState: () => ({
-      nativeActorRef: actorRef,
-      boundSessionBindingGeneration: 9n,
-      remoteBoundSessionTarget: { bindingGeneration: 8n }
-    })
+    getState: () => {
+      const state = actorStateWithBoundSession({
+        nativeActorRef: actorRef,
+        boundSession: { bindingGeneration: 9n }
+      });
+      state.remoteBoundSessionTargetFor = () => ({ bindingGeneration: 8n });
+      return state;
+    }
   });
   let completed = false;
   const close = host
@@ -2623,14 +2640,14 @@ test('runtime host bound session uses routed Session target before stale local r
   host.setActorManager({
     getState(actorId) {
       return actorId === actorRef.actorId
-        ? {
+        ? actorStateWithBoundSession({
             nativeActorRef: actorRef,
-            remoteBoundSessionTarget: {
+            boundSession: {
               routerChannelId: 'room.route',
               targetNodeRid: 'session-node',
               spotId: 'session-entry'
             }
-          }
+          })
         : undefined;
     }
   });
@@ -2666,15 +2683,15 @@ test('runtime host local actor keeps its current stream route when a remote pack
   host.setActorManager({
     getState(actorId) {
       return actorId === actorRef.actorId
-        ? {
+        ? actorStateWithBoundSession({
             actor: { actorId: actorRef.actorId },
             nativeActorRef: actorRef,
-            remoteBoundSessionTarget: {
+            boundSession: {
               routerChannelId: 'room.route',
               targetNodeRid: 'remote-node',
               spotId: 'remote-entry'
             }
-          }
+          })
         : undefined;
     }
   });
@@ -2723,14 +2740,14 @@ test('runtime host bound session uses Spot route target even when route channel 
   host.setActorManager({
     getState(actorId) {
       return actorId === actorRef.actorId
-        ? {
+        ? actorStateWithBoundSession({
             nativeActorRef: actorRef,
-            remoteBoundSessionTarget: {
+            boundSession: {
               routerChannelId: 'room.route',
               targetNodeRid: zlink.RoutingId.from('session-node'),
               spotId: zlink.RoutingId.from('session-entry')
             }
-          }
+          })
         : undefined;
     }
   });
@@ -2843,15 +2860,15 @@ test('runtime host local actor uses its current routed session target', async ()
   host.setActorManager({
     getState(actorId) {
       return actorId === actorRef.actorId
-        ? {
+        ? actorStateWithBoundSession({
             actor: { actorId: actorRef.actorId },
             nativeActorRef: actorRef,
-            remoteBoundSessionTarget: {
+            boundSession: {
               routerChannelId: 'room.route',
               targetNodeRid: 'session-node',
               spotId: 'session-entry'
             }
-          }
+          })
         : undefined;
     }
   });
@@ -2889,11 +2906,11 @@ test('local actor push preserves native target-not-found after its remote sessio
   });
   host.setActorManager({
     getState() {
-      return {
+      return actorStateWithBoundSession({
         actor: { actorId: actorRef.actorId },
         nativeActorRef: actorRef,
-        boundSessionBindingGeneration: 11n
-      };
+        boundSession: { sessionNodeRid: actorRef.nodeRid, bindingGeneration: 11n }
+      });
     }
   });
   await assert.rejects(
@@ -3060,13 +3077,13 @@ test('runtime host remote bound session send submits a routed Session command', 
   host.setActorManager({
     getState(actorId) {
       assert.equal(actorId, 'actor-remote');
-      return {
-        remoteBoundSessionTarget: {
+      return actorStateWithBoundSession({
+        boundSession: {
           routerChannelId: 'room.route',
           targetNodeRid: 'session-node',
           spotId: 'session-entry'
         }
-      };
+      });
     }
   });
 
@@ -3117,13 +3134,13 @@ test('runtime host remote bound session receiver forwards through actor remote t
   host.setActorManager({
     getState(actorId) {
       assert.equal(actorId, 'actor-hop');
-      return {
-        remoteBoundSessionTarget: {
+      return actorStateWithBoundSession({
+        boundSession: {
           routerChannelId: 'room.route',
           targetNodeRid: 'session-node',
           spotId: 'session-entry'
         }
-      };
+      });
     }
   });
 
@@ -4748,12 +4765,15 @@ test('production command 36 is sent by binding identity after owner lifecycle fi
   senderHost.setActorManager({
     getState(requestedActorId) {
       return requestedActorId === actorId
-        ? {
+        ? actorStateWithBoundSession({
             actor: { actorId },
             nativeActorRef: serviceActor.ref,
-            boundSessionBindingGeneration: binding.bindingGeneration,
+            boundSession: {
+              sessionNodeRid: serviceActor.ref.nodeRid,
+              bindingGeneration: binding.bindingGeneration
+            },
             ...ownerLifecycle
-          }
+          })
         : undefined;
     }
   });
@@ -6219,13 +6239,13 @@ test('runtime host routed bound session receiver forwards through actor remote t
   host.setActorManager({
     getState(actorId) {
       assert.equal(actorId, 'actor-routed-hop');
-      return {
-        remoteBoundSessionTarget: {
+      return actorStateWithBoundSession({
+        boundSession: {
           routerChannelId: 'room.route',
           targetNodeRid: 'session-node',
           spotId: 'session-entry'
         }
-      };
+      });
     }
   });
 

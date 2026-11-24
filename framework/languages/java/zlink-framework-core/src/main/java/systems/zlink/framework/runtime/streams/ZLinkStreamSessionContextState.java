@@ -10,6 +10,7 @@ import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamSocket;
+import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAction;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
@@ -39,8 +40,8 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 
 final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
@@ -54,6 +55,8 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
     private final ZLinkStreamCompressionCodec compressionCodec;
     private final ZLinkMessageFlowTracer flow;
     private final Supplier<CompletionStage<Void>> closeAction;
+    private final BooleanSupplier shutdownForced;
+    private final ZLinkSessionSerialExecutor serials;
     private final ConcurrentHashMap<String, ZLinkStreamHeader> requestHeadersByFlow =
             new ConcurrentHashMap<>();
     private final ConcurrentHashMap<ZLinkStreamHeader, Boolean> claimedReplyHeaders =
@@ -81,6 +84,7 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
                 compressionCodec,
                 flow,
                 closeAction,
+                () -> false,
                 null);
     }
 
@@ -94,7 +98,8 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
             ZLinkStreamCompressionCodec compressionCodec,
             ZLinkMessageFlowTracer flow,
             Supplier<CompletionStage<Void>> closeAction,
-            ScheduledExecutorService replyRetryExecutor) {
+            BooleanSupplier shutdownForced,
+            ZLinkSessionSerialExecutor serials) {
         this.sessionId = streamNodeName + ":" + routingId;
         this.stream = stream;
         this.routingId = routingId;
@@ -104,6 +109,8 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
         this.compressionCodec = compressionCodec;
         this.flow = flow;
         this.closeAction = Objects.requireNonNull(closeAction, "closeAction");
+        this.shutdownForced = shutdownForced;
+        this.serials = serials;
     }
 
     @Override
@@ -128,8 +135,7 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
 
     @Override
     public ZLinkSessionClient client() {
-        return new ZLinkStreamSessionClient(
-                stream, routingId, this, serializer, defaultCodec, compressionCodec, flow);
+        return new ZLinkStreamSessionClient(this, serializer, defaultCodec, compressionCodec, flow);
     }
 
     @Override
@@ -141,9 +147,11 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
     }
 
     CompletionStage<Void> notifyBoundActorsDisconnected(
-            CompletionStage<Void> acceptedPackets, Duration timeout) {
+            CompletionStage<Void> acceptedPackets,
+            Duration timeout,
+            CompletableFuture<Void> forcedStop) {
         if (actors instanceof ZLinkSessionActorsRuntime runtime) {
-            return runtime.notifyDisconnectedAll(acceptedPackets, timeout);
+            return runtime.notifyDisconnectedAll(acceptedPackets, timeout, forcedStop);
         }
         return CompletableFuture.completedFuture(null);
     }
@@ -177,7 +185,27 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
 
     @Override
     public CompletionStage<Void> close() {
-        return closeAction.get();
+        return shutdownForced.getAsBoolean()
+                ? CompletableFuture.completedFuture(null)
+                : closeAction.get();
+    }
+
+    ZLinkSessionSerialExecutor serials() {
+        return serials;
+    }
+
+    CompletionStage<Void> sendAsync(ZLinkStreamHeader header, List<Message> parts) {
+        return submitTransport(() -> stream.sendAsync(routingId, header, parts));
+    }
+
+    CompletionStage<Void> replyAsync(ZLinkStreamHeader header, List<Message> parts) {
+        return submitTransport(() -> stream.replyAsync(routingId, header, parts));
+    }
+
+    private CompletionStage<Void> submitTransport(Supplier<CompletionStage<Void>> submit) {
+        return shutdownForced.getAsBoolean()
+                ? ZLinkOneWayCalls.oneWayStatus(ZLinkOneWayCalls.SHUTDOWN)
+                : submit.get();
     }
 
     CompletionStage<Void> dispatchStage(
@@ -313,6 +341,11 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
             ZLinkStreamHeader header, Throwable error, CompletableFuture<Void> result) {
         requestHeadersByFlow.entrySet().removeIf(entry -> entry.getValue() == header);
         claimedReplyHeaders.remove(header);
+        if (shutdownForced.getAsBoolean()) {
+            result.completeExceptionally(
+                    ZLinkOneWayCalls.failureForStatus(ZLinkOneWayCalls.SHUTDOWN));
+            return;
+        }
         if (error != null) {
             completeDispatchError(header, error, result);
             return;
@@ -362,6 +395,13 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
                                 result.complete(null);
                             }
                         });
+    }
+
+    void traceShutdown(ZLinkStreamHeader header, Throwable error) {
+        if (unwrap(error) instanceof ZLinkFrameworkException failure
+                && failure.kind() == ZLinkFrameworkErrorKind.SHUTTING_DOWN) {
+            traceDispatchError(header, failure, ZLinkDispatchErrorReason.SHUTDOWN);
+        }
     }
 
     private void traceDispatchError(ZLinkStreamHeader header, Throwable error) {
@@ -447,7 +487,7 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
             Message payload = Message.from(payloadBytes);
             CompletionStage<Void> submitted;
             try {
-                submitted = stream.replyAsync(routingId, replyHeader, List.of(payload));
+                submitted = replyAsync(replyHeader, List.of(payload));
             } catch (RuntimeException failure) {
                 payload.close();
                 completeExceptionally(failure);
