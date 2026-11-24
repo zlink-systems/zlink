@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(zlink_framework_cpp VERSION 0.32.0 LANGUAGES C CXX)
+project(zlink_framework_cpp VERSION 0.34.0 LANGUAGES C CXX)
 add_compile_definitions($<$<CONFIG:Debug>:ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD>)
 set(ZLINK_FRAMEWORK_CPP_DIR "${CMAKE_CURRENT_LIST_DIR}")
 include("${ZLINK_FRAMEWORK_CPP_DIR}/cmake/zlink-cpp-project-defaults.cmake")
@@ -36,9 +36,23 @@ if(ZLINK_FRAMEWORK_CPP_TEST_PROBES AND ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
   message(FATAL_ERROR
     "ZLINK_FRAMEWORK_CPP_TEST_PROBES requires ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK=OFF")
 endif()
-find_package(protobuf CONFIG QUIET)
-if(NOT protobuf_FOUND)
-  find_package(Protobuf MODULE REQUIRED)
+if(ZLINK_FRAMEWORK_CPP_CONAN_PROTOBUF)
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${ZLINK_FRAMEWORK_CPP_CONAN_PROTOBUF}")
+  file(READ "${ZLINK_FRAMEWORK_CPP_CONAN_PROTOBUF}" _zlink_conan_protobuf)
+  string(JSON _zlink_protoc GET "${_zlink_conan_protobuf}" protoc)
+  string(JSON _zlink_protobuf_version GET "${_zlink_conan_protobuf}" version)
+  get_filename_component(protobuf_DIR "${ZLINK_FRAMEWORK_CPP_CONAN_PROTOBUF}" DIRECTORY)
+  # The Conan CONFIG uses its PATH search only if protobuf::protoc is undefined.
+  add_executable(protobuf::protoc IMPORTED)
+  set_property(TARGET protobuf::protoc PROPERTY IMPORTED_LOCATION "${_zlink_protoc}")
+  find_package(protobuf "${_zlink_protobuf_version}" EXACT CONFIG REQUIRED
+    PATHS "${protobuf_DIR}" NO_DEFAULT_PATH)
+else()
+  find_package(protobuf CONFIG QUIET)
+  if(NOT protobuf_FOUND)
+    find_package(Protobuf MODULE REQUIRED)
+  endif()
 endif()
 option(ZLINK_FRAMEWORK_CPP_STAGE_STANDALONE_DEPENDENCIES
   "Stage Core and the C++ binding in a standalone Framework install" ON)
@@ -3136,6 +3150,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_remote_duplicate_bind_replacement
     COMMAND test_cpp_framework_same_node_duplicate_bind remote
+    LABELS "framework-integration;framework-contract;stream;stream-session"
+    TIER contract
+    TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_bind_missing_authority
+    COMMAND test_cpp_framework_same_node_duplicate_bind missing-authority
     LABELS "framework-integration;framework-contract;stream;stream-session"
     TIER contract
     TIMEOUT 30)

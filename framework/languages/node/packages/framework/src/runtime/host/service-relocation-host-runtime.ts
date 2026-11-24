@@ -288,6 +288,7 @@ interface ZLinkHostRelocationOptions {
     clear?(): void | Promise<void>;
   };
   readonly trackInstanceSpot?: (input: ZLinkTrackedInstanceAuthority) => void;
+  readonly observeSpotAuthorityVersion?: (spotId: RoutingId, storeVersion: string) => void;
   readonly observeActorAuthorityVersion?: (actorId: string, storeVersion: string) => void;
   readonly runtimeEventPublisher?: ZLinkRuntimeEventPublisher;
   readonly metrics?: ZLinkRuntimeMetrics;
@@ -5755,6 +5756,12 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
         authority.objectGeneration,
         authority.authorityOwnerGeneration
       );
+      if (hidden.participant.objectKind === 'user_spot') {
+        this.options.observeSpotAuthorityVersion?.(
+          hidden.activation.spotId,
+          authority.storeVersion.value
+        );
+      }
       await this.requireSpotManager().publishRelocationSpot(
         hidden.activation,
         applicationSignaled ? () => hidden.activation!.notifyRelocatedBoundary() : undefined
@@ -5792,11 +5799,25 @@ class LocalTargetPort implements ServiceRelocationTargetObjectPort<LocalHidden> 
   async restoreBoundSession(hidden: LocalHidden, payload: Uint8Array): Promise<void> {
     const carried = decodeActorSession(payload);
     if (hidden.actor === undefined || carried === undefined) return;
-    // The relocation delivers the binding it carried; the target installs it
-    // through the one install rule (Session–Actor binding §6, §8).
-    this.requireActorManager()
-      .getState(hidden.actor.context.actorId)!
-      .installBoundSessionBinding(carried);
+    const actorId = hidden.actor.context.actorId;
+    const state = this.requireActorManager().getState(actorId);
+    const node = this.options.meshNode(this.meshName);
+    if (
+      state?.nativeActorRef === undefined ||
+      node?.restoreActorSessionBinding === undefined ||
+      carried.sessionNodeRid === undefined ||
+      carried.sessionRid === undefined ||
+      carried.bindingGeneration === undefined
+    ) {
+      throw new Error(`Relocation Actor '${actorId}' cannot restore its Session binding.`);
+    }
+    node.restoreActorSessionBinding(
+      state.nativeActorRef,
+      carried.sessionNodeRid,
+      carried.sessionRid,
+      carried.bindingGeneration,
+      carried
+    );
   }
 
   async replayQueuedMessage(

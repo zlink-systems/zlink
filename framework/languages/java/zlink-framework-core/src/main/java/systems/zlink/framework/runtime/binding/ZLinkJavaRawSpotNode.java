@@ -140,18 +140,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     }
 
     private <T> T inStateLane(Supplier<T> work) {
-        try {
-            return stateLane.runAsync(work).toCompletableFuture().join();
-        } catch (CompletionException failure) {
-            Throwable cause = failure.getCause();
-            if (cause instanceof RuntimeException runtimeFailure) {
-                throw runtimeFailure;
-            }
-            if (cause instanceof Error error) {
-                throw error;
-            }
-            throw failure;
-        }
+        return stateLane.awaitResult(work);
     }
 
     @Override
@@ -2608,6 +2597,43 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             int actorSlot,
             ZLinkJavaStreamSocket stream,
             long authorityOwnerGeneration) {
+        inStateLane(
+                streamPublication(
+                        sessionRid,
+                        actor,
+                        bindingGeneration,
+                        actorSlot,
+                        stream,
+                        authorityOwnerGeneration));
+    }
+
+    /** Publishes without parking the caller; the completion callback composes on the lane turn. */
+    CompletionStage<Void> publishStreamSessionAsync(
+            RoutingId sessionRid,
+            ZLinkBackendActorRef actor,
+            long bindingGeneration,
+            int actorSlot,
+            ZLinkJavaStreamSocket stream,
+            long authorityOwnerGeneration) {
+        return stateLane
+                .runAsync(
+                        streamPublication(
+                                sessionRid,
+                                actor,
+                                bindingGeneration,
+                                actorSlot,
+                                stream,
+                                authorityOwnerGeneration))
+                .thenApply(ignored -> null);
+    }
+
+    private Supplier<StreamBinding> streamPublication(
+            RoutingId sessionRid,
+            ZLinkBackendActorRef actor,
+            long bindingGeneration,
+            int actorSlot,
+            ZLinkJavaStreamSocket stream,
+            long authorityOwnerGeneration) {
         StreamBinding binding =
                 new StreamBinding(
                         sessionRid,
@@ -2617,29 +2643,28 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                         actorAuthorityNodeGeneration(actor),
                         actorSlot,
                         stream);
-        inStateLane(
-                () -> {
-                    StreamBinding current = streamBindings.get(actor.actorId());
-                    if (current != null
-                            && (current.bindingGeneration() > binding.bindingGeneration()
-                                    || current.bindingGeneration() == binding.bindingGeneration()
-                                            && (!current.sessionRid().equals(binding.sessionRid())
-                                                    || !current.actor()
-                                                            .actorId()
-                                                            .equals(binding.actor().actorId())
-                                                    || current.actor().generation()
-                                                            != binding.actor().generation()
-                                                    || current.actorSlot() != binding.actorSlot()
-                                                    || current.stream() != binding.stream()))) {
-                        throw new IllegalStateException(
-                                "STREAM session binding publication has a stale generation or"
-                                        + " conflicting identity");
-                    }
-                    if (!binding.equals(current)) {
-                        streamBindings.put(actor.actorId(), binding);
-                    }
-                    return current;
-                });
+        return () -> {
+            StreamBinding current = streamBindings.get(actor.actorId());
+            if (current != null
+                    && (current.bindingGeneration() > binding.bindingGeneration()
+                            || current.bindingGeneration() == binding.bindingGeneration()
+                                    && (!current.sessionRid().equals(binding.sessionRid())
+                                            || !current.actor()
+                                                    .actorId()
+                                                    .equals(binding.actor().actorId())
+                                            || current.actor().generation()
+                                                    != binding.actor().generation()
+                                            || current.actorSlot() != binding.actorSlot()
+                                            || current.stream() != binding.stream()))) {
+                throw new IllegalStateException(
+                        "STREAM session binding publication has a stale generation or"
+                                + " conflicting identity");
+            }
+            if (!binding.equals(current)) {
+                streamBindings.put(actor.actorId(), binding);
+            }
+            return current;
+        };
     }
 
     CompletionStage<Void> unbindStreamSession(

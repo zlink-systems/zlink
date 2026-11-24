@@ -280,9 +280,8 @@ int main (int argc, char **argv)
     try {
         fw::completion_owner_t completion;
         const std::string_view mode = argc > 1 ? std::string_view (argv[1]) : std::string_view ();
-        if (mode == "generation-mismatch" || mode == "stale-location") {
-            // Session-Actor binding §12: a Store row of the same ActorId with another
-            // ObjectGeneration ends InvalidOperation, a stale location ends Unavailable.
+        if (mode == "missing-authority" || mode == "generation-mismatch"
+            || mode == "stale-location") {
             Host host;
             await (host.observer->actors->create (fw::actor_id_t ("bind-target"), "player")
                      .in_mesh ("game")
@@ -290,19 +289,26 @@ int main (int argc, char **argv)
             const auto actor =
               await (host.observer->actors->find (fw::actor_id_t ("bind-target"))).value ();
             const bool different_generation = mode == "generation-mismatch";
+            const bool missing_authority = mode == "missing-authority";
             const auto submitted = fw::detail::actor_ref_access_t::make (
-              different_generation ? actor.node_rid () : fw::node_rid_t::from_string ("stale-node"),
-              std::string ("player"), "bind-target",
+              mode == "stale-location" ? fw::node_rid_t::from_string ("stale-node")
+                                       : actor.node_rid (),
+              std::string ("player"), missing_authority ? "missing-actor" : "bind-target",
               different_generation ? actor.object_generation () + 1 : actor.object_generation (),
               std::string (actor.mesh_name ()));
             Client session (host);
             const auto result = session.stream.actors ().bind (submitted).async ().result_for (10s);
             require (result.has_value (), "bind deadline");
             require (!*result, "bind with a mismatched ActorRef succeeded");
-            require (result->error_kind ()
-                       == (different_generation ? fw::framework_error_kind_t::invalid_operation
-                                                : fw::framework_error_kind_t::unavailable),
-                     "wrong bind error kind");
+            const auto expected = missing_authority ? fw::framework_error_kind_t::not_found
+                                  : different_generation
+                                    ? fw::framework_error_kind_t::invalid_operation
+                                    : fw::framework_error_kind_t::unavailable;
+            if (result->error_kind () != expected) {
+                throw std::runtime_error (
+                  "wrong bind error kind (expected " + std::to_string (static_cast<int> (expected))
+                  + ", got " + std::to_string (static_cast<int> (result->error_kind ())) + ")");
+            }
             return 0;
         }
         const bool remote = argc > 1 && std::string_view (argv[1]) == "remote";

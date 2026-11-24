@@ -722,11 +722,19 @@ export class ServiceStatefulRuntime {
     this.registry.destroyActor(actor);
   }
 
+  actorSessionBinding(actor: ServiceActorRef): ServiceSessionBinding | undefined {
+    return this.registry.binding(actor);
+  }
+
   restoreActorSessionBinding(
     actorRef: ServiceActorRef,
     sessionNodeRid: string,
     sessionRid: string,
-    bindingGeneration: bigint
+    bindingGeneration: bigint,
+    sessionOwner?: Pick<
+      ServiceSessionBinding,
+      'sessionOwnerNodeGeneration' | 'sessionOwnerId' | 'sessionOwnerLeaseGeneration'
+    >
   ): void {
     this.requireOpen();
     const actor = this.registry.actor(actorRef.actorId);
@@ -750,6 +758,9 @@ export class ServiceStatefulRuntime {
       sessionRid,
       sessionOwnerNodeRid: sessionNodeRid,
       bindingGeneration,
+      sessionOwnerNodeGeneration: sessionOwner?.sessionOwnerNodeGeneration,
+      sessionOwnerId: sessionOwner?.sessionOwnerId,
+      sessionOwnerLeaseGeneration: sessionOwner?.sessionOwnerLeaseGeneration,
       membershipEpoch: actor.membershipEpoch
     });
   }
