@@ -46,7 +46,8 @@ internal sealed class ZLinkActorHandoffState(
 
     private sealed record DurablePrefix(
         Task Terminal,
-        Func<ZLinkActorHandoffFrame, Task>? Admit = null
+        Func<ZLinkActorHandoffFrame, Task>? Admit = null,
+        Task? CapturedRequests = null
     );
 
     // Only the handoff lane writes capture. Begin capture runs in the current
@@ -57,7 +58,12 @@ internal sealed class ZLinkActorHandoffState(
     // projection of that lane-owned fact, not a second execution permission.
     internal bool DurablePrefixCanRun => !_deferredJoinCapture;
 
-    internal Task AdmitDurablePrefix(string handoffId, Func<ZLinkActorHandoffFrame, Task> admit)
+    internal Task AdmitDurablePrefix(
+        string handoffId,
+        Func<ZLinkActorHandoffFrame, Task> admit,
+        Func<ZLinkActorHandoffFrame, bool>? isCapturedRequest = null,
+        long? acceptedThrough = null
+    )
     {
         return AwaitStateLane(
             _lane.RunAsync(() =>
@@ -72,17 +78,55 @@ internal sealed class ZLinkActorHandoffState(
                 if (_canonicalMaintenanceDrain is { } previous)
                     return previous.Terminal;
                 var terminals = new List<Task>(_frames.Count);
-                foreach (var frame in _frames)
-                    terminals.Add(admit(frame));
+                List<Task>? requests = null;
+                var ordered = acceptedThrough is { } through
+                    ? _frames
+                        .OrderBy(frame => RelocationQueueGroup(frame, through))
+                        .ThenBy(static frame => frame.ArrivalIndex)
+                    : (IEnumerable<ZLinkActorHandoffFrame>)_frames;
+                foreach (var frame in ordered)
+                {
+                    var record = admit(frame);
+                    terminals.Add(record);
+                    if (isCapturedRequest?.Invoke(frame) == true)
+                        (requests ??= []).Add(record);
+                }
                 var terminal = Task.WhenAll(terminals);
                 ObserveTerminal(terminal);
-                _canonicalMaintenanceDrain = new DurablePrefix(terminal, admit);
+                var capturedRequests = requests is null
+                    ? Task.CompletedTask
+                    : Task.WhenAll(requests);
+                ObserveTerminal(capturedRequests);
+                _canonicalMaintenanceDrain = new DurablePrefix(terminal, admit, capturedRequests);
                 // Queue ownership is established, but public Join completion
                 // still owns admission. Complete releases the reserved prefix.
                 return terminal;
             })
         );
     }
+
+    private static int RelocationQueueGroup(ZLinkActorHandoffFrame frame, long acceptedThrough)
+    {
+        if (frame.ArrivalIndex <= acceptedThrough)
+            return 0;
+        return frame.RouteContext.MessageFollowHopCount != 0 ? 1 : 2;
+    }
+
+    internal Task? CapturedRequestDelivery(string handoffId) =>
+        AwaitStateLane(
+            _lane.RunAsync(() =>
+                string.Equals(_handoffId, handoffId, StringComparison.Ordinal)
+                    ? _canonicalMaintenanceDrain?.CapturedRequests
+                    : null
+            )
+        );
+
+    internal bool HasPendingCapturedRequests() =>
+        AwaitStateLane(
+            _lane.RunAsync(() =>
+                _canonicalMaintenanceDrain?.CapturedRequests is { IsCompletedSuccessfully: false }
+            )
+        );
 
     internal Task TargetActivation =>
         AwaitStateLane(
@@ -1271,7 +1315,11 @@ internal sealed class ZLinkActorHandoffState(
     {
         if (_targetPhase == ZLinkActorTargetHandoffPhase.Completed)
         {
-            if (_frames.Count == 0)
+            if (
+                _frames.Count == 0
+                && _canonicalMaintenanceDrain?.CapturedRequests
+                    is not { IsCompletedSuccessfully: false }
+            )
                 _canonicalMaintenanceDrain = null;
             _canonicalMaintenanceReplayReservations.Clear();
             _targetReplayCompletion?.TrySetResult();
@@ -1775,7 +1823,7 @@ internal sealed class ZLinkActorHandoffState(
                     // the authority cutover. They must reserve execution before
                     // direct ingress that observed the new owner, even when the
                     // network delivers the direct frame first.
-                    .OrderBy(static frame => frame.RouteContext.MessageFollowHopCount == 0 ? 1 : 0)
+                    .OrderBy(frame => RelocationQueueGroup(frame, queuedThroughArrivalIndex))
                     .ThenBy(static frame => frame.ArrivalIndex)
                     .ToArray();
                 // ACK removes the frame before DispatchReplayAsync necessarily
@@ -1874,25 +1922,6 @@ internal sealed class ZLinkActorHandoffState(
                     completedReservations.Select(static reservation => reservation.Task)
                 );
                 return claimed.Reservations;
-            })
-        );
-    }
-
-    internal void RegisterCanonicalMaintenanceDrain(string handoffId, Task drain)
-    {
-        ArgumentNullException.ThrowIfNull(drain);
-        AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                if (
-                    !string.Equals(_handoffId, handoffId, StringComparison.Ordinal)
-                    || _targetPhase != ZLinkActorTargetHandoffPhase.AdmissionOpenDraining
-                    || _canonicalMaintenanceDrain is not null
-                )
-                    throw new InvalidOperationException(
-                        $"Actor '{actorId}' cannot register the canonical drain."
-                    );
-                _canonicalMaintenanceDrain = new DurablePrefix(drain);
             })
         );
     }

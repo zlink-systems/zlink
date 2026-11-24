@@ -242,7 +242,9 @@ class actor_transfer_coordinator_t
     // handoff markers under the final transfer correlation.
     task_t<void> wait_for_source_completion (std::string actor_key);
     task_t<void> wait_for_source_completions ();
-    result_t<void> try_reserve_source (const std::string &actor_key, std::string transfer_id = {});
+    result_t<void> try_reserve_source (const std::string &actor_key,
+                                       std::string transfer_id = {},
+                                       bool pending_relocation_request = false);
     result_t<void> try_begin_local (const std::string &actor_key);
     result_t<void> try_begin_source_remote (const std::string &actor_key,
                                             std::string transfer_id = {});
@@ -275,6 +277,7 @@ class actor_transfer_coordinator_t
     task_t<bool> blocks_dispatch_async (std::string actor_key) const;
     std::optional<actor_move_phase_t> phase (const std::string &actor_key) const;
     std::optional<std::string> transfer_id (const std::string &actor_key) const;
+    bool reserved_with_pending_relocation_request (const std::string &actor_key) const;
     bool matches_source_remote_transfer (const std::string &actor_key,
                                          const std::string &transfer_id) const;
 
@@ -466,6 +469,7 @@ class actor_transfer_coordinator_t
         // handler can adopt the target route (spec 28) without a second
         // Location Store resolver lookup for the target's spot address.
         std::optional<reconcile_target_context_t> reconcile_context;
+        bool pending_relocation_request_at_reservation = false;
     };
 
     static bool is_source_remote (const move_state_t &move) noexcept

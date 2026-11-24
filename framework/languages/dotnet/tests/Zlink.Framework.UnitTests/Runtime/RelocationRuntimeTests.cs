@@ -156,6 +156,7 @@ public sealed partial class RelocationRuntimeTests
                 ExpiresAt = TimeSpan.Zero,
             };
             Volatile.Write(ref stage.Published, 1);
+            stage.Terminal.SetResult();
             Volatile.Write(ref stage.SessionRoutesConverged, 1);
             return target.TryTrackStage(
                 new ZLinkAggregateFence(envelope.AggregateId, envelope.AggregateGeneration),
@@ -1449,7 +1450,7 @@ public sealed partial class RelocationRuntimeTests
     }
 
     [Fact]
-    public async Task ShutdownDrainWaitsForPublishedTargetReplay()
+    public async Task ShutdownDrainWaitsForCapturedRequestDelivery()
     {
         using var services = new ServiceCollection().BuildServiceProvider();
         var target = new ZLinkSpotRetireTargetRuntime(
@@ -1460,7 +1461,7 @@ public sealed partial class RelocationRuntimeTests
         var stage = CreateTargetStageForHeldJournal();
         Volatile.Write(ref stage.AuthorityPublished, 1);
         var replay = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        stage.AdmissionDrainTask = replay.Task;
+        stage.CapturedRequestDelivery = replay.Task;
         var fence = new ZLinkAggregateFence(
             stage.Envelope.AggregateId,
             stage.Envelope.AggregateGeneration
@@ -1472,7 +1473,7 @@ public sealed partial class RelocationRuntimeTests
         try
         {
             Assert.False(drain.IsCompleted);
-            var failure = new IOException("Published target replay failed.");
+            var failure = new IOException("Captured request delivery failed.");
             replay.SetException(failure);
             Assert.Same(failure, await Assert.ThrowsAsync<IOException>(() => drain));
             Assert.Equal(1, target.ActiveStageCount);
@@ -1670,6 +1671,7 @@ public sealed partial class RelocationRuntimeTests
         );
 
         Assert.True(authorityNormalized);
+        Assert.False(stage.Terminal.Task.IsCompleted);
         Assert.Empty(deleted);
 
         await ZLinkSpotRetireTargetRuntime.ReleaseFinalRootAfterNormalizationAsync(
@@ -1678,6 +1680,7 @@ public sealed partial class RelocationRuntimeTests
             commitNormalization: null,
             reference =>
             {
+                Assert.True(stage.Terminal.Task.IsCompletedSuccessfully);
                 deleted.Add(reference);
                 return ValueTask.CompletedTask;
             }
@@ -1859,9 +1862,20 @@ public sealed partial class RelocationRuntimeTests
         );
         Assert.Equal(1, target.ActiveStageCount);
 
-        // Once the session routes converged, expiry reconciliation completes
-        // the published stage as a Completed tombstone.
+        // Route convergence can finish while the stage still owns publication.
         Volatile.Write(ref stage.SessionRoutesConverged, 1);
+        Assert.False(
+            await target.PublishInboundAsync(
+                unknownFence,
+                stage.SourceNodeRid,
+                CancellationToken.None
+            )
+        );
+        Assert.Equal(1, target.ActiveStageCount);
+        Assert.Equal(0, target.TerminalTombstoneCount);
+
+        // Once publication and the session routes are complete, expiry removes the stage.
+        stage.Terminal.SetResult();
         Assert.False(
             await target.PublishInboundAsync(
                 unknownFence,
@@ -1915,10 +1929,10 @@ public sealed partial class RelocationRuntimeTests
         // Target publication re-enters admission idempotently: racing an
         // already-open admission never re-opens the seal.
         await runtime.OpenInboundSpotAggregateAdmissionAsync(stage);
-        var drain = Assert.IsAssignableFrom<Task>(stage.AdmissionDrainTask);
+        var drain = Assert.IsAssignableFrom<Task>(stage.CapturedRequestDelivery);
         await runtime.OpenInboundSpotAggregateAdmissionAsync(stage);
 
-        Assert.Same(drain, stage.AdmissionDrainTask);
+        Assert.Same(drain, stage.CapturedRequestDelivery);
         Assert.Equal(1, Volatile.Read(ref stage.AdmissionOpened));
     }
 

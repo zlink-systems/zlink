@@ -161,26 +161,7 @@ internal sealed class ZLinkActorInboundPipeline(
         CancellationToken cancellationToken
     )
     {
-        await DispatchReplayAsync(
-                frames,
-                acknowledgeFrame,
-                replayAdmission: null,
-                cancellationToken
-            )
-            .ConfigureAwait(false);
-    }
-
-    internal async ValueTask DispatchReplayAsync(
-        ZLinkSpotActorFrameBatch frames,
-        Action<long> acknowledgeFrame,
-        ZLinkSpotRelocationReplayAdmission? replayAdmission,
-        CancellationToken cancellationToken
-    )
-    {
         ArgumentNullException.ThrowIfNull(acknowledgeFrame);
-        using var replayScope = replayAdmission is null
-            ? null
-            : ZLinkSpotRelocationReplayScope.Enter(replayAdmission);
         try
         {
             for (var i = 0; i < frames.Count; i++)
@@ -205,7 +186,6 @@ internal sealed class ZLinkActorInboundPipeline(
         }
         finally
         {
-            replayAdmission?.QueueReservation.Discard();
             frames.Dispose();
         }
     }
@@ -234,84 +214,6 @@ internal sealed class ZLinkActorInboundPipeline(
                     callerOwnsDispatchTurn: true
                 )
                 .ConfigureAwait(false);
-        }
-    }
-
-    internal Task QueueCanonicalReplayAsync(
-        ZLinkSpotActorFrameBatch frames,
-        Func<ZLinkSpotActorFrame, ZLinkActorReply?, CancellationToken, ValueTask> completeFrame,
-        CancellationToken cancellationToken
-    )
-    {
-        return QueueCanonicalReplayAsync(
-            frames,
-            completeFrame,
-            replayAdmission: null,
-            cancellationToken
-        );
-    }
-
-    internal Task QueueCanonicalReplayAsync(
-        ZLinkSpotActorFrameBatch frames,
-        Func<ZLinkSpotActorFrame, ZLinkActorReply?, CancellationToken, ValueTask> completeFrame,
-        ZLinkSpotRelocationReplayAdmission? replayAdmission,
-        CancellationToken cancellationToken
-    )
-    {
-        ArgumentNullException.ThrowIfNull(completeFrame);
-        var dispatches = new Task[frames.Count];
-        for (var index = 0; index < frames.Count; index++)
-        {
-            var frame = frames[index];
-            dispatches[index] = DispatchQueuedCanonicalFrameAsync(
-                frame,
-                completeFrame,
-                replayAdmission,
-                cancellationToken
-            );
-        }
-        return CompleteQueuedCanonicalBatchAsync(dispatches, frames);
-    }
-
-    private async Task DispatchQueuedCanonicalFrameAsync(
-        ZLinkSpotActorFrame frame,
-        Func<ZLinkSpotActorFrame, ZLinkActorReply?, CancellationToken, ValueTask> completeFrame,
-        ZLinkSpotRelocationReplayAdmission? replayAdmission,
-        CancellationToken cancellationToken
-    )
-    {
-        using var replayScope = replayAdmission is null
-            ? null
-            : ZLinkSpotRelocationReplayScope.Enter(replayAdmission);
-        try
-        {
-            using (frame)
-                await DispatchFrameAsync(
-                        frame,
-                        cancellationToken,
-                        allowCapture: false,
-                        completeCanonicalReplay: completeFrame
-                    )
-                    .ConfigureAwait(false);
-        }
-        finally
-        {
-            replayAdmission?.QueueReservation.Discard();
-        }
-    }
-
-    private static async Task CompleteQueuedCanonicalBatchAsync(
-        Task[] dispatches,
-        ZLinkSpotActorFrameBatch frames
-    )
-    {
-        try
-        {
-            await Task.WhenAll(dispatches).ConfigureAwait(false);
-        }
-        finally
-        {
-            frames.Dispose();
         }
     }
 

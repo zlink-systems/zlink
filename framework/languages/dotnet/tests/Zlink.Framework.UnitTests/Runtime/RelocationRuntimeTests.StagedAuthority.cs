@@ -190,8 +190,28 @@ public sealed partial class RelocationRuntimeTests
             );
             Assert.True(target.TryTrackStage(fence, stage));
 
-            // Stop after authority confirmation and before application dispatch.
-            stage.AdmissionDrainTask = Task.FromCanceled(new CancellationToken(canceled: true));
+            Assert.True(
+                ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(committed, out var previous)
+            );
+            Assert.Same(
+                stage.Terminal.Task,
+                target.FindTargetTerminal(previous.State, actor.AuthorityKey, out _)
+            );
+            Assert.Null(
+                target.FindTargetTerminal(
+                    previous.State with
+                    {
+                        TargetAttemptGeneration = stage.TargetAttemptGeneration + 1,
+                    },
+                    actor.AuthorityKey,
+                    out _
+                )
+            );
+
+            // Stop after authority confirmation and before authority normalization.
+            stage.CapturedRequestDelivery = Task.FromCanceled(
+                new CancellationToken(canceled: true)
+            );
             if (publication == StagedAuthorityPublication.Complete)
             {
                 // The live cutover owns its verified root while source completion is absent.

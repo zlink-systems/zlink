@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 #pragma once
 
+#include "runtime/locations/location_repository.hpp"
+
 #include <zlink/framework/detail/binary_text_codec.hpp>
 
 #include <nlohmann/json.hpp>
@@ -203,3 +205,39 @@ without_capture (const std::shared_ptr<const authority_aggregate_t> &current)
 }
 
 } // namespace zlink::framework::runtime::authority_aggregate_codec
+
+namespace zlink::framework::runtime
+{
+struct finishing_relocation_t
+{
+    std::string id;
+    std::uint64_t attempt_generation;
+};
+
+inline std::optional<finishing_relocation_t>
+finishing_relocation (const authority_snapshot_t &snapshot)
+{
+    using namespace authority_aggregate_codec;
+    if (snapshot.aggregate && snapshot.aggregate->relocation) {
+        const auto &record = *snapshot.aggregate->relocation;
+        if (record.phase != "committed" && record.phase != "activating"
+            && record.phase != "activated" && record.phase != "cleaning"
+            && record.phase != "completed")
+            return std::nullopt;
+        const auto &target = snapshot.aggregate->encoded.at ("relocation").at ("target");
+        const auto fence = read_fence (target);
+        const auto rid = snapshot.allocation.target.node_rid.value ();
+        if (fence.owner_id != snapshot.owner.owner_id || snapshot.owner.lease_generation <= 0
+            || fence.owner_lease_generation
+                 != static_cast<std::uint64_t> (snapshot.owner.lease_generation)
+            || fence.node_rid_hex != detail::encode_hex (std::as_bytes (std::span (rid)))
+            || fence.node_generation != snapshot.allocation.target.node_lifecycle_generation)
+            return std::nullopt;
+        return finishing_relocation_t{record.relocation_id, number (target, "attemptGeneration")};
+    }
+    if (const auto legacy = decode_finishing_relocation (snapshot.payload))
+        return finishing_relocation_t{wire_uuid (legacy->high, legacy->low),
+                                      legacy->target_attempt_generation};
+    return std::nullopt;
+}
+} // namespace zlink::framework::runtime

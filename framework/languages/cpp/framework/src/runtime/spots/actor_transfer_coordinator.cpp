@@ -178,12 +178,15 @@ result_t<void> actor_transfer_coordinator_t::try_claim_source_on_lane (const std
 }
 
 result_t<void> actor_transfer_coordinator_t::try_reserve_source (const std::string &actor_key,
-                                                                 std::string transfer_id)
+                                                                 std::string transfer_id,
+                                                                 bool pending_relocation_request)
 {
     return _lane
       .run ([&, this] {
           return try_claim_source_on_lane (
-            actor_key, {actor_move_phase_t::source_reserved, std::move (transfer_id)});
+            actor_key, {.phase = actor_move_phase_t::source_reserved,
+                        .transfer_id = std::move (transfer_id),
+                        .pending_relocation_request_at_reservation = pending_relocation_request});
       })
       .get ();
 }
@@ -948,6 +951,19 @@ actor_transfer_coordinator_t::transfer_id (const std::string &actor_key) const
           return found == _moves.end () || found->second.transfer_id.empty ()
                    ? std::nullopt
                    : std::make_optional (found->second.transfer_id);
+      })
+      .get ();
+}
+
+bool actor_transfer_coordinator_t::reserved_with_pending_relocation_request (
+  const std::string &actor_key) const
+{
+    return _lane
+      .run ([&] {
+          const auto found = _moves.find (actor_key);
+          return found != _moves.end ()
+                 && found->second.phase == actor_move_phase_t::source_reserved
+                 && found->second.pending_relocation_request_at_reservation;
       })
       .get ();
 }

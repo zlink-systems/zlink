@@ -65,19 +65,34 @@ internal sealed record ZLinkAuthorityRelocation(
         Guid relocationId,
         ulong attemptGeneration
     ) =>
-        authority.Relocation
-            is {
-                Phase: >= ServiceWireCodec.RelocationPhase.Committed
-                    and <= ServiceWireCodec.RelocationPhase.Completed,
-                Target: { } target,
-            } relocation
+        authority.Relocation is { Target: { } target } relocation
         && relocation.RelocationId == relocationId
         && target.AttemptGeneration == attemptGeneration
-        && target.NodeRid == authority.Allocation.Descriptor.Rid.ToHex()
-        && target.NodeGeneration == authority.Allocation.DescriptorLifecycleGeneration
-        && target.OwnerId == authority.OwnerId
+        && IsCommittedTargetAuthority(
+            authority,
+            relocation.Phase,
+            target.NodeRid,
+            target.NodeGeneration,
+            target.OwnerId,
+            target.OwnerLeaseGeneration
+        );
+
+    internal static bool IsCommittedTargetAuthority(
+        ZLinkAuthoritySnapshot authority,
+        ServiceWireCodec.RelocationPhase phase,
+        string targetNodeRid,
+        ulong targetNodeGeneration,
+        string targetOwnerId,
+        ulong targetOwnerLeaseGeneration
+    ) =>
+        phase
+            is >= ServiceWireCodec.RelocationPhase.Committed
+                and <= ServiceWireCodec.RelocationPhase.Completed
+        && targetNodeRid == authority.Allocation.Descriptor.Rid.ToHex()
+        && targetNodeGeneration == authority.Allocation.DescriptorLifecycleGeneration
+        && targetOwnerId == authority.OwnerId
         && authority.OwnerLeaseGeneration > 0
-        && target.OwnerLeaseGeneration == (ulong)authority.OwnerLeaseGeneration;
+        && targetOwnerLeaseGeneration == (ulong)authority.OwnerLeaseGeneration;
 
     internal bool HoldsCapturedSource(
         Guid relocationId,

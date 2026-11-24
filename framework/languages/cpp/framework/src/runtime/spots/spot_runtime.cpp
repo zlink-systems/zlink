@@ -9738,7 +9738,8 @@ spot_node_runtime_t::actor_join_operation_id (std::string_view transfer_id) cons
 }
 
 result_t<std::shared_ptr<deferred_barrier_t>>
-spot_node_runtime_t::reserve_actor_join_barrier (const actor_ref_t &actor_ref)
+spot_node_runtime_t::reserve_actor_join_barrier (const actor_ref_t &actor_ref,
+                                                 bool pending_relocation_request)
 {
     if (::zlink::framework::detail::actor_ref_access_t::empty (actor_ref)) {
         return result_t<std::shared_ptr<deferred_barrier_t>>::failure (
@@ -9747,8 +9748,8 @@ spot_node_runtime_t::reserve_actor_join_barrier (const actor_ref_t &actor_ref)
 
     const auto key = actor_key (actor_ref);
     const auto reservation_id = next_actor_transfer_id ();
-    const auto claimed =
-      _state->actor_transfer_coordinator->try_reserve_source (key, reservation_id);
+    const auto claimed = _state->actor_transfer_coordinator->try_reserve_source (
+      key, reservation_id, pending_relocation_request);
     if (!claimed)
         return detail::propagate_failure<std::shared_ptr<deferred_barrier_t>> (
           claimed, "Actor join reservation failed");
@@ -9792,6 +9793,13 @@ spot_node_runtime_t::reserve_actor_join_barrier (const actor_ref_t &actor_ref)
     }
     return executor->queue ()->reserve_deferred_barrier_next (
       "actor-join", std::move (cancel_reservation), std::move (settle_reservation));
+}
+
+bool spot_node_runtime_t::reserved_with_pending_relocation_request (
+  const actor_ref_t &actor_ref) const
+{
+    return _state->actor_transfer_coordinator->reserved_with_pending_relocation_request (
+      actor_key (actor_ref));
 }
 
 void spot_node_runtime_t::cancel_local_actor_handoff (const actor_ref_t &actor_ref)
@@ -15707,6 +15715,42 @@ task_t<bool> spot_node_runtime_t::relocation_ready_async () const
     });
 }
 
+spot_node_runtime_t::relocation_units_t spot_node_runtime_t::collect_relocation_units_on_lane (
+  const spot_node_builder_state_t &node,
+  const std::vector<runtime::stateful::object_inventory_t> &inventory)
+{
+    relocation_units_t units;
+    for (const auto &[_, context] : node.spot_contexts_by_id) {
+        const auto &state = context._state;
+        if (!state || state->is_entry_spot () || state->is_instance_spot ()
+            || state->execution_mode != user_spot_execution_mode_t::spot_wide)
+            continue;
+        units.spots.push_back ({state->spot_id, state->spot_name, {}});
+    }
+    for (const auto &actor : inventory) {
+        auto ref = ::zlink::framework::detail::actor_ref_access_t::make (
+          node_rid_t::from_string (actor.owner.node_id), actor.stable_type, actor.owner.key,
+          actor.owner.object_generation);
+        const auto spot =
+          std::find_if (units.spots.begin (), units.spots.end (),
+                        [&] (const auto &unit) { return unit.spot_id == actor.membership; });
+        if (spot != units.spots.end ())
+            spot->actors.push_back (std::move (ref));
+        else
+            units.standalone_actors.push_back (std::move (ref));
+    }
+    return units;
+}
+
+task_t<spot_node_runtime_t::relocation_units_t> spot_node_runtime_t::read_relocation_units () const
+{
+    const auto state = _state;
+    auto inventory = co_await local_actor_inventory_async ();
+    co_return co_await state->lane.run_task ([state, inventory = std::move (inventory)] {
+        return collect_relocation_units_on_lane (*state, inventory);
+    });
+}
+
 task_t<spot_node_runtime_t::relocation_units_t> spot_node_runtime_t::relocation_units () const
 {
     const auto state = _state;
@@ -15724,27 +15768,7 @@ task_t<spot_node_runtime_t::relocation_units_t> spot_node_runtime_t::relocation_
         units =
           co_await state->lane.run_task ([state, inventory = std::move (*inventory)] () mutable {
               filter_local_actor_inventory_on_lane (*state, inventory);
-              relocation_units_t result;
-              for (const auto &[_, context] : state->spot_contexts_by_id) {
-                  const auto state = context._state;
-                  if (!state || state->is_entry_spot () || state->is_instance_spot ()
-                      || state->execution_mode != user_spot_execution_mode_t::spot_wide)
-                      continue;
-                  result.spots.push_back ({state->spot_id, state->spot_name, {}});
-              }
-              for (const auto &actor : inventory) {
-                  auto ref = ::zlink::framework::detail::actor_ref_access_t::make (
-                    node_rid_t::from_string (actor.owner.node_id), actor.stable_type,
-                    actor.owner.key, actor.owner.object_generation);
-                  const auto spot = std::find_if (
-                    result.spots.begin (), result.spots.end (),
-                    [&] (const auto &unit) { return unit.spot_id == actor.membership; });
-                  if (spot != result.spots.end ())
-                      spot->actors.push_back (std::move (ref));
-                  else
-                      result.standalone_actors.push_back (std::move (ref));
-              }
-              return result;
+              return collect_relocation_units_on_lane (*state, inventory);
           });
     }
     catch (...) {
