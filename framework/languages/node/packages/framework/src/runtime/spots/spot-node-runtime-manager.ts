@@ -102,7 +102,7 @@ import {
   spotNodeAutoConnectCapability,
   type ZLinkSpotNodeLocationAutoConnectContext
 } from './spot-node-autoconnect';
-import type { ZLinkSpotRoutedTransport } from './spot-outbound';
+import type { ZLinkSpotAddressTransport, ZLinkSpotRoutedTransport } from './spot-outbound';
 import type { ZLinkSpotRouteResolver } from './spot-routing-internal';
 import type {
   ZLinkEntryActorRuntime,
@@ -136,6 +136,7 @@ export interface ZLinkSpotNodeRuntimeManagerOptions {
   readonly spotPublisherClient?: ZLinkSpotPublisherClient;
   readonly spotRouteResolver?: ZLinkSpotRouteResolver;
   readonly routedTransport?: ZLinkSpotRoutedTransport;
+  readonly addressTransport?: ZLinkSpotAddressTransport;
   readonly spotRouterChannelIdForMesh?: (meshName: string) => string;
   readonly providerResolver?: ZLinkProviderResolver;
   readonly dispatchErrors?: ZLinkDispatchErrorReporter;
@@ -1155,6 +1156,7 @@ export class ZLinkSpotNodeRuntimeManager {
       fanoutClient: this.options.fanoutClient,
       spotPublisherClient: this.options.spotPublisherClient,
       routedTransport: this.options.routedTransport,
+      addressTransport: this.options.addressTransport,
       spotRouterChannelIdForMesh: this.options.spotRouterChannelIdForMesh,
       timerHandlers: spotNode.entrySpotTimerHandlers,
       packetHandlers: spotNode.entrySpotPacketHandlers,
@@ -1252,7 +1254,8 @@ export class ZLinkSpotNodeRuntimeManager {
   async dispatchEntryActorJoin(
     meshName: string,
     actor: ZLinkActor,
-    handoffBacklog: readonly ZLinkActorHandoffPacket[] = []
+    handoffBacklog: readonly ZLinkActorHandoffPacket[] = [],
+    onCallbackFailure?: (error: unknown) => void
   ): Promise<void> {
     await this.ensureEntryActivation(meshName);
     const activation = this.entryActivations.get(meshName);
@@ -1261,7 +1264,7 @@ export class ZLinkSpotNodeRuntimeManager {
         `Entry Spot actor join requires an Entry Spot for MeshNode '${meshName}'.`
       );
     }
-    await activation.commitServiceActorJoin(actor, handoffBacklog);
+    await activation.commitServiceActorJoin(actor, handoffBacklog, undefined, onCallbackFailure);
   }
 
   admitEntryActorPacketPrefix(
@@ -1278,14 +1281,19 @@ export class ZLinkSpotNodeRuntimeManager {
     return activation.admitActorPacketPrefix(actorId, records);
   }
 
-  executeEntryActor<T>(meshName: string, actorId: string, operation: () => Promise<T>): Promise<T> {
+  executeEntryActor<T>(
+    meshName: string,
+    actorId: string,
+    operation: () => Promise<T>,
+    onFailure?: (error: unknown) => T
+  ): Promise<T> {
     const activation = this.entryActivations.get(meshName);
     if (activation === undefined) {
       throw new ZLinkConfigurationException(
         `Entry Spot Actor '${actorId}' has no activation for MeshNode '${meshName}'.`
       );
     }
-    return activation.executeActor(actorId, operation);
+    return activation.executeActor(actorId, operation, onFailure);
   }
 
   publish(

@@ -19,12 +19,16 @@ import systems.zlink.framework.actors.ZLinkActorManager;
 import systems.zlink.framework.handlers.ZLinkPacket;
 import systems.zlink.framework.handlers.ZLinkSpotActorRequest;
 import systems.zlink.framework.handlers.ZLinkSpotActorSend;
+import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.internal.backend.*;
+import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetricProbe;
+import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
+import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Metric;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
@@ -402,8 +406,9 @@ final class StreamSessionTest {
                 var targetOptions =
                         retirementActorOptions(RETIREMENT_TARGET_NODE, locations, relocations);
                 try (var target =
-                        RuntimeTestSupport.startFixedRidFramework(
-                                targetOptions, new ZLinkJavaBackendAdapterFactory())) {
+                                RuntimeTestSupport.startFixedRidFramework(
+                                        targetOptions, new ZLinkJavaBackendAdapterFactory());
+                        var metrics = ZLinkRuntimeMetricProbe.install()) {
                     assertEventually(target::isReady);
                     assertMeshPeerReady(actorHost, RETIREMENT_TARGET_NODE);
                     target.actorManager()
@@ -436,12 +441,18 @@ final class StreamSessionTest {
                                     .RELOCATED,
                             relocation.outcome(),
                             relocation::toString);
+                    String targetResumeMetric = Metric.RELOCATION_TARGET_RESUME.metricName();
+                    var userSpotTags =
+                            ZLinkRuntimeMetrics.relocationUnitTags(
+                                    ZLinkPlacementObjectKind.USER_SPOT.value());
                     assertEventually(
-                            () -> actorHost.status().safeToShutdown(),
-                            actorOptions
-                                    .configureLocations()
-                                    .messageFollowDuration()
-                                    .plusMillis(CLIENT_TIMEOUT_MILLIS));
+                            () ->
+                                    metrics.samples.stream()
+                                            .anyMatch(
+                                                    sample ->
+                                                            sample.name().equals(targetResumeMetric)
+                                                                    && sample.tags()
+                                                                            .equals(userSpotTags)));
                     assertEquals(
                             "INVALID_OPERATION",
                             target.actorClient()
@@ -1306,12 +1317,7 @@ final class StreamSessionTest {
     }
 
     private static void assertEventually(BooleanSupplier condition) throws Exception {
-        assertEventually(condition, java.time.Duration.ofMillis(CLIENT_TIMEOUT_MILLIS));
-    }
-
-    private static void assertEventually(
-            BooleanSupplier condition, java.time.Duration observationWindow) throws Exception {
-        long deadline = System.nanoTime() + observationWindow.toNanos();
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(CLIENT_TIMEOUT_MILLIS);
         while (System.nanoTime() < deadline) {
             if (condition.getAsBoolean()) {
                 return;

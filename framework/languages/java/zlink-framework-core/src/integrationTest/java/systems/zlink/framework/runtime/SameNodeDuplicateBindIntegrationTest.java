@@ -339,7 +339,8 @@ final class SameNodeDuplicateBindIntegrationTest {
                     assertEquals(
                             outcome.equals("recreated")
                                     ? ZLinkFrameworkErrorKind.INVALID_OPERATION
-                                    : ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                    // Destroy removes the authority: NotFound (06-framework-api).
+                                    : ZLinkFrameworkErrorKind.NOT_FOUND,
                             assertInstanceOf(
                                             ZLinkFrameworkException.class,
                                             failure.getCause(),

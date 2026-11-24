@@ -10,6 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -36,6 +37,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamReceiv
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
+import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityMissing;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityReadResult;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
@@ -192,8 +194,13 @@ final class ZLinkSessionActorBindingContractTest {
     }
 
     @ParameterizedTest
-    @ValueSource(booleans = {true, false})
-    void bindClassifiesGenerationMismatchSeparatelyFromStaleLocation(boolean differentGeneration) {
+    @CsvSource({
+        "different-generation, INVALID_OPERATION",
+        "stale-location, UNAVAILABLE",
+        "missing-authority, NOT_FOUND"
+    })
+    void bindClassifiesAuthorityAndRouteFailures(
+            String scenario, ZLinkFrameworkErrorKind expected) {
         var codec = new ZLinkActorAuthorityPayloadCodec();
         var snapshot =
                 new ZLinkAuthoritySnapshot(
@@ -230,7 +237,11 @@ final class ZLinkSessionActorBindingContractTest {
                                 (proxy, method, arguments) ->
                                         switch (method.getName()) {
                                             case "read" ->
-                                                    CompletableFuture.completedFuture(snapshot);
+                                                    CompletableFuture.completedFuture(
+                                                            scenario.equals("missing-authority")
+                                                                    ? new ZLinkAuthorityMissing(
+                                                                            java.time.Instant.now())
+                                                                    : snapshot);
                                             case "readOwnerLease" ->
                                                     CompletableFuture.completedFuture(
                                                             new ZLinkOwnerLeaseFound(
@@ -269,9 +280,11 @@ final class ZLinkSessionActorBindingContractTest {
         stream.runtime = runtime;
         try {
             var submitted =
-                    differentGeneration
-                            ? new ActorRef("actor-1", 8, MESH, NODE_A)
-                            : new ActorRef("actor-1", 7, MESH, NODE_B);
+                    switch (scenario) {
+                        case "different-generation" -> new ActorRef("actor-1", 8, MESH, NODE_A);
+                        case "stale-location" -> new ActorRef("actor-1", 7, MESH, NODE_B);
+                        default -> new ActorRef("actor-1", 7, MESH, NODE_A);
+                    };
 
             var failure =
                     assertThrows(
@@ -279,9 +292,7 @@ final class ZLinkSessionActorBindingContractTest {
                             () -> runtime.bind(submitted).toCompletableFuture().join());
 
             assertEquals(
-                    differentGeneration
-                            ? ZLinkFrameworkErrorKind.INVALID_OPERATION
-                            : ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    expected,
                     assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
             assertTrue(stream.binds.isEmpty());
             assertTrue(runtime.bound().isEmpty());
@@ -1573,7 +1584,7 @@ final class ZLinkSessionActorBindingContractTest {
         }
     }
 
-    private static ZLinkSessionActorsRuntime runtime(FakeStream stream) {
+    static ZLinkSessionActorsRuntime runtime(FakeStream stream) {
         ZLinkSessionActorsRuntime runtime =
                 new ZLinkSessionActorsRuntime(
                         authoritySpotNode(Map.of()),
@@ -1796,7 +1807,7 @@ final class ZLinkSessionActorBindingContractTest {
         }
     }
 
-    private static final class FakeStream implements ZLinkBackendStreamSocket {
+    static final class FakeStream implements ZLinkBackendStreamSocket {
         private final CompletableFuture<Duration> bindSubmitted = new CompletableFuture<>();
         private long nativeBindingGeneration = BINDING_GENERATION;
         private String disconnectPacketName;
@@ -1814,7 +1825,8 @@ final class ZLinkSessionActorBindingContractTest {
         private byte[] disconnectBody;
         private final List<String> binds = new ArrayList<>();
         private final List<String> bindingEvents = new ArrayList<>();
-        private final List<ControlFrame> controls = new ArrayList<>();
+        private final List<ControlFrame> controls =
+                java.util.Collections.synchronizedList(new ArrayList<>());
         //  `unbindActor` is submitted from a pool thread (ZLinkBoundActor
         //  hops off the completing thread on purpose), so the recording list
         //  is read by the test thread while a pool thread appends to it.
@@ -1829,8 +1841,7 @@ final class ZLinkSessionActorBindingContractTest {
         private boolean deferUnbind;
         private SubmitResult relayFailure;
         private CompletableFuture<List<Message>> pendingBoundRequest;
-        private CompletionStage<Void> bindingAcknowledgement =
-                CompletableFuture.completedFuture(null);
+        CompletionStage<Void> bindingAcknowledgement = CompletableFuture.completedFuture(null);
         private CompletableFuture<List<Message>> pendingDisconnectNotification;
         private CountDownLatch blockRelayEntered;
         private CountDownLatch blockRelayRelease;
@@ -1970,11 +1981,13 @@ final class ZLinkSessionActorBindingContractTest {
             return true;
         }
 
-        private List<String> controlNames() {
-            return controls.stream().map(ControlFrame::name).toList();
+        List<String> controlNames() {
+            synchronized (controls) {
+                return controls.stream().map(ControlFrame::name).toList();
+            }
         }
 
-        private int controlSlot(int index) {
+        int controlSlot(int index) {
             byte[] payload = controls.get(index).payload();
             return Short.toUnsignedInt(ByteBuffer.wrap(payload, 1, Short.BYTES).getShort());
         }

@@ -21,6 +21,7 @@ internal static class ZLinkMeshNodeTargetAvailability
 
     internal static IReadOnlyList<ZLinkMeshNodeDescriptor> FilterAdmitted(
         RoutingId localRid,
+        ulong localGeneration,
         IReadOnlyList<ZLinkMeshNodeDescriptor> candidates,
         IReadOnlyList<MeshNodePeer> peers,
         IReadOnlySet<PeerEpoch>? unavailablePeerEpochs = null
@@ -39,7 +40,7 @@ internal static class ZLinkMeshNodeTargetAvailability
 
         return candidates
             .Where(candidate =>
-                candidate.Rid == localRid
+                (candidate.Rid == localRid && candidate.LifecycleGeneration == localGeneration)
                 || admitted.TryGetValue(candidate.Rid, out var epoch)
                     && epoch.LifecycleGeneration == candidate.LifecycleGeneration
                     && (unavailablePeerEpochs is null || !unavailablePeerEpochs.Contains(epoch))

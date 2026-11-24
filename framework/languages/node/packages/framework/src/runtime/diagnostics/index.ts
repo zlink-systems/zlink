@@ -1,9 +1,15 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+import type { NodeRequestProgress } from '../foundation/operation-registry';
 import type {
   ZLinkLocationRuntimeQuery,
   ZLinkLocationRuntimeStatus,
   ZLinkLocationServiceSummary,
   ZLinkLocationTopologyEntry
 } from '../../contracts';
+import {
+  ZLinkFrameworkTerminationReason,
+  type ZLinkFrameworkTerminationResult
+} from '../../contracts/RouteMesh/RuntimeTopology';
 import type {
   ZLinkActorLocationKey,
   ZLinkLocationKey,
@@ -70,6 +76,40 @@ export function relocationDebug(marker: string, detail: Record<string, unknown>)
   console.error('[zlink.runtime.relocation]', marker, detail);
 }
 
+export function traceNodeRequestDeadline(
+  progress: NodeRequestProgress,
+  meshName: string,
+  targetRid: string,
+  correlationId: string
+): void {
+  const start = progress.nodeRequestStartedMs;
+  if (start === undefined) return;
+
+  let stage = 'route_unselected';
+  if (progress.replyReceivedMs !== undefined) stage = 'reply_completion';
+  else if (progress.bindingAdmittedMs !== undefined) stage = 'reply_wait';
+  else if (progress.bindingSubmittedMs !== undefined) stage = 'binding_admission';
+  else if (progress.peerAdmittedMs !== undefined) stage = 'binding_submit';
+  else if (progress.localDispatchMs !== undefined) stage = 'local_dispatch';
+  else if (progress.routeSelectedMs !== undefined) stage = 'peer_admission';
+
+  const elapsed = (time: number | undefined) => (time === undefined ? undefined : time - start);
+  relocationDebug('node_request_deadline', {
+    meshName,
+    targetRid,
+    correlationId,
+    stage,
+    routeGeneration: progress.routeGeneration,
+    elapsedMs: performance.now() - start,
+    routeSelectedMs: elapsed(progress.routeSelectedMs),
+    peerAdmittedMs: elapsed(progress.peerAdmittedMs),
+    bindingSubmittedMs: elapsed(progress.bindingSubmittedMs),
+    bindingAdmittedMs: elapsed(progress.bindingAdmittedMs),
+    replyReceivedMs: elapsed(progress.replyReceivedMs),
+    localDispatchMs: elapsed(progress.localDispatchMs)
+  });
+}
+
 export function relocationDebugTerminal(
   marker: string,
   detail: Record<string, unknown>,
@@ -88,6 +128,71 @@ export function relocationDebugTerminal(
   });
 }
 
+type ShutdownStepRunner = <T>(stage: string, operation: () => Promise<T>) => Promise<T>;
+
+const shutdownTrace = new AsyncLocalStorage<ShutdownDeadlineTrace>();
+const runUntracedShutdownStep: ShutdownStepRunner = (_stage, operation) => operation();
+
+export function traceHostShutdown(
+  deadlineAtMs: number,
+  signal: AbortSignal,
+  operation: (step: ShutdownStepRunner) => Promise<ZLinkFrameworkTerminationResult>
+): Promise<ZLinkFrameworkTerminationResult> {
+  if (!isRelocationDebugEnabled()) return operation(runUntracedShutdownStep);
+  const trace = new ShutdownDeadlineTrace(deadlineAtMs);
+  return shutdownTrace.run(trace, async () => {
+    const onAbort = () => trace.captureAtDeadline(performance.now(), true);
+    signal.addEventListener('abort', onAbort, { once: true });
+    if (signal.aborted) onAbort();
+    try {
+      const result = await operation((stage, run) => trace.runStep(stage, run));
+      if (result.reason === ZLinkFrameworkTerminationReason.DeadlineExceeded) {
+        relocationDebug('shutdown_deadline_exceeded', { pendingSteps: trace.pendingSteps ?? [] });
+      }
+      return result;
+    } finally {
+      signal.removeEventListener('abort', onAbort);
+    }
+  });
+}
+
+class ShutdownDeadlineTrace {
+  private readonly active = new Set<{
+    stage: string;
+    meshName: string | undefined;
+    startedAtMs: number;
+  }>();
+  pendingSteps?: { stage: string; meshName: string | undefined; elapsedMs: number }[];
+
+  constructor(private readonly deadlineAtMs: number) {}
+
+  async runStep<T>(stage: string, operation: () => T | Promise<T>, meshName?: string): Promise<T> {
+    const startedAtMs = performance.now();
+    this.captureAtDeadline(startedAtMs);
+    if (this.pendingSteps !== undefined) return operation();
+    const step = { stage, meshName, startedAtMs };
+    this.active.add(step);
+    try {
+      return await operation();
+    } finally {
+      this.captureAtDeadline(performance.now());
+      this.active.delete(step);
+    }
+  }
+
+  captureAtDeadline(now: number, aborted = false): void {
+    if (this.pendingSteps !== undefined || (!aborted && now < this.deadlineAtMs)) return;
+    // The event loop can finish a late step before running the existing deadline timer.
+    const cutoffAtMs = Math.min(now, this.deadlineAtMs);
+    this.pendingSteps = Array.from(this.active, ({ stage, meshName, startedAtMs }) => ({
+      stage,
+      meshName,
+      elapsedMs: cutoffAtMs - startedAtMs
+    }));
+    this.active.clear();
+  }
+}
+
 /** Observes shutdown completion without owning its ordering or error policy. */
 export async function traceShutdownStep<T>(
   stage: string,
@@ -97,7 +202,10 @@ export async function traceShutdownStep<T>(
   if (!isRelocationDebugEnabled()) return operation();
   relocationDebug('shutdown_step', { stage, meshName, outcome: 'started' });
   try {
-    const result = await operation();
+    const trace = shutdownTrace.getStore();
+    const result = await (trace === undefined
+      ? operation()
+      : trace.runStep(stage, operation, meshName));
     relocationDebug('shutdown_step', { stage, meshName, outcome: 'completed' });
     return result;
   } catch (error) {

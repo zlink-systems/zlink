@@ -11,6 +11,8 @@ import kotlin.concurrent.thread
 // One live room exhausts a match host during the update scenario.
 private const val RUN_ROOM_CAPACITY = 1
 
+private const val DOCKER_CLEANUP_SECONDS = 120L
+
 private class Node(val id: String, module: String, config: Path, root: Path, logs: Path) {
     private val output = LinkedBlockingQueue<String>()
     private val process =
@@ -72,8 +74,15 @@ private class Node(val id: String, module: String, config: Path, root: Path, log
     fun stop() {
         check(process.isAlive) { "$id exited unexpectedly: ${process.exitValue()}" }
         command(Control.SHUTDOWN)
-        waitFor(Control.STOPPED)
-        if (!process.waitFor(Control.PROCESS_SECONDS, TimeUnit.SECONDS)) {
+        val stopped = waitFor(Control.STOPPED)
+        if (DockerRuntime.enabled) {
+            check(stopped == Control.STOPPED) { "$id shutdown failed: $stopped" }
+            if (!process.waitFor(DOCKER_CLEANUP_SECONDS, TimeUnit.SECONDS)) {
+                System.err.println("infra cleanup delay: $id ${DOCKER_CLEANUP_SECONDS}s")
+                process.destroyForcibly().waitFor()
+                return
+            }
+        } else if (!process.waitFor(Control.PROCESS_SECONDS, TimeUnit.SECONDS)) {
             DockerRuntime.threadDump(process)
             error("$id failed to exit; thread dump is in $id-stdout.log")
         }

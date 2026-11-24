@@ -47,7 +47,7 @@ export interface ZLinkSpotActorTransferRuntime {
     completion: ZLinkDeferredJoinCompletion,
     actor: ZLinkActor,
     actorRef: ActorRef,
-    submitMailbox: <T>(operation: () => Promise<T>) => Promise<T>,
+    submitMailbox: (operation: () => Promise<void>) => Promise<void>,
     signal?: AbortSignal
   ): Promise<void>;
   getOrCreateRoutedActor(

@@ -3,13 +3,13 @@ const childProcess = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const { acquireNodeTestGateLock } = require('./node-test-gate-lock');
-const { nodeTestConcurrencyArgs } = require(path.join(__dirname, 'node-test-options'));
 const { runTestFileWithDeadline } = require('./node-test-file-runner');
 
 const nodeRoot = path.resolve(__dirname, '..');
 const eslintEntry = path.resolve(nodeRoot, 'node_modules/eslint/bin/eslint.js');
 const expectedMajor = Number(process.env.ZLINK_EXPECT_NODE_MAJOR ?? '0');
 const actualMajor = Number(process.versions.node.split('.')[0]);
+const testFileDeadlineMs = 600_000;
 const skippedTestFiles = new Set(
   (process.env.ZLINK_NODE_RUNTIME_GATE_SKIP_TESTS ?? '')
     .split(',')
@@ -20,7 +20,6 @@ const skippedTestFiles = new Set(
 //  SupportChat, TicTacToe, ZoneWorld) are not part of the framework build or CI;
 //  `npm run test:samples` / `verify:samples` cover them explicitly.
 const includeSamples = process.env.ZLINK_NODE_RUNTIME_GATE_INCLUDE_SAMPLES === '1';
-const testConcurrencyArgs = nodeTestConcurrencyArgs();
 const sampleTestPattern = /^(sample-|tictactoe-|node-sample-client-bundle)/;
 const skipped = [];
 const failedTestFiles = [];
@@ -62,12 +61,9 @@ async function runTestFiles() {
       skipped.push(relative);
       continue;
     }
-    //  타임아웃이 없으면 suite가 멈췄을 때 게이트가 실패가 아니라 "영원히 진행 중"이
-    //  된다. 실제로 그 상태에서 부분 로그를 통과로 오인하기 쉬웠다.
+    // The deadline runner isolates each file in its own process. Direct
+    // execution avoids the node --test output frame parser (#5352, #4052).
     const result = await runTestFile(relative, [
-      '--test',
-      ...testConcurrencyArgs,
-      '--test-timeout=600000',
       //  inspectTap() below parses TAP. TAP is Node 22's default reporter but not
       //  every Node's, so pin it explicitly instead of relying on the default.
       '--test-reporter=tap',
@@ -127,7 +123,9 @@ async function runTestFile(label, args) {
   const result = await runTestFileWithDeadline(args, {
     cwd: nodeRoot,
     env: process.env,
-    deadlineMs: 600000
+    //  타임아웃이 없으면 suite가 멈췄을 때 게이트가 실패가 아니라 "영원히 진행 중"이
+    //  된다. 실제로 그 상태에서 부분 로그를 통과로 오인하기 쉬웠다.
+    deadlineMs: testFileDeadlineMs
   });
 
   const tap = inspectTap(result.stdout ?? '');
@@ -145,7 +143,7 @@ async function runTestFile(label, args) {
   }
   if (result.stalled) {
     integrityErrors.push(
-      `STALLED after 600000ms; process tree killed; running: ${result.running || '(none)'}; last ok: ${result.lastOk ?? '(none)'}; processes: ${result.processes.join(' | ') || '(none listed)'}`
+      `STALLED after ${testFileDeadlineMs}ms; process tree killed; running: ${result.running || '(none)'}; last ok: ${result.lastOk ?? '(none)'}; processes: ${result.processes.join(' | ') || '(none listed)'}`
     );
   }
   if (result.error) integrityErrors.push(`runner error: ${result.error.message}`);
