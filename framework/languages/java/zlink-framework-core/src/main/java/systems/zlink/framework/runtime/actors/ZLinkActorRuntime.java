@@ -1139,15 +1139,14 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                 .thenCompose(stage -> stage)
                 .thenCompose(
                         actor -> {
-                            if (!locations.isOwnerAdmissionOpen()) {
+                            try {
+                                locations.ensureOwnerAdmissionOpen();
+                            } catch (ZLinkFrameworkException admissionClosed) {
                                 return spotNode.destroyActor(actorRef, defaultRequestTimeout)
                                         .thenCompose(
                                                 ignored ->
                                                         CompletableFuture.failedFuture(
-                                                                new IllegalStateException(
-                                                                        "The owner lease admission"
-                                                                                + " deadline has"
-                                                                                + " expired.")));
+                                                                admissionClosed));
                             }
                             context.setActor(actor);
                             actorRegistry.register(actorId, actorType, actor, context);
@@ -1173,19 +1172,17 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                     .thenCompose(ignored -> responseStage)
                                     .thenApply(
                                             response -> {
-                                                ZLinkActorCreateResponse effective =
-                                                        response == null
-                                                                ? ZLinkActorCreateResponse.reject()
-                                                                : response;
-                                                responseSink.accept(effective);
-                                                if (!effective.accepted()) {
-                                                    discardLocalActor(
-                                                            actor.context().actorId(),
-                                                            releaseLocationOnReject);
-                                                    throw new ActorCreateRejected(
-                                                            effective.reply());
+                                                if (response != null && response.accepted()) {
+                                                    responseSink.accept(response);
+                                                    return actor;
                                                 }
-                                                return actor;
+                                                discardLocalActor(
+                                                        actor.context().actorId(),
+                                                        releaseLocationOnReject);
+                                                Objects.requireNonNull(
+                                                        response,
+                                                        "Actor create callback returned no response");
+                                                throw new ActorCreateRejected(response.reply());
                                             });
                         })
                 .whenComplete(

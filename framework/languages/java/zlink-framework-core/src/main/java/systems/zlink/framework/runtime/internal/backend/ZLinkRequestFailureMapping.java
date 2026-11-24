@@ -126,12 +126,32 @@ public final class ZLinkRequestFailureMapping {
         return outgoing(kind, (int) FRAMEWORK_ERROR_NONE);
     }
 
-    /** Preserves typed execution failures; unexpected provider errors are internal failures. */
-    public static int[] outgoing(Throwable failure) {
+    /** Maps the cause before Actor creation writes or replies with a failed terminal. */
+    public static int[] actorCreation(Throwable failure) {
+        Throwable cause = unwrap(failure);
+        if (!(cause instanceof ZLinkFrameworkException framework)) {
+            return outgoing(INTERNAL_FAILURE, (int) FRAMEWORK_ERROR_ACTOR_CREATE_FAILED);
+        }
+        ZLinkFrameworkErrorKind kind = framework.kind();
+        int code = causeCode(framework);
+        if (kind == UNAVAILABLE && code == FRAMEWORK_ERROR_NONE) {
+            // RouteNotConnected explicitly asks creation placement to exclude this target.
+            code = (int) FRAMEWORK_ERROR_ACTOR_LOCATION_STALE;
+        }
+        return outgoing(kind, code);
+    }
+
+    private static Throwable unwrap(Throwable failure) {
         while ((failure instanceof CompletionException || failure instanceof ExecutionException)
                 && failure.getCause() != null) {
             failure = failure.getCause();
         }
+        return failure;
+    }
+
+    /** Preserves typed execution failures; unexpected provider errors are internal failures. */
+    public static int[] outgoing(Throwable failure) {
+        failure = unwrap(failure);
         return failure instanceof ZLinkFrameworkException framework
                 ? outgoing(framework.kind(), causeCode(framework))
                 : outgoing(

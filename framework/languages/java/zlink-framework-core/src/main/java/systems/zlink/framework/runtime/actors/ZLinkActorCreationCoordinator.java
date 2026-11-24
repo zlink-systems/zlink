@@ -475,10 +475,6 @@ public final class ZLinkActorCreationCoordinator
                             if (read instanceof ZLinkCreationTerminalFound found) {
                                 return verifiedResponse(found.terminalEnvelope());
                             }
-                            if (System.currentTimeMillis() >= request.intent().deadlineUnixMs()) {
-                                return failReserved(
-                                        request, operation, "Actor create deadline expired");
-                            }
                             return executeReserved(request, operation);
                         });
     }
@@ -491,50 +487,63 @@ public final class ZLinkActorCreationCoordinator
                 .read(key, OPEN)
                 .thenCompose(
                         read -> {
+                            ZLinkFrameworkException expired =
+                                    System.currentTimeMillis() >= request.intent().deadlineUnixMs()
+                                            ? ZLinkObjectCreationDeadline.exceeded(null)
+                                            : null;
                             if (!(read instanceof ZLinkAuthoritySnapshot snapshot)) {
                                 return replayAfterConflict(
-                                        operation, "Actor reservation is missing");
+                                        operation,
+                                        expired != null
+                                                ? expired
+                                                : unavailable("Actor reservation is missing"));
                             }
                             ZLinkObjectReservation reservation;
                             try {
                                 reservation = validateReservation(request, key, snapshot);
-                            } catch (RuntimeException stale) {
+                            } catch (ZLinkFrameworkException invalid) {
                                 return replayAfterConflict(
-                                        operation,
-                                        stale.getMessage() == null
-                                                ? "Actor reservation is stale"
-                                                : stale.getMessage());
+                                        operation, expired != null ? expired : invalid);
+                            }
+                            if (expired != null) {
+                                return failReserved(request, operation, reservation, expired);
                             }
                             if (!acceptsNewActor.test(request.intent().stableType())) {
                                 return failReserved(
                                         request,
                                         operation,
                                         reservation,
-                                        RequestResult.INTERNAL_ERROR.value(),
-                                        (int)
-                                                ServiceWireConstants
-                                                        .FRAMEWORK_ERROR_ROUTE_NOT_CONNECTED);
+                                        ZLinkRequestFailureMapping.receivedFailure(
+                                                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                                "Target has no Entry Spot that accepts this Actor type",
+                                                (int)
+                                                        ServiceWireConstants
+                                                                .FRAMEWORK_ERROR_ROUTE_NOT_CONNECTED,
+                                                Map.of()));
                             }
                             var pending = snapshot.pendingCreation().orElseThrow();
-                            byte[] stored;
+                            ZLinkMessage createRequest;
                             try {
-                                stored =
+                                byte[] stored =
                                         ZLinkInlineCreationContentCodec.decode(
                                                 pending.requestContentReference(),
                                                 pending.requestSha256(),
                                                 pending.requestEncodedSize());
-                            } catch (RuntimeException invalid) {
+                                var application = payloads.decodeApplicationPayload(stored);
+                                createRequest =
+                                        ZLinkMessage.fromEncoded(
+                                                ZLinkEncodedPayload.from(application.payload()),
+                                                serializer);
+                            } catch (IllegalArgumentException invalid) {
                                 return failReserved(
                                         request,
                                         operation,
                                         reservation,
-                                        "Actor create payload failed integrity validation");
+                                        new ZLinkFrameworkException(
+                                                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                                                "Actor create payload is invalid",
+                                                invalid));
                             }
-                            var application = payloads.decodeApplicationPayload(stored);
-                            ZLinkMessage createRequest =
-                                    ZLinkMessage.fromEncoded(
-                                            ZLinkEncodedPayload.from(application.payload()),
-                                            serializer);
                             return actors.createReservedActor(
                                             request.intent().actorId(),
                                             request.intent().stableType(),
@@ -555,9 +564,7 @@ public final class ZLinkActorCreationCoordinator
                                                             request,
                                                             operation,
                                                             reservation,
-                                                            failure.getMessage() == null
-                                                                    ? "Actor create callback failed"
-                                                                    : failure.getMessage()));
+                                                            failure));
                         });
     }
 
@@ -593,7 +600,8 @@ public final class ZLinkActorCreationCoordinator
                                             ? response(envelope)
                                             : replayAfterConflict(
                                                     operation,
-                                                    "Actor rejection lost its reservation"));
+                                                    unavailable(
+                                                            "Actor rejection lost its reservation")));
         }
         ActorRef actor =
                 result instanceof ZLinkActorCreateResult.Created created
@@ -659,8 +667,8 @@ public final class ZLinkActorCreationCoordinator
                                             ignored ->
                                                     replayAfterConflict(
                                                             operation,
-                                                            "Actor Ready commit lost its"
-                                                                    + " reservation"));
+                                                            unavailable(
+                                                                    "Actor Ready commit lost its reservation")));
                         });
     }
 
@@ -672,12 +680,12 @@ public final class ZLinkActorCreationCoordinator
         var allocation = snapshot.allocation();
         var pending =
                 snapshot.pendingCreation()
-                        .orElseThrow(() -> stale("Actor creation projection is missing"));
+                        .orElseThrow(() -> unavailable("Actor creation projection is missing"));
         var authority =
                 authorities
                         .decode(snapshot.payload())
                         .orElseThrow(() -> stale("invalid Actor authority"));
-        require(
+        boolean current =
                 authority.state() == ZLinkActorAuthorityPayloadCodec.State.CREATING
                         && authority.actorId().equals(request.intent().actorId())
                         && authority.stableType().equals(request.intent().stableType())
@@ -699,8 +707,10 @@ public final class ZLinkActorCreationCoordinator
                                 .capacityBundle()
                                 .equals(
                                         ZLinkPlacementCapacityBundle.actor(
-                                                Math.toIntExact(fence.pendingCapacityDelta()))),
-                "stale Actor create reservation");
+                                                Math.toIntExact(fence.pendingCapacityDelta())));
+        if (!current) {
+            throw unavailable("stale Actor create reservation");
+        }
         return new ZLinkObjectReservation(
                 key,
                 snapshot.storeVersion(),
@@ -715,43 +725,12 @@ public final class ZLinkActorCreationCoordinator
     private CompletionStage<ZLinkInternalMeshNode.ActorCreateResponse> failReserved(
             ZLinkInternalMeshNode.ActorCreateRequest request,
             ZLinkCreationOperationIdentity operation,
-            String message) {
-        String key = ZLinkAuthorityKeyCodec.actor(request.intent().actorId());
-        return locations
-                .read(key, OPEN)
-                .thenCompose(
-                        read -> {
-                            if (!(read instanceof ZLinkAuthoritySnapshot snapshot)) {
-                                return replayAfterConflict(operation, message);
-                            }
-                            return failReserved(
-                                    request,
-                                    operation,
-                                    validateReservation(request, key, snapshot),
-                                    message);
-                        });
-    }
-
-    private CompletionStage<ZLinkInternalMeshNode.ActorCreateResponse> failReserved(
-            ZLinkInternalMeshNode.ActorCreateRequest request,
-            ZLinkCreationOperationIdentity operation,
             ZLinkObjectReservation reservation,
-            String message) {
-        return failReserved(
-                request,
-                operation,
-                reservation,
-                RequestResult.INTERNAL_ERROR.value(),
-                (int) ServiceWireConstants.FRAMEWORK_ERROR_ACTOR_CREATE_FAILED);
-    }
-
-    private CompletionStage<ZLinkInternalMeshNode.ActorCreateResponse> failReserved(
-            ZLinkInternalMeshNode.ActorCreateRequest request,
-            ZLinkCreationOperationIdentity operation,
-            ZLinkObjectReservation reservation,
-            int terminalResult,
-            int failureCode) {
-        byte[] envelope = terminalEnvelope(null, null, terminalResult, failureCode);
+            Throwable failure) {
+        int[] result =
+                node.actorCreateFailure(
+                        request.intent().actorId(), request.sourceNodeRid(), failure);
+        byte[] envelope = terminalEnvelope(null, null, result[0], result[1]);
         ZLinkCreationOperationTerminal terminal =
                 terminal(
                         operation,
@@ -765,14 +744,14 @@ public final class ZLinkActorCreationCoordinator
     }
 
     private CompletionStage<ZLinkInternalMeshNode.ActorCreateResponse> replayAfterConflict(
-            ZLinkCreationOperationIdentity operation, String message) {
+            ZLinkCreationOperationIdentity operation, Throwable failure) {
         return locations
                 .readCreationTerminal(operation, OPEN)
                 .thenCompose(
                         read ->
                                 read instanceof ZLinkCreationTerminalFound found
                                         ? verifiedResponse(found.terminalEnvelope())
-                                        : CompletableFuture.failedFuture(stale(message)));
+                                        : CompletableFuture.failedFuture(failure));
     }
 
     private byte[] terminalEnvelope(
@@ -969,7 +948,11 @@ public final class ZLinkActorCreationCoordinator
                         spotId ->
                                 CompletableFuture.completedFuture(
                                         new EntrySpot(spotId, target.lifecycleGeneration())))
-                .orElseGet(() -> failed("Target descriptor has no Entry Spot identity"));
+                .orElseGet(
+                        () ->
+                                failed(
+                                        ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                        "Target descriptor has no Entry Spot identity"));
     }
 
     private record EntrySpot(String spotId, long spotGeneration) {}
@@ -1005,9 +988,12 @@ public final class ZLinkActorCreationCoordinator
         try {
             wire.decodeCreationOperationTerminal(envelope, meshName, node.status().routingId());
             return response(envelope);
-        } catch (RuntimeException invalid) {
+        } catch (IllegalArgumentException invalid) {
             return CompletableFuture.failedFuture(
-                    stale("Actor creation terminal failed integrity validation"));
+                    new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                            "Actor creation terminal failed integrity validation",
+                            invalid));
         }
     }
 
@@ -1045,10 +1031,8 @@ public final class ZLinkActorCreationCoordinator
         }
     }
 
-    private static void require(boolean value, String message) {
-        if (!value) {
-            throw stale(message);
-        }
+    private static ZLinkFrameworkException unavailable(String message) {
+        return frameworkFailure(ZLinkFrameworkErrorKind.UNAVAILABLE, message);
     }
 
     private static ZLinkFrameworkException stale(String message) {
@@ -1066,11 +1050,6 @@ public final class ZLinkActorCreationCoordinator
 
     private static <T> CompletionStage<T> failed(ZLinkFrameworkErrorKind kind, String message) {
         return CompletableFuture.failedFuture(frameworkFailure(kind, message));
-    }
-
-    private static <T> CompletionStage<T> admissionUnavailable(String message) {
-        return CompletableFuture.failedFuture(
-                frameworkFailure(ZLinkFrameworkErrorKind.UNAVAILABLE, message));
     }
 
     private static Throwable unwrap(Throwable failure) {
