@@ -2558,6 +2558,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_compile_definitions(test_cpp_framework_execution PRIVATE
     ZLINK_SERIAL_EXECUTION_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/serial-execution-v1.json"
     ZLINK_RUNTIME_OBSERVATION_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/runtime-observation-v1.json")
+  add_zlink_framework_test(
+    test_cpp_framework_spot_timer_generation
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_spot_timer_generation.cpp
+    "framework-unit;framework-contract;framework-regression;spot"
+    unit)
+  target_use_zlink_gtest_main(test_cpp_framework_spot_timer_generation)
+  target_include_directories(test_cpp_framework_spot_timer_generation PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_executable(test_cpp_framework_route_channel_request
     tests/Zlink.Framework.UnitTests/test_cpp_framework_route_channel_request.cpp)
   target_use_zlink_gtest_main(test_cpp_framework_route_channel_request)
