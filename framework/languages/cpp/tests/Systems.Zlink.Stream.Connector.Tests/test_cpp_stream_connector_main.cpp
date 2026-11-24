@@ -1,10 +1,13 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 #include "../support/stream_connector_cases.hpp"
+#include <string_view>
 
 int main (int argc, char **argv)
 {
     using namespace stream_connector_tests;
     if (argc == 2) {
+        if (std::string_view (argv[1]) == "login-admission")
+            return verify_login_admission ();
         return test_inbound_codec (argv[1]);
     }
     if (const int failure = verify_inbound_framing (); failure != 0)
