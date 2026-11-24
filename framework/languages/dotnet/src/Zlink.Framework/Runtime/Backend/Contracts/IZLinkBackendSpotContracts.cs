@@ -85,6 +85,13 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
         ulong expectedLifecycleGeneration
     );
 
+    bool TryConnectPeerAuto(
+        RoutingId? peerRid,
+        string endpoint,
+        string expectedSecurityIdentity,
+        ulong? expectedLifecycleGeneration
+    );
+
     void RemovePeerExpectation(RoutingId peerRid, string endpoint);
 
     void DisconnectPeer(string endpoint);

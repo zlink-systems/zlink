@@ -508,6 +508,28 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         string endpoint,
         RoutingId? expectedRid = null,
         string expectedSecurityIdentity = ZLinkServiceSecurityIdentity.Plaintext
+    ) => ConnectPeer(endpoint, expectedRid, expectedSecurityIdentity, automatic: false);
+
+    internal bool TryConnectPeerAuto(
+        RoutingId? expectedRid,
+        string endpoint,
+        string expectedSecurityIdentity,
+        ulong? expectedLifecycleGeneration = null
+    ) =>
+        ConnectPeer(
+            endpoint,
+            expectedRid,
+            expectedSecurityIdentity,
+            automatic: true,
+            expectedLifecycleGeneration
+        ) != 0;
+
+    private ulong ConnectPeer(
+        string endpoint,
+        RoutingId? expectedRid,
+        string expectedSecurityIdentity,
+        bool automatic,
+        ulong? expectedLifecycleGeneration = null
     )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(endpoint);
@@ -518,6 +540,36 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             return RunState(() =>
             {
                 ThrowIfDisposed();
+                // Channel topology §8: discovery adds an intent only when the
+                // current Core route and local manual intents leave no route owner.
+                if (
+                    automatic
+                    && (
+                        (expectedRid is { } target && _selectedRoutes.GenerationOf(target) != 0)
+                        || _peersByIntent.Values.Any(intent =>
+                            !intent.Automatic
+                            && (
+                                string.Equals(intent.Endpoint, endpoint, StringComparison.Ordinal)
+                                || (
+                                    expectedRid is { } rid
+                                    && (intent.ExpectedRid == rid || intent.ResolvedRid == rid)
+                                )
+                            )
+                        )
+                    )
+                )
+                    return 0UL;
+
+                // A skipped dial has no owned intent to remove when discovery
+                // drops the descriptor. Install its expectation with the intent.
+                if (expectedRid is { } peerRid && expectedLifecycleGeneration is { } generation)
+                    SetPeerExpectationOnLane(
+                        peerRid,
+                        endpoint,
+                        expectedSecurityIdentity,
+                        generation
+                    );
+
                 // Repeated configuration of the same target owns one intent and
                 // one endpoint registration throughout admission and reconnect.
                 var existingIntent = _peersByIntent.Values.FirstOrDefault(intent =>
@@ -554,7 +606,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     id,
                     endpoint,
                     expectedRid,
-                    expectedSecurityIdentity
+                    expectedSecurityIdentity,
+                    automatic
                 );
                 var admitted = expectedRid is { } rid
                     ? _peersByRid.GetValueOrDefault(rid)
@@ -603,14 +656,28 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ArgumentException.ThrowIfNullOrWhiteSpace(endpoint);
         ArgumentException.ThrowIfNullOrWhiteSpace(expectedSecurityIdentity);
         RunState(() =>
-        {
-            _peerExpectations[peerRid] = new ZLinkMeshPeerExpectation(
+            SetPeerExpectationOnLane(
+                peerRid,
                 endpoint,
                 expectedSecurityIdentity,
                 expectedLifecycleGeneration
-            );
-            SignalChannelSelectionChangedUnderLock();
-        });
+            )
+        );
+    }
+
+    private void SetPeerExpectationOnLane(
+        RoutingId peerRid,
+        string endpoint,
+        string expectedSecurityIdentity,
+        ulong expectedLifecycleGeneration
+    )
+    {
+        _peerExpectations[peerRid] = new ZLinkMeshPeerExpectation(
+            endpoint,
+            expectedSecurityIdentity,
+            expectedLifecycleGeneration
+        );
+        SignalChannelSelectionChangedUnderLock();
     }
 
     public void RemovePeerExpectation(RoutingId peerRid, string endpoint)

@@ -1928,8 +1928,18 @@ public sealed class ServiceRuntimeFoundationTests
 
         local.SetRoutingId(localRid);
         local.SetBind(localEndpoint);
-        var oldIntent = local.ConnectPeer(remoteEndpoint, oldRid);
-        var replacementIntent = local.ConnectPeer(remoteEndpoint, replacementRid);
+        Assert.True(
+            local.TryConnectPeerAuto(oldRid, remoteEndpoint, ZLinkServiceSecurityIdentity.Plaintext)
+        );
+        var oldIntent = Assert.Single(local.Peers()).ConnectionIntentId;
+        Assert.True(
+            local.TryConnectPeerAuto(
+                replacementRid,
+                remoteEndpoint,
+                ZLinkServiceSecurityIdentity.Plaintext
+            )
+        );
+        var replacementIntent = Assert.Single(local.Peers()).ConnectionIntentId;
         local.Start();
 
         Assert.NotEqual(oldIntent, replacementIntent);
@@ -1971,6 +1981,39 @@ public sealed class ServiceRuntimeFoundationTests
                 .Peers()
                 .Any(peer => peer.RoutingId == localRid && peer.State == MeshPeerState.Admitted)
         );
+    }
+
+    [Fact]
+    public async Task AutoConnect_Preserves_Manual_Intent_For_The_Same_Rid()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var local = new ZLinkManagedMeshNode(context, "manual-intent");
+        var peerRid = RoutingId.From("peer");
+        var manualIntent = local.ConnectPeer("inproc://manual", peerRid);
+
+        Assert.False(
+            local.TryConnectPeerAuto(
+                peerRid,
+                "inproc://discovered",
+                ZLinkServiceSecurityIdentity.Plaintext,
+                expectedLifecycleGeneration: 7
+            )
+        );
+        Assert.Equal(manualIntent, Assert.Single(local.Peers()).ConnectionIntentId);
+        Assert.Null(local.ObservePeerRoute(peerRid).Expectation);
+
+        local.RemovePeerConnection(manualIntent);
+
+        Assert.True(
+            local.TryConnectPeerAuto(
+                peerRid,
+                "inproc://discovered",
+                ZLinkServiceSecurityIdentity.Plaintext,
+                expectedLifecycleGeneration: 7
+            )
+        );
+        Assert.NotEqual(manualIntent, Assert.Single(local.Peers()).ConnectionIntentId);
+        Assert.Equal(7UL, local.ObservePeerRoute(peerRid).Expectation?.LifecycleGeneration);
     }
 
     [Fact]

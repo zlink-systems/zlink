@@ -41,16 +41,16 @@ public sealed class SpotPeerConnectorTests
         Assert.True(connector.ConnectPeerAuto(newRid, "tcp://peer:1", "none"));
 
         Assert.Equal([oldRid, newRid], proxy.ConnectedRids);
-        Assert.Equal(["tcp://peer:1"], proxy.DisconnectedEndpoints);
+        Assert.Empty(proxy.DisconnectedEndpoints);
 
         // Removing the stale target must not tear down the replacement
         // connection that now owns this endpoint.
         Assert.True(connector.DisconnectPeerAuto(oldRid, "tcp://peer:1"));
-        Assert.Single(proxy.DisconnectedEndpoints);
+        Assert.Empty(proxy.DisconnectedEndpoints);
         Assert.Equal((oldRid, "tcp://peer:1", 1UL), proxy.AdmissionCleanup);
 
         Assert.True(connector.DisconnectPeerAuto(newRid, "tcp://peer:1"));
-        Assert.Single(proxy.DisconnectedEndpoints);
+        Assert.Empty(proxy.DisconnectedEndpoints);
         Assert.Equal((newRid, "tcp://peer:1", 1UL), proxy.AdmissionCleanup);
     }
 
@@ -186,14 +186,14 @@ public sealed class SpotPeerConnectorTests
         protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
         {
             ArgumentNullException.ThrowIfNull(targetMethod);
-            if (targetMethod.Name != nameof(IZLinkBackendSpotNode.ConnectPeer))
+            if (targetMethod.Name != nameof(IZLinkBackendSpotNode.TryConnectPeerAuto))
                 throw new NotSupportedException(targetMethod.Name);
 
             ConnectAttempts++;
             if (ConnectAttempts == 1)
                 throw ConnectFailure;
 
-            return null;
+            return true;
         }
     }
 
@@ -229,9 +229,9 @@ public sealed class SpotPeerConnectorTests
             ArgumentNullException.ThrowIfNull(targetMethod);
             switch (targetMethod.Name)
             {
-                case nameof(IZLinkBackendSpotNode.ConnectPeer) when args is { Length: 3 }:
-                    ConnectedRids.Add((RoutingId)args[0]!);
-                    return null;
+                case nameof(IZLinkBackendSpotNode.TryConnectPeerAuto):
+                    ConnectedRids.Add((RoutingId)args![0]!);
+                    return true;
                 case nameof(IZLinkBackendSpotNode.DisconnectPeer):
                     DisconnectedEndpoints.Add((string)args![0]!);
                     return null;

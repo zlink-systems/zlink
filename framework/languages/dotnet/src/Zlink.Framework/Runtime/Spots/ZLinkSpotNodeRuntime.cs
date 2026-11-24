@@ -1319,8 +1319,15 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
     public bool ConnectPeerAuto(
         RoutingId? peerRid,
         string endpoint,
-        string expectedSecurityIdentity
-    ) => _peerConnector.ConnectPeerAuto(peerRid, endpoint, expectedSecurityIdentity);
+        string expectedSecurityIdentity,
+        ulong expectedLifecycleGeneration
+    ) =>
+        _peerConnector.ConnectPeerAuto(
+            peerRid,
+            endpoint,
+            expectedSecurityIdentity,
+            expectedLifecycleGeneration
+        );
 
     internal void ObservePeerExpectation(ZLinkAutoConnectTarget target)
     {
