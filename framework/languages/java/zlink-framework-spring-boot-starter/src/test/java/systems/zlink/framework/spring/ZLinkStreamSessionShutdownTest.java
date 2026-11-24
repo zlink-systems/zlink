@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
+import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
@@ -16,10 +17,16 @@ import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationOutcome;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationReason;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkTerminationResult;
+import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
+import systems.zlink.framework.spots.ZLinkEntrySpot;
+import systems.zlink.framework.spots.ZLinkEntrySpotContext;
+import systems.zlink.framework.spots.ZLinkSpotCloseReason;
+import systems.zlink.framework.spots.ZLinkSpotClosingContext;
 import systems.zlink.framework.streams.ZLinkSession;
 import systems.zlink.framework.streams.ZLinkSessionContext;
 import systems.zlink.framework.streams.ZLinkSessionDispatchContext;
 import systems.zlink.framework.streams.ZLinkStreamError;
+import systems.zlink.stream.connector.ZLinkStreamCloseReason;
 import systems.zlink.stream.connector.ZLinkStreamConnector;
 import systems.zlink.stream.connector.ZLinkStreamConnectorFactory;
 import systems.zlink.stream.connector.ZLinkStreamConnectorOptions;
@@ -40,7 +47,7 @@ final class ZLinkStreamSessionShutdownTest {
 
     @Test
     void deadlineStopsHostWhileConnectedCallbackIsPending() throws Exception {
-        try (var fixture = new Fixture()) {
+        try (var fixture = new Fixture(false)) {
             fixture.pauseConnectorReceive();
             var lateSend = fixture.session.client().send(new ProbePacket("late"));
             var shutdown = fixture.host.shutdown(DEADLINE).toCompletableFuture();
@@ -57,7 +64,7 @@ final class ZLinkStreamSessionShutdownTest {
                     result);
             assertEquals(List.of(), fixture.probe.callbacks);
             fixture.resumeConnector.complete(null);
-            await(fixture.disconnected);
+            await(fixture.probe.disconnected);
 
             fixture.probe.release.complete(null);
             await(fixture.probe.finished);
@@ -72,7 +79,7 @@ final class ZLinkStreamSessionShutdownTest {
 
     @Test
     void hostDrainsWhenConnectedCallbackFinishesBeforeDeadline() throws Exception {
-        try (var fixture = new Fixture()) {
+        try (var fixture = new Fixture(true)) {
             var shutdown = fixture.host.shutdown(DEADLINE);
             fixture.probe.release.complete(null);
             assertEquals(
@@ -80,12 +87,13 @@ final class ZLinkStreamSessionShutdownTest {
                             ZLinkFrameworkTerminationOutcome.STOPPED,
                             ZLinkFrameworkTerminationReason.NONE),
                     await(shutdown));
-            await(fixture.disconnected);
+            assertEquals(ZLinkStreamCloseReason.SERVER_DRAIN, await(fixture.probe.disconnected));
+            assertEquals(ZLinkSpotCloseReason.HOST_SHUTDOWN, await(fixture.probe.spotCloseReason));
             var lifecycle =
                     fixture.probe.callbacks.stream()
                             .filter(callback -> !callback.equals("dispatch"))
                             .toList();
-            assertEquals(List.of("connected", "disconnected"), lifecycle);
+            assertEquals(List.of("connected", "disconnected", "spot_closing"), lifecycle);
         }
     }
 
@@ -99,6 +107,8 @@ final class ZLinkStreamSessionShutdownTest {
         final CompletableFuture<ZLinkSessionContext> entered = new CompletableFuture<>();
         final CompletableFuture<Void> release = new CompletableFuture<>();
         final CompletableFuture<Void> finished = new CompletableFuture<>();
+        final CompletableFuture<ZLinkStreamCloseReason> disconnected = new CompletableFuture<>();
+        final CompletableFuture<ZLinkSpotCloseReason> spotCloseReason = new CompletableFuture<>();
         final List<String> callbacks = new CopyOnWriteArrayList<>();
     }
 
@@ -146,28 +156,54 @@ final class ZLinkStreamSessionShutdownTest {
         }
     }
 
+    public record EntrySpot(ZLinkEntrySpotContext context, Probe probe)
+            implements ZLinkEntrySpot<ZLinkActor> {
+        @Override
+        public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletionStage<Void> onClosing(ZLinkSpotClosingContext closing) {
+            probe.callbacks.add("spot_closing");
+            probe.spotCloseReason.complete(closing.reason());
+            return probe.disconnected.thenApply(reason -> null);
+        }
+    }
+
     @EnableZLinkFramework
     static class Enabled {}
 
     private static final class Fixture implements AutoCloseable {
         final AnnotationConfigApplicationContext app = new AnnotationConfigApplicationContext();
         final Probe probe = new Probe();
-        final CompletableFuture<Void> disconnected = new CompletableFuture<>();
         final ZLinkFrameworkRuntime host;
         final ZLinkSessionContext session;
         final CompletableFuture<Void> resumeConnector = new CompletableFuture<>();
         private ZLinkStreamConnector client;
 
-        Fixture() throws Exception {
+        Fixture(boolean registerSpot) throws Exception {
             try {
                 app.registerBean(Probe.class, () -> probe);
                 app.registerBean(
                         ZLinkFrameworkConfigurer.class,
                         () ->
-                                options ->
-                                        options.addStreamNode("probe")
-                                                .bind("ws://127.0.0.1:0")
-                                                .registerSession(Session.class));
+                                options -> {
+                                    options.addStreamNode("probe")
+                                            .bind("ws://127.0.0.1:0")
+                                            .registerSession(Session.class);
+                                    if (registerSpot) {
+                                        options.addLocationStore(new ZLinkInMemoryLocationStore());
+                                        var mesh = options.addRouteMesh("probe-mesh");
+                                        mesh.listen("tcp://127.0.0.1:0");
+                                        mesh.objects().server().addEntrySpot(EntrySpot.class);
+                                    }
+                                });
                 app.register(Enabled.class);
                 app.refresh();
                 host = app.getBean(ZLinkFrameworkRuntime.class);
@@ -193,7 +229,7 @@ final class ZLinkStreamSessionShutdownTest {
                                         2.0));
                 client.onDisconnected(
                         event -> {
-                            disconnected.complete(null);
+                            probe.disconnected.complete(event.closeReason());
                             return CompletableFuture.completedFuture(null);
                         });
                 await(client.connect().submit());

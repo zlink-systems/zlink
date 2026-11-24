@@ -2665,15 +2665,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                                             actors() == null
                                                                     ? CompletableFuture
                                                                             .completedFuture(null)
-                                                                    : actors().awaitDrainBarrier()))
-                                    .thenCompose(
-                                            barrierStep ->
-                                                    traceDrainStage(
-                                                            "stream",
-                                                            streams == null
-                                                                    ? CompletableFuture
-                                                                            .completedFuture(null)
-                                                                    : streams.awaitDrainBarrier()));
+                                                                    : actors().awaitDrainBarrier()));
                     applicationBarrier.whenComplete(
                             (barrierIgnored, barrierFailure) -> {
                                 if (barrierFailure != null) {
@@ -2683,17 +2675,39 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                                     "application_barrier", barrierFailure));
                                     return;
                                 }
-                                CompletionStage<Void> spotClosing =
+                                CompletionStage<Void> serverStreamBarrier =
                                         traceDrainStage(
-                                                "spot_closing",
-                                                spots() == null
+                                                "server_stream",
+                                                streams == null
                                                         ? CompletableFuture.completedFuture(null)
                                                         : ZLinkFrameworkShutdown.atStage(
-                                                                "spot_closing",
+                                                                "stream_drain",
                                                                 () ->
-                                                                        spots().notifyClosing(
-                                                                                        terminationDeadline
-                                                                                                .get())));
+                                                                        streams.awaitDrainBarrier()
+                                                                                .thenCompose(
+                                                                                        ignoredStream ->
+                                                                                                streams
+                                                                                                        .notifyServerDrain())));
+                                CompletionStage<Void> spotClosing =
+                                        serverStreamBarrier.thenCompose(
+                                                ignoredStream -> {
+                                                    if (forcedDrain.isDone()) {
+                                                        return CompletableFuture.failedFuture(
+                                                                forcedDrain.join());
+                                                    }
+                                                    return traceDrainStage(
+                                                            "spot_closing",
+                                                            spots() == null
+                                                                    ? CompletableFuture
+                                                                            .completedFuture(null)
+                                                                    : ZLinkFrameworkShutdown
+                                                                            .atStage(
+                                                                                    "spot_closing",
+                                                                                    () ->
+                                                                                            spots().notifyClosing(
+                                                                                                            terminationDeadline
+                                                                                                                    .get())));
+                                                });
                                 CompletionStage<Void> actorShutdown =
                                         spotClosing.thenCompose(
                                                 closingIgnored ->
@@ -2852,15 +2866,29 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         if (drained.isDone()) {
             return;
         }
-        closeAsync()
-                .whenComplete(
-                        (ignored, failure) -> {
-                            completeForcedStop(
-                                    failure == null
-                                            ? initialReason
-                                            : InternalDrainForceReason.TEARDOWN_FAILED,
-                                    initialFailure != null ? initialFailure : failure);
-                        });
+        CompletionStage<Void> notification =
+                streams == null
+                        ? CompletableFuture.completedFuture(null)
+                        : ZLinkFrameworkShutdown.atStage(
+                                "stream_drain", streams::notifyServerDrain);
+        notification.whenComplete(
+                (ignored, notificationFailure) ->
+                        closeAsync()
+                                .whenComplete(
+                                        (closed, closeFailure) -> {
+                                            Throwable failure =
+                                                    closeFailure != null
+                                                            ? closeFailure
+                                                            : notificationFailure;
+                                            completeForcedStop(
+                                                    failure == null
+                                                            ? initialReason
+                                                            : InternalDrainForceReason
+                                                                    .TEARDOWN_FAILED,
+                                                    initialFailure != null
+                                                            ? initialFailure
+                                                            : failure);
+                                        }));
     }
 
     private void completeForcedStop(InternalDrainForceReason reason, Throwable failure) {

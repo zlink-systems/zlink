@@ -147,6 +147,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     private final Set<ZLinkStreamSessionContextState> sessionContexts =
             ConcurrentHashMap.newKeySet();
     private volatile boolean draining;
+    private volatile CompletableFuture<Void> sessionShutdown;
     private CompletableFuture<Void> forcedStop = new CompletableFuture<>();
 
     int sessionContextCount() {
@@ -1512,8 +1513,10 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             return CompletableFuture.completedFuture(null);
         }
         if (draining) {
-            // A registered session is notified by its close owner.
-            if (state == null && !forcedStop.isDone()) sendSessionClosing(stream, routingId);
+            // Registered sessions are notified by the session drain.
+            if (state == null && sessionShutdown == null && !forcedStop.isDone()) {
+                sendSessionClosing(stream, routingId);
+            }
             return CompletableFuture.completedFuture(null);
         }
         if (state.replacementClosing()) {
@@ -1912,16 +1915,48 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     }
 
     public CompletionStage<Void> closeAsync() {
-        boolean serverDrain = draining;
+        // Direct disposal also has to end sessions if there was no host drain.
+        return endSessions(draining)
+                .whenCompleteAsync(
+                        (ignored, failure) -> finishClose(), ZLinkTeardownExecutor::execute);
+    }
+
+    public CompletionStage<Void> notifyServerDrain() {
+        return endSessions(true);
+    }
+
+    private CompletionStage<Void> endSessions(boolean notifyServer) {
+        var completion = new CompletableFuture<Void>();
         List<SessionState> activeSessions =
                 inStateLane(
                         () -> {
+                            if (sessionShutdown != null) return null;
                             draining = true;
+                            sessionShutdown = completion;
                             List<SessionState> active = sessionStates().toList();
                             active.forEach(SessionState::cancelLivenessTimer);
                             sessions.clear();
                             return active;
                         });
+        if (activeSessions == null) return sessionShutdown;
+        try {
+            finishSessions(activeSessions, notifyServer)
+                    .whenComplete(
+                            (ignored, failure) -> {
+                                if (failure == null) {
+                                    completion.complete(null);
+                                } else {
+                                    completion.completeExceptionally(failure);
+                                }
+                            });
+        } catch (RuntimeException failure) {
+            completion.completeExceptionally(failure);
+        }
+        return completion;
+    }
+
+    private CompletionStage<Void> finishSessions(
+            List<SessionState> activeSessions, boolean notifyServer) {
         var contexts = List.copyOf(sessionContexts);
         Map<ZLinkStreamSessionContextState, CompletionStage<Void>> cleanups = new HashMap<>();
         for (ZLinkStreamSessionContextState session : contexts) {
@@ -1933,7 +1968,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                                 .map(CompletionStage::toCompletableFuture)
                                 .toArray(CompletableFuture[]::new));
         CompletableFuture<Void> notifications =
-                serverDrain
+                notifyServer
                         ? CompletableFuture.allOf(
                                 activeSessions.stream()
                                         .map(
@@ -1978,9 +2013,11 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                                 })
                         .thenCompose(ignored -> awaitSessionTurns(contexts));
         return CompletableFuture.allOf(infrastructure, application.toCompletableFuture())
-                .thenRunAsync(
-                        () -> finishClose(activeSessions, serverDrain),
-                        ZLinkTeardownExecutor::execute);
+                .thenRun(
+                        () -> {
+                            String reason = notifyServer ? "server_shutdown" : "transport_error";
+                            activeSessions.forEach(state -> recordSessionClosed(state, reason));
+                        });
     }
 
     private static CompletionStage<Void> awaitSessionTurns(
@@ -1991,12 +2028,8 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                         .toArray(CompletableFuture[]::new));
     }
 
-    private void finishClose(List<SessionState> activeSessions, boolean serverDrain) {
+    private void finishClose() {
         sessionContexts.clear();
-        String closeReason = serverDrain ? "server_shutdown" : "transport_error";
-        for (int index = 0; index < activeSessions.size(); index++) {
-            recordSessionClosed(activeSessions.get(index), closeReason);
-        }
         replyRetryExecutor.shutdownNow();
         boolean replyRetriesStopped =
                 awaitExecutorTermination(replyRetryExecutor, "STREAM error reply retry executor");
