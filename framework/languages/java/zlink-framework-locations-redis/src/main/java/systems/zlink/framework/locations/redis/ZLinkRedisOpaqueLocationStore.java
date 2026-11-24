@@ -1,5 +1,6 @@
 package systems.zlink.framework.locations.redis;
 
+import io.lettuce.core.RedisNoScriptException;
 import io.lettuce.core.ScriptOutputType;
 
 import systems.zlink.framework.locationprovider.ZLinkLocationStore;
@@ -35,6 +36,8 @@ import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -132,7 +135,7 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
             end
             """;
 
-    private static final String READ_SCRIPT =
+    private static final RedisScript READ_SCRIPT =
             script(
                     UNPACK_TAGGED_HELPER
                             + """
@@ -169,7 +172,7 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
             end
             """;
 
-    private static final String WRITE_SCRIPT =
+    private static final RedisScript WRITE_SCRIPT =
             script(
                     UNPACK_TAGGED_HELPER
                             + PRUNE_HISTORY_HELPER
@@ -321,7 +324,7 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
                     return result
                     """);
 
-    private static final String SCAN_SCRIPT =
+    private static final RedisScript SCAN_SCRIPT =
             script(
                     UNPACK_TAGGED_HELPER
                             + PRUNE_HISTORY_HELPER
@@ -503,14 +506,7 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
         if (cancelled(cancellation)) {
             return cancelledStage();
         }
-        return connection
-                .commands()
-                .thenCompose(
-                        commands ->
-                                commands.<List<Object>>eval(
-                                        READ_SCRIPT,
-                                        ScriptOutputType.MULTI,
-                                        new String[] {keys.opaqueRecordKey(key.value())}))
+        return executeScript(READ_SCRIPT, new String[] {keys.opaqueRecordKey(key.value())})
                 .thenApply(result -> decodeRead(key, result));
     }
 
@@ -521,15 +517,7 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
         if (cancelled(cancellation)) {
             return cancelledStage();
         }
-        return connection
-                .commands()
-                .thenCompose(
-                        commands ->
-                                commands.<List<Object>>eval(
-                                        WRITE_SCRIPT,
-                                        ScriptOutputType.MULTI,
-                                        validated.redisKeys(),
-                                        validated.arguments()))
+        return executeScript(WRITE_SCRIPT, validated.redisKeys(), validated.arguments())
                 .thenApply(this::decodeWrite);
     }
 
@@ -543,28 +531,49 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
         if (cancelled(cancellation)) {
             return cancelledStage();
         }
+        return executeScript(
+                        SCAN_SCRIPT,
+                        new String[] {
+                            keys.opaqueIndexKey(),
+                            keys.opaqueMapKey(),
+                            keys.opaqueScanKey(validated.scanId()),
+                            keys.opaqueCleanupKey(),
+                            keys.opaqueSequenceKey(),
+                            keys.opaqueSnapshotExpiryKey(),
+                            keys.opaqueSnapshotBoundaryKey()
+                        },
+                        bytes(validated.prefix()),
+                        bytes(validated.lastKey()),
+                        bytes(Integer.toString(validated.limit())),
+                        bytes(validated.create() ? "1" : "0"),
+                        bytes(validated.scanId()))
+                .thenApply(result -> decodeScan(validated.scanId(), result));
+    }
+
+    private CompletionStage<List<Object>> executeScript(
+            RedisScript script, String[] redisKeys, byte[]... arguments) {
         return connection
                 .commands()
                 .thenCompose(
-                        commands ->
-                                commands.<List<Object>>eval(
-                                        SCAN_SCRIPT,
-                                        ScriptOutputType.MULTI,
-                                        new String[] {
-                                            keys.opaqueIndexKey(),
-                                            keys.opaqueMapKey(),
-                                            keys.opaqueScanKey(validated.scanId()),
-                                            keys.opaqueCleanupKey(),
-                                            keys.opaqueSequenceKey(),
-                                            keys.opaqueSnapshotExpiryKey(),
-                                            keys.opaqueSnapshotBoundaryKey()
-                                        },
-                                        bytes(validated.prefix()),
-                                        bytes(validated.lastKey()),
-                                        bytes(Integer.toString(validated.limit())),
-                                        bytes(validated.create() ? "1" : "0"),
-                                        bytes(validated.scanId())))
-                .thenApply(result -> decodeScan(validated.scanId(), result));
+                        commands -> {
+                            var evaluated =
+                                    commands.<List<Object>>evalsha(
+                                            script.sha1(),
+                                            ScriptOutputType.MULTI,
+                                            redisKeys,
+                                            arguments);
+                            return evaluated.exceptionallyCompose(
+                                    failure -> {
+                                        if (failure instanceof RedisNoScriptException) {
+                                            return commands.eval(
+                                                    script.body(),
+                                                    ScriptOutputType.MULTI,
+                                                    redisKeys,
+                                                    arguments);
+                                        }
+                                        return CompletableFuture.failedFuture(failure);
+                                    });
+                        });
     }
 
     private ZLinkStoreReadResult decodeRead(ZLinkStoreKey expectedKey, List<Object> result) {
@@ -898,8 +907,8 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
         return UUID.randomUUID().toString().replace("-", "");
     }
 
-    private static String script(String template) {
-        return ZLinkRedisLocationConnection.script(template, ScriptToken.BY_WIRE)
+    private static RedisScript script(String template) {
+        String body = ZLinkRedisLocationConnection.script(template, ScriptToken.BY_WIRE)
                 .replace(
                         "${VERSION_CLEANUP_GRACE_MILLIS}",
                         Long.toString(VERSION_CLEANUP_GRACE_MILLIS))
@@ -921,6 +930,14 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
                         Long.toString(ENCODED_ITEM_OVERHEAD_BYTES))
                 .replace(
                         "${MAXIMUM_ENCODED_PAGE_BYTES}", Long.toString(MAXIMUM_ENCODED_PAGE_BYTES));
+        byte[] encoded = bytes(body);
+        try {
+            String sha1 =
+                    HexFormat.of().formatHex(MessageDigest.getInstance("SHA-1").digest(encoded));
+            return new RedisScript(encoded, sha1);
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-1 is required by Redis script caching", exception);
+        }
     }
 
     private static void requireOutcome(
@@ -933,6 +950,8 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
                             + text(raw));
         }
     }
+
+    private record RedisScript(byte[] body, String sha1) {}
 
     private record ValidatedWrite(String[] redisKeys, byte[][] arguments) {}
 
