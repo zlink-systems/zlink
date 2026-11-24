@@ -3,6 +3,7 @@
 #include <zlink/framework/contracts/locations/stores.hpp>
 #include <map>
 #include <mutex>
+#include <stdexcept>
 
 namespace metric_test
 {
@@ -46,16 +47,20 @@ class store_t final : public zlink::framework::location_store_t
         expire (now);
         for (const auto &condition : request.conditions) {
             const bool matched = std::visit (
-              [&] (const auto &value) {
-                  const auto found = _values.find (value.key.value);
+              [&] (const auto &value) -> bool {
                   using T = std::decay_t<decltype (value)>;
-                  if constexpr (std::is_same_v<T, store_missing_condition_t>)
-                      return found == _values.end ();
-                  else if constexpr (std::is_same_v<T, store_version_condition_t>)
-                      return found != _values.end ()
-                             && found->second.version.value == value.expected.value;
-                  else
-                      return found != _values.end () && found->second.bytes == value.expected;
+                  if constexpr (std::is_same_v<T, store_sum_at_most_condition_t>) {
+                      throw std::logic_error ("Counter conditions are outside the metrics fixture");
+                  } else {
+                      const auto found = _values.find (value.key.value);
+                      if constexpr (std::is_same_v<T, store_missing_condition_t>)
+                          return found == _values.end ();
+                      else if constexpr (std::is_same_v<T, store_version_condition_t>)
+                          return found != _values.end ()
+                                 && found->second.version.value == value.expected.value;
+                      else
+                          return found != _values.end () && found->second.bytes == value.expected;
+                  }
               },
               condition);
             if (!matched)
@@ -69,8 +74,11 @@ class store_t final : public zlink::framework::location_store_t
                   std::move (put->bytes), version,
                   put->retention ? std::optional{now + *put->retention} : std::nullopt, now};
                 applied.put_versions.push_back ({put->key, version});
-            } else
-                _values.erase (std::get<store_delete_t> (mutation).key.value);
+            } else if (const auto *erase = std::get_if<store_delete_t> (&mutation)) {
+                _values.erase (erase->key.value);
+            } else {
+                throw std::logic_error ("Counter mutations are outside the metrics fixture");
+            }
         }
         return done (store_write_result_t{std::move (applied)});
     }

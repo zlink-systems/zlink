@@ -56,8 +56,7 @@ final class ZLinkStreamSessionPhysicalSubmitOwnershipTest {
         Message payload = Message.from("payload");
         ZLinkStreamSessionSendCall call =
                 new ZLinkStreamSessionSendCall(
-                        stream,
-                        SESSION,
+                        context(stream),
                         ZLinkFrameworkMultipartView.owned(payload),
                         "Packet",
                         Map.of(),
@@ -93,8 +92,7 @@ final class ZLinkStreamSessionPhysicalSubmitOwnershipTest {
         Message payload = Message.from("payload");
         ZLinkStreamSessionSendCall call =
                 new ZLinkStreamSessionSendCall(
-                        stream,
-                        SESSION,
+                        context(stream),
                         ZLinkFrameworkMultipartView.owned(payload),
                         "Packet",
                         Map.of(),
@@ -133,8 +131,6 @@ final class ZLinkStreamSessionPhysicalSubmitOwnershipTest {
         Message replyPayload = Message.from("reply");
         ZLinkStreamSessionReplyCall reply =
                 new ZLinkStreamSessionReplyCall(
-                        stream,
-                        SESSION,
                         ZLinkFrameworkMultipartView.owned(replyPayload),
                         context,
                         "Reply",
@@ -175,8 +171,7 @@ final class ZLinkStreamSessionPhysicalSubmitOwnershipTest {
             Message payload = Message.from("payload");
             ZLinkStreamSessionSendCall call =
                     new ZLinkStreamSessionSendCall(
-                            stream,
-                            SESSION,
+                            context(stream),
                             ZLinkFrameworkMultipartView.owned(payload),
                             "Packet",
                             Map.of(),
@@ -211,8 +206,6 @@ final class ZLinkStreamSessionPhysicalSubmitOwnershipTest {
             AtomicReference<Throwable> synchronousFailure = new AtomicReference<>();
             ZLinkStreamSessionReplyCall call =
                     new ZLinkStreamSessionReplyCall(
-                            stream,
-                            SESSION,
                             ZLinkFrameworkMultipartView.owned(payload),
                             context,
                             "Reply",
@@ -250,8 +243,10 @@ final class ZLinkStreamSessionPhysicalSubmitOwnershipTest {
             Message sendPayload = Message.from("send");
             ZLinkStreamSessionSendCall send =
                     new ZLinkStreamSessionSendCall(
-                            stream((method, arguments) -> defaultValue(method.getReturnType())),
-                            SESSION,
+                            context(
+                                    stream(
+                                            (method, arguments) ->
+                                                    defaultValue(method.getReturnType()))),
                             ZLinkFrameworkMultipartView.owned(sendPayload),
                             "Packet",
                             Map.of(),
@@ -269,8 +264,6 @@ final class ZLinkStreamSessionPhysicalSubmitOwnershipTest {
             AtomicReference<Throwable> synchronousFailure = new AtomicReference<>();
             ZLinkStreamSessionReplyCall reply =
                     new ZLinkStreamSessionReplyCall(
-                            stream,
-                            SESSION,
                             ZLinkFrameworkMultipartView.owned(replyPayload),
                             context,
                             "Reply",
@@ -303,8 +296,7 @@ final class ZLinkStreamSessionPhysicalSubmitOwnershipTest {
                 ZLinkStreamCodec.JSON,
                 null,
                 flow(),
-                () -> CompletableFuture.completedFuture(null),
-                null);
+                () -> CompletableFuture.completedFuture(null));
     }
 
     private static ZLinkMessageFlowTracer flow() {

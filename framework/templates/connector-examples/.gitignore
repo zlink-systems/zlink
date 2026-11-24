@@ -1,0 +1,8 @@
+.logs/
+node_modules/
+dist/
+bin/
+obj/
+.gradle/
+build/
+!client/typescript/index.html

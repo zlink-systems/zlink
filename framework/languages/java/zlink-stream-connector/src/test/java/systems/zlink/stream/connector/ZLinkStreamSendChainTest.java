@@ -125,7 +125,7 @@ final class ZLinkStreamSendChainTest {
         assertFalse(first.isDone());
 
         //  A new connection starts with no outstanding write.
-        chain.reset();
+        chain.reset(null);
 
         AtomicInteger writes = new AtomicInteger();
         CompletableFuture<Void> afterReset =
@@ -153,7 +153,7 @@ final class ZLinkStreamSendChainTest {
                             return CompletableFuture.completedFuture(null);
                         });
 
-        chain.reset();
+        chain.reset(null);
         chain.enqueue(() -> CompletableFuture.completedFuture(null)).join();
         firstGate.complete(null);
 

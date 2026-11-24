@@ -18,15 +18,15 @@ struct timer_spot_t
     int old_calls = 0;
     int new_calls = 0;
     std::optional<fw::timer_tick_t> new_tick;
-    std::function<void ()> replace;
+    std::function<void ()> on_first_old_callback;
 };
 
 struct old_handler_t
 {
     fw::task_t<void> handle (timer_spot_t &spot, const fw::timer_tick_t &)
     {
-        if (++spot.old_calls == 1 && spot.replace)
-            spot.replace ();
+        if (++spot.old_calls == 1 && spot.on_first_old_callback)
+            spot.on_first_old_callback ();
         co_return;
     }
 };
@@ -67,6 +67,11 @@ class SpotTimerGeneration : public testing::Test
         fw::detail::timer_runtime_t::post_fire_count (state, timer, {}, count);
     }
 
+    std::size_t registered_timer_count () const
+    {
+        return fw::detail::spot_context_access_t::state (context)->timers.snapshot ().size ();
+    }
+
     fw::serializer_registry_t serializers;
     fw::test::manual_internal_scheduler_t scheduler;
     std::shared_ptr<timer_spot_t> spot = std::make_shared<timer_spot_t> ();
@@ -78,12 +83,13 @@ class SpotTimerGeneration : public testing::Test
 TEST_F (SpotTimerGeneration, SameNameUsesNewCallback)
 {
     auto first = context.add_timer<old_handler_t> ("pulse", 24h);
+    const auto first_state = state->timers.snapshot ().front ();
     auto second = context.add_timer<new_handler_t> ("pulse", 48h);
 
     EXPECT_TRUE (first.is_disposed ());
     EXPECT_FALSE (second.is_disposed ());
-    post_tick (state->timers.front ());
-    post_tick (state->timers.back ());
+    post_tick (first_state);
+    post_tick (state->timers.snapshot ().back ());
     scheduler.run_all ();
     EXPECT_EQ (spot->old_calls, 0);
     EXPECT_EQ (spot->new_calls, 1);
@@ -92,14 +98,40 @@ TEST_F (SpotTimerGeneration, SameNameUsesNewCallback)
     EXPECT_EQ (spot->new_tick->period, 48h);
 }
 
+TEST_F (SpotTimerGeneration, RepeatedReplacementKeepsOnlyTheLiveGeneration)
+{
+    auto timer = context.add_timer<old_handler_t> ("pulse", 24h);
+    for (int i = 0; i < 100; ++i) {
+        auto replacement = context.add_timer<old_handler_t> ("pulse", 24h);
+        ASSERT_TRUE (timer.is_disposed ());
+        timer = std::move (replacement);
+    }
+
+    EXPECT_EQ (registered_timer_count (), 1u);
+    EXPECT_FALSE (timer.is_disposed ());
+}
+
+TEST_F (SpotTimerGeneration, RepeatedCancelAndRegistrationKeepsOnlyTheLiveGeneration)
+{
+    auto timer = context.add_timer<old_handler_t> ("pulse", 24h);
+    for (int i = 0; i < 100; ++i) {
+        ASSERT_TRUE (timer.cancel ().result ());
+        timer = context.add_timer<old_handler_t> ("pulse", 24h);
+    }
+
+    EXPECT_EQ (registered_timer_count (), 1u);
+    ASSERT_TRUE (timer.cancel ().result ());
+    EXPECT_EQ (registered_timer_count (), 0u);
+}
+
 TEST_F (SpotTimerGeneration, DropsTickQueuedBeforeReplacement)
 {
     auto first = context.add_timer<old_handler_t> ("pulse", 24h);
-    post_tick (state->timers.front ());
+    post_tick (state->timers.snapshot ().front ());
     ASSERT_EQ (state->serial_queue->pending_count (), 1u);
 
     auto second = context.add_timer<new_handler_t> ("pulse", 24h);
-    post_tick (state->timers.back ());
+    post_tick (state->timers.snapshot ().back ());
     scheduler.run_all ();
 
     EXPECT_EQ (spot->old_calls, 0);
@@ -107,6 +139,25 @@ TEST_F (SpotTimerGeneration, DropsTickQueuedBeforeReplacement)
     EXPECT_TRUE (first.cancel ().result ());
     EXPECT_TRUE (first.cancel ().result ());
     EXPECT_FALSE (second.is_disposed ());
+}
+
+TEST_F (SpotTimerGeneration, RetainsCancelledTimerUntilItsCallbackReturns)
+{
+    auto timer = context.add_timer<old_handler_t> ("pulse", 24h);
+    std::optional<fw::task_t<void>> cancellation;
+    spot->on_first_old_callback = [&] {
+        cancellation.emplace (timer.cancel ());
+        EXPECT_FALSE (cancellation->await_ready ());
+        EXPECT_EQ (registered_timer_count (), 1u);
+    };
+
+    post_tick (state->timers.snapshot ().front ());
+    scheduler.run_all ();
+
+    ASSERT_TRUE (cancellation.has_value ());
+    ASSERT_TRUE (cancellation->await_ready ());
+    EXPECT_TRUE (cancellation->result ());
+    EXPECT_EQ (registered_timer_count (), 0u);
 }
 
 TEST_F (SpotTimerGeneration, ReplacesItselfWithoutWaitingForItsOwnCallback)
@@ -118,22 +169,24 @@ TEST_F (SpotTimerGeneration, ReplacesItselfWithoutWaitingForItsOwnCallback)
     std::optional<fw::timer_t> second;
     std::optional<fw::task_t<void>> first_cancel;
     std::optional<fw::task_t<void>> second_cancel;
-    spot->replace = [&] {
+    spot->on_first_old_callback = [&] {
         ASSERT_NO_THROW (second.emplace (context.add_timer<new_handler_t> ("pulse", 24h)));
         first_cancel.emplace (first.cancel ());
         second_cancel.emplace (first.cancel ());
         EXPECT_FALSE (first_cancel->await_ready ());
         EXPECT_FALSE (second_cancel->await_ready ());
-        post_tick (state->timers.back ());
+        EXPECT_EQ (registered_timer_count (), 2u);
+        post_tick (state->timers.snapshot ().back ());
     };
 
-    post_tick (state->timers.front (), 2);
+    post_tick (state->timers.snapshot ().front (), 2);
     scheduler.run_all ();
-    spot->replace = {};
+    spot->on_first_old_callback = {};
 
     ASSERT_TRUE (second.has_value ());
     EXPECT_EQ (spot->old_calls, 1);
     EXPECT_EQ (spot->new_calls, 1);
+    EXPECT_EQ (registered_timer_count (), 1u);
     ASSERT_TRUE (first_cancel->await_ready ());
     ASSERT_TRUE (second_cancel->await_ready ());
     EXPECT_TRUE (first_cancel->result ());
