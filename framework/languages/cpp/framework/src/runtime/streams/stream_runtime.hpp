@@ -10,6 +10,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -49,11 +50,16 @@ class stream_builder_state_t
 class stream_state_t
 {
   public:
+    using transport_writer_t =
+      std::function<task_t<void> (const stream_header_t &,
+                                  const zlink::message_t &,
+                                  const std::shared_ptr<stream_reply_submission_t> &)>;
+
     std::string session_id;
     std::optional<zlink::routing_id_t> routing_id;
     std::optional<std::string> local_address;
     std::optional<std::string> remote_address;
-    std::atomic_bool closed{false};
+    std::stop_source closed;
     std::atomic<stream_codec_t> application_codec{stream_codec_t::raw};
     std::vector<stream_header_t> written_headers;
     std::vector<zlink::message_t> written_payloads;
@@ -61,8 +67,7 @@ class stream_state_t
     mutable std::mutex dispatch_mutex;
     std::shared_ptr<zlink::framework::runtime::session_serial_executor_t> session_serial_executor;
     std::mutex transport_writer_mutex;
-    std::shared_ptr<std::function<task_t<void> (const stream_header_t &, const zlink::message_t &)>>
-      transport_writer;
+    std::shared_ptr<transport_writer_t> transport_writer;
     serializer_registry_t *serializers = nullptr;
     std::atomic<session_actor_manager_t *> actors{nullptr};
     std::shared_ptr<const stream_compression_codec_t> compression_codec;
@@ -71,26 +76,37 @@ class stream_state_t
 class stream_reply_submission_t
 {
   public:
+    stream_reply_submission_t () = default;
+    stream_reply_submission_t (std::shared_ptr<void> admission_lease, std::stop_token closed);
+
     bool try_claim () noexcept { return _submission.try_claim (); }
     bool claimed () const noexcept { return _submission.claimed (); }
     task_t<void> terminal () const { return _terminal.task (); }
     void complete () { _terminal.complete (result_t<void>::success ()); }
-    void complete_if_unclaimed ()
+    bool admission_limited () const noexcept { return _cancel.has_value (); }
+    void complete_at_dispatch_end ()
     {
-        if (!claimed ())
+        if (admission_limited () || !claimed ())
             complete ();
     }
 
   private:
+    struct cancel_t
+    {
+        stream_reply_submission_t *owner;
+        void operator() () const { owner->complete (); }
+    };
+
     submit_once_t _submission;
     task_completion_source_t<void> _terminal;
+    std::optional<std::stop_callback<cancel_t>> _cancel;
 };
 
 class stream_runtime_state_t
 {
   public:
     std::map<std::string, std::shared_ptr<stream_builder_state_t>> streams;
-    std::uint64_t next_session_id = 1;
+    std::atomic_uint64_t next_session_id{1};
     dispatch_options_t dispatch;
     serializer_registry_t *serializers = nullptr;
     std::shared_ptr<const stream_compression_codec_t> compression_codec =
@@ -119,9 +135,11 @@ class stream_runtime_t
     result_t<std::vector<std::uint8_t>> encode_frame (const stream_header_t &header,
                                                       const zlink::message_t &payload) const;
     static std::function<task_t<void> (const stream_header_t &, const zlink::message_t &)>
-    stream_submitter (std::shared_ptr<stream_state_t> state);
+    stream_submitter (std::shared_ptr<stream_state_t> state,
+                      std::shared_ptr<stream_reply_submission_t> admission_reply = {});
     static stream_header_t make_terminal_header (stream_message_kind_t kind,
-                                                 const stream_header_t &request_header);
+                                                 const stream_header_t &request_header,
+                                                 stream_metadata_t admission_metadata = {});
     /* Encodes the versioned session-closing control payload
      * (graceful-drain-handoff §7.1): u8 version=1, u8 reason, u16 diagnostic
      * length (network order, <=512), UTF-8 diagnostic bytes. */
@@ -142,6 +160,7 @@ class stream_runtime_t
                                std::optional<zlink::routing_id_t> routing_id,
                                std::optional<std::string> local_address = std::nullopt,
                                std::optional<std::string> remote_address = std::nullopt) const;
+    void set_session_codec (stream_t &stream, stream_codec_t codec) const;
     result_t<void> dispatch_connected (packet_stream_session_t &session, stream_t &stream) const;
     result_t<void> dispatch_packet (packet_stream_session_t &session,
                                     stream_t &stream,
@@ -169,7 +188,8 @@ class stream_runtime_t
                                           const zlink::message_t &payload,
                                           async_dispatch_completion_t completion = {},
                                           async_dispatch_started_t started = {},
-                                          async_dispatch_cancel_t cancelled = {}) const;
+                                          async_dispatch_cancel_t cancelled = {},
+                                          std::shared_ptr<void> admission_lease = {}) const;
     result_t<void> dispatch_disconnected_async (packet_stream_session_t &session,
                                                 stream_t &stream,
                                                 async_dispatch_completion_t completion = {}) const;
@@ -182,6 +202,8 @@ class stream_runtime_t
     void attach_transport_writer (
       stream_t &stream,
       std::function<task_t<void> (const stream_header_t &, const zlink::message_t &)> writer) const;
+    void attach_transport_writer (stream_t &stream,
+                                  stream_state_t::transport_writer_t writer) const;
 
     std::vector<stream_header_t> written_headers (const stream_t &stream) const;
     std::vector<zlink::message_t> written_payloads (const stream_t &stream) const;

@@ -3479,7 +3479,7 @@ void app_t::_apply_zlink_framework ()
           _state->monitoring->runtime_failures, stream_runtime, stream_snapshot,
           options.stream_session_factories (), options.session_replacement_callback_timeout (),
           mesh_nodes.empty () ? nullptr : mesh_nodes.front (), stream_runtime.advertise_hosts (),
-          _state->listener_statuses, _state->application_job_queue);
+          _state->listener_statuses, _state->application_job_queue, _state->host_capacity);
         stream_service->bind_drain_flag (_state->draining);
         stream_service->bind_delay_owner (_state->delays);
         stream_service->bind_monitoring (_state->monitoring);

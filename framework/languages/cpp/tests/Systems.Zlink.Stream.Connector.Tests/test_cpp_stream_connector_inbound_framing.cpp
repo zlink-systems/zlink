@@ -272,13 +272,16 @@ int verify_read_terminal_order ()
             bool request_succeeded = false;
             state->pending_requests.emplace (
               7, zlink::stream_connector::detail::pending_request_t{
-                   7, zlink::stream_connector::packet_t{.name = "terminal.request"},
-                   [&] (zlink::stream_connector::result_t<
-                        zlink::stream_connector::detail::request_reply_t> result) {
-                       request_completed = true;
-                       request_succeeded = static_cast<bool> (result);
-                   },
-                   nullptr, /*deliver_direct=*/true, nullptr});
+                   .write_id = 7,
+                   .packet = {.name = "terminal.request"},
+                   .callback =
+                     [&] (zlink::stream_connector::result_t<
+                          zlink::stream_connector::detail::request_reply_t> result) {
+                         request_completed = true;
+                         request_succeeded = static_cast<bool> (result);
+                     },
+                   .deliver_direct = true,
+                   .attempt_seq = 7});
             bool pushed = false;
             state->packet_handlers[""].push_back (
               {1, [&] (const zlink::stream_connector::detail::dispatch_envelope_t &) {

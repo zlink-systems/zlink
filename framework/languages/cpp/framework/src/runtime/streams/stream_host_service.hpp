@@ -35,6 +35,8 @@ namespace zlink::framework::runtime
 {
 
 struct stream_host_service_test_access_t;
+class stream_host_ingress_t;
+class host_capacity_runtime_t;
 namespace host
 {
 class public_host_runtime_t;
@@ -69,7 +71,8 @@ class stream_host_service_t final : public hosted_service_t, public hosted_servi
       std::shared_ptr<detail::mesh_node_runtime_t> mesh_node = nullptr,
       std::map<std::string, std::optional<std::string>> advertise_hosts = {},
       std::shared_ptr<listener_status_registry_t> listener_statuses = {},
-      std::shared_ptr<application_job_queue_t> application_jobs = {});
+      std::shared_ptr<application_job_queue_t> application_jobs = {},
+      std::shared_ptr<host_capacity_runtime_t> host_capacity = {});
     ~stream_host_service_t () override;
 
     task_t<void> start (service_provider_t &services) override;
@@ -124,6 +127,7 @@ class stream_host_service_t final : public hosted_service_t, public hosted_servi
     std::shared_ptr<listener_status_registry_t> _listener_statuses;
     std::shared_ptr<detail::mesh_node_runtime_t> _mesh_node;
     std::shared_ptr<application_job_queue_t> _application_jobs;
+    std::shared_ptr<stream_host_ingress_t> _ingress;
     detail::delay_owner_t *_delay_owner = nullptr;
     service_provider_t *_services = nullptr;
     std::atomic_bool _stop{false};
