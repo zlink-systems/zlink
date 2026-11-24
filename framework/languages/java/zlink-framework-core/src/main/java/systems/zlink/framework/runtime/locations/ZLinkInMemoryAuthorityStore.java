@@ -33,7 +33,6 @@ final class ZLinkInMemoryAuthorityStore {
     private final Predicate<ZLinkLocationOwnerToken> ownerLeaseIsLive;
     private final ZLinkOwnerLeaseWaitTracker ownerLeaseWait;
     private final DescriptorLookup descriptorLookup;
-    private final Predicate<String> spotIdentityClaimed;
     private final Map<String, Row> rows = new HashMap<>();
     private final Map<String, ReservationState> reservations = new HashMap<>();
     private final Map<ZLinkCreationOperationIdentity, ZLinkCreationOperationTerminal>
@@ -56,7 +55,6 @@ final class ZLinkInMemoryAuthorityStore {
                 clock,
                 ownerLeaseIsLive,
                 (key, generation, owner) -> null,
-                ignored -> false,
                 new ZLinkOwnerLeaseWaitTracker(System::nanoTime, java.time.Duration.ZERO));
     }
 
@@ -69,7 +67,6 @@ final class ZLinkInMemoryAuthorityStore {
                 clock,
                 ownerLeaseIsLive,
                 descriptorLookup,
-                ignored -> false,
                 new ZLinkOwnerLeaseWaitTracker(System::nanoTime, java.time.Duration.ZERO));
     }
 
@@ -78,37 +75,12 @@ final class ZLinkInMemoryAuthorityStore {
             Clock clock,
             Predicate<ZLinkLocationOwnerToken> ownerLeaseIsLive,
             DescriptorLookup descriptorLookup,
-            Predicate<String> spotIdentityClaimed) {
-        this(
-                stateLane,
-                clock,
-                ownerLeaseIsLive,
-                descriptorLookup,
-                spotIdentityClaimed,
-                new ZLinkOwnerLeaseWaitTracker(System::nanoTime, java.time.Duration.ZERO));
-    }
-
-    ZLinkInMemoryAuthorityStore(
-            ZLinkStateLane stateLane,
-            Clock clock,
-            Predicate<ZLinkLocationOwnerToken> ownerLeaseIsLive,
-            DescriptorLookup descriptorLookup,
-            Predicate<String> spotIdentityClaimed,
             ZLinkOwnerLeaseWaitTracker ownerLeaseWait) {
         this.stateLane = stateLane;
         this.clock = clock;
         this.ownerLeaseIsLive = ownerLeaseIsLive;
         this.descriptorLookup = descriptorLookup;
-        this.spotIdentityClaimed = spotIdentityClaimed;
         this.ownerLeaseWait = ownerLeaseWait;
-    }
-
-    boolean containsAuthority(String key) {
-        return inStateLane(() -> containsAuthorityOnLane(key));
-    }
-
-    boolean containsAuthorityOnLane(String key) {
-        return rows.containsKey(key);
     }
 
     public CompletionStage<ZLinkAuthorityReadResult> read(
@@ -547,12 +519,6 @@ final class ZLinkInMemoryAuthorityStore {
             ZLinkObjectReservationRequest request, ZLinkStoreCancellation cancellation) {
         return inStateLane(
                 () -> {
-                    if (request.objectKind() != ZLinkPlacementObjectKind.ACTOR
-                            && spotIdentityClaimed.test(request.authorityKey())) {
-                        return completed(
-                                new ZLinkObjectConflict(
-                                        new ZLinkAuthorityMissing(clock.instant())));
-                    }
                     Instant now = clock.instant();
                     Row current = rows.get(request.authorityKey());
                     if (current != null

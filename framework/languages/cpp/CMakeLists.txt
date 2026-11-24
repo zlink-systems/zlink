@@ -3696,7 +3696,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     TIMEOUT 30)
   if(TARGET redis++::redis++ OR TARGET redis++::redis++_static)
     add_executable(test_cpp_framework_locations_redis
-      tests/Zlink.Framework.UnitTests/test_cpp_framework_locations_redis.cpp)
+      tests/Zlink.Framework.UnitTests/test_cpp_framework_locations_redis.cpp
+      tests/Zlink.Framework.UnitTests/test_cpp_framework_entry_spot_store_parity.cpp)
     zlink_enable_coverage(test_cpp_framework_locations_redis)
     target_compile_definitions(test_cpp_framework_locations_redis PRIVATE
       ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT=1)

@@ -431,19 +431,6 @@ internal sealed partial class ZLinkInMemoryLocationStore
         {
             var now = _time.GetUtcNow();
             RemoveExpiredCreationTerminals(now);
-            if (
-                request.ObjectKind
-                    is ZLinkPlacementObjectKind.UserSpot
-                        or ZLinkPlacementObjectKind.InstanceSpot
-                && Zlink.Framework.Runtime.Spots.ZLinkUserSpotAuthorityPayloadCodec.TryGetSpotId(
-                    request.Key,
-                    out var spotId
-                )
-                && _entrySpotIdClaims.ContainsKey(spotId)
-            )
-                return new ZLinkObjectReserveResult.Conflict(
-                    new ZLinkAuthorityReadResult.Missing(now)
-                );
             if (_authorities.TryGetValue(request.Key.Value, out var existing))
             {
                 if (

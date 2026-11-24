@@ -612,7 +612,7 @@ class ZLinkInMemoryLocationStoreTest {
     }
 
     @Test
-    void entrySpotIdentityIsClaimedGloballyAndReleasedByExactOwner() throws Exception {
+    void descriptorRemovalIsFencedWhenEntrySpotIdsMatch() throws Exception {
         ZLinkInMemoryLocationStore store =
                 new ZLinkInMemoryLocationStore(Clock.fixed(NOW, ZoneOffset.UTC));
         ZLinkLocationOwnerToken firstOwner =
@@ -644,7 +644,7 @@ class ZLinkInMemoryLocationStoreTest {
                         .get()
                         .status());
         assertEquals(
-                ZLinkLocationWriteStatus.REJECTED_CONFLICT,
+                ZLinkLocationWriteStatus.STORED,
                 store.updateMeshNode(second, ZLinkLocationWriteIntent.NEW_CLAIM)
                         .toCompletableFuture()
                         .get()
@@ -654,12 +654,7 @@ class ZLinkInMemoryLocationStoreTest {
                 store.removeMeshNode(new ZLinkMeshNodeDescriptorKey("mesh", NODE_A), firstOwner)
                         .toCompletableFuture()
                         .get());
-        assertEquals(
-                ZLinkLocationWriteStatus.STORED,
-                store.updateMeshNode(second, ZLinkLocationWriteIntent.NEW_CLAIM)
-                        .toCompletableFuture()
-                        .get()
-                        .status());
+        assertEquals(secondRid, onlyMeshNode(store).rid());
         assertEquals(
                 ZLinkLocationWriteStatus.IGNORED_STALE,
                 store.removeMeshNode(new ZLinkMeshNodeDescriptorKey("mesh", NODE_A), firstOwner)
