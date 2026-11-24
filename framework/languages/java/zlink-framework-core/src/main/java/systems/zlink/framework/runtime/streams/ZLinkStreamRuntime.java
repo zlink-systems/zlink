@@ -31,12 +31,14 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutc
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
+import systems.zlink.framework.runtime.internal.execution.ZLinkTeardownExecutor;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationAdapter;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
+import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
 import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 import systems.zlink.framework.runtime.spots.ZLinkSpotRuntime;
@@ -145,6 +147,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     private final Set<ZLinkStreamSessionContextState> sessionContexts =
             ConcurrentHashMap.newKeySet();
     private volatile boolean draining;
+    private CompletableFuture<Void> forcedStop = new CompletableFuture<>();
 
     int sessionContextCount() {
         return sessionContexts.size();
@@ -540,6 +543,13 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
      * the owner's close ({@link #closeAsync()}) releases like any other.
      */
     public ZLinkStreamRuntime start() {
+        return start(new CompletableFuture<>());
+    }
+
+    public ZLinkStreamRuntime start(CompletableFuture<Throwable> hostForcedDrain) {
+        forcedStop =
+                hostForcedDrain.thenCompose(
+                        cause -> CompletableFuture.failedFuture(shutdownFailure()));
         for (StreamNodeRegistration streamNode : registration.streamNodes()) {
             String actorMeshName =
                     streamNode.actorDispatchEnabled() ? resolveActorDispatchMeshName() : null;
@@ -608,6 +618,9 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                                                 "stream node is not configured: "
                                                         + streamNodeName));
         var state = getOrCreateSessionState(streamNode, stream, sessionRid);
+        if (state == null) {
+            throw shutdownFailure();
+        }
         if (state.actorRuntime() == null)
             throw new ZLinkConfigurationException(
                     "stream node has no Actor binding runtime: " + streamNodeName);
@@ -1178,6 +1191,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
 
     private ScheduledFuture<?> scheduleReplacementClose(
             SessionState state, ReplacementIdentity identity, Duration delay) {
+        if (forcedStop.isDone()) return null;
         try {
             return replyRetryExecutor.schedule(
                     () -> {
@@ -1192,7 +1206,8 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     }
 
     private void closeReplacedSessionIfExact(SessionState state, ReplacementIdentity identity) {
-        if (!isCurrentSessionState(state)
+        if (forcedStop.isDone()
+                || !isCurrentSessionState(state)
                 || !state.matchesReplacement(identity)
                 || !state.closeScheduled().compareAndSet(false, true)) {
             return;
@@ -1432,6 +1447,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             RoutingId routingId,
             ZLinkStreamHeader streamHeader,
             Message payload) {
+        if (forcedStop.isDone()) return forcedStop;
         ZLinkBackendStreamSocket stream = streamsByName.get(streamNode.name());
         //  Spec 27 §4: at Off the inbound flow pair is neither read into a flow
         //  context nor copied forward; at every other level the ingress installs
@@ -1481,12 +1497,13 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 && !draining) {
             receivedState = getOrCreateSessionState(streamNode, stream, routingId);
             SessionState created = receivedState;
-            inStateLane(
-                    () -> {
-                        created.markInboundReceived(nanoTime.getAsLong());
-                        created.markApplicationReceived();
-                        return null;
-                    });
+            if (created != null)
+                inStateLane(
+                        () -> {
+                            created.markInboundReceived(nanoTime.getAsLong());
+                            created.markApplicationReceived();
+                            return null;
+                        });
         }
         final SessionState state = receivedState;
         final ZLinkFlowContext.State incomingFlow = capturedFlow;
@@ -1495,7 +1512,8 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             return CompletableFuture.completedFuture(null);
         }
         if (draining) {
-            sendSessionClosing(stream, routingId);
+            // A registered session is notified by its close owner.
+            if (state == null && !forcedStop.isDone()) sendSessionClosing(stream, routingId);
             return CompletableFuture.completedFuture(null);
         }
         if (state.replacementClosing()) {
@@ -1544,37 +1562,37 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 state.serials()
                         .executeApplication(
                                 () -> {
+                                    if (forcedStop.isDone()) return forcedStop;
                                     traceStreamPhase(
                                             dispatchHeader,
                                             incomingFlow,
                                             routingId,
                                             ZLinkMessageFlowOutcome.ADMITTED);
-                                    traceStreamPhase(
-                                            dispatchHeader,
-                                            incomingFlow,
-                                            routingId,
-                                            ZLinkMessageFlowOutcome.DISPATCHED);
-                                    if (incomingFlow == null) {
-                                        return executeHandler(
-                                                () ->
-                                                        state.context()
-                                                                .dispatchStage(
-                                                                        dispatchHeader,
-                                                                        sessionPayload,
-                                                                        state.session()));
-                                    }
                                     try (ZLinkFlowContext.Scope ignored =
-                                            ZLinkFlowContext.enter(incomingFlow)) {
+                                            incomingFlow == null
+                                                    ? () -> {}
+                                                    : ZLinkFlowContext.enter(incomingFlow)) {
                                         return executeHandler(
-                                                () ->
-                                                        state.context()
-                                                                .dispatchStage(
-                                                                        dispatchHeader,
-                                                                        sessionPayload,
-                                                                        state.session()));
+                                                () -> {
+                                                    traceStreamPhase(
+                                                            dispatchHeader,
+                                                            incomingFlow,
+                                                            routingId,
+                                                            ZLinkMessageFlowOutcome.DISPATCHED);
+                                                    return state.context()
+                                                            .dispatchStage(
+                                                                    dispatchHeader,
+                                                                    sessionPayload,
+                                                                    state.session());
+                                                });
                                     }
                                 });
-        return completion;
+        return completion.whenComplete(
+                (ignored, failure) -> {
+                    if (failure != null && forcedStop.isDone()) {
+                        state.context().traceShutdown(dispatchHeader, failure);
+                    }
+                });
     }
 
     private void traceStreamPhase(
@@ -1679,6 +1697,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             MonitorEventType event,
             int nativeCode,
             String message) {
+        if (forcedStop.isDone()) return;
         if (event == MonitorEventType.CONNECTION_READY) {
             getOrCreateSessionState(streamNode, streamsByName.get(streamNode.name()), routingId);
             return;
@@ -1716,18 +1735,20 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             ZLinkBackendStreamSocket stream,
             RoutingId routingId) {
         SessionState existing = inStateLane(() -> findSessionState(streamNode.name(), routingId));
-        if (existing != null) {
+        if (existing != null || draining) {
             return existing;
         }
         SessionState state = createSessionState(streamNode, stream, routingId);
-        existing =
+        SessionState published =
                 inStateLane(
                         () -> {
+                            if (draining) return findSessionState(streamNode.name(), routingId);
                             SessionState current =
                                     sessions.computeIfAbsent(
                                                     streamNode.name(), ignored -> new HashMap<>())
                                             .putIfAbsent(routingId, state);
                             if (current == null) {
+                                sessionContexts.add(state.context());
                                 ZLinkRuntimeMetrics.add(
                                         ZLinkRuntimeMetrics.Metric.STREAM_CONNECTIONS_ACTIVE
                                                 .metricName(),
@@ -1739,18 +1760,14 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                                         state.metricTags);
                                 dispatchConnected(state);
                                 scheduleSessionLiveness(state, nanoTime.getAsLong());
+                                return state;
                             }
                             return current;
                         });
-        if (existing != null) {
-            try {
-                state.context().closeReplyRetries();
-            } finally {
-                sessionContexts.remove(state.context());
-            }
-            return existing;
+        if (published != state) {
+            state.context().closeReplyRetries();
         }
-        return state;
+        return published;
     }
 
     private static void recordSessionClosed(SessionState state, String reason) {
@@ -1803,6 +1820,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                                 .findFirst()
                                 .orElse(null);
         RoutingId ownerNodeRid = ownerNode == null ? null : ownerNode.routingId();
+        ZLinkSessionSerialExecutor serials = new ZLinkSessionSerialExecutor(serialExecutor);
         ZLinkStreamSessionContextState context =
                 new ZLinkStreamSessionContextState(
                         streamNode.name(),
@@ -1817,8 +1835,8 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                             sendSessionClosing(stream, routingId);
                             return CompletableFuture.completedFuture(null);
                         },
-                        replyRetryExecutor);
-        sessionContexts.add(context);
+                        forcedStop::isDone,
+                        serials);
         try {
             ZLinkHandlerActivator.MutableServices sessionFactory =
                     ZLinkHandlerActivator.services(handlerFactory);
@@ -1847,11 +1865,9 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                         "stream session must expose the context provided by the runtime: "
                                 + streamNode.sessionType().getName());
             }
-            ZLinkSessionSerialExecutor serials = new ZLinkSessionSerialExecutor(serialExecutor);
             return new SessionState(
                     streamNode,
                     session,
-                    serials,
                     context,
                     stream,
                     routingId,
@@ -1866,7 +1882,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             } catch (RuntimeException | Error cleanupFailure) {
                 failure.addSuppressed(cleanupFailure);
             }
-            sessionContexts.remove(context);
             throw failure;
         }
     }
@@ -1897,51 +1912,88 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     }
 
     public CompletionStage<Void> closeAsync() {
-        List<SessionState> activeSessions = inStateLane(() -> sessionStates().toList());
+        boolean serverDrain = draining;
+        List<SessionState> activeSessions =
+                inStateLane(
+                        () -> {
+                            draining = true;
+                            List<SessionState> active = sessionStates().toList();
+                            active.forEach(SessionState::cancelLivenessTimer);
+                            sessions.clear();
+                            return active;
+                        });
+        var contexts = List.copyOf(sessionContexts);
         Map<ZLinkStreamSessionContextState, CompletionStage<Void>> cleanups = new HashMap<>();
-        for (ZLinkStreamSessionContextState session : List.copyOf(sessionContexts)) {
+        for (ZLinkStreamSessionContextState session : contexts) {
             cleanups.put(session, disconnectInfrastructure(session));
-        }
-        List<CompletableFuture<Void>> callbacks = new ArrayList<>();
-        for (SessionState state : activeSessions) {
-            CompletionStage<Void> cleanup =
-                    cleanups.computeIfAbsent(state.context(), this::disconnectInfrastructure);
-            callbacks.add(
-                    cleanup.thenCompose(
-                                    ignored ->
-                                            state.serials()
-                                                    .executeFinal(
-                                                            () ->
-                                                                    executeHandler(
-                                                                            () ->
-                                                                                    disconnectSessionStage(
-                                                                                            state))))
-                            .toCompletableFuture());
         }
         CompletableFuture<Void> infrastructure =
                 CompletableFuture.allOf(
                         cleanups.values().stream()
                                 .map(CompletionStage::toCompletableFuture)
                                 .toArray(CompletableFuture[]::new));
-        return CompletableFuture.allOf(
-                        infrastructure,
-                        CompletableFuture.allOf(callbacks.toArray(CompletableFuture[]::new)))
-                .handle(
-                        (ignored, failure) -> {
-                            finishClose(activeSessions);
-                            return null;
+        CompletableFuture<Void> notifications =
+                serverDrain
+                        ? CompletableFuture.allOf(
+                                activeSessions.stream()
+                                        .map(
+                                                state ->
+                                                        sendSessionClosing(
+                                                                        state.stream(),
+                                                                        state.routingId())
+                                                                .toCompletableFuture())
+                                        .toArray(CompletableFuture[]::new))
+                        : CompletableFuture.completedFuture(null);
+
+        CompletionStage<Void> callbacks =
+                notifications.thenCompose(
+                        ignored -> {
+                            if (forcedStop.isDone()) return forcedStop;
+                            return CompletableFuture.allOf(
+                                    activeSessions.stream()
+                                            .map(
+                                                    state ->
+                                                            cleanups.get(state.context())
+                                                                    .thenCompose(
+                                                                            cleaned ->
+                                                                                    queueDisconnect(
+                                                                                            state,
+                                                                                            () ->
+                                                                                                    disconnectSessionStage(
+                                                                                                            state))))
+                                            .map(CompletionStage::toCompletableFuture)
+                                            .toArray(CompletableFuture[]::new));
                         });
+        // The deadline ends application waits. Native submissions are still owned by the
+        // socket and are settled by close before the host releases its Core context.
+        CompletionStage<Void> application =
+                CompletableFuture.anyOf(callbacks.toCompletableFuture(), forcedStop)
+                        .handle(
+                                (ignored, failure) -> {
+                                    if (forcedStop.isDone()) {
+                                        contexts.forEach(
+                                                session -> session.serials().discardPending());
+                                    }
+                                    return null;
+                                })
+                        .thenCompose(ignored -> awaitSessionTurns(contexts));
+        return CompletableFuture.allOf(infrastructure, application.toCompletableFuture())
+                .thenRunAsync(
+                        () -> finishClose(activeSessions, serverDrain),
+                        ZLinkTeardownExecutor::execute);
     }
 
-    private void finishClose(List<SessionState> activeSessions) {
-        inStateLane(
-                () -> {
-                    sessionStates().forEach(SessionState::cancelLivenessTimer);
-                    sessions.clear();
-                    return null;
-                });
-        sessionContexts.forEach(ZLinkStreamSessionContextState::closeReplyRetries);
-        String closeReason = draining ? "server_shutdown" : "transport_error";
+    private static CompletionStage<Void> awaitSessionTurns(
+            List<ZLinkStreamSessionContextState> contexts) {
+        return CompletableFuture.allOf(
+                contexts.stream()
+                        .map(session -> session.serials().awaitQuiescence().toCompletableFuture())
+                        .toArray(CompletableFuture[]::new));
+    }
+
+    private void finishClose(List<SessionState> activeSessions, boolean serverDrain) {
+        sessionContexts.clear();
+        String closeReason = serverDrain ? "server_shutdown" : "transport_error";
         for (int index = 0; index < activeSessions.size(); index++) {
             recordSessionClosed(activeSessions.get(index), closeReason);
         }
@@ -1999,29 +2051,10 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     }
 
     public CompletionStage<Void> awaitDrainBarrier() {
-        List<SessionState> activeSessions = inStateLane(() -> sessionStates().toList());
-        CompletableFuture<?>[] barriers =
-                activeSessions.stream()
-                        .map(
-                                state ->
-                                        state.serials()
-                                                .executeFinal(
-                                                        () ->
-                                                                CompletableFuture.completedFuture(
-                                                                        null)))
-                        .map(CompletionStage::toCompletableFuture)
-                        .toArray(CompletableFuture[]::new);
-        return CompletableFuture.allOf(barriers);
-    }
-
-    public CompletionStage<Void> notifyServerDrain() {
-        List<SessionState> active = inStateLane(() -> sessionStates().toList());
-        List<CompletableFuture<Void>> notifications = new ArrayList<>();
-        for (SessionState state : active) {
-            notifications.add(
-                    sendSessionClosing(state.stream(), state.routingId()).toCompletableFuture());
-        }
-        return CompletableFuture.allOf(notifications.toArray(CompletableFuture[]::new));
+        return CompletableFuture.anyOf(
+                        awaitSessionTurns(List.copyOf(sessionContexts)).toCompletableFuture(),
+                        forcedStop)
+                .thenApply(ignored -> null);
     }
 
     private static CompletionStage<Void> sendSessionClosing(
@@ -2137,8 +2170,14 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 });
     }
 
-    private <T> CompletionStage<T> executeHandler(Supplier<CompletionStage<T>> operation) {
-        CompletableFuture<CompletionStage<T>> entered = new CompletableFuture<>();
+    private static ZLinkFrameworkException shutdownFailure() {
+        return ZLinkFrameworkErrorOrigin.framework(
+                ZLinkFrameworkErrorKind.SHUTTING_DOWN, "STREAM runtime is shutting down");
+    }
+
+    private CompletionStage<Void> executeHandler(Supplier<CompletionStage<Void>> operation) {
+        if (forcedStop.isDone()) return forcedStop;
+        CompletableFuture<CompletionStage<Void>> entered = new CompletableFuture<>();
         ZLinkFlowContext.State capturedFlow = ZLinkFlowContext.current();
         var applicationJob = ZLinkApplicationJobContext.transferToQueuedJob();
         try {
@@ -2152,7 +2191,10 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                                         ZLinkApplicationJobContext.enterQueued(applicationJob)) {
                             ZLinkApplicationJobContext.beforeFirstApplicationInstruction();
                             entered.complete(
-                                    Objects.requireNonNull(operation.get(), "handler result"));
+                                    forcedStop.isDone()
+                                            ? forcedStop
+                                            : Objects.requireNonNull(
+                                                    operation.get(), "handler result"));
                         } catch (RuntimeException ex) {
                             entered.completeExceptionally(ex);
                         } finally {
@@ -2167,19 +2209,21 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             }
             entered.completeExceptionally(ex);
         }
-        // The session queue owns callback ordering. Keep its turn until the
-        // handler stage reaches its terminal result so callbacks from one
-        // STREAM session cannot overlap.
-        return entered.thenCompose(Function.identity());
+        // The session queue preserves callback order until the callback settles
+        // or the host ends the runtime-owned wait at its shutdown deadline.
+        return CompletableFuture.anyOf(entered.thenCompose(Function.identity()), forcedStop)
+                .thenApply(ignored -> null);
     }
 
     private CompletionStage<Void> disconnectSession(
             SessionState state, Supplier<CompletionStage<Void>> callback) {
         return disconnectInfrastructure(state.context())
-                .thenCompose(
-                        ignored ->
-                                state.serials()
-                                        .executeInfrastructure(() -> executeHandler(callback)));
+                .thenCompose(ignored -> queueDisconnect(state, callback));
+    }
+
+    private CompletionStage<Void> queueDisconnect(
+            SessionState state, Supplier<CompletionStage<Void>> callback) {
+        return state.serials().executeInfrastructure(() -> executeHandler(callback));
     }
 
     private CompletionStage<Void> disconnectInfrastructure(ZLinkStreamSessionContextState session) {
@@ -2198,8 +2242,10 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         return ZLinkHandlerStages.fromStageSupplier(() -> state.session().onError(error))
                 .thenCompose(
                         ignored ->
-                                ZLinkHandlerStages.fromStageSupplier(
-                                        state.session()::onDisconnected))
+                                forcedStop.isDone()
+                                        ? forcedStop
+                                        : ZLinkHandlerStages.fromStageSupplier(
+                                                state.session()::onDisconnected))
                 .whenComplete((ignored, failure) -> sessionContexts.remove(state.context()));
     }
 
@@ -2211,7 +2257,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         private long lastHeartbeatPhaseNanos;
         private ScheduledFuture<?> livenessTimer;
         private final ZLinkSession session;
-        private final ZLinkSessionSerialExecutor serials;
         private final ZLinkStreamSessionContextState context;
         private final ZLinkBackendStreamSocket stream;
         private final RoutingId routingId;
@@ -2228,7 +2273,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         SessionState(
                 StreamNodeRegistration streamNode,
                 ZLinkSession session,
-                ZLinkSessionSerialExecutor serials,
                 ZLinkStreamSessionContextState context,
                 ZLinkBackendStreamSocket stream,
                 RoutingId routingId,
@@ -2244,7 +2288,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             idleTimeoutNanos = TimeUnit.NANOSECONDS.convert(streamNode.idleTimeout());
             lastHeartbeatPhaseNanos = connectedNanos;
             this.session = session;
-            this.serials = serials;
             this.context = context;
             this.stream = stream;
             this.routingId = routingId;
@@ -2260,7 +2303,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         }
 
         ZLinkSessionSerialExecutor serials() {
-            return serials;
+            return context.serials();
         }
 
         ZLinkStreamSessionContextState context() {

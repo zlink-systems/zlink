@@ -18,6 +18,7 @@ dependencies {
     api("org.springframework.boot:spring-boot-actuator:3.5.14")
     compileOnlyApi("io.micrometer:micrometer-core:1.15.8")
     testImplementation("io.micrometer:micrometer-core:1.15.8")
+    testImplementation(project(":zlink-stream-connector"))
     testImplementation(project(":zlink-framework-testkit"))
     testImplementation(testFixtures(project(":zlink-framework-core")))
     testImplementation(project(":zlink-framework-codec-protobuf"))

@@ -653,7 +653,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
             if (closeGate.closing())
                 throw new IllegalStateException("framework runtime closed during startup");
             if (this.streams != null) {
-                this.streams.start();
+                this.streams.start(forcedDrain);
                 for (var streamNode : this.registration.streamNodes()) {
                     String endpoint = this.streams.boundListenerEndpoint(streamNode);
                     if (endpoint != null) {
@@ -2683,39 +2683,17 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                                     "application_barrier", barrierFailure));
                                     return;
                                 }
-                                CompletionStage<Void> serverStreamBarrier =
-                                        streams == null
-                                                ? CompletableFuture.completedFuture(null)
-                                                : ZLinkFrameworkShutdown.atStage(
-                                                        "stream_drain",
-                                                        () ->
-                                                                streams.awaitDrainBarrier()
-                                                                        .thenCompose(
-                                                                                streamIgnored ->
-                                                                                        streams
-                                                                                                .notifyServerDrain()));
-                                traceDrainStage("server_stream", serverStreamBarrier);
                                 CompletionStage<Void> spotClosing =
-                                        serverStreamBarrier.thenCompose(
-                                                streamIgnored ->
-                                                        traceDrainStage(
+                                        traceDrainStage(
+                                                "spot_closing",
+                                                spots() == null
+                                                        ? CompletableFuture.completedFuture(null)
+                                                        : ZLinkFrameworkShutdown.atStage(
                                                                 "spot_closing",
-                                                                spots() == null
-                                                                        ? CompletableFuture
-                                                                                .completedFuture(
-                                                                                        null)
-                                                                        : ZLinkFrameworkShutdown
-                                                                                .atStage(
-                                                                                        "spot_closing",
-                                                                                        () ->
-                                                                                                spots().notifyClosing(
-                                                                                                                Optional
-                                                                                                                        .ofNullable(
-                                                                                                                                terminationDeadline
-                                                                                                                                        .get())
-                                                                                                                        .orElseGet(
-                                                                                                                                Instant
-                                                                                                                                        ::now)))));
+                                                                () ->
+                                                                        spots().notifyClosing(
+                                                                                        terminationDeadline
+                                                                                                .get())));
                                 CompletionStage<Void> actorShutdown =
                                         spotClosing.thenCompose(
                                                 closingIgnored ->
@@ -2874,20 +2852,12 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         if (drained.isDone()) {
             return;
         }
-        InternalDrainForceReason reason = initialReason;
-        CompletionStage<Void> notification =
-                streams == null
-                        ? CompletableFuture.completedFuture(null)
-                        : streams.notifyServerDrain();
-        InternalDrainForceReason requestedReason = reason;
-        notification
-                .handle((ignored, failure) -> null)
-                .thenCompose(ignored -> closeAsync())
+        closeAsync()
                 .whenComplete(
                         (ignored, failure) -> {
                             completeForcedStop(
                                     failure == null
-                                            ? requestedReason
+                                            ? initialReason
                                             : InternalDrainForceReason.TEARDOWN_FAILED,
                                     initialFailure != null ? initialFailure : failure);
                         });
