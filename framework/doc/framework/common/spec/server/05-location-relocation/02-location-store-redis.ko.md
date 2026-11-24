@@ -316,7 +316,10 @@ Location Store를 공유하는 모든 node는 같은 형식을 쓴다 — v11 no
 2. 남은 v11 MeshNode 수용 공간 record마다 batch 하나로 그 record의 active·pending 값을 §4.1 counter key에 Put하고
    옛 record를 Delete한다. 조건은 옛 record의 `Value`(읽은 bytes)와 대상 counter key 전부의 `Missing`이다.
    `Conflict`나 응답 유실이면 그 record와 counter key를 다시 읽어, 옛 record가 없고 counter key가 있으면 끝난
-   것으로 보고 아니면 다시 시도한다.
+   것으로 보고 아니면 다시 시도한다. 값이 `0`인 counter key는 Put하지 않는다(없는 key는 `0`). 옛 record key의 RID
+   문자열은 현재 descriptor 중 그 문자열로 표시되는 RID가 정확히 하나면 그 RID의 `routingIdHex`로, 하나도 없으면
+   그 문자열을 RoutingId로 해석한 `routingIdHex`로 옮긴다. 둘 이상이거나 한 batch가 §4의 key 상한을 넘으면 옮기지
+   않고 startup configuration error로 멈춘다.
 3. Scan해서 옛 수용 공간 record가 하나도 남지 않았으면 `zlink:v12:format`을 `Missing` 조건으로 Put한다.
 
 `zlink:v12:format`이 생기기 전에는 어떤 v12 node도 예약·commit·반납을 하지 않으므로, 전환 중인 record를 일반

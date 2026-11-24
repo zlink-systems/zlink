@@ -382,7 +382,10 @@ nodes at once, or rerunning it after an interruption, gives the same result.
    the §4.1 counter keys and Deletes the old record. Its conditions are `Value` on the old record (the
    bytes read) and `Missing` on every target counter key. On `Conflict` or a lost response, read that
    record and its counter keys again: if the old record is gone and the counter keys exist, it is done;
-   otherwise retry.
+   otherwise retry. A counter whose value is `0` isn't Put (an absent key is `0`). The RID string in the old
+   record's key maps to that RID's `routingIdHex` when exactly one current descriptor's RID renders as that
+   string, or, when none does, to the `routingIdHex` of the string parsed as a RoutingId. If two or more do, or
+   one batch would exceed the §4 key bound, the record isn't moved and startup stops with a configuration error.
 3. When a scan finds no old capacity record left, Put `zlink:v12:format` under a `Missing` condition.
 
 Until `zlink:v12:format` exists, no v12 node reserves, commits, or releases, so ordinary capacity changes
