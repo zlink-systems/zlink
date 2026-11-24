@@ -148,9 +148,15 @@ recorded as `target_closed`.
 `zlink.dispatch_error` always uses `outcome=failed`. `reason` is one of
 the following values.
 
-`no_handler`, `decode_error`, `handler_exception`, `invalid_frame`,
+`no_handler`, `decode_error`, `encode_error`, `handler_exception`, `invalid_frame`,
 `reply_path_missing`, `unexpected_reply`, `backpressure`, `stale_target`,
 `shutdown`.
+
+When a send API cannot convert the application payload with the registered serializer, the send is
+never submitted to the transport, so no `sent` record is written; the sending process records one dispatch
+error for the packet it tried to send with `reason=encode_error` and `action=fail_caller`. The caller
+receives the same failure as the send result. The cause the serializer reports (such as the failing field
+path) goes into `error_message` as the innermost diagnostic message of the cause chain.
 
 Use `no_handler` only when the existing admission and Message Follow rules have established the local
 dispatch target and only its packet-handler lookup fails. Use `stale_target` when those rules terminate
@@ -407,6 +413,9 @@ interface. Each item corresponds to one contract test.
 - A missing subscriber-local Classic fanout handler builds a dispatch
   error with `surface=classic_fanout`, `reason=no_handler`, and
   `action=drop`, without `channel_route_kind`.
+- Sending a payload whose non-nullable field is null leaves no `sent`, records one `reason=encode_error`,
+  `action=fail_caller` dispatch error in the sending process with the failing field name in `error_message`,
+  and the caller receives the same failure.
 - A dispatch error from a handler exception leaves `error_type` and
   `error_message` together in both the trace and the structured log, and
   `error_message` neither exceeds the implementation limit nor contains a

@@ -129,9 +129,14 @@ lease fencing은 `target_closed`로 기록한다.
 `zlink.dispatch_error`는 항상 `outcome=failed`를 사용한다. `reason`은 다음 값 중
 하나다.
 
-`no_handler`, `decode_error`, `handler_exception`, `invalid_frame`,
+`no_handler`, `decode_error`, `encode_error`, `handler_exception`, `invalid_frame`,
 `reply_path_missing`, `unexpected_reply`, `backpressure`, `stale_target`,
 `shutdown`.
+
+송신 API가 application payload를 등록된 serializer로 변환하지 못하면 그 송신은 전송 계층에 제출되지 않으므로
+`sent`를 남기지 않고, 송신하려던 packet으로 `reason=encode_error`, `action=fail_caller`인 dispatch error를 송신
+process에서 한 번 기록한다. 호출자는 같은 실패를 송신 결과로 받는다. Serializer가 알려 준 원인(실패한 필드 경로
+등)은 원인 체인의 가장 안쪽 진단 message를 `error_message`에 담는다.
 
 기존 admission·Message Follow 규칙이 local dispatch 대상을 확정한 뒤 그 대상의 packet handler 조회만
 실패하면 `no_handler`다. 그 규칙이 대상 Actor·Spot·node 또는 유효한 target route가 없다고 확정해 전달을
@@ -357,6 +362,8 @@ attribute key, diagnostics level·sampling rate 설정 interface)만으로 다�
 - Classic fanout의 subscriber-local handler 누락이 `surface=classic_fanout`,
   `reason=no_handler`, `action=drop`인 dispatch error를 만들고 `channel_route_kind`를
   포함하지 않는다.
+- Non-nullable 필드가 null인 payload를 송신하면 `sent` 없이 송신 process에 `reason=encode_error`,
+  `action=fail_caller` dispatch error가 한 번 남고 `error_message`에 실패한 필드 이름이 들어가며, 호출자는 같은 실패를 받는다.
 - Handler 예외로 만든 dispatch error가 trace와 structured log 양쪽에 `error_type`과
   `error_message`를 함께 남기고, `error_message`가 구현의 최대 길이를 넘지 않으며
   secret과 stack trace를 담지 않는다.
