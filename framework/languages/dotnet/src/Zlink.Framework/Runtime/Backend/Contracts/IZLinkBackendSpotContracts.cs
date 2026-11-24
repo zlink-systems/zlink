@@ -418,6 +418,10 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
         Func<IReadOnlyList<ZLinkBackendRouteReceived>, CancellationToken, ValueTask> handler,
         ZLinkRuntimeTaskRunner taskRunner
     );
+
+    void OnOrderedNodeRelay(
+        Func<ZLinkBackendRouteReceived, ZLinkEnvelopeHeader, CancellationToken, ValueTask> handler
+    ) { }
 }
 
 internal interface IZLinkBackendRelocationReplyRelay

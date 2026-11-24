@@ -1518,8 +1518,11 @@ internal sealed class ZLinkBackendSpotNodeWrapper
     )
     {
         _pump.SetNodeRouteHandler(handler, taskRunner);
-        _node.SetRemoteSessionPushDispatch(_pump.DispatchNodeRoutes);
     }
+
+    public void OnOrderedNodeRelay(
+        Func<ZLinkBackendRouteReceived, ZLinkEnvelopeHeader, CancellationToken, ValueTask> handler
+    ) => _node.SetOrderedNodeRelayDispatch(handler);
 
     public ValueTask DisposeAsync() =>
         new(

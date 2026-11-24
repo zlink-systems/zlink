@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Systems.Zlink.Framework.Runtime.Protocol;
+using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
 using Zlink.Framework.Runtime.Identifiers;
 
 namespace Zlink.Framework.Runtime.Host;
@@ -484,10 +485,25 @@ internal sealed partial class ZLinkFrameworkRuntime
                         ZLinkFrameworkErrorKind.NotFound,
                         $"Actor '{actorState.ActorId}' has no staged target reference."
                     );
+                var actorType =
+                    actorState.ActorType
+                    ?? throw new InvalidOperationException(
+                        $"Actor '{actorState.ActorId}' has no registered type during relocation."
+                    );
+                var authority = stage.GetPublishedActorAuthority(actorState.RuntimeActorId);
+                await RequireActorRelocationLocationLifecycle(LocationLifecycle, actorState.ActorId)
+                    .ActorOwnership.AdoptCommittedActorAuthorityAsync(
+                        actorState.RuntimeActorId,
+                        actorType,
+                        actorRef.ToNative(stage.TargetMeshName),
+                        authority,
+                        _ => DeactivateActorOnOwnershipLossAsync(actorState)
+                    )
+                    .ConfigureAwait(false);
                 actorState.MarkRelocationSessionAuthorityCommitted(
                     handoffId,
                     actorRef,
-                    stage.TargetActorAuthorityOwnerGeneration(actorState.RuntimeActorId),
+                    authority.AuthorityOwnerGeneration,
                     ZLinkMeshName.FromBoundary(stage.TargetMeshName, nameof(stage.TargetMeshName)),
                     stage.TargetNodeLifecycleGeneration,
                     stage.TargetOwnerLeaseGeneration
