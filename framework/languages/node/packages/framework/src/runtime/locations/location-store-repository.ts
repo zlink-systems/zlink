@@ -71,6 +71,11 @@ import {
 } from './capacity-counters';
 import { readStoreCounter, validateStoreWriteRequest } from './provider-write-request';
 import { ZLinkAggregateInventoryStore } from './aggregate-inventory-store';
+import {
+  AGGREGATE_PREFIX,
+  GENERATION_FLOOR_KEY,
+  ZLinkLocationStoreFormat
+} from './location-store-format';
 import { decodeAuthorityKey, encodeAuthorityKey } from './authority-key-codec';
 import { ZLinkInMemoryLocationStore } from './in-memory-location-store';
 import { PROVIDER_STORAGE_NAMESPACE_PREFIX, storeKey } from './in-memory-provider-location-store';
@@ -142,7 +147,6 @@ const LOCATION_RECORD_VERSION = 1;
 
 const PREFIX = PROVIDER_STORAGE_NAMESPACE_PREFIX;
 const OWNER_COUNTER_KEY = storeKey(`${PREFIX}owner-counter`);
-const GENERATION_FLOOR_KEY = storeKey('zlink:v12:generation-floor');
 const OBJECT_COUNTER = 'object-counter';
 const AUTHORITY_OWNER_COUNTER = 'authority-owner-counter';
 type AuthorityCounter = typeof OBJECT_COUNTER | typeof AUTHORITY_OWNER_COUNTER;
@@ -298,6 +302,23 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   ): ZLinkMeshNodeDescriptor['populationCapacity'] | undefined {
     const record = this.confirmedCapacities.get(capacityScope(key));
     return record === undefined ? undefined : projectCapacity(limits, record);
+  }
+
+  async ensureStoreFormat(signal?: AbortSignal): Promise<void> {
+    const floor = await new ZLinkLocationStoreFormat(
+      this.provider,
+      {
+        prefix: meshPrefix,
+        routingIdHex: (bytes) =>
+          routingIdHexSegment(
+            reviveMeshDescriptor(
+              decodeCanonicalDescriptorRecord<ZLinkMeshNodeDescriptor>(bytes).descriptor
+            ).rid
+          )
+      },
+      signal
+    ).convert();
+    this.generationFloor = Promise.resolve(floor);
   }
 
   private readGenerationFloor(): Promise<bigint> {
@@ -3870,7 +3891,7 @@ function aggregateFence(id: ZLinkAggregateId, generation: bigint): ZLinkAggregat
 
 function aggregateKey(fence: ZLinkAggregateFence): ZLinkStoreKey {
   return storeKey(
-    `${PREFIX}aggregate:${encodeURIComponent(fence.aggregateId.value)}:${fence.aggregateGeneration}`
+    `${AGGREGATE_PREFIX}${encodeURIComponent(fence.aggregateId.value)}:${fence.aggregateGeneration}`
   );
 }
 

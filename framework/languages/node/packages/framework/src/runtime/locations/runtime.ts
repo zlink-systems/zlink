@@ -1,3 +1,5 @@
+import { ZLinkFrameworkErrorKind, ZLinkFrameworkException } from '../../contracts';
+import { ZLinkConfigurationException } from '../../contracts/Configuration/ConfigurationException';
 import type { ZLinkExecutionDecision } from '../admission';
 import {
   createInternalFrameworkException,
@@ -631,9 +633,12 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     const claim = this.renewOwnerLeaseOnce(signal, shutdownSignal);
     this.heartbeatRenewal = claim;
     try {
-      await claim;
+      if (!(await claim)) signal?.throwIfAborted();
       this.scheduleHeartbeat();
     } catch (error) {
+      if (error instanceof ZLinkConfigurationException && this.heartbeatRenewal === claim) {
+        this.heartbeatRenewal = undefined;
+      }
       this.started = false;
       this.ownerCleanupComplete = true;
       throw signal?.aborted === true ? signal.reason : error;
@@ -831,19 +836,33 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     shutdownSignal?: () => AbortSignal
   ): Promise<boolean> {
     if (!this.isStarted) return false;
-    const claimStartedAtMs = this.monotonicNowMs();
-    this.leaseOperationStartedAtMs = claimStartedAtMs;
-    const timeoutStartedAtMs = performance.now();
+    this.leaseOperationStartedAtMs = this.monotonicNowMs();
+    let claimStartedAtMs: number | undefined;
     let claim: Awaited<ReturnType<ZLinkOwnerLeaseStore['claimOwnerLease']>>;
     try {
-      claim = await this.claimOwnerLeaseWithConfirmation(
-        timeoutStartedAtMs,
-        signal,
-        shutdownSignal
-      );
+      const conversion = this.stores.locationStore.ensureStoreFormat?.(signal);
+      if (conversion !== undefined) {
+        await conversion;
+        signal?.throwIfAborted();
+        if (!this.started) return false;
+        this.leaseOperationStartedAtMs = this.monotonicNowMs();
+      }
+      claimStartedAtMs = this.leaseOperationStartedAtMs;
+      claim = await this.claimOwnerLeaseWithConfirmation(performance.now(), signal, shutdownSignal);
     } catch (error) {
-      if (signal?.aborted === true) throw error;
-      if (error instanceof ZLinkOwnerLeaseClaimError) throw error;
+      if (signal?.aborted === true) {
+        if (claimStartedAtMs === undefined) return false;
+        throw error;
+      }
+      if (
+        error instanceof ZLinkOwnerLeaseClaimError ||
+        (claimStartedAtMs === undefined &&
+          !(
+            error instanceof ZLinkFrameworkException &&
+            error.kind === ZLinkFrameworkErrorKind.Unavailable
+          ))
+      )
+        throw error;
       this.recordOwnerLeaseRenewFailure();
       this.recordFailure(errorMessage(error));
       return false;

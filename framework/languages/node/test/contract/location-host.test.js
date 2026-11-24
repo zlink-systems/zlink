@@ -1,5 +1,6 @@
 const { inspectRuntime } = require('../../packages/framework/dist/runtime/internal-observation');
 const { createMeshHost } = require('./fixtures/mesh-host');
+const { ownerLeaseClaimMutation } = require('./helpers/owner-lease-claim-mutation');
 const { createRelayHost } = require('./fixtures/relay-host');
 const { createSpotNodeLocationAutoConnectContext } = require('../../packages/framework/dist/runtime/spots/spot-node-autoconnect');
 const assert = require('node:assert/strict');
@@ -206,9 +207,10 @@ test('host shutdown cancels startup and releases a provider claim committed afte
     read: inner.read.bind(inner),
     scan: inner.scan.bind(inner),
     async write(request, signal) {
-      if (claimStartedOnce) return await inner.write(request, signal);
+      const claim = ownerLeaseClaimMutation(request);
+      if (claimStartedOnce || claim === undefined) return await inner.write(request, signal);
       claimStartedOnce = true;
-      claimKey = request.mutations[0].key;
+      claimKey = claim.key;
       claimSignal = signal;
       resolveStarted();
       return await new Promise((_resolve, reject) => {
@@ -262,9 +264,10 @@ for (const failedPhase of ['confirmation', 'release']) {
       scan: inner.scan.bind(inner),
       async write(request, signal) {
         providerEvents.push({ operation: 'write', mutations: request.mutations.map(mutation => ({ kind: mutation.kind, key: mutation.key.value })), committed });
-        if (!claimStartedOnce) {
+        const claim = ownerLeaseClaimMutation(request);
+        if (!claimStartedOnce && claim !== undefined) {
           claimStartedOnce = true;
-          claimKey = request.mutations[0].key;
+          claimKey = claim.key;
           claimSignal = signal;
           resolveStarted();
           return await new Promise((_resolve, reject) => {
@@ -275,7 +278,11 @@ for (const failedPhase of ['confirmation', 'release']) {
             }, { once: true });
           });
         }
-        if (request.mutations.some(mutation => mutation.kind === 'delete' && mutation.key.value === claimKey.value)) {
+        if (
+          request.mutations.some(
+            (mutation) => mutation.kind === 'delete' && mutation.key.value === claimKey?.value
+          )
+        ) {
           cleanupReleases += 1;
           throw new Error('release unavailable');
         }
@@ -319,7 +326,9 @@ test('host shutdown deadline bounds a pending opaque write reconciliation', asyn
     },
     scan: inner.scan.bind(inner),
     async write(request, signal) {
-      claimKey = request.mutations[0].key;
+      const claim = ownerLeaseClaimMutation(request);
+      if (claim === undefined) return await inner.write(request, signal);
+      claimKey = claim.key;
       resolveStarted();
       return await new Promise((_resolve, reject) => {
         signal.addEventListener('abort', async () => {

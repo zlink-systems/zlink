@@ -1,3 +1,4 @@
+const { ownerLeaseClaimMutation } = require('./helpers/owner-lease-claim-mutation');
 const { createMeshHost } = require('./fixtures/mesh-host');
 'use strict';
 
@@ -572,7 +573,10 @@ test('Store operation metrics classify owner claims and exclude normal conflicts
   const provider = new ZLinkInMemoryProviderLocationStore();
   const repository = new ZLinkLocationStoreRepository({
     read: provider.read.bind(provider), scan: provider.scan.bind(provider),
-    async write() { throw new Error('backend unavailable'); }
+    async write(request, signal) {
+      if (ownerLeaseClaimMutation(request) !== undefined) throw new Error('backend unavailable');
+      return provider.write(request, signal);
+    }
   }, undefined, metrics);
   const runtime = new framework.ZLinkLocationRuntime({
     stores: { locationStore: repository, ownerLeaseStore: repository }, metrics,
@@ -673,7 +677,8 @@ test('owner claim confirmation is a read and is counted once', async () => {
   let reads = 0;
   const repository = new ZLinkLocationStoreRepository({
     read(key, signal) {
-      if (++reads === 3) throw new Error('confirmation backend unavailable');
+      if (key.value === 'owner-lease\0owner' && ++reads === 2)
+        throw new Error('confirmation backend unavailable');
       return provider.read(key, signal);
     }, write: provider.write.bind(provider), scan: provider.scan.bind(provider)
   }, undefined, metrics);

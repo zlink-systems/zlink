@@ -1,5 +1,6 @@
 const { inspectRuntime } = require('../../packages/framework/dist/runtime/internal-observation');
 const { liveUserSpotAuthority } = require('../helpers/live-user-spot-authority');
+const { ownerLeaseClaimMutation } = require('./helpers/owner-lease-claim-mutation');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -3911,13 +3912,14 @@ class ReplyLossLocationStore {
   }
 
   async write(request, signal) {
+    const mutation = ownerLeaseClaimMutation(request);
+    if (mutation === undefined) return await this.inner.write(request, signal);
     this.observedWrites += 1;
     const result = await this.inner.write(request, signal);
     if (!this.loseNextResponse || result.kind !== 'applied') return result;
 
     this.loseNextResponse = false;
     if (this.replaceFirstMutationBeforeFailure) {
-      const mutation = request.mutations[0];
       assert.equal(mutation.kind, 'put');
       const version = result.putVersions.find(
         (candidate) => candidate.key.value === mutation.key.value

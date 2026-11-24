@@ -57,6 +57,7 @@ export type ZLinkMeshNodeWriteIntent = ZLinkLocationWriteIntent | ZLinkInternalM
  * implement this interface; the framework maps it to the opaque Store SPI.
  */
 export interface ZLinkDomainLocationStore {
+  ensureStoreFormat?(signal?: AbortSignal): Promise<void>;
   confirmedCapacity?(
     key: ZLinkMeshNodeDescriptorKey,
     limits: ZLinkMeshNodeDescriptor['populationCapacity']

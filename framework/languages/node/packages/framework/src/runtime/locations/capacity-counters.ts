@@ -15,10 +15,14 @@ import { readStoreCounter } from './provider-write-request';
 type CapacityLimits = ZLinkMeshNodeDescriptor['populationCapacity'];
 
 export function capacityScope({ meshName, rid }: ZLinkMeshNodeDescriptorKey): string {
-  return `zlink:v12:capacity\0${meshName}\0${routingIdHexSegment(rid)}\0`;
+  return capacityScopeForRidHex(meshName, routingIdHexSegment(rid));
 }
 
-function spotTypeDimension(
+export function capacityScopeForRidHex(meshName: string, ridHex: string): string {
+  return `zlink:v12:capacity\0${meshName}\0${ridHex}\0`;
+}
+
+export function spotTypeDimension(
   type: Pick<NonNullable<ZLinkCapacityVector['spotType']>, 'objectKind' | 'stableType'>
 ): string {
   return `spot-type\0${canonicalPlacementObjectKind(type.objectKind)}\0${type.stableType}`;
@@ -45,6 +49,10 @@ function dimensions(capacity: ZLinkCapacityVector, limits?: CapacityLimits) {
 
 function capacityCounterSuffix(dimension: string, state: 'active' | 'pending'): string {
   return `${dimension}\0${state}`;
+}
+
+export function capacityCounterKey(scope: string, dimension: string, state: 'active' | 'pending') {
+  return storeKey(scope + capacityCounterSuffix(dimension, state));
 }
 
 interface CapacityChange {
@@ -86,8 +94,8 @@ export function capacityReservationConditions(
       conditions.push({
         kind: 'sumAtMost',
         keys: [
-          storeKey(scope + capacityCounterSuffix(dimension, 'active')),
-          storeKey(scope + capacityCounterSuffix(dimension, 'pending'))
+          capacityCounterKey(scope, dimension, 'active'),
+          capacityCounterKey(scope, dimension, 'pending')
         ],
         delta: BigInt(count),
         limit: BigInt(limit)
