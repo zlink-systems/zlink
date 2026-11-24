@@ -23,12 +23,15 @@
 #include <cstring>
 #include <future>
 #include <iostream>
+#include <charconv>
 #include <limits>
 #include <mutex>
 #include <optional>
+#include <random>
 #include <sstream>
 #include <string_view>
 #include <unordered_set>
+#include <variant>
 
 namespace zlink::stream_connector::detail
 {
@@ -139,7 +142,13 @@ result_t<void> validate_packet_limits (const connector_state_t &state, const pac
     return result_t<void>::success ();
 }
 
-result_t<std::string> decode_remote_error_message (const packet_t &packet)
+struct remote_error_t
+{
+    std::string code;
+    std::string message;
+};
+
+result_t<remote_error_t> decode_remote_error (const packet_t &packet)
 {
     try {
         constexpr char code_field[] = "code";
@@ -148,16 +157,51 @@ result_t<std::string> decode_remote_error_message (const packet_t &packet)
         if (!payload.is_object () || !payload.contains (code_field)
             || !payload[code_field].is_string () || !payload.contains (message_field)
             || !payload[message_field].is_string ()) {
-            return result_t<std::string>::failure (
+            return result_t<remote_error_t>::failure (
               error_code_t::frame_decode_failed,
               "Remote error payload must contain string code and message fields.");
         }
-        return result_t<std::string>::success (payload[message_field].get<std::string> ());
+        return result_t<remote_error_t>::success (
+          {payload[code_field].get<std::string> (), payload[message_field].get<std::string> ()});
     }
     catch (const nlohmann::json::exception &) {
-        return result_t<std::string>::failure (error_code_t::frame_decode_failed,
-                                               "Remote error payload must be a JSON object.");
+        return result_t<remote_error_t>::failure (error_code_t::frame_decode_failed,
+                                                  "Remote error payload must be a JSON object.");
     }
+}
+
+constexpr char retry_after_key[] = "$zlink.admission.retryAfterMs";
+
+std::optional<std::chrono::milliseconds> parse_retry_after (std::string_view value)
+{
+    if (value.empty () || value.front () < '0' || value.front () > '9'
+        || (value.front () == '0' && value.size () > 1)) {
+        return std::nullopt;
+    }
+    std::int32_t delay = 0;
+    const auto end = value.data () + value.size ();
+    const auto parsed = std::from_chars (value.data (), end, delay);
+    if (parsed.ptr != end || parsed.ec != std::errc{}) {
+        return std::nullopt;
+    }
+    return std::chrono::milliseconds (delay);
+}
+
+std::variant<error_t, std::chrono::milliseconds> classify_request_error (const packet_t &packet)
+{
+    auto remote = decode_remote_error (packet);
+    if (!remote) {
+        return *remote.error ();
+    }
+    const auto retry = packet.metadata.values.find (retry_after_key);
+    if (remote.value ().code != "unavailable" || retry == packet.metadata.values.end ()) {
+        return error_t{error_code_t::remote_error, std::move (remote.value ().message)};
+    }
+    if (const auto delay = parse_retry_after (retry->second)) {
+        return *delay;
+    }
+    return error_t{error_code_t::frame_decode_failed,
+                   "Invalid authentication admission retry delay."};
 }
 
 bool has_flag (header_flags_t flags, header_flags_t flag) noexcept
@@ -331,19 +375,12 @@ result_t<void> validate_inbound_frame_limits (const connector_state_t &state,
     return result_t<void>::success ();
 }
 
-/* Builds one outbound frame. Callers must run this with transport_mutex
- * released: LZ4 compression of a large payload takes as long as the payload is
- * big, and the read pump needs that same lock to make progress. It is safe to
- * run unlocked because it reads only state that is fixed at construction
- * (options, compression_codec), and mutates
- * nothing in connector_state_t. The packet it is handed must be owned by the
- * caller, not borrowed from a container the lock protects. */
 result_t<std::vector<std::uint8_t>>
-encode_packet_frame (connector_state_t &state,
-                     message_kind_t kind,
-                     const packet_t &packet,
-                     std::optional<std::uint64_t> request_seq,
-                     const std::optional<actor_binding_ref_t> &actor_binding = std::nullopt)
+encode_packet_header (message_kind_t kind,
+                      const packet_t &packet,
+                      std::optional<std::uint64_t> request_seq,
+                      const std::optional<actor_binding_ref_t> &actor_binding,
+                      std::string_view correlation_id)
 {
     header_flags_t flags = header_flags_t::none;
     if (packet.compressed) {
@@ -361,23 +398,26 @@ encode_packet_frame (connector_state_t &state,
     }
     if (kind == message_kind_t::request) {
         /* correlation_id links a request to its terminal reply. */
-        header_data.correlation_id = next_correlation_id ();
+        header_data.correlation_id = correlation_id;
     }
-    auto header = header_codec.encode (header_data);
-    if (!header) {
-        return result_t<std::vector<std::uint8_t>>::failure (header.error ()->code,
-                                                             header.error ()->message);
-    }
-    const std::vector<std::uint8_t> *payload_message = &packet.payload;
+    return header_codec.encode (header_data);
+}
+
+result_t<std::vector<std::uint8_t>> encode_packet_payload (connector_state_t &state,
+                                                           const std::vector<std::uint8_t> &header,
+                                                           const std::vector<std::uint8_t> &payload,
+                                                           bool compressed)
+{
+    const std::vector<std::uint8_t> *payload_message = &payload;
     std::optional<std::vector<std::uint8_t>> compressed_payload;
-    if (packet.compressed) {
+    if (compressed) {
         if (!state.compression_codec) {
             return result_t<std::vector<std::uint8_t>>::failure (
               error_code_t::compression_failed,
               "stream connector compression codec is not configured");
         }
         try {
-            compressed_payload = state.compression_codec->compress (packet.payload);
+            compressed_payload = state.compression_codec->compress (payload);
             payload_message = &*compressed_payload;
         }
         catch (const std::exception &ex) {
@@ -385,12 +425,29 @@ encode_packet_frame (connector_state_t &state,
                                                                  ex.what ());
         }
     }
-    auto frame = frame_codec_t::encode (header.value (), *payload_message, state.options);
-    if (!frame) {
-        return result_t<std::vector<std::uint8_t>>::failure (frame.error ()->code,
-                                                             frame.error ()->message);
+    return frame_codec_t::encode (header, *payload_message, state.options);
+}
+
+/* Builds one outbound frame. Callers must run this with transport_mutex
+ * released: LZ4 compression of a large payload takes as long as the payload is
+ * big, and the read pump needs that same lock to make progress. It is safe to
+ * run unlocked because it reads only state that is fixed at construction
+ * (options, compression_codec), and mutates
+ * nothing in connector_state_t. The packet it is handed must be owned by the
+ * caller, not borrowed from a container the lock protects. */
+result_t<std::vector<std::uint8_t>>
+encode_packet_frame (connector_state_t &state,
+                     message_kind_t kind,
+                     const packet_t &packet,
+                     std::optional<std::uint64_t> request_seq,
+                     const std::optional<actor_binding_ref_t> &actor_binding = std::nullopt,
+                     std::string_view correlation_id = {})
+{
+    auto header = encode_packet_header (kind, packet, request_seq, actor_binding, correlation_id);
+    if (!header) {
+        return header;
     }
-    return result_t<std::vector<std::uint8_t>>::success (std::move (frame.value ()));
+    return encode_packet_payload (state, header.value (), packet.payload, packet.compressed);
 }
 
 /* Name matching only. The predicate half is deliberately absent: it is user
@@ -630,30 +687,82 @@ std::optional<result_t<inbound_frame_t>> try_take_inbound_frame (connector_state
 
 void kick_async_write (std::shared_ptr<connector_state_t> state, const char *reason);
 
+request_clock_t::time_point request_now (const connector_state_t &state)
+{
+    return state.request_timing ? state.request_timing->now () : request_clock_t::now ();
+}
+
+request_clock_t::time_point request_time_after (request_clock_t::time_point now,
+                                                std::chrono::milliseconds delay)
+{
+    if (delay <= std::chrono::milliseconds::zero ()) {
+        return now;
+    }
+    const auto maximum = request_clock_t::time_point::max ();
+    if (delay > std::chrono::duration_cast<std::chrono::milliseconds> (
+          request_clock_t::duration::max ())) {
+        return maximum;
+    }
+    const auto delta = std::chrono::duration_cast<request_clock_t::duration> (delay);
+    return now > maximum - delta ? maximum : now + delta;
+}
+
+result_t<request_reply_t> request_timeout ()
+{
+    return result_t<request_reply_t>::failure (error_code_t::request_timeout,
+                                               "stream connector request timed out");
+}
+
+void cancel_request_timer_locked (const pending_request_t &request)
+{
+    if (request.cancel_test_timer && *request.cancel_test_timer) {
+        (*request.cancel_test_timer) ();
+    }
+    cancel_timer (request.timeout_timer);
+}
+
+void unindex_retry_attempt_locked (connector_state_t &state,
+                                   std::uint64_t request_id,
+                                   std::uint64_t attempt)
+{
+    if (attempt != 0 && attempt != request_id) {
+        state.request_attempts.erase (attempt);
+    }
+}
+
+// Caller cancellation takes ownership of the same terminal without delivering a reply.
 void complete_pending_request (std::shared_ptr<connector_state_t> state,
-                               std::uint64_t request_seq,
-                               result_t<request_reply_t> result)
+                               std::uint64_t request_id,
+                               std::optional<result_t<request_reply_t>> result,
+                               std::optional<std::uint64_t> expected_attempt = {})
 {
     std::function<void (result_t<request_reply_t>)> callback;
     std::shared_ptr<std::vector<std::uint64_t>> reply_hook_ids;
     std::string packet_name;
     bool deliver_direct = false;
-    const bool succeeded = static_cast<bool> (result);
-    const auto error_code = result ? error_code_t{} : result.error ()->code;
+    bool succeeded = false;
     {
         std::lock_guard<std::mutex> lock (state->transport_mutex);
-        auto found = state->pending_requests.find (request_seq);
-        if (found == state->pending_requests.end ()) {
-            trace_request ("pending-complete-missing", request_seq, {},
+        auto found = state->pending_requests.find (request_id);
+        if (found == state->pending_requests.end ()
+            || (expected_attempt && found->second.attempt_seq != *expected_attempt)) {
+            trace_request ("pending-complete-missing", request_id, {},
                            [] { return std::string (); });
             return;
         }
-        packet_name = found->second.packet.name;
-        callback = std::move (found->second.callback);
-        reply_hook_ids = found->second.reply_hook_ids;
-        deliver_direct = found->second.deliver_direct;
-        const auto write_id = found->second.write_id;
-        cancel_timer (found->second.timeout_timer);
+        auto &request = found->second;
+        if (expected_attempt && request.first_rejection
+            && request_now (*state) >= request.deadline) {
+            result = request_timeout ();
+        }
+        succeeded = result && static_cast<bool> (*result);
+        packet_name = std::move (request.packet.name);
+        callback = std::move (request.callback);
+        reply_hook_ids = std::move (request.reply_hook_ids);
+        deliver_direct = request.deliver_direct;
+        const auto write_id = request.write_id;
+        cancel_request_timer_locked (request);
+        unindex_retry_attempt_locked (*state, request_id, request.attempt_seq);
         state->pending_requests.erase (found);
         if (!succeeded) {
             std::erase_if (state->write_queue, [write_id] (const pending_write_t &write) {
@@ -665,7 +774,11 @@ void complete_pending_request (std::shared_ptr<connector_state_t> state,
     if (!succeeded) {
         kick_async_write (state, "request-terminal");
     }
-    trace_request ("pending-complete", request_seq, packet_name, [&] {
+    if (!result) {
+        return;
+    }
+    const auto error_code = succeeded ? error_code_t{} : result->error ()->code;
+    trace_request ("pending-complete", request_id, packet_name, [&] {
         return std::string (succeeded ? "result=success"
                                       : "result=failure error="
                                           + std::to_string (static_cast<int> (error_code)));
@@ -675,16 +788,75 @@ void complete_pending_request (std::shared_ptr<connector_state_t> state,
     }
     if (deliver_direct) {
         if (callback) {
-            callback (std::move (result));
+            callback (std::move (*result));
         }
         return;
     }
     schedule_delivery (state,
-                       [callback = std::move (callback), result = std::move (result)] () mutable {
+                       [callback = std::move (callback), result = std::move (*result)] () mutable {
                            if (callback) {
                                callback (std::move (result));
                            }
                        });
+}
+
+void on_request_timer (const std::shared_ptr<connector_state_t> &state, std::uint64_t request_id);
+
+void arm_request_timer_locked (const std::shared_ptr<connector_state_t> &state,
+                               std::uint64_t request_id,
+                               pending_request_t &request)
+{
+    cancel_request_timer_locked (request);
+    const auto next = std::min (request.deadline, request.retry_at.value_or (request.deadline));
+    auto operation = [weak = std::weak_ptr<connector_state_t> (state), request_id] {
+        if (auto locked = weak.lock ()) {
+            on_request_timer (locked, request_id);
+        }
+    };
+    if (state->request_timing) {
+        request.cancel_test_timer = state->request_timing->schedule (next, std::move (operation));
+    } else {
+        request.timeout_timer = post_runtime_operation_at (state, next, std::move (operation));
+    }
+}
+
+std::chrono::milliseconds admission_jitter (connector_state_t &state)
+{
+    if (state.request_timing) {
+        return state.request_timing->admission_jitter ();
+    }
+    thread_local std::mt19937 generator (std::random_device{}());
+    return std::chrono::milliseconds (std::uniform_int_distribution<int> (0, 50) (generator));
+}
+
+void begin_admission_wait_locked (const std::shared_ptr<connector_state_t> &state,
+                                  std::uint64_t request_id,
+                                  pending_request_t &request,
+                                  request_clock_t::time_point received_at,
+                                  std::chrono::milliseconds delay)
+{
+    unindex_retry_attempt_locked (*state, request_id, request.attempt_seq);
+    request.attempt_seq = 0;
+    if (!request.first_rejection) {
+        request.first_rejection = received_at;
+        request.deadline =
+          std::min (request.deadline, request_time_after (received_at, request.max_admission_wait));
+    }
+    request.retry_at = request_time_after (received_at, delay + admission_jitter (*state));
+    std::vector<std::uint64_t> handler_ids;
+    {
+        std::lock_guard lock (state->lifecycle_mutex);
+        handler_ids = registered_handler_ids_locked (state->admission_waiting_handlers);
+    }
+    if (!handler_ids.empty ()) {
+        admission_waiting_context_t context{
+          request.packet.name,
+          request.actor_binding ? std::optional (request.actor_binding->actor_id) : std::nullopt,
+          delay};
+        schedule_handler_deliveries (
+          state, &connector_state_t::admission_waiting_handlers, handler_ids,
+          [context = std::move (context)] (const auto &handler) { handler (context); });
+    }
 }
 
 void schedule_request_pump (std::shared_ptr<connector_state_t> state);
@@ -850,11 +1022,20 @@ void process_inbound_buffer (std::shared_ptr<connector_state_t> state,
                              std::vector<std::uint8_t> bytes,
                              const std::shared_ptr<stream_connection_t> &observed_connection)
 {
+    const auto received_at = request_now (*state);
     std::optional<error_t> transport_error;
-    std::vector<std::pair<std::uint64_t, result_t<request_reply_t>>> completed_requests;
+    struct matched_completion_t
+    {
+        std::uint64_t request_id;
+        std::uint64_t attempt;
+        result_t<request_reply_t> result;
+    };
+    std::vector<matched_completion_t> completed_requests;
+    std::vector<std::uint64_t> waiting_requests;
     std::vector<dispatch_envelope_t> pushed_packets;
     std::vector<error_t> stream_errors;
     std::unordered_set<std::uint64_t> claimed_replies;
+    deferred_delivery_scope_t admission_deliveries (*state);
     bool reschedule = false;
     {
         std::unique_lock<std::mutex> lock (state->transport_mutex);
@@ -876,6 +1057,7 @@ void process_inbound_buffer (std::shared_ptr<connector_state_t> state,
               error_t{read_error == boost::asio::error::message_size ? error_code_t::frame_too_large
                                                                      : error_code_t::disconnected,
                       read_error.message ()};
+            state->read_state = read_state_t::ending;
         }
 
         // A stream read can report both bytes and EOF. Decode the bytes that
@@ -890,19 +1072,30 @@ void process_inbound_buffer (std::shared_ptr<connector_state_t> state,
                 transport_error = error_t{frame->error ()->code,
                                           frame->error () ? frame->error ()->message
                                                           : "stream connector frame decode failed"};
+                state->read_state = read_state_t::ending;
                 break;
             }
             auto value = std::move (frame->value ());
             const auto &header = value.header;
-            const bool reply_to_pending =
-              (header.kind == message_kind_t::response || header.kind == message_kind_t::error)
-              && header.request_seq && state->pending_requests.contains (*header.request_seq)
-              && !claimed_replies.contains (*header.request_seq);
+            const auto attempt = header.request_seq.value_or (0);
+            std::uint64_t request_id = 0;
+            if (header.kind == message_kind_t::response || header.kind == message_kind_t::error) {
+                if (const auto first = state->pending_requests.find (attempt);
+                    first != state->pending_requests.end ()) {
+                    if (first->second.attempt_seq == attempt) {
+                        request_id = attempt;
+                    }
+                } else if (const auto retry = state->request_attempts.find (attempt);
+                           retry != state->request_attempts.end ()) {
+                    request_id = retry->second;
+                }
+                if (request_id != 0 && !claimed_replies.insert (attempt).second) {
+                    request_id = 0;
+                }
+            }
+            const bool reply_to_pending = request_id != 0;
             if (header.kind == message_kind_t::response && !reply_to_pending) {
                 continue;
-            }
-            if (reply_to_pending) {
-                claimed_replies.insert (*header.request_seq);
             }
             // Keep the existing read claim until this batch has been consumed.
             // Request submission cannot start another reader while the codec runs.
@@ -919,6 +1112,7 @@ void process_inbound_buffer (std::shared_ptr<connector_state_t> state,
             // failures end the connection, including a decompressed size violation.
             if (!packet && packet.error ()->code != error_code_t::decompression_failed) {
                 transport_error = *packet.error ();
+                state->read_state = read_state_t::ending;
                 break;
             }
             trace_connector_write (*state, "read-dispatch", [&] {
@@ -936,33 +1130,46 @@ void process_inbound_buffer (std::shared_ptr<connector_state_t> state,
          * (a Response that answers nothing is dropped, §5.2). */
                 if (reply_to_pending) {
                     completed_requests.emplace_back (
-                      *header.request_seq, result_t<request_reply_t>::failure (
-                                             packet.error ()->code, packet.error ()->message));
+                      request_id, attempt,
+                      result_t<request_reply_t>::failure (packet.error ()->code,
+                                                          packet.error ()->message));
                 } else if (header.kind != message_kind_t::response) {
                     stream_errors.push_back (*packet.error ());
                 }
             } else if (reply_to_pending) {
                 if (header.kind == message_kind_t::response) {
                     completed_requests.emplace_back (
-                      *header.request_seq, result_t<request_reply_t>::success (
-                                             request_reply_t{std::move (packet.value ().packet)}));
-                } else if (auto remote_error =
-                             decode_remote_error_message (packet.value ().packet)) {
-                    completed_requests.emplace_back (
-                      *header.request_seq,
-                      result_t<request_reply_t>::failure (error_code_t::remote_error,
-                                                          std::move (remote_error.value ())));
+                      request_id, attempt,
+                      result_t<request_reply_t>::success (
+                        request_reply_t{std::move (packet.value ().packet)}));
                 } else {
-                    completed_requests.emplace_back (
-                      *header.request_seq,
-                      result_t<request_reply_t>::failure (remote_error.error ()->code,
-                                                          remote_error.error ()->message));
+                    auto decision = classify_request_error (packet.value ().packet);
+                    if (auto *error = std::get_if<error_t> (&decision)) {
+                        completed_requests.emplace_back (
+                          request_id, attempt,
+                          result_t<request_reply_t>::failure (error->code,
+                                                              std::move (error->message)));
+                    } else {
+                        const auto found = state->pending_requests.find (request_id);
+                        if (found != state->pending_requests.end ()) {
+                            if (received_at >= found->second.deadline) {
+                                completed_requests.emplace_back (request_id, attempt,
+                                                                 request_timeout ());
+                            } else {
+                                begin_admission_wait_locked (
+                                  state, request_id, found->second, received_at,
+                                  std::get<std::chrono::milliseconds> (decision));
+                                waiting_requests.push_back (request_id);
+                            }
+                        }
+                    }
                 }
             } else if (header.kind == message_kind_t::error) {
-                auto remote_error = decode_remote_error_message (packet.value ().packet);
-                stream_errors.push_back (remote_error ? error_t{error_code_t::remote_error,
-                                                                std::move (remote_error.value ())}
-                                                      : *remote_error.error ());
+                auto remote_error = decode_remote_error (packet.value ().packet);
+                stream_errors.push_back (
+                  remote_error
+                    ? error_t{error_code_t::remote_error, std::move (remote_error.value ().message)}
+                    : *remote_error.error ());
             } else if (header.kind != message_kind_t::response) {
                 pushed_packets.push_back (std::move (packet.value ()));
             }
@@ -972,6 +1179,16 @@ void process_inbound_buffer (std::shared_ptr<connector_state_t> state,
                                        + static_cast<std::ptrdiff_t> (consumed));
         reschedule =
           is_transport_connected (*state) && !state->close_requested.load () && !transport_error;
+        for (const auto request_id : waiting_requests) {
+            if (auto found = state->pending_requests.find (request_id);
+                found != state->pending_requests.end ()) {
+                if (reschedule) {
+                    arm_request_timer_locked (state, request_id, found->second);
+                } else {
+                    found->second.retry_at.reset ();
+                }
+            }
+        }
         if (!reschedule) {
             trace_connector_write (*state, "read-pump-stop", [&] {
                 return std::string (
@@ -988,6 +1205,7 @@ void process_inbound_buffer (std::shared_ptr<connector_state_t> state,
    * heartbeat timeout보다 오래 걸리는 정상 요청에서도 서버가 세션을 heartbeat
    * timeout으로 끊는다. 수신 프레임을 처리한 직후 바로 답한다. */
     queue_due_pong (state);
+    admission_deliveries.deliver ();
 
     for (auto &error : stream_errors) {
         publish_error (*state, std::move (error));
@@ -999,15 +1217,17 @@ void process_inbound_buffer (std::shared_ptr<connector_state_t> state,
         }
         route_inbound_packet (state, std::move (packet));
     }
-    for (auto &[request_seq, result] : completed_requests) {
-        complete_pending_request (state, request_seq, std::move (result));
+    for (auto &[request_id, attempt, result] : completed_requests) {
+        complete_pending_request (state, request_id, std::move (result), attempt);
     }
     {
         std::lock_guard<std::mutex> lock (state->transport_mutex);
         if (state->connection != observed_connection) {
             return;
         }
-        state->read_in_progress = false;
+        if (!transport_error) {
+            state->read_state = read_state_t::idle;
+        }
     }
     if (transport_error) {
         // The state transition must precede socket cancellation. The
@@ -1026,17 +1246,18 @@ void schedule_request_pump (std::shared_ptr<connector_state_t> state)
     std::shared_ptr<stream_connection_t> connection;
     {
         std::lock_guard<std::mutex> lock (state->transport_mutex);
-        if (state->read_in_progress || state->close_requested.load ()
+        if (state->read_state != read_state_t::idle || state->close_requested.load ()
             || !is_transport_connected (*state)) {
             trace_connector_write (*state, "read-start-skip", [&] {
                 return std::string (
-                  std::string ("in_progress=") + (state->read_in_progress ? "true" : "false")
+                  std::string ("in_progress=")
+                  + (state->read_state != read_state_t::idle ? "true" : "false")
                   + " close=" + (state->close_requested.load () ? "true" : "false")
                   + " connected=" + (is_transport_connected (*state) ? "true" : "false"));
             });
             return;
         }
-        state->read_in_progress = true;
+        state->read_state = read_state_t::receiving;
         connection = state->connection;
     }
     trace_connector_write (*state, "read-start", [] { return std::string (); });
@@ -1068,9 +1289,11 @@ std::uint64_t accept_write_locked (connector_state_t &state, pending_write_t wri
 }
 
 std::uint64_t reserve_write_locked (connector_state_t &state,
-                                    std::function<void (result_t<void>)> callback)
+                                    std::function<void (result_t<void>)> callback,
+                                    std::uint64_t retry_request_id = 0)
 {
-    return accept_write_locked (state, pending_write_t{{}, std::move (callback), 0, false});
+    return accept_write_locked (
+      state, pending_write_t{{}, std::move (callback), 0, false, retry_request_id});
 }
 
 void finish_reserved_write (std::shared_ptr<connector_state_t> state,
@@ -1192,6 +1415,7 @@ void start_next_async_write (std::shared_ptr<connector_state_t> state)
         /* stream-connector §7: once close is requested no write starts; the close
      * work fails the writes still queued without writing them. */
         if (state->active_write || state->write_queue.empty () || !state->write_queue.front ().ready
+            || state->read_state == read_state_t::ending
             || state->close_requested.load (std::memory_order_acquire)) {
             trace_connector_write (*state, "write-start-skip", [&] {
                 return std::string (
@@ -1207,8 +1431,20 @@ void start_next_async_write (std::shared_ptr<connector_state_t> state)
             immediate_failure = result_t<void>::failure (error_code_t::disconnected,
                                                          "stream connector is not connected");
         } else {
-            connection = state->connection;
-            frame = std::move (state->active_write->frame);
+            const auto retry_request_id = state->active_write->retry_request_id;
+            if (retry_request_id != 0) {
+                const auto request = state->pending_requests.find (retry_request_id);
+                if (request == state->pending_requests.end ()
+                    || request->second.write_id != write_id
+                    || request_now (*state) >= request->second.deadline) {
+                    immediate_failure = result_t<void>::failure (
+                      error_code_t::request_timeout, "stream connector request timed out");
+                }
+            }
+            if (!immediate_failure) {
+                connection = state->connection;
+                frame = std::move (state->active_write->frame);
+            }
         }
     }
 
@@ -1561,6 +1797,120 @@ void submit_request_async (std::shared_ptr<void> state_handle,
                            std::optional<actor_binding_ref_t> actor_binding,
                            std::shared_ptr<std::vector<std::uint64_t>> reply_hook_ids)
 {
+    submit_request_async (std::move (state_handle), std::move (packet), timeout,
+                          std::move (callback), deliver_direct, std::move (actor_binding),
+                          std::move (reply_hook_ids), nullptr);
+}
+
+namespace
+{
+struct request_submission_t
+{
+    std::uint64_t seq;
+    std::uint64_t write_id;
+};
+
+request_submission_t
+reserve_request_attempt_locked (const std::shared_ptr<connector_state_t> &state,
+                                std::uint64_t request_id,
+                                pending_request_t &request)
+{
+    const auto seq = state->next_request_seq++;
+    request.attempt_seq = seq;
+    const bool retry = seq != request_id;
+    if (retry) {
+        state->request_attempts.emplace (seq, request_id);
+    }
+    request.write_id = reserve_write_locked (
+      *state,
+      [state, request_id, seq] (result_t<void> written) {
+          trace_request ("request-write-completion", seq, {}, [&] {
+              return std::string (
+                written ? "result=success"
+                        : "result=failure error="
+                            + std::to_string (static_cast<int> (written.error ()->code)));
+          });
+          if (!written) {
+              complete_pending_request (state, request_id,
+                                        result_t<request_reply_t>::failure (
+                                          written.error ()->code, written.error ()->message),
+                                        seq);
+              return;
+          }
+          schedule_request_pump (state);
+      },
+      retry ? request_id : 0);
+    return {seq, request.write_id};
+}
+
+void on_request_timer (const std::shared_ptr<connector_state_t> &state, std::uint64_t request_id)
+{
+    std::unique_lock lock (state->transport_mutex);
+    const auto found = state->pending_requests.find (request_id);
+    if (found == state->pending_requests.end () || state->close_requested.load ()
+        || state->read_state == read_state_t::ending || !is_transport_connected (*state)
+        || state->connection != found->second.connection.lock ()) {
+        return;
+    }
+
+    auto &request = found->second;
+    const auto now = request_now (*state);
+    if (now >= request.deadline) {
+        lock.unlock ();
+        complete_pending_request (state, request_id, request_timeout ());
+        return;
+    }
+    if (!request.retry_at || now < *request.retry_at) {
+        return;
+    }
+    if (state->next_request_seq == 0) {
+        lock.unlock ();
+        complete_pending_request (
+          state, request_id,
+          result_t<request_reply_t>::failure (error_code_t::send_failed,
+                                              "stream connector request sequence exhausted"));
+        return;
+    }
+
+    request.retry_at.reset ();
+    const auto submission = reserve_request_attempt_locked (state, request_id, request);
+    arm_request_timer_locked (state, request_id, request);
+    trace_request ("submit", submission.seq, request.packet.name,
+                   [] { return std::string ("mode=async"); });
+    auto header = encode_packet_header (message_kind_t::request, request.packet, submission.seq,
+                                        request.actor_binding, request.correlation_id);
+    const auto encode_retry = [&] () -> result_t<std::vector<std::uint8_t>> {
+        if (!header) {
+            return std::move (header);
+        }
+        if (!request.packet.compressed) {
+            return encode_packet_payload (*state, header.value (), request.packet.payload, false);
+        }
+        // Custom compression runs outside transport_mutex. The request may complete
+        // during compression, so keep only the codec input in this scope.
+        auto payload = request.packet.payload;
+        lock.unlock ();
+        schedule_request_pump (state);
+        return encode_packet_payload (*state, header.value (), payload, true);
+    };
+    auto frame = encode_retry ();
+    if (lock.owns_lock ()) {
+        lock.unlock ();
+        schedule_request_pump (state);
+    }
+    finish_reserved_write (state, submission.write_id, std::move (frame));
+}
+} // namespace
+
+void submit_request_async (std::shared_ptr<void> state_handle,
+                           packet_t packet,
+                           std::chrono::milliseconds timeout,
+                           std::function<void (result_t<request_reply_t>)> callback,
+                           bool deliver_direct,
+                           std::optional<actor_binding_ref_t> actor_binding,
+                           std::shared_ptr<std::vector<std::uint64_t>> reply_hook_ids,
+                           std::function<void ()> *cancel_operation)
+{
     if (!state_handle) {
         if (callback) {
             callback (result_t<request_reply_t>::failure (error_code_t::configuration_error,
@@ -1570,10 +1920,10 @@ void submit_request_async (std::shared_ptr<void> state_handle,
     }
 
     auto state = std::static_pointer_cast<connector_state_t> (std::move (state_handle));
-    std::uint64_t seq = 0;
-    std::uint64_t write_id = 0;
+    std::uint64_t request_id = 0;
+    std::optional<request_submission_t> submission;
     std::optional<result_t<request_reply_t>> immediate_result;
-    std::string request_packet_name;
+    std::string correlation_id;
     {
         std::unique_lock<std::mutex> lock (state->transport_mutex);
         if (state->close_requested.load ()) {
@@ -1589,40 +1939,23 @@ void submit_request_async (std::shared_ptr<void> state_handle,
             immediate_result = result_t<request_reply_t>::failure (
               error_code_t::send_failed, "stream connector request sequence exhausted");
         } else {
-            seq = state->next_request_seq++;
-            request_packet_name = packet.name;
-            trace_request ("submit", seq, request_packet_name,
-                           [&] { return std::string ("mode=async"); });
-            auto timeout_timer =
-              post_runtime_operation_after (state, timeout, [state, seq, request_packet_name] {
-                  trace_request ("request-timeout", seq, request_packet_name,
-                                 [] { return std::string (); });
-                  complete_pending_request (
-                    state, seq,
-                    result_t<request_reply_t>::failure (error_code_t::request_timeout,
-                                                        "stream connector request timed out"));
-              });
-            state->pending_requests.emplace (
-              seq, pending_request_t{state->next_write_id, packet, std::move (callback),
-                                     timeout_timer, deliver_direct, reply_hook_ids});
-            write_id = reserve_write_locked (*state, [state, seq, request_packet_name] (
-                                                       result_t<void> written) mutable {
-                trace_request ("request-write-completion", seq, request_packet_name, [&] {
-                    return std::string (
-                      written ? "result=success"
-                              : "result=failure error="
-                                  + std::to_string (static_cast<int> (written.error ()->code)));
-                });
-                if (!written) {
-                    complete_pending_request (
-                      state, seq,
-                      result_t<request_reply_t>::failure (
-                        written.error ()->code, written.error () ? written.error ()->message
-                                                                 : "stream request write failed"));
-                    return;
-                }
-                schedule_request_pump (state);
-            });
+            request_id = state->next_request_seq;
+            auto &request = state->pending_requests.try_emplace (request_id).first->second;
+            request.packet = packet;
+            request.callback = std::move (callback);
+            request.deliver_direct = deliver_direct;
+            request.reply_hook_ids = reply_hook_ids;
+            if (actor_binding) {
+                request.actor_binding.emplace (actor_binding_ref_t{
+                  actor_binding->slot, actor_binding->bound, std::move (actor_binding->actor_id)});
+            }
+            request.connection = state->connection;
+            correlation_id = next_correlation_id ();
+            request.correlation_id = correlation_id;
+            request.deadline = request_time_after (request_now (*state), timeout);
+            request.max_admission_wait = state->options.max_admission_wait.value_or (timeout);
+            submission = reserve_request_attempt_locked (state, request_id, request);
+            arm_request_timer_locked (state, request_id, request);
         }
     }
 
@@ -1645,10 +1978,19 @@ void submit_request_async (std::shared_ptr<void> state_handle,
         return;
     }
 
+    trace_request ("submit", submission->seq, packet.name,
+                   [] { return std::string ("mode=async"); });
     schedule_request_pump (state);
-    auto encoded =
-      encode_packet_frame (*state, message_kind_t::request, packet, seq, actor_binding);
-    finish_reserved_write (std::move (state), write_id, std::move (encoded));
+    auto encoded = encode_packet_frame (*state, message_kind_t::request, packet, submission->seq,
+                                        actor_binding, correlation_id);
+    finish_reserved_write (state, submission->write_id, std::move (encoded));
+    if (cancel_operation) {
+        *cancel_operation = [weak = std::weak_ptr<connector_state_t> (state), request_id] {
+            if (auto locked = weak.lock ()) {
+                complete_pending_request (std::move (locked), request_id, std::nullopt);
+            }
+        };
+    }
 }
 
 result_t<void> dispatch_pending (std::shared_ptr<connector_state_t> state)

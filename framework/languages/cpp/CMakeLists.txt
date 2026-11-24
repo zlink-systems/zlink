@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(zlink_framework_cpp VERSION 0.34.0 LANGUAGES C CXX)
+project(zlink_framework_cpp VERSION 0.34.1 LANGUAGES C CXX)
 add_compile_definitions($<$<CONFIG:Debug>:ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD>)
 set(ZLINK_FRAMEWORK_CPP_DIR "${CMAKE_CURRENT_LIST_DIR}")
 include("${ZLINK_FRAMEWORK_CPP_DIR}/cmake/zlink-cpp-project-defaults.cmake")
@@ -670,7 +670,8 @@ target_compile_features(zlink_framework_locations_redis PUBLIC cxx_std_20)
 target_include_directories(zlink_framework_locations_redis PUBLIC
   $<BUILD_INTERFACE:${ZLINK_FRAMEWORK_CPP_DIR}/extensions/framework-locations-redis/include>
   $<BUILD_INTERFACE:${ZLINK_FRAMEWORK_CPP_DIR}/connector/core/include>
-  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+  PRIVATE "${ZLINK_FRAMEWORK_CPP_DIR}/framework/src")
 target_link_libraries(zlink_framework_locations_redis PUBLIC
   zlink::framework_provider_abstractions
   zlink::framework)
@@ -1609,7 +1610,25 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     TIMEOUT 30)
 
   add_executable(test_cpp_framework_m6b_runtime
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_accepted_ingress.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_actor_authority.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_actor_turns.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_bound_session_bind.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_bound_session_push.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_host_dispatch.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_mesh_admission.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_message_follow.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_relocation_management.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_reply_relay.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_session_relocation.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_spot_creation.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_spot_creation_terminal.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_spot_routing.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_runtime.cpp
+    tests/support/m6b_host_access.cpp
+    tests/support/m6b_mesh_fixture.cpp
+    tests/support/m6b_stateful_fixture.cpp
+    tests/support/m6b_task.cpp
     tests/support/allocation_counter.cpp)
   target_compile_features(test_cpp_framework_m6b_runtime PRIVATE cxx_std_20)
   target_include_directories(test_cpp_framework_m6b_runtime PRIVATE
@@ -2265,8 +2284,35 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     RESOURCE_LOCK "zlink_cpp_heavy_runtime")
   add_zlink_framework_test(
     test_cpp_framework_actor_gateway
-    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_main.cpp
     "framework-unit;framework-regression;framework-actor;stream")
+  target_sources(test_cpp_framework_actor_gateway PRIVATE
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_actor_identity.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_actor_join_completion.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_actor_join_resolution.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_actor_join_store_wait.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_binding_policy.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_disconnect_dispatch.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_disconnect_wire.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_native_relay.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_parked_requests.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_relay_admission.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_relay_dispatch.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_relocation_binding.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_relocation_fifo.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_relocation_follow.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_relocation_leave.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_relocation_reconcile.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_session_binding.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_session_close.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_session_protobuf.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_session_push.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_session_reconnect.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_session_routes.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_terminal_metrics.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_terminal_sdk.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_wire_contract.cpp
+    tests/support/actor_gateway_fixture.cpp)
   add_zlink_framework_test(
     test_cpp_framework_bound_session_egress
     tests/Zlink.Framework.UnitTests/test_cpp_framework_bound_session_egress.cpp
@@ -2567,6 +2613,23 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_execution.cpp
     "framework-unit;framework-contract;framework-regression;execution;spot;yield"
     unit)
+  target_sources(test_cpp_framework_execution PRIVATE
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_execution_actor_cutover.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_execution_actor_join_admission.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_execution_actor_join_finalize.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_execution_dispatch_observation.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_execution_lifecycle_fifo.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_execution_mailbox_shutdown.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_execution_relocation_barriers.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_execution_request_turns.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_execution_serial_scheduling.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_execution_spot_close.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_execution_spot_gate.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_execution_state_owner.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_execution_timer_lifecycle.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_execution_worker_dispatch.cpp
+    tests/support/execution_serial_fixture.cpp
+    tests/support/execution_wait.cpp)
   target_include_directories(test_cpp_framework_execution PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_compile_definitions(test_cpp_framework_execution PRIVATE
@@ -3148,6 +3211,18 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     "framework-unit;framework-contract;stream;reply"
     unit)
   add_zlink_framework_test(
+    test_cpp_framework_login_admission
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_login_admission.cpp
+    "framework-unit;framework-contract;stream;admission"
+    contract)
+  target_compile_definitions(test_cpp_framework_login_admission PRIVATE
+    ZLINK_LOGIN_ADMISSION_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/login-admission-v1.json")
+  target_include_directories(test_cpp_framework_login_admission PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  target_link_libraries(test_cpp_framework_login_admission PRIVATE
+    opentelemetry-cpp::metrics
+    nlohmann_json::nlohmann_json)
+  add_zlink_framework_test(
     test_cpp_framework_same_node_duplicate_bind
     tests/Zlink.Framework.UnitTests/test_cpp_framework_same_node_duplicate_bind.cpp
     "framework-integration;framework-contract;stream;stream-session"
@@ -3241,6 +3316,17 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     COMMAND test_cpp_framework_stream_framework --write-terminal-shutdown
     LABELS "framework-unit;stream;stream-session"
     TIMEOUT 30)
+  add_executable(test_cpp_framework_ws_shutdown
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_ws_shutdown.cpp)
+  target_link_libraries(test_cpp_framework_ws_shutdown PRIVATE zlink::framework zlink::stream_connector)
+  foreach(shutdown_case IN ITEMS force drain)
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_framework_ws_shutdown_${shutdown_case}
+      COMMAND test_cpp_framework_ws_shutdown --ws-shutdown-${shutdown_case}
+      LABELS "framework-unit;framework-contract;stream;stream-session"
+      TIER contract
+      TIMEOUT 30)
+  endforeach()
   zlink_framework_cpp_add_boost_headers(
     test_cpp_framework_stream_framework)
   target_include_directories(test_cpp_framework_stream_framework PRIVATE
@@ -3693,6 +3779,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT=1)
   target_include_directories(test_cpp_framework_redis_blob_bound BEFORE PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/tests/support/fake_redis
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
     ${ZLINK_FRAMEWORK_CPP_DIR}/extensions/framework-locations-redis/include)
   target_use_zlink_gtest_main(test_cpp_framework_redis_blob_bound)
   target_link_libraries(test_cpp_framework_redis_blob_bound PRIVATE
@@ -3731,6 +3818,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   if(ZLINK_FRAMEWORK_CPP_WITH_ETCD)
     add_executable(test_cpp_framework_locations_etcd
       extensions/framework-locations-etcd/tests/test_etcd.cpp
+      extensions/framework-locations-etcd/tests/test_etcd_counters.cpp
       ${ZLINK_ETCD_GENERATED_HEADERS})
     zlink_enable_coverage(test_cpp_framework_locations_etcd)
     target_use_zlink_gtest_main(test_cpp_framework_locations_etcd)
@@ -3753,6 +3841,41 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       LABELS "framework-extension;framework-location"
       TIER integration
       TIMEOUT 120)
+  endif()
+  add_executable(test_cpp_framework_location_store_counters
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_location_store_counters.cpp)
+  target_use_zlink_gtest_main(test_cpp_framework_location_store_counters)
+  target_link_libraries(test_cpp_framework_location_store_counters PRIVATE zlink::framework)
+  target_include_directories(test_cpp_framework_location_store_counters PRIVATE framework/src)
+  zlink_framework_cpp_add_boost_headers(test_cpp_framework_location_store_counters)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_location_store_counters
+    COMMAND test_cpp_framework_location_store_counters --gtest_filter=InMemory/*
+    LABELS "framework-unit;framework-location"
+    TIMEOUT 30)
+  if(_zlink_framework_redis_target)
+    target_link_libraries(test_cpp_framework_location_store_counters PRIVATE
+      zlink::framework_locations_redis)
+    target_compile_definitions(test_cpp_framework_location_store_counters PRIVATE
+      ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT=1)
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_framework_location_store_counters_redis
+      COMMAND test_cpp_framework_location_store_counters --gtest_filter=Redis/*
+      LABELS "framework-extension;framework-location;redis"
+      TIER integration
+      TIMEOUT 30)
+  endif()
+  if(ZLINK_FRAMEWORK_CPP_WITH_ETCD)
+    target_link_libraries(test_cpp_framework_location_store_counters PRIVATE
+      zlink::framework_locations_etcd)
+    target_compile_definitions(test_cpp_framework_location_store_counters PRIVATE
+      ZLINK_TEST_LOCATION_COUNTERS_ETCD)
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_framework_location_store_counters_etcd
+      COMMAND test_cpp_framework_location_store_counters --gtest_filter=Etcd/*
+      LABELS "framework-extension;framework-location"
+      TIER integration
+      TIMEOUT 60)
   endif()
   # TEST_PROBES forces INSTALL_FRAMEWORK=OFF, so that build has no package to consume.
   if(NOT ZLINK_FRAMEWORK_CPP_TEST_PROBES)
@@ -3831,6 +3954,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_heartbeat.cpp
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_inbound_codec.cpp
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_inbound_framing.cpp
+    tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_login_admission.cpp
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_payload_codecs.cpp
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_receive_waits.cpp
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_reconnect.cpp
@@ -3840,6 +3964,23 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_typed_messaging.cpp
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_wire_headers.cpp
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_write_order.cpp)
+  target_compile_definitions(test_cpp_stream_connector PRIVATE
+    ZLINK_LOGIN_ADMISSION_FIXTURE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/login-admission-v1.json")
+  target_link_libraries(test_cpp_stream_connector PRIVATE nlohmann_json::nlohmann_json)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_stream_connector_login_admission
+    COMMAND test_cpp_stream_connector login-admission
+    LABELS "connector-unit;connector-contract;stream;admission"
+    TIER contract
+    TIMEOUT 30)
+  add_zlink_connector_test(
+    test_cpp_stream_connector_request_allocations
+    tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_connector_request_allocations.cpp
+    "connector-unit;connector-regression"
+    unit)
+  target_sources(test_cpp_stream_connector_request_allocations PRIVATE
+    tests/support/allocation_counter.cpp)
+  target_link_libraries(test_cpp_stream_connector_request_allocations PRIVATE zlink::cpp)
   add_zlink_connector_test(
     test_cpp_stream_revision
     tests/Systems.Zlink.Stream.Connector.Tests/test_cpp_stream_revision.cpp

@@ -13,7 +13,6 @@ import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkRequestFailureMapping;
-import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration.RelocationPolicy;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.locations.ZLinkObjectCreationDeadline;
@@ -41,7 +40,6 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 
@@ -60,7 +58,6 @@ public final class ZLinkActorCreationCoordinator
     private final ZLinkActorRuntime actors;
     private final ZLinkMessageSerializer serializer;
     private final ZLinkActivationAdmission activationAdmission;
-    private final Function<String, RelocationPolicy> actorRelocationPolicy;
     private final Predicate<String> acceptsNewActor;
     private final ZLinkActorAuthorityPayloadCodec authorities =
             new ZLinkActorAuthorityPayloadCodec();
@@ -77,7 +74,6 @@ public final class ZLinkActorCreationCoordinator
             ZLinkActorRuntime actors,
             ZLinkMessageSerializer serializer,
             ZLinkActivationAdmission activationAdmission,
-            Function<String, RelocationPolicy> actorRelocationPolicy,
             Predicate<String> acceptsNewActor) {
         this.meshName = Objects.requireNonNull(meshName, "meshName");
         this.node = Objects.requireNonNull(node, "node");
@@ -87,8 +83,6 @@ public final class ZLinkActorCreationCoordinator
         this.serializer = Objects.requireNonNull(serializer, "serializer");
         this.activationAdmission =
                 Objects.requireNonNull(activationAdmission, "activationAdmission");
-        this.actorRelocationPolicy =
-                Objects.requireNonNull(actorRelocationPolicy, "actorRelocationPolicy");
         this.acceptsNewActor = Objects.requireNonNull(acceptsNewActor, "acceptsNewActor");
     }
 
@@ -248,8 +242,7 @@ public final class ZLinkActorCreationCoordinator
                         target.lifecycleGeneration(),
                         new ZLinkLocationOwnerToken(target.ownerId(), target.leaseGeneration()),
                         creating,
-                        ZLinkPlacementCapacityBundle.actor(1),
-                        actorRelocationPolicy.apply(actorType));
+                        ZLinkPlacementCapacityBundle.actor(1));
         return locations
                 .reserve(request, () -> System.currentTimeMillis() >= deadline)
                 .thenCompose(
@@ -405,10 +398,9 @@ public final class ZLinkActorCreationCoordinator
                 .thenApply(
                         owner ->
                                 owner instanceof ZLinkOwnerLeaseFound found
-                                        && found.token().ownerId().equals(snapshot.ownerId())
-                                        && found.token().leaseGeneration()
-                                                == snapshot.ownerLeaseGeneration()
-                                        && found.leaseExpiresAt().isAfter(found.storeNow()));
+                                        && found.isLiveFor(
+                                                snapshot.ownerId(),
+                                                snapshot.ownerLeaseGeneration()));
     }
 
     private static boolean isReady(
@@ -475,13 +467,24 @@ public final class ZLinkActorCreationCoordinator
                             if (read instanceof ZLinkCreationTerminalFound found) {
                                 return verifiedResponse(found.terminalEnvelope());
                             }
-                            return executeReserved(request, operation);
+                            var intent = request.intent();
+                            if (System.currentTimeMillis() >= intent.deadlineUnixMs()) {
+                                return executeReserved(request, operation, null);
+                            }
+                            return actors.awaitReservedActorRetirement(
+                                            intent.actorId(),
+                                            intent.reservation().objectGeneration())
+                                    .handle((ignored, failure) -> failure)
+                                    .thenCompose(
+                                            failure ->
+                                                    executeReserved(request, operation, failure));
                         });
     }
 
     private CompletionStage<ZLinkInternalMeshNode.ActorCreateResponse> executeReserved(
             ZLinkInternalMeshNode.ActorCreateRequest request,
-            ZLinkCreationOperationIdentity operation) {
+            ZLinkCreationOperationIdentity operation,
+            Throwable retirementFailure) {
         String key = ZLinkAuthorityKeyCodec.actor(request.intent().actorId());
         return locations
                 .read(key, OPEN)
@@ -507,6 +510,10 @@ public final class ZLinkActorCreationCoordinator
                             }
                             if (expired != null) {
                                 return failReserved(request, operation, reservation, expired);
+                            }
+                            if (retirementFailure != null) {
+                                return failReserved(
+                                        request, operation, reservation, retirementFailure);
                             }
                             if (!acceptsNewActor.test(request.intent().stableType())) {
                                 return failReserved(
@@ -662,7 +669,8 @@ public final class ZLinkActorCreationCoordinator
                                                 ignored -> actors.confirmReady(actor.actorId()))
                                         .thenCompose(ignored -> response(envelope));
                             }
-                            return actors.discardReservedActor(actor.actorId())
+                            return actors.discardReservedActor(
+                                            actor.actorId(), reservation.objectGeneration())
                                     .thenCompose(
                                             ignored ->
                                                     replayAfterConflict(
@@ -738,7 +746,8 @@ public final class ZLinkActorCreationCoordinator
                         ZLinkCreationTerminalState.FAILED,
                         envelope,
                         request.intent().deadlineUnixMs());
-        return actors.discardReservedActor(request.intent().actorId())
+        return actors.discardReservedActor(
+                        request.intent().actorId(), reservation.objectGeneration())
                 .thenCompose(ignored -> locations.abort(reservation, terminal, OPEN))
                 .thenCompose(ignored -> response(envelope));
     }

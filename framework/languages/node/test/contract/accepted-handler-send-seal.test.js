@@ -21,10 +21,12 @@ for (const shutdown of [false, true]) {
         }
       },
       routedTransport: {},
-      actorRefProvider: () => undefined,
+      targetProvider: () => ({
+        actorRef: undefined,
+        remoteTarget: undefined
+      }),
       nativeActorNodeProvider: () => undefined,
       localActorProvider: () => true,
-      remoteBoundSessionTargetProvider: () => undefined,
       remoteActorPacketTargetProvider: () => undefined,
       actorId: 'accepted-handler',
       reportError: (error) => {

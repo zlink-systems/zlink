@@ -32,7 +32,7 @@ public final class ZLinkActorSerialExecutor {
 
     public CompletionStage<Void> executeActor(
             Supplier<CompletionStage<Void>> operation, CompletableFuture<Void> admission) {
-        return queue.enqueue(operation, admission);
+        return queue.enqueueWithPayloadBytes(0, operation, admission);
     }
 
     public CompletionStage<Void> executeActor(

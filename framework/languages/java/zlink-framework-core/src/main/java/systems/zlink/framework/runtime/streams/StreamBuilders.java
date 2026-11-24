@@ -80,6 +80,24 @@ public final class StreamBuilders {
         }
 
         @Override
+        public ZLinkStreamNodeBuilder authenticationPacketName(String packetName) {
+            registration.authenticationPacketName(packetName);
+            return this;
+        }
+
+        @Override
+        public ZLinkStreamNodeBuilder maxConcurrentAuthentications(int limit) {
+            registration.maxConcurrentAuthentications(limit);
+            return this;
+        }
+
+        @Override
+        public ZLinkStreamNodeBuilder authenticationRetryDelay(Duration delay) {
+            registration.authenticationRetryDelay(delay);
+            return this;
+        }
+
+        @Override
         public ZLinkStreamSocketConfig configureSocket() {
             return registration.socketConfig();
         }

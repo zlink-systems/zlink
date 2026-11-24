@@ -309,6 +309,14 @@ generation. It does not reconstruct the selected route from the order of monitor
 
 Orderly close and transport disconnect don't wait 15 seconds. A late ACK or frame from a previous physical connection cannot change the new connection state. The framework processes Spot, Actor, and Channel messages as Core returns them without a second generation decision.
 
+When a selected route ends, the framework keeps the admission it confirmed on that route as the RID's
+**ended admitted generation**. When Core returns an application record it already received on the ended
+route, the framework delivers it if the record's route generation is the current admitted route or that
+RID's ended admitted generation. An ended admitted generation is never used for the handshake or for a
+new route's admission — a new route goes through HELLO and ADMIT again, and application records received
+before that are rejected. The record is cleared when another route on the same RID completes admission
+or when the peer is removed (descriptor withdrawal, lifecycle generation change, or expiry cleanup).
+
 Even if the physical disconnect of an expired peer fails, the runtime completes that peer's
 local admission and pending-operation cleanup and notifications, then processes the remaining
 expired peers in the same tick. `NOT_FOUND` is accepted as an already completed termination.

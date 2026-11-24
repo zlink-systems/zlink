@@ -1,5 +1,8 @@
 package systems.zlink.framework.runtime.internal.service;
 
+import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.calls.ZLinkBlockingCalls;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
@@ -27,6 +30,8 @@ import java.util.function.Supplier;
 
 /** Owns operation correlation, request deadlines, and terminal-once completion. */
 public final class ZLinkServiceOperationRegistry implements AutoCloseable {
+    private static final boolean REQUEST_DEADLINE_DIAGNOSTICS =
+            "1".equals(System.getenv("ZLINK_DEBUG_FRAMEWORK_RELOCATION"));
     private final ThreadFactory maintenanceFactory;
     Thread maintenance;
     // The worker's reserved wheel visit survives removal of the last pending request.
@@ -224,6 +229,28 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         if (!owner.isOnLane())
             throw new IllegalStateException("registration requires its owner turn");
         return registerOnOwner(nanoTime.getAsLong() + timeoutNanos(timeout), null, Kind.REQUEST);
+    }
+
+    /** Registers an Instance Spot request for an already selected route. */
+    public <T> Operation<T> registerInstanceRequestOnOwner(
+            Duration timeout,
+            String meshName,
+            RoutingId target,
+            long correlation,
+            long generation,
+            boolean local) {
+        if (!owner.isOnLane())
+            throw new IllegalStateException("registration requires its owner turn");
+        long deadline = nanoTime.getAsLong() + timeoutNanos(timeout);
+        UUID id = ZLinkServiceOperationIds.next();
+        Operation<T> operation =
+                REQUEST_DEADLINE_DIAGNOSTICS
+                        ? new ObservedOperation<>(
+                                id,
+                                new ZLinkServiceRequestProgress.Recording(
+                                        meshName, target, correlation, generation, local))
+                        : new Operation<>(true, id);
+        return registerOnOwner(deadline, Kind.REQUEST, operation);
     }
 
     /** Registers a backpressured send before observing its binding admission terminal. */
@@ -714,9 +741,13 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
 
     private <T> Operation<T> registerOnOwner(long deadlineNanos, UUID suppliedId, Kind kind) {
         UUID id = suppliedId == null ? ZLinkServiceOperationIds.next() : suppliedId;
-        Operation<T> operation = new Operation<>(kind == Kind.REQUEST, id);
+        return registerOnOwner(deadlineNanos, kind, new Operation<>(kind == Kind.REQUEST, id));
+    }
+
+    private <T> Operation<T> registerOnOwner(
+            long deadlineNanos, Kind kind, Operation<T> operation) {
         operation.beginRegistration();
-        Entry<T> entry = registerEntry(deadlineNanos, id, kind, operation, null);
+        Entry<T> entry = registerEntry(deadlineNanos, operation.id(), kind, operation.newEntry());
         if (!operation.finishRegistration(this)) abandonRegistration(entry);
         return operation;
     }
@@ -727,6 +758,10 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             Kind kind,
             CompletableFuture<?> completion,
             Consumer<? super T> discardValue) {
+        return registerEntry(deadlineNanos, id, kind, new Entry<>(id, completion, discardValue));
+    }
+
+    private <T> Entry<T> registerEntry(long deadlineNanos, UUID id, Kind kind, Entry<T> entry) {
         if (closed) {
             throw new IllegalStateException("operation registry is closed");
         }
@@ -756,7 +791,6 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
                                     / DEADLINE_TICK_NANOS;
         }
         // Each registration keeps its identity while a stale deadline still references it.
-        Entry<T> entry = new Entry<>(id, completion, discardValue);
         entry.deadlineNanos = deadlineNanos;
         completions.register(entry);
         pending.put(id, entry);
@@ -801,7 +835,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         }
     }
 
-    public static final class Operation<T> extends ZLinkCompletionBridge.CancellationFuture<T> {
+    public static class Operation<T> extends ZLinkCompletionBridge.CancellationFuture<T> {
         private static final Object UNREGISTERED = new Object();
         private static final Object REGISTERING = new Object();
         private static final VarHandle OWNER;
@@ -840,6 +874,14 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         @Override
         protected void beforeCompletion(Throwable failure) {
             observeTerminal(failure);
+        }
+
+        Entry<T> newEntry() {
+            return new Entry<>(id, this, null);
+        }
+
+        public ZLinkServiceRequestProgress requestProgress() {
+            return ZLinkServiceRequestProgress.NONE;
         }
 
         public UUID id() {
@@ -927,12 +969,31 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         }
     }
 
+    private static final class ObservedOperation<T> extends Operation<T> {
+        private final ZLinkServiceRequestProgress.Recording progress;
+
+        private ObservedOperation(UUID id, ZLinkServiceRequestProgress.Recording progress) {
+            super(true, id);
+            this.progress = progress;
+        }
+
+        @Override
+        Entry<T> newEntry() {
+            return new ObservedEntry<>(id(), this, progress);
+        }
+
+        @Override
+        public ZLinkServiceRequestProgress requestProgress() {
+            return progress;
+        }
+    }
+
     private enum Kind {
         REQUEST,
         SEND
     }
 
-    static final class Entry<T> extends ZLinkServiceCompletionDispatcher.WorkItem {
+    static class Entry<T> extends ZLinkServiceCompletionDispatcher.WorkItem {
         private static final int NONE = 0;
         private static final int VALUE = 1;
         private static final int FAILURE = 2;
@@ -1023,6 +1084,36 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
 
         void dispatchNext(Entry<?> value) {
             setDispatchNext(value);
+        }
+    }
+
+    private static final class ObservedEntry<T> extends Entry<T> {
+        private final ZLinkServiceRequestProgress.Recording progress;
+        private long expired;
+
+        private ObservedEntry(
+                UUID id, Operation<T> operation, ZLinkServiceRequestProgress.Recording progress) {
+            super(id, operation, null);
+            this.progress = progress;
+        }
+
+        @Override
+        void completeWithFailure(Throwable failure) {
+            if (failure instanceof TimeoutException
+                    || failure instanceof ZLinkFrameworkException typed
+                            && typed.kind() == ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED) {
+                expired = progress.elapsed();
+            }
+            super.completeWithFailure(failure);
+        }
+
+        @Override
+        void dispatch() {
+            try {
+                if (expired != 0) progress.report(expired);
+            } finally {
+                super.dispatch();
+            }
         }
     }
 }

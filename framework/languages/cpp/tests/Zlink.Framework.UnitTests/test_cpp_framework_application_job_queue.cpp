@@ -2,8 +2,8 @@
 //  Spec 33-core-hwm-application-job-flow §8 contract tests for the shared
 //  Application Job Queue: limit-1 head-of-line, a permit outliving its parent
 //  call, the 1:N materialization cap, and stop/exactly-once release. These are
-//  the named, filterable counterparts of the anonymous queue block in
-//  test_cpp_framework_execution.cpp.
+//  the named, filterable counterparts of the queue checks in
+//  test_cpp_framework_execution_dispatch_observation.cpp.
 
 #include "../support/telemetry_observation.hpp"
 #include "../support/exception_payload.hpp"

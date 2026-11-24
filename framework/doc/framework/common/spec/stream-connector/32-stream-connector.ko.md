@@ -449,13 +449,15 @@ connector가 같은 연결에서 그 request를 자동으로 다시 보낸다. �
 - 다시 보낼 시각은 거절을 받은 시각(connector의 단조 시계)에 `retryAfterMs`와 0~50ms의 무작위 지연을 더한 시각이다.
   서버 시계를 읽지 않는다.
 - 다시 보낼 때 같은 packet 이름, payload, application metadata, correlation을 그대로 쓰고 request sequence만 새로 받는다.
-- 거절을 받을 때마다 앱의 `OnAdmissionWaiting` callback을 한 번 부른다. 재시도는 요청 hook(§5.7)과 request callback의
+- 거절을 받을 때마다 앱의 `OnAdmissionWaiting` callback을 한 번 부른다. 인자는 요청 packet 이름, 요청을 보낸 actor ID(있을 때), 서버가 준 재시도 지연이다(§5.7 응답 수신 hook의 요청 식별 필드와 같은 이름). 재시도는 요청 hook(§5.7)과 request callback의
   실행 횟수를 늘리지 않는다. 횟수와 caller 취소 때의 규칙은 §5.7을 그대로 따른다(caller가 취소한 request에는
   reply received hook을 실행하지 않는다).
 - 대기의 마감은 원래 request deadline과 `처음 거절을 받은 시각 + MaxAdmissionWait` 중 이른 쪽이다. 원래 deadline을
   늘리지 않는다. 마감까지 성공하지 못하면 `RequestTimeout`으로 끝내고 마감 뒤에는 보내지 않는다.
-  `MaxAdmissionWait`의 기본값은 그 request의 유효 request timeout이다.
+  `MaxAdmissionWait`의 기본값은 그 request의 유효 request timeout이다. 지정할 때는 양수이며, 0 이하는 설정 오류다.
 - 연결이 끊기면 대기 중인 request는 기존 연결 생명주기(§6) 규칙대로 끝난다. 재접속이 대기 중인 request를 복원하지 않는다.
+- 2단계 대기열(`$zlink.admission.queueRequired`)의 enqueue, 순번·ticket 처리, 재등록과 callback 순서는
+  [인증 입장 제한 §3.4–§3.5](../server/04-session/03-authentication-admission.ko.md#34-wire)가 정한다.
 
 ## 6. 연결 생명주기
 

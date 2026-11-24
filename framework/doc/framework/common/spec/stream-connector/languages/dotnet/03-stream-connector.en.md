@@ -75,6 +75,7 @@ public interface IZlinkStreamConnector : IAsyncDisposable
 
 
     IDisposable OnRequestSending(Action<ZlinkStreamRequestSendingContext> handler);
+    IDisposable OnAdmissionWaiting(Func<ZlinkStreamAdmissionWaiting, CancellationToken, ValueTask> handler);
     IDisposable OnReplyReceived(Func<ZlinkStreamReplyReceivedContext, CancellationToken, ValueTask> handler);
     IDisposable OnConnectionStateChanged(Func<ZlinkStreamConnectionStateChanged, CancellationToken, ValueTask> handler);
     IDisposable OnDisconnected(Func<ZlinkStreamDisconnected, CancellationToken, ValueTask> handler);
@@ -209,6 +210,12 @@ public interface IZlinkStreamWaitCall
 The two hooks of [Common Spec §5.7](../../32-stream-connector.en.md#57-request-hooks) are projected as `OnRequestSending`/`OnReplyReceived` (§3) with the contexts below. The sending hook does not follow the dispatch mode, so it is a synchronous `Action`; the reply hook has the same shape as other receive callbacks.
 
 ```csharp
+public sealed record ZlinkStreamAdmissionWaiting(
+    string RequestPacketName,
+    string? ActorId,
+    TimeSpan RetryAfter
+);
+
 public sealed class ZlinkStreamRequestSendingContext
 {
     public string RequestPacketName { get; }
@@ -269,6 +276,7 @@ The two injection points of
 following properties of `ZlinkStreamConnectorOptions`.
 
 ```csharp
+public TimeSpan? MaxAdmissionWait { get; init; }
 public IZlinkStreamPayloadCodec? PayloadCodec { get; init; }          // ZlinkStreamJsonCodec when null
 public IZlinkStreamPacketNameResolver NameResolver { get; init; }
     = new ZlinkStreamPacketNameResolver();                            // the default resolver
@@ -518,3 +526,5 @@ clean consumer all have the same public contract.
 <!-- framework-adapter-nav:bottom:start -->
 [Document list](../../../../../../README.en.md)
 <!-- framework-adapter-nav:bottom:end -->
+
+Admission waiting and its default deadline are defined by [common spec §5.8](../../32-stream-connector.en.md#58-admission-wait-and-automatic-retry).

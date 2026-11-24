@@ -250,8 +250,10 @@ class stream_t
     friend class detail::stream_runtime_t;
     friend class session_actor_manager_t;
     explicit stream_t (std::shared_ptr<detail::stream_state_t> state);
-    stream_write_call_t write_packet_with_header (detail::stream_header_t header,
-                                                  zlink::message_t payload);
+    stream_write_call_t write_packet_with_header (
+      detail::stream_header_t header,
+      zlink::message_t payload,
+      std::shared_ptr<detail::stream_reply_submission_t> admission_reply = {});
 
     std::shared_ptr<detail::stream_state_t> _state;
     std::optional<detail::stream_header_t> _reply_header;
@@ -333,6 +335,13 @@ struct stream_liveness_options_t
         idle_timeout = timeout;
     }
 };
+
+struct stream_authentication_options_t
+{
+    std::optional<std::string> packet_name;
+    std::optional<std::int64_t> max_concurrent;
+    std::chrono::milliseconds retry_delay{500};
+};
 }
 
 struct stream_snapshot_t
@@ -347,6 +356,7 @@ struct stream_snapshot_t
     // that Framework adds no separate limit.
     std::int64_t max_message_size = 64 * 1024;
     detail::stream_liveness_options_t liveness;
+    detail::stream_authentication_options_t authentication;
 };
 
 class stream_builder_t
@@ -373,6 +383,7 @@ class stream_builder_t
     friend class detail::stream_runtime_t;
     explicit stream_builder_t (std::shared_ptr<detail::stream_builder_state_t> state);
     stream_builder_t &set_liveness (detail::stream_liveness_options_t options);
+    stream_builder_t &set_authentication (detail::stream_authentication_options_t options);
     stream_builder_t &set_max_message_size (std::int64_t value);
     stream_builder_t &configure_tls_server (std::string certificate_file,
                                             std::string private_key_file,

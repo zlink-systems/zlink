@@ -9,9 +9,6 @@ const {
   ZLinkLocationStoreRepository
 } = require('../../packages/framework/dist/runtime/locations/location-store-repository');
 const {
-  ZLinkLocationWriteIntent
-} = require('../../packages/framework/dist/contracts/Locations/Writes');
-const {
   ZLinkSubmitStatus
 } = require('../../packages/framework/dist/runtime/messaging/submission-result');
 const {
@@ -43,18 +40,46 @@ async function fixture(
 ) {
   let now = new Date(1000);
   const clock = { monotonicMs: 0 };
-  const monotonicNowMs = () => clock.monotonicMs;
+  let changeDuringRelease;
+  // The in-memory release runs synchronously. Enter the descriptor write through
+  // its existing release-delay clock to exercise the row fence before mutation.
+  const monotonicNowMs = () => {
+    const change = changeDuringRelease;
+    if (!provider && change !== undefined) {
+      changeDuringRelease = undefined;
+      change();
+    }
+    return clock.monotonicMs;
+  };
+  let releaseWrite;
+  class Provider extends ZLinkInMemoryProviderLocationStore {
+    async write(request, signal) {
+      if (
+        changeDuringRelease !== undefined &&
+        request.mutations.some(
+          (mutation) => mutation.kind === 'delete' && mutation.key.value.startsWith('authority\0')
+        )
+      ) {
+        const change = changeDuringRelease;
+        changeDuringRelease = undefined;
+        await change();
+        releaseWrite = await super.write(request, signal);
+        return releaseWrite;
+      }
+      return super.write(request, signal);
+    }
+  }
   const store = provider
     ? new ZLinkLocationStoreRepository(
-        new ZLinkInMemoryProviderLocationStore(() => now),
+        new Provider(() => now),
         () => now,
         undefined,
         monotonicNowMs,
         1
       )
     : new internal.ZLinkInMemoryLocationStore(() => now, monotonicNowMs, 1);
-  async function descriptor(ownerId, rid) {
-    const lease = await store.claimOwnerLease(ownerId, 30000);
+  async function descriptor(ownerId, rid, policy = 'disabled') {
+    const lease = await store.claimOwnerLease(ownerId, rid === 'node-b' ? 60000 : 30000);
     assert.equal(lease.kind, 'claimed');
     const owner = lease.token;
     const meshNode = {
@@ -78,12 +103,21 @@ async function fixture(
         spotTypes: ['room'],
         objectCapabilities: [
           {
-            objectKind: 'instance_spot',
-            stableType: 'room',
+            objectKind: 'actor',
+            stableType: 'player',
             policy: 'disabled',
             hasSnapshotAdapter: false,
-            limit: 1
-          }
+            limit: 0
+          },
+          ...(policy === null
+            ? []
+            : [{
+                objectKind: 'instance_spot',
+                stableType: 'room',
+                policy,
+                hasSnapshotAdapter: policy === 'snapshot',
+                limit: 1
+              }])
         ],
         state: framework.ZLinkFrameworkRuntimeState.Serving,
         securityIdentity: 'test',
@@ -128,7 +162,6 @@ async function fixture(
   const key = encodeAuthorityKey('instance_spot', 'ended-room');
   const request = {
     key: { kind: 'instance_spot', globalId: 'ended-room' },
-    actorRelocationPolicy: 'disabled',
     intent: {
       stableType: 'room',
       requestContentReference: 'old-request',
@@ -164,11 +197,11 @@ async function fixture(
   assert.equal(committed.kind, 'committed');
   now = new Date(32000);
   const owners = {
-    'node-a': await descriptor('new-owner-a', 'node-a'),
+    'node-a': await descriptor('new-owner-a', 'node-a', targetPolicy),
     'node-b': await descriptor('new-owner-b', 'node-b')
   };
   await assert.rejects(
-    store.reserve({ ...request, target: { ...oldTarget, owner: owners['node-a'] } }),
+    store.reserve({ ...request, target: { ...oldTarget, nodeRid: 'node-b', owner: owners['node-b'] } }),
     (error) => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
   );
   clock.monotonicMs = 30_000;
@@ -190,7 +223,7 @@ async function fixture(
   };
   let factories = 0;
   const runtimes = [];
-  function activation(rid, policy = 'disabled') {
+  function activation(rid) {
     const runtime = new ServiceStatefulRuntime(
       { setServiceIngress() {}, topology: { localDescriptor: () => undefined } },
       rid,
@@ -210,7 +243,6 @@ async function fixture(
       relocationStore,
       meshName: 'mesh',
       owner: () => owners[rid],
-      relocationPolicy: () => policy ?? undefined
     });
     runtime.registerAsyncInstanceActivationAuthority(authority);
     runtime.registerInstanceApplicationLifecycle({
@@ -299,12 +331,23 @@ async function fixture(
     }),
     defaultRequestTimeoutMs: 5000
   });
-  const activate = activation('node-a', targetPolicy);
+  const activate = activation('node-a');
   return {
     store,
     key,
     before: committed.ready,
     clock,
+    owners,
+    expireActorOwner() {
+      now = new Date(62001);
+    },
+    removeFactoryTargetDuringRelease() {
+      changeDuringRelease = () =>
+        store.removeMeshNode({ meshName: 'mesh', rid: 'node-b' }, owners['node-b']);
+    },
+    get releaseWrite() {
+      return releaseWrite;
+    },
     activation,
     activate,
     resolver,
@@ -325,6 +368,113 @@ async function fixture(
 
 for (const provider of [false, true]) {
   const label = provider ? 'provider' : 'in-memory';
+  test(`${label}: ended Ready release rejects a changed factory target descriptor`, async () => {
+    const f = await fixture(provider);
+    try {
+      f.removeFactoryTargetDuringRelease();
+      const release = f.store.releaseEndedReservation(
+        f.key,
+        f.before.storeVersion.value,
+        undefined,
+        {
+          key: { kind: 'instance_spot', globalId: 'ended-room' },
+          intent: { stableType: 'room' },
+          target: { meshName: 'mesh', nodeRid: 'node-b', nodeLifecycleGeneration: 1n }
+        }
+      );
+      if (provider) {
+        await assert.rejects(release, { kind: framework.ZLinkFrameworkErrorKind.Unavailable });
+        assert.equal(f.releaseWrite.kind, 'conflict');
+      } else {
+        assert.equal(await release, false);
+      }
+      const current = await f.store.readAuthority(f.key);
+      assert.equal(current.kind, 'snapshot');
+      assert.deepEqual(current.storeVersion, f.before.storeVersion);
+      assert.equal((await f.store.listMeshNodes('mesh')).items.length, 1);
+      assert.equal((await f.store.listMeshNodes('mesh')).items[0].populationCapacity.spots.active, 1);
+    } finally {
+      f.close();
+    }
+  });
+
+  test(`${label}: Actor GetOrCreate uses the remote factory target after owner expiry`, async () => {
+    const f = await fixture(provider);
+    try {
+      const { ZLinkActorPlacementCoordinator } = require(
+        '../../packages/framework/dist/runtime/host/actor-placement-coordinator'
+      );
+      const { ZLinkRuntimeTaskErrorSink, ZLinkRuntimeTaskRunner } = require(
+        '../../packages/framework/dist/runtime/execution'
+      );
+      const target = (nodeRid, sourceNodeRid) => ({
+        meshName: 'mesh',
+        nodeRid,
+        nodeGeneration: 1n,
+        entrySpotId: nodeRid + '-entry',
+        owner: f.owners[nodeRid],
+        isLocal: nodeRid === sourceNodeRid,
+        sourceNodeRid,
+        sourceNodeGeneration: 1n
+      });
+      const server = new ZLinkActorPlacementCoordinator({ store: f.store });
+      const calls = [];
+      const remoteCreate = (_mesh, rid, request) => server.handleRemoteCreate(
+        { ...request, correlation: 1n },
+        async (_payload, authority) => {
+          calls.push(rid);
+          return {
+            result: 'created',
+            actor: { actorId: 'player-1', nodeRid: rid, objectGeneration: authority.objectGeneration },
+            entrySpotId: rid + '-entry',
+            entrySpotGeneration: 1n
+          };
+        },
+        new AbortController().signal
+      );
+      const leaseTracker = {
+        async isOwnerTokenLive(owner) {
+          const lease = await f.store.readOwnerLease(owner.ownerId);
+          return lease.kind === 'found' && lease.token.leaseGeneration === owner.leaseGeneration &&
+            lease.leaseExpiresAt > lease.storeNow;
+        }
+      };
+      const old = new ZLinkActorPlacementCoordinator({
+        store: f.store,
+        leaseTracker,
+        target: async () => target('node-a', 'node-a'),
+        remoteCreate
+      });
+      const before = await old.create('player-1', 'player', false, 'mesh', Buffer.alloc(0), 1000);
+      f.expireActorOwner();
+      let selections = 0;
+      const client = new ZLinkActorPlacementCoordinator({
+        store: f.store,
+        leaseTracker,
+        target: async () => {
+          selections++;
+          return target('node-b', 'client');
+        },
+        remoteCreate
+      });
+      const manager = new internal.DefaultZLinkActorManager({
+        placementCreate: (id, type, createOnly, options, signal) =>
+          client.create(id, type, createOnly, options.meshName, Buffer.alloc(0), 1000, signal)
+      }, new ZLinkRuntimeTaskRunner(new ZLinkRuntimeTaskErrorSink(), new AbortController().signal));
+      const getOrCreate = () => manager.getOrCreate('player-1', 'player').inMesh('mesh').submit();
+      await assert.rejects(getOrCreate, { kind: framework.ZLinkFrameworkErrorKind.Unavailable });
+      f.clock.monotonicMs += 3;
+      const after = await getOrCreate();
+      assert.equal(after.status, 'created');
+      assert.equal(after.actor.nodeRid, 'node-b');
+      assert.ok(after.actor.objectGeneration > before.actor.objectGeneration);
+      assert.deepEqual(calls, ['node-a', 'node-b']);
+      assert.equal(selections, 2);
+    } finally {
+      f.close();
+    }
+  });
+
   test(`${label}: expired steady Ready Instance intent recreates once using stored type and Mesh`, async () => {
     const f = await fixture(provider);
     try {
@@ -458,7 +608,6 @@ for (const provider of [false, true]) {
         },
         meshName: 'mesh',
         owner: () => undefined,
-        relocationPolicy: () => 'disabled'
       });
       assert.deepEqual(
         await authority.read(
@@ -551,11 +700,11 @@ for (const provider of [false, true]) {
   });
   for (const policy of ['recreate', 'snapshot', null]) {
     test(`${label}: target policy ${policy} refuses without factory or Store mutation`, async () => {
-      const f = await fixture(provider);
+      const f = await fixture(provider, policy);
       try {
         const before = await f.store.readAuthority(f.key);
         await assert.rejects(
-          f.activation('node-a', policy)(),
+          f.activate(),
           (error) => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
         );
         assert.deepEqual(await f.store.readAuthority(f.key), before);

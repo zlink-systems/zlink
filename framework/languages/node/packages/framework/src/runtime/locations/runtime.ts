@@ -162,6 +162,10 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
   private readonly liveRows: ZLinkLiveRowFilter;
   private readonly leaseTracker: ZLinkOwnerLeaseTracker;
   private readonly ownershipLostHandlers = new Set<(event: ZLinkOwnershipLostEvent) => void>();
+  private ownerLeaseRecoveryPublication?: (
+    renewal: ZLinkOwnerLeaseRenewed,
+    wasOwnerLeaseUsable: boolean
+  ) => void;
   private readonly ownerLeaseRenewedHandlers = new Set<
     (renewal: ZLinkOwnerLeaseRenewed, wasOwnerLeaseUsable: boolean) => void
   >();
@@ -311,7 +315,8 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
           this.ownerLeaseDeadlineMs !== undefined &&
           !this.ownerAdmissionClosed
         : !recovering &&
-          (this.ownerLeaseUsable ||
+          (this.ownerAdmissionOpen ||
+            (record?.phase === 'recovered' && this.ownerLeaseUsable) ||
             (retained !== undefined &&
               (record?.phase === 'retained' || (owner === undefined && retained.size > 0))));
     if (allowed) return 'allowed';
@@ -347,6 +352,18 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       this.ownerLeaseDeadlineMs !== undefined &&
       this.monotonicNowMs() < this.ownerLeaseDeadlineMs
     );
+  }
+
+  get ownerAdmissionOpen(): boolean {
+    return !this.ownerAdmissionClosed && this.ownerLeaseUsable;
+  }
+
+  confirmOwnerPublication(owner: ZLinkLocationOwnerToken): void {
+    if (owner !== this.ownerToken || this.lastOwnerToken === undefined) return;
+    this.lastOwnerToken = undefined;
+    this.ownerAdmissionClosed = !this.ownerLeaseUsable;
+    this.scheduleOwnerDeadlines();
+    this.wakeExecution();
   }
 
   constructor(runtimeOptions: ZLinkLocationRuntimeOptions) {
@@ -401,6 +418,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
 
   closeOwnerLeaseAdmission(error: unknown): void {
     this.ownerLeaseDeadlineMs = undefined;
+    this.ownerAdmissionClosed = true;
     this.recordFailure(errorMessage(error));
   }
 
@@ -593,10 +611,24 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     this.ownershipLostHandlers.delete(handler);
   }
 
+  setOwnerLeaseRecoveryPublication(
+    handler?: (renewal: ZLinkOwnerLeaseRenewed, wasOwnerLeaseUsable: boolean) => void
+  ): void {
+    this.ownerLeaseRecoveryPublication = handler;
+  }
+
   addOwnerLeaseRenewedHandler(
     handler: (renewal: ZLinkOwnerLeaseRenewed, wasOwnerLeaseUsable: boolean) => void
   ): void {
     this.ownerLeaseRenewedHandlers.add(handler);
+  }
+
+  private notifyOwnerLeaseRenewed(
+    renewal: ZLinkOwnerLeaseRenewed,
+    wasOwnerLeaseUsable: boolean
+  ): void {
+    this.ownerLeaseRecoveryPublication?.(renewal, wasOwnerLeaseUsable);
+    for (const handler of this.ownerLeaseRenewedHandlers) handler(renewal, wasOwnerLeaseUsable);
   }
 
   removeOwnerLeaseRenewedHandler(
@@ -786,13 +818,14 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
         }
       }
       if (result.kind !== 'renewed') {
+        this.ownerAdmissionClosed = true;
+        this.ownerLeaseDeadlineMs = undefined;
         if (outage === undefined) {
           for (const execution of this.executions.keys()) this.discardExecution(execution);
         }
         this.lastOwnerToken = this.ownerToken;
         this.ownerToken = undefined;
         this.ownerLeaseHealthy = false;
-        this.ownerLeaseDeadlineMs = undefined;
         this.recordFailure('Owner lease token is stale.');
         for (const handler of this.ownerLeaseRenewalFailedHandlers) handler();
         // Claim after the outage eligibility check, or immediately outside an episode.
@@ -802,7 +835,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
         this.retainedExecutions();
         return false;
       }
-      const wasOwnerLeaseUsable = this.ownerLeaseUsable;
+      const wasOwnerLeaseUsable = this.ownerAdmissionOpen;
       this.ownerLeaseHealthy = true;
       this.ownerLeaseRenewedAt = result.storeNow;
       this.setOwnerLeaseDeadline(
@@ -813,9 +846,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       );
       this.recordSuccessfulLease(renewStartedAtMs, renewingOwner, true);
       this.lastError = undefined;
-      for (const handler of this.ownerLeaseRenewedHandlers) {
-        handler(result, wasOwnerLeaseUsable);
-      }
+      this.notifyOwnerLeaseRenewed(result, wasOwnerLeaseUsable);
       return true;
     } catch (error) {
       if (signal?.aborted === true) throw error;
@@ -859,7 +890,10 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
         this.lastOwnerToken = claim.token;
         return false;
       }
-      this.lastOwnerToken = this.ownerToken;
+      // While the previous token is retained, the replacement lease can only publish.
+      if (this.ownerLeaseRecoveryPublication === undefined) {
+        this.lastOwnerToken = undefined;
+      }
       this.ownerToken = claim.token;
       this.ownerLeaseHealthy = true;
       this.ownerLeaseRenewedAt = claim.storeNow;
@@ -871,16 +905,10 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       );
       this.recordSuccessfulLease(claimStartedAtMs, claim.token, false);
       this.lastError = undefined;
-      for (const handler of this.ownerLeaseRenewedHandlers) {
-        handler(
-          {
-            kind: 'renewed',
-            leaseExpiresAt: claim.leaseExpiresAt,
-            storeNow: claim.storeNow
-          },
-          false
-        );
-      }
+      this.notifyOwnerLeaseRenewed(
+        { kind: 'renewed', leaseExpiresAt: claim.leaseExpiresAt, storeNow: claim.storeNow },
+        false
+      );
       return true;
     } catch (error) {
       if (signal?.aborted === true) throw error;
@@ -1125,7 +1153,8 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     this.ownerLeaseDeadlineMs =
       requestCompletedAtMs +
       Math.max(0, remainingTtlMs - roundTripMs - this.options.ownerLeaseFencingMarginMs);
-    this.ownerAdmissionClosed = requestCompletedAtMs >= this.ownerLeaseDeadlineMs;
+    this.ownerAdmissionClosed =
+      this.lastOwnerToken !== undefined || requestCompletedAtMs >= this.ownerLeaseDeadlineMs;
     this.scheduleOwnerDeadlines();
     this.wakeExecution();
   }
@@ -1168,40 +1197,31 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       // in-process result after the write completes.
       updatedAt: new Date()
     };
-    const submit = (writeIntent: ZLinkMeshNodeWriteIntent) => {
-      const request = this.guardWrite(() =>
+    const submit = (writeIntent: ZLinkMeshNodeWriteIntent) =>
+      this.guardWrite(() =>
         this.writeDescriptor(
           (writeSignal) =>
             this.stores.locationStore.updateMeshNode(stamped, writeIntent, writeSignal),
           signal
         )
       );
-      const outage = this.storeOutage;
+    const publication = submit(intent).then((result) => {
       if (
-        outage !== undefined &&
-        (owner.leaseGeneration === outage.owner.leaseGeneration ||
-          writeIntent === ZLinkInternalMeshNodeWriteIntent.RecoveryClaim ||
-          writeIntent === ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim)
-      )
-        this.recoverPublishedExecutions(stamped.meshName, owner, request, signal);
-      return request;
-    };
-    let result = await submit(intent);
-    if (
-      (intent === ZLinkLocationWriteIntent.Renew ||
-        intent === ZLinkInternalMeshNodeWriteIntent.FixedRidRenew) &&
-      (result.status === ZLinkLocationWriteStatus.RejectedConflict ||
-        result.status === ZLinkLocationWriteStatus.IgnoredStale)
-    ) {
-      // Recovery preserves the existing descriptor publication contract.
-      result = await submit(
-        intent === ZLinkInternalMeshNodeWriteIntent.FixedRidRenew
-          ? ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
-          : ZLinkInternalMeshNodeWriteIntent.RecoveryClaim
-      );
-    }
-    if (result.status === ZLinkLocationWriteStatus.Stored)
-      this.recoverPublishedExecutions(stamped.meshName, owner, Promise.resolve(result), signal);
+        (intent === ZLinkLocationWriteIntent.Renew ||
+          intent === ZLinkInternalMeshNodeWriteIntent.FixedRidRenew) &&
+        (result.status === ZLinkLocationWriteStatus.RejectedConflict ||
+          result.status === ZLinkLocationWriteStatus.IgnoredStale)
+      ) {
+        return submit(
+          intent === ZLinkInternalMeshNodeWriteIntent.FixedRidRenew
+            ? ZLinkInternalMeshNodeWriteIntent.FixedRidNewClaim
+            : ZLinkInternalMeshNodeWriteIntent.RecoveryClaim
+        );
+      }
+      return result;
+    });
+    this.recoverPublishedExecutions(stamped.meshName, owner, publication, signal);
+    const result = await publication;
     this.notifyIfStale(
       result,
       ZLinkLocationKind.Peer,
