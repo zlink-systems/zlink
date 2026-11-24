@@ -276,6 +276,13 @@ exists only on errors produced by `DISCONNECTED`, and `UNKNOWN` (0) counts as pr
 turn it into another close reason.
 
 A server STREAM session follows the heartbeat rule of [Stream Connector §6](../../stream-connector/32-stream-connector.en.md#6-connection-lifecycle). The heartbeat interval and timeout default to that section's defaults and can be changed in the Stream node configuration. On the server, the result of the no-inbound timeout is closing the session with `heartbeat_timeout`, not reconnecting.
+
+While a session reader is waiting for a host application job permit before reading its next frame
+([authentication admission §1.2](03-authentication-admission.en.md#12-decision),
+[application job queue §3](../01-execution/04-application-job-queue-and-backpressure.en.md#3-ordinary-ingress-permit-order)), the session's no-inbound
+deadline and idle deadline aren't evaluated, because the wait is caused by the host, not the peer. Once the permit is
+granted, both deadlines are measured again from that moment. The server keeps sending heartbeat pings at the
+interval during the wait. (#5583)
 Each session's ping times are the time the connection was established plus multiples of the interval. The first ping is sent at connection time + interval. If execution is late and several ping times have passed, one ping is sent, and the next ping is sent at the next future time on the same multiples.
 
 Application idle closing runs only when the Stream node idle timeout is set to a positive value. The default is 0, and 0 means no idle closing. When enabled, a session whose last application packet arrived more than the idle timeout ago is closed with `idle_timeout`. Heartbeat control frames don't count as application activity. If the no-inbound deadline and the idle deadline have both passed, the session closes with `heartbeat_timeout`.
