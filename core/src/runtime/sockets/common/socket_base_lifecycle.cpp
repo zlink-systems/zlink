@@ -395,17 +395,20 @@ void zlink::socket_base_t::start_reaping (poller_t *poller_)
     check_destroy ();
 }
 
-int zlink::socket_base_t::process_commands (
-  int timeout_, bool throttle_, bool force_if_command_pending_,
-  const uint64_t *observed_command_wait_epoch_,
-  bool primary_poller_drain_)
+int zlink::socket_base_t::process_commands (int timeout_,
+                                            bool throttle_,
+                                            bool force_if_command_pending_,
+                                            const uint64_t *observed_command_wait_epoch_,
+                                            bool primary_poller_drain_,
+                                            bool defer_to_async_executor_)
 {
     receive_runtime_t &receive = receive_runtime ();
     socket_lifecycle_coordinator_t &lifecycle = lifecycle_coordinator ();
     mailbox_t *const mailbox = static_cast<mailbox_t *> (_mailbox);
     const bool async_executor = current_async_mailbox_dispatch_socket () == this;
     const bool owns_control_scope =
-      async_executor || lifecycle.public_api_sync_owned_by_current_thread ();
+      async_executor
+      || (!defer_to_async_executor_ && lifecycle.public_api_sync_owned_by_current_thread ());
     const wait_timeout_budget_t wait_budget (_clock, timeout_);
     bool woke_since_last_claim = false;
 

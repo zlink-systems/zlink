@@ -1274,7 +1274,9 @@ export class ZLinkFrameworkRuntimeHost
               const unscopedStreamDrain =
                 streams === undefined
                   ? undefined
-                  : step('host.unscoped_stream_drain', () => streams.notifyUnscopedServerDrain());
+                  : step('host.unscoped_stream_drain', () =>
+                      streams.notifyUnscopedServerDrain(shutdownSignal)
+                    );
               drain = await step('host.route_mesh_drain', () =>
                 this.routeMeshCoordinator.shutdownHost(this.runtimeDeadline!, shutdownSignal)
               );
@@ -2943,8 +2945,8 @@ export class ZLinkFrameworkRuntimeHost
       primaryMeshNodeOrUndefined: () => this.spotNodeRuntime?.primaryMeshNode,
       primaryMeshCompletions: () => this.spotNodeRuntime?.primaryMeshCompletions,
       meshNode: (meshName) => this.spotNodeRuntime?.meshNode(meshName),
-      boundSessionRoute: (sessionNodeRid) =>
-        this.meshRouters.remoteBoundSessionTargetForSource(sessionNodeRid),
+      boundSessionRoute: (sessionNodeRid, previousRoute) =>
+        this.meshRouters.remoteBoundSessionTargetForSource(sessionNodeRid, previousRoute),
       meshCompletions: (meshName) => this.spotNodeRuntime?.meshCompletionTable(meshName),
       notifyEntrySpotActorCreated: (nodeRid, actor, createRequest, signal) =>
         this.spotNodeRuntime?.notifyEntrySpotActorCreated(nodeRid, actor, createRequest, signal) ??

@@ -26,7 +26,9 @@ public sealed partial class StreamConnectorTests
     public async Task PendingResponseIgnoresLegacyReplyPacketName()
     {
         var requests = new ZlinkStreamPendingRequests();
+        using var session = new CancellationTokenSource();
         var pending = requests.Create("expected.response");
+        requests.Register(pending, session);
         var header = new ZlinkStreamHeader(
             ZlinkStreamMessageKind.Response,
             ZlinkStreamCodec.Raw,

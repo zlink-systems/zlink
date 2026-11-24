@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 #include "encoding.hpp"
+#include "runtime/locations/location_store_write.hpp"
 #include <charconv>
-#include <set>
 #include <stdexcept>
 
 namespace zlink::framework::etcd::detail
@@ -19,52 +19,8 @@ void validate_key (std::string_view value, bool prefix)
 
 void validate_write (const store_write_request_t &request)
 {
-    std::set<std::string> conditions, mutations, all;
-    std::size_t size = 0;
-    for (const auto &condition : request.conditions) {
-        std::visit (
-          [&] (const auto &item) {
-              validate_key (item.key.value);
-              if (!conditions.insert (item.key.value).second)
-                  throw std::invalid_argument ("Duplicate Store condition key.");
-              all.insert (item.key.value);
-              size += item.key.value.size ();
-              using T = std::decay_t<decltype (item)>;
-              if constexpr (std::is_same_v<T, store_version_condition_t>) {
-                  if (item.expected.value.empty () || item.expected.value.size () > 4096
-                      || !is_valid_utf8 (item.expected.value))
-                      throw std::invalid_argument ("Invalid Store version length.");
-                  size += item.expected.value.size ();
-              } else if constexpr (std::is_same_v<T, store_value_condition_t>) {
-                  if (item.expected.size () > max_payload)
-                      throw std::invalid_argument ("Store value exceeds 1 MiB.");
-                  size += item.expected.size ();
-              }
-          },
-          condition);
-    }
-    for (const auto &mutation : request.mutations) {
-        std::visit (
-          [&] (const auto &item) {
-              validate_key (item.key.value);
-              if (!mutations.insert (item.key.value).second)
-                  throw std::invalid_argument ("Duplicate Store mutation key.");
-              all.insert (item.key.value);
-              size += item.key.value.size ();
-              if constexpr (std::is_same_v<std::decay_t<decltype (item)>, store_put_t>) {
-                  if (item.bytes.size () > max_payload)
-                      throw std::invalid_argument ("Store value exceeds 1 MiB.");
-                  if (item.retention
-                      && (item.retention->count () <= 0
-                          || static_cast<std::uint64_t> (item.retention->count ()) > max_time))
-                      throw std::invalid_argument ("Invalid Store retention.");
-                  size += item.bytes.size ();
-              }
-          },
-          mutation);
-    }
-    if (all.size () > 2048 || size > max_page_bytes)
-        throw std::invalid_argument ("Store batch exceeds its bound.");
+    runtime::validate_location_write (
+      request, [] (std::string_view key) { validate_key (key); }, is_valid_utf8, max_time);
 }
 
 std::string physical_key (std::string_view ns, char kind, std::string_view key)

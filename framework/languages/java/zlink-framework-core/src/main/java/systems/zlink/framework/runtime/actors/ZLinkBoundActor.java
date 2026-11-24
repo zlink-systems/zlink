@@ -12,6 +12,7 @@ import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamSocket;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
@@ -39,6 +40,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 
 final class ZLinkBoundActor implements ZLinkSessionActor {
     static final int MAX_ACTOR_SLOT = 0xffff;
@@ -60,7 +62,8 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
     private final BooleanSupplier currentBinding;
     private final ZLinkSessionActorsRuntime.IngressAdmission ingressAdmission;
     private final ZLinkRelayMetadataPolicy metadataPolicy;
-    private Runnable unbindListener = () -> {};
+    private Supplier<CompletionStage<Void>> unbindListener =
+            () -> CompletableFuture.completedFuture(null);
     private volatile boolean nativeRebound;
     private CompletableFuture<Void> disconnect;
 
@@ -217,8 +220,8 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
         rebindNativeActor(targetActor);
     }
 
-    void setUnbindListener(Runnable unbindListener) {
-        this.unbindListener = unbindListener == null ? () -> {} : unbindListener;
+    void setUnbindListener(Supplier<CompletionStage<Void>> unbindListener) {
+        this.unbindListener = Objects.requireNonNull(unbindListener, "unbindListener");
     }
 
     @Override
@@ -244,7 +247,7 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
         }
         ZLinkStreamHeader requestHeader = currentHeader.orElseThrow();
         ZLinkStreamHeader header = metadataPolicy.sessionToActor(requestHeader);
-        traceRelay(header);
+        traceRelay(header, null);
         Message message = ZLinkMessagePayloads.message(payload, serializer);
         byte[] payloadBytes = message.toByteArray();
         message.close();
@@ -260,38 +263,56 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                             return relayUsingStoredBinding(
                                     requestHeader, header, payloadBytes, sourceSessionSequence);
                         });
+        if (flow != null && flow.dispatchErrorsEnabled()) {
+            submission =
+                    submission.whenComplete(
+                            (ignored, failure) -> {
+                                Throwable cause = failure;
+                                while (cause instanceof CompletionException
+                                        && cause.getCause() != null) {
+                                    cause = cause.getCause();
+                                }
+                                if (cause
+                                        instanceof
+                                        ZLinkSessionActorsRuntime.RelayBindingUnavailable) {
+                                    traceRelay(header, cause);
+                                }
+                            });
+        }
         return header.requestSequence().isPresent()
                 ? submission
                 : ZLinkOneWayCalls.adaptOneWay(submission);
     }
 
-    private void traceRelay(ZLinkStreamHeader header) {
-        ZLinkMessageFlowTracer.TracePoint tracePoint =
-                flow == null ? null : flow.begin(ZLinkMessageFlowOutcome.SENT);
+    private void traceRelay(ZLinkStreamHeader header, Throwable failure) {
+        ZLinkMessageFlowOutcome phase =
+                failure == null ? ZLinkMessageFlowOutcome.SENT : ZLinkMessageFlowOutcome.DROPPED;
+        ZLinkMessageFlowTracer.TracePoint tracePoint = flow == null ? null : flow.begin(phase);
         if (tracePoint == null) {
             return;
         }
         tracePoint.trace(
                 new ZLinkMessageFlowEvent(
-                        ZLinkMessageFlowOutcome.SENT,
-                        ZLinkDispatchErrorSurface.SPOT_ACTOR,
-                        header.requestSequence().isPresent()
-                                ? ZLinkDispatchMessageKind.ACTOR_REQUEST
-                                : ZLinkDispatchMessageKind.ACTOR_SEND,
-                        header.packetName(),
-                        null,
-                        null,
-                        header.correlationId().orElse(null),
-                        null,
-                        null,
-                        ref.actorId(),
-                        null,
-                        null,
-                        null,
-                        null,
-                        null,
-                        header.flowId().orElse(null),
-                        header.flowOrigin().orElse(null)));
+                                phase,
+                                ZLinkDispatchErrorSurface.SPOT_ACTOR,
+                                header.requestSequence().isPresent()
+                                        ? ZLinkDispatchMessageKind.ACTOR_REQUEST
+                                        : ZLinkDispatchMessageKind.ACTOR_SEND,
+                                header.packetName(),
+                                null,
+                                null,
+                                header.correlationId().orElse(null),
+                                null,
+                                null,
+                                ref.actorId(),
+                                null,
+                                failure == null ? null : ZLinkDispatchErrorReason.STALE_TARGET,
+                                null,
+                                failure == null ? null : failure.getClass().getName(),
+                                failure == null ? null : failure.getMessage(),
+                                header.flowId().orElse(null),
+                                header.flowOrigin().orElse(null))
+                        .withStreamSessionId(sessionRid.toHex()));
     }
 
     private CompletionStage<Void> relayLocal(
@@ -535,6 +556,13 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
     }
 
     CompletionStage<Void> notifyDisconnected(Duration timeout) {
+        return notifyDisconnected(timeout, null, null);
+    }
+
+    CompletionStage<Void> notifyDisconnected(
+            Duration timeout,
+            CompletableFuture<Void> deadline,
+            CompletableFuture<Void> forcedStop) {
         Objects.requireNonNull(timeout, "timeout");
         CompletableFuture<Void> result;
         boolean bindingCurrent;
@@ -565,6 +593,10 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                                                 .thenCompose(
                                                         cleared ->
                                                                 cleared
+                                                                                && (forcedStop
+                                                                                                == null
+                                                                                        || !forcedStop
+                                                                                                .isDone())
                                                                         ? actors.notifyDisconnected(
                                                                                 managedActor.get(),
                                                                                 disconnectIdentity)
@@ -573,9 +605,14 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                                                                                         completedFuture(
                                                                                                 null))
                                         : notifyRemoteDisconnected());
-        notification
-                .toCompletableFuture()
-                .orTimeout(timeout.toMillis(), TimeUnit.MILLISECONDS)
+        var notificationTerminal = notification.toCompletableFuture();
+        var boundedTerminal =
+                deadline == null
+                        ? notificationTerminal.orTimeout(timeout.toMillis(), TimeUnit.MILLISECONDS)
+                        : CompletableFuture.anyOf(notificationTerminal, deadline);
+        (forcedStop == null
+                        ? boundedTerminal
+                        : CompletableFuture.anyOf(boundedTerminal, forcedStop))
                 .handle((ignored, notifyError) -> notifyError)
                 //  The disconnect notification can complete inline inside the
                 //  transport's reply callback, still inside the native router
@@ -585,36 +622,40 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                 //  shutdown hang that ends in SIGKILL). Always hop off the
                 //  completing thread before the unbind submit.
                 .thenComposeAsync(
-                        notifyError ->
-                                stream.unbindActor(sessionRid, ref.actorId())
-                                        .submit(timeout)
-                                        .handle(
-                                                (ignored, unbindError) -> {
-                                                    if (notifyError != null) {
-                                                        throw new CompletionException(notifyError);
-                                                    }
-                                                    if (unbindError != null) {
-                                                        throw new CompletionException(unbindError);
-                                                    }
-                                                    return null;
-                                                }))
+                        notifyError -> {
+                            if (forcedStop != null && forcedStop.isDone()) {
+                                return CompletableFuture.completedFuture(null);
+                            }
+                            return stream.unbindActor(sessionRid, ref.actorId())
+                                    .submit(timeout)
+                                    .handle(
+                                            (ignored, unbindError) -> {
+                                                if (notifyError != null) {
+                                                    throw new CompletionException(notifyError);
+                                                }
+                                                if (unbindError != null) {
+                                                    throw new CompletionException(unbindError);
+                                                }
+                                                return null;
+                                            });
+                        })
                 .whenComplete(
                         (ignored, error) -> {
-                            Throwable terminal = error;
-                            try {
-                                unbindListener.run();
-                            } catch (RuntimeException listenerFailure) {
-                                if (terminal == null) {
-                                    terminal = listenerFailure;
-                                } else {
-                                    terminal.addSuppressed(listenerFailure);
-                                }
-                            }
-                            if (terminal == null) {
-                                result.complete(null);
-                            } else {
-                                result.completeExceptionally(terminal);
-                            }
+                            ZLinkHandlerStages.fromStageSupplier(unbindListener)
+                                    .whenComplete(
+                                            (removed, listenerFailure) -> {
+                                                if (error != null) {
+                                                    if (listenerFailure != null
+                                                            && listenerFailure != error) {
+                                                        error.addSuppressed(listenerFailure);
+                                                    }
+                                                    result.completeExceptionally(error);
+                                                } else if (listenerFailure != null) {
+                                                    result.completeExceptionally(listenerFailure);
+                                                } else {
+                                                    result.complete(null);
+                                                }
+                                            });
                         });
         return result;
     }

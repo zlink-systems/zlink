@@ -37,7 +37,7 @@ final class ZLinkStreamPendingRequests {
     }
 
     PendingRequest start(
-            ZLinkStreamTransportConnection connection,
+            ZLinkStreamTransportConnection owner,
             String packetName,
             Duration timeout,
             Duration maxAdmissionWait,
@@ -48,7 +48,7 @@ final class ZLinkStreamPendingRequests {
         long timeoutNanos = boundedNanos(timeout);
         PendingRequest request =
                 new PendingRequest(
-                        connection,
+                        owner,
                         packetName,
                         timeout,
                         nanoTime() + timeoutNanos,
@@ -106,8 +106,11 @@ final class ZLinkStreamPendingRequests {
         return true;
     }
 
-    /** Keeps the cause in the request failure while reporting the connection ending. */
-    void failAll(ZLinkStreamTransportConnection connection, Throwable ex) {
+    /**
+     * Fails requests owned by the ended transport, including those waiting between attempts. A null
+     * owner means the connector is closing. The ending cause is preserved.
+     */
+    void failAll(Throwable ex, ZLinkStreamTransportConnection owner) {
         ZLinkStreamException failure =
                 ex instanceof ZLinkStreamException coded
                                 && coded.errorCode() == ZLinkStreamErrorCode.DISCONNECTED
@@ -118,7 +121,7 @@ final class ZLinkStreamPendingRequests {
                                 ex);
         var ended = new ArrayList<PendingRequest>();
         for (PendingRequest request : active) {
-            if (request.connection == connection && request.terminate()) {
+            if ((owner == null || request.owner == owner) && request.terminate()) {
                 ended.add(request);
             }
         }
@@ -156,7 +159,7 @@ final class ZLinkStreamPendingRequests {
     }
 
     final class PendingRequest {
-        final ZLinkStreamTransportConnection connection;
+        final ZLinkStreamTransportConnection owner;
         final String packetName;
         final Duration timeout;
         final long admissionBudget;
@@ -175,7 +178,7 @@ final class ZLinkStreamPendingRequests {
         private ScheduledFuture<?> retryTask;
 
         private PendingRequest(
-                ZLinkStreamTransportConnection connection,
+                ZLinkStreamTransportConnection owner,
                 String packetName,
                 Duration timeout,
                 long deadline,
@@ -184,7 +187,7 @@ final class ZLinkStreamPendingRequests {
                 BiFunction<Throwable, BooleanSupplier, Boolean> onFailure,
                 Consumer<Duration> onAdmissionWaiting,
                 Consumer<PendingRequest> retry) {
-            this.connection = connection;
+            this.owner = owner;
             this.packetName = packetName;
             this.timeout = timeout;
             this.deadline = deadline;

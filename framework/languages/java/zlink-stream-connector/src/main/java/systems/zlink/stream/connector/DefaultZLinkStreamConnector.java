@@ -70,11 +70,18 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     private final AtomicReference<ZLinkStreamCloseReason> lastCloseReason = new AtomicReference<>();
 
     DefaultZLinkStreamConnector(ZLinkStreamConnectorOptions options) {
+        this(options, null);
+    }
+
+    DefaultZLinkStreamConnector(
+            ZLinkStreamConnectorOptions options,
+            Supplier<CompletionStage<? extends ZLinkStreamTransportConnection>> openTransport) {
         this(
                 options,
                 ZLinkStreamExecutionResources.timeouts(),
                 System::nanoTime,
-                () -> ThreadLocalRandom.current().nextInt(51));
+                () -> ThreadLocalRandom.current().nextInt(51),
+                openTransport);
     }
 
     DefaultZLinkStreamConnector(
@@ -82,6 +89,15 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
             ScheduledExecutorService timeouts,
             LongSupplier clock,
             IntSupplier admissionJitterMillis) {
+        this(options, timeouts, clock, admissionJitterMillis, null);
+    }
+
+    private DefaultZLinkStreamConnector(
+            ZLinkStreamConnectorOptions options,
+            ScheduledExecutorService timeouts,
+            LongSupplier clock,
+            IntSupplier admissionJitterMillis,
+            Supplier<CompletionStage<? extends ZLinkStreamTransportConnection>> openTransport) {
         this.timeouts = timeouts;
         this.pendingRequests =
                 new ZLinkStreamPendingRequests(timeouts, clock, admissionJitterMillis);
@@ -114,7 +130,8 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
                         this::notifyDisconnected,
                         this::recordConnectAttemptFailure,
                         this::sendControl,
-                        sendChain::reset);
+                        sendChain::reset,
+                        openTransport);
     }
 
     @Override
@@ -420,11 +437,10 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
         return sendFrame(
                 header,
                 body,
-                null,
-                (write, writeFailure) -> {
+                (owner, write, writeFailure) -> {
                     var request =
                             pendingRequests.start(
-                                    lifecycle.connection,
+                                    owner,
                                     packetName,
                                     timeout,
                                     configuration.timeouts().maxAdmissionWait(),
@@ -457,9 +473,13 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
             sendFrame(
                     header,
                     body,
-                    request.connection,
-                    (write, writeFailure) ->
-                            enqueueRequestAttempt(request, header, write, writeFailure));
+                    (owner, write, writeFailure) -> {
+                        if (owner != request.owner) {
+                            throw ZLinkStreamException.disconnected(
+                                    "connection ended before admission retry");
+                        }
+                        return enqueueRequestAttempt(request, header, write, writeFailure);
+                    });
         } catch (RuntimeException failure) {
             request.fail(failure);
         }
@@ -475,6 +495,7 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
                 sequence,
                 canWrite ->
                         sendChain.enqueueDeferred(
+                                request.owner,
                                 () ->
                                         canWrite.getAsBoolean()
                                                 ? traceWrite(header, write.get())
@@ -572,15 +593,13 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     }
 
     private CompletionStage<Void> sendFrame(ZLinkStreamWireProtocol.Header header, byte[] payload) {
-        return traceWrite(header, sendFrame(header, payload, null, sendChain::enqueueDeferred));
+        return traceWrite(header, sendFrame(header, payload, sendChain::enqueueDeferred));
     }
 
     private <T> CompletionStage<T> sendFrame(
             ZLinkStreamWireProtocol.Header header,
             byte[] payload,
-            ZLinkStreamTransportConnection expected,
-            BiFunction<Supplier<CompletionStage<Void>>, Consumer<Throwable>, CompletableFuture<T>>
-                    enqueue) {
+            ZLinkStreamConnectionLifecycle.FrameEnqueue<T> enqueue) {
         //  The wire codec is internal and reports structural problems with
         //  plain exceptions. This is the connector boundary, so a rejection
         //  the caller can act on (metadata limits, correlation id, send
@@ -614,7 +633,7 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
                                     + " correlation="
                                     + header.correlationId());
         }
-        return lifecycle.enqueueFrame(sendChain, frame, expected, enqueue);
+        return lifecycle.enqueueFrame(sendChain, frame, enqueue);
     }
 
     CompletionStage<Void> traceWrite(

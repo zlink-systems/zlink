@@ -36,6 +36,7 @@ final class ZLinkStreamR3RegressionTest {
                         null,
                         null,
                         null,
+                        null,
                         null);
         IllegalStateException failure = new IllegalStateException("transport close failure");
         lifecycle.publishCloseFailure(
@@ -228,6 +229,7 @@ final class ZLinkStreamR3RegressionTest {
                 sequence,
                 ignored ->
                         chain.enqueueDeferred(
+                                null,
                                 () -> {
                                     writes.incrementAndGet();
                                     return CompletableFuture.completedFuture(null);

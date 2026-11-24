@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import org.junit.jupiter.api.Test;
 
-import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.messaging.ZLinkMessage;
@@ -29,8 +28,6 @@ final class ZLinkStreamSessionDeclaredTypeCodecTest {
         codecs.freeze();
         ZLinkStreamSessionClient client =
                 new ZLinkStreamSessionClient(
-                        null,
-                        RoutingId.from("session"),
                         null,
                         codecs.serializerWithFallback(new ZLinkJsonMessageSerializer()),
                         ZLinkStreamCodec.RAW,
