@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
+import { UINT64_BYTES, UINT64_MAX } from '@zlink-systems/stream-wire';
 import type { ActorRef } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkResolvedActorRoute } from '../locations';
@@ -34,8 +35,14 @@ type ActorRefWithMessageFollow = ActorRef & {
   readonly __zlinkMessageFollowContext?: ZLinkActorMessageFollowContext;
 };
 
+const messageFollowIdPrefix = randomBytes(UINT64_BYTES).toString('hex');
+let nextMessageFollowSequence = 1n;
+
 export function createMessageFollowId(): string {
-  return randomBytes(16).toString('hex');
+  if (nextMessageFollowSequence > UINT64_MAX) {
+    throw new RangeError('Actor Message Follow identity sequence is exhausted.');
+  }
+  return messageFollowIdPrefix + (nextMessageFollowSequence++).toString(16).padStart(16, '0');
 }
 
 export function createInitialActorMessageFollowContext(

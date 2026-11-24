@@ -34,7 +34,7 @@ namespace protocol = zlink::framework::runtime::protocol;
 namespace transport = zlink::framework::runtime::transport;
 using namespace std::chrono_literals;
 
-class no_op_stream_session_t final : public framework::packet_stream_session_t
+class no_op_stream_session_t : public framework::packet_stream_session_t
 {
   public:
     framework::task_t<void> on_connected (framework::stream_t &) override { co_return; }
@@ -55,10 +55,22 @@ class no_op_stream_session_t final : public framework::packet_stream_session_t
     }
 };
 
+class no_op_websocket_stream_session_t final : public no_op_stream_session_t
+{
+};
+
 class listener_status_probe_t final : public framework::hosted_service_t
 {
   public:
-    explicit listener_status_probe_t (framework::app_t &app) : _app (&app) {}
+    explicit listener_status_probe_t (
+      framework::app_t &app,
+      std::string stream_name = "wildcard-stream",
+      std::optional<std::string> websocket_stream_name = std::nullopt) :
+        _app (&app),
+        _stream_name (std::move (stream_name)),
+        _websocket_stream_name (std::move (websocket_stream_name))
+    {
+    }
 
     framework::task_t<void> start (framework::service_provider_t &services) override
     {
@@ -66,7 +78,11 @@ class listener_status_probe_t final : public framework::hosted_service_t
         fanout_endpoint =
           runtime.listener_status (framework::listener_kind_t::fanout, "wildcard-fanout").endpoint;
         stream_endpoint =
-          runtime.listener_status (framework::listener_kind_t::stream, "wildcard-stream").endpoint;
+          runtime.listener_status (framework::listener_kind_t::stream, _stream_name).endpoint;
+        if (_websocket_stream_name)
+            websocket_endpoint =
+              runtime.listener_status (framework::listener_kind_t::stream, *_websocket_stream_name)
+                .endpoint;
         _app->stop ();
         co_return;
     }
@@ -75,10 +91,25 @@ class listener_status_probe_t final : public framework::hosted_service_t
 
     std::string fanout_endpoint;
     std::string stream_endpoint;
+    std::string websocket_endpoint;
 
   private:
     framework::app_t *_app;
+    std::string _stream_name;
+    std::optional<std::string> _websocket_stream_name;
 };
+
+void expect_loopback_endpoint_with_allocated_port (std::string_view endpoint,
+                                                   std::string_view prefix)
+{
+    ASSERT_TRUE (endpoint.starts_with (prefix)) << endpoint;
+    const auto port = endpoint.substr (prefix.size ());
+    ASSERT_FALSE (port.empty ()) << endpoint;
+    EXPECT_TRUE (std::all_of (port.begin (), port.end (),
+                              [] (char value) { return value >= '0' && value <= '9'; }))
+      << endpoint;
+    EXPECT_NE (port, std::string_view ("0")) << endpoint;
+}
 
 std::vector<std::uint8_t> bytes (std::string value)
 {
@@ -245,6 +276,30 @@ TEST (ListenerIdentity, WildcardFanoutAndStreamPublishLoopback)
     ASSERT_NE (probe_view, nullptr);
     EXPECT_TRUE (probe_view->fanout_endpoint.starts_with ("tcp://127.0.0.1:"));
     EXPECT_TRUE (probe_view->stream_endpoint.starts_with ("tcp://127.0.0.1:"));
+}
+
+TEST (ListenerIdentity, TcpAndWebSocketStreamPublishConfiguredSchemes)
+{
+    auto app = framework::app_t::create ();
+    app.add_zlink_framework ([] (framework::zlink_framework_options_t &options) {
+        options.add_fanout_channel ("wildcard-fanout").enable_publisher ("tcp://0.0.0.0:0");
+        options.add_stream_node ("tcp-stream")
+          .bind ("tcp://127.0.0.1:0")
+          .register_session<no_op_stream_session_t> ();
+        options.add_stream_node ("websocket-stream")
+          .bind ("ws://127.0.0.1:0")
+          .register_session<no_op_websocket_stream_session_t> ();
+    });
+    auto probe = std::make_unique<listener_status_probe_t> (app, "tcp-stream",
+                                                            std::string ("websocket-stream"));
+    auto *probe_view = probe.get ();
+    app.add_hosted_service (std::move (probe));
+
+    ASSERT_EQ (app.run (0, nullptr), 0);
+    ASSERT_NE (probe_view, nullptr);
+    expect_loopback_endpoint_with_allocated_port (probe_view->stream_endpoint, "tcp://127.0.0.1:");
+    expect_loopback_endpoint_with_allocated_port (probe_view->websocket_endpoint,
+                                                  "ws://127.0.0.1:");
 }
 
 TEST (ListenerIdentity, WildcardMeshAdvertisesLoopbackAndSupportsExpectedRidRouting)

@@ -14814,6 +14814,17 @@ public sealed partial class EntrySpotActorDispatchTests
                 reservation.TargetDescriptorLifecycleGeneration,
                 reservation.Capacity,
                 reservation.TargetOwner,
+                new ZLinkAuthorityRelocation.CoordinatorFence(
+                    reservation.Inventory.SourceNodeRid.ToHex(),
+                    reservation.Inventory.SourceNodeLifecycleGeneration,
+                    reservation.Inventory.SourceOwner.OwnerId,
+                    checked((ulong)reservation.Inventory.SourceOwner.LeaseGeneration),
+                    staging
+                        .Participants.Single(participant =>
+                            participant.Envelope.ObjectKind == ZLinkPlacementObjectKind.UserSpot
+                        )
+                        .ExpectedStoreVersion
+                ),
                 relocation.Envelope
             );
             var store = authorityStore();
@@ -17101,7 +17112,8 @@ public sealed partial class EntrySpotActorDispatchTests
             RoutingId targetNodeRid,
             IReadOnlyList<Message> parts,
             SendFlags flags,
-            ReadOnlyMemory<byte> metadata
+            ReadOnlyMemory<byte> metadata,
+            Action<Exception>? failureObserver = null
         )
         {
             LastNodeSendTarget = targetNodeRid;

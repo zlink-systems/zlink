@@ -36,7 +36,8 @@ public sealed partial class RelocationRuntimeTests
             new ZLinkMeshNodeDescriptorKey("mesh", RoutingId.From("aggregate-target")),
             1,
             new ZLinkCapacityVector(10_000, 0, null),
-            new ZLinkLocationOwnerToken("aggregate-target", 17)
+            new ZLinkLocationOwnerToken("aggregate-target", 17),
+            AggregateSourceFence()
         );
 
         await Assert.ThrowsAsync<ZLinkRelocationTargetSettledException>(async () =>
@@ -189,7 +190,8 @@ public sealed partial class RelocationRuntimeTests
                 1,
                 new ZLinkSpotTypeCapacityDelta(ZLinkPlacementObjectKind.UserSpot, "room", 1)
             ),
-            new ZLinkLocationOwnerToken("aggregate-target", 17)
+            new ZLinkLocationOwnerToken("aggregate-target", 17),
+            AggregateSourceFence()
         );
 
         await Assert.ThrowsAsync<ZLinkRelocationTargetSettledException>(async () =>

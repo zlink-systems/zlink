@@ -1,5 +1,7 @@
+using System.Text;
 using Zlink.Framework.Contracts.Channels;
 using Zlink.Framework.Runtime.Host;
+using Zlink.Framework.Runtime.Messaging;
 
 namespace Zlink.Framework.Runtime.Streams;
 
@@ -9,6 +11,26 @@ namespace Zlink.Framework.Runtime.Streams;
 internal static class ZLinkRemoteSessionPushProtocol
 {
     public const string PacketName = "$zlink.session.push-relay.v1";
+    private static readonly byte[] EncodedPacketName = Encoding.UTF8.GetBytes(PacketName);
+
+    internal static bool IsPush(ZLinkEnvelopeHeader header) =>
+        header.Kind == ZLinkMessageKind.Command && header.MessageName == PacketName;
+
+    internal static bool IsPush(ZLinkMultipartPayloadView parts)
+    {
+        if (parts.Count == 0 || parts.GetSpan(0).IndexOf(EncodedPacketName) < 0)
+            return false;
+
+        try
+        {
+            return IsPush(ZLinkEnvelopeCodec.DecodeHeader(parts, validateFlow: false));
+        }
+        catch (ZLinkEnvelopeProtocolException)
+        {
+            // The node dispatcher reports malformed application envelopes.
+            return false;
+        }
+    }
 }
 
 internal static class ZLinkRemoteActorFrameProtocol
@@ -159,21 +181,6 @@ internal sealed record ZLinkRemoteSessionPushRelay(
     string SessionRid,
     byte[] Frame
 );
-
-internal sealed class ZLinkRemoteSessionPushRelayHandler(ZLinkFrameworkRuntime runtime)
-    : IZLinkRouteSendHandler<ZLinkRemoteSessionPushRelay>
-{
-    public async ValueTask HandleAsync(
-        ZLinkRemoteSessionPushRelay message,
-        ZLinkRouteMessageContext context,
-        CancellationToken cancellationToken
-    )
-    {
-        await runtime
-            .AdmitRemoteSessionPushOneWayAsync(message, context.SourceNodeRid, cancellationToken)
-            .ConfigureAwait(false);
-    }
-}
 
 internal sealed class ZLinkRemoteActorReplyRelayHandler(ZLinkFrameworkRuntime runtime)
     : IZLinkRouteSendHandler<ZLinkRemoteActorReplyRelay>
