@@ -223,12 +223,13 @@ final class ZLinkLocationStoreFormatStartupTest {
     }
 
     @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void settlesV11AggregateBeforeConvertingCapacity(boolean prepared) throws Exception {
+    @ValueSource(ints = {0, 1, 2})
+    void settlesV11AggregateBeforeConvertingCapacity(int state) throws Exception {
+        boolean prepared = state == 1;
         var store = new ZLinkInMemoryProviderLocationStore();
         var aggregate = UUID.fromString("00000000-0000-4000-8000-0000000000a2");
         var aggregateKey = new ZLinkStoreKey("zlink:v11:aggregate:" + aggregate + ":1");
-        put(store, aggregateKey, legacyAggregateRecord(aggregate, prepared));
+        put(store, aggregateKey, legacyAggregateRecord(aggregate, state));
         put(store, legacy("a"), legacyUsage("{}", "{}", 2, prepared ? 1 : 0));
 
         try (var host = start(store)) {
@@ -364,9 +365,14 @@ final class ZLinkLocationStoreFormatStartupTest {
     }
 
     private static byte[] legacyAggregateRecord(UUID aggregate, boolean prepared) throws Exception {
+        return legacyAggregateRecord(aggregate, prepared ? 1 : 0);
+    }
+
+    /** State 0 staging, 1 prepared, 2 committed (v11 aggregate record layout). */
+    private static byte[] legacyAggregateRecord(UUID aggregate, int state) throws Exception {
         var bytes = new ByteArrayOutputStream();
         try (var record = new DataOutputStream(bytes)) {
-            record.writeByte(prepared ? 1 : 0);
+            record.writeByte(state);
             record.writeLong(aggregate.getMostSignificantBits());
             record.writeLong(aggregate.getLeastSignificantBits());
             record.writeLong(1);

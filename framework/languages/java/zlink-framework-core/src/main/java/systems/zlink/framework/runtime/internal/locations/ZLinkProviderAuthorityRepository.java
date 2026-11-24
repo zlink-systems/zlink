@@ -2591,13 +2591,13 @@ final class ZLinkProviderAuthorityRepository {
     private static PreparedAggregate legacyAggregate(ZLinkStoreScanItem item) {
         try {
             PreparedAggregate aggregate = decodeAggregate(item.value().bytes());
-            if (aggregate.state() == AGGREGATE_COMMITTED
-                    || !aggregateKey(
-                                    new ZLinkAggregateFence(
-                                            aggregate.aggregateId(),
-                                            aggregate.aggregateGeneration()))
-                            .equals(item.key())) {
-                throw new IllegalStateException("v11 aggregate requires completion by a v11 owner");
+            // A committed aggregate already moved its authority rows and v11 capacity; settling it
+            // only clears its markers, inventory and root, like the other states.
+            if (!aggregateKey(
+                            new ZLinkAggregateFence(
+                                    aggregate.aggregateId(), aggregate.aggregateGeneration()))
+                    .equals(item.key())) {
+                throw new IllegalStateException("v11 aggregate key does not match its record");
             }
             aggregate.capacityBundle();
             return aggregate;
