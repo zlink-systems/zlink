@@ -15,6 +15,73 @@ public sealed class LocationStoreFormatMigrationTests
     private static readonly ZLinkStoreKey Floor = new("zlink:v12:generation-floor");
     private static readonly TimeSpan LeaseTtl = TimeSpan.FromSeconds(30);
 
+    [Theory]
+    [InlineData("pendingV11Aggregate")]
+    [InlineData("flatV11Capacity")]
+    [InlineData("rawRidV11Capacity")]
+    [InlineData("ambiguousRawAndDisplayRid")]
+    public async Task ConvertsV11FixtureAtStartup(string name)
+    {
+        var fixture = LocationContentionFixture.ReadScenario("v11ConversionCases");
+        var mesh = fixture.GetProperty("mesh").GetString()!;
+        var scenario = fixture.GetProperty("cases").GetProperty(name);
+        var expected = scenario.GetProperty("expected");
+        var store = new MigrationStore();
+        foreach (var hex in scenario.GetProperty("descriptorRoutingIdHexes").EnumerateArray())
+            await SeedDescriptorAsync(store, RoutingId.FromHex(hex.GetString()!), mesh);
+        var rows = scenario
+            .GetProperty("rows")
+            .EnumerateArray()
+            .ToDictionary(
+                row => row.GetProperty("key").GetString()!,
+                row => row.GetProperty("value").GetString()!
+            );
+        foreach (var (key, value) in rows)
+            await SeedAsync(store, key, value);
+
+        await using var runtime = Runtime(store);
+        if (expected.GetProperty("startup").GetString() == "configurationError")
+        {
+            await Assert.ThrowsAsync<ZLinkConfigurationException>(() =>
+                runtime.StartAsync(RoutingId.From("v12-host")).AsTask()
+            );
+            await AssertValueAsync(store, Format, null);
+            foreach (var (key, value) in rows)
+                await AssertValueAsync(store, new(key), value);
+            if (name == "pendingV11Aggregate")
+                await AssertValueAsync(store, Floor, null);
+            return;
+        }
+
+        await runtime.StartAsync(RoutingId.From("v12-host"));
+        await AssertValueAsync(store, Format, "converted");
+        foreach (var key in rows.Keys)
+            await AssertValueAsync(store, new(key), null);
+        foreach (var counter in expected.GetProperty("counters").EnumerateObject())
+            await AssertValueAsync(store, new(counter.Name), counter.Value.GetString());
+        foreach (var key in expected.GetProperty("absentCounters").EnumerateArray())
+            await AssertValueAsync(store, new(key.GetString()!), null);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task StartupPreservesNonUtf8LegacyRid(bool seedDescriptor)
+    {
+        var store = new MigrationStore();
+        var rid = RoutingId.FromHex("ff00");
+        if (seedDescriptor)
+            await SeedDescriptorAsync(store, rid);
+        var legacyKey = new ZLinkStoreKey($"{LegacyPrefix}{Uri.EscapeDataString(Mesh)}:%FF%00");
+        await SeedAsync(store, legacyKey.Value, Capacity(1, 0, 0));
+        await using var runtime = Runtime(store);
+
+        await runtime.StartAsync(RoutingId.From("v12-host"));
+
+        await AssertValueAsync(store, legacyKey, null);
+        await AssertValueAsync(store, Counter(rid, "actors", "active"), "1");
+    }
+
     [Fact]
     public async Task ConcurrentStartupConvertsEachRecordOnceAndOmitsZeroCounters()
     {

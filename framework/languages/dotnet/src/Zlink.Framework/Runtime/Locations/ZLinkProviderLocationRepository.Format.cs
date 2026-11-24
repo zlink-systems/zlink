@@ -1,4 +1,6 @@
+using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Zlink.Framework.Internal;
 
 namespace Zlink.Framework.Runtime.Locations;
@@ -33,6 +35,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         }
         else
         {
+            await SettleLegacyAggregatesAsync(cancellationToken).ConfigureAwait(false);
             floor = await EnsureGenerationFloorAsync(cancellationToken).ConfigureAwait(false);
             await MoveLegacyCapacityAsync(cancellationToken).ConfigureAwait(false);
             marker = await PutMissingMigrationKeyAsync(
@@ -112,9 +115,7 @@ internal sealed partial class ZLinkProviderLocationRepository
 
     private async ValueTask MoveLegacyCapacityAsync(CancellationToken cancellationToken)
     {
-        var descriptorRids = new Dictionary<string, ILookup<string, RoutingId>>(
-            StringComparer.Ordinal
-        );
+        var descriptorRids = new Dictionary<string, HashSet<RoutingId>>(StringComparer.Ordinal);
         ZLinkStoreScanCursor? cursor = null;
         while (true)
         {
@@ -132,14 +133,14 @@ internal sealed partial class ZLinkProviderLocationRepository
                 return;
             foreach (var row in page.Items)
             {
-                var (mesh, display) = DecodeLegacyCapacityKey(row.Key);
+                var (mesh, legacyRid) = DecodeLegacyCapacityKey(row.Key);
                 if (!descriptorRids.TryGetValue(mesh, out var rids))
                 {
                     rids = await ScanDescriptorRidsAsync(mesh, cancellationToken)
                         .ConfigureAwait(false);
                     descriptorRids.Add(mesh, rids);
                 }
-                await MoveLegacyCapacityRowAsync(row.Key, mesh, display, rids, cancellationToken)
+                await MoveLegacyCapacityRowAsync(row.Key, mesh, legacyRid, rids, cancellationToken)
                     .ConfigureAwait(false);
             }
             // A fresh scan checks completion after the final page of the old snapshot.
@@ -147,7 +148,7 @@ internal sealed partial class ZLinkProviderLocationRepository
         }
     }
 
-    private async ValueTask<ILookup<string, RoutingId>> ScanDescriptorRidsAsync(
+    private async ValueTask<HashSet<RoutingId>> ScanDescriptorRidsAsync(
         string mesh,
         CancellationToken cancellationToken
     )
@@ -171,7 +172,7 @@ internal sealed partial class ZLinkProviderLocationRepository
                 rids.Add(DecodeDescriptor<ZLinkMeshNodeDescriptor>(row.Value.Bytes).Descriptor.Rid);
             cursor = page.NextCursor;
             if (cursor is null)
-                return rids.ToLookup(rid => rid.ToString(), StringComparer.Ordinal);
+                return rids;
         }
     }
 
@@ -188,8 +189,8 @@ internal sealed partial class ZLinkProviderLocationRepository
     private async ValueTask MoveLegacyCapacityRowAsync(
         ZLinkStoreKey oldKey,
         string mesh,
-        string display,
-        ILookup<string, RoutingId> descriptorRids,
+        byte[] legacyRid,
+        HashSet<RoutingId> descriptorRids,
         CancellationToken cancellationToken
     )
     {
@@ -199,23 +200,48 @@ internal sealed partial class ZLinkProviderLocationRepository
         if (old is not ZLinkStoreReadResult.Found)
             return;
 
-        var candidates = descriptorRids[display].Take(2).ToArray();
+        var candidates = descriptorRids
+            .Where(rid =>
+                rid.ToBytes().SequenceEqual(legacyRid)
+                || Encoding.UTF8.GetBytes(rid.ToString()).AsSpan().SequenceEqual(legacyRid)
+            )
+            .Take(2)
+            .ToArray();
         if (candidates.Length > 1)
             throw new ZLinkConfigurationException(
                 $"Ambiguous RoutingId in v11 capacity key {oldKey.Value}."
             );
-        var ridHex = (
-            candidates.Length == 1 ? candidates[0] : ParseLegacyRoutingId(display)
-        ).ToHex();
+        string ridHex;
+        try
+        {
+            ridHex = (candidates.Length == 1 ? candidates[0] : RoutingId.From(legacyRid)).ToHex();
+        }
+        catch (ArgumentException error)
+        {
+            throw new ZLinkConfigurationException(
+                $"Invalid RoutingId in v11 capacity key {oldKey.Value}. {error.Message}"
+            );
+        }
         while (old is ZLinkStoreReadResult.Found found)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var counters = DecodeLegacyCapacity(oldKey, found.Value.Bytes, mesh, ridHex);
-            var conditions = new List<ZLinkStoreCondition>(counters.Count + 1)
+            var counters = DecodeLegacyCapacity(oldKey, found.Value.Bytes)
+                .Counters.Where(counter => counter.Value.Count != 0)
+                .Select(counter => new ZLinkStoreMutation.Put(
+                    CapacityCounterKey(mesh, ridHex, counter.Key.Dimension, counter.Key.Pending),
+                    EncodeGenerationCounter((ulong)counter.Value.Count),
+                    null
+                ))
+                .ToArray();
+            if (counters.Length >= ZLinkLocationStoreLimits.MaximumUniqueKeys)
+                throw new ZLinkConfigurationException(
+                    $"Conversion of v11 capacity record {oldKey.Value} exceeds the Location Store batch key limit."
+                );
+            var conditions = new List<ZLinkStoreCondition>(counters.Length + 1)
             {
                 new ZLinkStoreCondition.Value(oldKey, found.Value.Bytes),
             };
-            var mutations = new List<ZLinkStoreMutation>(counters.Count + 1);
+            var mutations = new List<ZLinkStoreMutation>(counters.Length + 1);
             foreach (var counter in counters)
             {
                 conditions.Add(new ZLinkStoreCondition.Missing(counter.Key));
@@ -279,101 +305,242 @@ internal sealed partial class ZLinkProviderLocationRepository
         }
     }
 
-    private static (string Mesh, string Display) DecodeLegacyCapacityKey(ZLinkStoreKey key)
+    private static (string Mesh, byte[] Rid) DecodeLegacyCapacityKey(ZLinkStoreKey key)
     {
         var suffix = key.Value[LegacyCapacityPrefix.Length..];
         var separator = suffix.IndexOf(':');
         if (separator <= 0 || separator == suffix.Length - 1)
             throw new ZLinkConfigurationException($"Malformed v11 capacity key {key.Value}.");
-        return (
-            Uri.UnescapeDataString(suffix[..separator]),
-            Uri.UnescapeDataString(suffix[(separator + 1)..])
-        );
+        var rid = Encoding.UTF8.GetBytes(suffix[(separator + 1)..]);
+        var length = 0;
+        for (var index = 0; index < rid.Length; index++)
+        {
+            var next = rid[index];
+            if (
+                next == '%'
+                && index + 2 < rid.Length
+                && Uri.IsHexDigit((char)rid[index + 1])
+                && Uri.IsHexDigit((char)rid[index + 2])
+            )
+            {
+                next = (byte)(
+                    (Uri.FromHex((char)rid[index + 1]) << 4) | Uri.FromHex((char)rid[index + 2])
+                );
+                index += 2;
+            }
+            rid[length++] = next;
+        }
+        return (Uri.UnescapeDataString(suffix[..separator]), rid[..length]);
     }
 
-    private static RoutingId ParseLegacyRoutingId(string display)
-    {
-        try
-        {
-            // A display string longer than 255 bytes cannot be a text RID.
-            return display.Length > 255 && display.StartsWith("hex:", StringComparison.Ordinal)
-                ? RoutingId.FromHex(display[4..])
-                : RoutingId.From(display);
-        }
-        catch (ArgumentException error)
-        {
-            throw new ZLinkConfigurationException(
-                $"Invalid v11 capacity RoutingId. {error.Message}"
-            );
-        }
-    }
+    private sealed record LegacyCapacityField(JsonObject Row, string Name, long Count);
 
-    private static List<ZLinkStoreMutation.Put> DecodeLegacyCapacity(
-        ZLinkStoreKey oldKey,
-        ReadOnlyMemory<byte> bytes,
-        string mesh,
-        string ridHex
-    )
+    private static (
+        JsonObject Record,
+        Dictionary<(string Dimension, bool Pending), LegacyCapacityField> Counters
+    ) DecodeLegacyCapacity(ZLinkStoreKey key, ReadOnlyMemory<byte> bytes)
     {
-        var counters = new List<ZLinkStoreMutation.Put>();
+        var counters = new Dictionary<(string, bool), LegacyCapacityField>();
         try
         {
-            using var document = JsonDocument.Parse(bytes);
-            ReadUsage(document.RootElement.GetProperty("active"), pending: false);
-            ReadUsage(document.RootElement.GetProperty("pending"), pending: true);
+            var root = JsonNode.Parse(bytes.Span)?.AsObject() ?? throw new JsonException();
+            if (root.ContainsKey("active") || root.ContainsKey("pending"))
+            {
+                ReadUsage(RequireObject(root, "active"), pending: false);
+                ReadUsage(RequireObject(root, "pending"), pending: true);
+            }
+            else
+            {
+                ReadCounter(root, "actorsActive", "actors", pending: false);
+                ReadCounter(root, "actorsPending", "actors", pending: true);
+                ReadCounter(root, "spotsActive", "spots", pending: false);
+                ReadCounter(root, "spotsPending", "spots", pending: true);
+                foreach (var (name, value) in RequireObject(root, "spotTypes"))
+                {
+                    var dimension = DecodeType(name, ':');
+                    var counts = value?.AsObject() ?? throw new JsonException();
+                    ReadCounter(counts, "active", dimension, pending: false);
+                    ReadCounter(counts, "pending", dimension, pending: true);
+                }
+            }
+            return (root, counters);
         }
         catch (Exception error)
-            when (error is JsonException or InvalidOperationException or KeyNotFoundException)
+            when (error
+                    is JsonException
+                        or InvalidOperationException
+                        or ArgumentException
+                        or FormatException
+            )
         {
-            throw new ZLinkConfigurationException($"Invalid v11 capacity record {oldKey.Value}.");
+            throw new ZLinkConfigurationException($"Invalid v11 capacity record {key.Value}.");
         }
-        if (counters.Count >= ZLinkLocationStoreLimits.MaximumUniqueKeys)
-            throw new ZLinkConfigurationException(
-                $"Conversion of v11 capacity record {oldKey.Value} exceeds the Location Store batch key limit."
-            );
-        return counters;
 
-        void ReadUsage(JsonElement usage, bool pending)
+        void ReadUsage(JsonObject usage, bool pending)
         {
-            ReadCounter("actors", usage.GetProperty("actors"), pending);
-            ReadCounter("spots", usage.GetProperty("spots"), pending);
-            foreach (var property in usage.GetProperty("spotTypes").EnumerateObject())
+            ReadCounter(usage, "actors", "actors", pending);
+            ReadCounter(usage, "spots", "spots", pending);
+            var types = RequireObject(usage, "spotTypes");
+            foreach (var (name, _) in types)
+                ReadCounter(types, name, DecodeType(name, '\0'), pending);
+        }
+
+        void ReadCounter(JsonObject row, string name, string dimension, bool pending)
+        {
+            if (
+                row[name] is not JsonValue count
+                || !count.TryGetValue<long>(out var value)
+                || value < 0
+            )
+                throw new JsonException();
+            counters.Add((dimension, pending), new(row, name, value));
+        }
+
+        static JsonObject RequireObject(JsonObject row, string name) =>
+            row[name]?.AsObject() ?? throw new JsonException();
+
+        static string DecodeType(string name, char delimiter)
+        {
+            var separator = name.IndexOf(delimiter);
+            if (separator < 0)
+                throw new JsonException();
+            var kind = (delimiter, name[..separator]) switch
             {
-                var separator = property.Name.IndexOf('\0');
-                if (separator < 0)
-                    throw new ZLinkConfigurationException(
-                        $"Invalid spot type in v11 capacity record {oldKey.Value}."
-                    );
-                var kind = property.Name[..separator] switch
-                {
-                    "user_spot" => ZLinkPlacementObjectKind.UserSpot,
-                    "instance_spot" => ZLinkPlacementObjectKind.InstanceSpot,
-                    _ => throw new ZLinkConfigurationException(
-                        $"Invalid spot kind in v11 capacity record {oldKey.Value}."
-                    ),
-                };
-                ReadCounter(
-                    SpotCapacityDimension(kind, property.Name[(separator + 1)..]),
-                    property.Value,
-                    pending
-                );
-            }
+                (':', "2") or ('\0', "user_spot") => ZLinkPlacementObjectKind.UserSpot,
+                (':', "3") or ('\0', "instance_spot") => ZLinkPlacementObjectKind.InstanceSpot,
+                _ => throw new JsonException(),
+            };
+            return SpotCapacityDimension(kind, name[(separator + 1)..]);
         }
+    }
 
-        void ReadCounter(string dimension, JsonElement count, bool pending)
+    private static string EncodeLegacyCapacityComponent(string value) =>
+        Uri.EscapeDataString(value)
+            .Replace("%21", "!", StringComparison.Ordinal)
+            .Replace("%27", "'", StringComparison.Ordinal)
+            .Replace("%28", "(", StringComparison.Ordinal)
+            .Replace("%29", ")", StringComparison.Ordinal)
+            .Replace("%2A", "*", StringComparison.Ordinal);
+
+    private async ValueTask AppendLegacyCapacityReleaseAsync(
+        AggregateHeader header,
+        ICollection<ZLinkStoreCondition> conditions,
+        ICollection<ZLinkStoreMutation> mutations,
+        CancellationToken cancellationToken
+    )
+    {
+        var dimensions = CapacityDimensions(header.Capacity).ToArray();
+        if (dimensions.Length == 0)
+            return;
+
+        // v11 .NET wrote capacity rows using the descriptor's display RID.
+        var target = header.TargetDescriptor;
+        var key = Key(
+            $"{LegacyCapacityPrefix}{EncodeLegacyCapacityComponent(target.MeshName)}:{EncodeLegacyCapacityComponent(target.Rid.ToString())}"
+        );
+        var stored = await _provider.ReadAsync(key, cancellationToken).ConfigureAwait(false);
+        if (stored is not ZLinkStoreReadResult.Found found)
+            throw new ZLinkConfigurationException(
+                $"Missing v11 aggregate capacity row {key.Value}."
+            );
+        var (record, counters) = DecodeLegacyCapacity(key, found.Value.Bytes);
+        foreach (var (dimension, count) in dimensions)
         {
-            if (!count.TryGetInt64(out var value) || value < 0)
+            if (!counters.TryGetValue((dimension, true), out var field) || field.Count < count)
                 throw new ZLinkConfigurationException(
-                    $"Invalid count in v11 capacity record {oldKey.Value}."
+                    $"Invalid pending v11 aggregate capacity in {key.Value}."
                 );
-            if (value != 0)
-                counters.Add(
-                    new(
-                        CapacityCounterKey(mesh, ridHex, dimension, pending),
-                        EncodeGenerationCounter((ulong)value),
-                        null
-                    )
-                );
+            field.Row[field.Name] = field.Count - count;
+        }
+        conditions.Add(new ZLinkStoreCondition.Value(key, found.Value.Bytes));
+        mutations.Add(new ZLinkStoreMutation.Put(key, Encode(record), null));
+    }
+
+    private async ValueTask<bool> CanFinishLegacyWithoutParticipantsAsync(
+        ZLinkAggregateFence fence,
+        AggregateRecord aggregate,
+        CancellationToken cancellationToken
+    )
+    {
+        if (
+            aggregate.Status == AggregateStatus.Prepared
+            || (aggregate.Status == AggregateStatus.Committed && !aggregate.ParticipantsNormalized)
+        )
+            return false;
+        var prefix = AggregateKey(fence).Value + ":participant:";
+        var scan = await _provider
+            .ScanAsync(new(prefix, null, 1), cancellationToken)
+            .ConfigureAwait(false);
+        return scan is ZLinkStoreScanResult.Page { Value: { Items.Count: 0, NextCursor: null } };
+    }
+
+    private async ValueTask<StoredRecord<AggregateRecord>?> ReadLegacyTerminalWithoutParticipantsAsync(
+        ZLinkAggregateFence fence,
+        CancellationToken cancellationToken
+    )
+    {
+        // A competing startup may have removed the inventory after a scan snapshot.
+        var current = await ReadRecordAsync<AggregateRecord>(AggregateKey(fence), cancellationToken)
+            .ConfigureAwait(false);
+        if (current?.Record.Status is not (AggregateStatus.Aborted or AggregateStatus.Committed))
+            return null;
+        return
+            current.Record.ParticipantsCleaned
+            || await CanFinishLegacyWithoutParticipantsAsync(
+                    fence,
+                    current.Record,
+                    cancellationToken
+                )
+                .ConfigureAwait(false)
+            ? current
+            : null;
+    }
+
+    private async ValueTask FinishLegacyWithoutParticipantsAsync(
+        ZLinkAggregateFence fence,
+        StoredRecord<AggregateRecord> stored,
+        CancellationToken cancellationToken
+    )
+    {
+        if (stored.Record.ParticipantsCleaned)
+            return;
+        // Participant rows precede fence installation and are deleted after
+        // fence release or normalization. The remaining children are inventory.
+        await CleanupUnfencedAggregateChildrenAsync(fence, cancellationToken).ConfigureAwait(false);
+        var key = AggregateKey(fence);
+        var terminal = stored.Record with
+        {
+            Status =
+                stored.Record.Status == AggregateStatus.Staging
+                    ? AggregateStatus.Aborted
+                    : stored.Record.Status,
+            ParticipantsCleaned = true,
+        };
+        await _provider
+            .WriteAsync(
+                new(
+                    [new ZLinkStoreCondition.Version(key, stored.Version)],
+                    [new ZLinkStoreMutation.Put(key, Encode(terminal), null)]
+                ),
+                cancellationToken
+            )
+            .ConfigureAwait(false);
+    }
+
+    private async ValueTask SettleLegacyAggregatesAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await RecoverAggregatesAsync(beforeConversion: true, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (ZLinkRelocationDataLostException error)
+        {
+            throw new ZLinkConfigurationException(error.Message);
+        }
+        catch (ZLinkFrameworkException error) when (error.Kind == ZLinkFrameworkErrorKind.DataLost)
+        {
+            throw new ZLinkConfigurationException(error.Message);
         }
     }
 }

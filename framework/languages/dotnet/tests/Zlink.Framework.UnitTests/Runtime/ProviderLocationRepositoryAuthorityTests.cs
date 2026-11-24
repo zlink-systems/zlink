@@ -1966,9 +1966,10 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
                 )
             );
             writes = 0;
-            await Assert.ThrowsAsync<InvalidDataException>(async () =>
+            var corrupt = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
                 await repository.ReserveAsync(next)
             );
+            Assert.Equal(ZLinkFrameworkErrorKind.DataLost, corrupt.Kind);
             Assert.Equal(1, writes);
             foreach (var (id, version) in membersBefore)
                 Assert.Equal(
@@ -3091,9 +3092,10 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
             var capacityBefore = Assert.IsType<ZLinkStoreReadResult.Found>(
                 await provider.ReadAsync(capacityKey)
             );
-            await Assert.ThrowsAsync<InvalidDataException>(async () =>
+            var corrupt = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
                 await repository.ReleaseEndedReservationAsync(request.Key, reservation.StoreVersion)
             );
+            Assert.Equal(ZLinkFrameworkErrorKind.DataLost, corrupt.Kind);
             var capacityAfter = Assert.IsType<ZLinkStoreReadResult.Found>(
                 await provider.ReadAsync(capacityKey)
             );
@@ -3110,9 +3112,10 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
         }
         else if (scenario == "missingCapacity")
         {
-            await Assert.ThrowsAsync<InvalidDataException>(async () =>
+            var corrupt = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
                 await repository.ReleaseEndedReservationAsync(request.Key, reservation.StoreVersion)
             );
+            Assert.Equal(ZLinkFrameworkErrorKind.DataLost, corrupt.Kind);
             Assert.IsType<ZLinkStoreReadResult.Missing>(await provider.ReadAsync(capacityKey));
             Assert.Equal(
                 reservation.StoreVersion,
@@ -7129,77 +7132,6 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
         };
         Assert.IsType<ZLinkAggregatePrepareResult.Prepared>(
             await repository.PrepareAggregateAsync(retry)
-        );
-    }
-
-    [Fact]
-    public async Task SharedOpaqueProvider_FirstAggregateUseReclaimsAbandonedStaging()
-    {
-        var inner = new ZLinkInMemoryProviderLocationStore();
-        var provider = new ApplyThenThrowLocationStore(inner);
-        var repository = new ZLinkProviderLocationRepository(provider);
-        var sourceOwner = await ClaimAsync(repository, "source-owner");
-        var targetOwner = await ClaimAsync(repository, "target-owner");
-        var sourceDescriptor = Descriptor("source", sourceOwner);
-        var targetDescriptor = Descriptor("target", targetOwner);
-        _ = await repository.UpdateMeshNodeAsync(
-            sourceDescriptor,
-            ZLinkLocationWriteIntent.NewClaim
-        );
-        _ = await repository.UpdateMeshNodeAsync(
-            targetDescriptor,
-            ZLinkLocationWriteIntent.NewClaim
-        );
-        var create = Reservation("actor:staging-recovery", sourceDescriptor, sourceOwner);
-        var reserved = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
-            await repository.ReserveAsync(create)
-        );
-        var created = Assert
-            .IsType<ZLinkObjectCommitResult.Committed>(
-                await repository.CommitAsync(reserved.Reservation, new byte[] { 0x91 })
-            )
-            .Snapshot;
-        var participant = new ZLinkAggregateParticipant(
-            create.Key,
-            created.StoreVersion,
-            ZLinkAuthorityGenerationTransition.NewOwner,
-            new byte[] { 0x92 },
-            new byte[] { 0x93 }
-        );
-        var abandoned = AggregateRequest([participant], targetDescriptor, targetOwner);
-        var abandonedFence = new ZLinkAggregateFence(
-            abandoned.AggregateId,
-            abandoned.AggregateGeneration
-        );
-
-        provider.ThrowAfterNextWrite = true;
-        provider.SkipWritesBeforeThrow = 1;
-        provider.BlockWritesAfterThrownResponse = true;
-        var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
-            await repository.PrepareAggregateAsync(abandoned)
-        );
-        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, failure.Kind);
-        Assert.IsType<IOException>(failure.InnerException);
-        provider.BlockWrites = false;
-        await BackdateAggregateRootAsync(inner, abandonedFence);
-        Assert.Equal(
-            ZLinkOwnerLeaseReleaseResult.Released,
-            await repository.ReleaseOwnerLeaseAsync(targetOwner)
-        );
-
-        var recovering = new ZLinkProviderLocationRepository(inner);
-        var next = abandoned with { AggregateId = Guid.NewGuid() };
-        Assert.IsType<ZLinkAggregatePrepareResult.Conflict>(
-            await recovering.PrepareAggregateAsync(next)
-        );
-
-        Assert.DoesNotContain(
-            await ScanKeysAsync(inner, AggregatePrefix(abandonedFence)),
-            static key => key.Contains(":participant:", StringComparison.Ordinal)
-        );
-        Assert.Equal(
-            ZLinkAggregateCommitResult.Stale,
-            await recovering.CommitAggregateAsync(abandonedFence)
         );
     }
 

@@ -691,23 +691,22 @@ internal sealed partial class ZLinkProviderLocationRepository
                 .ConfigureAwait(false);
             if (result is ZLinkStoreWriteResult.Conflict)
             {
-                // The SPI reports a single Conflict for all conditions. Recheck only
-                // the provider's capacity predicates to distinguish a full target.
                 if (
                     capacityConditions.Count != 0
-                    && await _provider
-                        .WriteAsync(
-                            new ZLinkStoreWriteRequest(capacityConditions, []),
+                    && await ReservationAuthorityMatchesAsync(
+                            new ZLinkStoreCondition.Missing(metaKey),
+                            target,
                             cancellationToken
                         )
-                        .ConfigureAwait(false) is ZLinkStoreWriteResult.Conflict
+                        .ConfigureAwait(false)
+                    && await IsReservationCapacityExceededAsync(
+                            target.Descriptor,
+                            capacityConditions,
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false)
                 )
-                {
-                    var raced = await ReadAuthorityRecordAsync(request.Key, cancellationToken)
-                        .ConfigureAwait(false);
-                    if (raced is null)
-                        return new ZLinkObjectReserveResult.PlacementCapacityExhausted();
-                }
+                    return new ZLinkObjectReserveResult.PlacementCapacityExhausted();
                 continue;
             }
             var applied = (ZLinkStoreWriteResult.Applied)result;
@@ -1534,22 +1533,43 @@ internal sealed partial class ZLinkProviderLocationRepository
                     )
                         break;
 
-                    // A descriptor renewal can change its version during staging.
-                    // Keep the existing root and participant fences while checking the renewed target.
-                    var refreshed = await ReadTargetAsync().ConfigureAwait(false);
-                    if (
-                        refreshed is null
-                        || refreshed.DescriptorCondition == target.DescriptorCondition
-                    )
-                        break;
-                    var refreshedCapacity = CapacityReservationConditions(
-                        refreshed.Descriptor,
-                        request.Capacity
-                    );
-                    if (refreshedCapacity is null)
-                        break;
-                    target = refreshed;
-                    capacityConditions = refreshedCapacity;
+                    var sameAuthority = await ReservationAuthorityMatchesAsync(
+                            new ZLinkStoreCondition.Version(key, staging.Version),
+                            target,
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false);
+                    if (sameAuthority)
+                    {
+                        if (
+                            capacityConditions.Count == 0
+                            || await IsReservationCapacityExceededAsync(
+                                    target.Descriptor,
+                                    capacityConditions,
+                                    cancellationToken
+                                )
+                                .ConfigureAwait(false)
+                        )
+                            break;
+                    }
+                    else
+                    {
+                        // A renewed descriptor can still admit the staged aggregate.
+                        var refreshed = await ReadTargetAsync().ConfigureAwait(false);
+                        if (
+                            refreshed is null
+                            || refreshed.DescriptorCondition == target.DescriptorCondition
+                        )
+                            break;
+                        var refreshedCapacity = CapacityReservationConditions(
+                            refreshed.Descriptor,
+                            request.Capacity
+                        );
+                        if (refreshedCapacity is null)
+                            break;
+                        target = refreshed;
+                        capacityConditions = refreshedCapacity;
+                    }
                     await DelayWriteConflictRetryAsync(retry, retryDeadline, cancellationToken)
                         .ConfigureAwait(false);
                 }
@@ -2250,14 +2270,14 @@ internal sealed partial class ZLinkProviderLocationRepository
         }
     }
 
-    private async ValueTask AbortAggregateStagingAsync(
+    private async ValueTask<bool> AbortAggregateStagingAsync(
         ZLinkAggregateFence fence,
         StoredRecord<AggregateRecord> staging,
         CancellationToken cancellationToken
     )
     {
         if (staging.Record.Status != AggregateStatus.Staging)
-            return;
+            return false;
         var key = AggregateKey(fence);
         var result = await _provider
             .WriteAsync(
@@ -2285,10 +2305,14 @@ internal sealed partial class ZLinkProviderLocationRepository
                         .ConfigureAwait(false)
                 )?.Record;
         if (aborted?.Status != AggregateStatus.Aborted)
-            return;
-        await ReleaseAggregateParticipantFencesAsync(fence, aborted, cancellationToken)
-            .ConfigureAwait(false);
-        await CleanupAggregateParticipantsAsync(fence, cancellationToken).ConfigureAwait(false);
+            return false;
+        if (!aborted.ParticipantsCleaned)
+        {
+            await ReleaseAggregateParticipantFencesAsync(fence, aborted, cancellationToken)
+                .ConfigureAwait(false);
+            await CleanupAggregateParticipantsAsync(fence, cancellationToken).ConfigureAwait(false);
+        }
+        return result is ZLinkStoreWriteResult.Applied;
     }
 
     private async ValueTask<ZLinkAggregatePrepareResult?> ReconcileOrAbortClaimedAggregatePrepareAsync(
@@ -2589,127 +2613,233 @@ internal sealed partial class ZLinkProviderLocationRepository
         {
             if (aggregateStagingRecoveryCompleted != 0)
                 return;
-            var abandoned =
-                new List<(ZLinkAggregateFence Fence, StoredRecord<AggregateRecord> Aggregate)>();
-            var preparedToAbort = new List<ZLinkAggregateFence>();
-            var terminalToFinish =
-                new List<(ZLinkAggregateFence Fence, AggregateRecord Aggregate)>();
-            ZLinkStoreScanCursor? cursor = null;
-            var expiredRestarts = 0;
-            do
-            {
-                var scan = await _provider
-                    .ScanAsync(
-                        new ZLinkStoreScanRequest(AggregatePrefix, cursor, 256),
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
-                if (scan is ZLinkStoreScanResult.Expired)
-                {
-                    if (++expiredRestarts > 8)
-                        throw new IOException(
-                            "The Location Store aggregate recovery scan expired repeatedly."
-                        );
-                    abandoned.Clear();
-                    preparedToAbort.Clear();
-                    terminalToFinish.Clear();
-                    cursor = null;
-                    continue;
-                }
-                var page = ((ZLinkStoreScanResult.Page)scan).Value;
-                foreach (var pair in page.Items)
-                {
-                    if (pair.Key.Value.Contains(":participant:", StringComparison.Ordinal))
-                        continue;
-                    if (pair.Key.Value.Contains(":inventory:", StringComparison.Ordinal))
-                        continue;
-                    AggregateRecord aggregate;
-                    try
-                    {
-                        aggregate = Decode<AggregateRecord>(pair.Value.Bytes);
-                    }
-                    catch (Exception error)
-                        when (error
-                                is JsonException
-                                    or InvalidDataException
-                                    or NotSupportedException
-                                    or ArgumentException
-                        )
-                    {
-                        throw new ZLinkRelocationDataLostException(
-                            $"Aggregate durable root '{pair.Key.Value}' cannot be decoded ({error.GetType().Name})."
-                        );
-                    }
-                    var fence = new ZLinkAggregateFence(
-                        aggregate.Header.AggregateId,
-                        aggregate.Header.AggregateGeneration
-                    );
-                    if (aggregate.Status == AggregateStatus.Committed)
-                    {
-                        if (!aggregate.ParticipantsCleaned)
-                            terminalToFinish.Add((fence, aggregate));
-                        continue;
-                    }
-                    if (aggregate.Status == AggregateStatus.Aborted)
-                    {
-                        if (!aggregate.ParticipantsCleaned)
-                            terminalToFinish.Add((fence, aggregate));
-                        continue;
-                    }
-                    if (
-                        aggregate.StagedAt > pair.Value.StoreNow - AggregateStagingRetention
-                        || await ReadLiveOwnerAsync(aggregate.Header.TargetOwner, cancellationToken)
-                            .ConfigureAwait(false)
-                            is not null
-                    )
-                        continue;
-                    if (aggregate.Status == AggregateStatus.Staging)
-                        abandoned.Add(
-                            (
-                                fence,
-                                new StoredRecord<AggregateRecord>(
-                                    aggregate,
-                                    pair.Value.Version,
-                                    pair.Value.StoreNow
-                                )
-                            )
-                        );
-                    else if (aggregate.Status == AggregateStatus.Prepared)
-                        preparedToAbort.Add(fence);
-                }
-                cursor = page.NextCursor;
-            } while (cursor is not null);
-            foreach (var item in abandoned)
-                await AbortAggregateStagingAsync(item.Fence, item.Aggregate, cancellationToken)
-                    .ConfigureAwait(false);
-            foreach (var fence in preparedToAbort)
-                await AbortAggregateAsync(fence, cancellationToken).ConfigureAwait(false);
-            foreach (var item in terminalToFinish)
-            {
-                if (item.Aggregate.Status == AggregateStatus.Committed)
-                    await NormalizeCommittedAggregateAsync(
-                            item.Fence,
-                            item.Aggregate,
-                            cancellationToken
-                        )
-                        .ConfigureAwait(false);
-                else
-                {
-                    await ReleaseAggregateParticipantFencesAsync(
-                            item.Fence,
-                            item.Aggregate,
-                            cancellationToken
-                        )
-                        .ConfigureAwait(false);
-                    await CleanupAggregateParticipantsAsync(item.Fence, cancellationToken)
-                        .ConfigureAwait(false);
-                }
-            }
+            await RecoverAggregatesAsync(beforeConversion: false, cancellationToken)
+                .ConfigureAwait(false);
             Volatile.Write(ref aggregateStagingRecoveryCompleted, 1);
         }
         finally
         {
             aggregateRecoveryGate.Release();
+        }
+    }
+
+    private async ValueTask RecoverAggregatesAsync(
+        bool beforeConversion,
+        CancellationToken cancellationToken
+    )
+    {
+        var recovery =
+            new List<(ZLinkAggregateFence Fence, StoredRecord<AggregateRecord> Stored)>();
+        ZLinkStoreScanCursor? cursor = null;
+        var expiredRestarts = 0;
+        while (true)
+        {
+            var scan = await _provider
+                .ScanAsync(
+                    new ZLinkStoreScanRequest(AggregatePrefix, cursor, 256),
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+            if (scan is ZLinkStoreScanResult.Expired)
+            {
+                if (++expiredRestarts > 8)
+                    throw new IOException(
+                        "The Location Store aggregate recovery scan expired repeatedly."
+                    );
+                recovery.Clear();
+                cursor = null;
+                continue;
+            }
+            var page = ((ZLinkStoreScanResult.Page)scan).Value;
+            foreach (var pair in page.Items)
+            {
+                if (
+                    pair.Key.Value.Contains(":participant:", StringComparison.Ordinal)
+                    || pair.Key.Value.Contains(":inventory:", StringComparison.Ordinal)
+                )
+                    continue;
+
+                AggregateRecord aggregate;
+                try
+                {
+                    aggregate = Decode<AggregateRecord>(pair.Value.Bytes);
+                }
+                catch (Exception error)
+                    when (error
+                            is JsonException
+                                or InvalidDataException
+                                or NotSupportedException
+                                or ArgumentException
+                    )
+                {
+                    throw new ZLinkRelocationDataLostException(
+                        $"Aggregate durable root '{pair.Key.Value}' cannot be decoded ({error.GetType().Name})."
+                    );
+                }
+                if (aggregate.Header is null || !Enum.IsDefined(aggregate.Status))
+                    throw new ZLinkRelocationDataLostException(
+                        $"Aggregate durable root '{pair.Key.Value}' has invalid metadata."
+                    );
+                var fence = new ZLinkAggregateFence(
+                    aggregate.Header.AggregateId,
+                    aggregate.Header.AggregateGeneration
+                );
+                if (
+                    beforeConversion
+                    && (
+                        fence.AggregateId == Guid.Empty
+                        || fence.AggregateGeneration == 0
+                        || AggregateKey(fence) != pair.Key
+                    )
+                )
+                    throw new ZLinkRelocationDataLostException(
+                        $"Aggregate durable root '{pair.Key.Value}' has a mismatched identity."
+                    );
+
+                if (aggregate.Status is AggregateStatus.Committed or AggregateStatus.Aborted)
+                {
+                    if (aggregate.ParticipantsCleaned)
+                        continue;
+                }
+                else if (
+                    aggregate.StagedAt > pair.Value.StoreNow - AggregateStagingRetention
+                    || await ReadLiveOwnerAsync(aggregate.Header.TargetOwner, cancellationToken)
+                        .ConfigureAwait(false)
+                        is not null
+                )
+                {
+                    if (beforeConversion)
+                    {
+                        // A concurrent converter can enable v12 traffic after our first marker read.
+                        if (
+                            await _provider
+                                .ReadAsync(FormatKey, cancellationToken)
+                                .ConfigureAwait(false) is ZLinkStoreReadResult.Found
+                        )
+                            return;
+                        throw new ZLinkConfigurationException(
+                            $"v11 aggregate '{pair.Key.Value}' is still eligible to relocate."
+                        );
+                    }
+                    continue;
+                }
+
+                recovery.Add((fence, new(aggregate, pair.Value.Version, pair.Value.StoreNow)));
+            }
+            cursor = page.NextCursor;
+            if (cursor is null)
+                break;
+        }
+
+        var withoutParticipants = new HashSet<ZLinkAggregateFence>();
+        if (beforeConversion && recovery.Count != 0)
+        {
+            if (
+                await _provider.ReadAsync(FormatKey, cancellationToken).ConfigureAwait(false)
+                is ZLinkStoreReadResult.Found
+            )
+                return;
+
+            // Verify the durable inputs before issuing any recovery writes.
+            for (var index = 0; index < recovery.Count; index++)
+            {
+                var (fence, stored) = recovery[index];
+                if (
+                    await CanFinishLegacyWithoutParticipantsAsync(
+                            fence,
+                            stored.Record,
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false)
+                )
+                {
+                    withoutParticipants.Add(fence);
+                    continue;
+                }
+                try
+                {
+                    await ReadAndValidateAggregateInventoryAsync(
+                            fence,
+                            stored.Record,
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false);
+                }
+                catch (ZLinkRelocationDataLostException)
+                {
+                    var completed = await ReadLegacyTerminalWithoutParticipantsAsync(
+                            fence,
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false);
+                    if (completed is null)
+                        throw;
+                    recovery[index] = (fence, completed);
+                    withoutParticipants.Add(fence);
+                }
+            }
+        }
+
+        foreach (var (fence, stored) in recovery)
+        {
+            try
+            {
+                if (withoutParticipants.Contains(fence))
+                    await FinishLegacyWithoutParticipantsAsync(fence, stored, cancellationToken)
+                        .ConfigureAwait(false);
+                else
+                    switch (stored.Record.Status)
+                    {
+                        case AggregateStatus.Staging:
+                            await AbortAggregateStagingAsync(fence, stored, cancellationToken)
+                                .ConfigureAwait(false);
+                            break;
+                        case AggregateStatus.Prepared:
+                        case AggregateStatus.Aborted:
+                            await AbortAggregateAsync(fence, beforeConversion, cancellationToken)
+                                .ConfigureAwait(false);
+                            break;
+                        case AggregateStatus.Committed:
+                            await NormalizeCommittedAggregateAsync(
+                                    fence,
+                                    stored.Record,
+                                    cancellationToken
+                                )
+                                .ConfigureAwait(false);
+                            break;
+                    }
+            }
+            catch (ZLinkRelocationDataLostException) when (beforeConversion)
+            {
+                var completed = await ReadLegacyTerminalWithoutParticipantsAsync(
+                        fence,
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
+                if (completed is null)
+                    throw;
+                await FinishLegacyWithoutParticipantsAsync(fence, completed, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            if (!beforeConversion)
+                continue;
+            var settled = await ReadRecordAsync<AggregateRecord>(
+                    AggregateKey(fence),
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+            if (
+                settled is not null
+                && (
+                    settled.Record.Status
+                        is not (AggregateStatus.Aborted or AggregateStatus.Committed)
+                    || !settled.Record.ParticipantsCleaned
+                )
+            )
+                throw new ZLinkConfigurationException(
+                    $"v11 aggregate '{fence.AggregateId:N}' could not be settled."
+                );
         }
     }
 
@@ -4104,76 +4234,111 @@ internal sealed partial class ZLinkProviderLocationRepository
                 .ConfigureAwait(false);
     }
 
-    public async ValueTask<ZLinkAggregateAbortResult> AbortAggregateAsync(
+    public ValueTask<ZLinkAggregateAbortResult> AbortAggregateAsync(
         ZLinkAggregateFence fence,
         CancellationToken cancellationToken = default
+    ) => AbortAggregateAsync(fence, beforeConversion: false, cancellationToken);
+
+    private async ValueTask<ZLinkAggregateAbortResult> AbortAggregateAsync(
+        ZLinkAggregateFence fence,
+        bool beforeConversion,
+        CancellationToken cancellationToken
     )
     {
         var key = AggregateKey(fence);
-        var aggregate = await ReadRecordAsync<AggregateRecord>(key, cancellationToken)
-            .ConfigureAwait(false);
-        if (aggregate is null)
-            return ZLinkAggregateAbortResult.Stale;
-        if (aggregate.Record.Status == AggregateStatus.Aborted)
+        while (true)
         {
-            await ReleaseAggregateParticipantFencesAsync(fence, aggregate.Record, cancellationToken)
+            var aggregate = await ReadRecordAsync<AggregateRecord>(key, cancellationToken)
                 .ConfigureAwait(false);
-            await CleanupAggregateParticipantsAsync(fence, cancellationToken).ConfigureAwait(false);
-            return ZLinkAggregateAbortResult.AlreadyAborted;
-        }
-        if (aggregate.Record.Status == AggregateStatus.Staging)
-        {
-            var stagedAbort = await _provider
-                .WriteAsync(
-                    new ZLinkStoreWriteRequest(
-                        [new ZLinkStoreCondition.Version(key, aggregate.Version)],
-                        [
-                            new ZLinkStoreMutation.Put(
-                                key,
-                                Encode(aggregate.Record with { Status = AggregateStatus.Aborted }),
-                                null
-                            ),
-                        ]
-                    ),
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-            if (stagedAbort is not ZLinkStoreWriteResult.Applied)
+            if (aggregate is null)
                 return ZLinkAggregateAbortResult.Stale;
+            if (aggregate.Record.Status == AggregateStatus.Aborted)
+            {
+                if (aggregate.Record.ParticipantsCleaned)
+                    return ZLinkAggregateAbortResult.AlreadyAborted;
+                await ReleaseAggregateParticipantFencesAsync(
+                        fence,
+                        aggregate.Record,
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
+                await CleanupAggregateParticipantsAsync(fence, cancellationToken)
+                    .ConfigureAwait(false);
+                return ZLinkAggregateAbortResult.AlreadyAborted;
+            }
+            if (aggregate.Record.Status == AggregateStatus.Staging)
+                return await AbortAggregateStagingAsync(fence, aggregate, cancellationToken)
+                    .ConfigureAwait(false)
+                    ? ZLinkAggregateAbortResult.Aborted
+                    : ZLinkAggregateAbortResult.Stale;
+            if (aggregate.Record.Status == AggregateStatus.Committed)
+                return ZLinkAggregateAbortResult.Stale;
+            // Abort needs the target capacity vector from the durable aggregate
+            // header. Participant meta is not authoritative for fence release and
+            // may already be missing after a partial cleanup.
+            var header = aggregate.Record.Header;
+            var conditions = new List<ZLinkStoreCondition>
+            {
+                new ZLinkStoreCondition.Version(key, aggregate.Version),
+            };
+            var mutations = new List<ZLinkStoreMutation>
+            {
+                new ZLinkStoreMutation.Put(
+                    key,
+                    Encode(aggregate.Record with { Status = AggregateStatus.Aborted }),
+                    null
+                ),
+            };
+            if (beforeConversion)
+            {
+                try
+                {
+                    await AppendLegacyCapacityReleaseAsync(
+                            header,
+                            conditions,
+                            mutations,
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false);
+                }
+                catch (ZLinkConfigurationException)
+                {
+                    if (await MatchesAsync(conditions[0], cancellationToken).ConfigureAwait(false))
+                        throw;
+                    continue;
+                }
+            }
+            else
+            {
+                await EnsureStoreFormatAsync(cancellationToken).ConfigureAwait(false);
+                AddCapacityMutations(
+                    mutations,
+                    header.TargetDescriptor,
+                    header.Capacity,
+                    pending: -1
+                );
+            }
+            var result = await _provider
+                .WriteAsync(new ZLinkStoreWriteRequest(conditions, mutations), cancellationToken)
+                .ConfigureAwait(false);
+            if (result is not ZLinkStoreWriteResult.Applied)
+            {
+                if (beforeConversion && result is ZLinkStoreWriteResult.Conflict)
+                {
+                    var changed = false;
+                    foreach (var condition in conditions)
+                        changed |= !await MatchesAsync(condition, cancellationToken)
+                            .ConfigureAwait(false);
+                    if (changed)
+                        continue;
+                }
+                return ZLinkAggregateAbortResult.Stale;
+            }
             await ReleaseAggregateParticipantFencesAsync(fence, aggregate.Record, cancellationToken)
                 .ConfigureAwait(false);
             await CleanupAggregateParticipantsAsync(fence, cancellationToken).ConfigureAwait(false);
             return ZLinkAggregateAbortResult.Aborted;
         }
-        if (aggregate.Record.Status == AggregateStatus.Committed)
-            return ZLinkAggregateAbortResult.Stale;
-        // Abort needs the target capacity vector from the durable aggregate
-        // header. Participant meta is not authoritative for fence release and
-        // may already be missing after a partial cleanup.
-        var header = aggregate.Record.Header;
-        await EnsureStoreFormatAsync(cancellationToken).ConfigureAwait(false);
-        var conditions = new List<ZLinkStoreCondition>
-        {
-            new ZLinkStoreCondition.Version(key, aggregate.Version),
-        };
-        var mutations = new List<ZLinkStoreMutation>
-        {
-            new ZLinkStoreMutation.Put(
-                key,
-                Encode(aggregate.Record with { Status = AggregateStatus.Aborted }),
-                null
-            ),
-        };
-        AddCapacityMutations(mutations, header.TargetDescriptor, header.Capacity, pending: -1);
-        var result = await _provider
-            .WriteAsync(new ZLinkStoreWriteRequest(conditions, mutations), cancellationToken)
-            .ConfigureAwait(false);
-        if (result is not ZLinkStoreWriteResult.Applied)
-            return ZLinkAggregateAbortResult.Stale;
-        await ReleaseAggregateParticipantFencesAsync(fence, aggregate.Record, cancellationToken)
-            .ConfigureAwait(false);
-        await CleanupAggregateParticipantsAsync(fence, cancellationToken).ConfigureAwait(false);
-        return ZLinkAggregateAbortResult.Aborted;
     }
 
     private async ValueTask<ZLinkObjectCommitResult> CompleteCommitAsync(

@@ -85,6 +85,58 @@ internal sealed partial class ZLinkProviderLocationRepository
         return conditions;
     }
 
+    private async ValueTask<bool> ReservationAuthorityMatchesAsync(
+        ZLinkStoreCondition authority,
+        StoredTarget target,
+        CancellationToken cancellationToken
+    ) =>
+        await MatchesAsync(authority, cancellationToken).ConfigureAwait(false)
+        && await MatchesAsync(target.DescriptorCondition, cancellationToken).ConfigureAwait(false)
+        && await MatchesAsync(target.OwnerCondition, cancellationToken).ConfigureAwait(false);
+
+    private async ValueTask<bool> MatchesAsync(
+        ZLinkStoreCondition condition,
+        CancellationToken cancellationToken
+    )
+    {
+        switch (condition)
+        {
+            case ZLinkStoreCondition.Missing missing:
+                return await _provider
+                        .ReadAsync(missing.Key, cancellationToken)
+                        .ConfigureAwait(false) is ZLinkStoreReadResult.Missing;
+            case ZLinkStoreCondition.Version version:
+                return await _provider
+                        .ReadAsync(version.Key, cancellationToken)
+                        .ConfigureAwait(false)
+                        is ZLinkStoreReadResult.Found current
+                    && current.Value.Version == version.Expected;
+            case ZLinkStoreCondition.Value value:
+                return await _provider.ReadAsync(value.Key, cancellationToken).ConfigureAwait(false)
+                        is ZLinkStoreReadResult.Found found
+                    && found.Value.Bytes.Span.SequenceEqual(value.Expected.Span);
+            default:
+                throw new ArgumentOutOfRangeException(nameof(condition));
+        }
+    }
+
+    private async ValueTask<bool> IsReservationCapacityExceededAsync(
+        ZLinkMeshNodeDescriptor descriptor,
+        IReadOnlyList<ZLinkStoreCondition> conditions,
+        CancellationToken cancellationToken
+    )
+    {
+        var result = await _provider
+            .WriteAsync(new(conditions, []), cancellationToken)
+            .ConfigureAwait(false);
+        if (result is not ZLinkStoreWriteResult.Conflict)
+            return false;
+        Diagnostics.ZLinkFrameworkDebugLog.SpotDiscovery(
+            $"eligible_target_rejected reason=capacity_exceeded mesh={descriptor.MeshName} rid={descriptor.Rid}"
+        );
+        return true;
+    }
+
     private static void AddCapacityMutations(
         ICollection<ZLinkStoreMutation> mutations,
         ZLinkPlacementAllocation allocation,

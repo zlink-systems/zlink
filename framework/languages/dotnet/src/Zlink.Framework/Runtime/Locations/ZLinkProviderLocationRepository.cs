@@ -1210,7 +1210,8 @@ internal sealed partial class ZLinkProviderLocationRepository(
                 throw;
             }
             if (result is ZLinkStoreWriteResult.Corrupt)
-                throw new InvalidDataException(
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.DataLost,
                     "The Location Store capacity counter is inconsistent."
                 );
             return result;
