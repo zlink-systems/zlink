@@ -263,6 +263,8 @@ Framework는 MeshNode를 다음 순서로 시작한다.
    ID를 발급하고 instance를 초기화한다. Initialization이 끝나기 전에는 descriptor와
    resolver에 Entry Spot을 공개하지 않는다. 이 단계의 Fixed RID 재claim 대기는
    [§3.3](#33-fixed-rid)을 따른다.
+   Location Store 형식 전환이 끝나지 않은 Store면 이 단계의 다른 Store 작업보다 먼저
+   [Location Store §8.1](../05-location-relocation/02-location-store-redis.ko.md#81-v11에서-v12로-전환)을 실행한다.
 3. ROUTER를 bind한 뒤 다른 peer에 알릴 실제 endpoint를 확정한다.
 4. 필요한 정보를 모두 포함한 MeshNode descriptor를 공개하고 어떤 peer와 연결해야
    하는지 계산한다.

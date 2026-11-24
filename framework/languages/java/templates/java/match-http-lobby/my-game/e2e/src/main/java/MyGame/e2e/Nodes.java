@@ -130,7 +130,7 @@ public final class Nodes implements AutoCloseable {
                         .filter(entry -> entry.getValue().equals("lobby"))
                         .map(Map.Entry::getKey)
                         .findFirst()
-                        .orElseThrow(() -> new IllegalStateException("HTTP lobby is missing"));
+                        .orElseThrow(() -> new IllegalStateException("API node is missing"));
         nodes.get(id).stop();
         var ready = startNode(id);
         lobbyEndpoint = ready.path("httpEndpoint").asText();

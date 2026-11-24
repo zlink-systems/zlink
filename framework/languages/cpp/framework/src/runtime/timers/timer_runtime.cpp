@@ -138,15 +138,6 @@ timer_t spot_context_t::add_timer_erased (
                                      "SPOT timer max catch-up ticks must be between 1 and INT_MAX");
     }
 
-    const auto duplicate = std::any_of (_state->timers.begin (), _state->timers.end (),
-                                        [&] (const std::shared_ptr<detail::timer_state_t> &timer) {
-                                            return timer->name == name && !timer->disposed;
-                                        });
-    if (duplicate) {
-        throw framework_exception_t (framework_error_kind_t::protocol_error,
-                                     "duplicate SPOT timer registration");
-    }
-
     auto state = std::make_shared<detail::timer_state_t> ();
     state->name = std::move (name);
     state->period = period;
@@ -183,6 +174,15 @@ timer_t spot_context_t::add_timer_erased (
                                   detail::timer_runtime_t::post_fire_count (
                                     context, state, timer_queue, fire_count);
                               });
+    const auto previous =
+      std::find_if (_state->timers.rbegin (), _state->timers.rend (), [&state] (const auto &timer) {
+          return timer->name == state->name && !timer->disposed;
+      });
+    if (previous != _state->timers.rend ()) {
+        // Retire the previous generation only after the new timer started. Its cancellation
+        // may complete only after the callback performing this replacement returns.
+        (void) timer_t (*previous).cancel ();
+    }
     _state->timers.push_back (state);
     return timer_t (state);
 }
@@ -312,7 +312,7 @@ template <typename T> void append_observation (std::deque<T> &history, T value)
     history.push_back (std::move (value));
 }
 
-std::vector<timer_tick_t> make_ticks (timer_state_t &state, std::uint64_t fire_count)
+std::vector<timer_tick_t> make_ticks (const timer_state_t &state, std::uint64_t fire_count)
 {
     const auto previous_index = state.last_scheduled_index;
     const auto available = std::max<std::uint64_t> (1, fire_count);
@@ -335,20 +335,27 @@ std::vector<timer_tick_t> make_ticks (timer_state_t &state, std::uint64_t fire_c
     for (std::uint64_t offset = 0; offset < delivery_count; ++offset) {
         const auto scheduled_index = first_index + offset;
         const auto skipped_ticks = offset == 0 ? scheduled_index - previous_index - 1 : 0;
-        ++state.delivery_index;
         timer_tick_t tick{state.name,
-                          state.delivery_index,
+                          state.delivery_index + offset + 1,
                           scheduled_index,
                           state.period,
                           state.period * scheduled_index,
                           started_elapsed,
                           started_elapsed - state.period * scheduled_index,
                           skipped_ticks};
-        append_observation (state.delivered_ticks, tick);
         ticks.push_back (std::move (tick));
     }
-    state.last_scheduled_index = ticks.back ().scheduled_index;
     return ticks;
+}
+
+bool try_start_tick (timer_state_t &state, const timer_tick_t &tick)
+{
+    if (state.disposed.load (std::memory_order_acquire))
+        return false;
+    state.delivery_index = tick.delivery_index;
+    state.last_scheduled_index = tick.scheduled_index;
+    append_observation (state.delivered_ticks, tick);
+    return true;
 }
 
 void record_timer_failure (const std::shared_ptr<spot_context_state_t> &context,
@@ -373,62 +380,71 @@ timer_runtime_t::dispatch_fire_count (timer_t &timer,
                                       std::uint64_t fire_count,
                                       std::function<void (const timer_tick_t &)> handler) const
 {
-    if (timer.is_disposed ()) {
+    const auto state = timer._state;
+    if (!state) {
         return detail::boundary_failure<timer_tick_t> (detail::boundary_error_t::closed,
                                                        "SPOT timer is disposed");
     }
     {
-        std::lock_guard lock (timer._state->mutex);
-        if (timer._state->disposed.load (std::memory_order_acquire)) {
+        std::lock_guard lock (state->mutex);
+        if (state->disposed.load (std::memory_order_acquire)) {
             return detail::boundary_failure<timer_tick_t> (detail::boundary_error_t::closed,
                                                            "SPOT timer is disposed");
         }
-        if (timer._state->running) {
+        if (state->running) {
             return result_t<timer_tick_t>::failure (framework_error_kind_t::rejected,
                                                     "SPOT timer callback is already running");
         }
-        timer._state->running = true;
+        state->running = true;
     }
     if (!_context->admit (true)) {
         {
-            std::lock_guard lock (timer._state->mutex);
-            timer._state->running = false;
+            std::lock_guard lock (state->mutex);
+            state->running = false;
         }
-        complete_cancel_if_ready (timer._state);
+        complete_cancel_if_ready (state);
         return detail::result_access_t::failure<timer_tick_t> (_context->admission_error ());
     }
-    auto reset_running = [&timer, this] {
+    auto reset_running = [&state, this] {
         _context->leave_callback ();
         {
-            std::lock_guard lock (timer._state->mutex);
-            timer._state->running = false;
+            std::lock_guard lock (state->mutex);
+            state->running = false;
         }
-        complete_cancel_if_ready (timer._state);
+        complete_cancel_if_ready (state);
     };
 
     try {
-        auto ticks = make_ticks (*timer._state, fire_count);
-        for (const auto &tick : ticks)
+        auto ticks = make_ticks (*state, fire_count);
+        timer_tick_t *last_started = nullptr;
+        for (auto &tick : ticks) {
+            if (!try_start_tick (*state, tick))
+                break;
+            last_started = &tick;
             if (handler)
                 handler (tick);
+        }
         reset_running ();
-        return result_t<timer_tick_t>::success (std::move (ticks.back ()));
+        if (last_started)
+            return result_t<timer_tick_t>::success (std::move (*last_started));
+        return detail::boundary_failure<timer_tick_t> (detail::boundary_error_t::closed,
+                                                       "SPOT timer is disposed");
     }
     catch (const std::exception &error) {
-        const auto stopped = timer._state->options.stop_on_unhandled_exception;
-        record_timer_failure (_context, timer._state, stopped, error.what ());
+        const auto stopped = state->options.stop_on_unhandled_exception;
+        record_timer_failure (_context, state, stopped, error.what ());
         if (stopped) {
-            timer._state->disposed = true;
+            state->disposed = true;
         }
         reset_running ();
         return result_t<timer_tick_t>::failure (framework_error_kind_t::internal_failure,
                                                 error.what ());
     }
     catch (...) {
-        const auto stopped = timer._state->options.stop_on_unhandled_exception;
-        record_timer_failure (_context, timer._state, stopped, "unknown timer handler failure");
+        const auto stopped = state->options.stop_on_unhandled_exception;
+        record_timer_failure (_context, state, stopped, "unknown timer handler failure");
         if (stopped) {
-            timer._state->disposed = true;
+            state->disposed = true;
         }
         reset_running ();
         return result_t<timer_tick_t>::failure (framework_error_kind_t::internal_failure,
@@ -537,13 +553,20 @@ task_t<timer_tick_t> timer_runtime_t::dispatch_fire_count_async (
             throw framework_exception_t (framework_error_kind_t::protocol_error,
                                          "SPOT timer handler activation is no longer available");
         }
-        for (const auto &tick : ticks) {
+        timer_tick_t *last_started = nullptr;
+        for (auto &tick : ticks) {
+            if (!try_start_tick (*state, tick))
+                break;
+            last_started = &tick;
             auto handler_task = state->handler_invoker (
               spot_instance.get (), handler_instance.get (), *channel_runtime->serializers, tick);
             (void) co_await handler_task;
         }
         reset_running ();
-        co_return result_t<timer_tick_t>::success (std::move (ticks.back ()));
+        if (last_started)
+            co_return result_t<timer_tick_t>::success (std::move (*last_started));
+        co_return detail::boundary_failure<timer_tick_t> (detail::boundary_error_t::closed,
+                                                          "SPOT timer is disposed");
     }
     catch (const framework_exception_t &error) {
         const auto stopped = state->options.stop_on_unhandled_exception;

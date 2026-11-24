@@ -110,7 +110,7 @@ internal static class Scenarios
         var identity = await client.SessionAsync(ct);
         Require(
             before.ZoneId == "zone-3" && before.NodeId == "zoneA",
-            "Cross did not start in Zone node A."
+            "Cross did not start in play node A (zone)."
         );
 
         var tooLarge = await client.MoveRejectedAsync(ZonePositionDomain.MaxStep + 1, 1, ct);
@@ -129,7 +129,7 @@ internal static class Scenarios
         SameActor(identity, await client.SessionAsync(ct));
         Require(
             after.ZoneId == "zone-4" && after.NodeId == "zoneB" && after.X == 306,
-            "Cross did not relocate to Zone node B after multiple accepted moves."
+            "Cross did not relocate to play node B (zone) after multiple accepted moves."
         );
         Require(!client.Disconnected, "Cross disconnected the session.");
 
@@ -159,7 +159,7 @@ internal static class Scenarios
         var dungeon = await client.DungeonAsync("dungeon-" + Guid.NewGuid().ToString("N"), ct);
         Require(
             dungeon.NodeId == "instance",
-            "Dungeon GetOrCreate did not resolve to the Instance node."
+            "Dungeon GetOrCreate did not resolve to the play node (dungeon)."
         );
     }
 
@@ -178,7 +178,7 @@ internal static class Scenarios
             "border-" + Guid.NewGuid().ToString("N"),
             ct
         );
-        Require(observed.NodeId == "zoneB", "Border observer did not start on Zone node B.");
+        Require(observed.NodeId == "zoneB", "Border observer did not start on play node B (zone).");
 
         var appearedTask = observer
             .Connector.WaitFor<PlayerAppeared>()
@@ -186,7 +186,7 @@ internal static class Scenarios
             .Timeout(TimeSpan.FromSeconds(10))
             .Async(ct);
         var origin = await source.JoinAsync(299, ct);
-        Require(origin.NodeId == "zoneA", "Border source did not start on Zone node A.");
+        Require(origin.NodeId == "zoneA", "Border source did not start on play node A (zone).");
         var appeared = (await appearedTask).Payload;
         Require(appeared.Position.X == 299, "Adjacent Zone did not observe PlayerAppeared.");
 
@@ -328,7 +328,7 @@ internal static class Scenarios
         );
         var before = await client.JoinAsync(299, ct);
         var identity = await client.SessionAsync(ct);
-        Require(before.NodeId == "zoneA", "Update did not start on Zone node A.");
+        Require(before.NodeId == "zoneA", "Update did not start on play node A (zone).");
         var first = await client.MoveWithBudgetRetryAsync(-1, 1, ct);
         SameActor(identity, await client.SessionAsync(ct));
         async Task ObserveDrainAsync()

@@ -2884,10 +2884,9 @@ void physical_disconnect_progresses_while_session_handler_waits (bool websocket)
     options.endpoint = services.get_required<fw::framework_runtime_t> ()
                          .listener_status (fw::listener_kind_t::stream, stream_name)
                          .endpoint;
-    // The reader listener status reports its TCP acceptor address.
+    // Listener status reports the WebSocket acceptor endpoint; add the configured handshake path.
     if (websocket)
-        options.endpoint =
-          "ws://" + options.endpoint.substr (std::string ("tcp://").size ()) + "/disconnect";
+        options.endpoint += "/disconnect";
     options.dispatch_mode = zlink::stream_connector::dispatch_mode_t::immediate;
     options.reconnect.enabled = false;
     auto client = zlink::stream_connector::connector_factory_t::create (options);

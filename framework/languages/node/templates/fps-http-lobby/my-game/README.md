@@ -1,15 +1,19 @@
-# my-game — FPS HTTP lobby
+# my-game — FPS matchmaking API node
 
-This Node.js FPS server template runs an HTTP Lobby, a Session gateway, Match hosts A and B, and a Redis Location Store. The Lobby pairs `POST /match` requests by mode, generates a GUID Room ID, creates a dynamic Room User Spot, and waits for `RoomPrepared` before returning the Room ID and Session endpoint. `RoomRoster` owns the prepared member list and admission decision. Each Room owns movement, HP, action sequences, wall intersection, cooldowns, and match results.
+This Node.js FPS server template runs an API node, a Session node, play nodes A and B (match), and a Redis Location Store. The API node pairs `POST /match` requests by mode, generates a GUID Room ID, creates a dynamic Room User Spot, and waits for `RoomPrepared` before returning the Room ID and Session endpoint. `RoomRoster` owns the prepared member list and admission decision. Each Room owns movement, HP, action sequences, wall intersection, cooldowns, and match results.
 
 ```mermaid
 flowchart LR
-  players[Players] -->|HTTP POST /match| lobby[HTTP Lobby]
-  players -->|STREAM JoinRoomRequest| session[Session]
-  session -->|relay| matchA[Match A: Entry / Room]
-  matchA <-->|my-game-arena| matchB[Match B: Entry / Room]
+  subgraph playNodes["Play nodes"]
+    matchA["Play node A (match): Entry / Room"]
+    matchB["Play node B (match): Entry / Room"]
+  end
+  players[Players] -->|STREAM JoinRoomRequest| session["Session node"]
+  session -->|relay| matchA
+  matchA <-->|my-game-arena| matchB
   lobby -->|getOrCreate + PrepareRoom / RoomPrepared| matchA
   matchA -->|Location / lease| location[(Redis)]
+  players -->|HTTP POST /match| lobby["API node (matchmaking)"]
 ```
 
 ## Prerequisites
@@ -36,9 +40,9 @@ The build compiles the role entrypoints and generates DTO schemas for the defaul
 
 ### Endpoint and first packet
 
-Start with the Lobby HTTP endpoint in `server/config/lobby.json`: `http://127.0.0.1:0`. Read its actual `endpoint` from Lobby `READY` JSON. Send two concurrent `POST /match` JSON requests with distinct `playerId` values and the same `mode` (`duel` by default). Each HTTP response contains `roomId` and `sessionEndpoint`; the response waits for a pair and room preparation. See `e2e/client.mts` and `server/shared/lobby-messages.ts`.
+Start with the API node's HTTP endpoint in `server/config/lobby.json`: `http://127.0.0.1:0`. Read its actual `endpoint` from the API node `READY` JSON. Send two concurrent `POST /match` JSON requests with distinct `playerId` values and the same `mode` (`duel` by default). Each HTTP response contains `roomId` and `sessionEndpoint`; the response waits for a pair and room preparation. See `e2e/client.mts` and `server/shared/lobby-messages.ts`.
 
-Connect to that `sessionEndpoint` using STREAM. The Session `players` listener defaults to `ws://127.0.0.1:0` in `server/config/session.json`; Session `READY` JSON publishes its actual `endpoint`. Configure the Lobby's advertised `sessionEndpoint` with that running listener, as the e2e runner does. Both port-zero defaults need runtime addresses. WebSocket uses root path `/`. Match mesh listeners and Redis are internal endpoints.
+Connect to that `sessionEndpoint` using STREAM. The Session `players` listener defaults to `ws://127.0.0.1:0` in `server/config/session.json`; Session `READY` JSON publishes its actual `endpoint`. Configure the API node's advertised `sessionEndpoint` with that running listener, as the e2e runner does. Both port-zero defaults need runtime addresses. WebSocket uses root path `/`. Match mesh listeners and Redis are internal endpoints.
 
 The first STREAM packet is `JoinRoomRequest(playerId, roomId)`, using the assigned player and room. Only assigned members can join; success produces `MatchFound` and `RoomView` pushes. After binding, use request/reply for `RoomViewRequest` and `SessionInfoRequest`. A `RoomView` push is an unsolicited update and does not complete a room query. Room admission is not product authentication; validate identity before binding when adding authentication.
 
@@ -66,7 +70,7 @@ Use the same connector release as `package.json` dependencies `@zlink-systems/fr
 
 ### HTTP assignment and STREAM join example
 
-Save as `e2e/connect-once.mts` in a copy, build with `npm run build`, then run `node dist/e2e/connect-once.mjs <actual-lobby-http-endpoint>` against a separately running Lobby, Session, Match nodes, and Redis. Use fresh player IDs. The e2e command removes its deployment when finished. This example reads only the room ID; received contract int64 values remain decimal strings with the JSON codec.
+Save as `e2e/connect-once.mts` in a copy, build with `npm run build`, then run `node dist/e2e/connect-once.mjs <actual-lobby-http-endpoint>` against a separately running API node, session node, play nodes (match), and Redis. Use fresh player IDs. The e2e command removes its deployment when finished. This example reads only the room ID; received contract int64 values remain decimal strings with the JSON codec.
 
 ```typescript
 import '../.zlink-framework-json-schemas.cjs';
@@ -79,7 +83,7 @@ import { JoinRoomRequest } from '../server/shared/lobby-messages.js';
 import type { MatchResponse } from '../server/shared/lobby-messages.js';
 
 const lobby = process.argv[2];
-if (!lobby) throw new Error('Pass the Lobby HTTP endpoint from READY');
+if (!lobby) throw new Error('Pass the API node HTTP endpoint from READY');
 const players = ['guide-player-a', 'guide-player-b'];
 const assignments = await Promise.all(
   players.map(async (playerId) => {
@@ -142,7 +146,7 @@ pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
 ```
 
-The default run executes `lobby`, `hit`, `wall`, `input`, `reconnect`, and `update` in that order. The runner checks the structure and 46 game plus 19 HTTP lobby boundaries before starting nodes, assigns a unique Redis key prefix to each scenario, starts Match nodes before Session and the HTTP Lobby, and waits for public runtime readiness. Listeners bind port zero and publish their actual endpoints. The runner removes only processes and the Compose project that it created; cleanup failures produce a nonzero exit code.
+The default run executes `lobby`, `hit`, `wall`, `input`, `reconnect`, and `update` in that order. The runner checks the structure and 46 game plus 19 API node boundaries before starting nodes, assigns a unique Redis key prefix to each scenario, starts play nodes (match) before the session node and the API node, and waits for public runtime readiness. Listeners bind port zero and publish their actual endpoints. The runner removes only processes and the Compose project that it created; cleanup failures produce a nonzero exit code.
 
 | Scenario    | Client observations                                                                                                                                                                                                                                                                                      |
 | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -153,13 +157,13 @@ The default run executes `lobby`, `hit`, `wall`, `input`, `reconnect`, and `upda
 | `reconnect` | A new Session retains the Actor identity, Room, position, HP, and sequence; a finished match retains its winner.                                                                                                                                                                                         |
 | `update`    | Relocation preserves Session bindings and Room state; an outsider is rejected after relocation; safe shutdown is observed, and the replacement accepts a new Room.                                                                                                                                       |
 
-`e2e/domain-checks.ts` runs 46 game boundary checks and `e2e/lobby-domain-checks.ts` runs 19 HTTP lobby boundary checks before any scenario starts. The game checks cover closed ray/AABB faces, tangents, range limits, wall/player ties, movement and fire timing, rejected state, and snapshots restored under a different monotonic clock origin. The Lobby checks cover roster preparation and restoration, mode pairing, Room ID uniqueness, and HTTP response timing.
+`e2e/domain-checks.ts` runs 46 game boundary checks and `e2e/lobby-domain-checks.ts` runs 19 API node boundary checks before any scenario starts. The game checks cover closed ray/AABB faces, tangents, range limits, wall/player ties, movement and fire timing, rejected state, and snapshots restored under a different monotonic clock origin. The Lobby checks cover roster preparation and restoration, mode pairing, Room ID uniqueness, and HTTP response timing.
 
 ## FPS rules and extension points
 
 `MatchRequest` sends `{playerId}` or `{playerId, mode}` to `POST /match`; an omitted mode defaults to `duel`. The example accepts a claimed player ID; replace this boundary with authenticated identity before deployment. A Session binds an Actor only on the first allowed `JoinRoomRequest`. It relays only `JoinRoomRequest`, `RoomViewRequest`, `MoveRequest`, `ShootRequest`, and `SessionInfoRequest`. `PrepareRoom`, `RoomPrepared`, `HttpNodeReady`, and other client packets receive `ActionRejected` with `packet-not-allowed`. Application messages use the default typed Framework serializer.
 
-The Lobby generates `RoomPrefix + UUID` once in `server/lobby/matchmaker.ts`. It creates the dynamic Room, sends `PrepareRoom(matchId, members)`, and returns the HTTP assignment only after receiving `RoomPrepared(matchId)`. `server/match/roster.ts` copies and validates the roster, admits only those players, accepts an identical preparation again, and rejects a changed roster. Room relocation stores `{Game, Roster}` together.
+The API node generates `RoomPrefix + UUID` once in `server/lobby/matchmaker.ts`. It creates the dynamic Room, sends `PrepareRoom(matchId, members)`, and returns the HTTP assignment only after receiving `RoomPrepared(matchId)`. `server/match/roster.ts` copies and validates the roster, admits only those players, accepts an identical preparation again, and rejects a changed roster. Room relocation stores `{Game, Roster}` together.
 
 Coordinates use `Vec3(x, y, z)` with Y up. `ArenaMap` defines bounds X/Z=0..100 and Y=0..10, two static AABBs, and ordered server spawn points. A player box is 1 wide, 2 high, and 1 deep from its feet, with eye height 1.6. Feet remain at Y=0. Vertical movement is rejected as `vertical-move`; jumping and gravity are not implemented. Movement tests the feet-position segment against closed wall boxes, including contact at the endpoint. It does not implement swept player-volume collision.
 
@@ -171,7 +175,7 @@ Hit detection uses the current server state. The template has no lag compensatio
 
 Message Follow is configured explicitly to 30 seconds. After `RELOCATED`, the safe shutdown observation budget is the follow duration plus the existing relocation observation budget; the relocation operation deadline is unchanged.
 
-`--check-domain` (`-CheckDomain` in PowerShell) runs 46 game domain checks and one separate wire golden check for four samples. The wire check runs in the Framework execution image; the runner does not load Framework. It briefly starts one local typed Session host and observes its public connector payloads; Redis and game scenario nodes are not started.
+`--check-domain` (`-CheckDomain` in PowerShell) runs 46 game domain checks and one separate wire golden check for four samples. The wire check runs in the Framework execution image; the runner does not load Framework. It briefly starts one local typed Session node and observes its public connector payloads; Redis and game scenario nodes are not started.
 
 ## Framework behavior to know
 
@@ -189,6 +193,6 @@ Validated against the published Framework 0.32.0 packages. The typed push delive
 
 ## Deployment sequence
 
-Start Redis, then Match A and Match B, Session, and the HTTP Lobby. The Lobby requires the Session endpoint; each role reports `READY` with its actual listener endpoint. The Lobby creates dynamic Room Spots through the RouteMesh and waits for Room preparation before returning an HTTP response.
+Start Redis, then play nodes A and B (match), Session, and the API node. The API node requires the Session endpoint; each role reports `READY` with its actual listener endpoint. The API node creates dynamic Room Spots through the RouteMesh and waits for Room preparation before returning an HTTP response.
 
-Configure Redis, unique key prefixes, and listener addresses in `server/config/`. Start `dist/server/match/main.js` with `server/config/match-a.json`, then the same entrypoint with `server/config/match-b.json`. Start `dist/server/session/main.js` with `server/config/session.json`, then `dist/server/lobby/main.js` with `server/config/lobby.json` containing the actual Session endpoint. All roles use the common hosting module. To update a Match host, write `drain` to its standard input and wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Write `shutdown`, verify `STOPPED` with outcome `Stopped` and reason `None`, and wait for exit. Start a replacement with the same node configuration and wait for `READY`. Redis must remain available during relocation and Lobby restart.
+Configure Redis, unique key prefixes, and listener addresses in `server/config/`. Start `dist/server/match/main.js` with `server/config/match-a.json`, then the same entrypoint with `server/config/match-b.json`. Start `dist/server/session/main.js` with `server/config/session.json`, then `dist/server/lobby/main.js` with `server/config/lobby.json` containing the actual Session endpoint. All roles use the common hosting module. To update a play node (match), write `drain` to its standard input and wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Write `shutdown`, verify `STOPPED` with outcome `Stopped` and reason `None`, and wait for exit. Start a replacement with the same node configuration and wait for `READY`. Redis must remain available during relocation and the API node restart.

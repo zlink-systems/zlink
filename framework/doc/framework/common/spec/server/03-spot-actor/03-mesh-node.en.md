@@ -284,6 +284,9 @@ The framework starts a MeshNode in the following order.
    The Entry Spot isn't published to the descriptor and resolver before
    initialization finishes. The wait required for Fixed RID reclaim follows
    [§3.3](#33-fixed-rid).
+   On a Store whose format conversion hasn't finished, it runs
+   [Location Store §8.1](../05-location-relocation/02-location-store-redis.en.md#81-converting-from-v11-to-v12)
+   before any other Store work in this step.
 3. Binds the ROUTER, then fixes the actual endpoint to publish to other
    peers.
 4. Publishes the MeshNode descriptor containing all necessary information

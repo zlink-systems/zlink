@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Systems.Zlink.Framework.Runtime.Protocol;
+using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
 using Zlink.Framework.Runtime.Identifiers;
 
 namespace Zlink.Framework.Runtime.Host;
@@ -48,9 +49,7 @@ internal sealed partial class ZLinkFrameworkRuntime
     internal async ValueTask<TargetStage> StageInboundSpotAggregateAsync(
         ZLinkCanonicalSpotStageContext request,
         ZLinkRelocationEnvelope envelope,
-        ulong reservedTargetAuthorityOwnerGeneration,
-        CancellationToken cancellationToken,
-        bool stagedBeforeCutover = false
+        CancellationToken cancellationToken
     )
     {
         var targetRid = RoutingId.FromHex(request.TargetNodeRid);
@@ -65,14 +64,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                 "The inbound SPOT relocation target does not match its envelope."
             );
 
-        var targetOwnerGeneration = stagedBeforeCutover
-            ? spotParticipant.AuthorityOwnerGeneration
-            : await ResolveInboundTargetAuthorityOwnerGenerationAsync(
-                    spotParticipant,
-                    reservedTargetAuthorityOwnerGeneration,
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
+        var targetOwnerGeneration = spotParticipant.AuthorityOwnerGeneration;
         async ValueTask<PreparedReservedSpot> PrepareTargetSpotAsync()
         {
             if (request.InstanceSpot)
@@ -136,8 +128,6 @@ internal sealed partial class ZLinkFrameworkRuntime
                     envelope,
                     node,
                     preparedSpot,
-                    reservedTargetAuthorityOwnerGeneration,
-                    stagedBeforeCutover,
                     boundActorIds,
                     stagedActorStates,
                     cancellationToken
@@ -244,8 +234,6 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZLinkRelocationEnvelope envelope,
         ZLinkSpotNodeRuntime node,
         PreparedReservedSpot preparedSpot,
-        ulong reservedTargetAuthorityOwnerGeneration,
-        bool stagedBeforeCutover,
         ConcurrentDictionary<ZLinkActorId, byte> boundActorIds,
         ConcurrentDictionary<ZLinkActorId, ZLinkActorRuntimeState> stagedActorStates,
         CancellationToken cancellationToken
@@ -294,14 +282,13 @@ internal sealed partial class ZLinkFrameworkRuntime
                             out var relocation
                         );
                         hasRegistration &= hasActor;
-                        var publishedSteadyRecovery =
-                            reservedTargetAuthorityOwnerGeneration == 0
-                            && !hasRelocation
+                        var steadySource =
+                            !hasRelocation
                             && hasActor
                             && authority.State == ZLinkActorAuthorityState.Ready;
                         if (
                             !hasActor
-                            || !publishedSteadyRecovery
+                            || !steadySource
                                 && (
                                     !hasRelocation
                                     || relocationAuthority.RelocationId != envelope.AggregateId
@@ -319,14 +306,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                             );
                         }
 
-                        var actorTargetAuthorityOwnerGeneration = stagedBeforeCutover
-                            ? participant.AuthorityOwnerGeneration
-                            : await ResolveInboundTargetAuthorityOwnerGenerationAsync(
-                                    participant,
-                                    0,
-                                    cancellationToken
-                                )
-                                .ConfigureAwait(false);
+                        var actorTargetAuthorityOwnerGeneration =
+                            participant.AuthorityOwnerGeneration;
                         var actorState = GetOrCreateActorState(authority.ActorId);
                         await _actorSessionManager
                             .PrepareForTransferredActivationAsync(actorState, cancellationToken)
@@ -400,71 +381,9 @@ internal sealed partial class ZLinkFrameworkRuntime
             .ToArray();
     }
 
-    private async ValueTask<ulong> ResolveInboundTargetAuthorityOwnerGenerationAsync(
-        ZLinkRelocationParticipantEnvelope participant,
-        ulong reservedTargetAuthorityOwnerGeneration,
-        CancellationToken cancellationToken
-    )
-    {
-        if (reservedTargetAuthorityOwnerGeneration == 0)
-        {
-            var published = await ReadPublishedTargetAuthorityOwnerGenerationAsync(
-                    participant.AuthorityKey,
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-            if (
-                published is 0 or > long.MaxValue
-                || participant.AuthorityOwnerGeneration != published
-            )
-                throw new ZLinkRelocationDataLostException(
-                    $"Published target authority generation for '{participant.AuthorityKey.Value}' changed during recovery."
-                );
-            return published;
-        }
-
-        var targetGeneration =
-            reservedTargetAuthorityOwnerGeneration > 0
-                ? reservedTargetAuthorityOwnerGeneration
-                : await ReadPublishedTargetAuthorityOwnerGenerationAsync(
-                        participant.AuthorityKey,
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
-        if (
-            participant.AuthorityOwnerGeneration is 0 or > long.MaxValue
-            || targetGeneration is 0 or > long.MaxValue
-            || targetGeneration <= participant.AuthorityOwnerGeneration
-        )
-            throw new ZLinkRelocationDataLostException(
-                $"Target authority generation for '{participant.AuthorityKey.Value}' is not newer than its source generation."
-            );
-        return targetGeneration;
-    }
-
-    private async ValueTask<ulong> ReadPublishedTargetAuthorityOwnerGenerationAsync(
-        ZLinkAuthorityKey key,
-        CancellationToken cancellationToken
-    )
-    {
-        var store =
-            Registration.Locations.ResolveStore()
-            ?? throw new ZLinkConfigurationException(
-                "Inbound relocation recovery requires a Location Store."
-            );
-        return await store.ReadAuthorityAsync(key, cancellationToken).ConfigureAwait(false) switch
-        {
-            ZLinkAuthorityReadResult.Found found => found.Snapshot.AuthorityOwnerGeneration,
-            _ => throw new ZLinkRelocationDataLostException(
-                $"Published target authority '{key.Value}' is missing."
-            ),
-        };
-    }
-
     // The caller owns the stage publish gate through CAS settlement and publication.
     internal async ValueTask PublishInboundSpotAggregateCoreAsync(
         TargetStage stage,
-        Func<CancellationToken, ValueTask>? normalizeAuthority,
         CancellationToken cancellationToken
     )
     {
@@ -484,10 +403,25 @@ internal sealed partial class ZLinkFrameworkRuntime
                         ZLinkFrameworkErrorKind.NotFound,
                         $"Actor '{actorState.ActorId}' has no staged target reference."
                     );
+                var actorType =
+                    actorState.ActorType
+                    ?? throw new InvalidOperationException(
+                        $"Actor '{actorState.ActorId}' has no registered type during relocation."
+                    );
+                var authority = stage.GetPublishedActorAuthority(actorState.RuntimeActorId);
+                await RequireActorRelocationLocationLifecycle(LocationLifecycle, actorState.ActorId)
+                    .ActorOwnership.AdoptCommittedActorAuthorityAsync(
+                        actorState.RuntimeActorId,
+                        actorType,
+                        actorRef.ToNative(stage.TargetMeshName),
+                        authority,
+                        _ => DeactivateActorOnOwnershipLossAsync(actorState)
+                    )
+                    .ConfigureAwait(false);
                 actorState.MarkRelocationSessionAuthorityCommitted(
                     handoffId,
                     actorRef,
-                    stage.TargetActorAuthorityOwnerGeneration(actorState.RuntimeActorId),
+                    authority.AuthorityOwnerGeneration,
                     ZLinkMeshName.FromBoundary(stage.TargetMeshName, nameof(stage.TargetMeshName)),
                     stage.TargetNodeLifecycleGeneration,
                     stage.TargetOwnerLeaseGeneration
@@ -520,14 +454,10 @@ internal sealed partial class ZLinkFrameworkRuntime
                             _actorSessionManager.PublishReservedActor(actorState.ActorId);
                         stage.Node.Catalog.PublishRelocatedReserved(stage.Spot);
                     },
-                    normalizeAuthority is null ? null : () => normalizeAuthority(cancellationToken)
+                    normalizeAuthority: null
                 )
                 .ConfigureAwait(false);
             Volatile.Write(ref stage.Published, 1);
-        }
-        else if (normalizeAuthority is not null)
-        {
-            await normalizeAuthority(cancellationToken).ConfigureAwait(false);
         }
 
         // Published means queue publication is complete: restore, replay,
@@ -703,25 +633,6 @@ internal sealed partial class ZLinkFrameworkRuntime
         if (stage.ActorStates.Count == 0)
             return;
         var handoffId = stage.Envelope.AggregateId.ToString("N");
-        var authorityStore =
-            Registration.Locations.ResolveStore()
-            ?? throw new ZLinkConfigurationException("Location Store is not registered.");
-        var relocationStore =
-            Registration.Locations.ResolveRelocationStore()
-            ?? throw new ZLinkConfigurationException("Relocation Store is not registered.");
-        var targetOwner =
-            LocationLifecycle?.OwnerToken
-            ?? throw new ZLinkConfigurationException("Location runtime is not registered.");
-        var coordinator = new ZLinkAggregateRelocationCoordinator(
-            ErrorSink,
-            authorityStore,
-            relocationStore
-        );
-        var current = stage.Envelope.CanonicalLogicalStream.IsEmpty
-            ? stage.Envelope
-            : await coordinator
-                .ReadCanonicalRootAsync(stage.Envelope, targetOwner, cancellationToken)
-                .ConfigureAwait(false);
         var pipeline = new ZLinkActorInboundPipeline(
             this,
             new ZLinkEntrySpotActorInboundEndpoint(this),
@@ -734,7 +645,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             )
         )
         {
-            var participant = current.Participants.Single(candidate =>
+            var participant = stage.Envelope.Participants.Single(candidate =>
                 candidate.ObjectKind == ZLinkPlacementObjectKind.Actor
                 && candidate.AuthorityKey
                     == ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorState.ActorId)

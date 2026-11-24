@@ -19,7 +19,12 @@
 | `AuthenticationRetryDelay` | 거절한 request에 알려 줄 다시 시도까지의 시간(ms) | 500 |
 
 설정은 STREAM session 등록 options에 둔다. 언어별 이름은 각 언어의 session 등록 options 관례를 따르며
-언어별 exact interface 문서가 정한다. 0이나 음수 한도, 0 이하 지연은 시작할 때 설정 오류다.
+언어별 exact interface 문서가 정한다. 0이나 음수 한도, 0 이하 지연은 시작할 때 설정 오류다. 한도와 지연은
+`1..2147483647` 범위의 정수이며(지연 단위는 ms), 범위 밖도 시작할 때 설정 오류다. 유효 CPU 코어 수는 그 언어
+runtime이 보고하는 사용 가능 processor 수(container CPU quota·affinity 반영)이고, 기본 한도 계산이 `2147483647`을
+넘으면 `2147483647`을 쓴다. 한 node에 STREAM 등록이 여럿이어도 처리 중 인증 수와 한도는 node에 한 벌이다 —
+등록마다 다른 `AuthenticationPacketName`·`MaxConcurrentAuthentications`·`AuthenticationRetryDelay`를 지정하면
+시작할 때 설정 오류다.
 
 ### 1.2 판정
 

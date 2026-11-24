@@ -790,6 +790,12 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
                     or ZLinkUserSpotAuthorityState.Closing
             && user.OwnerId == snapshot.OwnerId
             && snapshot.OwnerLeaseGeneration > 0
+            && (
+                snapshot.Relocation is null
+                || user.OwnerLeaseGeneration == (ulong)snapshot.OwnerLeaseGeneration
+                    && user.NodeRid == snapshot.Allocation.Descriptor.Rid
+                    && user.NodeGeneration == snapshot.Allocation.DescriptorLifecycleGeneration
+            )
         )
             return new ZLinkResolvedSpotLocation(
                 user.MeshName,
@@ -815,6 +821,12 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
                     or ZLinkInstanceSpotAuthorityState.Closing
             && instance.OwnerId == snapshot.OwnerId
             && snapshot.OwnerLeaseGeneration > 0
+            && (
+                snapshot.Relocation is null
+                || instance.OwnerLeaseGeneration == (ulong)snapshot.OwnerLeaseGeneration
+                    && instance.NodeRid == snapshot.Allocation.Descriptor.Rid
+                    && instance.NodeGeneration == snapshot.Allocation.DescriptorLifecycleGeneration
+            )
         )
             return new ZLinkResolvedSpotLocation(
                 instance.MeshName,
@@ -893,6 +905,11 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
             || actor.OwnerId != snapshot.OwnerId
             || snapshot.OwnerLeaseGeneration <= 0
             || actor.OwnerLeaseGeneration != (ulong)snapshot.OwnerLeaseGeneration
+            || snapshot.Relocation is not null
+                && (
+                    actor.NodeRid != snapshot.Allocation.Descriptor.Rid
+                    || actor.NodeGeneration != snapshot.Allocation.DescriptorLifecycleGeneration
+                )
         )
         {
             if (

@@ -1313,10 +1313,11 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         RoutingId targetNodeRid,
         IReadOnlyList<Message> parts,
         SendFlags flags,
-        ReadOnlyMemory<byte> metadata
+        ReadOnlyMemory<byte> metadata,
+        Action<Exception>? failureObserver = null
     )
     {
-        return _node.SendToNode(targetNodeRid, parts, flags, metadata);
+        return _node.SendToNode(targetNodeRid, parts, flags, metadata, failureObserver);
     }
 
     public ValueTask SendToNodeAsync(
@@ -1518,8 +1519,11 @@ internal sealed class ZLinkBackendSpotNodeWrapper
     )
     {
         _pump.SetNodeRouteHandler(handler, taskRunner);
-        _node.SetRemoteSessionPushDispatch(_pump.DispatchNodeRoutes);
     }
+
+    public void OnOrderedNodeRelay(
+        Func<ZLinkBackendRouteReceived, ZLinkEnvelopeHeader, CancellationToken, ValueTask> handler
+    ) => _node.SetOrderedNodeRelayDispatch(handler);
 
     public ValueTask DisposeAsync() =>
         new(

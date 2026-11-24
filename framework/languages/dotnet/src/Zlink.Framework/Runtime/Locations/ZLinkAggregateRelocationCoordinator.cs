@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Spots;
 
 namespace Zlink.Framework.Runtime.Locations;
@@ -21,6 +22,7 @@ internal sealed record ZLinkAggregateRelocationRequest(
     ulong TargetDescriptorLifecycleGeneration,
     ZLinkCapacityVector Capacity,
     ZLinkLocationOwnerToken TargetOwner,
+    ZLinkAuthorityRelocation.CoordinatorFence Source,
     ZLinkRelocationEnvelope? CanonicalEnvelope = null
 );
 
@@ -44,7 +46,7 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
         ZLinkRelocationStored Relocation,
         ZLinkRelocationEnvelope Envelope,
         IReadOnlyList<ZLinkAggregateRelocationParticipant> Participants,
-        ReadOnlyMemory<byte> InventoryDigest
+        ZLinkAuthorityRelocation AuthorityRelocation
     );
 
     private const int MaxPublicationProbeConcurrency = 64;
@@ -91,6 +93,21 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
                 inventoryDigest,
                 request.Participants.Select(static participant => participant.Envelope).ToArray()
             );
+        var relocation = new ZLinkAuthorityRelocation(
+            envelope.AggregateId,
+            ServiceWireCodec.RelocationPhase.Committed,
+            request.Source.Identity,
+            new(
+                request.TargetDescriptor.Rid.ToHex(),
+                request.TargetDescriptorLifecycleGeneration,
+                request.TargetOwner.OwnerId,
+                checked((ulong)request.TargetOwner.LeaseGeneration),
+                request.TargetAttemptGeneration
+            ),
+            request.Source,
+            Convert.ToHexString(inventoryDigest).ToLowerInvariant(),
+            checked((ulong)envelope.CanonicalApplicationVersion)
+        );
         var ownsStoredRoot = acceptedRelocation is null;
         var stored =
             acceptedRelocation
@@ -129,20 +146,7 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
                     participant.Envelope.AuthorityKey,
                     participant.ExpectedStoreVersion,
                     participant.OwnerTransition,
-                    envelope.CanonicalLogicalStream.IsEmpty
-                        ? ZLinkRelocationAuthorityPayloadCodec.Encode(
-                            new ZLinkRelocationAuthorityPayload(
-                                stored.Reference,
-                                stored.ChecksumCrc32c,
-                                request.AggregateId,
-                                request.AggregateGeneration,
-                                inventoryDigest,
-                                request.TargetOwner.OwnerId,
-                                request.TargetOwner.LeaseGeneration,
-                                participant.ApplicationAuthorityPayload
-                            )
-                        )
-                        : BuildCanonicalAuthorityPayload(request, envelope, stored, participant),
+                    participant.ApplicationAuthorityPayload,
                     participant.MembershipMutation
                 ))
                 .ToArray();
@@ -157,7 +161,10 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
                         request.TargetDescriptorLifecycleGeneration,
                         request.Capacity,
                         request.TargetOwner
-                    ),
+                    )
+                    {
+                        Relocation = relocation,
+                    },
                     cancellationToken
                 )
                 .ConfigureAwait(false);
@@ -179,21 +186,13 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
                     );
             }
 
-            return new PublicationState(
-                fence,
-                stored,
-                envelope,
-                request.Participants,
-                inventoryDigest
-            );
+            return new PublicationState(fence, stored, envelope, request.Participants, relocation);
         }
         catch
         {
             var publication = await ProbePublicationAsync(
                     request.Participants,
-                    stored,
-                    envelope,
-                    inventoryDigest,
+                    relocation,
                     cancellationToken
                 )
                 .ConfigureAwait(false);
@@ -203,7 +202,7 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
                     stored,
                     envelope,
                     request.Participants,
-                    inventoryDigest
+                    relocation
                 );
             if (publication.State == AggregatePublicationProbe.Unknown)
                 throw;
@@ -238,92 +237,6 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
                 await DeleteOrphanAsync(stored.Reference).ConfigureAwait(false);
             throw;
         }
-    }
-
-    private static byte[] BuildCanonicalAuthorityPayload(
-        ZLinkAggregateRelocationRequest request,
-        ZLinkRelocationEnvelope envelope,
-        ZLinkRelocationStored stored,
-        ZLinkAggregateRelocationParticipant participant
-    )
-    {
-        var spotParticipant = request.Participants.Single(static item =>
-            item.Envelope.ObjectKind
-                is ZLinkPlacementObjectKind.UserSpot
-                    or ZLinkPlacementObjectKind.InstanceSpot
-        );
-        string sourceNodeRid;
-        ulong sourceNodeGeneration;
-        string sourceOwnerId;
-        ulong sourceOwnerLease;
-        if (spotParticipant.Envelope.ObjectKind == ZLinkPlacementObjectKind.InstanceSpot)
-        {
-            if (
-                !ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
-                    spotParticipant.ApplicationAuthorityPayload.Span,
-                    out var source
-                )
-            )
-                throw new InvalidDataException(
-                    "Canonical Instance SPOT source authority is invalid."
-                );
-            sourceNodeRid = source.NodeRid.ToHex();
-            sourceNodeGeneration = source.NodeGeneration;
-            sourceOwnerId = source.OwnerId;
-            sourceOwnerLease = source.OwnerLeaseGeneration;
-        }
-        else
-        {
-            if (
-                !ZLinkUserSpotAuthorityPayloadCodec.TryDecode(
-                    spotParticipant.ApplicationAuthorityPayload.Span,
-                    out var source
-                )
-            )
-                throw new InvalidDataException("Canonical User SPOT source authority is invalid.");
-            sourceNodeRid = source.NodeRid.ToHex();
-            sourceNodeGeneration = source.NodeGeneration;
-            sourceOwnerId = source.OwnerId;
-            sourceOwnerLease = source.OwnerLeaseGeneration;
-        }
-        var basePayload = participant.ApplicationAuthorityPayload;
-        if (
-            participant.Envelope.ObjectKind == ZLinkPlacementObjectKind.Actor
-            && ZLinkActorRelocationAuthorityPayloadCodec.TryDecode(
-                basePayload.Span,
-                out var actorPhase
-            )
-        )
-            basePayload = actorPhase.ApplicationPayload;
-        return ZLinkCanonicalRelocationAuthorityStateCodec.ReplaceRelocationState(
-            basePayload.Span,
-            new ZLinkCanonicalRelocationAuthorityState(
-                envelope.CanonicalRelocationHigh,
-                envelope.CanonicalRelocationLow,
-                request.TargetAttemptGeneration,
-                sourceNodeRid,
-                sourceNodeGeneration,
-                sourceOwnerId,
-                sourceOwnerLease,
-                request.TargetDescriptor.Rid.ToHex(),
-                request.TargetDescriptorLifecycleGeneration,
-                request.TargetOwner.OwnerId,
-                checked((ulong)request.TargetOwner.LeaseGeneration),
-                request.TargetOwner.OwnerId,
-                checked((ulong)request.TargetOwner.LeaseGeneration),
-                request.TargetDescriptor.Rid.ToHex(),
-                request.TargetDescriptorLifecycleGeneration,
-                Phase: 4,
-                envelope.CanonicalApplicationVersion
-            )
-            {
-                AggregateGeneration = request.AggregateGeneration,
-                CoordinatorExpectedAuthorityStoreVersion = spotParticipant.ExpectedStoreVersion,
-                RelocationReference = stored.Reference,
-                RelocationChecksumCrc32c = stored.ChecksumCrc32c,
-            },
-            envelope
-        );
     }
 
     private async ValueTask<ZLinkAggregateRelocationPublished> CommitPublicationAsync(
@@ -367,9 +280,7 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
                 (
                     await ProbePublicationAsync(
                             publication.Participants,
-                            publication.Relocation,
-                            publication.Envelope,
-                            publication.InventoryDigest,
+                            publication.AuthorityRelocation,
                             cancellationToken
                         )
                         .ConfigureAwait(false)
@@ -385,167 +296,6 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
         );
     }
 
-    internal async ValueTask<ZLinkRelocationEnvelope> ReadCanonicalRootAsync(
-        ZLinkRelocationEnvelope identity,
-        ZLinkLocationOwnerToken targetOwner,
-        CancellationToken cancellationToken
-    )
-    {
-        var current = await ReadCanonicalProgressAsync(identity, targetOwner, cancellationToken)
-            .ConfigureAwait(false);
-        return current.Root;
-    }
-
-    private async ValueTask<CanonicalProgress> ReadCanonicalProgressAsync(
-        ZLinkRelocationEnvelope identity,
-        ZLinkLocationOwnerToken targetOwner,
-        CancellationToken cancellationToken
-    )
-    {
-        while (true)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            ZLinkCanonicalRelocationAuthorityProjection? shared = null;
-            ZLinkAuthorityKey? sharedKey = null;
-            (
-                ZLinkAuthorityKey Key,
-                ZLinkCanonicalRelocationAuthorityProjection Projection
-            )? mismatch = null;
-            var orderedParticipants = identity
-                .Participants.OrderBy(static participant => participant.CanonicalParticipantId)
-                .ToArray();
-            var participantReads = await Task.WhenAll(
-                    orderedParticipants.Select(async participant =>
-                        (
-                            Participant: participant,
-                            Read: await authorityStore
-                                .ReadAuthorityAsync(participant.AuthorityKey, cancellationToken)
-                                .ConfigureAwait(false)
-                        )
-                    )
-                )
-                .ConfigureAwait(false);
-            foreach (var (participant, read) in participantReads)
-            {
-                if (
-                    read is not ZLinkAuthorityReadResult.Found found
-                    || !ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                        found.Snapshot.Payload.Span,
-                        out var projection
-                    )
-                    || projection.RelocationHigh != identity.CanonicalRelocationHigh
-                    || projection.RelocationLow != identity.CanonicalRelocationLow
-                    || projection.TargetOwnerId != targetOwner.OwnerId
-                    || projection.TargetOwnerLeaseGeneration
-                        != checked((ulong)targetOwner.LeaseGeneration)
-                )
-                    throw new ZLinkRelocationDataLostException(
-                        $"Canonical relocation authority '{participant.AuthorityKey.Value}' changed during replay."
-                    );
-                if (shared is not null && !SameCanonicalProgress(shared, projection))
-                    mismatch ??= (participant.AuthorityKey, projection);
-                shared ??= projection;
-                sharedKey ??= participant.AuthorityKey;
-            }
-
-            var currentProjection =
-                shared
-                ?? throw new ZLinkRelocationDataLostException(
-                    "Canonical relocation has no authority participants."
-                );
-            var anchorRead = await authorityStore
-                .ReadAuthorityAsync(sharedKey!.Value, cancellationToken)
-                .ConfigureAwait(false);
-            if (
-                anchorRead is not ZLinkAuthorityReadResult.Found anchorFound
-                || !ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                    anchorFound.Snapshot.Payload.Span,
-                    out var anchorProjection
-                )
-                || anchorProjection.RelocationHigh != identity.CanonicalRelocationHigh
-                || anchorProjection.RelocationLow != identity.CanonicalRelocationLow
-                || anchorProjection.TargetOwnerId != targetOwner.OwnerId
-                || anchorProjection.TargetOwnerLeaseGeneration
-                    != checked((ulong)targetOwner.LeaseGeneration)
-            )
-                throw new ZLinkRelocationDataLostException(
-                    $"Canonical relocation authority '{sharedKey.Value.Value}' changed during replay."
-                );
-
-            // Participant reads are separate store operations. A concurrent
-            // aggregate publication can therefore put the scan across two
-            // valid immutable roots. Re-reading the first participant tells
-            // that transient view apart from a stable split publication.
-            if (!SameCanonicalProgress(currentProjection, anchorProjection))
-            {
-                await Task.Yield();
-                continue;
-            }
-            if (mismatch is { } different)
-                throw new ZLinkRelocationDataLostException(
-                    $"Canonical relocation authorities '{sharedKey.Value.Value}' and '{different.Key.Value}' expose different relocation state "
-                        + $"(reference {currentProjection.RelocationReference}/{different.Projection.RelocationReference})."
-                );
-
-            var root = await ZLinkRelocationTreeStore
-                .GetAsync(
-                    relocationStore,
-                    currentProjection.RelocationReference,
-                    currentProjection.RelocationChecksumCrc32c,
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-            if (
-                root.CanonicalRelocationHigh != identity.CanonicalRelocationHigh
-                || root.CanonicalRelocationLow != identity.CanonicalRelocationLow
-                || root.Participants.Count != identity.Participants.Count
-            )
-                throw new ZLinkRelocationDataLostException(
-                    "Canonical replay root does not match its authority inventory."
-                );
-            var identities = identity.Participants.ToDictionary(static participant =>
-                participant.CanonicalParticipantId
-            );
-            root = root with
-            {
-                Participants = root
-                    .Participants.Select(state =>
-                    {
-                        if (
-                            !identities.TryGetValue(
-                                state.CanonicalParticipantId,
-                                out var participant
-                            )
-                        )
-                            throw new ZLinkRelocationDataLostException(
-                                "Canonical replay root contains an unknown participant."
-                            );
-                        return state with
-                        {
-                            AuthorityKey = participant.AuthorityKey,
-                            ObjectKind = participant.ObjectKind,
-                            ObjectGeneration = participant.ObjectGeneration,
-                            AuthorityOwnerGeneration = participant.AuthorityOwnerGeneration,
-                        };
-                    })
-                    .ToArray(),
-            };
-            return new CanonicalProgress(root, currentProjection);
-        }
-    }
-
-    private static bool SameCanonicalProgress(
-        ZLinkCanonicalRelocationAuthorityProjection left,
-        ZLinkCanonicalRelocationAuthorityProjection right
-    ) =>
-        left.RelocationReference == right.RelocationReference
-        && left.RelocationChecksumCrc32c == right.RelocationChecksumCrc32c;
-
-    private sealed record CanonicalProgress(
-        ZLinkRelocationEnvelope Root,
-        ZLinkCanonicalRelocationAuthorityProjection Projection
-    );
-
     internal static bool IsExactNormalizedTargetAuthority(
         ZLinkAuthoritySnapshot snapshot,
         ZLinkRelocationParticipantEnvelope participant,
@@ -557,7 +307,8 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
     )
     {
         if (
-            ZLinkRelocationAuthorityPayloadCodec.TryDecode(snapshot.Payload.Span, out _)
+            snapshot.Relocation is not null
+            || ZLinkRelocationAuthorityPayloadCodec.TryDecode(snapshot.Payload.Span, out _)
             || snapshot.Allocation.ObjectKind != participant.ObjectKind
             || snapshot.Allocation.Descriptor != targetDescriptor
             || snapshot.Allocation.DescriptorLifecycleGeneration
@@ -608,9 +359,7 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
 
     private async ValueTask<AggregatePublicationProbeResult> ProbePublicationAsync(
         IReadOnlyList<ZLinkAggregateRelocationParticipant> participants,
-        ZLinkRelocationStored stored,
-        ZLinkRelocationEnvelope envelope,
-        ReadOnlyMemory<byte> inventoryDigest,
+        ZLinkAuthorityRelocation relocation,
         CancellationToken cancellationToken
     )
     {
@@ -633,7 +382,17 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
                             .ConfigureAwait(false);
                         if (
                             read is ZLinkAuthorityReadResult.Found found
-                            && MatchesPublication(found, stored, envelope, inventoryDigest)
+                            && ZLinkAuthorityRelocation.MatchesCommittedTarget(
+                                found.Snapshot,
+                                relocation.RelocationId,
+                                relocation.Target!.AttemptGeneration
+                            )
+                            && found.Snapshot.Relocation!.Target == relocation.Target
+                            && found.Snapshot.Relocation.SourceInventorySha256
+                                == relocation.SourceInventorySha256
+                            && found.Snapshot.Payload.Span.SequenceEqual(
+                                participant.ApplicationAuthorityPayload.Span
+                            )
                         )
                         {
                             results[index] = AggregatePublicationProbe.Published;
@@ -657,32 +416,6 @@ internal sealed class ZLinkAggregateRelocationCoordinator(
         if (results.All(static result => result == AggregatePublicationProbe.NotPublished))
             return AggregatePublicationProbeResult.NotPublished;
         return AggregatePublicationProbeResult.Unknown;
-
-        static bool MatchesPublication(
-            ZLinkAuthorityReadResult.Found found,
-            ZLinkRelocationStored stored,
-            ZLinkRelocationEnvelope envelope,
-            ReadOnlyMemory<byte> inventoryDigest
-        )
-        {
-            if (
-                !ZLinkRelocationAuthorityPayloadCodec.TryDecode(
-                    found.Snapshot.Payload.Span,
-                    out var publication
-                )
-                || !string.Equals(publication.Reference, stored.Reference, StringComparison.Ordinal)
-                || publication.ChecksumCrc32c != stored.ChecksumCrc32c
-                || publication.AggregateId != envelope.AggregateId
-                || publication.AggregateGeneration != envelope.AggregateGeneration
-            )
-                return false;
-            if (envelope.CanonicalLogicalStream.IsEmpty)
-            {
-                return !publication.IsCanonical
-                    && publication.InventoryDigest.Span.SequenceEqual(inventoryDigest.Span);
-            }
-            return publication.IsCanonical;
-        }
     }
 
     private enum AggregatePublicationProbe

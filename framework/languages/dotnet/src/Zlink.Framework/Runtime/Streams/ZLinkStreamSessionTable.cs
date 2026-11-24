@@ -30,9 +30,6 @@ internal sealed class ZLinkStreamSessionTable(
 
     public ValueTask<int> GetCountAsync() => _lane.RunAsync(() => _sessions.Count);
 
-    public ValueTask<ZLinkStreamSessionRuntime[]> SnapshotAsync() =>
-        _lane.RunAsync(() => _sessions.Values.ToArray());
-
     public ValueTask<ZLinkStreamSessionRuntime[]> StopAsync() => _lane.RunAsync(StopCore);
 
     public ValueTask SealAdmissionAsync(CancellationToken cancellationToken) =>

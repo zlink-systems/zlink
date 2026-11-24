@@ -454,7 +454,7 @@ connector가 같은 연결에서 그 request를 자동으로 다시 보낸다. �
   reply received hook을 실행하지 않는다).
 - 대기의 마감은 원래 request deadline과 `처음 거절을 받은 시각 + MaxAdmissionWait` 중 이른 쪽이다. 원래 deadline을
   늘리지 않는다. 마감까지 성공하지 못하면 `RequestTimeout`으로 끝내고 마감 뒤에는 보내지 않는다.
-  `MaxAdmissionWait`의 기본값은 그 request의 유효 request timeout이다.
+  `MaxAdmissionWait`의 기본값은 그 request의 유효 request timeout이다. 지정할 때는 양수이며, 0 이하는 설정 오류다.
 - 연결이 끊기면 대기 중인 request는 기존 연결 생명주기(§6) 규칙대로 끝난다. 재접속이 대기 중인 request를 복원하지 않는다.
 
 ## 6. 연결 생명주기
@@ -586,7 +586,7 @@ await connector.Close.Async(cancellationToken);    // callback 밖에서는 공�
 | `HeartbeatTimeout` | heartbeat가 응답하지 않아 끊겼다 |
 | `ServerDrain` | 서버가 **우아한 종료(graceful drain)** 로 세션을 닫았다 |
 | `ProtocolError` | 프로토콜 위반으로 끊겼다 |
-| `TransportError` | transport 수준 실패로 끊겼다 |
+| `TransportError` | transport 수준 실패, 또는 서버가 그 연결의 session 객체를 만들지 못해 끊겼다 |
 
 `ServerDrain`을 받은 client는 이 값을 보고 **재접속과 백오프를 결정한다**
 ([Host relocation 전체 흐름 §9](../server/05-location-relocation/05-host-relocation-flow.ko.md#12-대기-중인-message-timer와-session을-옮긴다)). **서버가 대체 endpoint를

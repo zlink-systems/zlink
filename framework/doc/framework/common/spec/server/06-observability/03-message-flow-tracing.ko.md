@@ -120,9 +120,9 @@ Message가 send, request, response, error 또는 control 중 어떤 처리 방�
 다음 값 중 하나다.
 
 `backpressure`, `stale_target`, `target_closed`, `shutdown`, `location_unavailable`,
-`activation_rejected`, `activation_timeout`.
+`activation_rejected`, `activation_timeout`, `session_creation_failed`.
 
-마지막 세 값은 각각 Instance Spot의 위치를 찾지 못한 경우, 새 Spot 생성을 거부한
+`session_creation_failed`는 STREAM 연결의 session 객체 생성이 실패해 그 packet을 전달하지 못한 경우다([STREAM session §7](../04-session/01-stream-session.ko.md#7-오류-경계)). 그 앞의 세 값은 각각 Instance Spot의 위치를 찾지 못한 경우, 새 Spot 생성을 거부한
 경우와 제한 시간 안에 생성을 마치지 못한 경우를 나타낸다. Instance Spot close와
 lease fencing은 `target_closed`로 기록한다.
 
@@ -131,7 +131,15 @@ lease fencing은 `target_closed`로 기록한다.
 
 `no_handler`, `decode_error`, `encode_error`, `handler_exception`, `invalid_frame`,
 `reply_path_missing`, `unexpected_reply`, `backpressure`, `stale_target`,
-`shutdown`.
+`shutdown`, `session_creation_failed`, `encode_error`.
+
+`encode_error`는 송신 측이 application message를 wire bytes로 인코딩하지 못해 보내지 못한 경우다 —
+예를 들어 nullable로 선언하지 않은 필드가 null이거나 값이 wire 형식의 범위를 넘는 경우다
+([Message model](../00-foundation/05-message-model.ko.md)). 이 실패는 §2.1의 `sent` 경계에 이르기 전이므로
+`zlink.message_flow` 단계 기록은 남기지 않고, 송신하려던 packet과 flow로 `zlink.dispatch_error`를
+한 번 기록한다. `phase`는 넣지 않고 `action=fail_caller`다 — send·request 호출자는 같은 실패로 끝난다.
+기록에는 message type 이름을 담고, 오류 메시지에는 field 경로를 담는다. Handler 안에서 보낸 경우 그 실패가
+handler 실패로 이어지면 handler 쪽 기록(`handler_exception`)은 별도로 남긴다.
 
 송신 API가 application payload를 등록된 serializer로 변환하지 못하면 그 송신은 전송 계층에 제출되지 않으므로
 `sent`를 남기지 않고, 송신하려던 packet으로 `reason=encode_error`, `action=fail_caller`인 dispatch error를 송신
