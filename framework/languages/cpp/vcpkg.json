@@ -19,6 +19,7 @@
     "lz4",
     "nlohmann-json",
     "yyjson",
+    "zlib",
     "openssl",
     "opentelemetry-cpp",
     "protobuf",
