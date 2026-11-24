@@ -159,7 +159,10 @@ Local owner와 remote owner에는 같은 handler, metadata와 completion 계약�
 | `Unavailable` | authority는 남아 있지만 Ready route가 없다는 사실과 그 authority 상태(`Creating`·`Closing` 등) | Instance intent가 없는 call은 [Spot 주소 메시징 §9](06-spot-address-messaging.ko.md#9-실패와-관측)의 terminal mapper로 전달한다. Instance-intent activation은 [Object lifecycle §3·§5](09-object-lifecycle.ko.md#3-없는-객체를-언제-만드는가)의 `Creating` 대기, owner lease가 무효인 steady `Ready`의 해제 요청, idle-cleanup route 갱신을 따른다. Explicit Close 중인 authority를 확인한 Instance intent는 owner route와 fence를 보존해 그 owner node로 전달하며, owner에서의 처리는 [Spot 주소 메시징 §7](06-spot-address-messaging.ko.md#7-close와-generation-경계)을 따른다. |
 | `StoreFailure` | authority 유무를 판정하지 못했다는 사실 | Store retry·reconciliation으로 전달한다. |
 
-Positive route cache에는 `ReadyRoute`만 저장한다. Creation coordinator로의 전달은
+Positive route cache에는 `ReadyRoute`만 저장한다. 메시지 전달 경로를 찾기 위한 resolver 조회만 cache를 채운다 —
+Bind 검증처럼 authority를 확인하려고 Store를 직접 읽은 결과는 그 operation의 판정에만 쓰고 positive route cache에
+넣지 않는다. 그 read가 기존 entry보다 큰 `StoreVersion`을 확인하면 위 표대로 그 entry는 제거한다. 확인용 read로 채운 entry는 그 뒤 첫 메시지 전에 object가 연속 이동하면 Follow가 없는 옛 owner를
+가리키게 된다. Creation coordinator로의 전달은
 [Object lifecycle §3](09-object-lifecycle.ko.md#3-없는-객체를-언제-만드는가)을 따른다. Authority release를 소유하는 lifecycle component가 release를 완료한 뒤에만
 resolver가 `Missing`을 반환한다 — 이 순서가 없으면 아직 정리 중인 object가 이미 없는
 것처럼 보인다.
