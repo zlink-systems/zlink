@@ -284,6 +284,7 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
         accepted.whenComplete(
                 (ignored, failure) -> {
                     if (failure != null) received.close();
+                    else received.requestProgress().peerAdmitted();
                 });
         CompletionStage<Void> admitted;
         try {
