@@ -366,10 +366,16 @@ class stream_session_dispatcher_t
             const std::lock_guard<std::mutex> dispatch_lock (_stream.dispatch_mutex);
             if (!_stream.session_serial_executor) {
                 _stream.session_serial_executor =
-                  std::make_shared<runtime::session_serial_executor_t> (worker_executor);
+                  std::make_shared<runtime::session_serial_executor_t> (
+                    std::move (worker_executor), _stream.shutdown_cancellation);
             }
             session_executor = _stream.session_serial_executor;
         }
+        // The gate delivers the terminal for discarded work. The started
+        // turn delivers its terminal after the callback task settles.
+        runtime::session_serial_executor_t::discard_t discarded;
+        if (_stream.shutdown_cancellation.stop_possible ())
+            discarded = completion;
         auto work = [session_executor, callback = std::move (callback),
                      completion = std::move (completion),
                      started = std::move (started)] (auto complete) mutable {
@@ -417,19 +423,20 @@ class stream_session_dispatcher_t
         bool posted = false;
         switch (kind) {
             case work_kind_t::application:
-                posted =
-                  session_executor->execute_application (std::move (work), std::move (cancelled));
+                posted = session_executor->execute_application (
+                  std::move (work), std::move (cancelled), std::move (discarded));
                 break;
             case work_kind_t::control:
-                posted =
-                  session_executor->execute_control (std::move (work), std::move (cancelled));
+                posted = session_executor->execute_control (std::move (work), std::move (cancelled),
+                                                            std::move (discarded));
                 break;
             case work_kind_t::infrastructure:
-                posted = session_executor->execute_infrastructure (std::move (work),
-                                                                   std::move (cancelled));
+                posted = session_executor->execute_infrastructure (
+                  std::move (work), std::move (cancelled), std::move (discarded));
                 break;
             case work_kind_t::final:
-                posted = session_executor->execute_final (std::move (work), std::move (cancelled));
+                posted = session_executor->execute_final (std::move (work), std::move (cancelled),
+                                                          std::move (discarded));
                 break;
         }
         if (!posted) {
@@ -876,11 +883,19 @@ task_t<void> stream_t::close ()
 namespace detail
 {
 
+static void check_stream_shutdown (const stream_state_t &state)
+{
+    if (state.shutdown_cancellation.stop_requested ())
+        throw framework_exception_t (framework_error_kind_t::shutting_down,
+                                     "STREAM session Host is shutting down");
+}
+
 std::function<task_t<void> (const stream_header_t &, const zlink::message_t &)>
 stream_runtime_t::stream_submitter (std::shared_ptr<stream_state_t> state)
 {
     return [state = std::move (state)] (const stream_header_t &submitted_header,
                                         const zlink::message_t &submitted_payload) -> task_t<void> {
+        check_stream_shutdown (*state);
         if (state->closed.load (std::memory_order_acquire)) {
             throw framework_exception_t (framework_error_kind_t::unavailable,
                                          "STREAM session is disconnected");
@@ -890,6 +905,7 @@ stream_runtime_t::stream_submitter (std::shared_ptr<stream_state_t> state)
           writer;
         {
             const std::lock_guard<std::mutex> lock (state->transport_writer_mutex);
+            check_stream_shutdown (*state);
             if (state->closed.load (std::memory_order_acquire)) {
                 throw framework_exception_t (framework_error_kind_t::unavailable,
                                              "STREAM session is disconnected");
@@ -920,11 +936,13 @@ stream_runtime_t::stream_submitter (std::shared_ptr<stream_state_t> state)
 
 stream_send_call_t stream_t::write_packet (const zlink::framework::message_t &payload)
 {
-    if (!_state->serializers) {
-        return stream_send_call_t (result_t<void>::failure (
-          framework_error_kind_t::protocol_error, "STREAM write requires a serializer registry"));
-    }
     try {
+        detail::check_stream_shutdown (*_state);
+        if (!_state->serializers) {
+            return stream_send_call_t (
+              result_t<void>::failure (framework_error_kind_t::protocol_error,
+                                       "STREAM write requires a serializer registry"));
+        }
         auto raw_payload = detail::message_to_raw (payload, *_state->serializers);
         stream_header_t header (stream_message_kind_t::send,
                                 _state->application_codec.load (std::memory_order_acquire),
@@ -957,11 +975,13 @@ stream_write_call_t stream_t::reply_packet (const zlink::framework::message_t &p
         return stream_write_call_t (result_t<void>::failure (
           framework_error_kind_t::protocol_error, "STREAM reply requires request sequence"));
     }
-    if (!_state->serializers) {
-        return stream_write_call_t (result_t<void>::failure (
-          framework_error_kind_t::protocol_error, "STREAM reply requires a serializer registry"));
-    }
     try {
+        detail::check_stream_shutdown (*_state);
+        if (!_state->serializers) {
+            return stream_write_call_t (
+              result_t<void>::failure (framework_error_kind_t::protocol_error,
+                                       "STREAM reply requires a serializer registry"));
+        }
         auto raw_payload = detail::message_to_raw (payload, *_state->serializers);
         auto reply_header = detail::stream_runtime_t::make_terminal_header (
           stream_message_kind_t::response, *request_header);
@@ -1904,7 +1924,8 @@ void stream_runtime_t::dispatch_control_frame (stream_t &stream,
     }
 }
 
-stream_t stream_runtime_t::open_session (std::string stream_name) const
+stream_t stream_runtime_t::open_session (std::string stream_name,
+                                         std::stop_token shutdown_cancellation) const
 {
     if (_state->streams.find (stream_name) == _state->streams.end ()) {
         throw framework_exception_t (framework_error_kind_t::not_found,
@@ -1912,6 +1933,7 @@ stream_t stream_runtime_t::open_session (std::string stream_name) const
     }
     auto state = std::make_shared<stream_state_t> ();
     state->session_id = std::move (stream_name) + ":" + std::to_string (_state->next_session_id++);
+    state->shutdown_cancellation = std::move (shutdown_cancellation);
     state->serializers = _state->serializers;
     state->compression_codec = _state->compression_codec;
     return stream_t (state);

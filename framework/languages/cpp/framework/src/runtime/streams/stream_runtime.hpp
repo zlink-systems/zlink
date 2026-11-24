@@ -10,6 +10,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -54,6 +55,7 @@ class stream_state_t
     std::optional<std::string> local_address;
     std::optional<std::string> remote_address;
     std::atomic_bool closed{false};
+    std::stop_token shutdown_cancellation;
     std::atomic<stream_codec_t> application_codec{stream_codec_t::raw};
     std::vector<stream_header_t> written_headers;
     std::vector<zlink::message_t> written_payloads;
@@ -137,7 +139,8 @@ class stream_runtime_t
     static void propagate_flow (stream_header_t &header);
     static result_t<void> validate_header (const stream_header_t &header);
 
-    stream_t open_session (std::string stream_name) const;
+    stream_t open_session (std::string stream_name,
+                           std::stop_token shutdown_cancellation = {}) const;
     void set_session_identity (stream_t &stream,
                                std::optional<zlink::routing_id_t> routing_id,
                                std::optional<std::string> local_address = std::nullopt,
