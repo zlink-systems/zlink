@@ -345,6 +345,10 @@ public sealed partial class StreamConnectorTests
         public IDisposable OnRequestSending(Action<ZlinkStreamRequestSendingContext> handler) =>
             new NoopRegistration();
 
+        public IDisposable OnAdmissionWaiting(
+            Func<ZlinkStreamAdmissionWaiting, CancellationToken, ValueTask> handler
+        ) => throw new NotSupportedException();
+
         public IDisposable OnReplyReceived(
             Func<ZlinkStreamReplyReceivedContext, CancellationToken, ValueTask> handler
         ) => new NoopRegistration();

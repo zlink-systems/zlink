@@ -87,10 +87,13 @@ internal sealed class ZlinkStreamOneWaySubmitQueue
         await written.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public ValueTask SubmitRequestAsync(
+    // The returned task tracks the queue's last access to the frame, even if the caller
+    // cancels its wait for the write.
+    public Task SubmitRequest(
         ZlinkStreamOutboundFrame frame,
         CancellationToken cancellationToken,
-        Action onAccepted
+        Action? beforePublish,
+        IZlinkStreamConnection? expectedConnection = null
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -100,6 +103,13 @@ internal sealed class ZlinkStreamOneWaySubmitQueue
         lock (_gate)
         {
             var connection = GetConnection();
+            if (expectedConnection is not null && !ReferenceEquals(connection, expectedConnection))
+                throw ZlinkStreamConnector.Error(
+                    ZlinkStreamErrorCode.Disconnected,
+                    "The request's connection has ended."
+                );
+            // The writer can consume the request as soon as TryWrite publishes it.
+            beforePublish?.Invoke();
             if (
                 !_queue.Writer.TryWrite(
                     new SubmitItem(connection, frame, written, cancellationToken)
@@ -109,9 +119,8 @@ internal sealed class ZlinkStreamOneWaySubmitQueue
                     ZlinkStreamErrorCode.SendFailed,
                     "Connector outbound frame queue is full."
                 );
-            onAccepted();
         }
-        return new ValueTask(written.Task.WaitAsync(cancellationToken));
+        return written.Task;
     }
 
     /// <summary>
@@ -168,10 +177,14 @@ internal sealed class ZlinkStreamOneWaySubmitQueue
                 item.Written.TrySetCanceled(cancellationToken);
                 return;
             }
+            catch (OperationCanceledException) when (item.CancellationToken.IsCancellationRequested)
+            {
+                item.Written.TrySetCanceled(item.CancellationToken);
+            }
             catch (ZlinkStreamException exception)
             {
-                // The connector's send path classifies the failure and updates lifecycle
-                // state before returning the exception here.
+                // The send path owns transport failure classification and lifecycle changes.
+                // A request deadline can also fail before reaching that path.
                 item.Written.TrySetException(exception);
             }
             catch (Exception exception)
