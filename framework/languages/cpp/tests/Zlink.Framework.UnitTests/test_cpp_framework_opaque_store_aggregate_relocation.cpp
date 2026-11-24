@@ -205,7 +205,8 @@ class aggregate_commit_contention_store_t final : public location_store_t
     };
     task_t<store_read_result_t> read (store_key_t key) override
     {
-        if (on_counter_read && key.value == "zlink:v11:authority-owner-counter"
+        if (on_counter_read
+            && key.value.starts_with (std::string ("zlink:v12:authority-owner-counter") + '\0')
             && ++counter_reads == 2) {
             // The injected peer step runs on the lane that resumes the
             // repository, so it is awaited rather than blocking that lane.
@@ -226,9 +227,11 @@ class aggregate_commit_contention_store_t final : public location_store_t
         for (const auto &mutation : request.mutations) {
             const auto &key = std::visit (
               [] (const auto &value) -> const store_key_t & { return value.key; }, mutation);
-            counter |= key.value == "zlink:v11:authority-owner-counter";
+            if (const auto *put = std::get_if<store_put_t> (&mutation);
+                put && key.value.starts_with ("zlink:v11:aggregate:"))
+                counter |= nlohmann::json::parse (put->bytes).at ("status") == "committing";
             page |= key.value.starts_with ("zlink:v11:aggregate-commit:");
-            capacity |= key.value.starts_with ("zlink:v11:capacity:");
+            capacity |= key.value.starts_with (capacity_domain);
         }
         const bool matching = phase == phase_t::transition ? counter
                               : phase == phase_t::page     ? page

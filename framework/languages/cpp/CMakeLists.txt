@@ -2831,6 +2831,34 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     LABELS "framework-unit;framework-regression"
     TIMEOUT 30)
 
+  add_executable(test_cpp_framework_location_contention
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_location_contention.cpp)
+  target_compile_features(test_cpp_framework_location_contention PRIVATE cxx_std_20)
+  target_link_zlink_test_harness(test_cpp_framework_location_contention)
+  target_use_zlink_gtest_main(test_cpp_framework_location_contention)
+  target_link_libraries(test_cpp_framework_location_contention PRIVATE zlink::framework)
+  target_include_directories(test_cpp_framework_location_contention PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+  target_compile_definitions(test_cpp_framework_location_contention PRIVATE
+    ZLINK_LOCATION_CONTENTION_FIXTURE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/location-contention-v1.json")
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_location_contention
+    COMMAND test_cpp_framework_location_contention --gtest_filter=InMemory/*
+    LABELS "framework-unit;framework-location"
+    TIMEOUT 180)
+  if(_zlink_framework_redis_target)
+    target_link_libraries(test_cpp_framework_location_contention PRIVATE zlink::framework_locations_redis)
+    target_compile_definitions(test_cpp_framework_location_contention PRIVATE
+      ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT=1)
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_framework_location_contention_redis
+      COMMAND test_cpp_framework_location_contention --gtest_filter=Redis/*
+      LABELS "framework-extension;framework-location;redis"
+      TIER integration
+      TIMEOUT 180)
+  endif()
+
   add_executable(test_cpp_framework_discarded_authority
     tests/Zlink.Framework.UnitTests/test_cpp_framework_discarded_authority.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_owner_token_release_wait.cpp)

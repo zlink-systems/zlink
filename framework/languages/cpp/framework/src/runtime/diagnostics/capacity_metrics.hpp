@@ -59,8 +59,17 @@ class capacity_metrics_t
             if (observer.instrument)
                 observer.instrument->RemoveCallback (&observe, &observer);
     }
+    bool enabled () const noexcept
+    {
+        for (const auto &observer : _observers)
+            if (observer.instrument)
+                return true;
+        return false;
+    }
     void register_local (std::string key, const mesh_node_descriptor_t &descriptor)
     {
+        if (!enabled ())
+            return;
         mutate ([&] (snapshot_t &snapshot) {
             snapshot[key].mesh_name = descriptor.mesh_name;
             snapshot[key].limits = descriptor.capacity;

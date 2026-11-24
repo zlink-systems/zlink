@@ -200,7 +200,8 @@ decode_page (const bytes_t &encoded, std::optional<std::size_t> expected_page_in
         for (const auto &entry : value.at (location_record_fields::entries)) {
             const auto participant = decode_participant (entry);
             if (participant.key.value.empty () || participant.expected_store_version.empty ()
-                || participant.owner_transition != authority_generation_transition_t::new_owner)
+                || (participant.owner_transition != authority_generation_transition_t::new_owner
+                    && participant.owner_transition != authority_generation_transition_t::preserve))
                 return std::nullopt;
             participants.push_back (participant);
         }

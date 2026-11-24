@@ -309,13 +309,7 @@ class fault_store_t final : public location_store_t
     unsigned capacity_reads = 0;
     task_t<store_read_result_t> read (store_key_t key) override
     {
-        if (key.value.find (":capacity:") != std::string::npos) {
-            ++capacity_reads;
-            if (fail_capacity)
-                throw framework_exception_t (framework_error_kind_t::unavailable,
-                                             "injected capacity read failure");
-        }
-        co_return co_await inner.read (std::move (key));
+        return inner.read (std::move (key));
     }
     task_t<store_write_result_t> write (store_write_request_t request) override
     {
@@ -323,7 +317,13 @@ class fault_store_t final : public location_store_t
     }
     task_t<store_scan_result_t> scan (store_scan_request_t request) override
     {
-        return inner.scan (std::move (request));
+        if (request.prefix.starts_with (std::string ("zlink:v12:capacity") + '\0')) {
+            ++capacity_reads;
+            if (fail_capacity)
+                throw framework_exception_t (framework_error_kind_t::unavailable,
+                                             "injected capacity scan failure");
+        }
+        co_return co_await inner.scan (std::move (request));
     }
 };
 std::vector<std::byte> bytes (std::string_view text)

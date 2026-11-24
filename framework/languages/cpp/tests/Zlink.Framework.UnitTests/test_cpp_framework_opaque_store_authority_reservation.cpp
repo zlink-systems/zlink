@@ -42,9 +42,6 @@ using namespace zlink::framework;
 using namespace zlink::framework::runtime;
 using namespace zlink::framework::test::opaque_store;
 
-const store_key_t object_generation_counter_key{"zlink:v11:object-counter"};
-const store_key_t authority_owner_generation_counter_key{"zlink:v11:authority-owner-counter"};
-
 TEST (ZLinkFrameworkOpaqueStoreProviders, DescriptorCapacityUsesCurrentStoreCounts)
 {
     in_memory_location_store_t store;
@@ -195,6 +192,26 @@ class reject_next_authority_capacity_write_store_t final : public location_store
 
     task_t<store_write_result_t> write (store_write_request_t request) override
     {
+        if (observe_transfer) {
+            const auto reserved = std::any_of (
+              request.mutations.begin (), request.mutations.end (), [&] (const auto &mutation) {
+                  const auto *add = std::get_if<store_add_t> (&mutation);
+                  return add && add->key.value == target_pending.value && add->delta == -1;
+              });
+            if (reserved) {
+                observe_transfer = false;
+                const auto row = co_await inner.read (target_pending);
+                const auto *found = std::get_if<store_found_t> (&row);
+                EXPECT_NE (found, nullptr);
+                if (found)
+                    EXPECT_EQ (found->value.bytes, bytes ("1"));
+                EXPECT_TRUE (std::none_of (
+                  request.conditions.begin (), request.conditions.end (),
+                  [] (const auto &condition) {
+                      return std::holds_alternative<store_sum_at_most_condition_t> (condition);
+                  }));
+            }
+        }
         if (reject_next) {
             std::size_t authority_mutations = 0;
             std::size_t capacity_mutations = 0;
@@ -203,15 +220,19 @@ class reject_next_authority_capacity_write_store_t final : public location_store
                   [] (const auto &value) -> const store_key_t & { return value.key; }, mutation);
                 if (key.value.starts_with (std::string ("authority") + '\0'))
                     ++authority_mutations;
-                if (key.value.starts_with ("zlink:v11:capacity:"))
+                if (key.value.starts_with (capacity_domain))
                     ++capacity_mutations;
             }
             if (authority_mutations != 0 && capacity_mutations != 0) {
                 reject_next = false;
                 rejected_atomic_batch = true;
                 rejected_capacity_mutations = capacity_mutations;
-                const auto authority_key = std::visit (
-                  [] (const auto &mutation) { return mutation.key; }, request.mutations.front ());
+                const auto authority = std::find_if (
+                  request.mutations.begin (), request.mutations.end (), [] (const auto &mutation) {
+                      const auto *put = std::get_if<store_put_t> (&mutation);
+                      return put && put->key.value.starts_with (std::string ("authority") + '\0');
+                  });
+                const auto authority_key = std::get<store_put_t> (*authority).key;
                 // Awaited: the repository may resume on the inner store's lane.
                 const auto row = std::get<store_found_t> (co_await inner.read (authority_key));
                 store_write_request_t concurrent{
@@ -232,6 +253,8 @@ class reject_next_authority_capacity_write_store_t final : public location_store
 
     in_memory_location_store_t inner;
     bool reject_next = false;
+    bool observe_transfer = false;
+    store_key_t target_pending;
     bool rejected_atomic_batch = false;
     std::size_t rejected_capacity_mutations = 0;
 };
@@ -239,6 +262,11 @@ class reject_next_authority_capacity_write_store_t final : public location_store
 TEST (CppFrameworkOpaqueLocationStore, AbortedReservationCanBeReservedAgainThroughProvider)
 {
     in_memory_location_store_t provider;
+    ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (
+      provider
+        .write ({{}, {store_put_t{{"zlink:v12:generation-floor"}, bytes ("17"), std::nullopt}}})
+        .result ()
+        .value ()));
     provider_location_repository_t repository (provider);
     repository.configure_reclaim_margin (std::chrono::milliseconds::zero ());
     const auto claim = repository.claim_owner_lease ("owner-retry", 30s).result ().value ();
@@ -274,12 +302,24 @@ TEST (CppFrameworkOpaqueLocationStore, AbortedReservationCanBeReservedAgainThrou
     const auto first = repository.reserve (request).result ().value ();
     const auto *first_reservation = std::get_if<object_reserved_t> (&first);
     ASSERT_NE (first_reservation, nullptr);
+    EXPECT_EQ (first_reservation->fence.object_generation, 17u);
+    EXPECT_EQ (first_reservation->fence.authority_owner_generation, 17u);
     ASSERT_TRUE (std::holds_alternative<object_aborted_t> (
       repository.abort ({request.key, first_reservation->fence}).result ().value ()));
 
+    const auto pending = capacity_key (descriptor, "actors", "pending");
+    const auto returned = std::get<store_found_t> (provider.read (pending).result ().value ());
+    EXPECT_TRUE (std::holds_alternative<object_abort_conflict_t> (
+      repository.abort ({request.key, first_reservation->fence}).result ().value ()));
+    const auto replay = std::get<store_found_t> (provider.read (pending).result ().value ());
+    EXPECT_EQ (returned.value.bytes, bytes ("0"));
+    EXPECT_EQ (replay.value.bytes, returned.value.bytes);
+    EXPECT_EQ (replay.value.version.value, returned.value.version.value);
     const auto second = repository.reserve (request).result ().value ();
     const auto *second_reservation = std::get_if<object_reserved_t> (&second);
     ASSERT_NE (second_reservation, nullptr);
+    EXPECT_EQ (second_reservation->fence.object_generation, 18u);
+    EXPECT_EQ (second_reservation->fence.authority_owner_generation, 18u);
     EXPECT_NE (second_reservation->fence.reservation_id, first_reservation->fence.reservation_id);
     const auto capacity = capacity_record (provider, descriptor);
     EXPECT_EQ (capacity.at ("pending").at ("actors"), 1);
@@ -337,12 +377,12 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecyc
     ASSERT_NE (reservation, nullptr);
     // Missing canonical counter rows bootstrap at issue 1 and are stored as
     // bare next-to-issue decimals in the same reserve batch.
-    EXPECT_EQ (
-      std::get<store_found_t> (provider.read (object_generation_counter_key).result ().value ())
-        .value.bytes,
-      bytes ("2"));
     EXPECT_EQ (std::get<store_found_t> (
-                 provider.read (authority_owner_generation_counter_key).result ().value ())
+                 provider.read (generation_key ("actor", "actor-1")).result ().value ())
+                 .value.bytes,
+               bytes ("2"));
+    EXPECT_EQ (std::get<store_found_t> (
+                 provider.read (generation_key ("actor", "actor-1", true)).result ().value ())
                  .value.bytes,
                bytes ("2"));
     // store_version is the provider's own opaque per-key version
@@ -453,12 +493,15 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecyc
     provider.fault = creation_terminal_failure_store_t::fault_t::capacity_conflict_once;
     EXPECT_EQ (reopened.commit_aggregate (aggregate_fence->fence).result ().value (),
                aggregate_commit_result_t::committed);
-    // The two-participant aggregate issues 4 and 5 after reserve/retarget/
-    // reserve, then stores the next-to-issue value 6 in one transition batch.
+    // The aggregate issues the next owner generation for each participant.
     EXPECT_EQ (std::get<store_found_t> (
-                 provider.read (authority_owner_generation_counter_key).result ().value ())
+                 provider.read (generation_key ("actor", "actor-1", true)).result ().value ())
                  .value.bytes,
-               bytes ("6"));
+               bytes ("4"));
+    EXPECT_EQ (std::get<store_found_t> (
+                 provider.read (generation_key ("spot", "spot-1", true)).result ().value ())
+                 .value.bytes,
+               bytes ("3"));
     const auto aggregated_actor = reopened.read_authority (actor_key).result ().value ();
     ASSERT_TRUE (std::holds_alternative<authority_snapshot_t> (aggregated_actor));
     EXPECT_EQ (std::get<authority_snapshot_t> (aggregated_actor).payload,
@@ -566,7 +609,7 @@ TEST (CppFrameworkOpaqueLocationStore, PrivateRepositoryPersistsAuthorityLifecyc
       reopened.prepare_aggregate (exhausted_aggregate).result ().value ();
     const auto *exhausted_fence = std::get_if<aggregate_prepared_t> (&exhausted_prepared);
     ASSERT_NE (exhausted_fence, nullptr);
-    const auto &authority_counter_key = authority_owner_generation_counter_key;
+    const auto authority_counter_key = generation_key ("actor", "actor-1", true);
     const auto counter_before =
       std::get<store_found_t> (provider.read (authority_counter_key).result ().value ());
     const auto maximum = std::to_string (std::numeric_limits<std::int64_t>::max ());
@@ -650,7 +693,7 @@ TEST (CppFrameworkOpaqueLocationStore, EveryAuthorityMutationRechecksConflictQua
                       co_await repository.compare_exchange_authority (key, ready.store_version,
                                                                       std::move (concurrent))));
                 } else {
-                    const auto row_key = object_generation_counter_key;
+                    const auto row_key = generation_key ("actor", request.key.global_id);
                     const auto row =
                       std::get<store_found_t> (co_await provider.inner.read (row_key));
                     store_write_request_t concurrent{
@@ -726,8 +769,8 @@ TEST (CppFrameworkOpaqueLocationStore, ReincarnateAtomicallyIssuesPairAndPreserv
     const auto reservation =
       std::get<object_reserved_t> (repository.reserve (request).result ().value ());
     const auto key = actor_authority_key (request.key.global_id);
-    const auto &object_counter = object_generation_counter_key;
-    const auto &owner_counter = authority_owner_generation_counter_key;
+    const auto object_counter = generation_key ("actor", request.key.global_id);
+    const auto owner_counter = generation_key ("actor", request.key.global_id, true);
     const auto counter = [&] (const store_key_t &counter_key) {
         return std::get<store_found_t> (provider.read (counter_key).result ().value ()).value;
     };
@@ -981,6 +1024,8 @@ TEST (CppFrameworkOpaqueLocationStore, RetargetUsesCapacityRowsAtomically)
     };
 
     auto moved_actor = create_actor ("actor-moved");
+    provider.target_pending = capacity_key (target_descriptor, "actors", "pending");
+    provider.observe_transfer = true;
     const auto moved =
       repository
         .compare_exchange_authority (actor_authority_key ("actor-moved"), moved_actor.store_version,
@@ -994,23 +1039,18 @@ TEST (CppFrameworkOpaqueLocationStore, RetargetUsesCapacityRowsAtomically)
     auto target_capacity = capacity_record (provider, target_descriptor);
     EXPECT_EQ (source_capacity.at ("active").at ("actors"), 0);
     EXPECT_EQ (target_capacity.at ("active").at ("actors"), 1);
+    EXPECT_EQ (target_capacity.at ("pending").at ("actors"), 0);
+    EXPECT_FALSE (provider.observe_transfer);
 
     auto atomic_actor = create_actor ("actor-atomic");
-    const store_key_t node_source_capacity_key{"zlink:v11:capacity:retarget:source-node"};
-    const auto canonical_source_row = std::get<store_found_t> (
-      provider.inner.read (capacity_key (source_descriptor)).result ().value ());
-    const auto node_source_capacity = nlohmann::json{
-      {"active", {{"actors", 1}, {"spots", 0}, {"spotTypes", nlohmann::json::object ()}}},
-      {"pending", {{"actors", 0}, {"spots", 0}, {"spotTypes", nlohmann::json::object ()}}}};
+    const auto node_source_capacity_key = capacity_key (source_descriptor);
+    const auto canonical_source_row =
+      std::get<store_found_t> (provider.inner.read (node_source_capacity_key).result ().value ());
     ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (
       provider.inner
-        .write ({.conditions =
-                   {
-                     store_version_condition_t{capacity_key (source_descriptor),
-                                               canonical_source_row.value.version},
-                   },
-                 .mutations = {store_put_t{node_source_capacity_key,
-                                           bytes (node_source_capacity.dump ()), std::nullopt}}})
+        .write ({{store_version_condition_t{node_source_capacity_key,
+                                            canonical_source_row.value.version}},
+                 {store_put_t{node_source_capacity_key, bytes ("1"), std::nullopt}}})
         .result ()
         .value ()));
     provider.reject_next = true;
@@ -1022,7 +1062,7 @@ TEST (CppFrameworkOpaqueLocationStore, RetargetUsesCapacityRowsAtomically)
                             .value ();
     ASSERT_TRUE (std::holds_alternative<authority_conflict_t> (rejected));
     EXPECT_TRUE (provider.rejected_atomic_batch);
-    EXPECT_EQ (provider.rejected_capacity_mutations, 2u);
+    EXPECT_EQ (provider.rejected_capacity_mutations, 3u);
     const auto after_rejected = std::get<authority_snapshot_t> (
       repository.read_authority (actor_authority_key ("actor-atomic")).result ().value ());
     EXPECT_NE (after_rejected.store_version, atomic_actor.store_version);
@@ -1034,11 +1074,11 @@ TEST (CppFrameworkOpaqueLocationStore, RetargetUsesCapacityRowsAtomically)
                              reinterpret_cast<const char *> (node_source_row.value.bytes.data ())
                                + node_source_row.value.bytes.size ());
     target_capacity = capacity_record (provider, target_descriptor);
-    EXPECT_EQ (node_source.at ("active").at ("actors"), 1);
+    EXPECT_EQ (node_source, 1);
     EXPECT_EQ (target_capacity.at ("active").at ("actors"), 1);
 
     atomic_actor = after_rejected;
-    node_source["active"]["actors"] = 0;
+    node_source = 0;
     ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (
       provider.inner
         .write ({.conditions = {store_version_condition_t{node_source_capacity_key,
@@ -1051,9 +1091,14 @@ TEST (CppFrameworkOpaqueLocationStore, RetargetUsesCapacityRowsAtomically)
                              .compare_exchange_authority (
                                actor_authority_key ("actor-atomic"), atomic_actor.store_version,
                                authority_retarget_t{bytes ("underflow"), target_target})
-                             .result ()
-                             .value ();
-    EXPECT_TRUE (std::holds_alternative<authority_conflict_t> (underflow));
+                             .result ();
+    ASSERT_FALSE (underflow);
+    EXPECT_EQ (underflow.error_kind (), framework_error_kind_t::data_lost);
+    EXPECT_EQ (
+      std::get<authority_snapshot_t> (
+        repository.read_authority (actor_authority_key ("actor-atomic")).result ().value ())
+        .store_version,
+      atomic_actor.store_version);
     node_source_row =
       std::get<store_found_t> (provider.inner.read (node_source_capacity_key).result ().value ());
     node_source =
@@ -1061,7 +1106,7 @@ TEST (CppFrameworkOpaqueLocationStore, RetargetUsesCapacityRowsAtomically)
                              reinterpret_cast<const char *> (node_source_row.value.bytes.data ())
                                + node_source_row.value.bytes.size ());
     target_capacity = capacity_record (provider, target_descriptor);
-    EXPECT_EQ (node_source.at ("active").at ("actors"), 0);
+    EXPECT_EQ (node_source, 0);
     EXPECT_EQ (target_capacity.at ("active").at ("actors"), 1);
 }
 }

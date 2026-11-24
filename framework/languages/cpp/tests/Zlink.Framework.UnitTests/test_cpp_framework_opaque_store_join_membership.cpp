@@ -221,8 +221,15 @@ TEST_P (JoinMembershipFailure, StorePreservesCommitFailureKind)
             request.capacity_bundle.spot_slots = 1;
             request.capacity_bundle.spot_type = spot_type_capacity_delta_t{kind, "room", 1};
         }
-        const auto reserved =
+        auto reserved =
           std::get<object_reserved_t> (repository.reserve (request).result ().value ());
+        if (provider_backend && kind == placement_object_kind_t::user_spot) {
+            // The join must use the Spot's generation.
+            EXPECT_TRUE (std::holds_alternative<object_aborted_t> (
+              repository.abort ({request.key, reserved.fence}).result ().value ()));
+            reserved =
+              std::get<object_reserved_t> (repository.reserve (request).result ().value ());
+        }
         return std::get<object_committed_t> (
                  repository.commit ({request.key, reserved.fence, payload}).result ().value ())
           .ready;

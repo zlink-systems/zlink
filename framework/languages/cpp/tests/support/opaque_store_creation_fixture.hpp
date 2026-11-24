@@ -59,8 +59,22 @@ class creation_terminal_failure_store_t final : public location_store_t
         }
         if (fault == fault_t::reserve_counter_conflict) {
             fault = fault_t::none;
-            const auto counter = std::get<store_put_t> (request.mutations.at (1));
-            store_write_request_t advance{{request.conditions.at (1)}, {counter}};
+            const auto counter_position = std::find_if (
+              request.mutations.begin (), request.mutations.end (), [] (const auto &mutation) {
+                  const auto *put = std::get_if<store_put_t> (&mutation);
+                  return put
+                         && put->key.value.starts_with (std::string ("zlink:v12:object-counter")
+                                                        + '\0');
+              });
+            const auto counter = std::get<store_put_t> (*counter_position);
+            const auto condition = std::find_if (
+              request.conditions.begin (), request.conditions.end (), [&] (const auto &item) {
+                  bool matches = false;
+                  runtime::for_each_condition_key (
+                    item, [&] (const auto &key) { matches |= key.value == counter.key.value; });
+                  return matches;
+              });
+            store_write_request_t advance{{*condition}, {counter}};
             (void) co_await inner.write (std::move (advance));
             co_return store_write_result_t{
               store_write_conflict_t{std::chrono::system_clock::now ()}};
@@ -97,23 +111,13 @@ class creation_terminal_failure_store_t final : public location_store_t
               store_write_conflict_t{std::chrono::system_clock::now ()}};
         }
         if (fault == fault_t::capacity_conflict_once) {
-            if (std::none_of (request.conditions.begin (), request.conditions.end (),
-                              [this] (const auto &condition) {
-                                  bool matches = false;
-                                  runtime::for_each_condition_key (
-                                    condition, [&] (const auto &key) {
-                                        matches |= key.value == conflicting_capacity_key.value;
-                                    });
-                                  return matches;
+            if (std::none_of (request.mutations.begin (), request.mutations.end (),
+                              [this] (const auto &mutation) {
+                                  const auto *add = std::get_if<store_add_t> (&mutation);
+                                  return add && add->key.value == conflicting_capacity_key.value;
                               }))
                 co_return co_await inner.write (std::move (request));
             fault = fault_t::none;
-            const auto row = co_await inner.read (conflicting_capacity_key);
-            const auto &found = std::get<store_found_t> (row);
-            store_write_request_t change{
-              {store_version_condition_t{conflicting_capacity_key, found.value.version}},
-              {store_put_t{conflicting_capacity_key, found.value.bytes, std::nullopt}}};
-            (void) co_await inner.write (std::move (change));
             co_return store_write_result_t{
               store_write_conflict_t{std::chrono::system_clock::now ()}};
         }

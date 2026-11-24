@@ -125,7 +125,7 @@ TEST (ZLinkFrameworkOpaqueStoreProviders,
     EXPECT_EQ (waiting.error_kind (), framework_error_kind_t::unavailable);
     EXPECT_EQ (store.creation_writes.size (), writes_before_wait);
     clock.advance (15s);
-    store.conflicting_capacity_key = capacity_key (descriptor);
+    store.conflicting_capacity_key = capacity_key (descriptor, "spots", "active");
     store.fault = creation_terminal_failure_store_t::fault_t::capacity_conflict_once;
     const auto writes_before = store.creation_writes.size ();
     request.operation_deadline = std::chrono::system_clock::now () + 5s;
@@ -168,7 +168,7 @@ class CreationTerminalTest : public ::testing::TestWithParam<completion_kind_t>
         descriptor.capacity.spot_types.push_back (
           {placement_object_kind_t::user_spot, "player", {0, 0, 1}});
 
-        provider.conflicting_capacity_key = capacity_key (descriptor);
+        provider.conflicting_capacity_key = capacity_key (descriptor, "actors", "pending");
         ASSERT_EQ (repository.update_mesh_node (descriptor, location_write_intent_t::new_claim)
                      .result ()
                      .value ()
@@ -228,7 +228,7 @@ class CreationTerminalTest : public ::testing::TestWithParam<completion_kind_t>
                           mutation)
                 .value;
             authority |= key.starts_with (std::string ("authority") + '\0');
-            capacity |= key.starts_with ("zlink:v11:capacity:");
+            capacity |= key.starts_with (capacity_domain);
             if (key.starts_with (std::string ("creation-terminal") + '\0')) {
                 ++terminal_mutations;
                 if (const auto *put = std::get_if<store_put_t> (&mutation);
@@ -368,7 +368,13 @@ void CreationTerminalTest::verify_creation_conditions (bool user_spot)
         }
         ASSERT_EQ (provider.creation_writes.size (), 1u);
         const auto &conditions = provider.creation_writes.front ().conditions;
-        EXPECT_EQ (conditions.size (), transition == 0 ? 6u : 4u);
+        const auto limited_dimensions = user_spot ? 2u : 1u;
+        const auto sums = static_cast<unsigned> (
+          std::count_if (conditions.begin (), conditions.end (), [] (const auto &condition) {
+              return std::holds_alternative<store_sum_at_most_condition_t> (condition);
+          }));
+        EXPECT_EQ (conditions.size (), transition == 0 ? 5u + limited_dimensions : 3u);
+        EXPECT_EQ (sums, transition == 0 ? limited_dimensions : 0u);
         EXPECT_TRUE (std::any_of (conditions.begin (), conditions.end (), [&] (const auto &c) {
             const auto *v = std::get_if<store_value_condition_t> (&c);
             return v && v->key.value == std::string ("owner-lease") + '\0' + descriptor.owner_id;
@@ -429,11 +435,12 @@ void CreationTerminalTest::verify_creation_descriptor_conflict (bool user_spot)
     }
 }
 
-TEST_P (CreationTerminalTest, CapacityKeyUsesSharedUtf8UriPreimageAcrossLifecycles)
+TEST_P (CreationTerminalTest, CapacityKeyUsesSharedUtf8AndRawRoutingIdHexAcrossLifecycles)
 {
     auto escaped = descriptor;
     escaped.mesh_name = "mesh /한";
-    escaped.rid = zlink::routing_id_t::from ("node /#?");
+    const std::string raw_rid{"\0\0\0\x01", 4};
+    escaped.rid = zlink::routing_id_t::from (raw_rid);
     ASSERT_EQ (repository.update_mesh_node (escaped, location_write_intent_t::new_claim)
                  .result ()
                  .value ()
@@ -442,14 +449,15 @@ TEST_P (CreationTerminalTest, CapacityKeyUsesSharedUtf8UriPreimageAcrossLifecycl
     auto request = reserve_request;
     request.key.global_id = "escaped-capacity-actor";
     request.target.mesh_name = escaped.mesh_name;
-    request.target.node_rid = node_rid_t::from_string (escaped.rid.to_string ());
+    request.target.node_rid = node_rid_t::from_string (raw_rid);
     const auto reserved = repository.reserve (request).result ().value ();
     ASSERT_TRUE (std::holds_alternative<object_reserved_t> (reserved));
-    const store_key_t expected{"zlink:v11:capacity:mesh%20%2F%ED%95%9C:node%20%2F%23%3F"};
+    const store_key_t expected{std::string ("zlink:v12:capacity") + '\0' + "mesh /한" + '\0'
+                               + "00000001" + '\0' + "actors" + '\0' + "pending"};
     const auto before = std::get<store_found_t> (provider.read (expected).result ().value ());
     const auto counts =
       nlohmann::json::parse (before.value.bytes.begin (), before.value.bytes.end ());
-    EXPECT_EQ (counts.at ("pending").at ("actors"), 1);
+    EXPECT_EQ (counts, 1);
     repository.remove_mesh_node ({escaped.mesh_name, escaped.rid}, fence.target.owner)
       .result ()
       .value ();
@@ -465,10 +473,7 @@ TEST_P (CreationTerminalTest, CapacityKeyUsesSharedUtf8UriPreimageAcrossLifecycl
     ASSERT_TRUE (
       std::holds_alternative<object_reserved_t> (repository.reserve (request).result ().value ()));
     const auto after = std::get<store_found_t> (provider.read (expected).result ().value ());
-    EXPECT_EQ (nlohmann::json::parse (after.value.bytes.begin (), after.value.bytes.end ())
-                 .at ("pending")
-                 .at ("actors"),
-               1);
+    EXPECT_EQ (after.value.bytes, bytes ("1"));
 }
 
 TEST_P (CreationTerminalTest, LiveTargetKeepsReservation)
@@ -494,41 +499,49 @@ TEST_P (CreationTerminalTest, ExpiredTargetReleasesPendingCapacity)
       repository.read_authority (actor_authority_key (reserve_request.key.global_id))
         .result ()
         .value ()));
-    const auto capacity =
-      std::get<store_found_t> (provider.read (capacity_key (descriptor)).result ().value ());
+    const auto capacity = std::get<store_found_t> (
+      provider.read (capacity_key (descriptor, "actors", "pending")).result ().value ());
     const auto json =
       nlohmann::json::parse (capacity.value.bytes.begin (), capacity.value.bytes.end ());
-    EXPECT_EQ (json.at ("pending").at ("actors"), 0);
+    EXPECT_EQ (json, 0);
     EXPECT_TRUE (std::holds_alternative<object_commit_conflict_t> (
       repository.commit ({reserve_request.key, fence, bytes ("late")}).result ().value ()));
 }
 
-TEST_P (CreationTerminalTest, MissingCapacityReleasesOnlyAuthority)
+TEST_P (CreationTerminalTest, MissingPendingCounterReportsDataLostWithoutReleasingAuthority)
 {
-    provider.write ({{}, {store_delete_t{capacity_key (descriptor)}}}).result ().value ();
+    provider.write ({{}, {store_delete_t{capacity_key (descriptor, "actors", "pending")}}})
+      .result ()
+      .value ();
     repository.release_owner_lease (fence.target.owner).result ().value ();
-    EXPECT_TRUE (repository
-                   .release_ended_reservation (actor_authority_key (reserve_request.key.global_id),
-                                               fence.expected_store_version)
+    const auto released =
+      repository
+        .release_ended_reservation (actor_authority_key (reserve_request.key.global_id),
+                                    fence.expected_store_version)
+        .result ();
+    ASSERT_FALSE (released);
+    EXPECT_EQ (released.error_kind (), framework_error_kind_t::data_lost);
+    EXPECT_EQ (std::get<authority_snapshot_t> (
+                 repository.read_authority (actor_authority_key (reserve_request.key.global_id))
                    .result ()
-                   .value ());
+                   .value ())
+                 .store_version,
+               fence.expected_store_version);
     EXPECT_TRUE (std::holds_alternative<store_missing_t> (
-      provider.read (capacity_key (descriptor)).result ().value ()));
+      provider.read (capacity_key (descriptor, "actors", "pending")).result ().value ()));
 }
 
 TEST_P (CreationTerminalTest, UnderflowLeavesAuthorityAndCapacityUnchanged)
 {
     provider
-      .write ({{},
-               {store_put_t{capacity_key (descriptor),
-                            bytes ("{\"active\":{\"actors\":0,\"spots\":0,\"spotTypes\":{}},"
-                                   "\"pending\":{\"actors\":0,\"spots\":0,\"spotTypes\":{}}}"),
-                            std::nullopt}}})
+      .write (
+        {{},
+         {store_put_t{capacity_key (descriptor, "actors", "pending"), bytes ("0"), std::nullopt}}})
       .result ()
       .value ();
     repository.release_owner_lease (fence.target.owner).result ().value ();
-    const auto before =
-      std::get<store_found_t> (provider.read (capacity_key (descriptor)).result ().value ());
+    const auto before = std::get<store_found_t> (
+      provider.read (capacity_key (descriptor, "actors", "pending")).result ().value ());
     const auto result =
       repository
         .release_ended_reservation (actor_authority_key (reserve_request.key.global_id),
@@ -542,8 +555,8 @@ TEST_P (CreationTerminalTest, UnderflowLeavesAuthorityAndCapacityUnchanged)
     catch (const framework_exception_t &error) {
         EXPECT_EQ (error.kind (), framework_error_kind_t::data_lost);
     }
-    const auto after =
-      std::get<store_found_t> (provider.read (capacity_key (descriptor)).result ().value ());
+    const auto after = std::get<store_found_t> (
+      provider.read (capacity_key (descriptor, "actors", "pending")).result ().value ());
     EXPECT_EQ (before.value.version.value, after.value.version.value);
     EXPECT_EQ (before.value.bytes, after.value.bytes);
     EXPECT_EQ (std::get<authority_snapshot_t> (
@@ -750,6 +763,44 @@ TEST_P (CreationTerminalTest, SharedCapacityConflictReconstructsWithoutChangingR
     const auto result = repository.complete_creation (request ()).result ().value ();
     ASSERT_TRUE (std::holds_alternative<object_creation_completed_result_t> (result));
     expect_published_terminal_and_replay ();
+}
+
+TEST_P (CreationTerminalTest, LoweredCapacityLimitKeepsExistingReservations)
+{
+    const store_key_t descriptor_key{std::string ("mesh-node") + '\0' + descriptor.mesh_name + '\0'
+                                     + descriptor.rid.to_hex ()};
+    const auto publish_limit = [&] (int limit) {
+        const auto current =
+          std::get<store_found_t> (provider.inner.read (descriptor_key).result ().value ());
+        auto row = nlohmann::json::parse (current.value.bytes);
+        row["descriptor"]["capacity"]["actors"]["limit"] = limit;
+        ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (
+          provider.inner
+            .write ({{store_version_condition_t{descriptor_key, current.value.version}},
+                     {store_put_t{descriptor_key, bytes (row.dump ()), std::nullopt}}})
+            .result ()
+            .value ()));
+    };
+
+    publish_limit (2);
+    auto second = reserve_request;
+    second.key.global_id = "second-reservation-before-limit-drop";
+    const auto reserved = repository.reserve (second).result ().value ();
+    const auto *pending = std::get_if<object_reserved_t> (&reserved);
+    ASSERT_NE (pending, nullptr);
+    publish_limit (1);
+    ASSERT_EQ (capacity_count (provider, capacity_key (descriptor, "actors", "pending")), 2u);
+
+    EXPECT_TRUE (std::holds_alternative<object_creation_completed_result_t> (
+      repository.complete_creation (request ()).result ().value ()));
+    EXPECT_EQ (capacity_count (provider, capacity_key (descriptor, "actors", "pending")), 1u);
+    EXPECT_EQ (capacity_count (provider, capacity_key (descriptor)),
+               GetParam () == completion_kind_t::created ? 1u : 0u);
+    EXPECT_TRUE (std::holds_alternative<object_committed_t> (
+      repository.commit ({second.key, pending->fence, bytes ("ready")}).result ().value ()));
+    EXPECT_EQ (capacity_count (provider, capacity_key (descriptor, "actors", "pending")), 0u);
+    EXPECT_EQ (capacity_count (provider, capacity_key (descriptor)),
+               GetParam () == completion_kind_t::created ? 2u : 1u);
 }
 
 TEST_P (CreationTerminalTest, ReserveCounterConflictKeepsOperationReservationIdentity)

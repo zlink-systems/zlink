@@ -901,10 +901,11 @@ TEST_P (EndedSpotMemberReleaseTest, ReleasesOnlyEndedOwnerMembers)
       scenario == "memberOnlyAggregatePrepared" || scenario == "memberOnlyAggregateReplaced";
     const bool aggregate_race = scenario == "memberAggregatePrepared" || member_only_race;
     const bool separate_aggregate_spot = scenario == "aggregate" || member_only_race;
-    // Shared owner/node: Spot authority and lock, owner lease, descriptor and capacity,
-    // plus each member's authority and lock. The nearest fitting batch has 2,047 keys;
-    // one more member exceeds the Store's 2,048 unique-key limit (§4).
-    const auto fitting_members = (location_store_limits::write_keys - 5u) / 2u;
+    // The provider batch has four shared authority, lock, lease and descriptor keys,
+    // plus the active Actor, Spot and typed Spot counters. Each member adds two keys.
+    // One more member exceeds the Store's 2,048 unique-key limit (§4).
+    const auto shared_keys = use_provider ? 7u : 5u;
+    const auto fitting_members = (location_store_limits::write_keys - shared_keys) / 2u;
     const std::size_t members_wanted = scenario == "batchFits"    ? fitting_members
                                        : scenario == "batchBound" ? fitting_members + 1u
                                                                   : 1u;
@@ -1121,22 +1122,19 @@ TEST_P (EndedSpotMemberReleaseTest, ReleasesOnlyEndedOwnerMembers)
     if (scenario == "memberCapacityCorrupt") {
         const auto current =
           std::get<store_found_t> (opaque.inner.read (opaque.before_read_key).result ().value ());
-        auto capacity =
-          nlohmann::json::parse (current.value.bytes.begin (), current.value.bytes.end ());
-        capacity.at (location_record_fields::active).at (location_record_fields::actors) = 0;
         ASSERT_TRUE (std::holds_alternative<store_write_applied_t> (
           opaque.inner
             .write ({{store_version_condition_t{opaque.before_read_key, current.value.version}},
-                     {store_put_t{opaque.before_read_key, bytes (capacity.dump ()), std::nullopt}}})
+                     {store_put_t{opaque.before_read_key, bytes ("0"), std::nullopt}}})
             .result ()
             .value ()));
         corrupted_capacity =
           std::get<store_found_t> (opaque.inner.read (opaque.before_read_key).result ().value ());
     }
     if (scenario == "memberReclaimed") {
-        // The Spot has already captured the old member in its snapshot when it reads
-        // source capacity. Reclaim that member independently before returning capacity.
-        opaque.before_read = [&] () -> task_t<void> {
+        // Reclaim the member after the Spot has built its release batch, before the
+        // provider checks the captured authority versions and applies the counter deltas.
+        opaque.before_write = [&] () -> task_t<void> {
             object_reserve_request_t concurrent;
             concurrent.key = {placement_object_kind_t::actor, "member-a"};
             concurrent.intent.stable_type = "player";
@@ -1222,9 +1220,9 @@ TEST_P (EndedSpotMemberReleaseTest, ReleasesOnlyEndedOwnerMembers)
             }
             aggregate.aggregate_id.value[0] = std::byte{4};
         }
-        // Reclaim has checked both locks before its first source-capacity read.
+        // Reclaim has checked both locks before submitting its release batch.
         // Preparing on a separate live target must preserve both source participants.
-        opaque.before_read = [&, aggregate] () -> task_t<void> {
+        opaque.before_write = [&, aggregate] () -> task_t<void> {
             raced_aggregate = co_await repository.prepare_aggregate (aggregate);
         };
     }
