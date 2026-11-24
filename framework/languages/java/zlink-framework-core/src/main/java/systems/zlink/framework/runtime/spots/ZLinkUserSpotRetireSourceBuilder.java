@@ -760,11 +760,6 @@ final class ZLinkUserSpotRetireSourceBuilder {
                             record.sourceSessionRid(),
                             record.sourceBindingGeneration()));
         }
-        routes.sort(
-                (left, right) ->
-                        Arrays.compareUnsigned(
-                                left.actorId().getBytes(StandardCharsets.UTF_8),
-                                right.actorId().getBytes(StandardCharsets.UTF_8)));
         return List.copyOf(routes);
     }
 
