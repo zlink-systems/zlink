@@ -9,12 +9,6 @@ import java.util.concurrent.CompletionStage;
 public final class PoolPackets {
     private PoolPackets() {}
 
-    public static final class Prepare implements ZLinkSpotPacketHandler<Pool, PrepareRoom> {
-        public CompletionStage<Void> handle(Pool pool, PrepareRoom message) {
-            return pool.prepare(message);
-        }
-    }
-
     public static final class Enter implements ZLinkSpotPacketHandler<Pool, EnterReport> {
         public CompletionStage<Void> handle(Pool pool, EnterReport message) {
             return pool.report(message);

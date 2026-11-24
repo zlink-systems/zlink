@@ -17,13 +17,11 @@ import java.util.stream.Collectors;
 public final class Pool implements ZLinkInstanceSpot {
     private static final Logger LOG = LoggerFactory.getLogger(Pool.class);
     private final ZLinkInstanceSpotContext context;
-    private final ZLinkSpotManager spots;
     private final ZLinkActorClient actors;
     private final MatchQueue queue = new MatchQueue();
 
-    public Pool(ZLinkInstanceSpotContext context, ZLinkSpotManager spots, ZLinkActorClient actors) {
+    public Pool(ZLinkInstanceSpotContext context, ZLinkActorClient actors) {
         this.context = context;
-        this.spots = spots;
         this.actors = actors;
     }
 
@@ -32,7 +30,6 @@ public final class Pool implements ZLinkInstanceSpot {
     }
 
     public void configure() {
-        context.handlers().addPacket(PoolPackets.Prepare.class);
         context.handlers().addPacket(PoolPackets.Enter.class);
         context.handlers().addPacket(PoolPackets.Prepared.class);
     }
@@ -106,52 +103,29 @@ public final class Pool implements ZLinkInstanceSpot {
                     if (assignment == null) return CompletableFuture.completedFuture(null);
                     var members =
                             assignment.members.stream().map(MatchQueue.Ticket::playerId).toList();
-                    // Creation yields from a packet turn so the recurring timer can finish.
                     return context.outbound()
-                            .sendToSpot(context.spotId(), new PrepareRoom(assignment.id, members))
-                            .instanceSpot(Names.POOL)
-                            .submit();
+                            .sendToSpot(
+                                    Names.ROOM_PROVISIONER_KEY,
+                                    new PrepareRoom(assignment.id, members))
+                            .instanceSpot(Names.ROOM_PROVISIONER)
+                            .inMesh(Names.MESH)
+                            .submit()
+                            .exceptionally(
+                                    failure -> {
+                                        var cause =
+                                                failure instanceof CompletionException
+                                                        ? failure.getCause()
+                                                        : failure;
+                                        if (!(cause instanceof ZLinkFrameworkException))
+                                            throw new CompletionException(cause);
+                                        LOG.warn(
+                                                "Room preparation send failed for {}",
+                                                assignment.id,
+                                                cause);
+                                        // The reservation still follows its entry deadline.
+                                        return null;
+                                    });
                 });
-    }
-
-    CompletionStage<Void> prepare(PrepareRoom message) {
-        var assignment = queue.findAssignment(message.assignmentId());
-        if (assignment == null) return CompletableFuture.completedFuture(null);
-        return spots.getOrCreate(assignment.id, Names.TABLE)
-                .inMesh(Names.MESH)
-                .yield()
-                .thenCompose(
-                        result -> {
-                            if (queue.findAssignment(assignment.id) == null)
-                                return CompletableFuture.completedFuture(true);
-                            if (System.nanoTime() - assignment.deadline >= 0
-                                    || result.state() == ZLinkSpotCreateState.REJECTED)
-                                return CompletableFuture.completedFuture(false);
-                            return context.outbound()
-                                    .sendToSpot(assignment.id, message)
-                                    .submit()
-                                    .thenApply(ignored -> true);
-                        })
-                .handle(
-                        (submitted, failure) -> {
-                            if (failure == null) return submitted;
-                            var cause =
-                                    failure instanceof CompletionException
-                                            ? failure.getCause()
-                                            : failure;
-                            if (!(cause instanceof ZLinkFrameworkException))
-                                throw new CompletionException(cause);
-                            LOG.warn(
-                                    "Room preparation submission failed for {}",
-                                    assignment.id,
-                                    cause);
-                            return false;
-                        })
-                .thenCompose(
-                        submitted ->
-                                submitted
-                                        ? CompletableFuture.completedFuture(null)
-                                        : prepared(new RoomPrepared(assignment.id, false)));
     }
 
     CompletionStage<Void> prepared(RoomPrepared message) {

@@ -137,7 +137,7 @@ public final class ConnectOnce {
 
 ## 매치메이킹
 
-Matchmaker는 Pool Instance Spot 타입을 등록합니다. `pool-board`로 보낸 첫 메시지가 Pool을 활성화합니다. `FindMatch`는 `MatchQueued(ticketId)`를 반환하고, `CancelMatch(ticketId)`는 취소된 ticket에 대해 사유가 `cancelled`인 `MatchCancelled`를 반환합니다. Pool은 ticket이 도착할 때와 500ms마다 가장 오래 기다린 ticket 두 개를 짝짓습니다. 두 ticket을 대기열에서 빼고 배정을 준비 중으로 기록한 뒤 Table 생성이 진행되는 동안 turn을 반환합니다. Pool은 Table에 `PrepareRoom`을 보냅니다. Table이 `RoomPrepared`로 성공을 알리면 Pool은 배정을 입장 대기로 전환하고 두 Player에게 `MatchAssigned`를 보냅니다. 매칭 후 10초 이내에 두 Actor가 모두 입장을 보고하면 Pool이 좌석을 확정합니다. 각 클라이언트는 `MatchFound(ticketId, roomId, seat)`와 `TableView`를 차례로 받고 기존 게임 메시지로 플레이할 수 있습니다. 대기 중인 ticket은 120초 후 만료됩니다. 연결이 끊어지면 대기 중인 ticket은 즉시 취소하고 예약된 ticket은 입장 기한까지 유지합니다.
+Matchmaker는 Pool Instance Spot 타입을 등록합니다. `pool-board`로 보낸 첫 메시지가 Pool을 활성화합니다. `FindMatch`는 `MatchQueued(ticketId)`를 반환하고, `CancelMatch(ticketId)`는 취소된 ticket에 대해 사유가 `cancelled`인 `MatchCancelled`를 반환합니다. Pool은 ticket이 도착할 때와 500ms마다 가장 오래 기다린 ticket 두 개를 짝짓습니다. 두 ticket을 대기열에서 뺍니다. Pool은 배정을 준비 중으로 기록하고 Play node의 `room-provisioner-board` Instance Spot에 `PrepareRoom`을 보냅니다. RoomProvisioner는 Table User Spot을 생성하고 `PrepareRoom`을 전달합니다. Table은 Pool에 `RoomPrepared`를 보내고 Pool은 새 turn에서 결과를 처리합니다. 성공하면 Pool은 배정을 입장 대기로 전환하고 두 Player에게 `MatchAssigned`를 보냅니다. 매칭 후 10초 이내에 두 Actor가 모두 입장을 보고하면 Pool이 좌석을 확정합니다. 각 클라이언트는 `MatchFound(ticketId, roomId, seat)`와 `TableView`를 차례로 받고 기존 게임 메시지로 플레이할 수 있습니다. 대기 중인 ticket은 120초 후 만료됩니다. 연결이 끊어지면 대기 중인 ticket은 즉시 취소하고 예약된 ticket은 입장 기한까지 유지합니다.
 
 `server/matchmaker`에는 메모리 내 queue와 `MatchRule` 매칭 정책이 있습니다. `MatchRule`을 바꾸면 대기 중인 플레이어의 매칭 방식을 변경할 수 있습니다. Pool은 ticket 전이와 할당 결정을 소유합니다. Table은 준비된 참가자를 확인하고 게임을 실행합니다.
 
