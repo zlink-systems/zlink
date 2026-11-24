@@ -503,10 +503,16 @@ static_assert (std::is_same_v<decltype (std::declval<zlink::framework::location_
 static_assert (std::is_same_v<zlink::framework::store_condition_t,
                               std::variant<zlink::framework::store_missing_condition_t,
                                            zlink::framework::store_version_condition_t,
-                                           zlink::framework::store_value_condition_t>>);
-static_assert (
-  std::is_same_v<zlink::framework::store_mutation_t,
-                 std::variant<zlink::framework::store_put_t, zlink::framework::store_delete_t>>);
+                                           zlink::framework::store_value_condition_t,
+                                           zlink::framework::store_sum_at_most_condition_t>>);
+static_assert (std::is_same_v<zlink::framework::store_mutation_t,
+                              std::variant<zlink::framework::store_put_t,
+                                           zlink::framework::store_delete_t,
+                                           zlink::framework::store_add_t>>);
+static_assert (std::is_same_v<zlink::framework::store_write_result_t,
+                              std::variant<zlink::framework::store_write_applied_t,
+                                           zlink::framework::store_write_conflict_t,
+                                           zlink::framework::store_write_corrupt_t>>);
 
 template <typename T>
 concept exposes_domain_location_operations =

@@ -1243,16 +1243,10 @@ internal sealed partial class ZLinkLocationRuntime : IAsyncDisposable
         while (!cancellationToken.IsCancellationRequested)
         {
             var scheduledRenew = leaseOperationStartedAt + intervalTicks;
-            var remainingTicks = scheduledRenew - _time.GetTimestamp();
             try
             {
-                if (remainingTicks > 0)
-                    await Task.Delay(
-                            TimeSpan.FromSeconds(remainingTicks / (double)_time.TimestampFrequency),
-                            _time,
-                            cancellationToken
-                        )
-                        .ConfigureAwait(false);
+                await WaitForHeartbeatAsync(scheduledRenew, cancellationToken)
+                    .ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -1277,6 +1271,32 @@ internal sealed partial class ZLinkLocationRuntime : IAsyncDisposable
                 OwnerLeaseRenewalFailed?.Invoke();
             }
         }
+    }
+
+    private async Task WaitForHeartbeatAsync(
+        long scheduledRenew,
+        CancellationToken cancellationToken
+    )
+    {
+        if (scheduledRenew - _time.GetTimestamp() <= 0)
+            return;
+
+        using var waitCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken
+        );
+        var remainingTicks = Math.Max(0, scheduledRenew - _time.GetTimestamp());
+        var delay = Task.Delay(
+            TimeSpan.FromSeconds(remainingTicks / (double)_time.TimestampFrequency),
+            _time,
+            waitCancellation.Token
+        );
+        // TimeProvider arms a relative timer. If the deadline passed while it was being
+        // armed, discard that wait so it cannot postpone the renewal.
+        if (scheduledRenew - _time.GetTimestamp() <= 0)
+            waitCancellation.Cancel();
+        else
+            await delay.ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
     }
 
     private TaskCompletionSource StartHeartbeatOnLane(long leaseOperationStartedAt)

@@ -78,8 +78,8 @@ must appear in the JSON even when its value is `null`.
 
 === "Java"
 
-    On a record reference component, use a runtime-visible annotation whose simple name is
-    `Nullable`. The codec recognizes JSpecify type-use annotations and declaration annotations
+    On a record reference component, use a runtime-visible `@Nullable` annotation from any
+    package (the codec matches the simple name). The codec recognizes JSpecify type-use annotations and declaration annotations
     such as JSR 305 or Jakarta `@Nullable`. Use `@ZLinkJsonOptional` to allow omission.
     To allow both, declare `@ZLinkJsonOptional @Nullable String nickname`.
     Primitive components cannot accept `null`.

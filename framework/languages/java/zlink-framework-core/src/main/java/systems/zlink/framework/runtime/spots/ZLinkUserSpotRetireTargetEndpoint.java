@@ -1068,17 +1068,14 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                                                                 .completedFuture(
                                                                                         failure);
                                                                     }
-                                                                    return ZLinkSerialExecutionQueue
-                                                                            .yieldCurrent(
-                                                                                    actorJoin
-                                                                                            .submitSourceLeave(
-                                                                                                    request,
-                                                                                                    target
-                                                                                                            .previousMembership(),
-                                                                                                    targetOwnerGeneration))
-                                                                            .thenApply(
-                                                                                    ignored ->
-                                                                                            failure);
+                                                                    actorJoin.submitSourceLeave(
+                                                                            request,
+                                                                            target
+                                                                                    .previousMembership(),
+                                                                            targetOwnerGeneration);
+                                                                    return CompletableFuture
+                                                                            .completedFuture(
+                                                                                    failure);
                                                                 })
                                                         .thenCompose(
                                                                 failure ->

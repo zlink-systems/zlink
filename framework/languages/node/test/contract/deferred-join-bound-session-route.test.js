@@ -16,13 +16,23 @@ for (const status of [ZLinkSubmitStatus.Submitted, ZLinkSubmitStatus.RouteNotCon
     const session = new ZLinkNativeFallbackBoundSession({
       runtime,
       actorId: 'relocated-player',
-      actorRefProvider: () => ({
-        actorId: 'relocated-player',
-        objectGeneration: 5n,
-        nodeRid: 'target',
-        meshName: 'play',
-        bindingGeneration: 6n,
-        ownershipGeneration: 12n
+      targetProvider: () => ({
+        actorRef: {
+          actorId: 'relocated-player',
+          objectGeneration: 5n,
+          nodeRid: 'target',
+          meshName: 'play',
+          bindingGeneration: 6n,
+          ownershipGeneration: 12n
+        },
+        remoteTarget: {
+          routerChannelId: 'play',
+          targetNodeRid: 'session-owner',
+          spotId: 'entry',
+          sessionNodeRid: 'session-owner',
+          sessionRid: 'session',
+          bindingGeneration: 6n
+        }
       }),
       localActorProvider: () => true,
       nativeActorNodeProvider: () => ({
@@ -31,14 +41,6 @@ for (const status of [ZLinkSubmitStatus.Submitted, ZLinkSubmitStatus.RouteNotCon
           // Native Session routes are local to the Session owner, not the relocated Actor.
           return { status: ZLinkSubmitStatus.RouteNotConnected };
         }
-      }),
-      remoteBoundSessionTargetProvider: () => ({
-        routerChannelId: 'play',
-        targetNodeRid: 'session-owner',
-        spotId: 'entry',
-        sessionNodeRid: 'session-owner',
-        sessionRid: 'session',
-        bindingGeneration: 6n
       }),
       remoteActorPacketTargetProvider: () => undefined,
       routedTransport: {

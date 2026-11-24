@@ -217,6 +217,9 @@ for (const scenario of cases) {
       async onLeaveActor() {}
       async onDisconnectActor() {}
     }
+    class Push {
+      static packetName = 'Push';
+    }
     class ProbeHandler {
       async handle(_spot, _actor, _context, request) {
         ingress++;
@@ -310,7 +313,13 @@ for (const scenario of cases) {
     );
     const incoming = await open();
     if (scenario.accepted) {
-      await incoming.session.context.actors.bind(actor);
+      const beforeReplacement = new Promise((resolve) => current.client.on(Push, resolve));
+      await player.context.boundSession
+        .send({ value: 'before' })
+        .packetName('Push')
+        .submit();
+      assert.deepEqual((await beforeReplacement).payload, { value: 'before' });
+      const binding = await incoming.session.context.actors.bind(actor);
       const successor = await incoming.bound;
       assert.equal(
         await successor.request({ value: 'current' }).packetName('Probe').submit(),
@@ -324,10 +333,15 @@ for (const scenario of cases) {
       current.client.on('Push', () => {
         oldPushes++;
       });
-      incoming.client.on('Push', pushed);
+      incoming.client.on(Push, pushed);
       await player.context.boundSession.send({ value: 'current' }).packetName('Push').submit();
-      await delivered;
+      assert.deepEqual((await delivered).payload, { value: 'current' });
       assert.equal(oldPushes, 0);
+      await binding.notifyDisconnected();
+      await assert.rejects(
+        player.context.boundSession.send({ value: 'unbound' }).packetName('Push').submit(),
+        { kind: framework.ZLinkFrameworkErrorKind.InvalidOperation }
+      );
       await assert.rejects(async () =>
         oldActor.request({ value: 'retired' }).packetName('Probe').submit()
       );

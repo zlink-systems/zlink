@@ -27,10 +27,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 {
     internal ZLinkMeshCompletionTable Completions { get; } = new();
     private Func<
-        IReadOnlyList<ZLinkBackendRouteReceived>,
+        ZLinkBackendRouteReceived,
+        ZLinkEnvelopeHeader,
         CancellationToken,
         ValueTask
-    >? _dispatchRemoteSessionPush;
+    >? _dispatchOrderedNodeRelay;
     private const int ReceiveBatchSize = 64;
     private const int MaxInfrastructureControlParts = 64;
     private const long MaxInfrastructureControlBytes = 256 * 1024;
@@ -7257,9 +7258,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         return true;
     }
 
-    internal void SetRemoteSessionPushDispatch(
-        Func<IReadOnlyList<ZLinkBackendRouteReceived>, CancellationToken, ValueTask> handler
-    ) => Volatile.Write(ref _dispatchRemoteSessionPush, handler);
+    internal void SetOrderedNodeRelayDispatch(
+        Func<ZLinkBackendRouteReceived, ZLinkEnvelopeHeader, CancellationToken, ValueTask> handler
+    ) => Volatile.Write(ref _dispatchOrderedNodeRelay, handler);
 
     private bool ProcessReceived(ref RawIngressOwnership ownership)
     {
@@ -7577,16 +7578,18 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         var metadata = application.HasMetadata ? received.Parts[1].ToArray() : null;
         if (
             application.Command == ServiceWireConstants.Command.NodeSend
-            && Volatile.Read(ref _dispatchRemoteSessionPush) is { } dispatchPush
-            && ZLinkRemoteSessionPushProtocol.IsPush(parts)
+            && Volatile.Read(ref _dispatchOrderedNodeRelay) is { } dispatchRelay
+            && ZLinkOrderedNodeRelayProtocol.DecodeHeader(parts, _flow?.CaptureEnabled == true)
+                is { } relayHeader
         )
-            return DispatchRemoteSessionPush(
+            return DispatchOrderedNodeRelay(
                 ref ownership,
                 sourceRid,
                 sourceGeneration,
                 parts,
                 metadata,
-                dispatchPush
+                relayHeader,
+                dispatchRelay
             );
 
         var request =
@@ -7649,42 +7652,48 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         );
     }
 
-    private bool DispatchRemoteSessionPush(
+    private bool DispatchOrderedNodeRelay(
         ref RawIngressOwnership ownership,
         RoutingId sourceRid,
         ulong sourceGeneration,
         ZLinkMultipartPayloadView parts,
         byte[]? metadata,
-        Func<IReadOnlyList<ZLinkBackendRouteReceived>, CancellationToken, ValueTask> dispatchPush
+        ZLinkEnvelopeHeader header,
+        Func<ZLinkBackendRouteReceived, ZLinkEnvelopeHeader, CancellationToken, ValueTask> dispatch
     )
     {
-        if (!ZLinkMeshMetadataCodec.TryDecode(metadata ?? [], out var pushMetadata))
+        if (!ZLinkMeshMetadataCodec.TryDecode(metadata ?? [], out var relayMetadata))
             return false;
 
-        // Keep transport arrival order through admission to the binding's egress lane.
-        // A Node mailbox claim can start its dispatch after the next claim has started.
-        var permit = ownership.TakeAdmission();
-        var push = new ZLinkBackendRouteReceived(
+        // The receive loop submits to the existing ordered scheduler before
+        // a Node mailbox can publish a second claim for this source.
+        // Push has no application turn on this node. Actor relays transfer
+        // the inbound permit to their existing Actor admission path.
+        var pushPermit = ZLinkRemoteSessionPushProtocol.IsPush(header)
+            ? ownership.TakeAdmission()
+            : null;
+        var relay = new ZLinkBackendRouteReceived(
             [],
             sourceRid,
             string.Empty,
             null,
             null,
-            metadata: pushMetadata,
+            metadata: relayMetadata,
             sourceNodeGeneration: sourceGeneration,
             payloadOwner: ownership.TakeApplicationOwner(),
             applicationPayloadView: parts
         );
+        relay.ApplicationJobAdmission?.MarkQueued();
         if (
             !RunRoutedOperation(() =>
             {
-                permit?.Dispose();
-                return dispatchPush([push], _stop?.Token ?? CancellationToken.None).AsTask();
+                pushPermit?.Dispose();
+                return dispatch(relay, header, _stop?.Token ?? CancellationToken.None).AsTask();
             })
         )
         {
-            permit?.Dispose();
-            push.Dispose();
+            pushPermit?.Dispose();
+            relay.Dispose();
         }
         return true;
     }
