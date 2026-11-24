@@ -559,7 +559,11 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                                                                 metadataPolicy);
                                                                 binding.set(actor);
                                                                 actor.setUnbindListener(
-                                                                        () -> removeBinding(actor));
+                                                                        () -> {
+                                                                            removeBinding(actor);
+                                                                            return CompletableFuture
+                                                                                    .completedFuture(null);
+                                                                        });
                                                                 return actor;
                                                             });
                                         }))
@@ -679,9 +683,11 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                                                             metadataPolicy);
                                                             binding.set(boundActor);
                                                             boundActor.setUnbindListener(
-                                                                    () ->
-                                                                            removeBinding(
-                                                                                    boundActor));
+                                                                    () -> {
+                                                                        removeBinding(boundActor);
+                                                                        return CompletableFuture
+                                                                                .completedFuture(null);
+                                                                    });
                                                             boundSession.setRebindListener(
                                                                     target ->
                                                                             recordNativeRebind(
