@@ -1666,7 +1666,8 @@ public sealed partial class StreamConnectorTests
                 _ = queue.SendAsync(frame, CancellationToken.None);
 
             var error = await Assert.ThrowsAsync<ZlinkStreamException>(async () =>
-                await queue.SubmitRequest(
+                await queue.SubmitRequestAsync(
+                    connection,
                     new ZlinkStreamOutboundFrame(ReadOnlyMemory<byte>.Empty, new byte[] { 2 }),
                     CancellationToken.None,
                     () => { }
@@ -1933,6 +1934,7 @@ public sealed partial class StreamConnectorTests
             CancellationToken.None
         );
         var request = pending.Create("pending.request");
+        lifecycle.RegisterRequest(request);
         var pendingCompletion = pending.WaitAsync(request, CancellationToken.None).AsTask();
 
         await lifecycle.HandleTransportErrorAsync(
@@ -2039,6 +2041,7 @@ public sealed partial class StreamConnectorTests
             CancellationToken.None
         );
         var request = pending.Create("pending.request");
+        lifecycle.RegisterRequest(request);
         var pendingCompletion = pending.WaitAsync(request, CancellationToken.None).AsTask();
 
         await lifecycle.HandleServerCloseAsync(ZlinkStreamCloseReason.ServerDrain, "server drain");

@@ -722,7 +722,9 @@ export class ServiceStatefulRuntime {
     this.registry.destroyActor(actor);
   }
 
-  actorSessionBinding(actor: ServiceActorRef): ServiceSessionBinding | undefined {
+  actorSessionBinding(
+    actor: Pick<ServiceActorRef, 'actorId' | 'generation'>
+  ): ServiceSessionBinding | undefined {
     return this.registry.binding(actor);
   }
 

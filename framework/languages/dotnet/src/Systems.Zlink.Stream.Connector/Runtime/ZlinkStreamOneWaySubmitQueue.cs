@@ -89,11 +89,11 @@ internal sealed class ZlinkStreamOneWaySubmitQueue
 
     // The returned task tracks the queue's last access to the frame, even if the caller
     // cancels its wait for the write.
-    public Task SubmitRequest(
+    public Task SubmitRequestAsync(
+        IZlinkStreamConnection connection,
         ZlinkStreamOutboundFrame frame,
         CancellationToken cancellationToken,
-        Action? beforePublish,
-        IZlinkStreamConnection? expectedConnection = null
+        Action? beforePublish
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -102,12 +102,6 @@ internal sealed class ZlinkStreamOneWaySubmitQueue
         );
         lock (_gate)
         {
-            var connection = GetConnection();
-            if (expectedConnection is not null && !ReferenceEquals(connection, expectedConnection))
-                throw ZlinkStreamConnector.Error(
-                    ZlinkStreamErrorCode.Disconnected,
-                    "The request's connection has ended."
-                );
             // The writer can consume the request as soon as TryWrite publishes it.
             beforePublish?.Invoke();
             if (
@@ -115,10 +109,15 @@ internal sealed class ZlinkStreamOneWaySubmitQueue
                     new SubmitItem(connection, frame, written, cancellationToken)
                 )
             )
-                throw ZlinkStreamConnector.Error(
-                    ZlinkStreamErrorCode.SendFailed,
-                    "Connector outbound frame queue is full."
-                );
+                throw _accepting
+                    ? ZlinkStreamConnector.Error(
+                        ZlinkStreamErrorCode.SendFailed,
+                        "Connector outbound frame queue is full."
+                    )
+                    : ZlinkStreamConnector.Error(
+                        ZlinkStreamErrorCode.Disconnected,
+                        "Connector is not connected."
+                    );
         }
         return written.Task;
     }

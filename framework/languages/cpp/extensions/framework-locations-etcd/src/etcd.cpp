@@ -2,7 +2,9 @@
 #include <zlink/locations/etcd.hpp>
 #include "client.hpp"
 #include "cursor.hpp"
+#include "runtime/locations/location_store_write.hpp"
 #include <algorithm>
+#include <map>
 
 namespace zlink::framework::etcd
 {
@@ -65,10 +67,6 @@ store_value_t store_value (const kv_t &metadata,
             {encode_version (cluster, metadata.mod_revision ())},
             info.has_expiry ? std::optional{from_ms (info.expires_at)} : std::nullopt,
             from_ms (now)};
-}
-template <typename Variant> const store_key_t &key_of (const Variant &value)
-{
-    return std::visit ([] (const auto &item) -> const store_key_t & { return item.key; }, value);
 }
 wire::Compare exists (const std::string &key, bool present)
 {
@@ -148,162 +146,203 @@ struct etcd_location_store_t::impl_t
           store_value (*metadata, *payload, *info, response.header ().cluster_id (), now)};
     }
 
+    struct observed_record_t
+    {
+        bool counter = false;
+        const store_value_condition_t *value_condition = nullptr;
+        std::optional<kv_t> metadata;
+        std::optional<metadata_t> info;
+        std::optional<kv_t> payload;
+
+        bool live (std::uint64_t now) const { return info && !info->expired (now); }
+
+        bool needs_payload (std::uint64_t now) const
+        {
+            return info
+                   && ((counter && live (now)
+                        && info->payload_length <= runtime::location_counter_digits)
+                       || (value_condition
+                           && info->payload_length == value_condition->expected.size ()));
+        }
+    };
+
     struct decision_t
     {
-        std::uint64_t now;
-        std::uint64_t cluster;
-        std::int64_t revision;
-        std::vector<std::optional<kv_t>> metadata;
-        std::vector<std::optional<metadata_t>> info;
-    };
-    struct evaluation_t
-    {
-        bool matches = true;
-        std::optional<std::uint64_t> minimum_expiry;
+        std::uint64_t now = 0;
+        std::uint64_t cluster = 0;
+        std::int64_t revision = 0;
+        std::map<std::string_view, observed_record_t> records;
+
+        std::optional<std::int64_t> counter (const store_key_t &key) const
+        {
+            const auto &record = records.at (key.value);
+            if (!record.live (now))
+                return 0;
+            // A live counter larger than 19 bytes cannot hold a valid int64.
+            if (!record.payload)
+                return std::nullopt;
+            return runtime::parse_location_counter (record.payload->value ());
+        }
     };
 
     using write_input_t = std::shared_ptr<const store_write_request_t>;
-    using decision_ptr_t = std::shared_ptr<const decision_t>;
+    using decision_ptr_t = std::shared_ptr<decision_t>;
 
     task_t<decision_ptr_t> decide (write_input_t request, operation_t operation)
     {
+        auto result = std::make_shared<decision_t> ();
+        for (const auto &condition : request->conditions) {
+            const bool counter = std::holds_alternative<store_sum_at_most_condition_t> (condition);
+            const auto *value = std::get_if<store_value_condition_t> (&condition);
+            runtime::for_each_condition_key (condition, [&] (const store_key_t &key) {
+                auto &record = result->records[key.value];
+                record.counter = counter;
+                record.value_condition = value;
+            });
+        }
+        for (const auto &mutation : request->mutations)
+            if (const auto *add = std::get_if<store_add_t> (&mutation))
+                result->records[add->key.value].counter = true;
+
         wire::TxnRequest query;
         *query.add_success () = read_key (clock);
-        for (const auto &condition : request->conditions)
-            *query.add_success () = read_key (metadata_key (key_of (condition).value));
+        for (const auto &[key, record] : result->records)
+            *query.add_success () = read_key (metadata_key (key));
         const auto observed = co_await client.txn (std::move (query), operation);
-        check_response (observed, request->conditions.size () + 1);
-        auto result = std::make_shared<decision_t> (decision_t{store_now (observed),
-                                                               observed.header ().cluster_id (),
-                                                               observed.header ().revision (),
-                                                               {},
-                                                               {}});
-        for (std::size_t i = 0; i < request->conditions.size (); ++i) {
-            const auto *metadata =
-              one (observed.responses (static_cast<int> (i + 1)).response_range ());
-            result->metadata.push_back (metadata ? std::optional{*metadata} : std::nullopt);
-            result->info.push_back (metadata ? std::optional{decode_metadata (metadata->value ())}
-                                             : std::nullopt);
-            if (metadata && metadata->mod_revision () <= 0)
-                store_failure ();
+        check_response (observed, result->records.size () + 1);
+        result->now = store_now (observed);
+        result->cluster = observed.header ().cluster_id ();
+        result->revision = observed.header ().revision ();
+        int position = 1;
+        for (auto &[key, entry] : result->records) {
+            const auto *metadata = one (observed.responses (position++).response_range ());
+            if (metadata) {
+                if (metadata->mod_revision () <= 0)
+                    store_failure ();
+                entry.metadata = *metadata;
+                entry.info = decode_metadata (metadata->value ());
+            }
         }
         co_return result;
     }
 
-    task_t<std::vector<std::optional<kv_t>>>
-    read_payloads (write_input_t request, decision_ptr_t decision, operation_t operation)
+    task_t<decision_ptr_t> read_payloads (decision_ptr_t decision, operation_t operation)
     {
         wire::TxnRequest query;
-        std::vector<std::size_t> positions;
-        for (std::size_t i = 0; i < request->conditions.size (); ++i) {
-            const auto *condition = std::get_if<store_value_condition_t> (&request->conditions[i]);
-            if (condition && decision->info[i]
-                && decision->info[i]->payload_length == condition->expected.size ()) {
-                positions.push_back (i);
-                *query.add_success () =
-                  read_key (payload_key (condition->key.value), decision->revision);
+        std::vector<observed_record_t *> entries;
+        for (auto &[key, entry] : decision->records) {
+            if (entry.needs_payload (decision->now)) {
+                entries.push_back (&entry);
+                *query.add_success () = read_key (payload_key (key), decision->revision);
             }
         }
-        std::vector<std::optional<kv_t>> values (request->conditions.size ());
-        if (!positions.empty ()) {
+        if (!entries.empty ()) {
             const auto response = co_await client.txn (std::move (query), operation);
-            check_response (response, positions.size ());
+            check_response (response, entries.size ());
             if (response.header ().cluster_id () != decision->cluster)
                 store_failure ();
-            for (std::size_t j = 0; j < positions.size (); ++j) {
-                const auto i = positions[j];
+            for (std::size_t i = 0; i < entries.size (); ++i) {
+                auto &entry = *entries[i];
                 const auto *payload =
-                  one (response.responses (static_cast<int> (j)).response_range ());
-                record (&*decision->metadata[i], payload);
-                values[i] = *payload;
+                  one (response.responses (static_cast<int> (i)).response_range ());
+                record (&*entry.metadata, payload);
+                entry.payload = *payload;
             }
         }
-        co_return values;
+        co_return decision;
     }
 
-    static evaluation_t evaluate (const store_write_request_t &request,
-                                  const decision_t &decision,
-                                  const std::vector<std::optional<kv_t>> &values)
+    static runtime::location_sum_result_t evaluate (const store_write_request_t &request,
+                                                    const decision_t &decision)
     {
-        evaluation_t result;
-        for (std::size_t i = 0; i < request.conditions.size (); ++i) {
-            const auto &info = decision.info[i];
-            const bool live = info && !info->expired (decision.now);
-            const bool matches = std::visit (
-              [&] (const auto &condition) {
-                  using T = std::decay_t<decltype (condition)>;
-                  if constexpr (std::is_same_v<T, store_missing_condition_t>)
-                      return !live;
-                  else if constexpr (std::is_same_v<T, store_version_condition_t>) {
-                      return live
-                             && encode_version (decision.cluster,
-                                                decision.metadata[i]->mod_revision ())
-                                  == condition.expected.value;
-                  } else
-                      return live && values[i]
-                             && values[i]->value () == to_string (condition.expected);
+        using result_t = runtime::location_sum_result_t;
+        for (const auto &condition : request.conditions) {
+            const auto result = std::visit (
+              [&] (const auto &item) {
+                  using T = std::decay_t<decltype (item)>;
+                  if constexpr (std::is_same_v<T, store_sum_at_most_condition_t>) {
+                      return runtime::evaluate_location_sum (
+                        item, [&] (const store_key_t &key) { return decision.counter (key); });
+                  } else {
+                      const auto &record = decision.records.at (item.key.value);
+                      const bool live = record.live (decision.now);
+                      bool matches;
+                      if constexpr (std::is_same_v<T, store_missing_condition_t>)
+                          matches = !live;
+                      else if constexpr (std::is_same_v<T, store_version_condition_t>)
+                          matches =
+                            live
+                            && encode_version (decision.cluster, record.metadata->mod_revision ())
+                                 == item.expected.value;
+                      else
+                          matches = live && record.payload
+                                    && record.payload->value () == to_string (item.expected);
+                      return matches ? result_t::matches : result_t::exceeds;
+                  }
               },
-              request.conditions[i]);
-            if (!matches)
-                return {false, {}};
-            if (live && info->has_expiry
-                && !std::holds_alternative<store_missing_condition_t> (request.conditions[i]))
-                result.minimum_expiry = result.minimum_expiry
-                                          ? std::min (*result.minimum_expiry, info->expires_at)
-                                          : info->expires_at;
+              condition);
+            if (result != result_t::matches)
+                return result;
         }
-        return result;
+        return result_t::matches;
     }
 
-    wire::TxnRequest apply_request (const store_write_request_t &request,
-                                    const decision_t &decision,
-                                    const evaluation_t &evaluation)
+    std::optional<wire::TxnRequest> apply_request (const store_write_request_t &request,
+                                                   const decision_t &decision)
     {
         wire::TxnRequest apply;
         *apply.add_compare () = exists (clock, true);
-        if (evaluation.minimum_expiry) {
+        std::optional<std::uint64_t> minimum_expiry;
+        for (const auto &[key, record] : decision.records) {
+            const auto physical = metadata_key (key);
+            if (!record.metadata)
+                *apply.add_compare () = exists (physical, false);
+            else {
+                auto *compare = apply.add_compare ();
+                compare->set_key (physical);
+                compare->set_target (wire::Compare::MOD);
+                compare->set_result (wire::Compare::EQUAL);
+                compare->set_mod_revision (record.metadata->mod_revision ());
+            }
+            if (record.live (decision.now) && record.info->has_expiry
+                && (!minimum_expiry || record.info->expires_at < *minimum_expiry))
+                minimum_expiry = record.info->expires_at;
+        }
+        if (minimum_expiry) {
             auto *compare = apply.add_compare ();
             compare->set_key (clock);
             compare->set_target (wire::Compare::VALUE);
             compare->set_result (wire::Compare::LESS);
-            compare->set_value (encode_clock (*evaluation.minimum_expiry));
+            compare->set_value (encode_clock (*minimum_expiry));
         }
-        for (std::size_t i = 0; i < request.conditions.size (); ++i) {
-            const auto key = metadata_key (key_of (request.conditions[i]).value);
-            if (!decision.metadata[i])
-                *apply.add_compare () = exists (key, false);
-            else {
-                auto *compare = apply.add_compare ();
-                compare->set_key (key);
-                compare->set_target (wire::Compare::MOD);
-                compare->set_result (wire::Compare::EQUAL);
-                compare->set_mod_revision (decision.metadata[i]->mod_revision ());
-            }
-        }
+
+        const auto append_put = [&] (const store_put_t &put) {
+            const auto retention =
+              put.retention ? static_cast<std::uint64_t> (put.retention->count ()) : 0;
+            if (retention > max_time - decision.now)
+                throw std::invalid_argument ("Store expiry exceeds its bound.");
+            auto *metadata = apply.add_success ()->mutable_request_put ();
+            metadata->set_key (metadata_key (put.key.value));
+            metadata->set_value (encode_metadata (
+              {put.retention.has_value (), put.retention ? decision.now + retention : 0,
+               static_cast<std::uint32_t> (put.bytes.size ())}));
+            auto *payload = apply.add_success ()->mutable_request_put ();
+            payload->set_key (payload_key (put.key.value));
+            payload->set_value (to_string (put.bytes));
+        };
         for (const auto &mutation : request.mutations) {
-            std::visit (
-              [&] (const auto &item) {
-                  if constexpr (std::is_same_v<std::decay_t<decltype (item)>, store_put_t>) {
-                      const auto retention =
-                        item.retention ? static_cast<std::uint64_t> (item.retention->count ()) : 0;
-                      if (retention > max_time - decision.now)
-                          throw std::invalid_argument ("Store expiry exceeds its bound.");
-                      auto *metadata = apply.add_success ()->mutable_request_put ();
-                      metadata->set_key (metadata_key (item.key.value));
-                      metadata->set_value (encode_metadata (
-                        {item.retention.has_value (), item.retention ? decision.now + retention : 0,
-                         static_cast<std::uint32_t> (item.bytes.size ())}));
-                      auto *payload = apply.add_success ()->mutable_request_put ();
-                      payload->set_key (payload_key (item.key.value));
-                      payload->set_value (to_string (item.bytes));
-                  } else {
-                      apply.add_success ()->mutable_request_delete_range ()->set_key (
-                        metadata_key (item.key.value));
-                      apply.add_success ()->mutable_request_delete_range ()->set_key (
-                        payload_key (item.key.value));
-                  }
-              },
-              mutation);
+            if (const auto *put = std::get_if<store_put_t> (&mutation))
+                append_put (*put);
+            else if (const auto *add = std::get_if<store_add_t> (&mutation)) {
+                const auto put = runtime::prepare_location_add (*add, decision.counter (add->key));
+                if (!put)
+                    return std::nullopt;
+                append_put (*put);
+            } else {
+                const auto &key = std::get<store_delete_t> (mutation).key.value;
+                apply.add_success ()->mutable_request_delete_range ()->set_key (metadata_key (key));
+                apply.add_success ()->mutable_request_delete_range ()->set_key (payload_key (key));
+            }
         }
         return apply;
     }
@@ -314,10 +353,15 @@ struct etcd_location_store_t::impl_t
     {
         store_write_applied_t result{{}, from_ms (now)};
         for (const auto &mutation : request.mutations)
-            if (const auto *put = std::get_if<store_put_t> (&mutation))
-                result.put_versions.push_back ({put->key,
-                                                {encode_version (response.header ().cluster_id (),
-                                                                 response.header ().revision ())}});
+            std::visit (
+              [&] (const auto &item) {
+                  if constexpr (!std::is_same_v<std::decay_t<decltype (item)>, store_delete_t>)
+                      result.put_versions.push_back (
+                        {item.key,
+                         {encode_version (response.header ().cluster_id (),
+                                          response.header ().revision ())}});
+              },
+              mutation);
         return result;
     }
 
@@ -326,11 +370,10 @@ struct etcd_location_store_t::impl_t
         const auto input = std::make_shared<const store_write_request_t> (std::move (request));
         for (;;) {
             operation.check ();
-            const auto decision = co_await decide (input, operation);
-            std::vector<std::optional<kv_t>> payloads;
+            auto decision = co_await decide (input, operation);
             bool compacted = false;
             try {
-                payloads = co_await read_payloads (input, decision, operation);
+                decision = co_await read_payloads (decision, operation);
             }
             catch (const call_failure_t &error) {
                 if (error.kind != error_kind_t::compaction)
@@ -339,11 +382,16 @@ struct etcd_location_store_t::impl_t
             }
             if (compacted)
                 continue;
-            const auto evaluation = evaluate (*input, *decision, payloads);
-            if (!evaluation.matches)
-                co_return store_write_conflict_t{from_ms (decision->now)};
-            auto response =
-              co_await client.txn (apply_request (*input, *decision, evaluation), operation);
+            const auto now = from_ms (decision->now);
+            const auto evaluation = evaluate (*input, *decision);
+            if (evaluation == runtime::location_sum_result_t::exceeds)
+                co_return store_write_conflict_t{now};
+            if (evaluation == runtime::location_sum_result_t::corrupt)
+                co_return store_write_corrupt_t{now};
+            auto apply = apply_request (*input, *decision);
+            if (!apply)
+                co_return store_write_corrupt_t{now};
+            auto response = co_await client.txn (std::move (*apply), operation);
             if (!response.has_header () || response.header ().cluster_id () != decision->cluster)
                 store_failure ();
             if (response.succeeded ())

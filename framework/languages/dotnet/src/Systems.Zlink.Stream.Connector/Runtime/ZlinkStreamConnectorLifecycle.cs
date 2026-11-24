@@ -47,18 +47,25 @@ internal sealed class ZlinkStreamConnectorLifecycle(
         }
     }
 
-    internal (IZlinkStreamConnection Connection, Task<ZlinkStreamError> Ended) CaptureConnection()
+    public (IZlinkStreamConnection Transport, Task<ZlinkStreamError> Ended) RegisterRequest(
+        ZlinkStreamPendingRequests.PendingRequest request,
+        Task<ZlinkStreamError>? expectedEnd = null
+    )
     {
         lock (_gate)
         {
-            return (
-                _connection
-                    ?? throw ZlinkStreamConnector.Error(
-                        ZlinkStreamErrorCode.Disconnected,
-                        "Connector is not connected."
-                    ),
-                _connectionEnd!.Task
-            );
+            if (expectedEnd is { IsCompleted: true })
+                throw new ZlinkStreamException(expectedEnd.GetAwaiter().GetResult());
+
+            if (_connection is null || _sessionCts is null)
+                throw ZlinkStreamConnector.Error(
+                    ZlinkStreamErrorCode.Disconnected,
+                    "Connector is not connected."
+                );
+
+            // Bind the pending entry and write transport to the same session.
+            pending.Register(request, _sessionCts);
+            return (_connection, _connectionEnd!.Task);
         }
     }
 
@@ -661,7 +668,8 @@ internal sealed class ZlinkStreamConnectorLifecycle(
             .ConfigureAwait(false);
 
         Capture(() => snapshot.SessionCts?.Dispose());
-        Capture(() => pending.FailAll(pendingError));
+        if (snapshot.SessionCts is { } session)
+            Capture(() => pending.FailAll(pendingError, session));
         // Spec §10.1.1: a wait is released when the connection it observed ends, here,
         // and not when the reconnect that may follow establishes the next one.
         await CaptureAsync(onConnectionEnded).ConfigureAwait(false);

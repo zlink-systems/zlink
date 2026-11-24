@@ -631,8 +631,6 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
                                 (ZlinkStreamFrameCodec.PrefixSize + frame.HeaderBytes.Length)..
                             ],
                         };
-                        requestToken.ThrowIfCancellationRequested();
-                        connection = _lifecycle.CaptureConnection();
                     }
                     else
                     {
@@ -641,7 +639,10 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
                             ValidateWrite = ValidateAdmissionWrite,
                         };
                     }
-                    written = _oneWaySubmits.SubmitRequest(
+                    requestToken.ThrowIfCancellationRequested();
+                    connection = _lifecycle.RegisterRequest(attempt, connection.Ended);
+                    written = _oneWaySubmits.SubmitRequestAsync(
+                        connection.Transport,
                         frame,
                         requestToken,
                         initial
@@ -650,8 +651,7 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
                                 deadline = _requestClock.Now + timeout;
                                 timeoutCts.CancelAfter(timeout);
                             }
-                            : null,
-                        connection.Transport
+                            : null
                     );
                     await written.WaitAsync(requestToken).ConfigureAwait(false);
                     completion = await _pending

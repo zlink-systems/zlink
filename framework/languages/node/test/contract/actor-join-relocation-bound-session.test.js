@@ -67,6 +67,9 @@ test('cross-node Actor Join publishes the carried Session binding and committed 
         push.resolve = (value) => resolvePush(value);
         const apps = [];
         let client;
+        let sourceClient;
+        let sourcePlayer;
+        let sourceBinding;
         let sourceActors;
 
         class Player {
@@ -97,7 +100,9 @@ test('cross-node Actor Join publishes the carried Session binding and committed 
           }
 
           async create(context) {
-            return new Player(context, this.role);
+            const player = new Player(context, this.role);
+            if (this.role === 'source') sourcePlayer = player;
+            return player;
           }
         }
         class PlayerState {
@@ -131,6 +136,9 @@ test('cross-node Actor Join publishes the carried Session binding and committed 
         class Joined {
           static packetName = 'Joined';
         }
+        class Push {
+          static packetName = 'Push';
+        }
         class Probe {
           async handle() {
             probeCalls += 1;
@@ -146,7 +154,10 @@ test('cross-node Actor Join publishes the carried Session binding and committed 
                   await dispatch.actor.relay(payload);
                   return;
                 }
-                await context.actors.bind(await sourceActors.find(actorId));
+                const binding = await context.actors.bind(await sourceActors.find(actorId));
+                if (sourceClient !== undefined && sourceBinding === undefined) {
+                  sourceBinding = binding;
+                }
                 await context.client.reply({ bound: true }).submit();
               }
             };
@@ -196,6 +207,8 @@ test('cross-node Actor Join publishes the carried Session binding and committed 
           );
           if (role === 'target') {
             objects.addSpotFactory('Room', Room, (factory) => factory.disableRelocation());
+          }
+          if (role === 'target' || !callbackFails) {
             builder
               .addStreamNode('gateway')
               .bind('ws://127.0.0.1:0')
@@ -251,13 +264,32 @@ test('cross-node Actor Join publishes the carried Session binding and committed 
             .submit();
           assert.equal(String(room.spot.nodeRid), mesh + '-target');
 
-          client = connector.zlinkStreamConnectorFactory.create({
-            endpoint: target.get(n.ZLINK_FRAMEWORK_RUNTIME).getListenerStatus('stream', 'gateway')
-              .endpoint,
-            dispatchMode: connector.ZlinkStreamDispatchMode.Immediate
-          });
+          function connectTo(app) {
+            return connector.zlinkStreamConnectorFactory.create({
+              endpoint: app.get(n.ZLINK_FRAMEWORK_RUNTIME).getListenerStatus('stream', 'gateway')
+                .endpoint,
+              dispatchMode: connector.ZlinkStreamDispatchMode.Immediate
+            });
+          }
+          async function assertPushReaches(destination, value) {
+            const delivered = new Promise((resolve) => destination.on(Push, resolve));
+            await sourcePlayer.context.boundSession.send({ value }).packetName('Push').submit();
+            assert.deepEqual((await delivered).payload, { value });
+          }
+
+          if (!callbackFails) {
+            sourceClient = connectTo(source);
+            await sourceClient.connect();
+            assert.deepEqual(await sourceClient.request({}).packetName('Bind').submit(), {
+              bound: true
+            });
+            await assertPushReaches(sourceClient, 'SourcePush');
+            await sourceBinding.notifyDisconnected();
+          }
+          client = connectTo(target);
           await client.connect();
           assert.deepEqual(await client.request({}).packetName('Bind').submit(), { bound: true });
+          if (!callbackFails) await assertPushReaches(client, 'TargetPush');
           client.actor(actorId).on(Joined, (message) => {
             received = message.payload;
           });
@@ -296,6 +328,7 @@ test('cross-node Actor Join publishes the carried Session binding and committed 
           }
         } finally {
           await client?.close();
+          await sourceClient?.close();
           for (const app of apps.reverse()) await app.close();
           const keys = await redis.keys(mesh + ':*');
           if (keys.length > 0) await redis.del(keys);

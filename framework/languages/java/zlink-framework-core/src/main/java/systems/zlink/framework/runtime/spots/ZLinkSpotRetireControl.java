@@ -21,9 +21,11 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -460,10 +462,10 @@ final class ZLinkSpotRetireControl {
                 }
                 previous = participant.authorityKey();
             }
-            previous = null;
+            Set<String> routedActorIds = new HashSet<>();
             for (SessionRouteFence route : sessionRoutes) {
-                if (previous != null && compareUtf8(previous, route.actorId()) >= 0) {
-                    throw new IllegalArgumentException("Session routes are not canonical");
+                if (!routedActorIds.add(route.actorId())) {
+                    throw new IllegalArgumentException("Session route ActorId is duplicated");
                 }
                 boolean actorMatches =
                         participants.stream()
@@ -482,7 +484,6 @@ final class ZLinkSpotRetireControl {
                 if (!actorMatches) {
                     throw new IllegalArgumentException("Session route is outside Actor inventory");
                 }
-                previous = route.actorId();
             }
         }
 

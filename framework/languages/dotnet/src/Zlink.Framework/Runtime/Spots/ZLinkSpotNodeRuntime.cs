@@ -1449,7 +1449,10 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
             _taskRunner
         );
         if (_nodeRouteDispatcher is not null)
+        {
             Node.OnNodeRoute(_nodeRouteDispatcher.DispatchBatchAsync, _taskRunner);
+            Node.OnOrderedNodeRelay(_nodeRouteDispatcher.DispatchOrderedNodeRelayAsync);
+        }
     }
 
     private bool ShouldAttachActorDispatchPump()
