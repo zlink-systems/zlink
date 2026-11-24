@@ -143,17 +143,15 @@ jobs:
           set -euo pipefail
           mkdir -p "${APT_CACHE_DIR}"
           sudo install -d -o _apt -g root -m 0755 "${APT_CACHE_DIR}/partial"
-          # yyjson 0.12.0 has no Ubuntu package; CMake uses the pinned source fallback.
           # Self-hosted WSL runners share one dpkg lock; wait for it instead of failing.
           sudo apt-get -o DPkg::Lock::Timeout=600 update
+          # Core is built separately with system OpenSSL.
           sudo apt-get -o DPkg::Lock::Timeout=600 \
             -o Dir::Cache::archives="${APT_CACHE_DIR}" \
             -o APT::Keep-Downloaded-Packages=true \
             -o Binary::apt::APT::Keep-Downloaded-Packages=true \
             install -y \
-              build-essential cmake ninja-build git pkg-config curl \
-              libboost-all-dev libgtest-dev libgmock-dev liblz4-dev \
-              nlohmann-json3-dev libssl-dev
+              build-essential cmake ninja-build git pkg-config curl openssl libssl-dev
 
       - name: Resolve the runner vcpkg
         if: ${{ !inputs.skip_tests }}
@@ -176,7 +174,7 @@ jobs:
         if: ${{ !inputs.skip_tests && (steps.linux-vcpkg-cache.outputs.cache-hit != 'true') }}
         run: bash scripts/ci/framework-cpp-vcpkg.sh install
 
-      - name: Check vcpkg dependency versions against vcpkg.json
+      - name: Verify vcpkg versions against the manifest and Conan locks
         if: ${{ !inputs.skip_tests }}
         run: bash scripts/ci/framework-cpp-vcpkg.sh verify
 
@@ -428,6 +426,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw "vcpkg install failed with exit code $LASTEXITCODE"
           }
+
+      - name: Verify vcpkg versions against the manifest and Conan locks
+        shell: pwsh
+        run: |
+          python scripts/ci/framework-cpp-verify-dependencies.py "$env:VCPKG_INSTALLED_DIR/vcpkg/status" x64-windows
+          if ($LASTEXITCODE -ne 0) { throw "Framework C++ dependency version check failed" }
 
       - name: Fetch the Core release package
         id: core
