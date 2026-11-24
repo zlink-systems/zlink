@@ -1,4 +1,6 @@
 #pragma once
+#include <iostream>
+#include <syncstream>
 #include <zlink/framework/contracts/codecs/serializer.hpp>
 #include "matchmaker.hpp"
 #include "server/shared/http.hpp"
@@ -191,6 +193,7 @@ class HttpLobby final : public fx::hosted_service_t
               Limits::packet);
             if (prepared.matchId != room)
                 throw std::invalid_argument ("Prepared Room identity differs from the match.");
+            std::osyncstream (std::cout) << "GAME Room prepared " << room << std::endl;
             return MatchResponse{room, config_.SessionEndpoint};
         };
         start_io ();
