@@ -1460,7 +1460,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         deadline,
                         effectiveTimeout,
                         getOrCreate,
-                        Set.of()),
+                        Set.of(),
+                        false),
                 deadline);
     }
 
@@ -1473,24 +1474,21 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             long deadline,
             Duration timeout,
             boolean getOrCreate,
-            Set<ZLinkMeshNodeDescriptorKey> excludedTargets) {
+            Set<ZLinkMeshNodeDescriptorKey> excludedTargets,
+            boolean refreshCapacity) {
         return observeUserSpotAuthority(
-                        locations,
-                        meshName,
-                        spotId,
-                        stableType,
-                        envelope,
-                        deadline,
-                        timeout,
-                        getOrCreate,
-                        excludedTargets)
+                        locations, meshName, spotId, stableType, envelope, deadline, getOrCreate)
                 .thenCompose(
                         existing -> {
                             if (existing.isPresent()) {
                                 return CompletableFuture.completedFuture(existing.orElseThrow());
                             }
                             return selectUserSpotTarget(
-                                            meshName, stableType, deadline, excludedTargets)
+                                            meshName,
+                                            stableType,
+                                            deadline,
+                                            excludedTargets,
+                                            refreshCapacity)
                                     .handle(
                                             (target, failure) -> {
                                                 if (failure == null) {
@@ -1540,7 +1538,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                                 deadline,
                                                                                 timeout,
                                                                                 getOrCreate,
-                                                                                excludedTargets);
+                                                                                excludedTargets,
+                                                                                false);
                                                                     }
                                                                     return CompletableFuture
                                                                             .failedFuture(cause);
@@ -1557,9 +1556,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             String stableType,
             byte[] envelope,
             long deadline,
-            Duration timeout,
-            boolean getOrCreate,
-            Set<ZLinkMeshNodeDescriptorKey> excludedTargets) {
+            boolean getOrCreate) {
         String key = systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec.spot(spotId);
         return locations
                 .read(key, () -> System.currentTimeMillis() >= deadline)
@@ -1619,9 +1616,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                             stableType,
                                                             envelope,
                                                             deadline,
-                                                            timeout,
-                                                            getOrCreate,
-                                                            excludedTargets);
+                                                            getOrCreate);
                                                 }
                                                 if (existing.isPresent()) {
                                                     return userSpotLocationResolvers
@@ -1639,17 +1634,25 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                         return existing;
                                                                     });
                                                 }
-                                                return waitForUserSpotAuthority(
-                                                                locations,
-                                                                meshName,
-                                                                spotId,
-                                                                stableType,
-                                                                envelope,
-                                                                deadline,
-                                                                timeout,
-                                                                getOrCreate,
-                                                                excludedTargets)
-                                                        .thenApply(Optional::of);
+                                                if (System.currentTimeMillis() >= deadline) {
+                                                    return CompletableFuture.failedFuture(
+                                                            ZLinkObjectCreationDeadline.exceeded(
+                                                                    null));
+                                                }
+                                                return CompletableFuture.supplyAsync(
+                                                                () -> null,
+                                                                CompletableFuture.delayedExecutor(
+                                                                        10, TimeUnit.MILLISECONDS))
+                                                        .thenCompose(
+                                                                ignored ->
+                                                                        observeUserSpotAuthority(
+                                                                                locations,
+                                                                                meshName,
+                                                                                spotId,
+                                                                                stableType,
+                                                                                envelope,
+                                                                                deadline,
+                                                                                getOrCreate));
                                             });
                         });
     }
@@ -1677,35 +1680,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 ZLinkPlacementCapacityBundle.spot(
                         ZLinkPlacementObjectKind.USER_SPOT, stableType, 1),
                 registeredSpotPolicy(meshName, stableType, ZLinkPlacementObjectKind.USER_SPOT));
-    }
-
-    private CompletionStage<ZLinkSpotCreateResult> waitForUserSpotAuthority(
-            ZLinkLocationRepository locations,
-            String meshName,
-            String spotId,
-            String stableType,
-            byte[] envelope,
-            long deadline,
-            Duration timeout,
-            boolean getOrCreate,
-            Set<ZLinkMeshNodeDescriptorKey> excludedTargets) {
-        if (System.currentTimeMillis() >= deadline) {
-            return CompletableFuture.failedFuture(ZLinkObjectCreationDeadline.exceeded(null));
-        }
-        return CompletableFuture.supplyAsync(
-                        () -> null, CompletableFuture.delayedExecutor(10, TimeUnit.MILLISECONDS))
-                .thenCompose(
-                        ignored ->
-                                placeUserSpot(
-                                        locations,
-                                        meshName,
-                                        spotId,
-                                        stableType,
-                                        envelope,
-                                        deadline,
-                                        timeout,
-                                        getOrCreate,
-                                        excludedTargets));
     }
 
     private CompletionStage<ZLinkSpotCreateResult> reserveAndCreate(
@@ -1745,35 +1719,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 .reserve(reserve, () -> System.currentTimeMillis() >= deadline)
                 .thenCompose(
                         result -> {
-                            if (result instanceof ZLinkPlacementCapacityExhausted) {
-                                return observeUserSpotAuthority(
-                                                locations,
-                                                meshName,
-                                                spotId,
-                                                stableType,
-                                                envelope,
-                                                deadline,
-                                                timeout,
-                                                getOrCreate,
-                                                excludedTargets)
-                                        .thenCompose(
-                                                existing ->
-                                                        existing.isPresent()
-                                                                ? CompletableFuture.completedFuture(
-                                                                        existing.orElseThrow())
-                                                                : placeUserSpot(
-                                                                        locations,
-                                                                        meshName,
-                                                                        spotId,
-                                                                        stableType,
-                                                                        envelope,
-                                                                        deadline,
-                                                                        timeout,
-                                                                        getOrCreate,
-                                                                        excluding(
-                                                                                excludedTargets,
-                                                                                target)));
-                            }
                             if (result instanceof ZLinkObjectConflict conflict
                                     && conflict.current() instanceof ZLinkAuthorityMissing) {
                                 return placeUserSpot(
@@ -1785,9 +1730,13 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                         deadline,
                                         timeout,
                                         getOrCreate,
-                                        excluding(excludedTargets, target));
+                                        excluding(excludedTargets, target),
+                                        false);
                             }
-                            if (result instanceof ZLinkObjectAlreadyExists
+                            boolean refreshCapacity =
+                                    result instanceof ZLinkPlacementCapacityExhausted;
+                            if (refreshCapacity
+                                    || result instanceof ZLinkObjectAlreadyExists
                                     || result instanceof ZLinkObjectConflict
                                     || result instanceof ZLinkObjectTypeMismatch) {
                                 return placeUserSpot(
@@ -1799,7 +1748,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                         deadline,
                                         timeout,
                                         getOrCreate,
-                                        excludedTargets);
+                                        excludedTargets,
+                                        refreshCapacity);
                             }
                             if (!(result instanceof ZLinkObjectReserved reserved)) {
                                 return CompletableFuture.failedFuture(
@@ -1943,7 +1893,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             String meshName,
             String stableType,
             long deadlineUnixMs,
-            Set<ZLinkMeshNodeDescriptorKey> excludedTargets) {
+            Set<ZLinkMeshNodeDescriptorKey> excludedTargets,
+            boolean refreshCapacity) {
         return userSpotLocationResolvers.selectPlacement(
                 meshName,
                 ZLinkPlacementObjectKind.USER_SPOT,
@@ -1951,7 +1902,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 false,
                 routeMeshNodesByName.get(meshName),
                 excludedTargets,
-                deadlineUnixMs);
+                deadlineUnixMs,
+                refreshCapacity);
     }
 
     private static ZLinkMeshNodeDescriptorKey descriptorKey(ZLinkMeshNodeDescriptor node) {

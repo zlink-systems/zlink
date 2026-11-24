@@ -4250,6 +4250,36 @@ public sealed partial class LocationRuntimeTests
         Assert.Equal(TimeSpan.FromMilliseconds(50), first.DueTime);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Heartbeat_RenewsWhenDeadlinePassesDuringTimerRegistration(bool atRegistration)
+    {
+        var options = new ZLinkLocationOptions();
+        var time = new ControllableTimeProvider();
+        await using var runtime = new ZLinkLocationRuntime(
+            options,
+            new ZLinkInMemoryLocationStore(time),
+            time
+        );
+        var probe = new OwnerLeaseRenewalProbe(runtime);
+        runtime.OwnerLeaseRenewed += OnInitialClaim;
+
+        await runtime.StartAsync(RoutingId.From("heartbeat-registration-node"));
+        await probe.RenewedAsync();
+        Assert.Equal(options.OwnerLeaseRenewInterval.Ticks, time.GetTimestamp());
+
+        void OnInitialClaim(ZLinkOwnerLeaseRenewal _)
+        {
+            runtime.OwnerLeaseRenewed -= OnInitialClaim;
+            probe.Arm();
+            if (atRegistration)
+                time.AdvanceMonotonicBeforeNextTimerRegistration(options.OwnerLeaseRenewInterval);
+            else
+                time.AdvanceMonotonicAfterNextTimestampRead(options.OwnerLeaseRenewInterval);
+        }
+    }
+
     [Fact]
     public async Task Heartbeat_UsesActualStartAfterLateTimer_AndWaitsForInFlightRenewal()
     {

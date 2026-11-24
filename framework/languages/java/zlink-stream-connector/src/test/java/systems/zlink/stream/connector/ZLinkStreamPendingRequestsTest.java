@@ -16,6 +16,7 @@ final class ZLinkStreamPendingRequestsTest {
         var pending = new java.util.concurrent.CompletableFuture<ZLinkStreamEncodedPayload>();
         pendingRequests.add(
                 7L,
+                null,
                 "Echo",
                 pending,
                 (reply, complete) -> complete.getAsBoolean(),

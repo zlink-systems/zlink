@@ -226,6 +226,7 @@
         <Compile Include="Runtime/LocationLifecycleTests.cs"/>
         <Compile Include="Runtime/LayeringConvergenceTests.cs"/>
         <Compile Include="Runtime/LocationResolverTests.cs"/>
+        <Compile Include="Runtime/ActorRouteCacheConfirmationTests.cs"/>
         <Compile Include="Runtime/LocationRuntimeQueryTests.cs"/>
         <Compile Include="Runtime/InstanceSpotActivationJournalTests.cs"/>
         <Compile Include="Runtime/SameTargetInstanceActivationTests.cs"/>
