@@ -294,6 +294,22 @@ physical opaque key를 flush한다: `zlink:v11:counter:object`,
 mapping으로 literal마다 physical key를 다시 계산하며 record나 scan prefix에서 추측하지
 않는다.
 
+### 8.1 v11에서 v12로 전환
+
+ID별 counter(§8)와 수용 공간 counter key(§4.1)는 v11 Store 형식과 함께 쓸 수 없다. 한 Location
+Store를 공유하는 모든 node는 같은 형식을 쓴다 — v11 node와 v12 node가 같은 Store를 동시에 쓰지
+않는다. v12 node는 v11 counter만 있는 Store에서 시작할 때 첫 placement·생성 전에 다음 전환을 한 번
+실행하고, 끝나기 전에는 `Serving`을 게시하지 않는다.
+
+1. `zlink:v12:generation-floor`가 없으면 v11 `object-counter`와 `authority-owner-counter` 중 큰
+   값(둘 다 없으면 `1`)을 `Missing` 조건으로 Put한다. 이미 있으면 바꾸지 않는다.
+2. MeshNode 수용 공간 record마다 같은 batch에서 그 record의 active·pending 값을 §4.1 counter key로
+   Put하고(counter key에 `Missing` 조건) 옛 record를 지운다.
+
+두 단계는 조건부 write라 여러 node가 동시에 시작해도 한 번만 적용되고, 중간에 멈춰도 다음 시작이
+남은 record부터 이어 간다. 전환이 끝난 Store에 v11 node가 다시 붙으면 v11 counter가 낮은 값을
+발급할 수 있으므로 되돌리지 않는다(되돌리려면 §8의 clean break로 Store를 비운다).
+
 ## 9. 공식 Redis provider — opaque 저장 형식
 
 Automatic discovery에서 message를 보내거나 받는 runtime node인

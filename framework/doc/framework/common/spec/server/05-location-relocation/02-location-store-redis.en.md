@@ -355,6 +355,28 @@ computed as SHA-256 of these retired logical literals:
 literal with the mapping above; do not guess it from a record or scan
 prefix.
 
+### 8.1 Converting from v11 to v12
+
+Per-ID counters (§8) and capacity counter keys (§4.1) can't coexist with the
+v11 Store format. Every node sharing one Location Store uses the same format —
+v11 and v12 nodes never write the same Store at the same time. A v12 node that
+starts on a Store holding only v11 counters runs the following conversion once,
+before its first placement or creation, and doesn't publish `Serving` until it
+finishes.
+
+1. If `zlink:v12:generation-floor` is absent, Put the larger of the v11
+   `object-counter` and `authority-owner-counter` values (or `1` when both are
+   absent) under a `Missing` condition. An existing floor is left unchanged.
+2. For each MeshNode capacity record, in one batch, Put its active and pending
+   values into the §4.1 counter keys (only when the counter key is absent, under
+   a `Missing` condition) and delete the old record.
+
+Both steps are conditional writes, so nodes starting at the same time apply
+each step once, and a conversion interrupted partway resumes from the remaining
+records on the next start. Don't roll back: a v11 node rejoining a converted
+Store could issue lower counter values (rolling back requires the §8 clean break
+to empty the Store).
+
 ## 9. The Official Redis Provider — Opaque Storage Format
 
 A [MeshNode](../00-foundation/02-glossary.en.md#meshnode) — a runtime node that
