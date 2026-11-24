@@ -119,8 +119,17 @@ public:
     stream_builder_t &set_bind_host(std::string host);
     stream_builder_t &set_advertise_host(std::string host);
     stream_builder_t &register_session(std::string session_name);
+    stream_builder_t &set_authentication(detail::stream_authentication_options_t options);
     stream_snapshot_t snapshot() const;
 };
+
+namespace detail {
+struct stream_authentication_options_t {
+    std::optional<std::string> packet_name;
+    std::optional<std::int64_t> max_concurrent;
+    std::chrono::milliseconds retry_delay{500};
+};
+}
 
 struct stream_snapshot_t {
     std::string name;
@@ -130,6 +139,7 @@ struct stream_snapshot_t {
     std::string tls_private_key_file;
     bool tls_require_client_certificate;
     std::int64_t max_message_size = 64 * 1024;
+    detail::stream_authentication_options_t authentication;
 };
 
 class stream_compression_options_builder_t {
@@ -160,6 +170,9 @@ public:
     stream_node_options_builder_t &set_heartbeat(std::chrono::milliseconds interval,
                                                  std::chrono::milliseconds timeout);
     stream_node_options_builder_t &set_idle_timeout(std::chrono::milliseconds timeout);
+    stream_node_options_builder_t &set_authentication_packet_name(std::string name);
+    stream_node_options_builder_t &set_max_concurrent_authentications(std::int64_t value);
+    stream_node_options_builder_t &set_authentication_retry_delay(std::chrono::milliseconds delay);
     stream_node_options_builder_t &register_session(std::string session_name);
 
     template <typename TSession>
@@ -222,3 +235,5 @@ Handshake failure는 session이 만들어지기 전 runtime monitoring에만 기
 **wire 값이 계약이다.** `stream_close_reason_t`의 1~6은
 [Stream Connector §4.6](../../../../stream-connector/32-stream-connector.ko.md)의 `session-closing` payload와 같은 값이다.
 **enum을 정수로 cast해 wire 값으로 사용하지 않는다** — codec이 명시적으로 변환한다.
+
+인증 입장 설정의 기본값과 검증은 [인증 입장 제한](../../../04-session/03-authentication-admission.ko.md)이 정한다.
