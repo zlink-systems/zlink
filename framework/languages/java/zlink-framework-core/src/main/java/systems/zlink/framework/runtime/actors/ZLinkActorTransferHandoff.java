@@ -29,6 +29,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 /** Owns the transfer-only backlog and bounded source-retirement state. */
@@ -269,6 +270,19 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
     Optional<MessageFollowSource> messageFollowSource(
             ZLinkServiceMessageFollowWireCodec.ActorRoute sourceRoute) {
         return inStateLane(() -> Optional.ofNullable(exactSource(sourceRoute)));
+    }
+
+    Optional<ZLinkServiceMessageFollowWireCodec.ActorRoute> messageFollowSource(
+            ZLinkBackendActorRef actor) {
+        return inStateLane(
+                () ->
+                        Optional.ofNullable(
+                                        newestSource(
+                                                actor.actorId(),
+                                                source ->
+                                                        actor.equals(source.sourceActorRef())
+                                                                && source.sourceRoute() != null))
+                                .map(MessageFollowSource::sourceRoute));
     }
 
     void stageRelocationRoute(
@@ -712,19 +726,18 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
     }
 
     private MessageFollowSource exactSource(ZLinkServiceMessageFollowWireCodec.ActorRoute route) {
-        Map<Long, MessageFollowSource> sources = messageFollowSources.get(route.actorId());
-        if (sources == null) return null;
-        return sources.values().stream()
-                .filter(source -> route.equals(source.sourceRoute()))
-                .max(Comparator.comparingLong(MessageFollowSource::token))
-                .orElse(null);
+        return newestSource(route.actorId(), source -> route.equals(source.sourceRoute()));
     }
 
     private MessageFollowSource newestSource(String actorId, boolean committedOnly) {
+        return newestSource(actorId, source -> !committedOnly || source.committed());
+    }
+
+    private MessageFollowSource newestSource(String actorId, Predicate<MessageFollowSource> match) {
         Map<Long, MessageFollowSource> sources = messageFollowSources.get(actorId);
         if (sources == null) return null;
         return sources.values().stream()
-                .filter(source -> !committedOnly || source.committed())
+                .filter(match)
                 .max(Comparator.comparingLong(MessageFollowSource::token))
                 .orElse(null);
     }
