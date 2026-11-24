@@ -52,5 +52,86 @@
       "remainingLegacyRecords": 0,
       "writesBeforeConversion": 0
     }
+  },
+  "v11ConversionCases": {
+    "description": "Spec Location Store §8.1 (#5509). Each case seeds the listed descriptors (raw RID hex) and raw Store rows (UTF-8 key and value) into an empty v11 Store, starts one host and checks the expected outcome. 'configurationError' means startup fails with a configuration error, no zlink:v12:format marker is written and every seeded row is unchanged.",
+    "mesh": "mesh",
+    "cases": {
+      "pendingV11Aggregate": {
+        "descriptorRoutingIdHexes": [],
+        "rows": [
+          {
+            "key": "zlink:v11:aggregate:00000000-0000-4000-8000-0000000000a1:1",
+            "value": "{}"
+          },
+          {
+            "key": "zlink:v11:capacity:mesh:pending-aggregate",
+            "value": "{\"active\":{\"actors\":1,\"spots\":0,\"spotTypes\":{}},\"pending\":{\"actors\":0,\"spots\":0,\"spotTypes\":{}}}"
+          }
+        ],
+        "expected": {
+          "startup": "configurationError"
+        }
+      },
+      "flatV11Capacity": {
+        "descriptorRoutingIdHexes": [],
+        "rows": [
+          {
+            "key": "zlink:v11:capacity:mesh:flat-node",
+            "value": "{\"actorsActive\":2,\"actorsPending\":1,\"spotsActive\":3,\"spotsPending\":0,\"spotTypes\":{\"2:room\":{\"active\":1,\"pending\":0},\"3:arena\":{\"active\":0,\"pending\":2}}}"
+          }
+        ],
+        "expected": {
+          "startup": "converted",
+          "counters": {
+            "zlink:v12:capacity\u0000mesh\u0000666c61742d6e6f6465\u0000actors\u0000active": "2",
+            "zlink:v12:capacity\u0000mesh\u0000666c61742d6e6f6465\u0000actors\u0000pending": "1",
+            "zlink:v12:capacity\u0000mesh\u0000666c61742d6e6f6465\u0000spots\u0000active": "3",
+            "zlink:v12:capacity\u0000mesh\u0000666c61742d6e6f6465\u0000spot-type\u0000userSpot\u0000room\u0000active": "1",
+            "zlink:v12:capacity\u0000mesh\u0000666c61742d6e6f6465\u0000spot-type\u0000instanceSpot\u0000arena\u0000pending": "2"
+          },
+          "absentCounters": [
+            "zlink:v12:capacity\u0000mesh\u0000666c61742d6e6f6465\u0000spots\u0000pending",
+            "zlink:v12:capacity\u0000mesh\u0000666c61742d6e6f6465\u0000spot-type\u0000userSpot\u0000room\u0000pending",
+            "zlink:v12:capacity\u0000mesh\u0000666c61742d6e6f6465\u0000spot-type\u0000instanceSpot\u0000arena\u0000active"
+          ]
+        }
+      },
+      "rawRidV11Capacity": {
+        "descriptorRoutingIdHexes": [
+          "37"
+        ],
+        "rows": [
+          {
+            "key": "zlink:v11:capacity:mesh:7",
+            "value": "{\"active\":{\"actors\":1,\"spots\":0,\"spotTypes\":{}},\"pending\":{\"actors\":0,\"spots\":0,\"spotTypes\":{}}}"
+          }
+        ],
+        "expected": {
+          "startup": "converted",
+          "counters": {
+            "zlink:v12:capacity\u0000mesh\u000037\u0000actors\u0000active": "1"
+          },
+          "absentCounters": [
+            "zlink:v12:capacity\u0000mesh\u000000000007\u0000actors\u0000active"
+          ]
+        }
+      },
+      "ambiguousRawAndDisplayRid": {
+        "descriptorRoutingIdHexes": [
+          "37",
+          "00000007"
+        ],
+        "rows": [
+          {
+            "key": "zlink:v11:capacity:mesh:7",
+            "value": "{\"active\":{\"actors\":1,\"spots\":0,\"spotTypes\":{}},\"pending\":{\"actors\":0,\"spots\":0,\"spotTypes\":{}}}"
+          }
+        ],
+        "expected": {
+          "startup": "configurationError"
+        }
+      }
+    }
   }
 }

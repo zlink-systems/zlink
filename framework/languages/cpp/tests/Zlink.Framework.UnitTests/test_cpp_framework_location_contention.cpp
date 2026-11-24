@@ -119,6 +119,7 @@ TEST_P (LocationContention, DistinctActorsDoNotContend)
       + std::to_string (std::chrono::steady_clock::now ().time_since_epoch ().count ()) + "-";
     contention_store_t store (*provider, !redis);
     provider_location_repository_t repository (store);
+    repository.ensure_store_format ({}).result ().value ();
     const auto lease = repository.claim_owner_lease (actor_prefix, 120s).result ().value ();
     const auto &owner = std::get<owner_lease_claimed_t> (lease).token;
     mesh_node_descriptor_t descriptor;

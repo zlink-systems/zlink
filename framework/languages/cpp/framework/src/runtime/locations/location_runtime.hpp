@@ -732,15 +732,25 @@ class location_runtime_t
         static_cast<void> (node_rid);
         auto heartbeat = std::make_shared<heartbeat_owner_t> ();
         std::atomic_store_explicit (&_heartbeat_state, heartbeat, std::memory_order_release);
-        const auto operation_started_at = std::chrono::steady_clock::now ();
+        std::chrono::steady_clock::time_point operation_started_at;
         try {
             if (cancellation.stop_requested ())
                 std::rethrow_exception (
                   detail::make_cancellation_exception ("location runtime startup was cancelled"));
+            const auto format =
+              infrastructure_result ([&] { return _store->ensure_store_format (cancellation); });
+            operation_started_at = std::chrono::steady_clock::now ();
             const auto deadline_at = operation_started_at + _options.owner_lease_renew_timeout;
-            renew_owner_lease_once_at (operation_started_at, deadline_at, cancellation);
+            if (format) {
+                renew_owner_lease_once_at (operation_started_at, deadline_at, cancellation);
+            } else {
+                if (format.error_kind () != framework_error_kind_t::unavailable)
+                    format.value ();
+                record_failure (format.error ()->what ());
+            }
             if (cancellation.stop_requested ()) {
-                release_cancelled_claim (deadline_at);
+                if (format)
+                    release_cancelled_claim (deadline_at);
                 std::rethrow_exception (
                   detail::make_cancellation_exception ("location runtime startup was cancelled"));
             }
@@ -1858,6 +1868,18 @@ class location_runtime_t
                     co_await heartbeat_failure (attempt, std::move (failure));
                     co_return outcome;
                 }
+            }
+
+            const auto format = co_await await_heartbeat_store (
+              runtime->_store->ensure_store_format (attempt->cancellation), attempt);
+            if (!format || !*format) {
+                co_await heartbeat_communication_failure (attempt);
+                const auto *error = format ? format->error () : nullptr;
+                co_await heartbeat_failure (
+                  attempt, error ? error->what ()
+                                 : (format ? "Location Store conversion failed"
+                                           : "Location Store conversion timed out"));
+                co_return outcome;
             }
 
             std::string failure = "owner lease claim timed out";

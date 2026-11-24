@@ -765,6 +765,22 @@ TEST_P (CreationTerminalTest, SharedCapacityConflictReconstructsWithoutChangingR
     expect_published_terminal_and_replay ();
 }
 
+TEST_P (CreationTerminalTest, DefaultDeadlineRequalifiesUnchangedReservation)
+{
+    provider.conflicting_capacity_key = capacity_key (descriptor, "actors", "pending");
+    provider.fault = creation_terminal_failure_store_t::fault_t::capacity_conflict_once;
+    if (GetParam () == completion_kind_t::created) {
+        const auto result =
+          repository.commit ({reserve_request.key, fence, bytes ("ready")}).result ().value ();
+        EXPECT_TRUE (std::holds_alternative<object_committed_t> (result));
+    } else {
+        const auto result = repository.abort ({reserve_request.key, fence}).result ().value ();
+        EXPECT_TRUE (std::holds_alternative<object_aborted_t> (result));
+    }
+    EXPECT_EQ (provider.fault, creation_terminal_failure_store_t::fault_t::none);
+    EXPECT_EQ (capacity_count (provider, provider.conflicting_capacity_key), 0u);
+}
+
 TEST_P (CreationTerminalTest, LoweredCapacityLimitKeepsExistingReservations)
 {
     const store_key_t descriptor_key{std::string ("mesh-node") + '\0' + descriptor.mesh_name + '\0'

@@ -612,6 +612,8 @@ class location_repository_t
         const std::lock_guard lock (_reclaim_mutex);
         _reclaim_margin = margin;
     }
+    virtual task_t<void> ensure_store_format (std::stop_token) { co_return; }
+
     virtual task_t<void> refresh_capacity_metrics (std::string mesh_name, zlink::routing_id_t rid)
     {
         co_return;

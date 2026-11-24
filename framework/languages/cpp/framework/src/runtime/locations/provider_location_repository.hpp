@@ -154,6 +154,8 @@ class provider_location_repository_t final : public location_repository_t
     {
     }
 
+    task_t<void> ensure_store_format (std::stop_token cancellation) override;
+
     task_t<void> refresh_capacity_metrics (std::string mesh_name, zlink::routing_id_t rid) override
     {
         const auto scope = capacity_prefix (mesh_name, rid.to_hex ());
@@ -166,7 +168,6 @@ class provider_location_repository_t final : public location_repository_t
     {
         if (owner_id.empty () || lease_ttl <= std::chrono::milliseconds::zero ())
             throw std::invalid_argument ("owner lease claim is incomplete");
-        (void) co_await generation_floor ();
         const auto owner_key = key_owner (owner_id);
         for (;;) {
             auto owner = co_await _store.read (owner_key);
@@ -689,7 +690,8 @@ class provider_location_repository_t final : public location_repository_t
         const auto store_now =
           found ? found->value.store_now : std::get<store_missing_t> (current).store_now;
         // The unchanged opaque version also preserves the reservation identity
-        // checked before the operation constructs its conditional write.
+        // checked before the operation constructs its conditional write. Direct
+        // reserve/commit/abort calls use the epoch as the default (no deadline).
         if (!unchanged
             || (operation_deadline && *operation_deadline != decltype (store_now){}
                 && store_now >= *operation_deadline))
@@ -1598,14 +1600,7 @@ class provider_location_repository_t final : public location_repository_t
                                   aggregate_prepare_conflict_t{}};
                             continue;
                         }
-                        auto old_aggregate =
-                          co_await _store.read (key_aggregate (lock->aggregate_id));
-                        const auto *old_aggregate_found =
-                          std::get_if<store_found_t> (&old_aggregate);
-                        if (!old_aggregate_found
-                            || parse_json (old_aggregate_found->value.bytes)
-                                   .value (location_record_fields::status, "")
-                                 != aggregate_status::committed)
+                        if (co_await aggregate_lock_holds_async (*lock))
                             co_return aggregate_prepare_result_t{aggregate_prepare_conflict_t{}};
                         lock_request.conditions.push_back (
                           version_condition (lock_key, found->value.version));
@@ -2075,17 +2070,18 @@ class provider_location_repository_t final : public location_repository_t
         if (!already_aborted && status != aggregate_status::preparing
             && status != aggregate_status::prepared && status != aggregate_status::committing)
             co_return aggregate_abort_result_t::stale;
-        const object_creation_target_t target{
-          record.at (location_record_fields::targetMeshName).get<std::string> (),
-          decode_aggregate_target_rid (record),
-          record.at (location_record_fields::targetLifecycleGeneration).get<std::uint64_t> (),
-          decode_owner (record.at (location_record_fields::targetOwner))};
         if (!already_aborted) {
             record[location_record_fields::status] = aggregate_status::aborted;
             store_write_request_t abort_request{
               {version_condition (key, found->value.version)},
               {store_put_t{key, to_bytes (record.dump ()), std::nullopt}}};
             if (status != aggregate_status::preparing) {
+                const object_creation_target_t target{
+                  record.at (location_record_fields::targetMeshName).get<std::string> (),
+                  decode_aggregate_target_rid (record),
+                  record.at (location_record_fields::targetLifecycleGeneration)
+                    .get<std::uint64_t> (),
+                  decode_owner (record.at (location_record_fields::targetOwner))};
                 capacity_changes_t capacity;
                 capacity.change (target,
                                  decode_bundle (record.at (location_record_fields::capacityBundle)),
@@ -2112,32 +2108,33 @@ class provider_location_repository_t final : public location_repository_t
                 store_write_request_t rollback;
                 for (std::size_t entry_index = 0; entry_index < entries->size (); ++entry_index) {
                     const auto &entry = (*entries)[entry_index];
-                    auto authority = co_await _store.read (key_authority (entry.authority_key));
-                    const auto *stored_authority = std::get_if<store_found_t> (&authority);
-                    auto lock = co_await _store.read (key_aggregate_lock (entry.authority_key));
+                    const auto lock_key = key_aggregate_lock (entry.authority_key);
+                    const auto lock = co_await _store.read (lock_key);
                     const auto *stored_lock = std::get_if<store_found_t> (&lock);
-                    if (!stored_authority)
+                    if (!stored_lock)
+                        continue;
+                    const auto decoded_lock = decode_aggregate_lock (stored_lock->value.bytes);
+                    if (!decoded_lock || decoded_lock->authority_key != entry.authority_key)
                         co_return aggregate_abort_result_t::stale;
-                    if (stored_authority->value.bytes != entry.before
-                        && stored_authority->value.bytes != entry.after)
+                    // Another recovery may already have removed our lock and
+                    // allowed the participant to join a new aggregate.
+                    if (decoded_lock->aggregate_id.value != fence.aggregate_id.value
+                        || decoded_lock->aggregate_generation != fence.aggregate_generation)
+                        continue;
+                    if (decoded_lock->status != aggregate_status::committing
+                        || decoded_lock->page_index != page_index
+                        || decoded_lock->entry_index != entry_index)
                         co_return aggregate_abort_result_t::stale;
-                    if (stored_lock) {
-                        const auto decoded_lock = decode_aggregate_lock (stored_lock->value.bytes);
-                        if (!decoded_lock
-                            || decoded_lock->aggregate_id.value != fence.aggregate_id.value
-                            || decoded_lock->aggregate_generation != fence.aggregate_generation
-                            || decoded_lock->authority_key != entry.authority_key
-                            || decoded_lock->status != aggregate_status::committing
-                            || decoded_lock->page_index != page_index
-                            || decoded_lock->entry_index != entry_index)
-                            co_return aggregate_abort_result_t::stale;
-                        rollback.conditions.push_back (version_condition (
-                          key_aggregate_lock (entry.authority_key), stored_lock->value.version));
-                        rollback.mutations.push_back (
-                          store_delete_t{key_aggregate_lock (entry.authority_key)});
-                    } else if (stored_authority->value.bytes != entry.before) {
+                    const auto authority =
+                      co_await _store.read (key_authority (entry.authority_key));
+                    const auto *stored_authority = std::get_if<store_found_t> (&authority);
+                    if (!stored_authority
+                        || (stored_authority->value.bytes != entry.before
+                            && stored_authority->value.bytes != entry.after))
                         co_return aggregate_abort_result_t::stale;
-                    }
+                    rollback.conditions.push_back (
+                      version_condition (lock_key, stored_lock->value.version));
+                    rollback.mutations.push_back (store_delete_t{lock_key});
                     if (stored_authority->value.bytes == entry.after) {
                         rollback.conditions.push_back (version_condition (
                           key_authority (entry.authority_key), stored_authority->value.version));
@@ -2181,9 +2178,12 @@ class provider_location_repository_t final : public location_repository_t
                 auto lock = co_await _store.read (lock_key);
                 if (const auto *stored_lock = std::get_if<store_found_t> (&lock)) {
                     const auto decoded_lock = decode_aggregate_lock (stored_lock->value.bytes);
-                    if (!decoded_lock
-                        || decoded_lock->aggregate_id.value != fence.aggregate_id.value
+                    if (!decoded_lock || decoded_lock->authority_key != participant.key.value)
+                        co_return aggregate_abort_result_t::stale;
+                    if (decoded_lock->aggregate_id.value != fence.aggregate_id.value
                         || decoded_lock->aggregate_generation != fence.aggregate_generation)
+                        continue;
+                    if (decoded_lock->status == aggregate_status::committing)
                         co_return aggregate_abort_result_t::stale;
                     cleanup.conditions.push_back (
                       version_condition (lock_key, stored_lock->value.version));
@@ -2351,8 +2351,11 @@ class provider_location_repository_t final : public location_repository_t
     }
 
   private:
+    class store_format_t;
+
     using json_t = nlohmann::json;
     static constexpr std::string_view prefix = "zlink:v11:";
+    static constexpr std::string_view aggregate_prefix = "zlink:v11:aggregate:";
     static constexpr std::uint64_t max_generation = std::numeric_limits<std::int64_t>::max ();
     inline static const store_key_t counter_key{std::string (prefix) + "owner-counter"};
     inline static const store_key_t generation_floor_key{"zlink:v12:generation-floor"};
@@ -2578,19 +2581,34 @@ class provider_location_repository_t final : public location_repository_t
                                                   store_condition_t *observed_condition = nullptr)
     {
         const auto lock = co_await read_aggregate_lock_async (authority_key, observed_condition);
-        if (!lock
-            || (lock->status != aggregate_status::prepared
-                && lock->status != aggregate_status::committing))
+        if (!lock)
             co_return false;
-        if (lock->status == aggregate_status::committing) {
-            auto aggregate = co_await _store.read (key_aggregate (lock->aggregate_id));
-            if (const auto *found = std::get_if<store_found_t> (&aggregate)) {
-                const auto record = parse_json (found->value.bytes);
-                if (record.value (location_record_fields::status, "")
-                    == aggregate_status::committed)
-                    co_return false;
-            }
-        }
+        co_return co_await aggregate_lock_holds_async (*lock);
+    }
+
+    task_t<bool> aggregate_lock_holds_async (aggregate_lock_t lock)
+    {
+        if (lock.status != aggregate_status::prepared
+            && lock.status != aggregate_status::committing)
+            co_return false;
+        const auto aggregate = co_await _store.read (key_aggregate (lock.aggregate_id));
+        const auto *found = std::get_if<store_found_t> (&aggregate);
+        if (!found)
+            co_return true;
+        const auto record = parse_json (found->value.bytes);
+        if (record.value (location_record_fields::aggregateGeneration, std::uint64_t{0})
+            != lock.aggregate_generation)
+            co_return true;
+        const auto status = record.value (location_record_fields::status, "");
+        if (status == aggregate_status::committed)
+            co_return false;
+        if (status != aggregate_status::aborted)
+            co_return true;
+
+        // The terminal CAS returned capacity. Resume its existing rollback
+        // and reject this attempt, which may have read the staged authority.
+        aggregate_fence_t fence{lock.aggregate_id, lock.aggregate_generation, std::nullopt};
+        (void) co_await abort_aggregate (fence);
         co_return true;
     }
 
@@ -2811,9 +2829,7 @@ class provider_location_repository_t final : public location_repository_t
             co_return cached;
         const auto row = co_await _store.read (generation_floor_key);
         const auto *found = std::get_if<store_found_t> (&row);
-        const auto floor = found ? read_counter (found->value.bytes, true) : std::uint64_t{1};
-        _generation_floor.store (floor, std::memory_order_relaxed);
-        co_return floor;
+        co_return found ? read_counter (found->value.bytes, true) : std::uint64_t{1};
     }
 
     task_t<std::optional<std::uint64_t>> issue_generation (const store_key_t &authority,
@@ -2964,7 +2980,7 @@ class provider_location_repository_t final : public location_repository_t
 
     static store_key_t key_aggregate (const aggregate_id_t &id)
     {
-        return {std::string (prefix) + "aggregate:" + hex (id.value)};
+        return {std::string (aggregate_prefix) + hex (id.value)};
     }
 
     static store_key_t key_aggregate_inventory (const aggregate_id_t &id, std::size_t page_index)

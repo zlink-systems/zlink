@@ -31,6 +31,13 @@ class paused_aggregate_page_store_t final : public location_store_t
     }
     task_t<store_write_result_t> write (store_write_request_t request) override
     {
+        const bool rollback = std::any_of (
+          request.mutations.begin (), request.mutations.end (), [] (const auto &mutation) {
+              const auto *deleted = std::get_if<store_delete_t> (&mutation);
+              return deleted && deleted->key.value.starts_with ("zlink:v11:aggregate-lock:");
+          });
+        if (rollback && interrupt_rollback)
+            co_return store_write_result_t{store_write_conflict_t{}};
         const bool page = std::any_of (
           request.mutations.begin (), request.mutations.end (), [] (const auto &mutation) {
               return std::visit (
@@ -49,6 +56,7 @@ class paused_aggregate_page_store_t final : public location_store_t
     location_store_t &inner;
     task_completion_source_t<bool> page_written;
     task_completion_source_t<void> release;
+    bool interrupt_rollback = false;
 };
 
 inline task_t<aggregate_commit_result_t>
@@ -61,7 +69,10 @@ observe_aggregate_page_commit (task_t<aggregate_commit_result_t> commit,
 
 template <typename TBytes>
 void aggregate_page_read_keeps_source_version_until_commit (
-  location_store_t &store, TBytes bytes, authority_aggregate_codec::json_t captured = nullptr)
+  location_store_t &store,
+  TBytes bytes,
+  authority_aggregate_codec::json_t captured = nullptr,
+  bool interrupt_abort = false)
 {
     namespace stateful = zlink::framework::runtime::stateful;
     paused_aggregate_page_store_t provider (store);
@@ -186,6 +197,47 @@ void aggregate_page_read_keeps_source_version_until_commit (
     });
     ASSERT_TRUE (provider.page_written.task ().result ().value ());
     EXPECT_FALSE (pending.await_ready ());
+    if (interrupt_abort) {
+        provider.interrupt_rollback = true;
+        EXPECT_EQ (repository.abort_aggregate (fence).result ().value (),
+                   aggregate_abort_result_t::stale);
+        release_commit.run ();
+        EXPECT_EQ (pending.result ().value (), aggregate_commit_result_t::stale);
+
+        // The new repository has no knowledge of the interrupted caller.
+        provider_location_repository_t recovered (store);
+        const auto attempt = recovered
+                               .compare_exchange_authority (key, before.store_version,
+                                                            authority_put_t{bytes ("preserve")})
+                               .result ()
+                               .value ();
+        ASSERT_TRUE (std::holds_alternative<authority_conflict_t> (attempt));
+        const auto &conflict = std::get<authority_conflict_t> (attempt);
+        ASSERT_TRUE (std::holds_alternative<authority_snapshot_t> (conflict.current));
+        EXPECT_EQ (std::get<authority_snapshot_t> (conflict.current).payload, before.payload);
+        const auto restored =
+          std::get<authority_snapshot_t> (recovered.read_authority (key).result ().value ());
+        EXPECT_EQ (restored.payload, before.payload);
+        EXPECT_EQ (restored.owner.owner_id, source.owner.owner_id);
+        EXPECT_NE (restored.store_version, before.store_version);
+        const auto changed = recovered
+                               .compare_exchange_authority (key, restored.store_version,
+                                                            authority_put_t{bytes ("updated")})
+                               .result ()
+                               .value ();
+        EXPECT_TRUE (std::holds_alternative<authority_stored_t> (changed));
+        const auto nodes = recovered.list_mesh_nodes_core (target.mesh_name).result ().value ();
+        const auto target_rid = zlink::routing_id_t::from (std::string (target.node_rid.value ()));
+        const auto target_node =
+          std::find_if (nodes.items.begin (), nodes.items.end (),
+                        [&] (const auto &node) { return node.rid == target_rid; });
+        ASSERT_NE (target_node, nodes.items.end ());
+        EXPECT_EQ (target_node->capacity.actors.active, 0);
+        EXPECT_EQ (target_node->capacity.actors.reserved, 0);
+        EXPECT_EQ (target_node->capacity.spots.active, 0);
+        EXPECT_EQ (target_node->capacity.spots.reserved, 0);
+        return;
+    }
     // Release the commit even if an observation fails, so the fixture owns no pending work.
     const auto read = repository.read_authority (key).result ().value ();
     const auto during = std::get<authority_snapshot_t> (read);
