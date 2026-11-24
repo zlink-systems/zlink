@@ -29,7 +29,6 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
     private Task? _receiveLoop;
 
     internal Task ReceiveCompletion => _receiveLoop ?? Task.CompletedTask;
-    private Task? _livenessLoop;
 
     // The monitor loop closes the monitor when it returns.
     private readonly ZLinkReceiveSocketOwner _monitorOwner;
@@ -153,18 +152,6 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         await CaptureAsync(_controlIngress.DisposeAsync).ConfigureAwait(false);
         await CaptureAsync(_monitorOwner.CloseAsync).ConfigureAwait(false);
 
-        if (_livenessLoop is not null)
-            try
-            {
-                await _livenessLoop;
-            }
-            catch (OperationCanceledException) { }
-            catch (ObjectDisposedException) { }
-            catch (Exception exception)
-            {
-                failures.Add(exception);
-            }
-
         if (_receiveLoop is not null)
             try
             {
@@ -250,10 +237,6 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
         _receivePoller ??= Socket.CreateReceivePoller();
         _receiveLoop = _taskRunner.Run($"stream-recv:{NodeName}", RunReceiveLoopUntilStopped);
         _monitorOwner.Start(_taskRunner, $"stream-monitor:{NodeName}", RunMonitorLoopUntilStopped);
-        _livenessLoop = _taskRunner.Run(
-            $"stream-liveness:{NodeName}",
-            runtimeToken => new ValueTask(RunLivenessLoopUntilStoppedAsync(runtimeToken))
-        );
     }
 
     private async ValueTask RunMonitorLoopUntilStopped(CancellationToken runtimeToken)
@@ -267,29 +250,6 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
 
     private ValueTask CloseMonitorAsync() =>
         Monitor is { } monitor ? monitor.DisposeAsync() : ValueTask.CompletedTask;
-
-    private async Task RunLivenessLoopUntilStoppedAsync(CancellationToken runtimeToken)
-    {
-        using var stop = CancellationTokenSource.CreateLinkedTokenSource(
-            _stopSource.Token,
-            runtimeToken
-        );
-        var sweepInterval =
-            _livenessOptions.HeartbeatInterval < ZLinkStreamSessionLiveness.SweepInterval
-                ? _livenessOptions.HeartbeatInterval
-                : ZLinkStreamSessionLiveness.SweepInterval;
-        if (
-            _livenessOptions.IdleTimeout > TimeSpan.Zero
-            && _livenessOptions.IdleTimeout < sweepInterval
-        )
-            sweepInterval = _livenessOptions.IdleTimeout;
-        while (!stop.IsCancellationRequested)
-        {
-            await Task.Delay(sweepInterval, _timeProvider, stop.Token).ConfigureAwait(false);
-            foreach (var session in await _sessions.SnapshotAsync().ConfigureAwait(false))
-                session.CheckLiveness();
-        }
-    }
 
     private async ValueTask RunReceiveLoopUntilStopped(CancellationToken runtimeToken)
     {
@@ -624,6 +584,7 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                     break;
                 if (monitorEvent.RoutingId is RoutingId readyRoutingId)
                 {
+                    var connectedAt = _timeProvider.GetTimestamp();
                     await ClearDisconnectedRoutingIdAsync(readyRoutingId).ConfigureAwait(false);
                     var connectedAdmission = _controlIngress.ExecuteControl(
                         async cancellationToken =>
@@ -635,7 +596,8 @@ internal sealed class ZLinkStreamNodeRuntime : IAsyncDisposable
                             {
                                 var sessionAdmission = session.EnqueueConnected(
                                     monitorEvent.LocalAddr,
-                                    monitorEvent.RemoteAddr
+                                    monitorEvent.RemoteAddr,
+                                    connectedAt
                                 );
                                 await ReportControlAdmissionAsync(
                                         "stream-session-connected",
