@@ -242,7 +242,8 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                     new IllegalStateException(
                             "Session actor relay requires an active stream dispatch."));
         }
-        ZLinkStreamHeader header = metadataPolicy.sessionToActor(currentHeader.get());
+        ZLinkStreamHeader requestHeader = currentHeader.orElseThrow();
+        ZLinkStreamHeader header = metadataPolicy.sessionToActor(requestHeader);
         traceRelay(header);
         Message message = ZLinkMessagePayloads.message(payload, serializer);
         byte[] payloadBytes = message.toByteArray();
@@ -253,10 +254,11 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                             if (managedActor.isPresent()
                                     && localActorDispatcher != null
                                     && !nativeRebound) {
-                                return relayLocal(header, payloadBytes, sourceSessionSequence);
+                                return relayLocal(
+                                        requestHeader, header, payloadBytes, sourceSessionSequence);
                             }
                             return relayUsingStoredBinding(
-                                    header, payloadBytes, sourceSessionSequence);
+                                    requestHeader, header, payloadBytes, sourceSessionSequence);
                         });
         return header.requestSequence().isPresent()
                 ? submission
@@ -293,7 +295,10 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
     }
 
     private CompletionStage<Void> relayLocal(
-            ZLinkStreamHeader header, byte[] payloadBytes, long sourceSessionSequence) {
+            ZLinkStreamHeader requestHeader,
+            ZLinkStreamHeader header,
+            byte[] payloadBytes,
+            long sourceSessionSequence) {
         if (localActorDispatcher == null) {
             return CompletableFuture.failedFuture(
                     new ZLinkConfigurationException(
@@ -321,7 +326,7 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                             sourceSessionSequence,
                             header,
                             payload,
-                            reply -> submitted.set(replyLocal(header, reply)));
+                            reply -> submitted.set(replyLocal(requestHeader, header, reply)));
         } catch (RuntimeException failure) {
             payload.close();
             completeRequest(metric, started, failure);
@@ -336,7 +341,9 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
     }
 
     private CompletionStage<Void> replyLocal(
-            ZLinkStreamHeader header, ZLinkSessionActorsRuntime.LocalActorReply reply) {
+            ZLinkStreamHeader requestHeader,
+            ZLinkStreamHeader header,
+            ZLinkSessionActorsRuntime.LocalActorReply reply) {
         ZLinkFrameworkMultipartView retained = ZLinkFrameworkMultipartView.owned(reply.payload());
         if (header.requestSequence().isEmpty()) {
             retained.close();
@@ -369,13 +376,17 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
             retained.close();
             throw failure;
         }
-        return submission.whenComplete((ignored, failure) -> retained.close());
+        return completeRelayReply(submission, requestHeader, retained::close);
     }
 
     private CompletionStage<Void> relayUsingStoredBinding(
-            ZLinkStreamHeader header, byte[] payloadBytes, long sourceSessionSequence) {
+            ZLinkStreamHeader requestHeader,
+            ZLinkStreamHeader header,
+            byte[] payloadBytes,
+            long sourceSessionSequence) {
         if (header.requestSequence().isPresent()) {
-            return requestUsingStoredBinding(header, payloadBytes, sourceSessionSequence);
+            return requestUsingStoredBinding(
+                    requestHeader, header, payloadBytes, sourceSessionSequence);
         }
         Message payloadPart = Message.from(payloadBytes);
         CompletionStage<Void> submission;
@@ -396,7 +407,10 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
     }
 
     private CompletionStage<Void> requestUsingStoredBinding(
-            ZLinkStreamHeader requestHeader, byte[] payloadBytes, long sourceSessionSequence) {
+            ZLinkStreamHeader originalHeader,
+            ZLinkStreamHeader requestHeader,
+            byte[] payloadBytes,
+            long sourceSessionSequence) {
         Message payloadPart = Message.from(payloadBytes);
         ZLinkRequestMetrics.Series metric = ZLinkRequestMetrics.actor(meshName);
         long started =
@@ -425,7 +439,7 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                     payloadPart.close();
                     completeRequest(metric, started, failure);
                 });
-        return request.thenCompose(reply -> replyRemote(requestHeader, reply));
+        return request.thenCompose(reply -> replyRemote(originalHeader, requestHeader, reply));
     }
 
     private static void completeRequest(
@@ -439,7 +453,9 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
     }
 
     private CompletionStage<Void> replyRemote(
-            ZLinkStreamHeader requestHeader, List<Message> reply) {
+            ZLinkStreamHeader originalHeader,
+            ZLinkStreamHeader requestHeader,
+            List<Message> reply) {
         Message body = null;
         try {
             if (reply == null || reply.size() != 1) {
@@ -483,8 +499,10 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                             Optional.of(actorSlot));
             body = Message.from(decoded.body());
             Message replyBody = body;
-            return stream.replyAsync(sessionRid, clientHeader, List.of(replyBody))
-                    .whenComplete((ignored, failure) -> replyBody.close());
+            return completeRelayReply(
+                    stream.replyAsync(sessionRid, clientHeader, List.of(replyBody)),
+                    originalHeader,
+                    replyBody::close);
         } catch (RuntimeException failure) {
             if (body != null) {
                 body.close();
@@ -495,6 +513,20 @@ final class ZLinkBoundActor implements ZLinkSessionActor {
                 reply.forEach(Message::close);
             }
         }
+    }
+
+    private CompletionStage<Void> completeRelayReply(
+            CompletionStage<Void> submission, ZLinkStreamHeader requestHeader, Runnable release) {
+        return submission.whenComplete(
+                (ignored, failure) -> {
+                    try {
+                        if (failure == null) {
+                            relayHeaders.replyAccepted(requestHeader);
+                        }
+                    } finally {
+                        release.run();
+                    }
+                });
     }
 
     @Override

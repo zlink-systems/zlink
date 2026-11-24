@@ -178,7 +178,7 @@ final class ZLinkStreamConnectionLifecycle {
         stopHeartbeat();
         Throwable closeFailure = closeQuietly(ended);
         connectionEndedNotifier.run();
-        pendingRequests.failAll(cause);
+        pendingRequests.failAll(ended, cause);
         dispatchQueue.connectionEnded();
         if (ended != null) {
             actorUnboundNotifier.run();
@@ -199,12 +199,15 @@ final class ZLinkStreamConnectionLifecycle {
     <T> CompletionStage<T> enqueueFrame(
             ZLinkStreamSendChain sendChain,
             byte[] frame,
+            ZLinkStreamTransportConnection expected,
             BiFunction<Supplier<CompletionStage<Void>>, Consumer<Throwable>, CompletableFuture<T>>
                     enqueue) {
         CompletableFuture<T> publication;
         synchronized (connectionAttemptLock) {
             ZLinkStreamTransportConnection current = connection;
-            if (state != ZLinkStreamConnectionState.CONNECTED || current == null) {
+            if (state != ZLinkStreamConnectionState.CONNECTED
+                    || current == null
+                    || (expected != null && current != expected)) {
                 throw ZLinkStreamException.disconnected("connector is not connected");
             }
             publication =
@@ -234,6 +237,11 @@ final class ZLinkStreamConnectionLifecycle {
      * code the queue reset gives the operations the ending found.
      */
     private CompletionStage<Void> write(ZLinkStreamTransportConnection transport, byte[] frame) {
+        if (connection != transport) {
+            return CompletableFuture.failedFuture(
+                    ZLinkStreamException.disconnected(
+                            "connection ended before frame write started"));
+        }
         CompletionStage<Void> written;
         try {
             written = transport.writeAsync(frame);
@@ -337,7 +345,7 @@ final class ZLinkStreamConnectionLifecycle {
                 configuration.limits().receivePayload());
     }
 
-    private void activateConnection(ZLinkStreamTransportConnection transport) {
+    void activateConnection(ZLinkStreamTransportConnection transport) {
         boolean closed;
         boolean stateChanged = false;
         synchronized (connectionAttemptLock) {

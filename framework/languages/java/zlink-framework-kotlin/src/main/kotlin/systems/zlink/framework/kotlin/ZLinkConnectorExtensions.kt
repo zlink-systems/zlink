@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.future.await
 import systems.zlink.framework.kotlin.stream.ZLinkKotlinRequestCall as ZLinkKotlinStreamRequestCall
 import systems.zlink.stream.connector.ZLinkStreamActor
+import systems.zlink.stream.connector.ZLinkStreamAdmissionWaitingHandler
 import systems.zlink.stream.connector.ZLinkStreamAssert
 import systems.zlink.stream.connector.ZLinkStreamCloseReason
 import systems.zlink.stream.connector.ZLinkStreamCompression
@@ -75,6 +76,7 @@ private fun ZLinkStreamConnectorOptions.copyStreamCompression(
         codec,
         nameResolver(),
         typedCodec(),
+        maxAdmissionWait(),
     )
 
 class ZLinkKotlinStreamConnector(@PublishedApi internal val inner: ZLinkStreamConnector) {
@@ -128,6 +130,9 @@ class ZLinkKotlinStreamConnector(@PublishedApi internal val inner: ZLinkStreamCo
 
     fun onRequestSending(handler: ZLinkStreamRequestSendingHandler): AutoCloseable =
         inner.onRequestSending(handler)
+
+    fun onAdmissionWaiting(handler: ZLinkStreamAdmissionWaitingHandler): AutoCloseable =
+        inner.onAdmissionWaiting(handler)
 
     fun onDisconnected(handler: ZLinkStreamDisconnectedHandler): AutoCloseable =
         inner.onDisconnected(handler)

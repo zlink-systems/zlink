@@ -112,7 +112,7 @@ class ZLinkStreamTimeoutIsolationTest {
                             configuration,
                             ZLinkStreamExecutionResources.timeouts(),
                             new ZLinkStreamDispatchQueue(),
-                            new ZLinkStreamPendingRequests(),
+                            ZLinkStreamPendingRequestsTest.pendingRequests(),
                             null,
                             ignored -> {},
                             () -> {},
