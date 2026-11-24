@@ -94,8 +94,8 @@ for (const [scenario, name] of [
       },
       relocation: {
         relocationId,
-        phase: 'prepared',
-        source: { ...fence, nodeRid: 'source' },
+        phase: 'committed',
+        source: { ...fence, nodeRid: '736f75726365' },
         target: { ...fence, attemptGeneration: 1n },
         coordinator: { ...fence, expectedStoreVersion: 'source-v1' },
         sourceInventorySha256: '0'.repeat(64),
@@ -413,7 +413,10 @@ for (const [scenario, name] of [
       events.push('ack');
       return 'terminalReceived';
     };
-    runtime.commitTargetReservation = async () => current;
+    runtime.commitTargetReservation = async () => {
+      events.push(current.relocation.phase);
+      return current;
+    };
     runtime.waitForRelocationBudgetHeadroom = async () => {};
     runtime.runCoordinator = async (_mesh, target) => {
       current = {
