@@ -274,7 +274,8 @@ public final class ZLinkUserSpotRetireRuntime {
                             target,
                             spots::scheduleRelocationCleanup,
                             transferOptions,
-                            () -> targetAdmissionSealed.test(registration.meshName()));
+                            () -> targetAdmissionSealed.test(registration.meshName()),
+                            spots.dispatchErrors);
             machines.add(relocationClient);
             new ZLinkCanonicalRelocationTransitionOwner(relocationClient).install(node);
             node.setRelocationReplyRelayHandler(target::relayCanonicalReply);
@@ -646,8 +647,8 @@ public final class ZLinkUserSpotRetireRuntime {
                             }
                             var split =
                                     new RelocationAuthorityErrorException(
-                                            "Relocation units committed on both source and"
-                                                    + " target");
+                                            "Relocation units committed on different sides"
+                                                    + " (some on source, some on target)");
                             split.initCause(cause);
                             return CompletableFuture.<Void>failedFuture(split);
                         });

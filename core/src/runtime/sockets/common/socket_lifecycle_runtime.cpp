@@ -300,14 +300,8 @@ bool zlink::socket_lifecycle_coordinator_t::acquire_poller_registration ()
 
 bool zlink::socket_lifecycle_coordinator_t::begin_close_or_fail_busy ()
 {
-    // A public poller samples a registered socket's readiness through the
-    // same in-flight admission, and that sample is only microseconds long.
-    // Failing close on it would break the documented guarantee that a
-    // registered socket may be closed before it is removed from the poller,
-    // so let a transient admission drain on the sync bit's backoff schedule
-    // before reporting BUSY. A call that holds its admission for its whole
-    // body - a blocking receive, an endpoint teardown - outlives that window
-    // and still reports BUSY.
+    // Give short public admissions time to leave before reporting BUSY.
+    // Socket turns and mailbox lifetime pins do not count as admissions.
     unsigned int attempt = 0;
     uint64_t old = public_api_state.load (std::memory_order_acquire);
     while (true) {

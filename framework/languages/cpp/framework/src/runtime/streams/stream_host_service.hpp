@@ -20,6 +20,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <stop_token>
 #include <thread>
 #include <unordered_set>
 #include <vector>
@@ -85,6 +86,11 @@ class stream_host_service_t final : public hosted_service_t, public hosted_servi
         _drain_flag = std::move (flag);
     }
 
+    void bind_shutdown_cancellation (std::stop_token cancellation) noexcept
+    {
+        _shutdown_cancellation = std::move (cancellation);
+    }
+
     void bind_monitoring (
       std::shared_ptr<framework::detail::monitoring_runtime_state_t> monitoring) noexcept
     {
@@ -115,6 +121,7 @@ class stream_host_service_t final : public hosted_service_t, public hosted_servi
     class listener_t;
 
     std::shared_ptr<std::atomic_bool> _drain_flag;
+    std::stop_token _shutdown_cancellation;
     std::shared_ptr<framework::detail::monitoring_runtime_state_t> _monitoring;
     detail::stream_runtime_t _runtime;
     std::vector<stream_snapshot_t> _streams;

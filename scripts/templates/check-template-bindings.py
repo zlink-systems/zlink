@@ -2,8 +2,8 @@
 """Check each template binding pin against the binding its published Framework requires.
 
 framework/languages/<lang>/templates/TEMPLATE_VERSIONS pins the public Framework and binding
-that the genre templates use. For every language that pins a binding, this reads the binding
-that the Framework release requires at tag framework-<lang>/v<framework> and fails when the
+that the genre templates use. The connector example bundle has its own TEMPLATE_VERSIONS
+for the shared release and the Node server binding. This reads the binding requirement at tag framework-<lang>/v<framework> and fails when the
 pin differs. It needs the release tags (git fetch --tags); a missing tag is a failure.
 
 scripts/local-package/sync-version.py keeps the templates equal to TEMPLATE_VERSIONS and
@@ -66,25 +66,31 @@ def tagged_file(tag: str, relative: str) -> str:
     return shown.stdout
 
 
+def check_binding_pin(language: str, owner: str, pins: dict[str, str]) -> None:
+    relative, pattern = BINDING_SOURCES[language]
+    framework = pins["framework"]
+    binding = pins["binding"]
+    tag = f"framework-{language}/v{framework}"
+    required = re.findall(pattern, tagged_file(tag, relative))
+    if len(required) != 1:
+        raise SyncError(
+            f"{tag}:{relative}: expected 1 binding requirement, found {len(required)}"
+        )
+    if binding != required[0]:
+        raise SyncError(
+            f"{owner}: {sync_version.TEMPLATE_BINDING_KEY}={binding}, but Framework "
+            f"{framework} requires binding {required[0]} ({tag}:{relative})"
+        )
+
+
 def check_template_bindings() -> dict[str, dict[str, str]]:
     """Return the checked pins; raise SyncError on the first mismatch or missing tag."""
     pins = sync_version.template_versions()
     for language in sync_version.TEMPLATE_BINDING_LANGUAGES:
-        relative, pattern = BINDING_SOURCES[language]
-        framework = pins[language]["framework"]
-        binding = pins[language]["binding"]
-        tag = f"framework-{language}/v{framework}"
-        required = re.findall(pattern, tagged_file(tag, relative))
-        if len(required) != 1:
-            raise SyncError(
-                f"{tag}:{relative}: expected 1 binding requirement, found {len(required)}"
-            )
-        if binding != required[0]:
-            raise SyncError(
-                f"{sync_version.template_versions_path(language)}: "
-                f"{sync_version.TEMPLATE_BINDING_KEY}={binding}, but Framework {framework} "
-                f"requires binding {required[0]} ({tag}:{relative})"
-            )
+        check_binding_pin(language, sync_version.template_versions_path(language), pins[language])
+    owner = sync_version.CONNECTOR_EXAMPLE_VERSIONS
+    pins["connector-examples"] = sync_version.read_template_versions(owner, True)
+    check_binding_pin("node", owner, pins["connector-examples"])
     return pins
 
 
@@ -95,6 +101,7 @@ def main() -> int:
         print(f"template binding check failed: {error}", file=sys.stderr)
         return 1
     checked = {language: pins[language] for language in sync_version.TEMPLATE_BINDING_LANGUAGES}
+    checked["connector-examples"] = pins["connector-examples"]
     print(f"Template binding pins {checked} match their Framework release tags")
     return 0
 

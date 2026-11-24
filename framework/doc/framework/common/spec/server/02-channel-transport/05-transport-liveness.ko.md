@@ -279,6 +279,13 @@ Orderly close와 transport disconnect는 15초를 기다리지 않는다. 이전
 connection에서 늦게 도착한 ACK나 frame은 새 connection의 상태를 바꾸지 못한다. Core가 반환한
 Spot·Actor·Channel message는 Framework가 generation으로 다시 판정하지 않는다.
 
+선택 route가 끝나도 Framework는 그 route에서 확인한 admission을 그 RID의 **종료된 admitted
+generation**으로 남긴다. Core가 끝난 route에서 이미 받은 application record를 반환하면, 그 record의
+route generation이 현재 admitted route이거나 그 RID의 종료된 admitted generation일 때 전달한다.
+종료된 admitted generation은 handshake와 새 route admission에 쓰지 않는다 — 새 route는 HELLO·ADMIT를
+다시 거치고, 그 전에 받은 application record는 거부한다. 같은 RID에서 다른 route가 admission을
+마치거나 peer가 제거되면(descriptor 철회, lifecycle generation 변경, 만료 정리) 그 기록을 지운다.
+
 만료 peer의 물리 disconnect가 실패해도 runtime은 그 peer의 로컬 admission과 pending
 operation 정리 및 통지를 완료하고, 같은 tick의 나머지 만료 peer를 처리한다. `NOT_FOUND`는
 이미 종료된 결과로 받아들인다. 그 밖의 오류는 독립 정리가 끝난 뒤 원래 원인을 보존하여

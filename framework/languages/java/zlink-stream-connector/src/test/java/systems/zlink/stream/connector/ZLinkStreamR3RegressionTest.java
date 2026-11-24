@@ -34,6 +34,7 @@ final class ZLinkStreamR3RegressionTest {
                         null,
                         null,
                         null,
+                        null,
                         null);
         IllegalStateException failure = new IllegalStateException("transport close failure");
         lifecycle.publishCloseFailure(
@@ -86,6 +87,7 @@ final class ZLinkStreamR3RegressionTest {
         var requests = new ZLinkStreamPendingRequests();
         var pending =
                 chain.enqueueRequestDeferred(
+                        null,
                         () -> {
                             writes.incrementAndGet();
                             return CompletableFuture.completedFuture(null);
@@ -94,6 +96,7 @@ final class ZLinkStreamR3RegressionTest {
                         owned ->
                                 requests.add(
                                         7L,
+                                        null,
                                         "Echo",
                                         owned,
                                         (reply, complete) -> complete.getAsBoolean(),
@@ -189,6 +192,7 @@ final class ZLinkStreamR3RegressionTest {
         var writes = new AtomicInteger();
         var pending =
                 chain.enqueueRequestDeferred(
+                        null,
                         () -> {
                             writes.incrementAndGet();
                             return CompletableFuture.completedFuture(null);
@@ -197,6 +201,7 @@ final class ZLinkStreamR3RegressionTest {
                         owned ->
                                 requests.add(
                                         8L,
+                                        null,
                                         "Echo",
                                         owned,
                                         (reply, complete) -> complete.getAsBoolean(),
@@ -219,6 +224,7 @@ final class ZLinkStreamR3RegressionTest {
         try {
             var pending =
                     chain.enqueueRequestDeferred(
+                            null,
                             () -> {
                                 writes.incrementAndGet();
                                 return CompletableFuture.completedFuture(null);
@@ -227,6 +233,7 @@ final class ZLinkStreamR3RegressionTest {
                             owned ->
                                     requests.add(
                                             9L,
+                                            null,
                                             "Echo",
                                             owned,
                                             (reply, complete) -> complete.getAsBoolean(),
@@ -247,6 +254,7 @@ final class ZLinkStreamR3RegressionTest {
         var snapshot = new java.util.concurrent.atomic.AtomicReference<byte[]>();
         requests.add(
                 10L,
+                null,
                 "Echo",
                 pending,
                 (reply, complete) -> {
@@ -276,6 +284,7 @@ final class ZLinkStreamR3RegressionTest {
         var message = systems.zlink.contracts.messaging.Message.from("reply");
         requests.add(
                 11L,
+                null,
                 "Echo",
                 pending,
                 (reply, complete) -> {
