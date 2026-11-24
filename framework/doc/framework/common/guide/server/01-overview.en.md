@@ -969,10 +969,118 @@ part of this map.
 
 - An **api node** receives HTTP requests and calls a play node when needed. A channel client
   calls a node handler or an Instance Spot by name. Spot and Actor clients call by ID.
-- A **session node** receives client STREAM connections through L4. The session relay forwards
-  messages over a RouteMesh channel to an Actor on a play node.
+- A **session node** receives client STREAM connections through L4.
 - Spots and Actors on a **play node** own state and process messages in order.
 - The **Location Store** resolves node endpoints. Dotted lines represent address lookups.
+
+### 5.1 Session Node
+
+To use Actor dispatch on a session-only node, register a STREAM listener and an **Object Client
+MeshNode** in the same process. Configure the same `MeshName` and Location Store on the session
+and play processes so the session relay can reach the Actor on the play node. Startup validation
+fails if a process enables Actor dispatch without a MeshNode with the Object Client or Object
+Server role. .NET reports the following error for a STREAM node named `players`.
+
+```text
+STREAM node 'players' requires at least one local Object Client or Server MeshNode.
+```
+
+To deliver a delayed response to the client, [send a message to the target Actor](../../../common/spec/server/03-spot-actor/04-actor-model.en.md#5-actor-messaging)
+and have the Actor [send it to its current bound session](../../../common/spec/server/04-session/02-session-actor-binding.en.md#5-bind-and-relay).
+The Session–Actor binding determines which session receives the message. An Object Client
+[cannot register application Node direct handlers](../../../common/spec/server/02-channel-transport/01-channel-topology.en.md#4-when-a-call-can-start-without-a-local-server).
+A Node direct call targeting an Object Client [ends with `NotFound`](../../../common/spec/server/02-channel-transport/02-channel-messaging.en.md#2-how-to-select-a-target--node-direct).
+
+The example registers `session`, `play`, and `api` in separate processes. All three processes use
+the `game` mesh and the same Location Store. The code shows the mesh roles and STREAM registration.
+Configure the Location Store, the Actor and Spot factories on `play`, and the HTTP handler on `api`
+in the corresponding processes.
+
+=== "C#/.NET"
+
+    ```csharp
+    // session
+    sessionOptions.AddRouteMesh("game").Listen(sessionMeshEndpoint).Objects().Client();
+    sessionOptions.AddStreamNode("players")
+        .Bind(streamEndpoint)
+        .EnableActorDispatch()
+        .AddSession<PlayerSession>();
+
+    // play
+    playOptions.AddRouteMesh("game").Listen(playMeshEndpoint).Objects().Server();
+
+    // api
+    apiOptions.AddRouteMesh("game").Listen(apiMeshEndpoint).Objects().Client();
+    ```
+
+=== "C++"
+
+    ```cpp
+    // session
+    session_options.add_route_mesh ("game").listen (session_mesh_endpoint).objects ().client ();
+    session_options.add_stream_node ("players")
+      .bind (stream_endpoint)
+      .enable_actor_dispatch ()
+      .register_session<game_session_t> ();
+
+    // play
+    play_options.add_route_mesh ("game").listen (play_mesh_endpoint).objects ().server ();
+
+    // api
+    api_options.add_route_mesh ("game").listen (api_mesh_endpoint).objects ().client ();
+    ```
+
+=== "Java"
+
+    ```java
+    // session
+    sessionOptions.addRouteMesh("game").listen(sessionMeshEndpoint).objects().client();
+    sessionOptions.addStreamNode("players")
+        .bind(streamEndpoint)
+        .enableActorDispatch()
+        .registerSession(GameSession.class);
+
+    // play
+    playOptions.addRouteMesh("game").listen(playMeshEndpoint).objects().server();
+
+    // api
+    apiOptions.addRouteMesh("game").listen(apiMeshEndpoint).objects().client();
+    ```
+
+=== "Kotlin"
+
+    ```kotlin
+    // session
+    sessionOptions.addRouteMesh("game").listen(sessionMeshEndpoint).objects().client()
+    sessionOptions.addStreamNode("players")
+        .bind(streamEndpoint)
+        .enableActorDispatch()
+        .registerSession<GameSession>()
+
+    // play
+    playOptions.addRouteMesh("game").listen(playMeshEndpoint).objects().server()
+
+    // api
+    apiOptions.addRouteMesh("game").listen(apiMeshEndpoint).objects().client()
+    ```
+
+=== "Node/TypeScript"
+
+    ```typescript
+    // session
+    sessionOptions.addRouteMesh('game').listen(sessionMeshEndpoint).objects().client();
+    sessionOptions
+      .addStreamNode('players')
+      .bind(streamEndpoint)
+      .enableActorDispatch()
+      .registerSession(SessionFactory);
+
+    // play
+    playOptions.addRouteMesh('game').listen(playMeshEndpoint).objects().server();
+
+    // api
+    apiOptions.addRouteMesh('game').listen(apiMeshEndpoint).objects().client();
+    ```
 
 ## 6. Who This Guide Is for, and Its Scope
 
