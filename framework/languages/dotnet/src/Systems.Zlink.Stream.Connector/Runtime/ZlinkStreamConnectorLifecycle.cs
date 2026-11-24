@@ -46,6 +46,22 @@ internal sealed class ZlinkStreamConnectorLifecycle(
         }
     }
 
+    public IZlinkStreamConnection RegisterRequest(ZlinkStreamPendingRequests.PendingRequest request)
+    {
+        lock (_gate)
+        {
+            if (_connection is null || _sessionCts is null)
+                throw ZlinkStreamConnector.Error(
+                    ZlinkStreamErrorCode.Disconnected,
+                    "Connector is not connected."
+                );
+
+            // Use the same session for the pending entry and the selected write transport.
+            pending.Register(request, _sessionCts);
+            return _connection;
+        }
+    }
+
     public ZlinkStreamConnectionState State
     {
         get
@@ -636,7 +652,8 @@ internal sealed class ZlinkStreamConnectorLifecycle(
             .ConfigureAwait(false);
 
         Capture(() => snapshot.SessionCts?.Dispose());
-        Capture(() => pending.FailAll(GetPendingDisconnectError(error)));
+        if (snapshot.SessionCts is { } session)
+            Capture(() => pending.FailAll(GetPendingDisconnectError(error), session));
         // Spec §10.1.1: a wait is released when the connection it observed ends, here,
         // and not when the reconnect that may follow establishes the next one.
         await CaptureAsync(onConnectionEnded).ConfigureAwait(false);

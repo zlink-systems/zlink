@@ -588,8 +588,15 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(
                 cancellationToken
             );
+            timeoutCts.Token.ThrowIfCancellationRequested();
+            var connection = _lifecycle.RegisterRequest(pending);
             await _oneWaySubmits
-                .SubmitRequestAsync(frame, timeoutCts.Token, () => timeoutCts.CancelAfter(timeout))
+                .SubmitRequestAsync(
+                    connection,
+                    frame,
+                    timeoutCts.Token,
+                    () => timeoutCts.CancelAfter(timeout)
+                )
                 .ConfigureAwait(false);
 
             var pendingCompletion = await _pending
