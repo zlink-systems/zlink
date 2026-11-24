@@ -6,6 +6,8 @@ internal sealed class ControllableTimeProvider : TimeProvider
     private readonly HashSet<ControlledTimer> _timers = [];
     private DateTimeOffset _utcNow = new(2026, 7, 2, 0, 0, 0, TimeSpan.Zero);
     private long _timestamp;
+    private Action? _afterNextTimestampRead;
+    private Action? _beforeNextTimerRegistration;
 
     public override DateTimeOffset GetUtcNow()
     {
@@ -13,7 +15,18 @@ internal sealed class ControllableTimeProvider : TimeProvider
             return _utcNow;
     }
 
-    public override long GetTimestamp() => Volatile.Read(ref _timestamp);
+    public override long GetTimestamp()
+    {
+        var timestamp = Volatile.Read(ref _timestamp);
+        Interlocked.Exchange(ref _afterNextTimestampRead, null)?.Invoke();
+        return timestamp;
+    }
+
+    internal void AdvanceMonotonicAfterNextTimestampRead(TimeSpan delta) =>
+        Volatile.Write(ref _afterNextTimestampRead, () => AdvanceMonotonic(delta));
+
+    internal void AdvanceMonotonicBeforeNextTimerRegistration(TimeSpan delta) =>
+        Volatile.Write(ref _beforeNextTimerRegistration, () => AdvanceMonotonic(delta));
 
     public override long TimestampFrequency => TimeSpan.TicksPerSecond;
 
@@ -58,6 +71,7 @@ internal sealed class ControllableTimeProvider : TimeProvider
         TimeSpan period
     )
     {
+        Interlocked.Exchange(ref _beforeNextTimerRegistration, null)?.Invoke();
         var timer = new ControlledTimer(this, callback, state);
         lock (_gate)
         {
