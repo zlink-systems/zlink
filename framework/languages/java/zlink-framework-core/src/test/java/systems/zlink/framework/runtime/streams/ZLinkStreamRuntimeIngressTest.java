@@ -604,11 +604,10 @@ final class ZLinkStreamRuntimeIngressTest {
         var clock = new java.util.concurrent.atomic.AtomicLong();
         ZLinkStreamRuntime runtime = startDeterministic(stream, clock);
         TestSession.failNextConstruction = true;
-        assertThrows(
-                RuntimeException.class,
-                () ->
-                        stream.errorHandler.handle(
-                                PEER_A, MonitorEventType.CONNECTION_READY, 0, "ready"));
+        stream.errorHandler.handle(PEER_A, MonitorEventType.CONNECTION_READY, 0, "ready");
+        assertEquals(PEER_A, stream.disconnectedPeer.get(5, TimeUnit.SECONDS));
+        assertEquals(1, stream.sessionClosingSends.get());
+        assertEquals(List.of(PEER_A), stream.disconnectedPeers);
         assertEquals(0, runtime.sessionContextCount());
         stream.errorHandler.handle(PEER_B, MonitorEventType.CONNECTION_READY, 0, "ready");
         assertEquals(1, runtime.sessionContextCount());

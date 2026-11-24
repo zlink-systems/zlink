@@ -3227,6 +3227,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_link_libraries(test_cpp_framework_stream_framework PRIVATE
     opentelemetry-cpp::metrics
     zlink::stream_connector)
+  foreach(transport IN ITEMS tcp ws)
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_framework_stream_session_creation_failure_${transport}
+      COMMAND test_cpp_framework_stream_framework --session-creation-failure-${transport}
+      LABELS "framework-unit;framework-contract;stream;stream-session"
+      TIER contract
+      TIMEOUT 30)
+  endforeach()
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_stream_connection_registry_lifetime
     COMMAND test_cpp_framework_stream_framework --connection-registry-lifetime

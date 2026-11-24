@@ -410,6 +410,15 @@ final class ZLinkStreamSessionContextState implements ZLinkSessionContext {
 
     private void traceDispatchError(
             ZLinkStreamHeader header, Throwable error, ZLinkDispatchErrorReason reason) {
+        traceDispatchError(flow, routingId, header, error, reason);
+    }
+
+    static void traceDispatchError(
+            ZLinkMessageFlowTracer flow,
+            RoutingId routingId,
+            ZLinkStreamHeader header,
+            Throwable error,
+            ZLinkDispatchErrorReason reason) {
         systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer.TracePoint tracePoint =
                 flow.beginDispatchError();
         if (tracePoint == null) {

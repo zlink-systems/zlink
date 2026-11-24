@@ -99,24 +99,12 @@ internal sealed class ZLinkSessionStreamTransport(
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (requestHeader.RequestSeq is not { } requestSeq)
+        if (requestHeader.RequestSeq is null)
             return ValueTask.CompletedTask;
 
-        var header = ZLinkStreamReplyHeaders.CreateForRequest(
-            requestHeader,
-            ZlinkStreamMessageKind.Error,
-            ZlinkStreamCodec.Json,
-            ZlinkStreamHeaderFlags.None,
-            requestSeq,
-            ZlinkStreamMetadata.Empty
-        );
-        var payload = ZLinkEnvelopeCodec.EncodeProtocolJsonBytes(
-            ZLinkStreamWireError.FromException(exception)
-        );
-        var frame = ZLinkStreamFrameCodec.Encode(
-            ZLinkStreamProtocolDefaults.EncodeHeader(header).Span,
-            payload
-        );
+        var reply = ZLinkActorReply.FromError(exception);
+        var header = reply.CreateResponseHeader(requestHeader);
+        var frame = reply.EncodeFrame(header);
         return SendReplyAsync(Message.From(frame), cancellationToken, header);
     }
 

@@ -10,6 +10,7 @@ final class ZLinkSessionClosingControl {
     static final int IDLE_TIMEOUT = 2;
     static final int HEARTBEAT_TIMEOUT = 3;
     static final int PROTOCOL_ERROR = 5;
+    static final int TRANSPORT_ERROR = 6;
     private static final int MAX_DIAGNOSTIC_BYTES = 512;
 
     private ZLinkSessionClosingControl() {}
