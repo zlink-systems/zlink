@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Handlers;
+using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Timers;
 using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 
@@ -11,8 +12,14 @@ internal sealed partial class ZLinkEntrySpotActivation
     : IZLinkEntrySpotContext,
         IZLinkCurrentSpotActivation,
         IZLinkSpotHandlerRegistrySink,
+        IZLinkObjectExecutionRecord,
         IAsyncDisposable
 {
+    ZLinkObjectExecutionStatus IZLinkObjectExecutionRecord.ExecutionStatus =>
+        _stopSource.IsCancellationRequested
+            ? ZLinkObjectExecutionStatus.Stopped
+            : _runtime.GetLocationExecutionStatus(this);
+
     ZLinkUserSpotExecutionMode IZLinkCurrentSpotActivation.ExecutionMode =>
         ZLinkUserSpotExecutionMode.PerActor;
     private static readonly AsyncLocal<ZLinkEntrySpotActivation?> Current = new();
@@ -118,6 +125,7 @@ internal sealed partial class ZLinkEntrySpotActivation
             )
         );
         cancellation.GetAwaiter().GetResult();
+        _serial?.NotifyReadiness();
     }
 
     internal void RequestStop()
@@ -153,8 +161,18 @@ internal sealed partial class ZLinkEntrySpotActivation
             new ZLinkRuntimeTaskRunner(errorSink, _stopSource.Token, _runtime.ExecutionOwner),
             errorSink,
             _stopSource.Token,
-            ZLinkExecutionLanePolicy.Default
+            ZLinkExecutionLanePolicy.Default,
+            applicationStartAllowed: static item =>
+                item.ExecutionStatus != ZLinkObjectExecutionStatus.Paused
         );
+        if (_runtime.Services.GetService<ZLinkLocationRuntime>() is { } locations)
+            locations.OwnerLeaseRenewed += ResumeTimerExecution;
+    }
+
+    private void ResumeTimerExecution(ZLinkOwnerLeaseRenewal renewal)
+    {
+        if (_serial.ApplicationPendingCount != 0)
+            _serial.NotifyReadiness();
     }
 
     public ValueTask DisposeAsync()
@@ -197,6 +215,8 @@ internal sealed partial class ZLinkEntrySpotActivation
     private async Task FinalizeAsync()
     {
         var failures = new List<Exception>();
+        if (_runtime.Services.GetService<ZLinkLocationRuntime>() is { } locations)
+            locations.OwnerLeaseRenewed -= ResumeTimerExecution;
         Capture(RequestStop);
         await CaptureAsync(_timers.DisposeAsync).ConfigureAwait(false);
         if (_serial is not null)

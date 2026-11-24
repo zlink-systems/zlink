@@ -250,6 +250,11 @@ final class ZLinkStreamConnectionLifecycle {
      * code the queue reset gives the operations the ending found.
      */
     private CompletionStage<Void> write(ZLinkStreamTransportConnection transport, byte[] frame) {
+        if (connection != transport) {
+            return CompletableFuture.failedFuture(
+                    ZLinkStreamException.disconnected(
+                            "connection ended before frame write started"));
+        }
         CompletionStage<Void> written;
         try {
             written = transport.writeAsync(frame);
@@ -353,7 +358,7 @@ final class ZLinkStreamConnectionLifecycle {
                 configuration.limits().receivePayload());
     }
 
-    private void activateConnection(ZLinkStreamTransportConnection transport) {
+    void activateConnection(ZLinkStreamTransportConnection transport) {
         boolean closed;
         boolean stateChanged = false;
         synchronized (connectionAttemptLock) {

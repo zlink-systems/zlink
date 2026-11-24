@@ -1,51 +1,59 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const api = require('../dist');
-const { ZlinkStreamFrameSender } = require('../dist/Runtime/ZlinkStreamFrameSender');
+const { ZlinkStreamFrameCodec } = require('../dist/Runtime/Protocol/ZlinkStreamFrameCodec');
+const { ZlinkStreamHeaderCodec } = require('../dist/Runtime/Protocol/ZlinkStreamHeaderCodec');
 
 for (const terminal of ['timeout', 'cancel']) {
-  test(`G01 ${terminal} removes a frame whose write has not started`, async () => {
+  test(`G01 ${terminal} removes a frame whose write has not started`, async (t) => {
     let release;
+    let now = 0;
+    if (terminal === 'timeout') {
+      t.mock.method(performance, 'now', () => now);
+      t.mock.timers.enable({ apis: ['setTimeout'] });
+    }
     const written = [];
     const connection = {
       write: (frame) => {
-        written.push(frame);
+        const header = ZlinkStreamFrameCodec.decode(frame).header;
+        written.push(ZlinkStreamHeaderCodec.decode(header).name);
         return new Promise((resolve) => {
           release = resolve;
         });
-      }
+      },
+      close: async () => {}
     };
-    const sender = new ZlinkStreamFrameSender({ encode: (_kind, name) => name });
-    sender.open(connection, () => assert.fail('unexpected write failure'));
-    const send = (name, signal, expiry) =>
-      sender.send(
-        connection,
-        1,
-        name,
-        {},
-        {},
-        false,
-        undefined,
-        signal,
-        undefined,
-        undefined,
-        expiry
-      );
-    const first = send('first');
-    const controller = new AbortController();
-    let expire;
-    const expiry = new Promise((_resolve, reject) => {
-      expire = reject;
+    const connector = api.zlinkStreamConnectorFactory.create({
+      endpoint: 'ws://node-r3.invalid',
+      heartbeat: { enabled: false },
+      reconnect: { enabled: false },
+      transportFactory: { connect: async () => connection }
     });
-    const second = send('second', controller.signal, expiry);
-    const failed = assert.rejects(second);
-    if (terminal === 'cancel') controller.abort();
-    else expire(new Error('request timed out'));
-    await failed;
-    release();
-    await first;
-    await Promise.resolve();
-    assert.deepEqual(written, ['first']);
+    const raw = { codec: api.ZlinkStreamCodec.Raw, payload: Uint8Array.of(1) };
+    const controller = new AbortController();
+    await connector.connect();
+    const first = connector.send(raw).packetName('first').submit();
+    try {
+      const second = connector.request(raw).packetName('second').timeout(10)
+        .submitEncoded(controller.signal);
+      const code = terminal === 'timeout'
+        ? api.ZlinkStreamErrorCode.RequestTimeout
+        : api.ZlinkStreamErrorCode.Disconnected;
+      const failed = assert.rejects(second, (error) => error.error?.code === code);
+      if (terminal === 'cancel') controller.abort();
+      else {
+        now = 10;
+        t.mock.timers.tick(10);
+      }
+      await failed;
+      release();
+      await first;
+      await Promise.resolve();
+      assert.deepEqual(written, ['first']);
+    } finally {
+      release?.();
+      await connector.close();
+    }
   });
 }
 

@@ -15,10 +15,14 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
+import java.util.function.IntSupplier;
+import java.util.function.LongSupplier;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.logging.Level;
@@ -30,7 +34,7 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     private static final String RESERVED_PACKET_NAME_PREFIX = "$zlink.";
     private static final boolean STREAM_TRACE =
             "1".equals(System.getenv("ZLINK_JAVA_STREAM_TRACE"));
-    final ScheduledExecutorService timeouts = ZLinkStreamExecutionResources.timeouts();
+    final ScheduledExecutorService timeouts;
 
     private final ZLinkStreamConnectorConfiguration configuration;
     private final Map<String, List<ZLinkStreamMessageHandler<ZLinkStreamEncodedPayload>>> handlers =
@@ -42,6 +46,8 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
             new CopyOnWriteArrayList<>();
     private final List<ZLinkStreamReplyReceivedHandler> replyReceivedHandlers =
             new CopyOnWriteArrayList<>();
+    private final List<ZLinkStreamAdmissionWaitingHandler> admissionWaitingHandlers =
+            new CopyOnWriteArrayList<>();
     private final ZLinkStreamDispatchQueue dispatchQueue;
     final ZLinkStreamActorRegistry actorRegistry;
     private final ZLinkStreamConnectorPayloadCodec payloadCodec;
@@ -50,7 +56,7 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     //  request packets only. Spec 27 §2: a one-way message that has no reply
     //  never creates a correlation_id.
     private final AtomicLong correlationCounter = new AtomicLong();
-    private final ZLinkStreamPendingRequests pendingRequests = new ZLinkStreamPendingRequests();
+    private final ZLinkStreamPendingRequests pendingRequests;
     private final ZLinkStreamReceiveDispatcher receiveDispatcher;
     final ZLinkStreamConnectionLifecycle lifecycle;
 
@@ -70,6 +76,31 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     DefaultZLinkStreamConnector(
             ZLinkStreamConnectorOptions options,
             Supplier<CompletionStage<? extends ZLinkStreamTransportConnection>> openTransport) {
+        this(
+                options,
+                ZLinkStreamExecutionResources.timeouts(),
+                System::nanoTime,
+                () -> ThreadLocalRandom.current().nextInt(51),
+                openTransport);
+    }
+
+    DefaultZLinkStreamConnector(
+            ZLinkStreamConnectorOptions options,
+            ScheduledExecutorService timeouts,
+            LongSupplier clock,
+            IntSupplier admissionJitterMillis) {
+        this(options, timeouts, clock, admissionJitterMillis, null);
+    }
+
+    private DefaultZLinkStreamConnector(
+            ZLinkStreamConnectorOptions options,
+            ScheduledExecutorService timeouts,
+            LongSupplier clock,
+            IntSupplier admissionJitterMillis,
+            Supplier<CompletionStage<? extends ZLinkStreamTransportConnection>> openTransport) {
+        this.timeouts = timeouts;
+        this.pendingRequests =
+                new ZLinkStreamPendingRequests(timeouts, clock, admissionJitterMillis);
         this.configuration = ZLinkStreamConnectorConfiguration.from(options);
         this.dispatchQueue = new ZLinkStreamDispatchQueue(this::publishError);
         this.actorRegistry =
@@ -212,6 +243,13 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
     }
 
     @Override
+    public AutoCloseable onAdmissionWaiting(ZLinkStreamAdmissionWaitingHandler handler) {
+        Objects.requireNonNull(handler, "handler");
+        admissionWaitingHandlers.add(handler);
+        return () -> admissionWaitingHandlers.remove(handler);
+    }
+
+    @Override
     public AutoCloseable onDisconnected(ZLinkStreamDisconnectedHandler handler) {
         Objects.requireNonNull(handler, "handler");
         disconnectedHandlers.add(handler);
@@ -306,7 +344,7 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
             Duration timeout,
             boolean compress,
             ZLinkStreamActorRegistry.DefaultActor actor) {
-        long start = System.nanoTime();
+        long start = pendingRequests.nanoTime();
         String requestName = payload.packetName();
         String actorId = actor == null ? null : actor.actorId();
         BiFunction<ZLinkStreamEncodedPayload, BooleanSupplier, Boolean> onReply =
@@ -317,7 +355,7 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
                             reply == null || registered.isEmpty()
                                     ? null
                                     : reply.payload().toByteArray();
-                    Duration elapsed = Duration.ofNanos(System.nanoTime() - start);
+                    Duration elapsed = Duration.ofNanos(pendingRequests.nanoTime() - start);
                     boolean completed = complete.getAsBoolean();
                     if (completed)
                         publishReplyReceived(
@@ -332,7 +370,7 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
                         publishReplyReceived(
                                 requestName,
                                 actorId,
-                                Duration.ofNanos(System.nanoTime() - start),
+                                Duration.ofNanos(pendingRequests.nanoTime() - start),
                                 null,
                                 null,
                                 failure,
@@ -340,25 +378,27 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
                     return completed;
                 };
         try {
-            Map<String, String> metadata = new HashMap<>(payload.metadata());
-            ZLinkStreamRequestSendingContext context =
-                    new ZLinkStreamRequestSendingContext(payload.packetName(), actorId, metadata);
-            for (ZLinkStreamRequestSendingHandler handler : List.copyOf(requestSendingHandlers)) {
-                if (requestSendingHandlers.contains(handler)) {
-                    Map<String, String> before = new HashMap<>(metadata);
-                    try {
-                        handler.handle(context);
-                    } catch (Throwable failure) {
-                        metadata.clear();
-                        metadata.putAll(before);
-                        publishError(userCallbackFailed(failure));
+            Map<String, String> metadata = payload.metadata();
+            if (!requestSendingHandlers.isEmpty()) {
+                metadata = new HashMap<>(metadata);
+                ZLinkStreamRequestSendingContext context =
+                        new ZLinkStreamRequestSendingContext(requestName, actorId, metadata);
+                for (ZLinkStreamRequestSendingHandler handler :
+                        List.copyOf(requestSendingHandlers)) {
+                    if (requestSendingHandlers.contains(handler)) {
+                        Map<String, String> before = new HashMap<>(metadata);
+                        try {
+                            handler.handle(context);
+                        } catch (Throwable failure) {
+                            metadata.clear();
+                            metadata.putAll(before);
+                            publishError(userCallbackFailed(failure));
+                        }
                     }
                 }
             }
-            ZLinkStreamEncodedPayload outgoing =
-                    new ZLinkStreamEncodedPayload(
-                            payload.packetName(), payload.payload(), metadata, payload.codec());
-            return sendRequestFrame(outgoing, timeout, compress, actor, onReply, onFailure);
+            return sendRequestFrame(
+                    payload, metadata, timeout, compress, actor, onReply, onFailure);
         } catch (RuntimeException failure) {
             onFailure.apply(failure, () -> true);
             return CompletableFuture.failedFuture(failure);
@@ -367,52 +407,114 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
 
     private CompletionStage<ZLinkStreamEncodedPayload> sendRequestFrame(
             ZLinkStreamEncodedPayload payload,
+            Map<String, String> metadata,
             Duration timeout,
             boolean compress,
             ZLinkStreamActorRegistry.DefaultActor actor,
             BiFunction<ZLinkStreamEncodedPayload, BooleanSupplier, Boolean> onReply,
             BiFunction<Throwable, BooleanSupplier, Boolean> onFailure) {
-        Integer actorSlot = actorSlot(actor);
-        long requestSeq = nextRequestSeq();
         byte[] body = payloadCodec.encode(payload, compress);
-        ZLinkStreamWireProtocol.Header header =
+        String packetName = payload.packetName();
+        String correlation = nextCorrelationId();
+        int codec = ZLinkStreamConnectorPayloadCodec.toWireCodec(payload.codec());
+        int flags =
+                ZLinkStreamWireProtocol.FLAG_HAS_REQUEST_SEQ
+                        | (metadata.isEmpty() ? 0 : ZLinkStreamWireProtocol.FLAG_HAS_METADATA)
+                        | (compress ? ZLinkStreamWireProtocol.FLAG_PAYLOAD_COMPRESSED : 0);
+        var header =
                 new ZLinkStreamWireProtocol.Header(
                         ZLinkStreamWireProtocol.KIND_REQUEST,
-                        ZLinkStreamConnectorPayloadCodec.toWireCodec(payload.codec()),
-                        ZLinkStreamWireProtocol.FLAG_HAS_REQUEST_SEQ
-                                | (payload.metadata().isEmpty()
-                                        ? 0
-                                        : ZLinkStreamWireProtocol.FLAG_HAS_METADATA)
-                                | (compress ? ZLinkStreamWireProtocol.FLAG_PAYLOAD_COMPRESSED : 0),
-                        requestSeq,
-                        payload.packetName(),
-                        payload.metadata(),
-                        nextCorrelationId(),
+                        codec,
+                        flags,
+                        nextRequestSeq(),
+                        packetName,
+                        metadata,
+                        correlation,
                         null,
                         0,
-                        actorSlot);
-
+                        actorSlot(actor));
+        String actorId = actor == null ? null : actor.actorId();
         return sendFrame(
                 header,
                 body,
-                (owner, write, writeFailure) ->
-                        sendChain.enqueueRequestDeferred(
-                                owner,
-                                () -> traceWrite(header, write.get()),
+                (owner, write, writeFailure) -> {
+                    var request =
+                            pendingRequests.start(
+                                    owner,
+                                    packetName,
+                                    timeout,
+                                    configuration.timeouts().maxAdmissionWait(),
+                                    onReply,
+                                    onFailure,
+                                    delay -> notifyAdmissionWaiting(packetName, actorId, delay),
+                                    waiting -> retryRequest(waiting, header, body, actor));
+                    return enqueueRequestAttempt(request, header, write, writeFailure);
+                });
+    }
+
+    private void retryRequest(
+            ZLinkStreamPendingRequests.PendingRequest request,
+            ZLinkStreamWireProtocol.Header original,
+            byte[] body,
+            ZLinkStreamActorRegistry.DefaultActor actor) {
+        try {
+            var header =
+                    new ZLinkStreamWireProtocol.Header(
+                            original.kind(),
+                            original.codec(),
+                            original.flags(),
+                            nextRequestSeq(),
+                            original.name(),
+                            original.metadata(),
+                            original.correlationId(),
+                            original.flowId(),
+                            original.flowOrigin(),
+                            actorSlot(actor));
+            sendFrame(
+                    header,
+                    body,
+                    (owner, write, writeFailure) -> {
+                        if (owner != request.owner) {
+                            throw ZLinkStreamException.disconnected(
+                                    "connection ended before admission retry");
+                        }
+                        return enqueueRequestAttempt(request, header, write, writeFailure);
+                    });
+        } catch (RuntimeException failure) {
+            request.fail(failure);
+        }
+    }
+
+    private CompletableFuture<ZLinkStreamEncodedPayload> enqueueRequestAttempt(
+            ZLinkStreamPendingRequests.PendingRequest request,
+            ZLinkStreamWireProtocol.Header header,
+            Supplier<CompletionStage<Void>> write,
+            Consumer<Throwable> writeFailure) {
+        long sequence = header.requestSeq();
+        return request.enqueueAttempt(
+                sequence,
+                canWrite ->
+                        sendChain.enqueueDeferred(
+                                request.owner,
+                                () ->
+                                        canWrite.getAsBoolean()
+                                                ? traceWrite(header, write.get())
+                                                : CompletableFuture.completedFuture(null),
                                 failure -> {
-                                    pendingRequests.fail(requestSeq, failure);
+                                    pendingRequests.fail(sequence, failure);
                                     writeFailure.accept(failure);
-                                },
-                                pending -> {
-                                    pendingRequests.add(
-                                            requestSeq,
-                                            owner,
-                                            payload.packetName(),
-                                            pending,
-                                            onReply,
-                                            onFailure);
-                                    pendingRequests.startTimeout(requestSeq, timeout, timeouts);
                                 }));
+    }
+
+    private void notifyAdmissionWaiting(String packetName, String actorId, Duration retryAfter) {
+        var event = new ZLinkStreamAdmissionWaiting(packetName, actorId, retryAfter);
+        for (ZLinkStreamAdmissionWaitingHandler handler : admissionWaitingHandlers) {
+            dispatchUserCallback(
+                    () ->
+                            admissionWaitingHandlers.contains(handler)
+                                    ? handler.handle(event)
+                                    : CompletableFuture.completedFuture(null));
+        }
     }
 
     private void dispatchRequestCallback(Runnable callback) {
@@ -598,11 +700,15 @@ final class DefaultZLinkStreamConnector implements ZLinkStreamConnector {
         //  already the snapshot a callback that registers or removes a
         //  handler needs, so copying it again only allocates.
         for (ZLinkStreamDisconnectedHandler handler : disconnectedHandlers) {
-            if (configuration.dispatchMode() == ZLinkStreamDispatchMode.IMMEDIATE) {
-                invokeUserCallback(() -> handler.handle(event));
-            } else {
-                dispatchQueue.addAsync(() -> invokeUserCallback(() -> handler.handle(event)));
-            }
+            dispatchUserCallback(() -> handler.handle(event));
+        }
+    }
+
+    private void dispatchUserCallback(UserCallback callback) {
+        if (configuration.dispatchMode() == ZLinkStreamDispatchMode.IMMEDIATE) {
+            invokeUserCallback(callback);
+        } else {
+            dispatchQueue.addAsync(() -> invokeUserCallback(callback));
         }
     }
 
