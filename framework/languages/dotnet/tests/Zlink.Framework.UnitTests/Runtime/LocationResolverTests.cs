@@ -889,6 +889,7 @@ public sealed class LocationResolverTests
             ),
             CancellationToken.None
         );
+        Assert.False(fixture.Resolvers.HasCachedActorRoute(ActorKey));
         Assert.Equal(OwnerB, (await fixture.Resolvers.ResolveActorRowAsync(ActorKey))!.OwnerId);
     }
 
