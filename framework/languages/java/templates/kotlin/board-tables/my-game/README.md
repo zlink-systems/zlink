@@ -9,7 +9,8 @@ flowchart LR
   players[Players] -->|STREAM| session[Session node]
   session -->|relay| table[Table node ×N]
   table -->|Queue / entry report| pool[Matchmaker node]
-  pool -->|Room preparation / decision| table
+  pool -->|PrepareRoom / CommitRoom| table
+  table -->|RoomPrepared| pool
   table -->|ClientServer Channel| api[API node · Actor DB]
   api -->|Player balances| location[Redis]
   table -->|Location / lease| location
@@ -59,7 +60,7 @@ Loopback is reachable only inside the same host/network namespace. Keep a deploy
 
 Send `JoinTableRequest(playerId, tableId)` to join a specific table. Successful seating produces a `TableView` push. `ActionRejected` reports rejection.
 
-Send an empty `FindMatch` to join the matchmaking queue. The Session assigns a player ID when this is the first packet. `MatchQueued` returns a ticket ID, which the client can pass to `CancelMatch`. The Pool pairs the two longest-waiting players, prepares a new Table, and commits their seats after both Actors report successful entry. Each player receives `MatchFound` followed by `TableView` and uses the existing game messages at that table. The Pool allows 10 seconds for both Actors to enter. Waiting tickets expire after 120 seconds, and a disconnected waiting ticket has up to 15 seconds of grace.
+Send an empty `FindMatch` to join the matchmaking queue. The Session assigns a player ID when this is the first packet. `MatchQueued` returns a ticket ID, which the client can pass to `CancelMatch`. The Pool pairs the two longest-waiting players. The Pool records the pair as preparing and sends `PrepareRoom` to the Play nodes’ `room-provisioner-board` Instance Spot. That Spot creates the Table User Spot and forwards `PrepareRoom` to it. The Table sends `RoomPrepared` to the Pool, which handles it in a new turn. The Pool commits the seats after both Actors report successful entry. Each player receives `MatchFound` followed by `TableView` and uses the existing game messages at that table. The Pool allows 10 seconds for both Actors to enter. Waiting tickets expire after 120 seconds, and a disconnected waiting ticket has up to 15 seconds of grace.
 
 After admission, `SessionInfoRequest` uses `connector.kotlin().request<SessionInfo>(SessionInfoRequest()).await()` for a correlated `SessionInfo` reply. The first game operation above uses `send(...).await()` and server pushes. This template does not authenticate player identity; add identity validation before Actor binding for production.
 

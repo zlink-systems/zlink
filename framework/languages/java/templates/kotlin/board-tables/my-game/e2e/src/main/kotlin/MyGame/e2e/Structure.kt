@@ -106,9 +106,14 @@ fun checkStructure(root: Path) {
                 if (spot.has("dynamic")) check(spot["dynamic"].isBoolean)
             }
             "instance" -> {
-                check(role == Names.MATCHMAKER && text(spot, "type") == Names.POOL)
                 val logicalId = text(spot, "logicalId")
-                check(logicalId == Names.POOL_KEY && !spot.has("dynamic"))
+                check(!spot.has("dynamic"))
+                when (text(spot, "type")) {
+                    Names.POOL -> check(role == Names.MATCHMAKER && logicalId == Names.POOL_KEY)
+                    Names.ROOM_PROVISIONER ->
+                        check(role == "table" && logicalId == Names.ROOM_PROVISIONER_KEY)
+                    else -> error("Unregistered Instance Spot type")
+                }
                 logicalIds += logicalId
             }
             else -> error("Unregistered Spot kind")
@@ -116,7 +121,9 @@ fun checkStructure(root: Path) {
     }
     unique(logicalIds)
     check(roles.filterValues { it == Names.MATCHMAKER }.keys == setOf(Names.MATCHMAKER))
-    check(spots.count { it["kind"].asText() == "instance" } == 1)
+    val instanceTypes =
+        spots.filter { it["kind"].asText() == "instance" }.map { it["type"].asText() }
+    check(instanceTypes.toSet() == setOf(Names.POOL, Names.ROOM_PROVISIONER))
     check(spots.any { it["kind"].asText() == "user" && it["dynamic"]?.asBoolean() == true })
     for (node in nodes.filter { roles[it["id"].asText()] == "table" }) check(
         spots.count {

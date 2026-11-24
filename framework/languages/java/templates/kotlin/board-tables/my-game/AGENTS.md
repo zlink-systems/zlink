@@ -67,7 +67,7 @@ An Actor is a game state object addressed by ID; `Player` in `server/table/src/m
 
 ### Matchmaker
 
-`server/matchmaker` registers only the SpotWide Instance Spot factory for `pool-board`. `MatchQueue.kt` stores tickets and reservations in memory. Edit `MatchRule.kt` to change pair selection. `Pool.kt` prepares the Table, commits entry after both Players report success, and withdraws the room on failure or after 10 seconds. The current Spot reports client disconnects to the Pool. A disconnected waiting ticket has up to 15 seconds of grace before cancellation. A reserved ticket follows the entry deadline. Waiting tickets expire after 120 seconds.
+`server/matchmaker` registers only the SpotWide Instance Spot factory for `pool-board`. `MatchQueue.kt` stores tickets and reservations in memory. Edit `MatchRule.kt` to change pair selection. The Pool records the pair as preparing and sends `PrepareRoom` to the Play nodes’ `room-provisioner-board` Instance Spot. That Spot creates the Table User Spot and forwards `PrepareRoom` to it. The Table sends `RoomPrepared` to the Pool, which handles it in a new turn. `Pool.kt` commits entry after both Players report success and withdraws when entry fails or the 10-second deadline expires. The current Spot reports client disconnects to the Pool. A disconnected waiting ticket has up to 15 seconds of grace before cancellation. A reserved ticket follows the entry deadline. Waiting tickets expire after 120 seconds.
 
 `PlayerMatching.kt` handles the typed client requests and assignment notifications. `RoomReservation.kt` connects room preparation, commit, and withdrawal to the Table. Keep ticket decisions in the Pool and seat assignment in the Table.
 

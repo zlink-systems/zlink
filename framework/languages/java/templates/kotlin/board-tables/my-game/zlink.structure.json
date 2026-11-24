@@ -23,6 +23,7 @@
     { "id": "table-entry-a", "kind": "entry", "type": null, "owner": "tableA" },
     { "id": "table-entry-b", "kind": "entry", "type": null, "owner": "tableB" },
     { "id": "table", "kind": "user", "type": "Table", "owner": "tableA", "dynamic": true },
+    { "id": "room-provisioner", "kind": "instance", "type": "RoomProvisioner", "owner": "tableA", "logicalId": "room-provisioner-board" },
     { "id": "pool-board", "kind": "instance", "type": "Pool", "owner": "matchmaker", "logicalId": "pool-board" }
   ],
   "edges": [

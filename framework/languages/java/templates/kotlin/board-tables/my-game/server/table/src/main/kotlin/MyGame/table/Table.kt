@@ -78,6 +78,7 @@ class Table(
     )
 
     override fun configure() {
+        context.handlers().addHandler(PrepareTable::class.java)
         context.handlers().addHandler(CommitTable::class.java)
         context.handlers().addHandler(WithdrawTable::class.java)
     }

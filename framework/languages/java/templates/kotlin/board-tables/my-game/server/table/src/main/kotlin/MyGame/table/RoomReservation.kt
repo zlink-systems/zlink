@@ -1,7 +1,6 @@
 package MyGame.table
 
 import MyGame.*
-import systems.zlink.framework.handlers.*
 import systems.zlink.framework.kotlin.*
 
 enum class RoomPhase {
@@ -17,10 +16,16 @@ data class RoomReservation(
     val balances: Map<String, Long> = emptyMap(),
 )
 
-@ZLinkHandlerGroup(Names.TABLE)
-class PrepareTable {
-    @ZLinkSpotRequest
-    suspend fun prepare(table: Table, request: PrepareRoom): RoomPrepared = table.prepare(request)
+class PrepareTable : ZLinkSuspendingSpotPacketHandler<Table, PrepareRoom> {
+    override suspend fun handle(spot: Table, message: PrepareRoom) {
+        spot.context
+            .outbound()
+            .kotlin()
+            .sendToSpot(Names.POOL_KEY, spot.prepare(message))
+            .instanceSpot(Names.POOL)
+            .inMesh(Names.MESH)
+            .await()
+    }
 }
 
 class CommitTable : ZLinkSuspendingSpotPacketHandler<Table, CommitRoom> {

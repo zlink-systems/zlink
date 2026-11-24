@@ -9,7 +9,8 @@ flowchart LR
   players[Players] -->|STREAM| session[Session node]
   session -->|relay| table[Table node ×N]
   table -->|Queue / entry report| pool[Matchmaker node]
-  pool -->|Room preparation / decision| table
+  pool -->|PrepareRoom / CommitRoom| table
+  table -->|RoomPrepared| pool
   table -->|ClientServer Channel| api[API node · Actor DB]
   api -->|Player balances| location[Redis]
   table -->|Location / lease| location
@@ -59,7 +60,7 @@ Docker를 시작하고 전용 터미널에서 서버를 실행합니다.
 
 `JoinTableRequest(playerId, tableId)`로 지정한 테이블에 참가합니다. 좌석 배정에 성공하면 `TableView`, 거절되면 `ActionRejected`를 받습니다.
 
-매칭 대기열에 등록하려면 빈 `FindMatch`를 보냅니다. 첫 패킷이면 Session이 플레이어 ID를 생성합니다. `MatchQueued`에서 티켓 ID를 받고, `CancelMatch`에 그 ID를 넣어 대기를 취소할 수 있습니다. Pool은 가장 오래 기다린 두 명을 짝지어 테이블을 준비하고, 두 Actor가 입장을 보고하면 좌석을 확정합니다. 각 플레이어는 `MatchFound`와 `TableView`를 차례로 받은 뒤 기존 게임 메시지를 사용합니다. 입장 제한은 10초입니다. 대기 티켓은 120초 후 만료되고, 대기 중 연결이 끊기면 최대 15초의 유예가 적용됩니다.
+매칭 대기열에 등록하려면 빈 `FindMatch`를 보냅니다. 첫 패킷이면 Session이 플레이어 ID를 생성합니다. `MatchQueued`에서 티켓 ID를 받고, `CancelMatch`에 그 ID를 넣어 대기를 취소할 수 있습니다. Pool은 가장 오래 기다린 두 명을 짝지어 배정을 준비 중으로 기록합니다. Play node의 `room-provisioner-board` Instance Spot에 `PrepareRoom`을 보냅니다. RoomProvisioner는 Table User Spot을 생성하고 `PrepareRoom`을 전달합니다. Table은 Pool에 `RoomPrepared`를 보내고 Pool은 새 turn에서 결과를 처리합니다. 두 Actor가 입장 성공을 보고하면 Pool이 좌석을 확정합니다. 각 플레이어는 `MatchFound`와 `TableView`를 차례로 받은 뒤 기존 게임 메시지를 사용합니다. 입장 제한은 10초입니다. 대기 티켓은 120초 후 만료되고, 대기 중 연결이 끊기면 최대 15초의 유예가 적용됩니다.
 
 입장 후 `connector.kotlin().request<SessionInfo>(SessionInfoRequest()).await()`를 호출하면 요청에 대응하는 `SessionInfo` 응답을 받습니다. 첫 게임 요청은 `send(...).await()`로 보내고 결과는 push로 받습니다. 운영 배포에서는 Actor 바인딩 전에 플레이어 ID를 인증합니다.
 

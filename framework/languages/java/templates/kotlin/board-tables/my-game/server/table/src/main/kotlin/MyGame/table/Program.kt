@@ -31,6 +31,9 @@ class Program {
                 if (config.tableCapacity > 0) stableTypeLimit(config.tableCapacity)
                 preserveStateWith<Table, TableTransfer>()
             }
+            .addInstanceSpotFactory<RoomProvisioner>(Names.ROOM_PROVISIONER) {
+                recreateOnRelocation()
+            }
             .addActorFactory<Player, PlayerFactory>(Names.PLAYER) {
                 preserveStateWith<Player, PlayerTransfer>()
             }
