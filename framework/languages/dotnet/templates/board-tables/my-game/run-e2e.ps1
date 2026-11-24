@@ -1,5 +1,6 @@
 param(
     [switch]$Local,
+    [switch]$Attach,
     [switch]$NoBuild,
     [switch]$BuildOnly,
     [switch]$CheckStructure,
@@ -8,21 +9,25 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'PowerShell 7 or later is required.' }
 $root = $PSScriptRoot
+. (Join-Path $root 'scripts/run-helpers.ps1')
 New-Item -ItemType Directory -Force (Join-Path $root '.logs') | Out-Null
 if ($CheckStructure) { $RunnerArguments = @('--check-structure') + $RunnerArguments }
 elseif ($Scenario) { $RunnerArguments = @('--scenario', $Scenario) + $RunnerArguments }
+if (!$Attach -and !$Local -and !$BuildOnly -and !$CheckStructure -and (Test-RunningServer)) {
+    Write-Host 'Using the running server (.logs/server.json)'
+    $Attach = $true
+}
+if ($Attach) {
+    if ($BuildOnly -or $CheckStructure) { throw '-Attach requires a scenario run.' }
+    if (!(Test-RunningServer)) { throw 'Start the server with ./run-server.ps1 before attaching.' }
+    & dotnet $runner --root $root --attach @RunnerArguments
+    exit $LASTEXITCODE
+}
 if ($Local) {
-    if (-not $NoBuild) {
-        & dotnet build (Join-Path $root 'server/MyGame.sln') --nologo --verbosity minimal *> (Join-Path $root '.logs/build.log')
-        if ($LASTEXITCODE -ne 0) {
-            Get-Content (Join-Path $root '.logs/build.log') -Tail 20 | Write-Host
-            exit 1
-        }
-    }
+    if (!$NoBuild) { Build-Local }
     if ($BuildOnly) { exit 0 }
-    & dotnet (Join-Path $root 'e2e/MyGame.E2E/bin/Debug/net8.0/MyGame.E2E.dll') --root $root @RunnerArguments
+    & dotnet $runner --root $root @RunnerArguments
     exit $LASTEXITCODE
 }
 if ($NoBuild) { throw '-NoBuild requires -Local; Docker builds reuse the layer cache automatically.' }
@@ -36,6 +41,13 @@ New-Item -ItemType Directory $logs | Out-Null
 $env:MY_GAME_BUILD_CONTEXT = Join-Path $logs $project
 New-Item -ItemType ($IsWindows ? 'Junction' : 'SymbolicLink') -Path $env:MY_GAME_BUILD_CONTEXT -Target $root | Out-Null
 $compose = @('compose', '-f', (Join-Path $root 'docker-compose.yml'), '-p', $project, '--profile', 'docker')
+if (!$IsWindows -and (Test-Path '/var/run/docker.sock')) {
+    $runnerUid = & id -u
+    $runnerGid = & id -g
+    $env:MY_GAME_RUNNER_USER = "${runnerUid}:${runnerGid}"
+    $env:MY_GAME_DOCKER_GID = & stat -c '%g' /var/run/docker.sock 2>$null
+    if ($LASTEXITCODE -ne 0) { $env:MY_GAME_DOCKER_GID = & stat -f '%g' /var/run/docker.sock }
+}
 $result = 1
 Write-Host "Docker logs: $logs"
 try {

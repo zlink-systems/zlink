@@ -26,12 +26,18 @@ public static class NodeControl
         throw new InvalidOperationException("Runtime observation ended before Serving.");
     }
 
-    public static async Task RunAsync(IHost host, NodeSettings settings)
+    public static async Task RunAsync(
+        IHost host,
+        NodeSettings settings,
+        Func<CancellationToken, ValueTask>? initialize = null
+    )
     {
         using var lifetime = new CancellationTokenSource();
         await host.StartAsync(lifetime.Token);
         var runtime = host.Services.GetRequiredService<IZLinkFrameworkRuntime>();
         await WaitForServingAsync(runtime, lifetime.Token);
+        if (initialize is not null)
+            await initialize(lifetime.Token);
         var mesh = runtime.GetListenerStatus(ZLinkListenerKind.RouteMesh, GameNames.WorldMesh);
         var stream = settings.StreamEndpoint is null
             ? null

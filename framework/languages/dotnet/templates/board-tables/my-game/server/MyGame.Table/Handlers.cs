@@ -70,7 +70,17 @@ public abstract class PlayerDelivery<TMessage>
     ) => actor.Context.BoundSession.Send(message).Async();
 }
 
-public sealed class TableViewDelivery : PlayerDelivery<TableView>;
+public sealed class TableViewDelivery
+    : IZLinkSpotActorSendHandler<TableSpot, PlayerActor, TableView>
+{
+    public ValueTask HandleAsync(
+        TableSpot spot,
+        PlayerActor actor,
+        IZLinkMessageContext context,
+        TableView view,
+        CancellationToken ct
+    ) => actor.DeliverAsync(view);
+}
 
 public sealed class HandDealtDelivery : PlayerDelivery<HandDealt>;
 

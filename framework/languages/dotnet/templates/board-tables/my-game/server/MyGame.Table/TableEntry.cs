@@ -9,8 +9,21 @@ public sealed class TableEntry(IZLinkEntrySpotContext context) : IZLinkEntrySpot
 {
     public IZLinkEntrySpotContext Context { get; } = context;
 
-    public void Configure() =>
+    public void Configure()
+    {
         Context.Handlers.AddActorPacket<EnterTableHandler, PlayerActor>(nameof(JoinTableRequest));
+        Context.Handlers.AddActorPacket<EntryFindMatchHandler, PlayerActor>(nameof(FindMatch));
+        Context.Handlers.AddActorPacket<EntryCancelMatchHandler, PlayerActor>(nameof(CancelMatch));
+        Context.Handlers.AddActorPacket<EntryMatchAssignedHandler, PlayerActor>(
+            nameof(MatchAssigned)
+        );
+        Context.Handlers.AddActorPacket<EntryMatchCancelledHandler, PlayerActor>(
+            nameof(MatchCancelled)
+        );
+    }
+
+    public ValueTask OnDisconnectActorAsync(PlayerActor actor, CancellationToken ct) =>
+        actor.DisconnectAsync(ct);
 
     public ValueTask OnJoinedActorAsync(PlayerActor actor, CancellationToken cancellationToken) =>
         ValueTask.CompletedTask;
@@ -38,6 +51,6 @@ public sealed class EnterTableHandler(IZLinkSpotManager spots)
             .Async(cancellationToken);
         if (created.State == ZLinkSpotCreateState.Rejected)
             throw new InvalidOperationException("Table creation rejected.");
-        actor.Context.JoinSpot(request.TableId, request).Defer();
+        actor.JoinFixed(request);
     }
 }

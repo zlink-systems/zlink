@@ -3,7 +3,8 @@ using MyGame.Shared;
 
 namespace MyGame.E2E;
 
-internal sealed class TableRun(string root, int tableCapacity) : IAsyncDisposable
+internal sealed class TableRun(string root, int tableCapacity, bool foreground = false)
+    : IAsyncDisposable
 {
     public RunOutcome Outcome { get; } = new();
     private readonly List<ManagedProcess> nodes = [];
@@ -52,6 +53,7 @@ internal sealed class TableRun(string root, int tableCapacity) : IAsyncDisposabl
             var table = await StartNodeAsync(configName, "MyGame.Table", false, ct);
             tables.Add(table.Ready.Id, (configName, table.Process));
         }
+        await StartNodeAsync("matchmaker", "MyGame.Matchmaker", false, ct);
         var session = await StartNodeAsync("session", "MyGame.Session", false, ct);
         Endpoint =
             session.Ready.StreamEndpoint
@@ -65,20 +67,16 @@ internal sealed class TableRun(string root, int tableCapacity) : IAsyncDisposabl
         CancellationToken ct
     )
     {
-        var settings =
-            JsonSerializer.Deserialize<NodeSettings>(
-                await File.ReadAllTextAsync(
-                    Path.Combine(root, "server", "config", configName + ".json"),
-                    ct
-                )
-            ) ?? throw new InvalidOperationException($"Invalid {configName} configuration.");
+        var settings = NodeSettings.Load([
+            "--config",
+            Path.Combine(root, "server", "config", configName + ".json"),
+        ]);
         settings = settings with
         {
             TableCapacity = tableCapacity,
             RedisEndpoint = redisEndpoint,
             KeyPrefix = (dockerProject ?? project) + ":",
             MeshEndpoint = "tcp://127.0.0.1:0",
-            StreamEndpoint = settings.StreamEndpoint is null ? null : "ws://127.0.0.1:0",
         };
         var suffix = configName + (replacement ? "-replacement" : "");
         var config = Path.Combine(runDirectory, suffix + ".json");
@@ -142,13 +140,11 @@ internal sealed class TableRun(string root, int tableCapacity) : IAsyncDisposabl
                 "net8.0",
                 assembly + ".dll"
             );
-            node = new ManagedProcess(
-                Outcome,
-                "dotnet",
-                [dll, "--config", config],
-                runDirectory,
-                suffix
-            );
+            var arguments = new[] { "dotnet", dll, "--config", config };
+            // The foreground host translates a terminal interrupt to the stdin shutdown command.
+            if (foreground && !OperatingSystem.IsWindows())
+                arguments = ["sh", "-c", "trap '' INT; exec \"$@\"", "node", .. arguments];
+            node = new ManagedProcess(Outcome, arguments[0], arguments[1..], runDirectory, suffix);
         }
         nodes.Add(node);
         var ready =

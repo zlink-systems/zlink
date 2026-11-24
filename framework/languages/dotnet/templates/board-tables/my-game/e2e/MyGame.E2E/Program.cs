@@ -28,6 +28,7 @@ string? Option(string name)
     return args[index + 1];
 }
 
+var outcome = new RunOutcome();
 TableRun? run = null;
 Exception? scenarioFailure = null;
 var result = 0;
@@ -35,11 +36,13 @@ try
 {
     result = await RunAsync();
 }
+catch (OperationCanceledException)
+    when (cancellation.IsCancellationRequested && args.Contains("--serve")) { }
 catch (Exception error)
 {
     scenarioFailure = error;
 }
-var failures = run?.Outcome.Failures ?? [];
+var failures = (run?.Outcome ?? outcome).Failures;
 if (scenarioFailure is not null)
     failures.Insert(0, scenarioFailure);
 if (failures.Count > 0)
@@ -54,20 +57,51 @@ return result;
 async Task<int> RunAsync()
 {
     var root = Path.GetFullPath(Option("--root") ?? Directory.GetCurrentDirectory());
+    if (args.Contains("--is-running"))
+        return ServerHost.IsRunning(root) ? 0 : 1;
     if (args.Contains("--check-structure"))
     {
         StructureCheck.Run(root, Option("--structure"));
         return 0;
     }
-    var selected = Scenarios.Select(Option("--scenario"));
     StructureCheck.Run(root, null);
+    if (args.Contains("--serve"))
+    {
+        run = new TableRun(root, 0, foreground: true);
+        await ServerHost.RunAsync(root, run, cancellation.Token);
+        return 0;
+    }
+    var requested = Option("--scenario");
+    var selected = Scenarios.Select(requested);
+    var attach = args.Contains("--attach");
+    if (attach && requested is null)
+    {
+        selected = selected.Where(scenario => scenario != "update").ToArray();
+        Console.WriteLine(
+            "Running against the started server. Update runs with an isolated server."
+        );
+    }
+    if (attach && selected.Contains("update"))
+        throw new InvalidOperationException(
+            "The update scenario requires a fresh server with capacity set for its test run."
+        );
     await DomainChecks.RunAsync();
-    run = new TableRun(root, selected.Length);
-    await using var ownedRun = run;
     using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellation.Token);
     deadline.CancelAfter(TimeSpan.FromMinutes(3));
-    await run.StartAsync(deadline.Token);
-    await Scenarios.RunAsync(run.Endpoint, run, selected, deadline.Token);
-    Console.WriteLine("board-tables=completed");
+    if (attach)
+    {
+        var endpoint = ServerHost.Endpoint(root);
+        Console.WriteLine($"Attached to Session STREAM: {endpoint}");
+        await Scenarios.RunAsync(endpoint, null, outcome, selected, deadline.Token);
+    }
+    else
+    {
+        run = new TableRun(root, selected.Length);
+        await using var ownedRun = run;
+        await run.StartAsync(deadline.Token);
+        await Scenarios.RunAsync(run.Endpoint, run, run.Outcome, selected, deadline.Token);
+    }
+    if ((run?.Outcome ?? outcome).Failures.Count == 0)
+        Console.WriteLine("board-tables=completed");
     return 0;
 }

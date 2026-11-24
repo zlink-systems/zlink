@@ -16,10 +16,19 @@ public sealed class TableSpot(
 {
     public IZLinkSpotContext Context { get; } = context;
     private TableState state = new();
-    private readonly Func<int, int> randomIndexSource = randomIndex ?? RandomNumberGenerator.GetInt32;
+    private readonly Func<int, int> randomIndexSource =
+        randomIndex ?? RandomNumberGenerator.GetInt32;
 
     public void Configure()
     {
+        Context.Handlers.AddActorPacket<TableFindMatchHandler, PlayerActor>(nameof(FindMatch));
+        Context.Handlers.AddActorPacket<TableCancelMatchHandler, PlayerActor>(nameof(CancelMatch));
+        Context.Handlers.AddActorPacket<TableMatchAssignedHandler, PlayerActor>(
+            nameof(MatchAssigned)
+        );
+        Context.Handlers.AddActorPacket<TableMatchCancelledHandler, PlayerActor>(
+            nameof(MatchCancelled)
+        );
         Context.Handlers.AddActorPacket<ReconnectHandler, PlayerActor>(nameof(JoinTableRequest));
         Context.Handlers.AddActorPacket<ViewHandler, PlayerActor>(nameof(TableViewRequest));
         Context.Handlers.AddActorPacket<StartHandler, PlayerActor>(nameof(StartHandRequest));
@@ -29,12 +38,70 @@ public sealed class TableSpot(
         Context.Handlers.AddActorPacket<HandResultDelivery, PlayerActor>(nameof(HandResult));
     }
 
+    public ValueTask<ZLinkSpotCreateResponse> OnCreateAsync(
+        ZLinkMessage request,
+        CancellationToken ct
+    )
+    {
+        if (request.IsEmpty)
+            return ValueTask.FromResult(ZLinkSpotCreateResponse.Accept());
+
+        var room = request.Decode<PrepareRoom>();
+        if (
+            room.AssignmentId != Context.SpotId
+            || room.Members.Length != GameNames.MinimumPlayers
+            || room.Members.Distinct(StringComparer.Ordinal).Count() != room.Members.Length
+        )
+            return ValueTask.FromResult(ZLinkSpotCreateResponse.Reject());
+
+        state.Room = new MatchedRoom(room.AssignmentId, room.Members);
+        return ValueTask.FromResult(ZLinkSpotCreateResponse.Accept());
+    }
+
+    public RoomPrepared Prepared(PrepareRoom request) =>
+        new(
+            request.AssignmentId,
+            state.Room is { Phase: RoomPhase.Prepared } room
+                && room.AssignmentId == request.AssignmentId
+                && room.Members.SequenceEqual(request.Members)
+        );
+
+    public ValueTask CommitAsync(string assignmentId, CancellationToken ct)
+    {
+        if (
+            state.Room is not { Phase: RoomPhase.Prepared } room
+            || room.AssignmentId != assignmentId
+        )
+            return ValueTask.CompletedTask;
+
+        state.Room = room with { Phase = RoomPhase.Committed };
+        for (var seat = 0; seat < room.Members.Length; seat++)
+            state.Seats.Add(new PlayerSeat { PlayerId = room.Members[seat], Seat = seat });
+        return BroadcastAsync(ct);
+    }
+
+    public void Withdraw(string assignmentId)
+    {
+        if (state.Room is { Phase: RoomPhase.Prepared } room && room.AssignmentId == assignmentId)
+            state.Room = room with { Phase = RoomPhase.Withdrawn };
+    }
+
+    public ValueTask OnDisconnectActorAsync(PlayerActor actor, CancellationToken ct) =>
+        actor.DisconnectAsync(ct);
+
     public ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
         string actorId,
         ZLinkMessage request,
         CancellationToken cancellationToken
     )
     {
+        if (state.Room is { } room)
+            return ValueTask.FromResult(
+                room.Admits(Context.SpotId, actorId, request.Decode<MatchAssigned>())
+                    ? ZLinkSpotActorJoinResult.Accept()
+                    : ZLinkSpotActorJoinResult.Reject()
+            );
+
         var join = request.Decode<JoinTableRequest>();
         if (join.PlayerId != actorId || join.TableId != Context.SpotId)
             throw new InvalidDataException("Table admission identity mismatch.");
@@ -52,7 +119,7 @@ public sealed class TableSpot(
     }
 
     public ValueTask OnJoinedActorAsync(PlayerActor actor, CancellationToken cancellationToken) =>
-        BroadcastAsync(cancellationToken);
+        state.Room is null ? BroadcastAsync(cancellationToken) : ValueTask.CompletedTask;
 
     public ValueTask OnLeaveActorAsync(PlayerActor actor, CancellationToken cancellationToken) =>
         ValueTask.CompletedTask;
@@ -254,7 +321,8 @@ public sealed class TableSpot(
 
         plan = new SettlementPlan(
             winners,
-            hands.Select(seat => new RevealedHand(seat.Seat, seat.PlayerId, seat.Cards.ToArray()))
+            hands
+                .Select(seat => new RevealedHand(seat.Seat, seat.PlayerId, seat.Cards.ToArray()))
                 .ToArray(),
             winnerBalances
         );
@@ -286,6 +354,7 @@ public sealed class PlayerSeat
 
 public sealed class TableState
 {
+    public MatchedRoom? Room { get; set; }
     public List<PlayerSeat> Seats { get; set; } = [];
     public List<int> Deck { get; set; } = [];
     public long HandNumber { get; set; }

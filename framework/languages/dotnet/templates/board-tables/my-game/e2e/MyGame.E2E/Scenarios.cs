@@ -3,9 +3,16 @@ using MyGame.Shared;
 
 namespace MyGame.E2E;
 
-internal static class Scenarios
+internal static partial class Scenarios
 {
-    private static readonly string[] Order = ["table", "reconnect", "update"];
+    private static readonly string[] Order =
+    [
+        "table",
+        "reconnect",
+        "match",
+        "match-cancel",
+        "update",
+    ];
     internal static IReadOnlyList<string> All => Order;
     private const int FirstBet = 100;
     private const int SecondBet = 50;
@@ -19,7 +26,9 @@ internal static class Scenarios
             || selected.Distinct().Count() != selected.Length
             || selected.Any(id => !Order.Contains(id))
         )
-            throw new ArgumentException("Select distinct scenarios from table,reconnect,update.");
+            throw new ArgumentException(
+                $"Select distinct scenarios from {string.Join(',', Order)}."
+            );
         return Order.Where(selected.Contains).ToArray();
     }
 
@@ -34,32 +43,43 @@ internal static class Scenarios
 
     public static async Task RunAsync(
         string endpoint,
-        TableRun run,
+        TableRun? run,
+        RunOutcome outcome,
         string[] selected,
         CancellationToken ct
     )
     {
         var passed = 0;
+        var failed = 0;
         try
         {
-            foreach (var scenario in selected)
+            for (var index = 0; index < selected.Length; index++)
             {
+                var scenario = selected[index];
+                ct.ThrowIfCancellationRequested();
+                Console.WriteLine($"=== {scenario} ({index + 1}/{selected.Length}) ===");
                 try
                 {
-                    await PlayAsync(endpoint, scenario, run, run.Outcome, ct);
-                    Console.WriteLine($"✓ {scenario}");
+                    if (scenario is "match" or "match-cancel")
+                        await MatchAsync(endpoint, scenario == "match-cancel", outcome, ct);
+                    else
+                        await PlayAsync(endpoint, scenario, run, outcome, ct);
+                    Console.WriteLine($"PASS {scenario}");
                     passed++;
                 }
-                catch
+                catch (Exception error) when (!ct.IsCancellationRequested)
                 {
-                    Console.WriteLine($"✗ {scenario}");
-                    throw;
+                    Console.WriteLine($"FAIL {scenario} - {error.Message}");
+                    outcome.Record(
+                        new InvalidOperationException($"Scenario {scenario} failed.", error)
+                    );
+                    failed++;
                 }
             }
         }
         finally
         {
-            Console.WriteLine($"Scenarios: {passed}/{selected.Length} passed");
+            Console.WriteLine($"Scenarios: {passed}/{selected.Length} passed, {failed} failed");
         }
     }
 
@@ -98,10 +118,7 @@ internal static class Scenarios
         );
         await p2.SendAsync(new HandResult(0, 0, [], [], []), ct);
         var internalPacket = await packetRejected;
-        Require(
-            internalPacket.RetryAfterMs == 0,
-            "Packet rejection included a retry delay."
-        );
+        Require(internalPacket.RetryAfterMs == 0, "Packet rejection included a retry delay.");
         var unchangedAfterPacket = await p2.ViewAsync(
             view => view.TableId == table && !view.InHand,
             ct
@@ -160,7 +177,10 @@ internal static class Scenarios
                 ct
             );
             var overLimitRejection = await overLimit;
-            Require(overLimitRejection.RetryAfterMs == 0, "Integer rejection included a retry delay.");
+            Require(
+                overLimitRejection.RetryAfterMs == 0,
+                "Integer rejection included a retry delay."
+            );
             var unchangedAfterLimit = await p1.ViewAsync(
                 view => view.InHand && view.TurnSeat == 0 && view.Pot == 0,
                 ct
@@ -171,10 +191,7 @@ internal static class Scenarios
                 rejection => rejection.Reason == Rejection.InvalidAmount,
                 ct
             );
-            await p1.SendAsync(
-                new BetRequest(hand1.HandNumber, GameNames.InitialChips + 1),
-                ct
-            );
+            await p1.SendAsync(new BetRequest(hand1.HandNumber, GameNames.InitialChips + 1), ct);
             var invalidAmountRejection = await invalidAmount;
             Require(
                 invalidAmountRejection.RetryAfterMs == 0,

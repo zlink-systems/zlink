@@ -15,6 +15,8 @@ internal static class StructureCheck
         ("players", "session", "STREAM", null),
         ("session", "tableA", "relay", null),
         ("tableA", "location", "Location / lease", "location-authority"),
+        ("tableA", "matchmaker", "Match tickets", null),
+        ("matchmaker", "tableA", "Prepare and commit rooms", null),
     ];
 
     private static readonly string[] CommandShells = ["sh", "powershell"];
@@ -141,6 +143,12 @@ internal static class StructureCheck
                 continue;
             var loaded = NodeSettings.Load(new[] { "--config", config });
             Require(loaded.Id == id, "Configuration ID differs from structure ID.");
+            if (role == "session")
+                Require(
+                    Uri.TryCreate(loaded.StreamEndpoint, UriKind.Absolute, out var stream)
+                        && stream.Scheme is "ws" or "wss",
+                    "Session STREAM endpoint must use ws:// or wss://."
+                );
         }
         Require(Array(document, "channels").Count == 0, "This server registers no channels.");
         var spotIds = new HashSet<string>(StringComparer.Ordinal);
@@ -151,12 +159,31 @@ internal static class StructureCheck
             .Where(node => Text(node, "role") == "table")
             .Select(node => Text(node, "id"))
             .ToHashSet(StringComparer.Ordinal);
+        var matchmakerNodes = Array(document, "nodes")
+            .Where(node => Text(node, "role") == "matchmaker")
+            .Select(node => Text(node, "id"))
+            .ToArray();
+        Require(matchmakerNodes.Length == 1, "Expected one Matchmaker node.");
+        var poolCount = 0;
         foreach (var spot in spots)
         {
             Require(spotIds.Add(Text(spot, "id")), "Duplicate Spot ID.");
             var owner = Text(spot, "owner");
-            Require(tableNodes.Contains(owner), "Spot owner must host the Table runtime.");
             var kind = Text(spot, "kind");
+            if (owner == matchmakerNodes[0])
+            {
+                Require(
+                    kind == "user"
+                        && Text(spot, "type") == MatchNames.PoolType
+                        && Text(spot, "logicalId") == MatchNames.PoolKey
+                        && spot!["dynamic"] is null
+                        && logicalIds.Add(MatchNames.PoolKey),
+                    "Matchmaker must declare the fixed Pool Spot."
+                );
+                poolCount++;
+                continue;
+            }
+            Require(tableNodes.Contains(owner), "Spot owner must host the Table runtime.");
             if (kind == "entry")
             {
                 Require(
@@ -183,6 +210,7 @@ internal static class StructureCheck
             else
                 Require(logicalIds.Add(Text(spot, "logicalId")), "Duplicate logical Spot ID.");
         }
+        Require(poolCount == 1, "Expected one fixed Pool Spot.");
         Require(
             spots.Any(spot =>
                 Text(spot, "kind") == "user"

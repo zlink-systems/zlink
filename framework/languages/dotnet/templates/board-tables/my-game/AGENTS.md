@@ -9,7 +9,7 @@ Every server process in this project is a stateful ZLink node. Before writing co
 - While a game is running, a Spot handler never awaits a remote request or a database reply: the await holds the Spot's turn and stops every message and timer in it. When a round ends, the Spot writes the results of all its Actors in one transaction, then tells each Actor after the commit.
 - Values many players see live in node memory or one owning Spot; values many requests update are applied by that one owning Spot. A process that does not own a value sends a request to its owner instead of writing it.
 - Spots and Actors already process one message at a time. Do not guard their state with locks, semaphores or process-wide static stores, and do not update memory from database commit hooks; the writer updates its owner's memory after commit, others send a message to the owner.
-- Split roles so the game can scale out from day one: game nodes host lobby and room Spots and player Actors and are the only processes you add; a shared node hosts only game-wide Instance Spots (matchmaking, game-wide values), and game nodes do not register those factories. Send and request by Spot ID only; placement is configuration. Keep shared-Spot values recoverable from room resends or a database read at startup.
+- Split roles so the game can scale out from day one: game nodes host lobby and room Spots and player Actors and are the only processes you add; a shared node hosts only game-wide Spots (matchmaking, game-wide values), and game nodes do not register those factories. Send and request by Spot ID only; placement is configuration. Keep shared-Spot values recoverable from room resends or a database read at startup.
 - Never have two Actors or Spots wait on requests to each other inside a turn; notify with send and let the state owner decide.
 - Actors move between nodes when they join a Spot or relocate. Keep all mutable Actor fields in one state record, register stateful Actors with the state-preserving relocation policy, and test that save and restore preserve every field.
 - Player data reaches a Spot with the Actor that joins it; do not request it per player at Spot entry. If a Spot truly needs extra data, fetch it for all players in one request before the game starts.
@@ -23,7 +23,7 @@ Details: [Stateful game nodes and the HTTP lobby](https://docs.zlink.systems/dot
 
 ## Project overview
 
-This C#/.NET 8 project is a board table server example in which players sit at a shared Table and play hands against each other. It runs a Session gateway for connections, Table hosts A and B, and Redis for location and relocation state. `Directory.Packages.props` pins the ZLink Framework and connector packages to `0.34.0`.
+This C#/.NET 8 project is a board table server example in which players sit at a shared Table and play hands against each other. It runs a Session gateway for connections, Table hosts A and B, a Matchmaker node, and Redis for location and relocation state. `Directory.Packages.props` pins the ZLink Framework and connector packages to `0.34.0`.
 
 The project layout and feature procedure below describe where to add gameplay. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 
@@ -31,13 +31,15 @@ The project layout and feature procedure below describe where to add gameplay. T
 
 ## Development commands
 
-Default builds and e2e run nodes and the client in Docker without a host SDK. Run these commands from this directory.
+Run these commands from this directory. Start a foreground server with `./run-server.sh` in Bash or `./run-server.cmd` on Windows. These scripts build with the host .NET 8 SDK and start Redis through Docker Compose. Connect to the `ws://` endpoint on the `Server ready:` line and stop the server with Ctrl+C. The CMD wrapper uses PowerShell 7 to run `run-server.ps1`.
+
+Run E2E in a second terminal. With a ready `.logs/server.json`, it attaches to that server. Without a ready server, the default run creates an isolated Docker environment. The `update` scenario requires an isolated run with its own Table capacity.
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
-pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario table,reconnect,update
-pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+./run-e2e.cmd -BuildOnly
+./run-e2e.cmd
+./run-e2e.cmd -Scenario table,reconnect,match,match-cancel,update
+./run-e2e.cmd -CheckStructure
 ```
 
 Bash provides the same workflow:
@@ -45,7 +47,7 @@ Bash provides the same workflow:
 ```bash
 ./run-e2e.sh --build-only
 ./run-e2e.sh
-./run-e2e.sh --scenario table,reconnect,update
+./run-e2e.sh --scenario table,reconnect,match,match-cancel,update
 ./run-e2e.sh --check-structure
 ```
 
@@ -59,9 +61,15 @@ For host process debugging, install the .NET 8 SDK and add `--local` or `-Local`
 
 ### Entry and tables
 
-An Actor is a game state object addressed by ID; `PlayerActor` in `server/MyGame.Table/PlayerActor.cs` holds only the player's identity and the bound Session, with no game state. A Spot is a state object that accepts Actors and executes shared game rules; `TableSpot` in `server/MyGame.Table/TableSpot.cs` owns seats, chips, the deck, cards, turns, and the pot, and decides admission in `OnActorJoinAsync`. Game rules and settlement belong in `TableSpot`, not in the Actor.
+An Actor is a game state object addressed by ID; `PlayerActor` in `server/MyGame.Table/PlayerActor.cs` keeps the player's ticket and the single deferred join in its relocation snapshot. A Spot is a state object that accepts Actors and executes shared game rules; `TableSpot` in `server/MyGame.Table/TableSpot.cs` owns seats, chips, the deck, cards, turns, and the pot, and decides admission in `OnActorJoinAsync`. Game rules and settlement belong in `TableSpot`, not in the Actor.
 
 `server/MyGame.Table/Program.cs` registers the Entry Spot, the Actor factory, and the Table factory. `server/MyGame.Table/TableEntry.cs` receives the first packet and joins the Actor to a Table, and `server/MyGame.Table/Handlers.cs` holds the Table handlers and the delivery handlers that forward pushes to the client. When changing node composition, update registrations, `server/config/`, and the descriptor together so the structure check validates the same composition.
+
+### Matchmaker
+
+`server/MyGame.Matchmaker/Program.cs` registers and starts the only Pool, `pool-board`. The SpotWide Pool handles requests and timer ticks. `MatchQueue.cs` owns the in-memory queue, deadlines, and assignment decisions. Change `MatchRule.cs` to extend pairing. The Pool sends room decisions to the Table, which admits only prepared members and runs the game after commit. The Player sends join outcomes to the Pool and forwards client notifications.
+
+The first client `FindMatch` binds a Player Actor and yields `MatchQueued`. The SpotWide Pool selects two waiting tickets, prepares a room, and commits it after both Actors report entry. Each client receives `MatchFound` followed by `TableView`. `CancelMatch` cancels a ticket by ID. The Pool applies waiting, disconnect, and entry deadlines.
 
 ### Shared contracts and hosting
 
@@ -153,7 +161,7 @@ Investigate Framework failures using actual replies, events, and lifecycle resul
 
 Preserve the first failing run and read its logs before deciding whether to run it again. An intermittent failure is an observed defect; a subsequent pass does not invalidate it. `.logs/run-<id>/` contains effective settings written by `TableRun.cs` at node startup and logs for each node.
 
-Settings files are `session.json`, `table-a.json`, and `table-b.json`; a replaced node uses the `-replacement` suffix, such as `table-a-replacement`. `ManagedProcess.cs` records diagnostic stderr in `<node>.err.log` and readiness/control stdout in `<node>.out.log`. Redis logs are `redis-start.log`, `redis-port.log`, `redis.log`, and `redis-stop.log`; local build output is in `.logs/build.log`. Docker build, Redis, and outer cleanup logs are in `.logs/docker-<project>/`.
+Settings files are `session.json`, `table-a.json`, `table-b.json`, and `matchmaker.json`; a replaced node uses the `-replacement` suffix, such as `table-a-replacement`. `ManagedProcess.cs` records diagnostic stderr in `<node>.err.log` and readiness/control stdout in `<node>.out.log`. Redis logs are `redis-start.log`, `redis-port.log`, `redis.log`, and `redis-stop.log`; local build output is in `.logs/build.log`. Docker build, Redis, and outer cleanup logs are in `.logs/docker-<project>/`.
 
 ### Diagnostic levels
 

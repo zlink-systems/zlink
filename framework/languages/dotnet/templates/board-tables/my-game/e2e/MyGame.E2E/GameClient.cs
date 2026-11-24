@@ -14,7 +14,7 @@ internal sealed class GameClient(
 {
     private static readonly TimeSpan ResponseTimeout = TimeSpan.FromSeconds(10);
     public IZlinkStreamConnector Connector { get; } = connector;
-    public string PlayerId { get; } = playerId;
+    public string PlayerId { get; private set; } = playerId;
     public bool Disconnected { get; private set; }
     public ConcurrentQueue<object> Received { get; } = new();
     private readonly Dictionary<Type, Channel<object>> inboxes = [];
@@ -54,6 +54,9 @@ internal sealed class GameClient(
         client.Record<HandDealt>();
         client.Record<HandResult>();
         client.Record<ActionRejected>();
+        client.Record<MatchQueued>();
+        client.Record<MatchFound>();
+        client.Record<MatchCancelled>();
         try
         {
             await connector.Connect.Async(ct);
@@ -102,6 +105,14 @@ internal sealed class GameClient(
 
     public Task SendAsync<T>(T message, CancellationToken ct) =>
         Connector.Send(message).Async(ct).AsTask();
+
+    public async Task<MatchQueued> FindAsync(CancellationToken ct)
+    {
+        await SendAsync(new FindMatch(), ct);
+        var queued = await WaitAsync<MatchQueued>(_ => true, ct);
+        PlayerId = (await SessionAsync(ct)).ActorId;
+        return queued;
+    }
 
     public async Task<TableView> JoinAsync(string tableId, CancellationToken ct)
     {

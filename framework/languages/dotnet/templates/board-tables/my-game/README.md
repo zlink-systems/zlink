@@ -1,11 +1,15 @@
 # MyGame board table server
 
-The Session node accepts STREAM connections, binds them to Player Actors, and relays messages. Table nodes A and B host dynamically created Table User Spots and Player Actors. The Table Spot owns seats, chips, private cards, turns, and settlement.
+[한국어](README.ko.md)
+
+The Session node accepts STREAM connections, binds them to Player Actors, and relays messages. Table nodes A and B host dynamically created Table User Spots and Player Actors. The Table Spot owns seats, chips, private cards, turns, and settlement. The Matchmaker node hosts the shared Pool Spot that pairs players and coordinates room admission.
 
 ```mermaid
 flowchart LR
     players[Players] -->|STREAM| session[Session node]
     session -->|relay| tables[Table node ×N]
+    tables -->|tickets and entry reports| matchmaker[Matchmaker node]
+    matchmaker -->|room preparation and commit| tables
     tables -->|Location / lease| location[(Location Store)]
 ```
 
@@ -13,9 +17,9 @@ flowchart LR
 
 ## Prerequisites
 
-Default execution requires Docker Linux containers; no host .NET SDK is needed.
+Isolated E2E runs build and run in Docker Linux containers. The foreground server needs a local .NET SDK.
 
-- .NET 8 SDK and ASP.NET Core 8 runtime for `--local` / `-Local` debugging only.
+- .NET 8 SDK and ASP.NET Core 8 runtime for `run-server` and `--local` / `-Local` execution.
 - Docker Engine with Docker Compose v2.
 - Bash on Linux or WSL, or PowerShell 7 on Windows.
 - An operating system and architecture supported by the published Zlink native package.
@@ -33,20 +37,28 @@ Run commands from this project root:
 PowerShell builds the same Dockerfile targets:
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
+./run-e2e.cmd -BuildOnly
 ```
 
 `Dockerfile` owns fixed `SDK_IMAGE`, `RUNTIME_IMAGE`, and `DOCKER_CLI_IMAGE` defaults. Replace the appropriate base ARG when adopting a ZLink base image. All node roles share the node image because their runtime dependencies match; each retains its own executable entry point. The ASP.NET Core runtime supplies shared hosting dependencies. The runner target adds Docker CLI and structure inputs without including the SDK.
 
 Scripts remove unique image tags after each invocation. Docker retains build layers for subsequent runs.
 
+## Run the local server
+
+From this directory, run `./run-server.sh` in Bash or `./run-server.cmd` in Windows Terminal. The Windows wrapper runs `run-server.ps1` with PowerShell 7. If your execution policy allows it, you can also call `./run-server.ps1` from PowerShell.
+
+The script prints `Preparing: building the server (...)` and `Build complete. Starting servers...`, starts Redis in Docker and runs the .NET nodes on the host. Connect clients to the WebSocket URL in `Server ready:`. The ready endpoint is also recorded in `.logs/server.json`. Keep the terminal open while clients are connected. Press Ctrl+C to stop the nodes and Redis.
+
+Run `./run-e2e.sh` or `./run-e2e.cmd` from a second terminal to test the running server. When no local server is ready, the same command starts an isolated Docker environment. See the E2E scenario table below for `update` requirements.
+
 ## Client connection
 
 ### Endpoint and first packet
 
-The Session `players` STREAM listener uses `StreamEndpoint` in `server/config/session.json`, defaulting to `ws://127.0.0.1:0`: loopback WebSocket, OS-assigned port, root path `/`. Read `StreamEndpoint` from the Session's `READY` JSON, as `e2e/MyGame.E2E/TableRun.cs` does. Table mesh listeners and Redis are internal endpoints.
+The Session `players` STREAM listener uses `streamEndpoint` in `server/config/session.json`, defaulting to `ws://127.0.0.1:0`: loopback WebSocket, OS-assigned port, root path `/`. Read `StreamEndpoint` from the Session's `READY` JSON, as `e2e/MyGame.E2E/TableRun.cs` does. Table mesh listeners and Redis are internal endpoints.
 
-Send `JoinTableRequest(PlayerId, TableId)` first. The Session creates/binds the Actor; successful seating produces a `TableView` push, including the assigned seat and table state. `ActionRejected` reports rejected actions. Entry is send/push; `SessionInfoRequest` is request/reply after binding. This template does not authenticate the supplied player ID; validate identity before binding when adding authentication.
+Send `JoinTableRequest(PlayerId, TableId)` to choose a table, or send `FindMatch` to request matchmaking. The Session assigns an Actor ID for a first-packet `FindMatch`. For a direct join, the Session creates/binds the Actor; successful seating produces a `TableView` push, including the assigned seat and table state. `ActionRejected` reports rejected actions. Entry is send/push; `SessionInfoRequest` is request/reply after binding. This template does not authenticate the supplied player ID; validate identity before binding when adding authentication.
 
 ### Connector installation
 
@@ -70,7 +82,7 @@ Use the release pinned in `Directory.Packages.props`, at `PackageVersion Include
 
 ### First table example
 
-In a copy of this template, create a .NET 8 console project, reference `server/MyGame.Shared/MyGame.Shared.csproj`, and add `Zlink.Stream.Connector` using the pinned version described above. Save this as its `Program.cs` and run `dotnet run --project <client-project> -- <actual-session-endpoint>`. Keep Session, Table nodes, and Redis running separately from the temporary e2e deployment. Use fresh player/table IDs. `e2e/MyGame.E2E/GameClient.cs` shows the full game flow.
+In a copy of this template, create a .NET 8 console project, reference `server/MyGame.Shared/MyGame.Shared.csproj`, and add `Zlink.Stream.Connector` using the pinned version described above. Save this as its `Program.cs` and run `dotnet run --project <client-project> -- <actual-session-endpoint>`. Keep `run-server` open and pass the endpoint it prints. Use fresh player/table IDs. `e2e/MyGame.E2E/GameClient.cs` shows the full game flow.
 
 ```csharp
 using MyGame.Shared;
@@ -113,7 +125,7 @@ Console.WriteLine(await received.Task.WaitAsync(ct));
 
 ## Local e2e
 
-Both scripts build images and call the same C# orchestrator inside a runner container. A unique Compose project/network contains Redis and the runner. The runner checks structure before starting nodes. Nodes share its network namespace, preserving loopback listeners and OS-assigned ports without host port mappings. Redis publishes an ephemeral loopback port for local debugging.
+In isolated mode the scripts build images and call the same C# orchestrator inside a runner container. A unique Compose project/network contains Redis and the runner. The runner checks structure before starting nodes. Nodes share its network namespace, preserving loopback listeners and OS-assigned ports without host port mappings. Redis publishes an ephemeral loopback port for local debugging.
 
 The runner creates each node with interactive stdin, copies its configuration with `docker cp`, and attaches through `docker start -a -i`. `ManagedProcess` retains readiness, drain, shutdown, and replacement controls. Only the runner mounts the Docker socket; use a trusted local daemon. Scripts remove their labeled containers, Compose project, and image tags. Cleanup failure returns exit code 1.
 
@@ -137,27 +149,31 @@ On Bash, run:
 
 ```sh
 ./run-e2e.sh
-./run-e2e.sh --scenario table,reconnect,update
+./run-e2e.sh --scenario table,reconnect,match,match-cancel,update
 ./run-e2e.sh --check-structure
 ```
 
-On PowerShell 7, run the same runner with:
+On Windows, use the CMD wrappers or invoke the equivalent PowerShell 7 scripts:
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario table,reconnect,update
-pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+./run-e2e.cmd
+./run-e2e.cmd -Scenario table,reconnect,match,match-cancel,update
+./run-e2e.cmd -CheckStructure
 ```
 
-The runner checks the structure, then starts Redis, Table A and B, and Session in order under a uniquely named Compose project. It uses OS-assigned loopback ports and a per-run Redis key prefix. It runs the scenarios after each process reports `READY` and cleans up the processes and containers it created. Configuration and logs are retained under `.logs/run-<id>/`.
+In isolated mode the runner checks the structure, then starts Redis, Table A and B, Matchmaker, and Session in order under a uniquely named Compose project. It uses OS-assigned loopback ports and a per-run Redis key prefix. It runs the scenarios after each process reports `READY` and cleans up the processes and containers it created. Configuration and logs are retained under `.logs/run-<id>/`.
 
 | Scenario | Verified behavior |
 | --- | --- |
 | `table` | Seats and chips, private cards, rejection of server-originated packets, out-of-turn bets, over-limit values, and insufficient chips. Each rejection has `RetryAfterMs: 0` and leaves table state unchanged. Settlement reports every `cardCount` as zero; a private-hand query before the next hand returns no cards. |
 | `reconnect` | The sessionId in `SessionInfo` changes while the Actor ID and generation stay the same. Seat, chips, cards, and turn persist, and the hand settles after reconnecting with empty hands. |
+| `match` | Both players receive matching room IDs, distinct seats, and a TableView after MatchFound, then settle one hand. |
+| `match-cancel` | A waiting client receives `MatchCancelled` with reason `cancelled`. The next two clients match normally. |
 | `update` | Both clients keep their `SessionInfo` across drain, connection and game state persist, the hand settles on a different node with empty hands, and after the original node is replaced a new table plays one hand. |
 
-After the structure check, the runner executes the domain boundary checks and prints `Domain checks: 7/7`. It then starts the nodes and runs selected scenarios in the order shown above. Scenario results are printed with `✓`/`✗` and `Scenarios: N/M passed`. Failures and cleanup errors are reported with exit code 1. A rerun that passes without a known cause does not cancel an intermittent failure.
+An attached run selects `table`, `reconnect`, `match`, and `match-cancel` by default. Use `--attach` or `-Attach` to require a running server. The `update` scenario requires an isolated run because it sets a Table capacity and replaces a node. Stop the foreground server or use `--local` / `-Local` with `--no-build` / `-NoBuild` to exercise `update` in a separate local run.
+
+After the structure check, the runner executes the domain boundary checks and prints `Domain checks: 7/7`. It runs selected scenarios in the order shown above. Each scenario has a heading and a `PASS` or `FAIL` line. The last count is `Scenarios: N/M passed, F failed`. Failures and cleanup errors return exit code 1.
 
 After a local build, use the following command to check structure without starting nodes:
 
@@ -169,17 +185,23 @@ The structure check validates the actual files' version, identifiers, configurat
 
 ## Game rules and extension
 
-The first client packet is `JoinTableRequest{playerId,tableId}`. The Entry Spot calls `GetOrCreate` for the Table and joins the Actor. When the same player reconnects, the new Session is bound to the existing Actor, and the player receives the current Table state and their own cards. Seats and game state persist when the connection drops.
+For a direct join, the first client packet is `JoinTableRequest{playerId,tableId}`. The Entry Spot calls `GetOrCreate` for the Table and joins the Actor. When the same player reconnects, the new Session is bound to the existing Actor, and the player receives the current Table state and their own cards. Seats and game state persist when the connection drops.
 
-Send `SessionInfoRequest` after `JoinTableRequest`. The Session node replies with `SessionInfo` containing the current sessionId and the bound Actor's actorId and objectGeneration. The Table state does not store Actor identity.
+Send `SessionInfoRequest` after the first packet binds a Player Actor. The Session node replies with `SessionInfo` containing the current sessionId and the bound Actor's actorId and objectGeneration. The Table state does not store Actor identity.
 
 There are four seats, and each player starts with 1000 chips. With two or more players, each receives two cards from a fresh 52-card deck shuffled by the operating system cryptographic random source. Players bet once in turn starting from the lowest seat. The player with the highest sum of the two cards' values takes the pot. Ties split the pot evenly, and the remainder goes to the lowest winning seat. A player who sits down during a hand joins from the next hand. Settlement clears every player's hand before sending `HandResult`; a subsequent private-hand query returns an empty card list.
 
 `server/MyGame.Shared/Contracts.cs` owns typed messages, `GameNames.MaxContractInteger` (`9007199254740991`), and rejection reason strings. Requests and results use that integer limit. `TableSpot` validates requests before changing state, calculates bets and settlement, and rejects a value or result outside the limit with `integer-out-of-range`. `ActionRejected` carries `Reason` and `RetryAfterMs`; `RetryAfterMs` is a 32-bit integer serialized as `retryAfterMs` by the default typed JSON serializer. Chips, pots, and hand numbers remain 64-bit integers. Current rules have no time-based rejection, so the value is zero. Extend `TableSpot` as the only owner of any time-based decision, use a monotonic clock, pass a test clock through its constructor, and store remaining milliseconds in relocation snapshots. A client waits only for a positive delay supplied by the server.
 
-`server/MyGame.Session/PlayerSession.cs` forwards only `JoinTableRequest`, `TableViewRequest`, `StartHandRequest`, `BetRequest`, and `SessionInfoRequest`. It rejects other packets with `packet-not-allowed`. Add only client-to-server requests to this allowlist. Add new client-observable checks in `e2e/MyGame.E2E/Scenarios.cs`, and keep its scenario IDs aligned with the README table and `run.scenarios` in `zlink.structure.json`.
+`server/MyGame.Session/PlayerSession.cs` forwards only `JoinTableRequest`, `FindMatch`, `CancelMatch`, `TableViewRequest`, `StartHandRequest`, `BetRequest`, and `SessionInfoRequest`. It rejects other packets with `packet-not-allowed`. Add only client-to-server requests to this allowlist. Add new client-observable checks in `e2e/MyGame.E2E/Scenarios.cs`, and keep its scenario IDs aligned with the README table and `run.scenarios` in `zlink.structure.json`.
 
 Message Follow is explicitly configured for 30 seconds. The `SAFE_TO_SHUTDOWN` observation budget is that period plus the existing relocation budget. Update waits for replacement `READY`, then asserts that the replacement hosts the new table and completes a hand.
+
+### Matchmaking
+
+The Matchmaker node starts the SpotWide Pool `pool-board` from `server/config/matchmaker.json`. On requests and on its 500 ms timer, the Pool pairs the two longest-waiting players, prepares a Table for those members, and commits the room after both Actors complete deferred entry within 10 seconds. The Table assigns seats on commit. Each Actor sends its client `MatchFound` followed by `TableView`.
+
+Send `CancelMatch` with the ticket ID from `MatchQueued` to leave the queue. A disconnected player is ineligible for pairing. The Pool cancels the waiting ticket after 15 seconds with reason `disconnected` if the 120-second waiting deadline has yet to expire. Reserved tickets follow the entry deadline. Restarting the Matchmaker clears the in-memory queue. Extend `server/MyGame.Matchmaker/MatchRule.cs` to change pairing policy.
 
 ## Deployment sequence
 
@@ -187,7 +209,8 @@ Set the Redis address and the shared key prefix in `server/config/` for each env
 
 1. Start Redis. For a manual local Compose run, use `docker compose -p my-game-local up -d --wait` and read the assigned port with `docker compose -p my-game-local port location 6379`.
 2. Start Table A and B with their own configurations and wait for `READY`.
-3. Start Session and connect clients to the STREAM endpoint it prints.
+3. Start Matchmaker with `server/config/matchmaker.json` and wait for `READY`.
+4. Start Session and connect clients to the STREAM endpoint it prints.
 
 Example of starting a Table node:
 
@@ -201,7 +224,7 @@ This procedure is a `PlannedMaintenance` example at the same application version
 
 ## Windows notes and diagnostics
 
-Use PowerShell 7. If NuGet connections fail in an IPv6 environment, you can set `DOTNET_SYSTEM_NET_DISABLEIPV6=1` in that shell. The scripts do not change this machine-specific setting. Processes started by the runner do not create console windows.
+Use PowerShell 7. The CMD wrappers temporarily select UTF-8 and restore the previous console code page after the script exits. If NuGet connections fail in an IPv6 environment, you can set `DOTNET_SYSTEM_NET_DISABLEIPV6=1` in that shell. The scripts do not change this machine-specific setting. Processes started by the runner do not create console windows.
 
 Node stderr records the message flow from the dispatch diagnostics `Normal` logger. In `<node>.err.log` of the first failing run, find the last transition of the same flow and packet. Do not compensate for a public package defect with internal APIs, manual codecs, sleeps, retries, or longer deadlines.
 
@@ -217,6 +240,6 @@ Node stderr records the message flow from the dispatch diagnostics `Normal` logg
 
 ## Known issues in the public package
 
-Validated against the published Framework 0.34.0 packages.
+This project uses the published Framework 0.34.0 packages. The E2E scenarios `match` and `match-cancel` can receive match notifications out of order during room admission. The runner checks `MatchQueued` → `MatchFound` → `TableView` and reports the received order on failure.
 
-The e2e runner sets each node's optional `TableCapacity` to the number of selected scenarios through the public Table stable-type limit. Each scenario retains one table. After update drains the source, the surviving node is at capacity, so only the replacement can host the new table. Both new players must observe the replacement node ID. Omitted or zero capacity leaves deployment capacity unlimited. Entry declarations describe the application Entry on Table nodes only; there are no fixed User Spots in this template.
+The isolated e2e runner sets each node's optional `TableCapacity` to the number of selected scenarios through the public Table stable-type limit. Each scenario retains one table. After update drains the source, the surviving node is at capacity, so only the replacement can host the new table. Both new players must observe the replacement node ID. Omitted or zero capacity leaves deployment capacity unlimited. Entry declarations identify the application Entry on each Table node. The Matchmaker config owns the fixed Pool.
