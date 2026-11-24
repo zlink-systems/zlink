@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Runtime.ExceptionServices;
 using Microsoft.Extensions.DependencyInjection;
 using Systems.Zlink.Framework.Runtime.Protocol;
+using Zlink.Framework.Contracts.Errors;
 using Zlink.Framework.Contracts.Locations;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Spots;
@@ -11,7 +12,14 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed partial class RelocationBehaviorConformanceTests
 {
     [Fact]
-    public async Task SpotWide_find_follows_target_dispatch_before_steady_normalization()
+    public Task SpotWide_find_follows_target_dispatch_before_steady_normalization() =>
+        RunSpotWideFindReadinessAsync(verifyClose: false);
+
+    [Fact]
+    public Task SpotWide_close_reports_retryable_moving_before_steady_normalization() =>
+        RunSpotWideFindReadinessAsync(verifyClose: true);
+
+    private static async Task RunSpotWideFindReadinessAsync(bool verifyClose)
     {
         using var listener = Environment.GetEnvironmentVariable(
             RelocationBehaviorHost.FlowPathEnvironmentVariable
@@ -119,6 +127,19 @@ public sealed partial class RelocationBehaviorConformanceTests
             );
             Assert.Equal(committed.AuthorityOwnerGeneration, activated.AuthorityOwnerGeneration);
 
+            if (verifyClose)
+            {
+                var moving = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                    spots.CloseAsync(opened).AsTask()
+                );
+                Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, moving.Kind);
+                Assert.Equal(ZLinkRetryAdvice.RetryAfterBackoff, moving.RetryAdvice);
+                Assert.Equal(
+                    (int)ServiceWireConstants.FrameworkErrorCode.SpotMoving,
+                    moving.FrameworkFailureCode
+                );
+            }
+
             normalization.Release.TrySetResult();
             Assert.Equal(
                 ZLinkAggregateCommitResult.Committed,
@@ -129,6 +150,8 @@ public sealed partial class RelocationBehaviorConformanceTests
                 ZLinkFrameworkRelocationOutcome.Relocated,
                 (await relocation.WaitAsync(timeout)).Outcome
             );
+            if (verifyClose)
+                Assert.True(await spots.CloseAsync(opened));
         }
         finally
         {
