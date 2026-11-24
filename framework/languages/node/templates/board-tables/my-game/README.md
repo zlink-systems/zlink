@@ -10,7 +10,7 @@ flowchart LR
     session -->|relay| table[Play / Table node ×N]
     table -->|MatchRequest and EnterReport| matchmaker[Matchmaker node / Pool Instance Spot]
     matchmaker -->|PrepareRoom and CommitRoom| table
-    table -->|RoomPrepared reply| matchmaker
+    table -->|RoomPrepared| matchmaker
     table -->|ClientServer Channel| api[API node / Actor DB]
     api -->|Player records| location[(Redis)]
     table -->|Location / lease| location
@@ -66,7 +66,7 @@ The first application packet is `JoinTableRequest{playerId, tableId}` for direct
 
 Send `FindMatch{playerId}` and receive `MatchQueued{ticketId}`. Once both players enter the assigned table, each receives `MatchFound{ticketId, roomId, seat}` followed by `TableView`. The two players receive the same `roomId` and different seats. Send `CancelMatch{ticketId}` while waiting to receive `MatchCancelled{ticketId, reason}`. Use the same gameplay messages as for direct join.
 
-The Matchmaker node registers the Pool Instance Spot factory. Play nodes address `pool-board` as an Instance Spot, and the first request activates it. The Pool checks the queue on arrival and every 500 ms. It reserves the two longest-waiting tickets in a preparing assignment. Room creation and the `PrepareRoom` request run outside the Pool turn. A `RoomPrepared` message returns the outcome to the Pool, which moves a successful assignment to awaiting entry and sends `MatchAssigned` to both Players. A failed or expired preparation releases the tickets back to the queue. Both players must report successful entry within 10 seconds of reservation. The Table admits only the assigned players. The Pool cancels a waiting ticket after 15 seconds disconnected (`disconnected`) or 120 seconds in the queue (`expired`).
+The Matchmaker node registers the Pool Instance Spot factory. Play nodes address `pool-board` as an Instance Spot, and the first request activates it. The Pool checks the queue on arrival and every 500 ms. It reserves the two longest-waiting tickets. The Pool records the pair as preparing and sends `PrepareRoom` to the Play nodes’ `room-provisioner-board` Instance Spot. That Spot creates the Table User Spot and forwards `PrepareRoom` to it. The Table sends `RoomPrepared` to the Pool, which handles it in a new turn. On success, the Pool moves the assignment to awaiting entry and sends `MatchAssigned` to both Players. A failed or expired preparation releases the tickets back to the queue. Both players must report successful entry within 10 seconds of reservation. The Table admits only the assigned players. The Pool cancels a waiting ticket after 15 seconds disconnected (`disconnected`) or 120 seconds in the queue (`expired`).
 
 ### Player records
 

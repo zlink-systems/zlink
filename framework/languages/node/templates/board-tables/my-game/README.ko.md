@@ -10,7 +10,7 @@ flowchart LR
     session -->|relay| table[Play / Table node ×N]
     table -->|MatchRequest와 EnterReport| matchmaker[Matchmaker node / Pool Instance Spot]
     matchmaker -->|PrepareRoom과 CommitRoom| table
-    table -->|RoomPrepared 응답| matchmaker
+    table -->|RoomPrepared| matchmaker
     table -->|ClientServer Channel| api[API node / Actor DB]
     api -->|플레이어 기록| location[(Redis)]
     table -->|Location / lease| location
@@ -68,7 +68,7 @@ TypeScript를 컴파일하고 메시지 DTO에서 Framework의 기본 typed JSON
 
 `FindMatch{playerId}`를 보내면 `MatchQueued{ticketId}`를 받는다. 두 플레이어는 같은 `roomId`와 서로 다른 좌석을 받는다. 대기열에서 나가려면 `CancelMatch{ticketId}`를 보내고 `MatchCancelled{ticketId, reason}`을 받는다. 매칭으로 입장한 뒤에는 직접 입장과 같은 게임 메시지를 사용한다.
 
-Matchmaker node는 Pool Instance Spot factory를 등록한다. Play node는 `pool-board`를 Instance Spot으로 지정하며, 첫 요청이 Pool을 활성화한다. Pool은 요청이 들어올 때와 500ms마다 대기열을 확인하고 가장 오래 기다린 두 티켓을 준비 중인 배정에 묶는다. 방 생성과 `PrepareRoom` 요청은 Pool turn 밖에서 진행한다. Pool은 `RoomPrepared` 메시지로 결과를 받아, 성공하면 배정을 입장 대기로 바꾸고 두 Player에 `MatchAssigned`를 보낸다. 준비에 실패하거나 기한이 지나면 티켓을 대기열로 돌려보낸다. 두 플레이어는 배정 시점부터 10초 안에 입장 성공을 보고해야 한다. Table은 배정에 명시된 플레이어만 받아들인다. Pool은 연결이 끊긴 채 15초가 지나면 `disconnected`, 대기 시간이 120초에 이르면 `expired`로 대기 티켓을 취소한다.
+Matchmaker node는 Pool Instance Spot factory를 등록한다. Play node는 `pool-board`를 Instance Spot으로 지정하며, 첫 요청이 Pool을 활성화한다. Pool은 요청이 들어올 때와 500ms마다 대기열을 확인하고 가장 오래 기다린 두 티켓을 예약한다. Pool은 배정을 준비 중으로 기록하고 Play node의 `room-provisioner-board` Instance Spot에 `PrepareRoom`을 보낸다. RoomProvisioner는 Table User Spot을 생성하고 `PrepareRoom`을 전달한다. Table은 Pool에 `RoomPrepared`를 보내고 Pool은 새 turn에서 결과를 처리한다. 성공하면 배정을 입장 대기로 바꾸고 두 Player에게 `MatchAssigned`를 보낸다. 준비에 실패하거나 기한이 지나면 티켓을 대기열로 돌려보낸다. 두 플레이어는 배정 시점부터 10초 안에 입장 성공을 보고해야 한다. Table은 배정에 명시된 플레이어만 받아들인다. Pool은 연결이 끊긴 채 15초가 지나면 `disconnected`, 대기 시간이 120초에 이르면 `expired`로 대기 티켓을 취소한다.
 
 ### 플레이어 기록
 

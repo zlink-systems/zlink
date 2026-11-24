@@ -4,6 +4,8 @@ export const Names = {
   stream: 'players',
   actor: 'Player',
   table: 'Table',
+  roomProvisioner: 'RoomProvisioner',
+  roomProvisionerKey: 'room-provisioner-board',
   pool: 'Pool',
   poolKey: 'pool-board',
   matchRoomPrefix: 'room-'

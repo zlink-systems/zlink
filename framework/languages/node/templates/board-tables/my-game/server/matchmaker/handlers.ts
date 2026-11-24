@@ -52,7 +52,7 @@ export class ReportEntry {
 @zlinkSpotPacketHandler({ spot: () => Pool, packetName: PacketNames.returnReport })
 export class ReportReturn {
   async handle(spot: Pool, report: ReturnReport): Promise<void> {
-    spot.returned(report);
+    await spot.returned(report);
   }
 }
 

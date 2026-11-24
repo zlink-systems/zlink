@@ -5,7 +5,7 @@ import {
   zlinkSpotPacketHandler
 } from '@zlink-systems/nestjs';
 import type { ZLinkMessageContext } from '@zlink-systems/framework';
-import { PacketNames, Reasons } from '../../shared/constants';
+import { Names, PacketNames, Reasons } from '../../shared/constants';
 import {
   RoomPrepared,
   type CancelMatch,
@@ -144,8 +144,12 @@ export class MatchCommittedHandler {
 
 @zlinkSpotPacketHandler({ spot: () => Table, packetName: PacketNames.prepareRoom })
 export class PrepareRoomHandler {
-  async handle(spot: Table, request: PrepareRoom): Promise<RoomPrepared> {
-    return new RoomPrepared(request.assignmentId, spot.prepare(request));
+  async handle(spot: Table, request: PrepareRoom): Promise<void> {
+    await spot.context.outbound
+      .sendToSpot(Names.poolKey, new RoomPrepared(request.assignmentId, spot.prepare(request)))
+      .instanceSpot(Names.pool)
+      .inMesh(Names.mesh)
+      .submit();
   }
 }
 

@@ -93,6 +93,13 @@
       "dynamic": true
     },
     {
+      "id": "room-provisioner",
+      "kind": "instance",
+      "type": "RoomProvisioner",
+      "owner": "tableA",
+      "logicalId": "room-provisioner-board"
+    },
+    {
       "id": "pool",
       "kind": "instance",
       "type": "Pool",

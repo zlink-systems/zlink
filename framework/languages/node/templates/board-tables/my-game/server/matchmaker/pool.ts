@@ -1,14 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { Inject, Injectable, Scope } from '@nestjs/common';
-import { ZLINK_ACTOR_CLIENT, ZLINK_SPOT_OUTBOUND, ZLINK_SPOT_MANAGER } from '@zlink-systems/nestjs';
+import { ZLINK_ACTOR_CLIENT } from '@zlink-systems/nestjs';
 import {
-  ZLinkSpotCreateState,
   type ZLinkActorClient,
   type ZLinkInstanceSpot,
   type ZLinkInstanceSpotContext,
-  type ZLinkSpotOutbound,
-  type ZLinkSpotManager,
   type ZLinkSpotRelocationAdapter,
   type ZLinkSpotTimerHandler
 } from '@zlink-systems/framework';
@@ -20,8 +17,8 @@ import {
   MatchQueued,
   MatchReleased,
   PrepareRoom,
-  RoomClosed,
-  RoomPrepared,
+  type RoomClosed,
+  type RoomPrepared,
   WithdrawRoom,
   type CancelTicket,
   type EnterReport,
@@ -44,11 +41,7 @@ export class Pool implements ZLinkInstanceSpot {
   readonly tickets = new Map<string, Ticket>();
   readonly assignments = new Map<string, Assignment>();
 
-  constructor(
-    @Inject(ZLINK_SPOT_MANAGER) private readonly spots: ZLinkSpotManager,
-    @Inject(ZLINK_ACTOR_CLIENT) private readonly actors: ZLinkActorClient,
-    @Inject(ZLINK_SPOT_OUTBOUND) private readonly outbound: ZLinkSpotOutbound
-  ) {}
+  constructor(@Inject(ZLINK_ACTOR_CLIENT) private readonly actors: ZLinkActorClient) {}
 
   configure(): void {
     this.context.handlers.addTimerHandler(PoolTick);
@@ -117,10 +110,10 @@ export class Pool implements ZLinkInstanceSpot {
       if (reason) await this.expire(ticket, reason);
     }
     const members = waitingPair(this.tickets.values());
-    if (members) this.prepare(members, now);
+    if (members) await this.prepare(members, performance.now());
   }
 
-  private prepare(members: [Ticket, Ticket], now: number): void {
+  private async prepare(members: [Ticket, Ticket], now: number): Promise<void> {
     const id = Names.matchRoomPrefix + randomUUID();
     const assignment: Assignment = {
       id,
@@ -132,31 +125,22 @@ export class Pool implements ZLinkInstanceSpot {
     };
     for (const ticket of members) ticket.assignmentId = id;
     this.assignments.set(id, assignment);
-    void this.provisionRoom(
-      new PrepareRoom(
-        id,
-        members.map((ticket) => ticket.playerId)
-      )
-    ).catch(console.error);
-  }
-
-  // This operation carries only the request. The result returns through the Pool's handler.
-  private async provisionRoom(request: PrepareRoom): Promise<void> {
-    const id = request.assignmentId;
-    let ok = false;
     try {
-      const created = await this.spots.getOrCreate(id, Names.table).inMesh(Names.mesh).submit();
-      if (created.state !== ZLinkSpotCreateState.Rejected) {
-        const reply = await this.outbound.requestToSpot(id, request).submit<RoomPrepared>();
-        ok = reply.ok && reply.assignmentId === id;
-      }
+      await this.context.outbound
+        .sendToSpot(
+          Names.roomProvisionerKey,
+          new PrepareRoom(
+            id,
+            members.map((ticket) => ticket.playerId)
+          )
+        )
+        .instanceSpot(Names.roomProvisioner)
+        .inMesh(Names.mesh)
+        .submit();
     } catch (error) {
-      console.error('Room preparation failed', id, error);
+      // The reservation still follows its entry deadline.
+      console.error('Room preparation send failed', id, error);
     }
-    await this.outbound
-      .sendToSpot(Names.poolKey, new RoomPrepared(id, ok))
-      .instanceSpot(Names.pool)
-      .submit();
   }
 
   async roomPrepared(message: RoomPrepared): Promise<void> {
@@ -164,7 +148,7 @@ export class Pool implements ZLinkInstanceSpot {
     if (assignment && assignment.state.phase !== 'preparing') return;
     if (!assignment || !message.ok || decide(assignment, performance.now()) === 'withdraw') {
       if (assignment) this.release(assignment);
-      void this.closeRoom(message.assignmentId).catch(console.error);
+      await this.closeRoom(message.assignmentId);
       return;
     }
     assignment.state = { phase: 'entering' };
@@ -235,7 +219,7 @@ export class Pool implements ZLinkInstanceSpot {
         .submit();
   }
 
-  returned(report: ReturnReport): void {
+  async returned(report: ReturnReport): Promise<void> {
     const assignment = this.assignments.get(report.assignmentId);
     const ticket = assignment?.members.find((member) => member.ticketId === report.ticketId);
     if (
@@ -246,19 +230,14 @@ export class Pool implements ZLinkInstanceSpot {
       return;
     assignment.returned.push(ticket.playerId);
     if (assignment.returned.length === assignment.members.length)
-      void this.closeWithdrawnRoom(assignment.id).catch(console.error);
+      await this.closeRoom(assignment.id);
   }
 
   private async closeRoom(id: string): Promise<void> {
-    const room = await this.spots.find(id);
-    if (room && !(await this.spots.close(room))) throw new Error(`Room still occupied: ${id}`);
-  }
-
-  private async closeWithdrawnRoom(id: string): Promise<void> {
-    await this.closeRoom(id);
-    await this.outbound
-      .sendToSpot(Names.poolKey, new RoomClosed(id))
-      .instanceSpot(Names.pool)
+    await this.context.outbound
+      .sendToSpot(Names.roomProvisionerKey, new WithdrawRoom(id))
+      .instanceSpot(Names.roomProvisioner)
+      .inMesh(Names.mesh)
       .submit();
   }
 
