@@ -19,6 +19,26 @@ final class ZLinkLocationDescriptorFixture {
             String rid,
             ZLinkPlacementObjectKind kind,
             int actorLimit) {
+        return descriptor(owner, rid, kind, actorLimit, ZLinkObjectMaintenancePolicyKind.DISABLED);
+    }
+
+    static ZLinkMeshNodeDescriptor descriptor(
+            ZLinkLocationOwnerToken owner,
+            String rid,
+            ZLinkPlacementObjectKind kind,
+            int actorLimit,
+            ZLinkObjectMaintenancePolicyKind spotPolicy) {
+        var capabilities = new java.util.ArrayList<ZLinkObjectCapability>();
+        if (spotPolicy != null) {
+            capabilities.add(new ZLinkObjectCapability(kind, "room", spotPolicy, false, 1));
+        }
+        capabilities.add(
+                new ZLinkObjectCapability(
+                        ZLinkPlacementObjectKind.ACTOR,
+                        "player",
+                        ZLinkObjectMaintenancePolicyKind.DISABLED,
+                        false,
+                        0));
         return new ZLinkMeshNodeDescriptor(
                 "mesh",
                 RoutingId.from(rid),
@@ -27,15 +47,7 @@ final class ZLinkLocationDescriptorFixture {
                 "tcp://127.0.0.1:7100",
                 Map.of(),
                 1,
-                List.of(
-                        new ZLinkObjectCapability(
-                                kind, "room", ZLinkObjectMaintenancePolicyKind.DISABLED, false, 1),
-                        new ZLinkObjectCapability(
-                                ZLinkPlacementObjectKind.ACTOR,
-                                "player",
-                                ZLinkObjectMaintenancePolicyKind.DISABLED,
-                                false,
-                                0)),
+                capabilities,
                 ZLinkMeshNodeObjectRole.SERVER,
                 Optional.of(rid + "-entry-00000000-0000-4000-8000-000000000001"),
                 100,
