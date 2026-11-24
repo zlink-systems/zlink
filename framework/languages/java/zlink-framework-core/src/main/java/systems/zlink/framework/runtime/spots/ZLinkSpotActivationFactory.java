@@ -339,7 +339,7 @@ final class ZLinkSpotActivationFactory {
         }
         EntrySpotActivation activation =
                 new EntrySpotActivation(host, handlerInvoker, entrySpot, backendSpot, context);
-        return context.enqueueDispatch(
+        return context.enqueueLifecycle(
                         () ->
                                 host.runWithOutbound(
                                         context.dispatchOutbound(),

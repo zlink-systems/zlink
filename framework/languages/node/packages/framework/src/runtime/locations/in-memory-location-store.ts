@@ -386,7 +386,9 @@ export class ZLinkInMemoryLocationStore
     }
     if (
       current.ownerId !== descriptor.ownerId ||
-      current.leaseGeneration !== descriptor.leaseGeneration ||
+      (current.leaseGeneration !== descriptor.leaseGeneration &&
+        (intent !== ZLinkLocationWriteIntent.Renew ||
+          current.leaseGeneration > descriptor.leaseGeneration)) ||
       current.lifecycleGeneration !== descriptor.lifecycleGeneration ||
       descriptor.descriptorRevision <= current.descriptorRevision ||
       meshNodeImmutableFingerprint(current) !== meshNodeImmutableFingerprint(descriptor)

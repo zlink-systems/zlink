@@ -325,9 +325,6 @@ export class ZLinkFrameworkRuntimeHost
   private spotManager?: DefaultZLinkSpotManager;
   private userSpotCoordinator?: ZLinkUserSpotCreationCoordinator;
   private ownerLeaseRecoveryRuntime?: ZLinkLocationRuntime;
-  private ownerLeaseRecoveryHandler?: Parameters<
-    ZLinkLocationRuntime['addOwnerLeaseRenewedHandler']
-  >[0];
   private registerUserSpotHandlers?: (runtime: ZLinkSpotNodeRuntimeManager) => void;
   private readonly destroyedActorRefs = new Map<string, ActorRef>();
   private readonly runtimeEventPublisher: ZLinkRuntimeEventPublisher;
@@ -1847,11 +1844,11 @@ export class ZLinkFrameworkRuntimeHost
     channelRuntime: ZLinkChannelRuntimeManager
   ): void {
     let recoveryOperation: Promise<void> | undefined;
-    const handler: Parameters<ZLinkLocationRuntime['addOwnerLeaseRenewedHandler']>[0] = (
+    const handler: Parameters<ZLinkLocationRuntime['setOwnerLeaseRecoveryPublication']>[0] = (
       _renewal,
       wasOwnerLeaseUsable
     ) => {
-      if (!this.ownerAdmissionOpen()) return;
+      if (runtime.ownerLeaseUsable === false) return;
       if (
         wasOwnerLeaseUsable &&
         !runtime.ownerLeaseRecoveryRequired &&
@@ -1881,8 +1878,7 @@ export class ZLinkFrameworkRuntimeHost
         });
     };
     this.ownerLeaseRecoveryRuntime = runtime;
-    this.ownerLeaseRecoveryHandler = handler;
-    runtime.addOwnerLeaseRenewedHandler(handler);
+    runtime.setOwnerLeaseRecoveryPublication(handler);
   }
 
   async resumeOwnerLeaseOwnedWork(
@@ -1890,10 +1886,13 @@ export class ZLinkFrameworkRuntimeHost
     spotNodeRuntime: ZLinkSpotNodeRuntimeManager,
     channelRuntime: ZLinkChannelRuntimeManager
   ): Promise<void> {
-    if (!this.ownerAdmissionOpen()) return;
+    if (runtime.ownerLeaseUsable === false) return;
+    const owner = runtime.currentOwnerToken;
+    if (owner === undefined) return;
     await this.publishOrStayPreparing(runtime, async (signal) => {
       await spotNodeRuntime.publishMeshNodeState(this.runtimeState, signal);
-      if (runtime.ownerLeaseUsable === false) return;
+      if (!runtime.ownerLeaseUsable || runtime.currentOwnerToken !== owner) return;
+      runtime.confirmOwnerPublication(owner);
       await spotNodeRuntime.startLocationAutoConnect(signal);
       await channelRuntime.startLocationAutoConnect(signal);
       await channelRuntime.reclaimLocationOwnerRows(signal);
@@ -2054,19 +2053,13 @@ export class ZLinkFrameworkRuntimeHost
   }
 
   removeOwnerLeaseRecoveryPublication(): void {
-    if (
-      this.ownerLeaseRecoveryRuntime !== undefined &&
-      this.ownerLeaseRecoveryHandler !== undefined
-    ) {
-      this.ownerLeaseRecoveryRuntime.removeOwnerLeaseRenewedHandler(this.ownerLeaseRecoveryHandler);
-    }
+    this.ownerLeaseRecoveryRuntime?.setOwnerLeaseRecoveryPublication();
     this.ownerLeaseRecoveryRuntime = undefined;
-    this.ownerLeaseRecoveryHandler = undefined;
   }
 
   private ownerAdmissionOpen(): boolean {
     const runtime = this.locationOwner.currentRuntime;
-    if (runtime !== undefined) return runtime.ownerLeaseUsable;
+    if (runtime !== undefined) return runtime.ownerAdmissionOpen;
     return this.locationOwner.currentStores?.locationStore === undefined;
   }
 

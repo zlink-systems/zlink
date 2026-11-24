@@ -4114,7 +4114,9 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     }
 
     public CompletionStage<Void> claimEntrySpotLocations() {
-        return spotLocations.claimEntrySpotsAsync();
+        return spotLifecycle
+                .registerEntryExecutions(userSpotLocationRuntime)
+                .thenCompose(ignored -> spotLocations.claimEntrySpotsAsync());
     }
 
     public CompletionStage<Optional<LocalActorReply>> dispatchLocalSessionActor(
@@ -5792,9 +5794,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         return dispatch.enqueue(
                                 timerName,
                                 () -> {
-                                    if (spotLifecycle.spotActivationFor(spotId) == null
-                                            && !instanceSpotActivations.containsKey(spotId))
-                                        ensureOwnerAdmissionOpen();
                                     //  Spec 27 §4: a timer callback starts a new flow at every
                                     //  diagnostics level except Off.
                                     if (!flowCaptureEnabled()) {

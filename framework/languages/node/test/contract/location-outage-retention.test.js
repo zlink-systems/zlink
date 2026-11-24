@@ -2,6 +2,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const internal = require('../../packages/framework/dist/internal');
+const { ZLinkRuntimeAdmissionGate } = require('../../packages/framework/dist/runtime/admission');
 
 function executionPolicy(runtime, owner) {
   return {
@@ -118,6 +119,85 @@ async function scenario(t, provider, retention = false) {
       };
     }
   };
+}
+
+for (const queued of [false, true]) {
+  test(`Entry Spot timer waits for owner admission to reopen (queued=${queued})`, async (t) => {
+    let activation;
+    t.after(() => activation?.dispose());
+    const s = await scenario(t, false, true);
+    const admission = new ZLinkRuntimeAdmissionGate(() => s.runtime.ownerLeaseUsable);
+    admission.setExecutionRuntime(() => s.runtime);
+    t.mock.method(performance, 'now', s.clock.now);
+    t.mock.method(Date, 'now', s.clock.utcNow);
+    t.mock.method(global, 'setTimeout', s.clock.setTimeout);
+    t.mock.method(global, 'clearTimeout', s.clock.clearTimeout);
+    class Entry {}
+    activation = new internal.ZLinkEntrySpotActivation({
+      admission,
+      entrySpotType: Entry,
+      nativeSpot: { routingId: 'entry', setDispatchHandler() {}, async dispose() {} },
+      nodeRid: 'node',
+      spotNodeName: 'mesh',
+      detachedTaskRunner: { runDetached(_name, task) { void task(); } }
+    });
+    await activation.create();
+    await activation.configure();
+    await activation.initialize();
+
+    const ticks = [];
+    class Tick {
+      handle(_spot, tick) {
+        ticks.push(tick);
+      }
+    }
+    await activation.context.addTimer('entry-lease', 100, Tick);
+    const flush = () => new Promise((resolve) => setImmediate(resolve));
+    s.advance(200);
+    await flush();
+    assert.equal(ticks.length, 1);
+
+    if (queued) {
+      let enter;
+      let release;
+      const entered = new Promise((resolve) => {
+        enter = resolve;
+      });
+      const held = activation.serialExecutor.execute(
+        () =>
+          new Promise((resolve) => {
+            release = resolve;
+            enter();
+          })
+      );
+      try {
+        await entered;
+        const execute = activation.serialExecutor.execute.bind(activation.serialExecutor);
+        const enqueue = t.mock.method(activation.serialExecutor, 'execute', execute);
+        s.advance(300);
+        await flush();
+        assert.equal(enqueue.mock.callCount(), 1);
+        s.fail();
+        assert.equal(await s.runtime.renewOwnerLeaseOnce(), false);
+        s.setNow(1000);
+      } finally {
+        release();
+      }
+      await held;
+    } else {
+      s.fail();
+      assert.equal(await s.runtime.renewOwnerLeaseOnce(), false);
+      s.advance(1000);
+    }
+    assert.equal(s.runtime.ownerLeaseUsable, false);
+    await flush();
+    assert.equal(ticks.length, 1, 'closed owner admission must hold the due tick');
+
+    s.lease.renewOwnerLease = (...args) => s.store.renewOwnerLease(...args);
+    assert.equal(await s.runtime.renewOwnerLeaseOnce(), true);
+    await flush();
+    assert.equal(ticks.length, 2, 'reopening delivers the pending tick once');
+  });
 }
 
 for (const provider of [false, true]) {

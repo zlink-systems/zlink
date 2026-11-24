@@ -506,23 +506,36 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
             dispatch.enqueue(name, () -> dispatchClaimed(selected, tick))
                     .whenComplete(
                             (ignored, error) -> {
-                                if (error != null) {
-                                    stateLane
-                                            .runAsync(
-                                                    () ->
-                                                            activeDispatch == null
-                                                                    || activeDispatch.tick()
-                                                                            != selected)
-                                            .whenComplete(
-                                                    (notStarted, ownerFailure) -> {
-                                                        if (ownerFailure != null) {
-                                                            reportCompletionFailure(ownerFailure);
-                                                        } else if (notStarted) {
-                                                            completeDispatch(
-                                                                    selected, tick, error, null);
+                                if (error == null) return;
+                                stateLane
+                                        .runAsync(
+                                                () -> {
+                                                    if (disposed
+                                                            || phase != Phase.RUNNING
+                                                            || pendingTick != selected
+                                                            || (activeDispatch != null
+                                                                    && activeDispatch.tick()
+                                                                            == selected))
+                                                        return false;
+                                                    scheduled = null;
+                                                    return true;
+                                                })
+                                        .whenComplete(
+                                                (unstarted, failure) -> {
+                                                    if (failure != null) {
+                                                        reportCompletionFailure(failure);
+                                                    } else if (unstarted) {
+                                                        if (systems.zlink.framework.runtime
+                                                                .locations.ZLinkLocationRuntime
+                                                                .isExecutionPaused(error)) {
+                                                            // Recovery may have notified us before
+                                                            // this attempt was cleared.
+                                                            if (!dispatch.paused()) resume();
+                                                        } else {
+                                                            close();
                                                         }
-                                                    });
-                                }
+                                                    }
+                                                });
                             });
         }
 
@@ -888,6 +901,28 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
     interface Dispatch {
         default boolean paused() {
             return false;
+        }
+
+        static Dispatch withExecution(
+                Supplier<
+                                ? extends
+                                        systems.zlink.framework.runtime.internal.execution
+                                                .ZLinkExecutionAvailability>
+                        execution,
+                Dispatch dispatch) {
+            return new Dispatch() {
+                @Override
+                public boolean paused() {
+                    var current = execution.get();
+                    return current != null && current.paused();
+                }
+
+                @Override
+                public CompletionStage<Void> enqueue(
+                        String timerName, Supplier<CompletionStage<Void>> operation) {
+                    return dispatch.enqueue(timerName, operation);
+                }
+            };
         }
 
         CompletionStage<Void> enqueue(String timerName, Supplier<CompletionStage<Void>> operation);

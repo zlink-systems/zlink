@@ -5206,7 +5206,12 @@ function sameFanoutDescriptor(
 }
 
 function canRenewMesh(current: ZLinkMeshNodeDescriptor, next: ZLinkMeshNodeDescriptor): boolean {
-  return sameOwnerGeneration(current, next) && next.descriptorRevision > current.descriptorRevision;
+  return (
+    current.ownerId === next.ownerId &&
+    current.lifecycleGeneration === next.lifecycleGeneration &&
+    current.leaseGeneration <= next.leaseGeneration &&
+    next.descriptorRevision > current.descriptorRevision
+  );
 }
 
 function canRenewClientServer(

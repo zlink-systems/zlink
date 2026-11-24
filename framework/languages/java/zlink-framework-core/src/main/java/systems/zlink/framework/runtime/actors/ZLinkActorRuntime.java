@@ -254,17 +254,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             java.util.logging.Logger.getLogger(ZLinkActorRuntime.class.getName());
     final ZLinkActorDispatchSerials dispatches;
     private volatile Function<String, CompletionStage<ZLinkActorDispatchTarget.ActivationSnapshot>>
-            actorDispatchTargetResolver =
-                    actorId ->
-                            actorRegistry
-                                    .actorAsync(actorId)
-                                    .thenApply(
-                                            actor ->
-                                                    new ZLinkActorDispatchTarget.ActivationSnapshot(
-                                                            null,
-                                                            actor == null
-                                                                    ? null
-                                                                    : actor.context()));
+            actorDispatchTargetResolver = actorRegistry::standaloneDispatchTarget;
     final ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
     private final Map<String, CompletableFuture<Void>> actorCreationTails = new HashMap<>();
     private Consumer<String> actorTimerDisposer = ignored -> {};
@@ -870,19 +860,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             Function<String, CompletionStage<ZLinkActorDispatchTarget.ActivationSnapshot>>
                     resolver) {
         actorDispatchTargetResolver =
-                resolver == null
-                        ? actorId ->
-                                actorRegistry
-                                        .actorAsync(actorId)
-                                        .thenApply(
-                                                actor ->
-                                                        new ZLinkActorDispatchTarget
-                                                                .ActivationSnapshot(
-                                                                null,
-                                                                actor == null
-                                                                        ? null
-                                                                        : actor.context()))
-                        : resolver;
+                resolver == null ? actorRegistry::standaloneDispatchTarget : resolver;
     }
 
     public void setCountChanged(Runnable callback) {
@@ -4965,6 +4943,16 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                     () -> {
                         ActorEntry entry = byId.get(actorId);
                         return entry == null ? null : entry.actor();
+                    });
+        }
+
+        CompletionStage<ZLinkActorDispatchTarget.ActivationSnapshot> standaloneDispatchTarget(
+                String actorId) {
+            return stateLane.runNowOrQueue(
+                    () -> {
+                        ActorEntry entry = byId.get(actorId);
+                        return new ZLinkActorDispatchTarget.ActivationSnapshot(
+                                null, entry == null ? null : entry.context());
                     });
         }
 

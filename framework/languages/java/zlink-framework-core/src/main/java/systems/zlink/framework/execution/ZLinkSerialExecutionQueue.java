@@ -562,6 +562,17 @@ public final class ZLinkSerialExecutionQueue {
      * Closing seal rejects new work, a relocated owner reports the post-cut arrival, and otherwise
      * the queue accepts. A relocation seal is not a rejection; the caller holds the work.
      */
+    private CompletionStage<Void> applicationAdmissionFailureLocked() {
+        var rejection = admissionFailureLocked();
+        if (rejection != null) return rejection;
+        try {
+            requireMailboxExecution(true);
+            return null;
+        } catch (systems.zlink.framework.errors.ZLinkFrameworkException failure) {
+            return CompletableFuture.failedFuture(failure);
+        }
+    }
+
     private CompletionStage<Void> admissionFailureLocked() {
         return admissionFailureLocked(null, ignored -> false, ZLinkFrameworkErrorKind.REJECTED);
     }
@@ -1120,7 +1131,7 @@ public final class ZLinkSerialExecutionQueue {
         CompletionStage<Void> rejection = null;
         synchronized (this) {
             validatePayloadBytes(payloadBytes);
-            rejection = admissionFailureLocked();
+            rejection = applicationAdmissionFailureLocked();
             result =
                     rejection == null
                             ? enqueueAccepted(
@@ -1558,7 +1569,7 @@ public final class ZLinkSerialExecutionQueue {
         synchronized (this) {
             Objects.requireNonNull(record, "record");
             Objects.requireNonNull(relocationRelease, "relocationRelease");
-            rejection = admissionFailureLocked();
+            rejection = applicationAdmissionFailureLocked();
             result =
                     rejection == null
                             ? enqueueAccepted(
@@ -1625,7 +1636,7 @@ public final class ZLinkSerialExecutionQueue {
             Objects.requireNonNull(operation, "operation");
             Objects.requireNonNull(relocationRelease, "relocationRelease");
             validatePayloadBytes(recordSizeHint);
-            immediate = admissionFailureLocked();
+            immediate = applicationAdmissionFailureLocked();
             if (immediate == null) {
                 if (nextSequence == Long.MAX_VALUE) {
                     throw new IllegalStateException("queue sequence exhausted");
