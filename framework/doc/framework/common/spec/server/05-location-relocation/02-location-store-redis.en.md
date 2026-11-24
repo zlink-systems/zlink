@@ -195,6 +195,13 @@ Spot total, per Spot kind and type) and state (`active`, `pending`). A reservati
 **Only the reservation checks the limit.** A commit or a relocation move transfers space already
 reserved, so it does not fail if the limit was lowered in between.
 
+The logical key of a capacity counter is `zlink:v12:capacity <mesh> <rid> <dimension> <state>`.
+`<mesh>` is the MeshName's UTF-8 bytes, `<rid>` is the lowercase `routingIdHex` used by the descriptor key,
+and `<state>` is `active` or `pending`. `<dimension>` is `actors`, `spots`, or
+`spot-type <objectKind> <stableType>`, where `<objectKind>` is the allocation's `userSpot` or
+`instanceSpot` ([Location runtime §3.3](01-location-runtime.en.md)) and `<stableType>` is its UTF-8 bytes.
+All four languages and the [§8.1](#81-converting-from-v11-to-v12) conversion use this one key.
+
 The following bounds apply to a batch.
 
 - The total unique keys appearing across conditions and mutations is at most

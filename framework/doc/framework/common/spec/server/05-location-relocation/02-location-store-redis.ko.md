@@ -164,7 +164,13 @@ revision compare로 commit하고, 그 사이 다른 caller가 같은 key를 바�
 Framework는 MeshNode 수용 공간을 Mesh 이름·RID·차원(Actor 총수, Spot 총수, Spot 종류·type별 수)·상태
 (`active`, `pending`)마다 counter key 하나로 둔다. 예약은 차원마다 `SumAtMost([active, pending], n,
 limit)`와 `Add(pending, n)`을, commit은 `Add(pending, -n)`과 `Add(active, n)`을, 반납은 `Add(..., -n)`을
-그 authority 변경과 같은 batch에 넣는다. **상한은 예약에서만 검사한다** — commit과 relocation 이동은
+그 authority 변경과 같은 batch에 넣는다.
+
+수용 공간 counter의 logical key는 `zlink:v12:capacity <mesh> <rid> <dimension> <state>`이다. `<mesh>`는
+MeshName의 UTF-8 bytes, `<rid>`는 descriptor key와 같은 lowercase `routingIdHex`, `<state>`는 `active` 또는
+`pending`이다. `<dimension>`은 `actors`, `spots`, 또는 `spot-type <objectKind> <stableType>`이며
+`<objectKind>`는 allocation의 `userSpot`·`instanceSpot`([Location runtime §3.3](01-location-runtime.ko.md)), `<stableType>`은 UTF-8
+bytes다. 네 언어와 [§8.1](#81-v11에서-v12로-전환) 전환이 이 key 하나를 쓴다. **상한은 예약에서만 검사한다** — commit과 relocation 이동은
 이미 예약한 공간을 옮기므로 그 사이 limit이 낮아져도 실패하지 않는다.
 
 Batch에는 다음 bound를 적용한다.
