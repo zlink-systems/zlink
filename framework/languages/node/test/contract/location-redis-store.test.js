@@ -237,6 +237,55 @@ test('redis Store serializes concurrent first-use connection', async (t) => {
   }
 });
 
+test('redis Location Store reuses a Lua script and recovers after SCRIPT FLUSH', async (t) => {
+  const fixture = await redisFixture(t);
+  if (fixture === undefined) return;
+  const prefix = testPrefix('script-cache');
+  const store = new redisLocations.ZLinkRedisLocationStore({ url: fixture.url, keyPrefix: prefix });
+  const subject = key('script-cache/subject');
+  const put = bytes => store.write({
+    conditions: [], mutations: [{ kind: 'put', key: subject, bytes }]
+  });
+  const scriptCalls = async () => {
+    const stats = await fixture.client.info('commandstats');
+    return {
+      eval: Number(/^cmdstat_eval:calls=(\d+)/m.exec(stats)?.[1] ?? 0),
+      evalsha: Number(/^cmdstat_evalsha:calls=(\d+)/m.exec(stats)?.[1] ?? 0)
+    };
+  };
+  const assertCalls = async (phase, before, expected) => {
+    const after = await scriptCalls();
+    const calls = { eval: after.eval - before.eval, evalsha: after.evalsha - before.evalsha };
+    t.diagnostic(`${phase}: EVAL=${calls.eval}, EVALSHA=${calls.evalsha}`);
+    assert.deepEqual(calls, expected, phase);
+  };
+
+  try {
+    assert.equal((await put(Buffer.from('initial'))).kind, 'applied');
+    const warm = await scriptCalls();
+    for (let index = 0; index < 3; index += 1) {
+      assert.equal((await put(Buffer.from(`warm-${index}`))).kind, 'applied');
+    }
+    await assertCalls('warm cache', warm, { eval: 0, evalsha: 3 });
+
+    await fixture.client.scriptFlush('SYNC');
+    const cold = await scriptCalls();
+    const payload = Buffer.from([0, 255, 17]);
+    assert.equal((await put(payload)).kind, 'applied');
+    await assertCalls('after SCRIPT FLUSH', cold, { eval: 1, evalsha: 1 });
+    assert.equal(await fixture.client.get(`${prefix}:{zlink-location-v3}:opaque:sequence`), '5');
+    assert.deepEqual(Buffer.from((await store.read(subject)).value.bytes), payload);
+
+    const rewarmed = await scriptCalls();
+    assert.equal((await put(payload)).kind, 'applied');
+    await assertCalls('repopulated cache', rewarmed, { eval: 0, evalsha: 1 });
+  } finally {
+    await store.dispose();
+    await cleanup(fixture.client, prefix);
+    await fixture.client.quit();
+  }
+});
+
 test('redis prefix scan excludes unrelated index records from its page work', async t => {
   const fixture = await redisFixture(t);
   if (!fixture) return;
