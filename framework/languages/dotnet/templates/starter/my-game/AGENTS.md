@@ -2,6 +2,16 @@
 
 ## Rules for AI
 
+### Reference project
+
+This template is a reference. To build a new game, create a new project and design its nodes, Spots, Actors and messages for that game, using this template's structure and rules as reference; do not rename or edit this template in place into the game.
+
+### Server and e2e commands
+
+Run `./run-server.sh` or `.\run-server.cmd` to start Redis and the nodes in the foreground. Run `./run-e2e.sh` or `.\run-e2e.cmd` in another terminal to attach automatically. With the server stopped, run-e2e uses isolated Docker processes. Read per-node stdout, stderr, message flow, and failure detail under `.logs/run-<id>/`.
+
+### Node and game design
+
 Every server process in this project is a stateful ZLink node. Before writing code, decide which kind you are editing.
 
 - A play node hosts Spots. A session-bound Actor owns the player's state, and a Spot owns shared state. Load it once on connect; do not read the database while handling a request.
@@ -39,7 +49,7 @@ This .NET 8 starter provides one Session node, Redis hosting, diagnostics, stdin
 
 ## Development from samples
 
-Download and run a structure from [ZLink Start](https://zlink.systems/start) before introducing its features here. The sample collection contains nine structures in five server languages. Keep the sample separate and transfer only the registrations, application state, and tests required by your feature.
+Download and run a structure from [ZLink Start](https://zlink.systems/start) before designing corresponding features in your game project. The sample collection contains nine structures in five server languages. Keep the sample separate and transfer only the registrations, application state, and tests required by your feature.
 
 Choose the sample according to the composition your game needs.
 
@@ -91,7 +101,7 @@ Each run owns a RunOutcome instance. Record process and connector cleanup failur
 
 ## Debugging settings
 
-`GameHosting.Configure` enables dispatch diagnostics at `Normal` and writes Framework message flow to node stderr. Node stdout and stderr are stored separately as `session.out.log` and `session.err.log` under `.logs/run-<id>/`. Do not add a second flow listener.
+`GameHosting.Configure` enables dispatch diagnostics at `Normal` and writes Framework message flow to node stderr and the runner records it in the node flow log. Node stdout and stderr are stored separately as `session.out.log` and `session.err.log` under `.logs/run-<id>/`. Do not add a second flow listener.
 
 Read the first exception and the preceding flow/correlation records. A connection-only run may contain no application message-flow events because it dispatches no game packets. Startup failures before dispatch must retain their exception and stack.
 

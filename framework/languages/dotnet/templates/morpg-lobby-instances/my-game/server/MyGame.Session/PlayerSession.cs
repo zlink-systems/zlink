@@ -28,9 +28,19 @@ public sealed class PlayerSession(IZLinkSessionContext context, IZLinkActorManag
         CancellationToken cancellationToken
     )
     {
-        if (dispatch.PacketName is not (nameof(JoinLobbyRequest) or nameof(CreatePartyRequest)
-            or nameof(JoinPartyRequest) or nameof(ReadyRequest) or nameof(EnterDungeonRequest)
-            or nameof(AdvanceRequest) or nameof(ViewRequest) or nameof(SessionInfoRequest)))
+        if (
+            dispatch.PacketName
+            is not (
+                nameof(JoinLobbyRequest)
+                or nameof(CreatePartyRequest)
+                or nameof(JoinPartyRequest)
+                or nameof(ReadyRequest)
+                or nameof(EnterDungeonRequest)
+                or nameof(AdvanceRequest)
+                or nameof(ViewRequest)
+                or nameof(SessionInfoRequest)
+            )
+        )
         {
             await Context.Client.Send(new ActionRejected(Rejection.PacketNotAllowed)).Async();
             return;

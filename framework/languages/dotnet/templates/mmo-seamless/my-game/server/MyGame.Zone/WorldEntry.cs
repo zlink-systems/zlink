@@ -9,10 +9,17 @@ public sealed class WorldEntry(IZLinkEntrySpotContext context) : IZLinkEntrySpot
 {
     public void Configure()
     {
-        Context.Handlers.AddActorPacket<WorldEntryPlayerAppearedNotification, PlayerActor>(nameof(PlayerAppeared));
-        Context.Handlers.AddActorPacket<WorldEntryPlayerMovedNotification, PlayerActor>(nameof(PlayerMoved));
-        Context.Handlers.AddActorPacket<WorldEntryPlayerLeftNotification, PlayerActor>(nameof(PlayerLeft));
+        Context.Handlers.AddActorPacket<WorldEntryPlayerAppearedNotification, PlayerActor>(
+            nameof(PlayerAppeared)
+        );
+        Context.Handlers.AddActorPacket<WorldEntryPlayerMovedNotification, PlayerActor>(
+            nameof(PlayerMoved)
+        );
+        Context.Handlers.AddActorPacket<WorldEntryPlayerLeftNotification, PlayerActor>(
+            nameof(PlayerLeft)
+        );
     }
+
     public IZLinkEntrySpotContext Context { get; } = context;
 
     public ValueTask OnJoinedActorAsync(PlayerActor actor, CancellationToken cancellationToken) =>
@@ -47,22 +54,40 @@ public sealed class EnterWorldHandler
 }
 
 [ZLinkSpotActorSendHandler(nameof(PlayerAppeared))]
-public sealed class WorldEntryPlayerAppearedNotification : IZLinkEntrySpotActorSendHandler<WorldEntry, PlayerActor, PlayerAppeared>
+public sealed class WorldEntryPlayerAppearedNotification
+    : IZLinkEntrySpotActorSendHandler<WorldEntry, PlayerActor, PlayerAppeared>
 {
-    public ValueTask HandleAsync(WorldEntry spot, PlayerActor actor, IZLinkMessageContext context,
-        PlayerAppeared message, CancellationToken ct) => actor.DeliverAsync(message);
+    public ValueTask HandleAsync(
+        WorldEntry spot,
+        PlayerActor actor,
+        IZLinkMessageContext context,
+        PlayerAppeared message,
+        CancellationToken ct
+    ) => actor.DeliverAsync(message);
 }
 
 [ZLinkSpotActorSendHandler(nameof(PlayerMoved))]
-public sealed class WorldEntryPlayerMovedNotification : IZLinkEntrySpotActorSendHandler<WorldEntry, PlayerActor, PlayerMoved>
+public sealed class WorldEntryPlayerMovedNotification
+    : IZLinkEntrySpotActorSendHandler<WorldEntry, PlayerActor, PlayerMoved>
 {
-    public ValueTask HandleAsync(WorldEntry spot, PlayerActor actor, IZLinkMessageContext context,
-        PlayerMoved message, CancellationToken ct) => actor.DeliverAsync(message);
+    public ValueTask HandleAsync(
+        WorldEntry spot,
+        PlayerActor actor,
+        IZLinkMessageContext context,
+        PlayerMoved message,
+        CancellationToken ct
+    ) => actor.DeliverAsync(message);
 }
 
 [ZLinkSpotActorSendHandler(nameof(PlayerLeft))]
-public sealed class WorldEntryPlayerLeftNotification : IZLinkEntrySpotActorSendHandler<WorldEntry, PlayerActor, PlayerLeft>
+public sealed class WorldEntryPlayerLeftNotification
+    : IZLinkEntrySpotActorSendHandler<WorldEntry, PlayerActor, PlayerLeft>
 {
-    public ValueTask HandleAsync(WorldEntry spot, PlayerActor actor, IZLinkMessageContext context,
-        PlayerLeft message, CancellationToken ct) => actor.DeliverAsync(message);
+    public ValueTask HandleAsync(
+        WorldEntry spot,
+        PlayerActor actor,
+        IZLinkMessageContext context,
+        PlayerLeft message,
+        CancellationToken ct
+    ) => actor.DeliverAsync(message);
 }

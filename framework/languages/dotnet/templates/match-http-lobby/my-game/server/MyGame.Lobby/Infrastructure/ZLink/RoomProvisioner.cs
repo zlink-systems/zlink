@@ -8,8 +8,7 @@ public sealed class RoomProvisioner(
     IZLinkSpotManager spots,
     IZLinkSpotClient client,
     NodeSettings settings
-)
-    : IRoomProvisioner
+) : IRoomProvisioner
 {
     public async Task<MatchResponse> PrepareAsync(
         string roomId,

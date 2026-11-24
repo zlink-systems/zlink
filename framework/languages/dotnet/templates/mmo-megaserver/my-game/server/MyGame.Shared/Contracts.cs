@@ -18,9 +18,8 @@ public static class GameNames
     public const double MaxSpeed = MaxStep * 5.0;
     public const long MaxSafeInteger = 9_007_199_254_740_991;
 
-    public static IReadOnlyList<string> AllowedRegions { get; } = Array.AsReadOnly(
-        new[] { "forest", "desert" }
-    );
+    public static IReadOnlyList<string> AllowedRegions { get; } =
+        Array.AsReadOnly(new[] { "forest", "desert" });
 
     public static string RegionId(string region, int index) => $"{region}-{index}";
 

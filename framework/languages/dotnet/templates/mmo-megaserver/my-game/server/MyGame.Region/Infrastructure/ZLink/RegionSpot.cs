@@ -59,12 +59,7 @@ public sealed class RegionSpot(
     public ValueTask OnDisconnectActorAsync(PlayerActor actor, CancellationToken ct) =>
         ValueTask.CompletedTask;
 
-    private RegionView View() =>
-        new(
-            Context.SpotId,
-            settings.Id,
-            positions.View()
-        );
+    private RegionView View() => new(Context.SpotId, settings.Id, positions.View());
 
     public ValueTask ShowAsync(PlayerActor actor) =>
         actor.Context.BoundSession.Send(View()).Async();

@@ -15,7 +15,9 @@ public static class GameNames
     public const int FinalStage = 3;
 
     public static string NewPartyId() => $"party-{Guid.NewGuid():N}";
+
     public static string NewRunId() => $"run-{Guid.NewGuid():N}";
+
     public static string DungeonId(string runId) => $"dungeon-{runId}";
 }
 
@@ -50,9 +52,22 @@ public sealed record AdvanceRequest;
 public sealed record ViewRequest;
 
 [JsonConverter(typeof(JsonStringEnumConverter<RunPhase>))]
-public enum RunPhase { Forming, Preparing, Entering, Active, Completed }
+public enum RunPhase
+{
+    Forming,
+    Preparing,
+    Entering,
+    Active,
+    Completed,
+}
 
-public sealed record PartyView(string PartyId, string[] Members, bool[] Ready, RunPhase Phase, string? RunId);
+public sealed record PartyView(
+    string PartyId,
+    string[] Members,
+    bool[] Ready,
+    RunPhase Phase,
+    string? RunId
+);
 
 public sealed record DungeonView(
     string DungeonId,
@@ -69,9 +84,13 @@ public sealed record PrepareDungeon(string RunId, string PartyId, string[] Membe
 public sealed record DungeonPrepared(string DungeonId, string RunId);
 
 public sealed record JoinDungeon(string DungeonId, string RunId);
+
 public sealed record DungeonMemberEntered(string RunId, string PlayerId);
+
 public sealed record RunStarted(string RunId);
+
 public sealed record RunCompleted(string RunId);
+
 public sealed record EnterPartyRun(string PlayerId);
 
 public sealed record ActionRejected(string Reason, int RetryAfterMs = 0);
