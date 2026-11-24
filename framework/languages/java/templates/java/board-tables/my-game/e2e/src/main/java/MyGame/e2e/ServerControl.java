@@ -20,9 +20,13 @@ interface ServerControl {
 
     String CONTROL_HEADER = "X-MyGame-Control";
 
-    record State(URI controlEndpoint, String sessionEndpoint, UUID controlToken) {}
+    record State(URI controlEndpoint, ServerHost.Endpoints endpoints, UUID controlToken) {}
 
-    record Connection(String endpoint, ServerControl control) {}
+    record Connection(Path root, ServerHost.Endpoints endpoints, ServerControl control) {
+        String endpoint() {
+            return endpoints.session();
+        }
+    }
 
     static Path statePath(Path root) {
         return root.resolve(".logs/server.json");
@@ -40,7 +44,8 @@ interface ServerControl {
                 "Invalid server control endpoint");
         var client = HttpClient.newBuilder().connectTimeout(Control.HOST_DEADLINE).build();
         return new Connection(
-                state.sessionEndpoint(),
+                root,
+                state.endpoints(),
                 new ServerControl() {
                     private void call(String operation, String id, Duration timeout)
                             throws Exception {
@@ -72,7 +77,8 @@ interface ServerControl {
                 });
     }
 
-    static HttpServer publish(Path root, ServerHost host, String sessionEndpoint) throws Exception {
+    static HttpServer publish(Path root, ServerHost host, ServerHost.Endpoints endpoints)
+            throws Exception {
         var server = HttpServer.create(new InetSocketAddress(ServerHost.LOOPBACK, 0), 0);
         UUID token = UUID.randomUUID();
         server.createContext(
@@ -113,7 +119,7 @@ interface ServerControl {
                                     + ":"
                                     + server.getAddress().getPort()
                                     + "/");
-            Json.MAPPER.writeValue(temporary.toFile(), new State(uri, sessionEndpoint, token));
+            Json.MAPPER.writeValue(temporary.toFile(), new State(uri, endpoints, token));
             Files.move(temporary, state, StandardCopyOption.ATOMIC_MOVE);
             return server;
         } catch (Exception failure) {

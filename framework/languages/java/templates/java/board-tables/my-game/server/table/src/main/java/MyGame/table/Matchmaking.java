@@ -9,10 +9,16 @@ import java.util.concurrent.*;
 
 @ZLinkHandlerGroup(Names.PLAYER)
 public final class Matchmaking {
+    private final PlayerApi players;
+
+    public Matchmaking(PlayerApi players) {
+        this.players = players;
+    }
+
     @ZLinkSpotActorSend
     public CompletionStage<Void> find(
             Entry spot, Player actor, ZLinkMessageContext context, FindMatch message) {
-        return actor.find();
+        return actor.loadPlayer(players).thenCompose(ignored -> actor.find());
     }
 
     @ZLinkSpotActorSend

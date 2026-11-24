@@ -5,6 +5,7 @@ public enum Scenario {
     RECONNECT("reconnect"),
     MATCH("match"),
     MATCH_CANCEL("match-cancel"),
+    PERSIST("persist"),
     // Drain last so all selected scenarios' rooms count toward the relocation capacity.
     UPDATE("update");
     private final String id;

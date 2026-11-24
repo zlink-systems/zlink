@@ -7,9 +7,11 @@ A Java server template for four-seat card tables. Table User Spots own seats, ch
 flowchart LR
   players[Players] -->|STREAM| session[Session node]
   session -->|relay| tables[Play node ×N]
-  tables -->|match requests| matchmaker[Matchmaker node]
+  tables -->|loadPlayer / commitRound| api[API node · Actor DB]
+  api -->|player records / round results| location
+  tables -->|match requests| matchmaker[Matchmaker node · Pool Spot]
   matchmaker -->|room preparation| tables
-  tables -->|Location / lease| location[Location Store]
+  tables -->|Location / lease| location[Redis]
 ```
 
 ## Prerequisites
@@ -48,9 +50,9 @@ Install JDK 25 and start Docker. Run the server in a dedicated terminal.
 .\run-server.cmd
 ```
 
-The launcher starts Redis, Play nodes A and B, Matchmaker, and Session. When all nodes are ready, the console prints `Server ready: ws://127.0.0.1:<port>`. Keep the terminal open while clients are connected. Press Ctrl+C to stop the nodes and remove this run's Redis Compose project.
+The launcher starts Redis, the API node, Play nodes A and B, Matchmaker, and Session. When all nodes are ready, the console prints `Server ready: ws://127.0.0.1:<port>`. Keep the terminal open while clients are connected. Press Ctrl+C to stop the nodes and remove this run's Redis Compose project.
 
-From another terminal, run `./run-e2e.sh` or `.\run-e2e.cmd`. To invoke the PowerShell scripts directly, use `pwsh -NoProfile -ExecutionPolicy Bypass -File ./run-server.ps1` and `pwsh -NoProfile -ExecutionPolicy Bypass -File ./run-e2e.ps1`. While a server started by `run-server` is running, the e2e run only runs the test clients against it and leaves it running; it runs `table`, `reconnect`, `match` and `match-cancel`. Select scenarios with `--scenario match` or `-Scenario match`. Add `--attach` or `-Attach` to require an existing server. `update` replaces a node, so it runs only when no server is running and the e2e run starts its own.
+From another terminal, run `./run-e2e.sh` or `.\run-e2e.cmd`. To invoke the PowerShell scripts directly, use `pwsh -NoProfile -ExecutionPolicy Bypass -File ./run-server.ps1` and `pwsh -NoProfile -ExecutionPolicy Bypass -File ./run-e2e.ps1`. While a server started by `run-server` is running, the e2e run only runs the test clients against it and leaves it running; it runs `table`, `reconnect`, `match`, `match-cancel` and `persist`. Select scenarios with `--scenario match` or `-Scenario match`. Add `--attach` or `-Attach` to require an existing server. `update` replaces a node, so it runs only when no server is running and the e2e run starts its own.
 
 ## Client connection
 
@@ -137,6 +139,10 @@ Matchmaker runs the SpotWide Pool `pool-board`. `FindMatch` returns `MatchQueued
 
 `server/matchmaker` contains the in-memory queue and the `MatchRule` pairing policy. Change `MatchRule` to change which waiting players are paired. The Pool owns ticket transitions and assignment decisions. The Table checks the prepared members and runs the game.
 
+## API node
+
+Play calls `loadPlayer` once before a Player Actor takes a seat or enters matchmaking, and keeps the balance on the Actor. At settlement, the Table calls `commitRound` for all seats in one ClientServer Channel request. The API node stores the balances in Redis in one transaction, skips duplicate table and hand pairs, and replies before Play sends the settlement results.
+
 ## End-to-end scenarios
 
 Docker runs the Java e2e runner and every node role in containers. Nodes share the runner's network namespace and keep the existing stdin/stdout control protocol. Only the runner mounts the Docker socket. Each invocation removes its own containers, network and image tags; logs remain under `.logs/`.
@@ -149,14 +155,14 @@ Linux or WSL:
 
 ```sh
 ./run-e2e.sh
-./run-e2e.sh --scenario table,reconnect,match,match-cancel,update
+./run-e2e.sh --scenario table,reconnect,match,match-cancel,persist,update
 ```
 
 Windows:
 
 ```powershell
 .\run-e2e.cmd
-.\run-e2e.cmd -Scenario table,reconnect,match,match-cancel,update
+.\run-e2e.cmd -Scenario table,reconnect,match,match-cancel,persist,update
 ```
 
 The runner validates `zlink.structure.json` and uses the same Java server host as the local server when it needs an isolated deployment. Each isolated run uses OS-assigned ports and a unique Redis key prefix. The server host keeps effective settings and each node's stdout, stderr, and Framework message-flow file (`<node>.flow.log`) under `.logs/run-<id>/`. The standalone console shows server and game events. Cleanup failures cause exit code 1.
@@ -167,6 +173,7 @@ The runner validates `zlink.structure.json` and uses the same Java server host a
 | `reconnect` | The Session ID changes while the Actor ID/generation, seat, chips, private cards, and pending turn persist. Settlement clears every hand, and a later private-hand query returns an empty list. |
 | `match` | Two queued clients receive distinct seats in the same room, then complete a hand. |
 | `match-cancel` | A queued client cancels its ticket. Two later clients match and complete a hand. |
+| `persist` | A new Actor in a separate Play and Session pair loads the same player ID’s settled chips through the original API node. |
 | `update` | Table state and client connections persist through drain, settlement on another node, source replacement, and a new hand. Settlement clears every hand, and a later private-hand query returns an empty list. |
 
 Use `./run-e2e.sh --check-structure` or `.\run-e2e.cmd -CheckStructure` to validate the actual structure files without starting Redis or nodes.
@@ -191,12 +198,13 @@ Message Follow is explicitly configured for 30 seconds. The `SAFE_TO_SHUTDOWN` o
 
 ## Deployment sequence
 
-1. Provision Redis and use one shared, deployment-specific key prefix in the node configuration files. Set mesh endpoints reachable by all nodes and a client-reachable Session stream endpoint.
-2. Start `server/table/build/install/table/bin/table` with `server/config/play-a.json` and `server/config/play-b.json`, each as a separate process. Windows launchers have a `.bat` suffix.
-3. Start `server/matchmaker/build/install/matchmaker/bin/matchmaker` with `server/config/matchmaker.json`.
-4. Start `server/session/build/install/session/bin/session` with `server/config/session.json`. The processes publish `READY` with the endpoints actually bound by Framework.
-5. Send `drain` on the selected Table process's stdin. Wait for `RELOCATION_REQUESTED`, `RELOCATED` and `SAFE_TO_SHUTDOWN`, then send `shutdown` and wait for `STOPPED` and process exit.
-6. Start the replacement Table process with the same configuration. Wait for `READY` before submitting new work.
+1. Provision Redis and use one shared, deployment-specific key prefix in the node configuration files. Set mesh endpoints reachable by all game nodes, an API endpoint reachable by Play, and a client-reachable Session stream endpoint.
+2. Start `server/api/build/install/api/bin/api` with `server/config/api.json`. Play discovers its ClientServer endpoint through the shared Location Store.
+3. Start `server/table/build/install/table/bin/table` with `server/config/play-a.json` and `server/config/play-b.json`, each as a separate process. Windows launchers have a `.bat` suffix.
+4. Start `server/matchmaker/build/install/matchmaker/bin/matchmaker` with `server/config/matchmaker.json`.
+5. Start `server/session/build/install/session/bin/session` with `server/config/session.json`. The processes publish `READY` with the endpoints actually bound by Framework.
+6. Send `drain` on the selected Table process's stdin. Wait for `RELOCATION_REQUESTED`, `RELOCATED` and `SAFE_TO_SHUTDOWN`, then send `shutdown` and wait for `STOPPED` and process exit.
+7. Start the replacement Table process with the same configuration. Wait for `READY` before submitting new work.
 
 Production launchers use the configuration files directly. The server host derives its node IDs and configuration paths from the structure and replaces Redis, key-prefix and listener endpoint values only in its run-specific copies. Application transfer contains no Framework routing, membership or lease state.
 

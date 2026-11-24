@@ -16,6 +16,8 @@ import java.util.*;
 import java.util.concurrent.*;
 
 public final class ServerHost implements ServerControl, AutoCloseable {
+    record Endpoints(String session, String redis, String api) {}
+
     static final String LOOPBACK = "127.0.0.1";
     private static final DateTimeFormatter CLOCK =
             DateTimeFormatter.ofPattern("HH:mm:ss.SSS").withZone(ZoneOffset.UTC);
@@ -96,7 +98,7 @@ public final class ServerHost implements ServerControl, AutoCloseable {
 
     private synchronized void publish() throws Exception {
         var server = start();
-        controlServer = ServerControl.publish(root, this, server.endpoint());
+        controlServer = ServerControl.publish(root, this, server.endpoints());
         announce("host", "Server ready: " + server.endpoint() + " (game clients connect here)");
         announce("host", "Logs: " + logs);
     }
@@ -135,20 +137,39 @@ public final class ServerHost implements ServerControl, AutoCloseable {
     }
 
     ServerControl.Connection start() throws Exception {
-        String endpoint = null;
         if (!DOCKER) {
             composeStarted = true;
             compose("up", "-d", "--wait", "redis");
         }
         String redis = (DOCKER ? "redis:6379" : compose("port", "redis", "6379"));
         announce("host", "Redis started — listen " + redis);
+        return startNodes(redis, null);
+    }
+
+    ServerControl.Connection startPersistenceProbe(Endpoints existing) throws Exception {
+        return startNodes(existing.redis(), existing.api());
+    }
+
+    private ServerControl.Connection startNodes(String redis, String existingApi) throws Exception {
+        String endpoint = null;
+        String apiEndpoint = existingApi;
         var structure = Json.MAPPER.readTree(root.resolve("zlink.structure.json").toFile());
         var declarations = new ArrayList<JsonNode>();
         structure.path("nodes").forEach(declarations::add);
-        declarations.sort(Comparator.comparing(n -> n.path("role").asText().equals("session")));
+        declarations.sort(
+                Comparator.comparingInt(
+                        n ->
+                                switch (n.path("role").asText()) {
+                                    case "api" -> 0;
+                                    case "session" -> 2;
+                                    default -> 1;
+                                }));
         for (var declaration : declarations) {
             String role = declaration.path("role").asText();
-            if (!Set.of("session", "table", "matchmaker").contains(role)) continue;
+            if (!Set.of("session", "table", "matchmaker", "api").contains(role)) continue;
+            // The persistence probe starts fresh actors against the existing API node.
+            if (existingApi != null && !Set.of("session", "table").contains(role)) continue;
+            if (existingApi != null && modules.containsValue(role)) continue;
             var declared =
                     Json.MAPPER.readValue(
                             root.resolve(declaration.path("config").asText()).toFile(),
@@ -160,18 +181,28 @@ public final class ServerHost implements ServerControl, AutoCloseable {
                             id,
                             redis,
                             "my-game:" + runId + ":",
-                            "tcp://" + LOOPBACK + ":0",
+                            role.equals("api") ? null : "tcp://" + LOOPBACK + ":0",
                             role.equals("session") ? "ws://" + LOOPBACK + ":0" : null,
-                            tableCapacity);
+                            tableCapacity,
+                            switch (role) {
+                                case "api" -> "tcp://" + LOOPBACK + ":0";
+                                case "table" -> existingApi;
+                                default -> null;
+                            });
             var path = logs.resolve(id + ".json");
             Json.MAPPER.writeValue(path.toFile(), config);
             configs.put(id, path);
             var ready = startNode(id, declaration.path("title").asText());
+            if (role.equals("api")) {
+                apiEndpoint = ready.path("apiEndpoint").asText();
+                Structure.require(!apiEndpoint.isBlank(), "API channel endpoint missing");
+            }
             if (role.equals("session")) endpoint = ready.path("streamEndpoint").asText();
         }
         Structure.require(
                 endpoint != null && !endpoint.isBlank(), "Session STREAM endpoint missing");
-        return new ServerControl.Connection(endpoint, this);
+        return new ServerControl.Connection(
+                root, new Endpoints(endpoint, redis, Objects.requireNonNull(apiEndpoint)), this);
     }
 
     private JsonNode startNode(String id, String title) throws Exception {

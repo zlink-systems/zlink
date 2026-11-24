@@ -12,7 +12,7 @@ public final class Actions {
     @ZLinkSpotActorSend
     public CompletionStage<Void> join(
             Table table, Player actor, ZLinkMessageContext context, JoinTableRequest request) {
-        table.checkJoin(actor.context().actorId(), request);
+        table.checkJoin(actor.context().actorId(), request.playerId(), request.tableId());
         table.log(GameLog.shortId(request.playerId()) + " reconnected");
         return table.current(actor);
     }
@@ -50,6 +50,6 @@ public final class Actions {
     @ZLinkSpotActorSend
     public CompletionStage<Void> forward(
             Table table, Player actor, ZLinkMessageContext context, HandResult message) {
-        return Table.reply(actor, message);
+        return actor.settled(message);
     }
 }

@@ -10,6 +10,8 @@ import java.util.*;
 public final class Structure {
     private Structure() {}
 
+    private record Channel(String name, String owner, String kind, String role) {}
+
     private record Edge(String from, String to, String label, String semantic) {}
 
     static void require(boolean value, String message) {
@@ -93,15 +95,38 @@ public final class Structure {
                 require(node.path("config").isNull(), "External config must be null");
             else {
                 var file = configPath(root, text(node, "config"));
-                if (!role.equals("location-store"))
+                if (!role.equals("location-store")) {
+                    var config = Json.MAPPER.readTree(file.toFile());
                     require(
-                            Json.MAPPER.readTree(file.toFile()).path("id").asText().equals(id),
+                            config.path("id").asText().equals(id),
                             "Configuration Id mismatch: " + file);
+                    if (role.equals("api")) text(config, "apiEndpoint");
+                }
             }
         }
-        var channels = array(s, "channels");
-        unique(channels.stream().map(c -> List.of(text(c, "name"), owner(c, roles))).toList());
-        require(channels.isEmpty(), "Server registers no channels");
+        require("api".equals(roles.get("api")), "Missing API node");
+        require(
+                roles.values().stream().filter("api"::equals).count() == 1,
+                "Expected one API node");
+        var channels =
+                array(s, "channels").stream()
+                        .map(
+                                c ->
+                                        new Channel(
+                                                text(c, "name"),
+                                                owner(c, roles),
+                                                text(c, "kind"),
+                                                text(c, "role")))
+                        .toList();
+        unique(channels.stream().map(c -> List.of(c.name(), c.owner())).toList());
+        var expectedChannels = new HashSet<Channel>();
+        expectedChannels.add(new Channel(Names.API, "api", "client-server", "server"));
+        for (var entry : roles.entrySet()) {
+            if (entry.getValue().equals("table"))
+                expectedChannels.add(
+                        new Channel(Names.API, entry.getKey(), "client-server", "client"));
+        }
+        require(Set.copyOf(channels).equals(expectedChannels), "Invalid API channel declarations");
         var spots = array(s, "spots");
         unique(spots.stream().map(p -> text(p, "id")).toList());
         var logical = new ArrayList<String>();
@@ -175,6 +200,9 @@ public final class Structure {
                         new Edge("players", "session", "STREAM", ""),
                         new Edge("session", "playA", "relay", ""),
                         new Edge("playA", "matchmaker", "match requests", ""),
+                        new Edge("playA", "api", "loadPlayer / commitRound", ""),
+                        new Edge("playB", "api", "loadPlayer / commitRound", ""),
+                        new Edge("api", "location", "Player records / round results", ""),
                         new Edge("matchmaker", "playA", "room preparation", ""),
                         new Edge("playA", "location", "Location / lease", "location-authority")))
             require(declaredEdges.contains(required), "Missing required edge: " + required);

@@ -20,6 +20,7 @@ public final class GameLog {
         return switch (id) {
             case "session" -> "Session";
             case "matchmaker" -> "Matchmaker";
+            case "api" -> "API";
             default -> shortId(id);
         };
     }
