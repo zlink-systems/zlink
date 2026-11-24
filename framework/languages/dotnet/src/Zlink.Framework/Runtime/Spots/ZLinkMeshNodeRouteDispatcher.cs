@@ -83,21 +83,8 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
     )
     {
         var descriptors = BuildRouteDescriptors(spotNode);
-        // Router-capable nodes always host the framework's internal
-        // remote-session push relay consumer (spec 31 §6): an actor that moved
-        // to another node pushes to its bound session through this packet.
         if (spotNode.Router is not null)
             descriptors = descriptors
-                .Append(
-                    ToRouteDescriptor(
-                        ZLinkHandlerScanner.CreateExplicitRouteInterfaceDescriptor(
-                            typeof(ZLinkRemoteSessionPushRelayHandler),
-                            typeof(IZLinkRouteSendHandler<ZLinkRemoteSessionPushRelay>),
-                            ZLinkMessageKind.Command,
-                            ZLinkRemoteSessionPushProtocol.PacketName
-                        )
-                    )
-                )
                 .Append(
                     ToRouteDescriptor(
                         ZLinkHandlerScanner.CreateExplicitRouteInterfaceDescriptor(
@@ -429,6 +416,13 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                 ZLinkFlowOrigin.Inbound
             );
 
+            if (received.ChannelName is null && ZLinkRemoteSessionPushProtocol.IsPush(header))
+            {
+                await DispatchRemoteSessionPushAsync(received, header, cancellationToken)
+                    .ConfigureAwait(false);
+                return;
+            }
+
             if (
                 received.ChannelName is not null
                 && header.Kind is ZLinkMessageKind.Command or ZLinkMessageKind.Request
@@ -530,10 +524,50 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         received.ChannelName is null
         && header.Kind == ZLinkMessageKind.Command
         && header.MessageName
-            is ZLinkRemoteSessionPushProtocol.PacketName
-                or ZLinkRemoteActorFrameProtocol.PacketName
+            is ZLinkRemoteActorFrameProtocol.PacketName
                 or ZLinkRemoteActorReplyProtocol.PacketName
                 or ZLinkRemoteActorSourceLeaveProtocol.PacketName;
+
+    private async ValueTask DispatchRemoteSessionPushAsync(
+        ZLinkBackendRouteReceived received,
+        ZLinkEnvelopeHeader header,
+        CancellationToken cancellationToken
+    )
+    {
+        var scope = CreateScope(header, isRequest: false);
+        scope.Trace(_dispatchErrors, ZLinkMessageFlowOutcome.Received);
+        try
+        {
+            var relay = (ZLinkRemoteSessionPushRelay)
+                (
+                    received.ApplicationPayloadView is { } view
+                        ? ZLinkEnvelopeCodec.DecodeBody(
+                            view,
+                            typeof(ZLinkRemoteSessionPushRelay),
+                            header.ContentType,
+                            _codecs
+                        )
+                        : ZLinkEnvelopeCodec.DecodeBody(
+                            received.Parts,
+                            typeof(ZLinkRemoteSessionPushRelay),
+                            header.ContentType,
+                            _codecs
+                        )
+                )!;
+            await _runtime
+                .AdmitRemoteSessionPushOneWayAsync(
+                    relay,
+                    received.SourceNodeRid ?? default,
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+            scope.Trace(_dispatchErrors, ZLinkMessageFlowOutcome.Dispatched);
+        }
+        catch (Exception error)
+        {
+            scope.HandlerException(_dispatchErrors, ZLinkDispatchErrorAction.Drop, error);
+        }
+    }
 
     private async ValueTask DispatchNodeRouteAsync(
         ZLinkBackendRouteReceived received,
