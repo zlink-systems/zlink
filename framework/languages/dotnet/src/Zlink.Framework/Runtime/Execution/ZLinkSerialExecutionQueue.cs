@@ -1038,34 +1038,26 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         }
     }
 
-    internal async ValueTask RunTargetPreparationAsync(
-        ZLinkSerialRelocationSeal seal,
-        Func<CancellationToken, ValueTask> callback,
-        CancellationToken cancellationToken
+    internal ZLinkSerialWorkItem? TryPostTargetPreparation(
+        Func<CancellationToken, ValueTask> callback
     )
     {
-        var item = await RunOnSharedGateAsync(() =>
+        Func<CancellationToken, ValueTask>? drain;
+        ZLinkSerialWorkItem work;
+        lock (_admissionGate)
+        {
+            if (_relocation?.PreparationOwner is not { } owner)
+                return null;
+            RequireSharedGate();
+            work = new ZLinkSerialWorkItem(callback, lane: ZLinkSerialWorkLane.Lifecycle)
             {
-                Func<CancellationToken, ValueTask>? drain;
-                ZLinkSerialWorkItem work;
-                lock (_admissionGate)
-                {
-                    if (!Matches(seal) || _relocation!.PreparationOwner is not { } owner)
-                        throw new InvalidOperationException(
-                            "The target staging lifecycle is no longer current."
-                        );
-                    work = new ZLinkSerialWorkItem(callback, lane: ZLinkSerialWorkLane.Lifecycle)
-                    {
-                        LifecycleOwner = owner,
-                    };
-                    CommitWorkItemUnderLock(_lifecycleQueue, work, ZLinkSerialWorkLane.Lifecycle);
-                    drain = ReserveDrainUnderLock();
-                }
-                PublishDrain(drain);
-                return work;
-            })
-            .ConfigureAwait(false);
-        await item.Completion.WaitAsync(cancellationToken).ConfigureAwait(false);
+                LifecycleOwner = owner,
+            };
+            CommitWorkItemUnderLock(_lifecycleQueue, work, ZLinkSerialWorkLane.Lifecycle);
+            drain = ReserveDrainUnderLock();
+        }
+        PublishDrain(drain);
+        return work;
     }
 
     internal bool TryOpenRelocationAfterMessageFollowOnGate(ZLinkSerialRelocationSeal seal)
