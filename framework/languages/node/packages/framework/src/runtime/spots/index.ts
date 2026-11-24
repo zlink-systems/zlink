@@ -1878,12 +1878,11 @@ export class DefaultZLinkSpotManager {
       await (admit === undefined ? dispatch() : admit(dispatch));
       return;
     }
-    const envelope = decodeChannelEnvelope(
-      record.parts,
-      undefined,
-      this.options.dispatchErrors?.flow.flowCreationEnabled() ?? true
-    );
-    const packetName = envelope.packetName;
+    const tracer = this.options.dispatchErrors?.flow;
+    const flowEnabled = tracer?.flowCreationEnabled() ?? true;
+    const envelope = decodeChannelEnvelope(record.parts, undefined, flowEnabled);
+    const { header, packetName } = envelope;
+    const inboundFlow = createInboundFlow(header.flowId, header.flowOrigin, flowEnabled, undefined);
     const codecs =
       this.options.messageSerializers === undefined
         ? undefined
@@ -1892,36 +1891,57 @@ export class DefaultZLinkSpotManager {
       decodeChannelPayload(envelope, codecs, messageType);
     const context = {
       channelName: envelope.header.channelName,
-      contentType: envelope.header.contentType,
+      contentType: header.contentType,
+      correlationId: header.correlationId ?? undefined,
+      inboundFlow,
+      sourceRid: record.sourceNodeRid === null ? undefined : String(record.sourceNodeRid),
       metadata: envelope.header.metadata,
       workOptions: zlinkSerialWorkOptions(
         envelope.payload.byteLength,
         record.applicationMetadata?.byteLength ?? zlinkMetadataByteLength(envelope.header.metadata)
       )
     };
+    flowIfEnabled(tracer, ZLinkMessageFlowOutcome.Received, undefined, inboundFlow?.flowId)?.trace({
+      outcome: ZLinkMessageFlowOutcome.Received,
+      surface: ZLinkDispatchErrorSurface.SpotRoute,
+      messageKind:
+        record.kind === ReceiveKind.SpotRequest
+          ? ZLinkDispatchMessageKind.Request
+          : ZLinkDispatchMessageKind.Send,
+      meshName,
+      spotId: String(spotId),
+      packetName,
+      channelName: context.channelName,
+      sourceRid: context.sourceRid,
+      correlationId: context.correlationId,
+      flowId: inboundFlow?.flowId,
+      flowOrigin: inboundFlow?.flowOrigin,
+      messageSize: envelope.payload.byteLength
+    });
     try {
-      const dispatch = async () => {
-        if (record.kind === ReceiveKind.SpotSend) {
+      const dispatch = () =>
+        runWithFlow(inboundFlow, async () => {
+          if (record.kind === ReceiveKind.SpotSend) {
+            await this.ensureInstanceApplicationActivation(meshName, spotId);
+            await this.routedSpotPackets.sendEncoded(spotId, packetName, decodePayload, context);
+            return;
+          }
+          if (record.kind !== ReceiveKind.SpotRequest) {
+            throw new ZLinkConfigurationException(
+              `Unsupported MeshNode Spot record kind '${record.kind}'.`
+            );
+          }
           await this.ensureInstanceApplicationActivation(meshName, spotId);
-          await this.routedSpotPackets.sendEncoded(spotId, packetName, decodePayload, context);
-          return;
-        }
-        if (record.kind !== ReceiveKind.SpotRequest) {
-          throw new ZLinkConfigurationException(
-            `Unsupported MeshNode Spot record kind '${record.kind}'.`
+          const response = await this.routedSpotPackets.requestEncoded(
+            spotId,
+            packetName,
+            decodePayload,
+            context
           );
-        }
-        await this.ensureInstanceApplicationActivation(meshName, spotId);
-        const response = await this.routedSpotPackets.requestEncoded(
-          spotId,
-          packetName,
-          decodePayload,
-          context
-        );
-        requireMeshSpotReply(
-          record.reply(encodeChannelReplyParts(envelope.header, response, codecs))
-        );
-      };
+          requireMeshSpotReply(
+            record.reply(encodeChannelReplyParts(envelope.header, response, codecs))
+          );
+        });
       await (admit === undefined ? dispatch() : admit(dispatch));
     } catch (error) {
       if (record.kind !== ReceiveKind.SpotRequest) throw error;
