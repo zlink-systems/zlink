@@ -302,8 +302,7 @@ internal sealed class OutageLocationStore(
         }
         if (source && !_recovering && _newLease != 0 && actor is not null)
         {
-            var meta = OutageCanonicalStoreReader.ReadAuthority(actor.Bytes);
-            var relocation = OutageCanonicalStoreReader.ReadRelocation(meta.Payload);
+            var relocation = OutageCanonicalStoreReader.ReadRelocation(actor.Bytes);
             if (relocation is not null)
             {
                 var state = relocation;
