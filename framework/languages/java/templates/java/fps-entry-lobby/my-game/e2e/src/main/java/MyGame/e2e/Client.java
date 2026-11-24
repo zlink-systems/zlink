@@ -90,9 +90,13 @@ public final class Client implements AutoCloseable {
     }
 
     RoomView view() throws Exception {
+        return view(room -> true);
+    }
+
+    RoomView view(Predicate<RoomView> predicate) throws Exception {
         clear();
         send(new RoomViewRequest());
-        return next(RoomView.class);
+        return next(RoomView.class, predicate);
     }
 
     SessionInfo sessionInfo() {

@@ -282,7 +282,7 @@ async function shootAsync(
   shooter: PlayerClient,
   aimDirection: Vec3,
   outcome: string
-): Promise<void> {
+): Promise<bigint> {
   const before = await viewAsync(shooter),
     request = new ShootRequest(aimDirection, next(before, shooter));
   while (true) {
@@ -303,14 +303,18 @@ async function shootAsync(
     const shot = result.payload as ShotResult;
     assert.equal(shot.outcome, outcome);
     assert.equal(shot.sequence, request.sequence);
-    return;
+    return shot.sequence;
   }
 }
 
 async function hitAsync(shooter: PlayerClient, target: PlayerClient, hp: number): Promise<void> {
-  await shootAsync(shooter, await aimAsync(shooter, target), ShotOutcome.hit);
-  const shooterView = await viewAsync(shooter),
-    targetView = await viewAsync(target);
+  const shooterFrom = shooter.messages.length;
+  const targetFrom = target.messages.length;
+  const sequence = await shootAsync(shooter, await aimAsync(shooter, target), ShotOutcome.hit);
+  const afterShot = (room: RoomView): boolean =>
+    room.players.some((p) => p.playerId === shooter.playerId && p.lastSequence === sequence);
+  const shooterView = await shooter.wait<RoomView>(PacketNames.roomView, shooterFrom, afterShot);
+  const targetView = await target.wait<RoomView>(PacketNames.roomView, targetFrom, afterShot);
   assert(
     equal(shooterView, targetView) && player(shooterView, target).hp === hp,
     'Hit views or damage differ.'

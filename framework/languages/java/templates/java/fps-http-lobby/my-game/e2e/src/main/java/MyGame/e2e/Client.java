@@ -99,6 +99,16 @@ public final class Client implements AutoCloseable {
         connector.send(message).submit().toCompletableFuture().join();
     }
 
+    RoomView view() throws Exception {
+        return view(room -> true);
+    }
+
+    RoomView view(Predicate<RoomView> predicate) throws Exception {
+        clear();
+        send(new RoomViewRequest());
+        return next(RoomView.class, predicate);
+    }
+
     Object sendAndAwait(Object message, Predicate<Object> predicate) throws Exception {
         if (message != null) send(message);
         return next(Object.class, predicate);

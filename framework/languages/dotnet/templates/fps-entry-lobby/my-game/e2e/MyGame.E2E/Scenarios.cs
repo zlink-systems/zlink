@@ -392,7 +392,7 @@ internal static class Scenarios
         return Player(view, target).Position - Player(view, shooter).Position;
     }
 
-    private static async Task ShootAsync(
+    private static async Task<long> ShootAsync(
         GameClient shooter,
         Vec3 aim,
         string outcome,
@@ -410,13 +410,11 @@ internal static class Scenarios
                 await Task.Delay(retry.RetryAfterMs, ct);
                 continue;
             }
-            Require(
-                result is ShotResult shot
-                    && shot.Outcome == outcome
-                    && shot.Sequence == request.Sequence,
-                $"Expected {outcome}, received {result}."
-            );
-            return;
+            if (result is not ShotResult shot
+                || shot.Outcome != outcome
+                || shot.Sequence != request.Sequence)
+                throw new InvalidOperationException($"Expected {outcome}, received {result}.");
+            return shot.Sequence;
         }
     }
 
@@ -427,9 +425,13 @@ internal static class Scenarios
         CancellationToken ct
     )
     {
-        await ShootAsync(shooter, await AimAsync(shooter, target, ct), ShotOutcome.Hit, ct);
-        var a = await ViewAsync(shooter, ct);
-        var b = await ViewAsync(target, ct);
+        var sequence = await ShootAsync(
+            shooter, await AimAsync(shooter, target, ct), ShotOutcome.Hit, ct
+        );
+        bool AfterShot(RoomView view) =>
+            view.Players.Any(p => p.PlayerId == shooter.PlayerId && p.LastSequence == sequence);
+        var a = await shooter.ViewAsync(AfterShot, ct);
+        var b = await target.ViewAsync(AfterShot, ct);
         Require(Equal(a, b) && Player(a, target).Hp == hp, "Hit views or damage differ.");
     }
 

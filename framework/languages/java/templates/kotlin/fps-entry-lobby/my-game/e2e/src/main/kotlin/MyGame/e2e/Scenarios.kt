@@ -181,7 +181,7 @@ private suspend fun aim(shooter: Client, target: Client): Vec3 {
     return player(room, target).position - player(room, shooter).position
 }
 
-private suspend fun shoot(shooter: Client, aim: Vec3, expectedOutcome: String) {
+private suspend fun shoot(shooter: Client, aim: Vec3, expectedOutcome: String): Long {
     val before = view(shooter)
     val request = ShootRequest(aim, nextSequence(before, shooter))
     while (true) {
@@ -197,7 +197,7 @@ private suspend fun shoot(shooter: Client, aim: Vec3, expectedOutcome: String) {
                 check(result.outcome == expectedOutcome && result.sequence == request.sequence) {
                     "Expected $expectedOutcome, received $result."
                 }
-                return
+                return result.sequence
             }
             else -> error("Unexpected shot response: $result")
         }
@@ -205,9 +205,12 @@ private suspend fun shoot(shooter: Client, aim: Vec3, expectedOutcome: String) {
 }
 
 private suspend fun hit(shooter: Client, target: Client, hp: Int) {
-    shoot(shooter, aim(shooter, target), ShotOutcome.HIT)
-    val a = view(shooter)
-    val b = view(target)
+    val sequence = shoot(shooter, aim(shooter, target), ShotOutcome.HIT)
+    val afterShot: (RoomView) -> Boolean = { room ->
+        room.players.any { it.playerId == shooter.playerId && it.lastSequence == sequence }
+    }
+    val a = shooter.view(afterShot)
+    val b = target.view(afterShot)
     check(a == b && player(a, target).hp == hp) { "Hit views or damage differ." }
 }
 

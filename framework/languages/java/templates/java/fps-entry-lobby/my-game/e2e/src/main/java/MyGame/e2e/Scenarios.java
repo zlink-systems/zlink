@@ -345,7 +345,7 @@ public final class Scenarios {
         return player(room, target).position().minus(player(room, shooter).position());
     }
 
-    private static void shoot(Client shooter, Vec3 direction, String outcome) throws Exception {
+    private static long shoot(Client shooter, Vec3 direction, String outcome) throws Exception {
         var before = view(shooter);
         var request = new ShootRequest(direction, next(before, shooter));
         while (true) {
@@ -360,19 +360,21 @@ public final class Scenarios {
                 Thread.sleep(rejected.retryAfterMs());
                 continue;
             }
-            check(
-                    response instanceof ShotResult result
-                            && result.outcome().equals(outcome)
-                            && result.sequence() == request.sequence(),
-                    "Expected " + outcome + ", received " + response);
-            return;
+            if (!(response instanceof ShotResult result)
+                    || !result.outcome().equals(outcome)
+                    || result.sequence() != request.sequence()) {
+                throw new IllegalStateException("Expected " + outcome + ", received " + response);
+            }
+            return result.sequence();
         }
     }
 
     private static void hit(Client shooter, Client target, int hp) throws Exception {
-        shoot(shooter, aim(shooter, target), ShotOutcome.HIT);
-        var first = view(shooter);
-        var second = view(target);
+        long sequence = shoot(shooter, aim(shooter, target), ShotOutcome.HIT);
+        Predicate<RoomView> afterShot = room -> room.players().stream()
+                .anyMatch(p -> p.playerId().equals(shooter.playerId) && p.lastSequence() == sequence);
+        var first = shooter.view(afterShot);
+        var second = target.view(afterShot);
         check(
                 first.equals(second) && player(first, target).hp() == hp,
                 "Hit views or damage differ");
