@@ -1089,6 +1089,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                 systems.zlink.framework.runtime.actors.ZLinkActorRuntimeTestAccess
                         .messageFollowSourceRoute(actors, ACTOR_ID);
         link.submitDuplicateLeft();
+        // The source callback is submitted asynchronously; observe its entry before counting.
+        LEAVE_ENTERED.get().get(4, TimeUnit.SECONDS);
         assertFalse(LEAVE_GATE.get().isDone());
         var target =
                 systems.zlink.framework.runtime.actors.ZLinkActorRuntimeTestAccess
