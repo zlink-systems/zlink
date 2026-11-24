@@ -23,9 +23,9 @@ Details: [Stateful game nodes and the HTTP lobby](https://docs.zlink.systems/nod
 
 ## Project overview
 
-This Node.js 22 (TypeScript, NestJS) project is a board-table game server example in which players take seats, play hands, and reconnect to the same seat. It runs a Session gateway for connections, Table nodes A and B that host Table Spots, and Redis for location and relocation state. `package.json` pins the ZLink Framework and connector packages to `0.34.0`.
+This Node.js 22 (TypeScript, NestJS) project is a board-table game server example in which players queue for a match or join a table by ID, play hands, and reconnect to the same seat. It runs a Session gateway, a Matchmaker node that hosts the Pool Spot, Table nodes A and B that host Table Spots and Player Actors, and Redis for location and relocation state. `package.json` pins the ZLink Framework and connector packages to `0.34.0`.
 
-The project layout and feature procedure below describe where to add gameplay. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
+The project layout and feature procedure below describe where to add gameplay. The [README](README.md) covers prerequisites, local execution, and deployment. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 
 > **Documentation and package versions.** The [ZLink documentation](https://docs.zlink.systems/), [Node.js guide](https://docs.zlink.systems/node/guide/server/), [API reference](https://docs.zlink.systems/node/reference/), and [agent index](https://docs.zlink.systems/llms.txt) are the public documentation entry points. When a current guide describes a newer release, check its API against the package pinned in `package.json`.
 
@@ -33,11 +33,13 @@ The project layout and feature procedure below describe where to add gameplay. T
 
 Use the [README client connection section](README.md#client-connection) for the client installation table and minimal TypeScript example. The Session `players` STREAM listener defaults to `ws://127.0.0.1:0` in `server/config/session.json` (WebSocket root path `/`, OS-assigned port); use the actual endpoint from the Session's `READY` output. Table mesh listeners and Redis are not game client endpoints. Loopback and the Docker runner's shared network namespace limit default reachability; an external client needs a running deployment with a reachable listener and exposed port. HTTPS browser pages need `wss://`, which is not configured by default.
 
-Follow `e2e/client.mts`: connect, register a `TableView` receiver, send `JoinTableRequest(playerId, tableId)` with `send(...).submit()`, and receive the seating result as a push. Do not turn this first packet into a request/reply operation. After joining, `SessionInfoRequest` returns `SessionInfo` through `request(...).submit()`. Use this template's DTOs and packet names instead of the Engine Lobby sample contract, retain the default JSON codec, and validate identity before binding when adding authentication. Check public connector source and the package pinned in `package.json` before changing the example; keep the README and this guide consistent.
+Follow `e2e/client.mts`: connect, register listeners, and submit `JoinTableRequest(playerId, tableId)` for direct seating or `FindMatch(playerId)` for matchmaking. Both paths receive `TableView` as a push. The matchmaking path also receives `MatchQueued` and `MatchFound`. After joining, `SessionInfoRequest` returns `SessionInfo` through `request(...).submit()`. Use this template's DTOs and packet names, retain the default JSON codec, and validate identity before binding when adding authentication. Check public connector source and the package pinned in `package.json` before changing the example.
 
 ## Development commands
 
-Default builds and e2e run nodes and the runner in Docker without a host Node.js installation. Run these commands from this directory.
+From this directory, run `./run-server.sh` on Linux or WSL, or `.\run-server.cmd` on Windows. It builds with Node.js 22 and npm, starts Redis in Docker and keeps the Node.js server processes running in the foreground. Wait for the printed Session WebSocket URL before connecting a client. Ctrl+C shuts down the server.
+
+Run `./run-e2e.sh` or `.\run-e2e.cmd` from a second terminal. If `.logs/server.json` identifies a live server, the runner attaches and runs the scenarios that preserve the deployment. Stop that server to run the default isolated Docker suite, including the `update` scenario. Use `--attach` or `-Attach` to require an active server. Docker builds and isolated Docker runs work without a host Node.js installation.
 
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
@@ -55,17 +57,23 @@ Bash provides the same workflow:
 ./run-e2e.sh --check-structure
 ```
 
-For host process debugging, install Node.js 22 or later and npm, then add `--local` or `-Local`; the nodes run as local processes with Redis in Docker. Add `--no-build` or `-NoBuild` only with an existing local build. Keep canonical scenario order and assertions; compare first failures with Known issues in the README.
+For host process debugging, install Node.js 22 or later and npm, then add `--local` or `-Local`; the nodes run as local processes with Redis in Docker. Add `--no-build` or `-NoBuild` only with an existing local build. Keep canonical scenario order and assertions; read the first failure and the associated node and client logs.
 
 ## Project layout and extension points
 
 ### Session gateway
 
-`server/session/main.ts` registers STREAM and the mesh listener, and `server/session/session.ts` handles connection callbacks and forwards incoming packets. A Session is a communication object for a connection; Framework provides binding to associate it with a player state object. `Session` accepts `JoinTableRequest` as the first packet. Add authentication before binding and retain the existing typed packet relay so Framework can identify the connection for replies to that player.
+`server/session/main.ts` registers STREAM and the mesh listener, and `server/session/session.ts` handles connection callbacks and forwards incoming packets. A Session is a communication object for a connection; Framework provides binding to associate it with a player state object. `Session` accepts `JoinTableRequest` or `FindMatch` as the first packet. Add authentication before binding and retain the existing typed packet relay so Framework can identify the connection for replies to that player.
+
+### Matchmaker
+
+`server/matchmaker/main.ts` registers the Pool factory and starts the fixed `pool-board` Spot. The Entry handler queues a Player; the Pool selects the oldest waiting pair, prepares a Table, and commits after receiving both players' admission reports. The Pool also decides when to withdraw an assignment or remove a waiting ticket. The Pool holds a disconnected waiting player’s ticket for 15 seconds. A reserved ticket remains subject to the 10-second entry deadline. A waiting ticket expires after 120 seconds. The Table checks the assigned members and owns game state. Player Actors retain their own matchmaking state across moves.
+
+MatchRule in `server/matchmaker/domain/` owns pair selection. Extend it to consider ratings, and apply a competitive acceptance step in the Pool before commitment.
 
 ### Tables and players
 
-A Spot is a state object that accepts Actors and executes shared game rules; `Table` in `server/table/infrastructure/table.ts` admits players, builds the table view, and publishes it to every seat. The game rules and the application snapshot live in `TableState` in `server/table/domain/table-state.ts`: seats, chips, deck, hands, turn, hand number, pot, and settlement. Change game rules there, and keep Framework callbacks and I/O in `server/table/infrastructure/`. An Actor is a game state object addressed by ID; `Player` in `server/table/infrastructure/player.ts` holds no application state and reports a rejected join to the client.
+A Spot is a state object that accepts Actors and executes shared game rules; `Table` in `server/table/infrastructure/table.ts` admits players, builds the table view, and publishes it to every seat. The game rules and the application snapshot live in `TableState` in `server/table/domain/table-state.ts`: seats, chips, deck, hands, turn, hand number, pot, and settlement. Change game rules there, and keep Framework callbacks and I/O in `server/table/infrastructure/`. The `Player` Actor retains its matchmaking state and reports the result of joining its assigned table.
 
 `server/table/main.ts` registers the Entry Spot, factories, and handlers, and every new handler is added to its `providers` array. Add handlers that combine player rules with table rules in `server/table/infrastructure/handlers.ts`. When changing node composition, update registrations, `server/config/`, and the descriptor together so the structure check validates the same composition. The optional `tableCapacity` setting in a node's configuration sets the public stable-type limit for Tables on that node; omitted or zero leaves capacity unlimited, and the e2e runner sets it so that a replacement node must host the new table.
 
@@ -85,7 +93,7 @@ A RouteMesh connects nodes that exchange messages between processes; this projec
 
 ### Spots and Actors
 
-`Entry` handles the first admission of an Actor, and `Table` represents one table. `Table` is a User Spot created on demand by its table ID. `Player` carries no game state of its own, so a table keeps its seats while Actors move or reconnect. The [Spot guide](https://docs.zlink.systems/node/guide/server/21-spot/) describes registration and calls for these objects, and the [Actor guide](https://docs.zlink.systems/node/guide/server/22-actor/) describes Actor creation and calls.
+`Entry` handles the first admission of an Actor, and `Table` represents one table. `Table` is a User Spot created on demand by its table ID. The Table keeps seats while Actors move or reconnect. The [Spot guide](https://docs.zlink.systems/node/guide/server/21-spot/) describes registration and calls for these objects, and the [Actor guide](https://docs.zlink.systems/node/guide/server/22-actor/) describes Actor creation and calls.
 
 ### STREAM and Sessions
 
@@ -123,7 +131,7 @@ Extend this template's domain to build a board-game server. `TableState` in `ser
 1. Add typed request and result classes to `server/shared/messages.ts`. Keep packet names and rejection reasons in `server/shared/constants.ts`; `messages.ts` owns the shared integer limit.
 2. Add state and decisions to `TableState`. Keep Framework callbacks and I/O in `server/table/infrastructure/`, and preserve the application snapshot through `TableRelocation`. For a time-based rule, make `TableState` the only decision owner, use a monotonic clock, accept a test clock only through its constructor, and store remaining milliseconds in the snapshot.
 3. Add only client-to-server requests to the allowlist in `server/session/session.ts`. Reject other packets with `packet-not-allowed`.
-4. Add client-visible checks to `e2e/client.mts` and domain-boundary tests to `e2e/domain.test.ts`. Keep the `table`, `reconnect`, and `update` scenarios and align their order with the README table and `run.scenarios` in `zlink.structure.json`.
+4. Add client-visible checks to `e2e/client.mts` and domain-boundary tests to `e2e/domain.test.ts`. Keep the existing scenarios and align their order with the README table and `run.scenarios` in `zlink.structure.json`.
 
 The server validates requests and calculates results. Reject values above `9,007,199,254,740,991` and any result that exceeds this limit before changing state. Rejected actions leave values, sequences, and cooldowns unchanged. `ActionRejected` carries `reason` and `retryAfterMs`; the latter is zero unless the server rejects an action for a time limit. A client waits only for a positive delay supplied by the server. Do not add fixed waits or longer deadlines to pass a scenario.
 
@@ -153,7 +161,7 @@ Investigate Framework failures using actual replies, events, and lifecycle resul
 
 Preserve the first failing run and read its logs before deciding whether to run it again. An intermittent failure is an observed defect; a subsequent pass does not invalidate it. `.logs/run-<id>/` contains effective settings written by `e2e/runner.ts` at node startup and logs for each node.
 
-Settings files are `session.json`, `tableA.json`, and `tableB.json`. `NodeProcess` in `e2e/runner.ts` records diagnostic stderr in `<node>-<n>.err.log` and readiness/control stdout in `<node>-<n>.out.log`, where `<n>` counts the processes started in the run; a replaced node has a second pair with a later `<n>`. The client packets each scenario received are in `<scenario>-<suffix>.jsonl`. Docker command logs of the run are `docker-<label>.log`, and local build output is in `.logs/build.log`. The shell runner writes Docker build, Redis, and outer cleanup logs to `.logs/docker-<project>/`. The `.out.log` file also contains `ZLINK_E2E_DIAG` JSON lines with ISO UTC timestamps for process spawn, READY wait start, READY receipt, and READY timeout; timeout records include the last received line and its timestamp.
+Settings files are `session.json`, `tableA.json`, `tableB.json`, and `matchmaker.json`. `NodeProcess` in `e2e/runner.ts` records diagnostic stderr in `<node>-<n>.err.log` and readiness/control stdout in `<node>-<n>.out.log`, where `<n>` counts the processes started in the run; a replaced node has a second pair with a later `<n>`. The client packets each scenario received are in `<scenario>-<suffix>.jsonl`. Docker command logs of the run are `docker-<label>.log`, and local build output is in `.logs/build.log`. The shell runner writes Docker build, Redis, and outer cleanup logs to `.logs/docker-<project>/`. The `.out.log` file also contains `ZLINK_E2E_DIAG` JSON lines with ISO UTC timestamps for process spawn, READY wait start, READY receipt, and READY timeout; timeout records include the last received line and its timestamp.
 
 ### Diagnostic levels
 

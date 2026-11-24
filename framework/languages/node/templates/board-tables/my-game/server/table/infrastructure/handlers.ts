@@ -10,7 +10,7 @@ import {
   type ZLinkMessageContext,
   type ZLinkSpotManager
 } from '@zlink-systems/framework';
-import { Names, PacketNames } from '../../shared/constants';
+import { Names, PacketNames, Reasons } from '../../shared/constants';
 import {
   ActionRejected,
   BetRequest,
@@ -38,6 +38,14 @@ export class EntryJoin {
     request: JoinTableRequest
   ): Promise<void> {
     if (actor.context.actorId !== request.playerId) throw new Error('Player identity mismatch');
+    if (actor.match) {
+      await actor.reject(Reasons.matchPending);
+      return;
+    }
+    if (request.tableId.startsWith(Names.matchRoomPrefix)) {
+      await actor.reject(Reasons.full);
+      return;
+    }
     const created = await this.spots
       .getOrCreate(request.tableId, Names.table)
       .inMesh(Names.mesh)
@@ -96,7 +104,7 @@ export class Start {
     _context: ZLinkMessageContext,
     _request: StartHandRequest
   ): Promise<void> {
-    const reason = spot.state.start(actor.context.actorId);
+    const reason = spot.canPlay ? spot.state.start(actor.context.actorId) : Reasons.matchPending;
     if (reason) await actor.context.boundSession.send(new ActionRejected(reason, 0)).submit();
     else await spot.deal();
   }
@@ -114,7 +122,9 @@ export class Bet {
     _context: ZLinkMessageContext,
     request: BetRequest
   ): Promise<void> {
-    const result = spot.state.bet(actor.context.actorId, request.handNumber, request.amount);
+    const result = spot.canPlay
+      ? spot.state.bet(actor.context.actorId, request.handNumber, request.amount)
+      : Reasons.matchPending;
     if (typeof result === 'string')
       await actor.context.boundSession.send(new ActionRejected(result, 0)).submit();
     else await spot.publish(result ?? null);

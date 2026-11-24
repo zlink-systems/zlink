@@ -128,13 +128,7 @@ export class TableState {
     s.turnSeat = Game.noSeat;
     s.pot = 0n;
     for (const candidate of s.seats) candidate.cards = [];
-    return new HandResult(
-      s.handNumber,
-      nextPot,
-      winners,
-      hands,
-      this.seatViews()
-    );
+    return new HandResult(s.handNumber, nextPot, winners, hands, this.seatViews());
   }
   seatViews(): SeatView[] {
     return this.snapshot.seats.map((s, seat) => ({

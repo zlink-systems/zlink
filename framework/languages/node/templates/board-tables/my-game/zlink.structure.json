@@ -5,14 +5,20 @@
   "language": "node",
   "run": {
     "commands": {
-      "sh": ["./run-e2e.sh --build-only", "./run-e2e.sh", "./run-e2e.sh --scenario table,reconnect"],
+      "sh": [
+        "./run-server.sh",
+        "./run-e2e.sh --build-only",
+        "./run-e2e.sh",
+        "./run-e2e.sh --scenario match,match-cancel"
+      ],
       "powershell": [
-        "pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly",
-        "pwsh -NoProfile -File ./run-e2e.ps1",
-        "pwsh -NoProfile -File ./run-e2e.ps1 -Scenario table,reconnect"
+        ".\\run-server.cmd",
+        ".\\run-e2e.cmd -BuildOnly",
+        ".\\run-e2e.cmd",
+        ".\\run-e2e.cmd -Scenario match,match-cancel"
       ]
     },
-    "scenarios": ["table", "reconnect", "update"]
+    "scenarios": ["table", "reconnect", "match", "match-cancel", "update"]
   },
   "nodes": [
     {
@@ -38,6 +44,12 @@
       "role": "table",
       "title": "Table node B",
       "config": "server/config/table-b.json"
+    },
+    {
+      "id": "matchmaker",
+      "role": "matchmaker",
+      "title": "Matchmaker node",
+      "config": "server/config/matchmaker.json"
     },
     {
       "id": "location",
@@ -66,6 +78,13 @@
       "type": "Table",
       "owner": "tableA",
       "dynamic": true
+    },
+    {
+      "id": "pool",
+      "kind": "user",
+      "type": "Pool",
+      "owner": "matchmaker",
+      "logicalId": "pool-board"
     }
   ],
   "edges": [
@@ -78,6 +97,16 @@
       "to": "tableA",
       "label": "relay",
       "from": "session"
+    },
+    {
+      "to": "matchmaker",
+      "label": "MatchRequest",
+      "from": "tableA"
+    },
+    {
+      "to": "tableA",
+      "label": "PrepareRoom",
+      "from": "matchmaker"
     },
     {
       "to": "location",
