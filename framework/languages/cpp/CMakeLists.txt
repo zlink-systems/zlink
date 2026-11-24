@@ -1610,7 +1610,25 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     TIMEOUT 30)
 
   add_executable(test_cpp_framework_m6b_runtime
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_accepted_ingress.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_actor_authority.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_actor_turns.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_bound_session_bind.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_bound_session_push.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_host_dispatch.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_mesh_admission.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_message_follow.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_relocation_management.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_reply_relay.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_session_relocation.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_spot_creation.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_spot_creation_terminal.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_spot_routing.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_runtime.cpp
+    tests/support/m6b_host_access.cpp
+    tests/support/m6b_mesh_fixture.cpp
+    tests/support/m6b_stateful_fixture.cpp
+    tests/support/m6b_task.cpp
     tests/support/allocation_counter.cpp)
   target_compile_features(test_cpp_framework_m6b_runtime PRIVATE cxx_std_20)
   target_include_directories(test_cpp_framework_m6b_runtime PRIVATE
@@ -2595,6 +2613,23 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_execution.cpp
     "framework-unit;framework-contract;framework-regression;execution;spot;yield"
     unit)
+  target_sources(test_cpp_framework_execution PRIVATE
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_execution_actor_cutover.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_execution_actor_join_admission.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_execution_actor_join_finalize.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_execution_dispatch_observation.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_execution_lifecycle_fifo.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_execution_mailbox_shutdown.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_execution_relocation_barriers.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_execution_request_turns.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_execution_serial_scheduling.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_execution_spot_close.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_execution_spot_gate.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_execution_state_owner.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_execution_timer_lifecycle.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_execution_worker_dispatch.cpp
+    tests/support/execution_serial_fixture.cpp
+    tests/support/execution_wait.cpp)
   target_include_directories(test_cpp_framework_execution PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_compile_definitions(test_cpp_framework_execution PRIVATE
