@@ -16,16 +16,8 @@ for argument in "$@"; do
 done
 cd "$ROOT"
 mkdir -p "$ROOT/.logs"
-. "$ROOT/scripts/run-helpers.sh"
-# A scenario run uses the server started by run-server.sh when one is running.
-if ! $local_mode && ! $build_only && [[ "${arguments[0]:-}" != "--check-structure" ]] &&
-  server_running "$ROOT"; then
-  echo 'Using the running server (logs/server.json)'
-  exec node dist/e2e/runner.js --attach "${arguments[@]}"
-fi
 if $local_mode; then
   if ! $no_build; then
-    assert_no_running_server "$ROOT"
     if ! (npm ci && npm run build) >"$ROOT/.logs/build.log" 2>&1; then
       tail -n 20 "$ROOT/.logs/build.log" >&2
       exit 1

@@ -4,13 +4,6 @@ export const Names = {
   actor: 'Player',
   table: 'Table'
 } as const;
-// Words in server console lines that the run-server console also reads to show server titles.
-export const ServerLog = {
-  connectedTo: 'connected to',
-  disconnectedFrom: 'disconnected from',
-  // A routing ID is "<node id>-<suffix>" (setRoutingIdPrefix).
-  routingIdSeparator: '-'
-} as const;
 export const Game = {
   seats: 4,
   minimumPlayers: 2,
@@ -23,19 +16,14 @@ export const Game = {
 } as const;
 const messageFollowMs = 30_000;
 const relocationMs = 25_000;
-const startupMs = 30_000;
-const messageMs = 10_000;
-const shutdownMs = 10_000;
-const safeMs = messageFollowMs + relocationMs;
 export const Limits = {
   observationCapacity: 64,
-  messageMs,
-  startupMs,
+  messageMs: 10_000,
+  startupMs: 30_000,
   messageFollowMs,
   relocationMs,
-  safeMs,
-  shutdownMs,
-  controlMs: Math.max(messageMs + relocationMs + safeMs, shutdownMs + messageMs + startupMs)
+  safeMs: messageFollowMs + relocationMs,
+  shutdownMs: 10_000
 } as const;
 export const Reasons = {
   full: 'table-full',
@@ -65,7 +53,6 @@ export const PacketNames = {
 export const Control = {
   ready: 'READY ',
   drain: 'drain',
-  replace: 'replace',
   shutdown: 'shutdown',
   requested: 'RELOCATION_REQUESTED',
   relocated: 'RELOCATED',
@@ -78,35 +65,3 @@ export const NodeEntrypoints = {
   table: 'server/table/main.ts'
 } as const;
 export type NodeRole = keyof typeof NodeEntrypoints;
-
-export const LogFiles = {
-  directory: 'logs',
-  nodeExtension: '.log',
-  runs: '.logs',
-  runPrefix: 'run-',
-  serverState: 'server.json',
-  workerConfig: 'my-game.diagnostics',
-  // Docker e2e nodes write their file log inside the container; the runner keeps their stderr.
-  container: '/tmp/my-game-logs',
-  // Console tag for lines from run-server itself.
-  hostTag: 'host',
-  // HH:MM:SS.mmm of an ISO timestamp, for console lines.
-  consoleTimeStart: 11,
-  consoleTimeEnd: 23
-} as const;
-
-const loopback = '127.0.0.1';
-const redisPort = '6379';
-export const LocalHost = {
-  address: loopback,
-  controlPort: 0,
-  meshEndpoint: `tcp://${loopback}:0`,
-  streamEndpoint: `ws://${loopback}:0`,
-  redisPort,
-  dockerRedis: `redis:${redisPort}`,
-  keyPrefix: 'my-game:',
-  projectPrefix: 'my-game-',
-  structureFile: 'zlink.structure.json',
-  ready: 'Server ready:',
-  traceFlag: '--trace'
-} as const;

@@ -3,4 +3,3 @@ node_modules
 dist
 .npm-cache
 .git
-logs

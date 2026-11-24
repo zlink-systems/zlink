@@ -1,7 +1,7 @@
 import { readFileSync, realpathSync } from 'node:fs';
 import { isAbsolute, relative, resolve, sep, win32 } from 'node:path';
 import assert from 'node:assert/strict';
-import { Names, Scenarios, LocalHost, NodeEntrypoints } from '../server/shared/constants';
+import { Names, Scenarios, NodeEntrypoints } from '../server/shared/constants';
 function object(value: unknown): Record<string, unknown> {
   assert(value !== null && typeof value === 'object' && !Array.isArray(value), 'Expected object');
   return value as Record<string, unknown>;
@@ -17,7 +17,7 @@ function array(value: unknown): unknown[] {
 function unique(values: string[], label: string): void {
   assert.equal(new Set(values).size, values.length, `Duplicate ${label}`);
 }
-export function checkStructure(path: string = LocalHost.structureFile): void {
+export function checkStructure(path = 'zlink.structure.json'): void {
   const root = realpathSync('.');
   const s = object(JSON.parse(readFileSync(path, 'utf8')));
   assert.equal(s.version, 1, 'Unknown structure version');

@@ -1,6 +1,5 @@
 {
   "id": "playA",
-  "title": "Play node A",
   "redisEndpoint": "127.0.0.1:6379",
   "keyPrefix": "my-game:",
   "meshEndpoint": "tcp://127.0.0.1:0",

@@ -21,8 +21,6 @@ import {
   type SessionInfo,
   type TableView
 } from '../server/shared/messages.js';
-import { serverTitle, shortId } from '../server/shared/game-log.js';
-import type { NodeControl } from './server-control.js';
 interface Received {
   name: string;
   payload: unknown;
@@ -72,15 +70,18 @@ function decodeWirePayload(name: string, payload: unknown): unknown {
   }
   return payload;
 }
+export interface NodeControl {
+  drain(id: string): Promise<void>;
+  replace(id: string): Promise<void>;
+}
 class PlayerClient {
-  private readonly connector: ZlinkStreamConnector;
+  readonly connector: ZlinkStreamConnector;
   readonly messages: Received[] = [];
   private readonly changed = new EventEmitter();
   private failure?: Error;
   disconnects = 0;
   constructor(
     endpoint: string,
-    private readonly name: string,
     private readonly log: string
   ) {
     this.connector = zlinkStreamConnectorFactory.create({
@@ -99,8 +100,13 @@ class PlayerClient {
     ])
       this.connector.on(name, (message) => {
         const payload = decodeWirePayload(name, message.payload);
-        this.record('←', name, payload);
         this.messages.push({ name, payload });
+        appendFileSync(
+          log,
+          JSON.stringify({ name, payload }, (_, v) =>
+            typeof v === 'bigint' ? v.toString() : v
+          ) + '\n'
+        );
         this.changed.emit('change');
       });
     this.connector.onDisconnected(() => {
@@ -111,21 +117,6 @@ class PlayerClient {
       this.failure = new Error(`Connector error: ${error.code}: ${error.message}`);
       this.changed.emit('change');
     });
-  }
-  // Packets go to the client's file log only; the console shows the scenario steps.
-  private record(direction: '→' | '←', name: string, payload: unknown): void {
-    const line = { time: new Date().toISOString(), client: this.name, direction, name, payload };
-    appendFileSync(
-      this.log,
-      JSON.stringify(line, (_, v) => (typeof v === 'bigint' ? v.toString() : v)) + '\n'
-    );
-  }
-  async send(
-    messageType: abstract new (...args: never[]) => object,
-    payload: object
-  ): Promise<void> {
-    this.record('→', messageType.name, payload);
-    await this.connector.send(payload, messageType).submit();
   }
   async wait<T>(
     name: string,
@@ -167,7 +158,7 @@ class PlayerClient {
   async join(playerId: string, tableId: string): Promise<TableView> {
     await this.connector.connect();
     const index = this.messages.length;
-    await this.send(JoinTableRequest, new JoinTableRequest(playerId, tableId));
+    await this.connector.send(new JoinTableRequest(playerId, tableId)).submit();
     const view = await this.wait<TableView>(
       PacketNames.tableView,
       index,
@@ -178,10 +169,9 @@ class PlayerClient {
     return view;
   }
   async sessionInfo(): Promise<SessionInfo> {
-    const request = new SessionInfoRequest();
-    this.record('→', PacketNames.sessionInfoRequest, request);
-    const response = await this.connector.request(request).submit<SessionInfo>();
-    this.record('←', PacketNames.sessionInfo, response);
+    const response = await this.connector
+      .request(new SessionInfoRequest())
+      .submit<SessionInfo>();
     const fields = response as unknown as Record<string, unknown>;
     return {
       ...response,
@@ -190,7 +180,7 @@ class PlayerClient {
   }
   async view(): Promise<TableView> {
     const index = this.messages.length;
-    await this.send(TableViewRequest, new TableViewRequest());
+    await this.connector.send(new TableViewRequest()).submit();
     return this.wait<TableView>(PacketNames.tableView, index);
   }
   async close(): Promise<void> {
@@ -259,15 +249,13 @@ function settlement(
   assert(result.seats.every((s) => s.cardCount === 0));
   assert.equal(chips(result), 2n * Game.initialChips);
 }
-// One line per scenario step above the packet lines it causes.
-function step(message: string): void {
-  console.log(`▶ ${message}`);
-}
 function sendBet(client: PlayerClient, handNumber: bigint, amount: bigint): Promise<void> {
-  return client.send(BetRequest, {
-    handNumber: handNumber.toString(10),
-    amount: amount.toString(10)
-  });
+  return client.connector
+    .send(
+      { handNumber: handNumber.toString(10), amount: amount.toString(10) },
+      BetRequest
+    )
+    .submit();
 }
 export async function scenario(
   name: string,
@@ -281,7 +269,7 @@ export async function scenario(
     ids = [`p1-${name}-${runId}`, `p2-${name}-${runId}`];
   const clients: PlayerClient[] = [];
   const create = (suffix: string): PlayerClient => {
-    const client = new PlayerClient(endpoint, suffix, `${logDir}/${name}-${suffix}.jsonl`);
+    const client = new PlayerClient(endpoint, `${logDir}/${name}-${suffix}.jsonl`);
     clients.push(client);
     return client;
   };
@@ -289,12 +277,8 @@ export async function scenario(
   let p2 = create('p2');
   const failures: unknown[] = [];
   try {
-    step(`p1, p2 join ${shortId(tableId)}`);
     const first = await p1.join(ids[0], tableId),
       second = await p2.join(ids[1], tableId);
-    step(
-      `seated on ${serverTitle(second.nodeId)}: p1 seat ${first.yourSeat}, p2 seat ${second.yourSeat}`
-    );
     if (expectedNode !== undefined) {
       assert.equal(first.nodeId, expectedNode, 'Replacement node did not host new work');
       assert.equal(second.nodeId, expectedNode, 'Replacement node did not host new work');
@@ -309,10 +293,17 @@ export async function scenario(
       session2 = await p2.sessionInfo();
     assert.notEqual(session1.sessionId, session2.sessionId);
     if (name === 'table') {
-      step('p2 sends a server-only packet: expect rejected');
       const rejectedAt = p2.messages.length;
-      await p2.send(HandResult, { handNumber: '0', pot: '0', winners: [], hands: [], seats: [] });
-      const rejected = await p2.wait<ActionRejected>(PacketNames.actionRejected, rejectedAt);
+      await p2.connector
+        .send(
+          { handNumber: '0', pot: '0', winners: [], hands: [], seats: [] },
+          HandResult
+        )
+        .submit();
+      const rejected = await p2.wait<ActionRejected>(
+        PacketNames.actionRejected,
+        rejectedAt
+      );
       assert.equal(rejected.reason, Reasons.packetNotAllowed);
       assert.equal(rejected.retryAfterMs, 0);
       const idleViewAt = p2.messages.length;
@@ -326,8 +317,7 @@ export async function scenario(
     }
     const start1 = p1.messages.length,
       start2 = p2.messages.length;
-    step('p1 starts a hand: expect cards dealt to both');
-    await p1.send(StartHandRequest, new StartHandRequest());
+    await p1.connector.send(new StartHandRequest()).submit();
     const [v1, v2, h1, h2] = await Promise.all([
       p1.wait<TableView>(PacketNames.tableView, start1, (v) => v.inHand),
       p2.wait<TableView>(PacketNames.tableView, start2, (v) => v.inHand),
@@ -344,7 +334,6 @@ export async function scenario(
     for (const card of [...h1.cards, ...h2.cards])
       assert(Number.isInteger(card) && card >= 0 && card < Game.deckSize);
     if (name === 'table') {
-      step('p2 bets out of turn, p1 bets over the limit and over its chips: expect rejected');
       const index = p2.messages.length;
       await sendBet(p2, v2.handNumber, 50n);
       const rejected = await p2.wait<ActionRejected>(PacketNames.actionRejected, index);
@@ -354,7 +343,10 @@ export async function scenario(
 
       const overLimitAt = p1.messages.length;
       await sendBet(p1, v1.handNumber, MaxContractInteger + 1n);
-      const overLimit = await p1.wait<ActionRejected>(PacketNames.actionRejected, overLimitAt);
+      const overLimit = await p1.wait<ActionRejected>(
+        PacketNames.actionRejected,
+        overLimitAt
+      );
       assert.equal(overLimit.reason, Reasons.integerOutOfRange);
       assert.equal(overLimit.retryAfterMs, 0);
       assert.deepEqual(await p1.view(), v1);
@@ -370,7 +362,6 @@ export async function scenario(
       assert.deepEqual(await p1.view(), v1);
     }
     const amount = name === 'table' ? 100n : 10n;
-    step(`p1 bets ${amount}`);
     const bet1 = p1.messages.length,
       bet2 = p2.messages.length;
     await sendBet(p1, v1.handNumber, amount);
@@ -379,7 +370,6 @@ export async function scenario(
       p2.wait<TableView>(PacketNames.tableView, bet2, (v) => v.turnSeat === 1)
     ]);
     if (name === 'reconnect') {
-      step('p2 disconnects and reconnects: expect the same seat and cards');
       await p2.close();
       p2 = create('p2-reconnected');
       const mark = p2.messages.length;
@@ -392,7 +382,6 @@ export async function scenario(
       assert.equal(rebound.objectGeneration, session2.objectGeneration);
       assert.deepEqual((await p2.wait<HandDealt>(PacketNames.handDealt, mark)).cards, h2.cards);
     } else if (name === 'update') {
-      step(`drain ${serverTitle(b1.nodeId)}: expect the table to move to another play node`);
       await control.drain(b1.nodeId);
       const mark1 = p1.messages.length,
         mark2 = p2.messages.length;
@@ -401,9 +390,6 @@ export async function scenario(
       identity(b2, after2);
       assert.notEqual(after1.nodeId, b1.nodeId);
       assert.equal(after2.nodeId, after1.nodeId);
-      step(
-        `table now on ${serverTitle(after1.nodeId)}: checking view, cards and sessions are unchanged`
-      );
       assert.deepEqual((await p1.wait<HandDealt>(PacketNames.handDealt, mark1)).cards, h1.cards);
       assert.deepEqual((await p2.wait<HandDealt>(PacketNames.handDealt, mark2)).cards, h2.cards);
       assert.deepEqual(await p1.sessionInfo(), session1);
@@ -411,7 +397,6 @@ export async function scenario(
     }
     privacy(p1, h1.cards);
     for (const client of clients) if (client !== p1) privacy(client, h2.cards);
-    step('p2 bets 50: expect the hand to settle');
     const end1 = p1.messages.length,
       end2 = p2.messages.length;
     await sendBet(p2, v2.handNumber, 50n);
@@ -421,9 +406,6 @@ export async function scenario(
     ]);
     assert.deepEqual(results[0], results[1]);
     settlement(results[0], h1, h2, [amount, 50n]);
-    step(
-      `hand settled: winner ${results[0].winners.map((seat) => `seat ${seat}`).join(', ')}, pot ${results[0].pot}`
-    );
     for (const client of [p1, p2]) {
       const from = client.messages.length;
       const settled = await client.view();
@@ -449,9 +431,6 @@ export async function scenario(
     assert.equal(p1.disconnects, 0);
     assert.equal(p2.disconnects, 0);
     if (name === 'update') {
-      step(
-        `replace ${serverTitle(b1.nodeId)} once it is safe to shut down: expect new tables on it`
-      );
       await control.replace(b1.nodeId);
       await scenario('table', endpoint, `${runId}-replacement`, logDir, control, b1.nodeId);
     }

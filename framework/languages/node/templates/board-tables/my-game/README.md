@@ -13,7 +13,7 @@ flowchart LR
 
 - Local process debugging: Node.js 22 or later with npm. The supported range of public binding 1.23.0 is `>=22`.
 - Docker Engine with Docker Compose v2, reachable from the current shell.
-- Windows PowerShell 5.1 or PowerShell 7 on Windows; Bash on Linux and WSL. The examples use `pwsh -NoProfile -File`; in Windows PowerShell 5.1 run the same script with `powershell -NoProfile -ExecutionPolicy Bypass -File`.
+- PowerShell 7 on Windows; Bash on Linux and WSL.
 - A Windows x64 or Linux x64 environment supported by the published native binding.
 
 The Framework package is pinned to `0.32.0` and the binding to `1.23.0`. Copy only this directory and install from the public npm registry.
@@ -34,7 +34,7 @@ This compiles TypeScript and generates the Framework default typed JSON schema f
 
 ### Endpoint and first packet
 
-Connect game clients to the Session node's `players` STREAM listener. Its default configuration in `server/config/session.json` is `ws://127.0.0.1:0`: WebSocket on loopback, with port `0` asking the OS to assign a free port and no application path (the WebSocket URL uses `/`). The Session node prints `READY {"id":"session","endpoint":"..."}` with the actual listening endpoint; use that endpoint, not port `0`. `e2e/server-host.ts` reads this value and the e2e runner passes it to the client. Table mesh endpoints and Redis are not client endpoints.
+Connect game clients to the Session node's `players` STREAM listener. Its default configuration in `server/config/session.json` is `ws://127.0.0.1:0`: WebSocket on loopback, with port `0` asking the OS to assign a free port and no application path (the WebSocket URL uses `/`). The Session node prints `READY {"id":"session","endpoint":"..."}` with the actual listening endpoint; use that endpoint, not port `0`. `e2e/runner.ts` reads this value and passes it to the client. Table mesh endpoints and Redis are not client endpoints.
 
 The default listener is reachable from the same host/network namespace. Docker e2e nodes share the runner's network namespace; the runner removes its nodes when it finishes. To connect an external game client, keep a deployment running, configure `streamEndpoint` with a reachable interface and port, and expose that port when using containers. Use the server's reachable host in the client URL. Browsers can use this WebSocket listener; an HTTPS page needs a secure `wss://` deployment, which the default configuration does not provide.
 
@@ -98,32 +98,6 @@ try {
   await connector.close();
 }
 ```
-
-## Run the server and the e2e separately
-
-Open two terminals in the template directory. In the first terminal, start Redis and the nodes. Wait for `Server ready:` and the Session endpoint. Each server's console lines start with its ID, such as `[session]` or `[playA]`, and show when it starts (`Session node starting` / `started`), drains and stops. Message flow records stay in the file logs; add `--trace` (`-Trace` in PowerShell) to `run-server` to show them in the console too.
-
-```sh
-./run-server.sh
-```
-
-```powershell
-pwsh -NoProfile -File ./run-server.ps1
-```
-
-In the second terminal, run the e2e. It finds the server from the first terminal through `logs/server.json` and runs the same scenarios against it; with no server running it starts its own nodes in Docker. The console shows each scenario (`━━ update (3/3) ━━`) and its steps (`▶ drain Play node A: …`), and the servers show the matching game events. Each client's packets go to `.logs/run-<id>/<scenario>-<client>.jsonl`, one JSON line per packet with its time, direction (`→` send, `←` receive), message type and payload. A drained server keeps forwarding messages sent to its old routes for the message follow window (30 s) before it is safe to shut down, so the update scenario waits for that before it replaces the server.
-
-```sh
-./run-e2e.sh
-```
-
-```powershell
-pwsh -NoProfile -File ./run-e2e.ps1
-```
-
-Start the server again before another full e2e run: one server start reserves table capacity for one run of every scenario, and the `update` scenario replaces a play node (table).
-
-Press Ctrl+C in the first terminal to shut down the nodes and remove the Redis container. The console shows each diagnostic record as its time and message; each node also appends the full records to `logs/<node-id>.log` as JSON lines, including when it is started directly with `node`. Set `logDir` in a node's JSON config to use another directory. Docker e2e nodes write that file inside their container; the runner keeps each node's stderr in `.logs/run-<id>/`. The e2e runner and server host also keep per-run logs under `.logs/`.
 
 ## Docker e2e
 

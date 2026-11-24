@@ -11,7 +11,6 @@ import {
   type ZLinkSpotManager
 } from '@zlink-systems/framework';
 import { Names, PacketNames } from '../../shared/constants';
-import { shortId, tableLog } from '../../shared/game-log';
 import {
   ActionRejected,
   BetRequest,
@@ -65,7 +64,6 @@ export class Rejoin {
       request.tableId !== String(spot.context.spotId)
     )
       throw new Error('Reconnect identity mismatch');
-    tableLog(spot.tableId, `${shortId(request.playerId)} reconnected`);
     await spot.respond(actor);
   }
 }
@@ -98,15 +96,9 @@ export class Start {
     _context: ZLinkMessageContext,
     _request: StartHandRequest
   ): Promise<void> {
-    const playerId = actor.context.actorId;
-    const reason = spot.state.start(playerId);
-    if (reason) {
-      tableLog(spot.tableId, `${shortId(playerId)} start rejected (${reason})`);
-      await actor.context.boundSession.send(new ActionRejected(reason, 0)).submit();
-      return;
-    }
-    tableLog(spot.tableId, `hand ${spot.state.snapshot.handNumber} started`);
-    await spot.deal();
+    const reason = spot.state.start(actor.context.actorId);
+    if (reason) await actor.context.boundSession.send(new ActionRejected(reason, 0)).submit();
+    else await spot.deal();
   }
 }
 @Injectable()
@@ -122,22 +114,10 @@ export class Bet {
     _context: ZLinkMessageContext,
     request: BetRequest
   ): Promise<void> {
-    const playerId = actor.context.actorId;
-    const result = spot.state.bet(playerId, request.handNumber, request.amount);
-    if (typeof result === 'string') {
-      tableLog(spot.tableId, `${shortId(playerId)} bet ${request.amount} rejected (${result})`);
+    const result = spot.state.bet(actor.context.actorId, request.handNumber, request.amount);
+    if (typeof result === 'string')
       await actor.context.boundSession.send(new ActionRejected(result, 0)).submit();
-      return;
-    }
-    tableLog(spot.tableId, `${shortId(playerId)} bet ${request.amount}`);
-    if (result) {
-      const winners = result.winners.map((seat) => `seat ${seat}`).join(', ');
-      tableLog(
-        spot.tableId,
-        `hand ${result.handNumber} settled, winner ${winners}, pot ${result.pot}`
-      );
-    }
-    await spot.publish(result ?? null);
+    else await spot.publish(result ?? null);
   }
 }
 const deliveryPackets: ReadonlyMap<string, Type<TableView | HandDealt | HandResult>> = new Map<

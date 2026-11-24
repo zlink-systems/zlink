@@ -153,7 +153,7 @@ Investigate Framework failures using actual replies, events, and lifecycle resul
 
 Preserve the first failing run and read its logs before deciding whether to run it again. An intermittent failure is an observed defect; a subsequent pass does not invalidate it. `.logs/run-<id>/` contains effective settings written by `e2e/runner.ts` at node startup and logs for each node.
 
-Settings files are `session.json`, `playA.json`, and `playB.json`. `NodeProcess` in `e2e/server-host.ts` records diagnostic stderr in `<node>-<n>.err.log` and readiness/control stdout in `<node>-<n>.out.log`, where `<n>` counts the processes started in the run; a replaced node has a second pair with a later `<n>`. The client packets each scenario received are in `<scenario>-<suffix>.jsonl`. Docker command logs of the run are `docker-<label>.log`, and local build output is in `.logs/build.log`. The shell runner writes Docker build, Redis, and outer cleanup logs to `.logs/docker-<project>/`. The `.out.log` file also contains `ZLINK_E2E_DIAG` JSON lines with ISO UTC timestamps for process spawn, READY wait start, READY receipt, and READY timeout; timeout records include the last received line and its timestamp.
+Settings files are `session.json`, `play-a.json`, and `play-b.json`. `NodeProcess` in `e2e/runner.ts` records diagnostic stderr in `<node>-<n>.err.log` and readiness/control stdout in `<node>-<n>.out.log`, where `<n>` counts the processes started in the run; a replaced node has a second pair with a later `<n>`. The client packets each scenario received are in `<scenario>-<suffix>.jsonl`. Docker command logs of the run are `docker-<label>.log`, and local build output is in `.logs/build.log`. The shell runner writes Docker build, Redis, and outer cleanup logs to `.logs/docker-<project>/`. The `.out.log` file also contains `ZLINK_E2E_DIAG` JSON lines with ISO UTC timestamps for process spawn, READY wait start, READY receipt, and READY timeout; timeout records include the last received line and its timestamp.
 
 ### Diagnostic levels
 
@@ -169,7 +169,7 @@ builder.configureDispatch().messageFlow('normal');
 
 ### Message flow investigation
 
-`server/shared/diagnostics.ts` writes each diagnostic record as a JSON line to stderr and to `logs/<node-id>.log` by default. In an e2e run, `NodeProcess` also copies stderr to the per-process `.err.log`. A record's `flow` value identifies a message across nodes, and `corr` relates request and reply records. The `body` field starts with `zlink flow:`; failures have `outcome=failed`, `error_type`, and `error_message`.
+`server/shared/diagnostics.ts` writes each diagnostic record to stderr as one JSON line, so inspect message flow in node `.err.log` files; the template creates no separate flow file. A record's `flow` value identifies a message across nodes, and `corr` relates request and reply records. The `body` field starts with `zlink flow:`; failures have `outcome=failed`, `error_type`, and `error_message`.
 
 Read the failure fields and preceding stage together without filtering categories out. Flow IDs differ between runs, so compare passing and failing runs by logical operation, Actor ID, and stage order to find the first missing or failed stage. If startup fails before message flow recording, preserve the startup exception and stack.
 
