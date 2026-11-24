@@ -64,6 +64,13 @@ fun checkStructure(root: Path) {
                 check(Json.mapper.readTree(file.toFile())["id"]?.asText() == text(node, "id")) {
                     "Configuration Id mismatch: $file"
                 }
+            if (role == Names.API) {
+                val endpoint =
+                    java.net.URI.create(text(Json.mapper.readTree(file.toFile()), "apiEndpoint"))
+                check(
+                    endpoint.scheme == "tcp" && endpoint.host != null && endpoint.port in 0..65535
+                )
+            }
         }
     }
     fun owner(node: JsonNode): String {
@@ -72,8 +79,13 @@ fun checkStructure(root: Path) {
         return id
     }
     val channels = array("channels")
-    unique(channels.map { text(it, "name") to owner(it) })
-    check(channels.isEmpty()) { "Server registers no channels" }
+    check(roles.filterValues { it == Names.API }.keys == setOf(Names.API))
+    check(
+        channels.map { listOf(text(it, "name"), owner(it), text(it, "kind")) } ==
+            listOf(listOf(Names.PLAYER_DATA, Names.API, "client-server"))
+    ) {
+        "Player data channel must be hosted by the API node"
+    }
     val spots = array("spots")
     unique(spots.map { text(it, "id") })
     val logicalIds = mutableListOf<String>()
@@ -117,6 +129,8 @@ fun checkStructure(root: Path) {
             listOf("session", "tableA", "relay", ""),
             listOf("tableA", Names.MATCHMAKER, "queue / assignment", ""),
             listOf(Names.MATCHMAKER, "tableA", "prepare / commit", ""),
+            listOf("tableA", Names.API, Names.PLAYER_DATA, ""),
+            listOf("tableB", Names.API, Names.PLAYER_DATA, ""),
             listOf("tableA", "location", "Location / lease", "location-authority"),
         )
     val declaredEdges =

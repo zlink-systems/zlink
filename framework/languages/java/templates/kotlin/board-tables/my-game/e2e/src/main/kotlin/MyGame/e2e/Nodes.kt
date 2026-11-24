@@ -164,7 +164,7 @@ class Nodes(
             compose("up", "-d", "--wait", "redis")
         }
         val redis = if (DockerRuntime.enabled) "redis:6379" else compose("port", "redis", "6379")
-        for (id in listOf("tableA", "tableB", Names.MATCHMAKER, "session")) {
+        for (id in listOf(Names.API, "tableA", "tableB", Names.MATCHMAKER, "session")) {
             val config =
                 NodeConfig(
                     id,
@@ -173,6 +173,7 @@ class Nodes(
                     "tcp://127.0.0.1:0",
                     if (id == "session") "ws://127.0.0.1:0" else null,
                     tableCapacity,
+                    apiEndpoint = if (id == Names.API) "tcp://127.0.0.1:0" else null,
                 )
             val path = logs.resolve("$id.json")
             Json.mapper.writeValue(path.toFile(), config)
@@ -190,7 +191,8 @@ class Nodes(
                 id,
                 when (id) {
                     "session",
-                    Names.MATCHMAKER -> id
+                    Names.MATCHMAKER,
+                    Names.API -> id
                     else -> "table"
                 },
                 requireNotNull(configs[id]),

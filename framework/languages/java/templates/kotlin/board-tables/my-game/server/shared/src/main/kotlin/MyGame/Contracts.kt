@@ -11,7 +11,9 @@ object Names {
     const val POOL = "Pool"
     const val POOL_KEY = "pool-board"
     const val MATCHMAKER = "matchmaker"
-    val SCENARIOS = listOf("table", "reconnect", "match", "match-cancel", "update")
+    const val API = "api"
+    const val PLAYER_DATA = "player-data"
+    val SCENARIOS = listOf("table", "reconnect", "match", "match-cancel", "update", "persist")
 }
 
 object Rules {

@@ -14,6 +14,7 @@ data class RoomReservation(
     val assignmentId: String,
     val members: List<String>,
     val phase: RoomPhase = RoomPhase.PREPARED,
+    val balances: Map<String, Long> = emptyMap(),
 )
 
 @ZLinkHandlerGroup(Names.TABLE)
