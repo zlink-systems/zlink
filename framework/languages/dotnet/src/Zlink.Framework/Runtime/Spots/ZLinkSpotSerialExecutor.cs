@@ -372,7 +372,13 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
             // is still pending.
             var execution = RunClaimedAsync(
                     lane,
-                    reservation.RunAsync,
+                    ct =>
+                        ExecuteActorOperationAsync(
+                            actorId,
+                            static (_, replay, token) => replay.RunAsync(token),
+                            reservation,
+                            ct
+                        ),
                     claim,
                     CancellationToken.None,
                     ready: _executionMode == ZLinkUserSpotExecutionMode.SpotWide
