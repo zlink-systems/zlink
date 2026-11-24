@@ -475,13 +475,24 @@ public final class ZLinkActorCreationCoordinator
                             if (read instanceof ZLinkCreationTerminalFound found) {
                                 return verifiedResponse(found.terminalEnvelope());
                             }
-                            return executeReserved(request, operation);
+                            var intent = request.intent();
+                            if (System.currentTimeMillis() >= intent.deadlineUnixMs()) {
+                                return executeReserved(request, operation, null);
+                            }
+                            return actors.awaitReservedActorRetirement(
+                                            intent.actorId(),
+                                            intent.reservation().objectGeneration())
+                                    .handle((ignored, failure) -> failure)
+                                    .thenCompose(
+                                            failure ->
+                                                    executeReserved(request, operation, failure));
                         });
     }
 
     private CompletionStage<ZLinkInternalMeshNode.ActorCreateResponse> executeReserved(
             ZLinkInternalMeshNode.ActorCreateRequest request,
-            ZLinkCreationOperationIdentity operation) {
+            ZLinkCreationOperationIdentity operation,
+            Throwable retirementFailure) {
         String key = ZLinkAuthorityKeyCodec.actor(request.intent().actorId());
         return locations
                 .read(key, OPEN)
@@ -507,6 +518,10 @@ public final class ZLinkActorCreationCoordinator
                             }
                             if (expired != null) {
                                 return failReserved(request, operation, reservation, expired);
+                            }
+                            if (retirementFailure != null) {
+                                return failReserved(
+                                        request, operation, reservation, retirementFailure);
                             }
                             if (!acceptsNewActor.test(request.intent().stableType())) {
                                 return failReserved(
@@ -662,7 +677,8 @@ public final class ZLinkActorCreationCoordinator
                                                 ignored -> actors.confirmReady(actor.actorId()))
                                         .thenCompose(ignored -> response(envelope));
                             }
-                            return actors.discardReservedActor(actor.actorId())
+                            return actors.discardReservedActor(
+                                            actor.actorId(), reservation.objectGeneration())
                                     .thenCompose(
                                             ignored ->
                                                     replayAfterConflict(
@@ -738,7 +754,8 @@ public final class ZLinkActorCreationCoordinator
                         ZLinkCreationTerminalState.FAILED,
                         envelope,
                         request.intent().deadlineUnixMs());
-        return actors.discardReservedActor(request.intent().actorId())
+        return actors.discardReservedActor(
+                        request.intent().actorId(), reservation.objectGeneration())
                 .thenCompose(ignored -> locations.abort(reservation, terminal, OPEN))
                 .thenCompose(ignored -> response(envelope));
     }

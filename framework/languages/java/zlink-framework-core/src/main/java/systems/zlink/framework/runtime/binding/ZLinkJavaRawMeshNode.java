@@ -816,27 +816,19 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             long sourceBindingGeneration,
             long sourceSessionSequence,
             long requestId) {
-        ZLinkInternalMeshNode.PeerAuthorityFence local = localAuthorityFence;
-        ZLinkServiceNodeDescriptor descriptor = localDescriptor;
-        ZLinkJavaRawSpotNode spots = (ZLinkJavaRawSpotNode) spotNode();
-        long ownerGeneration = spots.actorAuthorityOwnerGeneration(actor);
-        long ownerLeaseGeneration = spots.actorAuthorityOwnerLeaseGeneration(actor);
-        if (local == null
-                || descriptor == null
-                || sourceNodeRid == null
-                || sourceSessionRid == null && !routingId.equals(sourceNodeRid)
-                || sourceSessionRid != null
-                        && (sourceBindingGeneration <= 0 || sourceSessionSequence <= 0)
-                || ownerGeneration <= 0
-                || ownerLeaseGeneration <= 0) {
+        if (localAuthorityFence == null) {
             return null;
         }
-        return localActorMessage(
-                new ZLinkServiceM6BWireCodec.ActorRouteFence(
+        var target =
+                localActorMessageTarget(
                         actor,
-                        descriptor.lifecycleGeneration(),
-                        ownerGeneration,
-                        ownerLeaseGeneration),
+                        sourceNodeRid,
+                        sourceSessionRid,
+                        sourceBindingGeneration,
+                        sourceSessionSequence);
+        if (target == null) return null;
+        return localActorMessage(
+                target,
                 sourceNodeRid,
                 sourceSessionRid,
                 sourceBindingGeneration,
@@ -888,20 +880,17 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             Map<String, String> metadata,
             byte[] payload) {
         ZLinkInternalMeshNode.PeerAuthorityFence local = localAuthorityFence;
-        ZLinkServiceNodeDescriptor descriptor = localDescriptor;
-        ZLinkJavaRawSpotNode spots = (ZLinkJavaRawSpotNode) spotNode();
-        long ownerGeneration = spots.actorAuthorityOwnerGeneration(actor);
-        long ownerLeaseGeneration = spots.actorAuthorityOwnerLeaseGeneration(actor);
-        if (local == null
-                || descriptor == null
-                || sourceNodeRid == null
-                || sourceSessionRid == null && !routingId.equals(sourceNodeRid)
-                || sourceSessionRid != null
-                        && (sourceBindingGeneration <= 0 || sourceSessionSequence <= 0)
-                || ownerGeneration <= 0
-                || ownerLeaseGeneration <= 0) {
+        if (local == null) {
             return new byte[0];
         }
+        var target =
+                localActorMessageTarget(
+                        actor,
+                        sourceNodeRid,
+                        sourceSessionRid,
+                        sourceBindingGeneration,
+                        sourceSessionSequence);
+        if (target == null) return new byte[0];
         UUID operation = UUID.randomUUID();
         var message =
                 new ZLinkServiceM6BWireCodec.ActorMessage(
@@ -914,11 +903,7 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                         operation.getLeastSignificantBits(),
                         0,
                         null,
-                        new ZLinkServiceM6BWireCodec.ActorRouteFence(
-                                actor,
-                                descriptor.lifecycleGeneration(),
-                                ownerGeneration,
-                                ownerLeaseGeneration),
+                        target,
                         sourceSessionRid == null
                                 ? null
                                 : new ZLinkServiceM6BWireCodec.BoundSessionTail(
@@ -933,6 +918,24 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
                 wire.encodeApplicationPayload(
                         new ZLinkServiceM6AWireCodec.ApplicationPayload(
                                 packetName, "application/zlink-framework-json-v1", payload)));
+    }
+
+    private ZLinkServiceM6BWireCodec.ActorRouteFence localActorMessageTarget(
+            ZLinkBackendActorRef actor,
+            RoutingId sourceNodeRid,
+            RoutingId sourceSessionRid,
+            long sourceBindingGeneration,
+            long sourceSessionSequence) {
+        ZLinkServiceNodeDescriptor descriptor = localDescriptor;
+        if (descriptor == null
+                || sourceNodeRid == null
+                || sourceSessionRid == null && !routingId.equals(sourceNodeRid)
+                || sourceSessionRid != null
+                        && (sourceBindingGeneration <= 0 || sourceSessionSequence <= 0)) {
+            return null;
+        }
+        return ((ZLinkJavaRawSpotNode) spotNode())
+                .localActorRoute(actor, descriptor.lifecycleGeneration());
     }
 
     private static byte[] encodeFrozenMetadata(Map<String, String> metadata) {

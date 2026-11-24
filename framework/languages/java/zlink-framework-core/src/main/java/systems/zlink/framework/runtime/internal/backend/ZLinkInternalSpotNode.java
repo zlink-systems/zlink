@@ -475,6 +475,14 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
         return CompletableFuture.completedFuture(null);
     }
 
+    /** Retires the committed relocation source and its binding, if it had one. */
+    default CompletionStage<Void> retireDepartedActor(
+            ZLinkBackendActorRef actor, RoutingId sessionRid, long authorityOwnerGeneration) {
+        return sessionRid == null
+                ? CompletableFuture.completedFuture(null)
+                : retireDepartedActorBinding(actor, sessionRid, authorityOwnerGeneration);
+    }
+
     /**
      * Completes when every Instance activation this node accepted has reached its terminal,
      * including the first message's Store cleanup. Host shutdown waits for it inside its own drain
@@ -594,6 +602,10 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
          */
         default boolean hasSource(String actorId) {
             return true;
+        }
+
+        default ZLinkServiceM6BWireCodec.ActorRouteFence sourceFence(ZLinkBackendActorRef actor) {
+            return null;
         }
 
         boolean handle(

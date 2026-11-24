@@ -280,6 +280,12 @@ final class ZLinkFrameworkActorSubsystem {
                                         }
 
                                         @Override
+                                        public ZLinkServiceM6BWireCodec.ActorRouteFence sourceFence(
+                                                ZLinkBackendActorRef actor) {
+                                            return actors.messageFollowSourceFence(actor);
+                                        }
+
+                                        @Override
                                         public boolean handle(
                                                 RoutingId sourceNodeRid,
                                                 long sourceNodeGeneration,
