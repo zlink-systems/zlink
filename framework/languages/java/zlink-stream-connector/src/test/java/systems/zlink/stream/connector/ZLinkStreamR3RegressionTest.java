@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.net.URI;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -14,6 +15,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 final class ZLinkStreamR3RegressionTest {
     @Test
@@ -84,23 +86,8 @@ final class ZLinkStreamR3RegressionTest {
         CompletableFuture<Void> first = new CompletableFuture<>();
         chain.enqueue(() -> first);
         AtomicInteger writes = new AtomicInteger();
-        var requests = new ZLinkStreamPendingRequests();
-        var pending =
-                chain.enqueueRequestDeferred(
-                        null,
-                        () -> {
-                            writes.incrementAndGet();
-                            return CompletableFuture.completedFuture(null);
-                        },
-                        failure -> requests.fail(7L, failure),
-                        owned ->
-                                requests.add(
-                                        7L,
-                                        null,
-                                        "Echo",
-                                        owned,
-                                        (reply, complete) -> complete.getAsBoolean(),
-                                        (failure, complete) -> complete.getAsBoolean()));
+        var requests = ZLinkStreamPendingRequestsTest.pendingRequests();
+        var pending = enqueueRequest(requests, chain, 7L, Duration.ofSeconds(30), writes);
         chain.pump();
         pending.whenComplete((reply, error) -> first.complete(null));
         requests.fail(7L, new TimeoutException("request expired"));
@@ -188,24 +175,9 @@ final class ZLinkStreamR3RegressionTest {
         var chain = new ZLinkStreamSendChain();
         var first = new CompletableFuture<Void>();
         chain.enqueue(() -> first);
-        var requests = new ZLinkStreamPendingRequests();
+        var requests = ZLinkStreamPendingRequestsTest.pendingRequests();
         var writes = new AtomicInteger();
-        var pending =
-                chain.enqueueRequestDeferred(
-                        null,
-                        () -> {
-                            writes.incrementAndGet();
-                            return CompletableFuture.completedFuture(null);
-                        },
-                        error -> requests.fail(8L, error),
-                        owned ->
-                                requests.add(
-                                        8L,
-                                        null,
-                                        "Echo",
-                                        owned,
-                                        (reply, complete) -> complete.getAsBoolean(),
-                                        (error, complete) -> complete.getAsBoolean()));
+        var pending = enqueueRequest(requests, chain, 8L, Duration.ofSeconds(30), writes);
         pending.whenComplete((reply, error) -> first.complete(null));
         assertTrue(pending.cancel(false));
         assertTrue(pending.isCancelled());
@@ -218,52 +190,69 @@ final class ZLinkStreamR3RegressionTest {
         var chain = new ZLinkStreamSendChain();
         var first = new CompletableFuture<Void>();
         chain.enqueue(() -> first);
-        var requests = new ZLinkStreamPendingRequests();
         var writes = new AtomicInteger();
         var scheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+        var time = new AtomicLong();
+        var release = new CompletableFuture<Void>();
         try {
-            var pending =
-                    chain.enqueueRequestDeferred(
-                            null,
-                            () -> {
-                                writes.incrementAndGet();
-                                return CompletableFuture.completedFuture(null);
-                            },
-                            error -> requests.fail(9L, error),
-                            owned ->
-                                    requests.add(
-                                            9L,
-                                            null,
-                                            "Echo",
-                                            owned,
-                                            (reply, complete) -> complete.getAsBoolean(),
-                                            (error, complete) -> complete.getAsBoolean()));
+            scheduler.execute(release::join);
+            var requests = new ZLinkStreamPendingRequests(scheduler, time::get, () -> 0);
+            var pending = enqueueRequest(requests, chain, 9L, Duration.ofNanos(1), writes);
             var callback = pending.whenComplete((reply, error) -> first.complete(null));
-            requests.startTimeout(9L, java.time.Duration.ZERO, scheduler);
+            time.set(1);
+            release.complete(null);
             assertThrows(CompletionException.class, callback::join);
             assertEquals(0, writes.get());
         } finally {
+            release.complete(null);
             scheduler.shutdownNow();
         }
     }
 
+    private static CompletableFuture<ZLinkStreamEncodedPayload> enqueueRequest(
+            ZLinkStreamPendingRequests requests,
+            ZLinkStreamSendChain chain,
+            long sequence,
+            Duration timeout,
+            AtomicInteger writes) {
+        var request =
+                requests.start(
+                        null,
+                        "Echo",
+                        timeout,
+                        null,
+                        (reply, complete) -> complete.getAsBoolean(),
+                        (error, complete) -> complete.getAsBoolean(),
+                        ignored -> {},
+                        ignored -> {});
+        return request.enqueueAttempt(
+                sequence,
+                ignored ->
+                        chain.enqueueDeferred(
+                                null,
+                                () -> {
+                                    writes.incrementAndGet();
+                                    return CompletableFuture.completedFuture(null);
+                                },
+                                error -> requests.fail(sequence, error)));
+    }
+
     @Test
     void replySnapshotPrecedesUserClosingPayload() {
-        var requests = new ZLinkStreamPendingRequests();
-        var pending = new CompletableFuture<ZLinkStreamEncodedPayload>();
+        var requests = ZLinkStreamPendingRequestsTest.pendingRequests();
         var snapshot = new java.util.concurrent.atomic.AtomicReference<byte[]>();
-        requests.add(
-                10L,
-                null,
-                "Echo",
-                pending,
-                (reply, complete) -> {
-                    byte[] bytes = reply.payload().toByteArray();
-                    boolean completed = complete.getAsBoolean();
-                    if (completed) snapshot.set(bytes);
-                    return completed;
-                },
-                (error, complete) -> complete.getAsBoolean());
+        var pending =
+                ZLinkStreamPendingRequestsTest.addAttempt(
+                        requests,
+                        10L,
+                        "Echo",
+                        (reply, complete) -> {
+                            byte[] bytes = reply.payload().toByteArray();
+                            boolean completed = complete.getAsBoolean();
+                            if (completed) snapshot.set(bytes);
+                            return completed;
+                        },
+                        (error, complete) -> complete.getAsBoolean());
         pending.whenComplete((reply, error) -> reply.payload().close());
         requests.complete(
                 10L,
@@ -278,19 +267,18 @@ final class ZLinkStreamR3RegressionTest {
 
     @Test
     void snapshotFailureTerminatesPending() {
-        var requests = new ZLinkStreamPendingRequests();
-        var pending = new CompletableFuture<ZLinkStreamEncodedPayload>();
+        var requests = ZLinkStreamPendingRequestsTest.pendingRequests();
         var failure = new IllegalStateException("snapshot");
         var message = systems.zlink.contracts.messaging.Message.from("reply");
-        requests.add(
-                11L,
-                null,
-                "Echo",
-                pending,
-                (reply, complete) -> {
-                    throw failure;
-                },
-                (error, complete) -> complete.getAsBoolean());
+        var pending =
+                ZLinkStreamPendingRequestsTest.addAttempt(
+                        requests,
+                        11L,
+                        "Echo",
+                        (reply, complete) -> {
+                            throw failure;
+                        },
+                        (error, complete) -> complete.getAsBoolean());
         requests.complete(11L, () -> new ZLinkStreamEncodedPayload("", message, Map.of()));
         assertSame(failure, assertThrows(CompletionException.class, pending::join).getCause());
         assertFalse(requests.fail(11L, new IllegalStateException("late failure")));

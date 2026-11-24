@@ -674,6 +674,17 @@ class DefaultZLinkNestStreamNodeBuilder
     super(state);
   }
 
+  setAuthenticationAdmission(
+    packetName: string,
+    maxConcurrentAuthentications?: number,
+    authenticationRetryDelayMs?: number
+  ): this {
+    this.streamOptions.authenticationPacketName = packetName;
+    this.streamOptions.maxConcurrentAuthentications = maxConcurrentAuthentications;
+    this.streamOptions.authenticationRetryDelayMs = authenticationRetryDelayMs;
+    return this;
+  }
+
   setHeartbeat(intervalMs: number, timeoutMs: number): this {
     this.streamOptions.heartbeatIntervalMs = intervalMs;
     this.streamOptions.heartbeatTimeoutMs = timeoutMs;

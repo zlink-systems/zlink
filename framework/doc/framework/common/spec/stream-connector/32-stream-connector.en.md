@@ -531,7 +531,7 @@ that request again on the same connection automatically. Applications don't buil
   random delay of 0–50 ms. The server's clock is never read.
 - A resend uses the same packet name, payload, application metadata, and correlation, and only takes a new request
   sequence.
-- The application's `OnAdmissionWaiting` callback is called once for each rejection received. Retries don't add runs
+- The application's `OnAdmissionWaiting` callback is called once for each rejection received. Its arguments are the request packet name, the actor ID that sent the request (when there is one) and the retry delay the server gave, named like the request fields of the §5.7 reply-received hook. Retries don't add runs
   of the request hooks (§5.7) or the request callback; their counts and the caller-cancellation rule follow §5.7
   unchanged (a request the caller cancelled doesn't run the reply received hook).
 - The wait ends at the earlier of the original request deadline and `first rejection time + MaxAdmissionWait`; the

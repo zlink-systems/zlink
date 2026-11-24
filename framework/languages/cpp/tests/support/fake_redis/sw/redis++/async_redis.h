@@ -36,6 +36,17 @@ class AsyncRedis : public Redis
     }
 
     template <typename T, typename TKeyIterator, typename TArgIterator, typename TCallback>
+    void evalsha (const std::string &sha1,
+                  TKeyIterator keys_begin,
+                  TKeyIterator keys_end,
+                  TArgIterator args_begin,
+                  TArgIterator args_end,
+                  TCallback callback)
+    {
+        eval<T> (sha1, keys_begin, keys_end, args_begin, args_end, std::move (callback));
+    }
+
+    template <typename T, typename TKeyIterator, typename TArgIterator, typename TCallback>
     void eval (const std::string &script,
                TKeyIterator keys_begin,
                TKeyIterator keys_end,

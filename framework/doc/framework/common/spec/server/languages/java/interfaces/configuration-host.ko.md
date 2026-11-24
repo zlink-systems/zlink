@@ -527,6 +527,9 @@ public interface systems.zlink.framework.configuration.ZLinkStreamNodeBuilder {
  public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder enableActorDispatch();
  public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder heartbeat(java.time.Duration, java.time.Duration);
  public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder idleTimeout(java.time.Duration);
+ public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder authenticationPacketName(java.lang.String);
+ public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder maxConcurrentAuthentications(int);
+ public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder authenticationRetryDelay(java.time.Duration);
  public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder addSessionPacketHandler(java.lang.Class<?>);
 }
 public interface systems.zlink.framework.configuration.ZLinkStreamSocketConfig {
@@ -754,3 +757,5 @@ relocation chunk byte 합계의 상한이고 기본값은 16 MiB이며 `0`은 �
 미적용이다. `relocationCutoverWaitTimeout`은 cutover 대기 Warning 임계값이고 기본값은 1초다.
 Source 사본 유지와 authority CAS는 [공통 relocation §4.4](../../../05-location-relocation/04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)를 따른다. 네 값 모두 startup-only이며 음수는 socket
 bind 전에 configuration error다.
+
+인증 입장 설정의 기본값과 검증은 [인증 입장 제한](../../../04-session/03-authentication-admission.ko.md)이 정한다.

@@ -3,19 +3,46 @@ package systems.zlink.framework.runtime.locations;
 import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.RepeatedTest;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.actors.ZLinkActor;
+import systems.zlink.framework.actors.ZLinkActorContext;
+import systems.zlink.framework.actors.ZLinkActorFactory;
+import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
+import systems.zlink.framework.monitoring.ZLinkListenerKind;
+import systems.zlink.framework.runtime.InMemoryRelocationStore;
+import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
+import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
+import systems.zlink.framework.runtime.internal.backend.ZLinkRequestFailureMapping;
+import systems.zlink.framework.runtime.internal.binding.spot.MeshPeerState;
 import systems.zlink.framework.runtime.internal.execution.ZLinkSpotCloseCallAccess;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.locations.*;
+import systems.zlink.framework.runtime.spots.ZLinkSpotRuntimeTestAccess;
+import systems.zlink.framework.spots.ZLinkEntrySpot;
+import systems.zlink.framework.spots.ZLinkEntrySpotContext;
+import systems.zlink.framework.spots.ZLinkInstanceSpot;
+import systems.zlink.framework.spots.ZLinkInstanceSpotContext;
+import systems.zlink.framework.spots.ZLinkSpotRequestHandler;
+import systems.zlink.framework.spots.ZLinkTimerOptions;
+import systems.zlink.framework.spots.ZLinkTimerOverrunPolicy;
+import systems.zlink.framework.spots.ZLinkTimerTick;
 import systems.zlink.framework.testing.ZLinkLocationStoreTestAdapter;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
 import java.time.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -25,6 +52,340 @@ final class ZLinkOwnerLeaseOutageRecoveryTest {
     private static final Duration TTL = Duration.ofSeconds(30);
     private static final Duration MARGIN = Duration.ofSeconds(5);
     private static final long RECLAIM_AFTER = TTL.plus(MARGIN).toNanos();
+    private static final String OUTAGE_MESH = "lease-outage";
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void hostGatedTimerPreservesDueTickWithoutFailureOrImmediateReschedule(boolean stopOnError)
+            throws Exception {
+        try (var f = new OutageHost(true)) {
+            var next = f.timerScheduler.nextTask();
+            try (var timer =
+                    get(
+                            f.entry
+                                    .context()
+                                    .addTimer(
+                                            "outage",
+                                            Duration.ofNanos(1),
+                                            EntryTick.class,
+                                            new ZLinkTimerOptions(
+                                                    ZLinkTimerOverrunPolicy.SKIP_LATE_TICKS,
+                                                    1,
+                                                    stopOnError)))) {
+                var healthyTick = get(next);
+                var outageTick = f.timerScheduler.nextTask();
+                healthyTick.run();
+                get(outageTick);
+                assertEquals(1, f.entry.ticks.get(), "healthy control");
+
+                f.closeLeaseAdmission();
+                var retry = f.timerScheduler.nextTask();
+                get(outageTick).run();
+                assertAll(
+                        () -> assertEquals(1, f.entry.ticks.get()),
+                        () ->
+                                assertFalse(
+                                        timer.isDisposed(), "a lease refusal is no handler error"),
+                        () ->
+                                assertFalse(
+                                        retry.isDone(),
+                                        () ->
+                                                "rescheduled during outage with delay "
+                                                        + retry.join()
+                                                                .getDelay(TimeUnit.NANOSECONDS)
+                                                        + " ns"));
+                f.store.renew = null;
+                assertTrue(get(f.locations.renewOwnerLeaseOnce()));
+                get(retry);
+                assertEquals(2, f.entry.ticks.get(), "renewal delivers the pending tick");
+            }
+        }
+    }
+
+    @Test
+    void closedLeaseRejectsStandaloneActorBeforeQueueAdmission() throws Exception {
+        try (var f = new OutageHost(true)) {
+            f.startOutage();
+            get(f.host.actorManager().create("standalone", "player").submit());
+            var actors = ZLinkFrameworkRuntimeTestAccess.actors(f.host);
+            var actor =
+                    get(actors.getOrCreateLocalActor("standalone", OutageActor.class))
+                            .orElseThrow();
+            assertTrue(actor.context().spotId().isEmpty());
+            actors.setActorDispatchTargetResolver(null);
+            var calls = new AtomicInteger();
+            java.util.function.Supplier<CompletionStage<Void>> callback =
+                    () -> {
+                        calls.incrementAndGet();
+                        return CompletableFuture.completedFuture(null);
+                    };
+            get(actors.submitActorDispatch("standalone", 0, callback));
+            assertEquals(1, calls.get(), "healthy control");
+
+            f.expireAdmission();
+            var admitted = new CompletableFuture<Void>();
+            var completion =
+                    actors.submitActorDispatch(
+                            null, "standalone", 0, callback, admitted, null, null);
+            assertAll(
+                    () -> {
+                        var rejection = assertThrows(ExecutionException.class, () -> get(admitted));
+                        assertEquals(
+                                ZLinkFrameworkErrorKind.SHUTTING_DOWN,
+                                assertInstanceOf(
+                                                ZLinkFrameworkException.class, rejection.getCause())
+                                        .kind());
+                    },
+                    () -> assertThrows(ExecutionException.class, () -> get(completion)),
+                    () -> assertEquals(1, calls.get()));
+        }
+    }
+
+    @Test
+    void remoteInstanceRequestReportsOwnerLeaseAdmissionClosed() throws Exception {
+        try (var f = new OutageHost(false)) {
+            String endpoint =
+                    f.host.listenerStatus(ZLinkListenerKind.ROUTE_MESH, OUTAGE_MESH).endpoint();
+            var options = outageOptions(f.backing);
+            var mesh = options.addRouteMesh(OUTAGE_MESH).listen("tcp://127.0.0.1:0");
+            mesh.peerConnections().connect(endpoint);
+            mesh.objects().client();
+            try (var client = ZLinkFrameworkRuntimeTestAccess.start(options)) {
+                get(ZLinkFrameworkRuntimeTestAccess.startupCompletion(client));
+                assertTrue(client.isReady());
+                var spots = ZLinkFrameworkRuntimeTestAccess.spots(client);
+                var node = ZLinkSpotRuntimeTestAccess.routeMeshNodesByName(spots).get(OUTAGE_MESH);
+                long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                while (node.peers().stream()
+                        .noneMatch(peer -> peer.state() == MeshPeerState.ADMITTED)) {
+                    assertTrue(
+                            System.nanoTime() < until, "the target peer did not become admitted");
+                    Thread.sleep(10);
+                }
+                assertEquals("reply", get(requestInstance(client, "healthy")));
+                f.closeLeaseAdmission();
+                var rejection =
+                        assertThrows(
+                                ExecutionException.class,
+                                () -> get(requestInstance(client, "closed")));
+                var failure = assertInstanceOf(ZLinkFrameworkException.class, rejection.getCause());
+                assertAll(
+                        () ->
+                                assertEquals(
+                                        ZLinkFrameworkErrorKind.SHUTTING_DOWN,
+                                        failure.kind(),
+                                        failure::getMessage),
+                        () ->
+                                assertEquals(
+                                        0,
+                                        ZLinkRequestFailureMapping.causeCode(failure),
+                                        failure::getMessage),
+                        () -> assertEquals(1, f.observers.instanceCalls.get()));
+            }
+        }
+    }
+
+    private static CompletionStage<String> requestInstance(ZLinkFrameworkRuntime host, String id) {
+        return host.route()
+                .requestToSpot(id, new InstanceProbe())
+                .instanceSpot("room")
+                .inMesh(OUTAGE_MESH)
+                .timeout(Duration.ofSeconds(5))
+                .submit(String.class);
+    }
+
+    private static <T> T get(CompletionStage<T> stage) throws Exception {
+        return stage.toCompletableFuture().get(8, TimeUnit.SECONDS);
+    }
+
+    private static DefaultZLinkFrameworkOptions outageOptions(ZLinkInMemoryLocationStore backing) {
+        var options = new DefaultZLinkFrameworkOptions();
+        options.addLocationStore(backing);
+        options.addRelocationStore(new InMemoryRelocationStore());
+        options.configureLocations().setStoreOutageRetention(true);
+        options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+        return options;
+    }
+
+    private static final class OutageHost implements AutoCloseable {
+        final ZLinkInMemoryLocationStore backing = new ZLinkInMemoryLocationStore();
+        final AtomicLong now = new AtomicLong(1);
+        final ZLinkLocationRepository provider =
+                new ZLinkProviderLocationRepository(backing, now::get, MARGIN);
+        final LeaseStore store = new LeaseStore(provider);
+        final ZLinkLocationFirstHeartbeatTest.RecordingScheduler timerScheduler =
+                new ZLinkLocationFirstHeartbeatTest.RecordingScheduler();
+        final OutageObservers observers = new OutageObservers();
+        final ZLinkLocationRuntime locations;
+        final ZLinkFrameworkRuntime host;
+        final OutageEntry entry;
+
+        OutageHost(boolean withEntrySpot) throws Exception {
+            var options = outageOptions(backing);
+            var objects =
+                    options.addRouteMesh(OUTAGE_MESH)
+                            .listen("tcp://127.0.0.1:0")
+                            .objects()
+                            .server();
+            if (withEntrySpot) objects.addEntrySpot(OutageEntry.class);
+            objects.addActorFactory(
+                    "player",
+                    OutageActor.class,
+                    OutageActorFactory.class,
+                    factory -> factory.disableRelocation());
+            objects.addInstanceSpotFactory(
+                    "room", OutageInstance.class, factory -> factory.disableRelocation());
+            var heartbeat = new ZLinkLocationFirstHeartbeatTest.RecordingScheduler();
+            var repository =
+                    (ZLinkLocationRepository)
+                            Proxy.newProxyInstance(
+                                    ZLinkLocationRepository.class.getClassLoader(),
+                                    new Class<?>[] {ZLinkLocationRepository.class},
+                                    (proxy, method, arguments) -> {
+                                        try {
+                                            return method.invoke(
+                                                    method.getName().equals("renewOwnerLease")
+                                                            ? store
+                                                            : provider,
+                                                    arguments);
+                                        } catch (InvocationTargetException failure) {
+                                            throw failure.getCause();
+                                        }
+                                    });
+            var registered = ZLinkRegisteredLocationStores.fromUnified(repository);
+            locations =
+                    new ZLinkLocationRuntime(
+                            registered,
+                            "lease-outage-owner",
+                            TTL,
+                            Duration.ofSeconds(5),
+                            Duration.ofSeconds(3),
+                            MARGIN,
+                            now::get,
+                            heartbeat,
+                            new ZLinkStateLane(Runnable::run));
+            host =
+                    ZLinkFrameworkRuntimeTestAccess.startWithConstruction(
+                            options,
+                            new ZLinkJavaBackendAdapterFactory(),
+                            ZLinkHandlerActivator.services().add(OutageObservers.class, observers),
+                            null,
+                            new ZLinkFrameworkRuntimeTestAccess.Construction()
+                                    .locationRuntime(locations)
+                                    .locationStores(registered)
+                                    .spotTimerExecutor(timerScheduler)
+                                    .spotHandlerExecutor(Runnable::run)
+                                    .spotTimerStateLaneFactory(
+                                            () -> new ZLinkStateLane(Runnable::run)));
+            try {
+                get(ZLinkFrameworkRuntimeTestAccess.startupCompletion(host));
+                assertTrue(host.isReady());
+                entry = withEntrySpot ? get(observers.entryReady) : null;
+            } catch (Exception | Error failure) {
+                close();
+                throw failure;
+            }
+        }
+
+        void closeLeaseAdmission() throws Exception {
+            startOutage();
+            expireAdmission();
+        }
+
+        void startOutage() throws Exception {
+            var lastSuccess = locations.ownerLeaseSnapshot().lastSuccessfulRequestStartedNanos();
+            now.set(lastSuccess + Duration.ofSeconds(5).toNanos());
+            store.renew =
+                    CompletableFuture.failedFuture(new IllegalStateException("Store unavailable"));
+            assertFalse(get(locations.renewOwnerLeaseOnce()));
+            assertNotNull(locations.ownerLeaseSnapshot().outageObservedAtNanos());
+        }
+
+        void expireAdmission() {
+            now.set(locations.ownerAdmissionDeadlineNanos + 1);
+            assertFalse(locations.isOwnerAdmissionOpen());
+            assertFalse(locations.ownerLeaseSnapshot().outageDiscarded());
+        }
+
+        public void close() throws Exception {
+            try {
+                if (store.renew != null) {
+                    store.renew = null;
+                    assertTrue(
+                            get(locations.renewOwnerLeaseOnce()), "restore the lease for shutdown");
+                }
+            } finally {
+                try {
+                    host.close();
+                } finally {
+                    timerScheduler.shutdownNow();
+                }
+            }
+        }
+    }
+
+    public record OutageActor(ZLinkActorContext context) implements ZLinkActor {}
+
+    public static final class OutageActorFactory implements ZLinkActorFactory {
+        public CompletionStage<ZLinkActor> create(ZLinkActorContext context) {
+            return CompletableFuture.completedFuture(new OutageActor(context));
+        }
+    }
+
+    public static final class OutageObservers {
+        final CompletableFuture<OutageEntry> entryReady = new CompletableFuture<>();
+        final AtomicInteger instanceCalls = new AtomicInteger();
+    }
+
+    public static final class OutageEntry implements ZLinkEntrySpot<OutageActor> {
+        private final ZLinkEntrySpotContext context;
+        final AtomicInteger ticks = new AtomicInteger();
+
+        public OutageEntry(ZLinkEntrySpotContext context, OutageObservers observers) {
+            this.context = context;
+            observers.entryReady.complete(this);
+        }
+
+        public ZLinkEntrySpotContext context() {
+            return context;
+        }
+
+        public CompletionStage<Void> onJoinedActor(OutageActor actor) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        public CompletionStage<Void> onLeaveActor(OutageActor actor) {
+            return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    public static final class EntryTick {
+        public void handle(OutageEntry spot, ZLinkTimerTick tick) {
+            spot.ticks.incrementAndGet();
+        }
+    }
+
+    public record InstanceProbe() {}
+
+    public record OutageInstance(ZLinkInstanceSpotContext context) implements ZLinkInstanceSpot {
+        public void configure() {
+            context.handlers().addPacket(InstanceHandler.class);
+        }
+    }
+
+    public static final class InstanceHandler
+            implements ZLinkSpotRequestHandler<OutageInstance, InstanceProbe, String> {
+        private final AtomicInteger calls;
+
+        public InstanceHandler(OutageObservers observers) {
+            this.calls = observers.instanceCalls;
+        }
+
+        public CompletionStage<String> handle(OutageInstance spot, InstanceProbe probe) {
+            calls.incrementAndGet();
+            return CompletableFuture.completedFuture("reply");
+        }
+    }
 
     static final class MutableClock extends Clock {
         Instant now = Instant.EPOCH;
@@ -487,6 +848,14 @@ final class ZLinkOwnerLeaseOutageRecoveryTest {
         var queue = new ZLinkSerialExecutionQueue(Runnable::run, ZLinkExecutionLanePolicy.spot());
         var timer = ZLinkSerialExecutionQueue.spotTimer(Runnable::run, queue);
         try (var f = new Fixture(provider, retention)) {
+            var store = f.store.backing;
+            var before =
+                    ZLinkLocationDescriptorFixture.descriptor(
+                            f.original, "node", ZLinkPlacementObjectKind.USER_SPOT, 1);
+            assertEquals(
+                    ZLinkLocationWriteStatus.STORED,
+                    await(store.updateMeshNode(before, ZLinkLocationWriteIntent.NEW_CLAIM))
+                            .status());
             var called = new AtomicInteger();
             var disposed = new AtomicInteger();
             var execution =
@@ -501,11 +870,17 @@ final class ZLinkOwnerLeaseOutageRecoveryTest {
             ZLinkSpotCloseCallAccess.executionPolicy(queue, execution);
             var entered = new CompletableFuture<Void>();
             var remote = new CompletableFuture<Void>();
+            var staleWrite = new CompletableFuture<ZLinkLocationWriteStatus>();
             var active =
                     queue.enqueue(
                             () -> {
                                 entered.complete(null);
-                                return remote;
+                                return remote.thenCompose(
+                                                ignored ->
+                                                        store.updateMeshNode(
+                                                                before,
+                                                                ZLinkLocationWriteIntent.RENEW))
+                                        .thenAccept(result -> staleWrite.complete(result.status()));
                             },
                             null);
             entered.join();
@@ -527,9 +902,31 @@ final class ZLinkOwnerLeaseOutageRecoveryTest {
             var tick = timer.enqueue(callback, null);
             assertFalse(pending.toCompletableFuture().isDone());
             assertFalse(tick.toCompletableFuture().isDone());
-            var claim = new CompletableFuture<ZLinkOwnerLeaseClaimResult>();
-            f.store.claim = claim;
-            f.store.renew = CompletableFuture.completedFuture(new ZLinkOwnerLeaseRenewStale());
+            var publication = new CompletableFuture<Void>();
+            var descriptorCommitted = new CompletableFuture<ZLinkMeshNodeDescriptor>();
+            f.runtime.setOwnerLeaseRecoveryListener(
+                    admissionWasOpen -> {
+                        assertFalse(admissionWasOpen);
+                        var next =
+                                ZLinkLocationDescriptorFixture.descriptor(
+                                        f.runtime.descriptorPublicationOwnerToken(),
+                                        "node",
+                                        ZLinkPlacementObjectKind.USER_SPOT,
+                                        1,
+                                        before.descriptorRevision() + 1);
+                        return publication
+                                .thenCompose(
+                                        ignored ->
+                                                store.updateMeshNode(
+                                                        next, ZLinkLocationWriteIntent.RENEW))
+                                .thenAccept(
+                                        result -> {
+                                            assertEquals(
+                                                    ZLinkLocationWriteStatus.STORED,
+                                                    result.status());
+                                            descriptorCommitted.complete(next);
+                                        });
+                    });
             f.store.onClaim =
                     () -> {
                         assertEquals(1, disposed.get());
@@ -539,14 +936,31 @@ final class ZLinkOwnerLeaseOutageRecoveryTest {
                         assertStale(queue.enqueue(callback, null));
                         assertNull(f.runtime.ownerLeaseSnapshot().outageCutoffNanos());
                     };
+            f.at(RECLAIM_AFTER);
             var renewing = f.runtime.renewOwnerLeaseOnce();
-            assertFalse(renewing.toCompletableFuture().isDone(), f.runtime::lastError);
-            claim.complete(
-                    new ZLinkOwnerLeaseClaimed(
-                            new ZLinkLocationOwnerToken("owner", 2),
-                            Instant.EPOCH.plus(TTL),
-                            Instant.EPOCH));
-            assertTrue(await(renewing));
+            try {
+                assertFalse(renewing.toCompletableFuture().isDone(), f.runtime::lastError);
+                var owner = f.runtime.descriptorPublicationOwnerToken();
+                assertEquals(f.original.ownerId(), owner.ownerId());
+                assertNotEquals(f.original.leaseGeneration(), owner.leaseGeneration());
+                assertFalse(active.toCompletableFuture().isDone());
+                assertFalse(activeTimer.toCompletableFuture().isDone());
+                assertFalse(f.runtime.isOwnerAdmissionOpen());
+                assertThrows(ZLinkFrameworkException.class, f.runtime::ensureOwnerAdmissionOpen);
+                assertFalse(descriptorCommitted.isDone());
+                publication.complete(null);
+                assertTrue(await(renewing));
+                assertTrue(f.runtime.isOwnerAdmissionOpen());
+                f.runtime.ensureOwnerAdmissionOpen();
+                var after = await(descriptorCommitted);
+                assertEquals(owner.leaseGeneration(), after.leaseGeneration());
+                assertTrue(after.descriptorRevision() > before.descriptorRevision());
+                assertFalse(active.toCompletableFuture().isDone());
+            } finally {
+                publication.complete(null);
+                remote.complete(null);
+            }
+            assertEquals(ZLinkLocationWriteStatus.IGNORED_STALE, await(staleWrite));
             assertStale(queue.enqueue(callback, null));
             assertStale(timer.enqueue(callback, null));
             await(execution.ready());
@@ -565,7 +979,6 @@ final class ZLinkOwnerLeaseOutageRecoveryTest {
             } finally {
                 freshQueue.close();
             }
-            remote.complete(null);
             await(active);
             await(activeTimer);
         } finally {

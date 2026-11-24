@@ -218,7 +218,10 @@ export interface ZLinkRouteChannelOptions extends ZLinkRouteMeshChannelOptions {
   readonly routerChannelId: string;
 }
 
-export interface ZLinkStreamNodeOptions {
+export interface ZLinkStreamNodeOptions extends Pick<
+  import('../../framework/dist/nest-integration').ZLinkStreamNodeOptions,
+  'authenticationPacketName' | 'maxConcurrentAuthentications' | 'authenticationRetryDelayMs'
+> {
   readonly heartbeatIntervalMs?: number;
   readonly heartbeatTimeoutMs?: number;
   readonly idleTimeoutMs?: number;

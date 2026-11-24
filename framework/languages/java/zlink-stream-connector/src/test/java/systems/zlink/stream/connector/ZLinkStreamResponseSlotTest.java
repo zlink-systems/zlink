@@ -20,16 +20,16 @@ final class ZLinkStreamResponseSlotTest {
                         ZLinkStreamConnectorOptions.createDefault(URI.create("tcp://127.0.0.1:1")));
         var queue = new ZLinkStreamDispatchQueue();
         var actors = new ZLinkStreamActorRegistry(null, config, queue, ignored -> {});
-        var pending = new ZLinkStreamPendingRequests();
-        var result = new CompletableFuture<ZLinkStreamEncodedPayload>();
-        if (hasPending)
-            pending.add(
-                    1,
-                    null,
-                    "Reply",
-                    result,
-                    (payload, complete) -> complete.getAsBoolean(),
-                    (failure, complete) -> complete.getAsBoolean());
+        var pending = ZLinkStreamPendingRequestsTest.pendingRequests();
+        var result =
+                hasPending
+                        ? ZLinkStreamPendingRequestsTest.addAttempt(
+                                pending,
+                                1,
+                                "Reply",
+                                (payload, complete) -> complete.getAsBoolean(),
+                                (failure, complete) -> complete.getAsBoolean())
+                        : new CompletableFuture<ZLinkStreamEncodedPayload>();
         var dispatcher =
                 new ZLinkStreamReceiveDispatcher(
                         config,
