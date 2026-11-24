@@ -18,8 +18,8 @@ struct Names
 };
 struct Rules
 {
-    static constexpr int seats = 4, deck_size = 52, ranks = 13, lowest_rank = 2,
-                         cards_per_hand = 2, no_seat = -1, minimum_players = 2;
+    static constexpr int seats = 4, deck_size = 52, ranks = 13, lowest_rank = 2, cards_per_hand = 2,
+                         no_seat = -1, minimum_players = 2;
     static constexpr std::int64_t initial_chips = 1000;
     static constexpr std::int64_t max_contract_integer = 9'007'199'254'740'991LL;
     static constexpr auto table_full = "table-full";
@@ -36,8 +36,8 @@ struct Rules
     {
         return value >= 0 && value <= max_contract_integer;
     }
-    static constexpr bool try_add_contract_integers (std::int64_t left, std::int64_t right,
-                                                     std::int64_t &sum) noexcept
+    static constexpr bool
+    try_add_contract_integers (std::int64_t left, std::int64_t right, std::int64_t &sum) noexcept
     {
         if (!is_contract_integer (left) || !is_contract_integer (right)
             || right > max_contract_integer - left) {
@@ -116,7 +116,6 @@ struct TableView
     int turnSeat = Rules::no_seat;
     std::int64_t pot = 0;
     std::vector<SeatView> seats;
-
 };
 struct HandDealt
 {
@@ -153,88 +152,79 @@ namespace zlink::json
 {
 template <> struct dto_traits<::MyGame::SessionInfo>
 {
-    static constexpr auto fields = std::tuple{
-      zlink::json::field ("sessionId", &::MyGame::SessionInfo::sessionId),
-      zlink::json::field ("actorId", &::MyGame::SessionInfo::actorId),
-      zlink::json::field ("objectGeneration", &::MyGame::SessionInfo::objectGeneration)
-    };
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("sessionId", &::MyGame::SessionInfo::sessionId),
+                 zlink::json::field ("actorId", &::MyGame::SessionInfo::actorId),
+                 zlink::json::field ("objectGeneration", &::MyGame::SessionInfo::objectGeneration)};
 };
 
 template <> struct dto_traits<::MyGame::JoinTableRequest>
 {
-    static constexpr auto fields = std::tuple{
-      zlink::json::field ("playerId", &::MyGame::JoinTableRequest::playerId),
-      zlink::json::field ("tableId", &::MyGame::JoinTableRequest::tableId)
-    };
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("playerId", &::MyGame::JoinTableRequest::playerId),
+                 zlink::json::field ("tableId", &::MyGame::JoinTableRequest::tableId)};
 };
 
 template <> struct dto_traits<::MyGame::BetRequest>
 {
-    static constexpr auto fields = std::tuple{
-      zlink::json::field ("handNumber", &::MyGame::BetRequest::handNumber),
-      zlink::json::field ("amount", &::MyGame::BetRequest::amount)
-    };
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("handNumber", &::MyGame::BetRequest::handNumber),
+                 zlink::json::field ("amount", &::MyGame::BetRequest::amount)};
 };
 
 template <> struct dto_traits<::MyGame::SeatView>
 {
-    static constexpr auto fields = std::tuple{
-      zlink::json::field ("seat", &::MyGame::SeatView::seat),
-      zlink::json::field ("playerId", &::MyGame::SeatView::playerId),
-      zlink::json::field ("chips", &::MyGame::SeatView::chips),
-      zlink::json::field ("acted", &::MyGame::SeatView::acted),
-      zlink::json::field ("cardCount", &::MyGame::SeatView::cardCount)
-    };
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("seat", &::MyGame::SeatView::seat),
+                 zlink::json::field ("playerId", &::MyGame::SeatView::playerId),
+                 zlink::json::field ("chips", &::MyGame::SeatView::chips),
+                 zlink::json::field ("acted", &::MyGame::SeatView::acted),
+                 zlink::json::field ("cardCount", &::MyGame::SeatView::cardCount)};
 };
 
 template <> struct dto_traits<::MyGame::TableView>
 {
-    static constexpr auto fields = std::tuple{
-      zlink::json::field ("tableId", &::MyGame::TableView::tableId),
-      zlink::json::field ("nodeId", &::MyGame::TableView::nodeId),
-      zlink::json::field ("yourSeat", &::MyGame::TableView::yourSeat),
-      zlink::json::field ("handNumber", &::MyGame::TableView::handNumber),
-      zlink::json::field ("inHand", &::MyGame::TableView::inHand),
-      zlink::json::field ("turnSeat", &::MyGame::TableView::turnSeat),
-      zlink::json::field ("pot", &::MyGame::TableView::pot),
-      zlink::json::field ("seats", &::MyGame::TableView::seats)
-    };
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("tableId", &::MyGame::TableView::tableId),
+                 zlink::json::field ("nodeId", &::MyGame::TableView::nodeId),
+                 zlink::json::field ("yourSeat", &::MyGame::TableView::yourSeat),
+                 zlink::json::field ("handNumber", &::MyGame::TableView::handNumber),
+                 zlink::json::field ("inHand", &::MyGame::TableView::inHand),
+                 zlink::json::field ("turnSeat", &::MyGame::TableView::turnSeat),
+                 zlink::json::field ("pot", &::MyGame::TableView::pot),
+                 zlink::json::field ("seats", &::MyGame::TableView::seats)};
 };
 
 template <> struct dto_traits<::MyGame::HandDealt>
 {
-    static constexpr auto fields = std::tuple{
-      zlink::json::field ("handNumber", &::MyGame::HandDealt::handNumber),
-      zlink::json::field ("cards", &::MyGame::HandDealt::cards)
-    };
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("handNumber", &::MyGame::HandDealt::handNumber),
+                 zlink::json::field ("cards", &::MyGame::HandDealt::cards)};
 };
 
 template <> struct dto_traits<::MyGame::RevealedHand>
 {
-    static constexpr auto fields = std::tuple{
-      zlink::json::field ("seat", &::MyGame::RevealedHand::seat),
-      zlink::json::field ("playerId", &::MyGame::RevealedHand::playerId),
-      zlink::json::field ("cards", &::MyGame::RevealedHand::cards)
-    };
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("seat", &::MyGame::RevealedHand::seat),
+                 zlink::json::field ("playerId", &::MyGame::RevealedHand::playerId),
+                 zlink::json::field ("cards", &::MyGame::RevealedHand::cards)};
 };
 
 template <> struct dto_traits<::MyGame::HandResult>
 {
-    static constexpr auto fields = std::tuple{
-      zlink::json::field ("handNumber", &::MyGame::HandResult::handNumber),
-      zlink::json::field ("pot", &::MyGame::HandResult::pot),
-      zlink::json::field ("winners", &::MyGame::HandResult::winners),
-      zlink::json::field ("hands", &::MyGame::HandResult::hands),
-      zlink::json::field ("seats", &::MyGame::HandResult::seats)
-    };
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("handNumber", &::MyGame::HandResult::handNumber),
+                 zlink::json::field ("pot", &::MyGame::HandResult::pot),
+                 zlink::json::field ("winners", &::MyGame::HandResult::winners),
+                 zlink::json::field ("hands", &::MyGame::HandResult::hands),
+                 zlink::json::field ("seats", &::MyGame::HandResult::seats)};
 };
 
 template <> struct dto_traits<::MyGame::ActionRejected>
 {
-    static constexpr auto fields = std::tuple{
-      zlink::json::field ("reason", &::MyGame::ActionRejected::reason),
-      zlink::json::field ("retryAfterMs", &::MyGame::ActionRejected::retryAfterMs)
-    };
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("reason", &::MyGame::ActionRejected::reason),
+                 zlink::json::field ("retryAfterMs", &::MyGame::ActionRejected::retryAfterMs)};
 };
 
 template <> struct dto_traits<::MyGame::SessionInfoRequest>

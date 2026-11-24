@@ -73,6 +73,8 @@ class TableState
 
   public:
     std::vector<Seat> seats;
+    std::vector<std::string> matchMembers;
+    bool matchWithdrawn = false;
     std::vector<int> deck;
     std::int64_t handNumber = 0, pot = 0;
     int turnSeat = Rules::no_seat;
@@ -241,23 +243,25 @@ namespace zlink::json
 {
 template <> struct dto_traits<::MyGame::Seat>
 {
-    static constexpr auto fields = std::tuple{
-      zlink::json::field ("playerId", &::MyGame::Seat::playerId),
-      zlink::json::field ("chips", &::MyGame::Seat::chips),
-      zlink::json::field ("cards", &::MyGame::Seat::cards),
-      zlink::json::field ("acted", &::MyGame::Seat::acted)
-    };
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("playerId", &::MyGame::Seat::playerId),
+                 zlink::json::field ("chips", &::MyGame::Seat::chips),
+                 zlink::json::field ("cards", &::MyGame::Seat::cards),
+                 zlink::json::field ("acted", &::MyGame::Seat::acted)};
 };
 
 template <> struct dto_traits<::MyGame::TableState>
 {
-    static constexpr auto fields = std::tuple{
-      zlink::json::field ("seats", &::MyGame::TableState::seats),
-      zlink::json::field ("deck", &::MyGame::TableState::deck),
-      zlink::json::field ("handNumber", &::MyGame::TableState::handNumber),
-      zlink::json::field ("pot", &::MyGame::TableState::pot),
-      zlink::json::field ("turnSeat", &::MyGame::TableState::turnSeat),
-      zlink::json::field ("inHand", &::MyGame::TableState::inHand)
-    };
+    static constexpr auto fields =
+      std::tuple{zlink::json::field ("seats", &::MyGame::TableState::seats),
+                 zlink::json::field (
+                   "matchMembers", &::MyGame::TableState::matchMembers, zlink::json::defaulted),
+                 zlink::json::field (
+                   "matchWithdrawn", &::MyGame::TableState::matchWithdrawn, zlink::json::defaulted),
+                 zlink::json::field ("deck", &::MyGame::TableState::deck),
+                 zlink::json::field ("handNumber", &::MyGame::TableState::handNumber),
+                 zlink::json::field ("pot", &::MyGame::TableState::pot),
+                 zlink::json::field ("turnSeat", &::MyGame::TableState::turnSeat),
+                 zlink::json::field ("inHand", &::MyGame::TableState::inHand)};
 };
 } // namespace zlink::json

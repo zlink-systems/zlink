@@ -6,19 +6,25 @@
   "run": {
     "commands": {
       "sh": [
+        "./run-server.sh",
         "./run-e2e.sh --build-only",
         "./run-e2e.sh",
-        "./run-e2e.sh --scenario table,reconnect,update"
+        "./run-e2e.sh --scenario table,reconnect,update",
+        "./run-e2e.sh --scenario match,match-cancel"
       ],
       "powershell": [
+        "pwsh -NoProfile -File ./run-server.ps1",
         "pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly",
         "pwsh -NoProfile -File ./run-e2e.ps1",
-        "pwsh -NoProfile -File ./run-e2e.ps1 -Scenario table,reconnect,update"
+        "pwsh -NoProfile -File ./run-e2e.ps1 -Scenario table,reconnect,update",
+        "pwsh -NoProfile -File ./run-e2e.ps1 -Scenario match,match-cancel"
       ]
     },
     "scenarios": [
       "table",
       "reconnect",
+      "match",
+      "match-cancel",
       "update"
     ]
   },
@@ -48,6 +54,12 @@
       "config": "server/config/table-b.json"
     },
     {
+      "id": "matchmaker",
+      "role": "matchmaker",
+      "title": "Matchmaker node",
+      "config": "server/config/matchmaker.json"
+    },
+    {
       "id": "location",
       "role": "location-store",
       "title": "Location Store",
@@ -74,6 +86,13 @@
       "type": "Table",
       "owner": "tableA",
       "dynamic": true
+    },
+    {
+      "id": "board-pool",
+      "kind": "user",
+      "type": "Pool",
+      "owner": "matchmaker",
+      "logicalId": "pool-board"
     }
   ],
   "edges": [
@@ -89,6 +108,22 @@
     },
     {
       "from": "tableA",
+      "to": "location",
+      "label": "Location / lease",
+      "semantic": "location-authority"
+    },
+    {
+      "from": "tableA",
+      "to": "matchmaker",
+      "label": "MatchRequest / EnterReport"
+    },
+    {
+      "from": "matchmaker",
+      "to": "tableA",
+      "label": "PrepareRoom / CommitRoom"
+    },
+    {
+      "from": "matchmaker",
       "to": "location",
       "label": "Location / lease",
       "semantic": "location-authority"

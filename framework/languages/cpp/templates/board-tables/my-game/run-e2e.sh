@@ -3,28 +3,46 @@ set -euo pipefail
 umask 077
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
+. "$ROOT/scripts/run-helpers.sh"
 local_mode=false
 no_build=false
 build_only=false
+attach=false
+check_structure=false
 arguments=()
 for argument in "$@"; do
   case "$argument" in
     --local) local_mode=true ;;
     --no-build) no_build=true ;;
     --build-only) build_only=true ;;
+    --attach) attach=true ;;
+    --check-structure) check_structure=true; arguments+=("$argument") ;;
     *) arguments+=("$argument") ;;
   esac
 done
 mkdir -p "$ROOT/.logs"
+if ! $attach && ! $local_mode && ! $build_only && ! $check_structure && server_running; then
+  echo 'Using the running server (.logs/server.json)'
+  attach=true
+fi
+if $attach; then
+  if $build_only || $check_structure; then
+    echo '--attach requires a scenario run.' >&2
+    exit 1
+  fi
+  if [[ ! -x "$runner" ]]; then
+    echo 'Run ./run-server.sh to build and start the server before attaching.' >&2
+    exit 1
+  fi
+  exec "$runner" --root "$ROOT" --attach "${arguments[@]}"
+fi
 if $local_mode; then
   if ! $no_build; then
-    if ! { cmake -P bootstrap.cmake && cmake --preset default && cmake --build --preset default; } >"$ROOT/.logs/build.log" 2>&1; then
-      tail -n 20 "$ROOT/.logs/build.log" >&2
-      exit 1
-    fi
+    assert_no_running_server
+    build_local
   fi
   $build_only && exit 0
-  exec "$ROOT/build/bin/my-game-e2e" --root "$ROOT" "${arguments[@]}"
+  exec "$runner" --root "$ROOT" "${arguments[@]}"
 fi
 if $no_build; then
   echo '--no-build requires --local; Docker builds reuse the layer cache automatically.' >&2
@@ -72,9 +90,7 @@ if ! "${compose[@]}" build >"$logs/build.log" 2>&1; then
   exit 1
 fi
 $build_only && exit 0
-"${compose[@]}" run --rm --no-deps -T --name "$project-check" runner "${arguments[@]}" --check-structure
-for argument in "${arguments[@]}"; do
-  [[ "$argument" == "--check-structure" ]] && exit 0
-done
+"${compose[@]}" run --rm --no-deps -T --name "$project-check" runner --check-structure
+$check_structure && exit 0
 "${compose[@]}" up -d --wait --wait-timeout 30 redis >"$logs/redis-start.log" 2>&1
 "${compose[@]}" run --rm --no-deps -T --name "$project-control" runner "${arguments[@]}"

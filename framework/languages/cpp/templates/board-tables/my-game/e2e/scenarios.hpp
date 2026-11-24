@@ -34,9 +34,8 @@ inline int domain_checks ()
         int expected_card = 0;
         const bool is_complete_deck =
           cards.size () == Rules::deck_size
-          && std::all_of (cards.begin (), cards.end (), [&expected_card] (int card) {
-                 return card == expected_card++;
-             });
+          && std::all_of (cards.begin (), cards.end (),
+                          [&expected_card] (int card) { return card == expected_card++; });
         require (card_count == Rules::deck_size && is_complete_deck,
                  "Shuffled deck did not contain every card exactly once");
     }
@@ -47,13 +46,13 @@ inline int domain_checks ()
         require (state.admit ("p1") && state.admit ("p2"),
                  "Could not prepare deterministic shuffle");
         require (state.start ("p1").empty (), "Injected random source failed");
-        const std::vector<int> expected_order{
-          2,  1,  4,  9,  14, 40, 12, 7,  34, 18, 22, 13, 8,  33, 16, 19, 50, 24,
-          37, 23, 25, 27, 49, 28, 20, 26, 48, 44, 29, 39, 32, 31, 35, 17, 10, 46,
-          6,  5,  21, 42, 36, 43, 51, 3,  30, 11, 41, 15, 38, 45, 0,  47};
+        const std::vector<int> expected_order{2,  1,  4,  9,  14, 40, 12, 7,  34, 18, 22, 13, 8,
+                                              33, 16, 19, 50, 24, 37, 23, 25, 27, 49, 28, 20, 26,
+                                              48, 44, 29, 39, 32, 31, 35, 17, 10, 46, 6,  5,  21,
+                                              42, 36, 43, 51, 3,  30, 11, 41, 15, 38, 45, 0,  47};
         constexpr auto dealt_count = Rules::minimum_players * Rules::cards_per_hand;
         const std::vector<int> expected_remaining (expected_order.begin (),
-                                                  expected_order.end () - dealt_count);
+                                                   expected_order.end () - dealt_count);
         const std::vector<int> expected_first_hand{expected_order[51], expected_order[50]};
         const std::vector<int> expected_second_hand{expected_order[49], expected_order[48]};
         require (state.deck == expected_remaining && state.seats[0].cards == expected_first_hand
@@ -65,8 +64,7 @@ inline int domain_checks ()
     {
         TableState state;
         for (int i = 0; i < Rules::seats; ++i)
-            require (state.admit ("p" + std::to_string (i)),
-                     "Could not prepare settlement cards");
+            require (state.admit ("p" + std::to_string (i)), "Could not prepare settlement cards");
         state.handNumber = 1;
         state.inHand = true;
         state.turnSeat = 0;
@@ -92,8 +90,7 @@ inline int domain_checks ()
 
     {
         TableState state;
-        require (state.admit ("p1") && state.admit ("p2"),
-                 "Could not prepare bet amount boundary");
+        require (state.admit ("p1") && state.admit ("p2"), "Could not prepare bet amount boundary");
         state.seats[0].chips = maximum;
         state.seats[0].cards = {11, 24};
         state.seats[1].cards = {0, 13};
@@ -127,14 +124,14 @@ inline int domain_checks ()
         const auto outcome = state.bet ("p1", BetRequest{1, 1});
         require (outcome.rejection == Rules::integer_out_of_range,
                  "Pot overflow did not return integer-out-of-range");
-        require (test_json_board_scenarios::object (state) == before, "Pot overflow rejection changed state");
+        require (test_json_board_scenarios::object (state) == before,
+                 "Pot overflow rejection changed state");
     }
     ++passed;
 
     {
         TableState state;
-        require (state.admit ("p1") && state.admit ("p2"),
-                 "Could not prepare payout boundary");
+        require (state.admit ("p1") && state.admit ("p2"), "Could not prepare payout boundary");
         state.seats[0].chips = maximum;
         state.seats[0].cards = {11, 24};
         state.seats[1].cards = {0, 13};
@@ -148,7 +145,8 @@ inline int domain_checks ()
         const auto outcome = state.bet ("p2", BetRequest{1, 1});
         require (outcome.rejection == Rules::integer_out_of_range,
                  "Payout overflow did not return integer-out-of-range");
-        require (test_json_board_scenarios::object (state) == before, "Payout overflow rejection changed state");
+        require (test_json_board_scenarios::object (state) == before,
+                 "Payout overflow rejection changed state");
     }
     ++passed;
 
@@ -194,9 +192,21 @@ inline std::pair<HandDealt, HandDealt> start (Client &a, Client &b)
         }
     return {ah, bh};
 }
-inline void
-settle (Client &a, Client &b, const HandDealt &ah, const HandDealt &bh, std::int64_t first,
-        std::int64_t second)
+inline TableView
+first_bet (Client &first, Client &second, const HandDealt &hand, std::int64_t amount)
+{
+    first.send (BetRequest{hand.handNumber, amount});
+    const auto view = second.next<TableView> ([amount] (const auto &v) { return v.pot == amount; });
+    require (view.turnSeat == 1 && view.seats[0].chips == Rules::initial_chips - amount,
+             "First bet state incorrect");
+    return view;
+}
+inline void settle (Client &a,
+                    Client &b,
+                    const HandDealt &ah,
+                    const HandDealt &bh,
+                    std::int64_t first,
+                    std::int64_t second)
 {
     a.privacy (ah);
     b.privacy (bh);
@@ -323,12 +333,7 @@ inline void table (const std::string &endpoint, const std::string &expected_node
     require (a.next<HandDealt> () == ah, "Rejected bet changed private cards");
     same_state (before_limit, after_invalid_amount);
 
-    a.send (BetRequest{ah.handNumber, Bets::table_first});
-    const auto state =
-      b.next<TableView> ([] (const auto &v) { return v.pot == Bets::table_first; });
-    require (state.turnSeat == 1
-               && state.seats[0].chips == Rules::initial_chips - Bets::table_first,
-             "First bet state incorrect");
+    first_bet (a, b, ah, Bets::table_first);
     settle (a, b, ah, bh, Bets::table_first, Bets::table_second);
     a.close ();
     b.close ();
@@ -342,10 +347,7 @@ inline Continuity in_progress (Client &a, Client &b)
 {
     initial (a, b);
     const auto [ah, bh] = start (a, b);
-    a.send (BetRequest{ah.handNumber, Bets::continuity_first});
-    auto before =
-      b.next<TableView> ([] (const auto &v) { return v.pot == Bets::continuity_first; });
-    require (before.turnSeat == 1, "Second player must own turn");
+    const auto before = first_bet (a, b, ah, Bets::continuity_first);
     return {ah, bh, before};
 }
 inline void reconnect (const std::string &endpoint)
@@ -368,17 +370,13 @@ inline void reconnect (const std::string &endpoint)
     a.close ();
     replacement.close ();
 }
-inline void update (const std::string &endpoint, World &world)
+template <typename Server> void update (const std::string &endpoint, Server &server)
 {
     const auto id = unique_id (), table_id = "table-" + id;
     Client a (endpoint, "p1-" + id, table_id), b (endpoint, "p2-" + id, table_id);
     const auto state = in_progress (a, b);
     const auto ai = a.info (), bi = b.info ();
-    auto &source = world.table_node (state.before.nodeId);
-    source.command (Control::drain);
-    source.wait_line (Control::requested, Limits::relocation);
-    source.wait_line (Control::relocated, Limits::relocation);
-    source.wait_line (Control::safe, Limits::safe);
+    server.drain_table (state.before.nodeId);
     require (a.info () == ai && b.info () == bi, "Drain changed client identity");
     a.clear ();
     b.clear ();
@@ -391,9 +389,64 @@ inline void update (const std::string &endpoint, World &world)
     a.next<TableView> ();
     require (a.next<HandDealt> () == state.a, "Drain changed first player's cards");
     settle (a, b, state.a, state.b, Bets::continuity_first, Bets::continuity_second);
-    world.replace_table (state.before.nodeId);
+    server.replace_table (state.before.nodeId);
     a.close ();
     b.close ();
     table (endpoint, state.before.nodeId);
+}
+inline MatchQueued queue_match (Client &client)
+{
+    client.send (FindMatch{});
+    const auto queued = client.next<MatchQueued> ();
+    require (!queued.ticketId.empty (), "Missing match ticket");
+    client.player_id = client.info ().actorId;
+    return queued;
+}
+
+inline void play_match (const std::string &endpoint)
+{
+    Client a (endpoint, "", ""), b (endpoint, "", "");
+    const auto qa = queue_match (a);
+    const auto qb = queue_match (b);
+    const auto a_match = a.next<MatchFound> ();
+    const auto b_match = b.next<MatchFound> ();
+    require (a_match.ticketId == qa.ticketId && b_match.ticketId == qb.ticketId
+               && qa.ticketId != qb.ticketId,
+             "MatchFound ticket must match that player's queue ticket");
+    require (a_match.roomId.starts_with (MatchNames::room_prefix)
+               && a_match.roomId == b_match.roomId && a_match.seat != b_match.seat,
+             "The players must share one room and occupy different seats");
+    for (auto *client : {&a, &b}) {
+        const auto found = client == &a ? a_match : b_match;
+        const auto view = client->next<TableView> ();
+        require (view.tableId == found.roomId && view.yourSeat == found.seat
+                   && view.seats.size () == Rules::minimum_players
+                   && view.seats.at (static_cast<std::size_t> (found.seat)).playerId
+                        == client->player_id,
+                 "Committed table view must match the room and seats");
+        client->require_match_sequence (found);
+    }
+    auto &first = a_match.seat == 0 ? a : b;
+    auto &second = a_match.seat == 0 ? b : a;
+    const auto [first_hand, second_hand] = start (first, second);
+    first_bet (first, second, first_hand, Bets::table_first);
+    settle (first, second, first_hand, second_hand, Bets::table_first, Bets::table_second);
+    a.close ();
+    b.close ();
+}
+
+inline void match_cancel (const std::string &endpoint)
+{
+    Client a (endpoint, "", "");
+    const auto queued = queue_match (a);
+    a.send (FindMatch{});
+    require (a.next<MatchQueued> ().ticketId == queued.ticketId,
+             "Duplicate FindMatch changed ticket");
+    a.send (CancelMatch{queued.ticketId});
+    const auto cancelled = a.next<MatchCancelled> ();
+    require (cancelled.ticketId == queued.ticketId && cancelled.reason == MatchNames::cancelled,
+             "Cancelled ticket and reason must match the request");
+    play_match (endpoint);
+    a.close ();
 }
 }

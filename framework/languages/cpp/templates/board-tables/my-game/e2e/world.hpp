@@ -35,6 +35,7 @@ class World
     bool compose_started_ = false;
     int command_index_ = 0;
     int table_capacity_;
+    bool foreground_;
     std::vector<std::string> compose (std::initializer_list<std::string> arguments) const
     {
         std::vector<std::string> result{"docker",         "compose",
@@ -46,7 +47,8 @@ class World
     std::string run_command (const std::vector<std::string> &arguments)
     {
         const auto name = "command-" + std::to_string (++command_index_);
-        Process process (arguments, logs_ / (name + ".out.log"), logs_ / (name + ".err.log"));
+        Process process (arguments, logs_ / (name + ".out.log"), logs_ / (name + ".err.log"),
+                         foreground_);
         require (process.wait_exit (Limits::startup) == 0,
                  "Command failed: " + arguments.front () + "; log " + name);
         return process.output ();
@@ -58,9 +60,6 @@ class World
         config["TableCapacity"] = table_capacity_;
         config["RedisEndpoint"] = redis_;
         config["KeyPrefix"] = project_ + ":";
-        config["MeshEndpoint"] = "tcp://127.0.0.1:0";
-        if (role == "session")
-            config["StreamEndpoint"] = "tcp://127.0.0.1:0";
         const auto suffix = name + (replacement ? "-replacement" : "");
         const auto config_path = logs_ / (suffix + ".json");
         {
@@ -76,7 +75,8 @@ class World
 #endif
         std::vector<std::string> arguments{executable.string (), config_path.string ()};
         if (!docker_project_.empty ()) {
-            const auto container = docker_project_ + "-" + logs_.filename ().string () + "-" + suffix;
+            const auto container =
+              docker_project_ + "-" + logs_.filename ().string () + "-" + suffix;
             constexpr auto container_config = "/app/node.json";
             const auto image = environment ("MY_GAME_NODE_IMAGE");
             const auto runner = environment ("MY_GAME_RUNNER_CONTAINER");
@@ -85,11 +85,12 @@ class World
                           "my-game.e2e=" + docker_project_, "--network", "container:" + runner,
                           image, "/app/bin/my-game-" + role, container_config});
             containers_.push_back (container);
-            run_command ({"docker", "cp", config_path.string (), container + ":" + container_config});
+            run_command (
+              {"docker", "cp", config_path.string (), container + ":" + container_config});
             arguments = {"docker", "start", "-a", "-i", container};
         }
-        node->process = std::make_unique<Process> (
-          arguments, logs_ / (suffix + ".out.log"), logs_ / (suffix + ".err.log"));
+        node->process = std::make_unique<Process> (arguments, logs_ / (suffix + ".out.log"),
+                                                   logs_ / (suffix + ".err.log"), foreground_);
         auto *result = node.get ();
         nodes_.push_back (std::move (node));
         const auto line = result->process->wait_line (Control::ready);
@@ -112,12 +113,16 @@ class World
     }
 
   public:
-    World (std::filesystem::path root, std::filesystem::path bin, int table_capacity) :
+    World (std::filesystem::path root,
+           std::filesystem::path bin,
+           int table_capacity,
+           bool foreground = false) :
         root_ (std::filesystem::canonical (root)),
         bin_ (std::filesystem::canonical (bin)),
         project_ ("my-game-" + unique_id ()),
         docker_project_ (environment ("MY_GAME_DOCKER_PROJECT")),
-        table_capacity_ (table_capacity)
+        table_capacity_ (table_capacity),
+        foreground_ (foreground)
     {
         logs_ = root_ / ".logs" / ("run-" + project_);
         std::filesystem::create_directories (logs_);
@@ -140,13 +145,22 @@ class World
             const auto [node, ready] = start_node (name, "table");
             tables_[ready.at ("id").get<std::string> ()] = node;
         }
+        start_node ("matchmaker", "matchmaker");
         const auto ready = start_node ("session", "session").second;
         const auto stream = ready.at ("streamEndpoint").get<std::string> ();
-        require (!stream.empty () && !stream.ends_with (":0"),
-                 "Framework did not publish stream endpoint");
+        require (stream.starts_with ("ws://") && !stream.ends_with (":0"),
+                 "Framework did not publish a bound WebSocket STREAM endpoint: " + stream);
         return stream;
     }
-    Process &table_node (const std::string &id) { return *tables_.at (id)->process; }
+    const std::filesystem::path &logs () const { return logs_; }
+    void drain_table (const std::string &id)
+    {
+        auto &source = *tables_.at (id)->process;
+        source.command (Control::drain);
+        source.wait_line (Control::requested, Limits::relocation);
+        source.wait_line (Control::relocated, Limits::relocation);
+        source.wait_line (Control::safe, Limits::safe);
+    }
     void replace_table (const std::string &id)
     {
         stop_node (*tables_.at (id));

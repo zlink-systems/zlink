@@ -1,5 +1,6 @@
 #pragma once
 #include "server/shared/config.hpp"
+#include "server/shared/match_contracts.hpp"
 #include <algorithm>
 #include <set>
 #include <tuple>
@@ -11,16 +12,22 @@ enum class Scenario
 {
     table,
     reconnect,
-    update
+    update,
+    match,
+    match_cancel
 };
 struct ScenarioDefinition
 {
     Scenario id;
     const char *name;
 };
-inline constexpr std::array scenario_order{ScenarioDefinition{Scenario::table, "table"},
-                                           ScenarioDefinition{Scenario::reconnect, "reconnect"},
-                                           ScenarioDefinition{Scenario::update, "update"}};
+// Update's placement check needs the other selected scenarios' tables to exist before drain.
+inline constexpr std::array scenario_order{
+  ScenarioDefinition{Scenario::table, "table"},
+  ScenarioDefinition{Scenario::reconnect, "reconnect"},
+  ScenarioDefinition{Scenario::match, "match"},
+  ScenarioDefinition{Scenario::match_cancel, "match-cancel"},
+  ScenarioDefinition{Scenario::update, "update"}};
 inline std::vector<std::string> scenario_names ()
 {
     std::vector<std::string> result;
@@ -112,6 +119,14 @@ inline void check_structure (const std::filesystem::path &root)
         }
         require (kind == "user", "Unknown application Spot kind");
         const auto type = nonempty (spot, "type");
+        if (type == MatchNames::pool) {
+            require (roles.at (owner) == "matchmaker" && !spot.value ("dynamic", false)
+                       && spot.at ("logicalId") == MatchNames::pool_key,
+                     "Matchmaker must own the board Pool");
+            require (logical_ids.insert (nonempty (spot, "logicalId")).second,
+                     "Duplicate logical Spot ID");
+            continue;
+        }
         require (type == Names::table, "Unknown stable type");
         if (spot.contains ("dynamic"))
             require (spot.at ("dynamic").is_boolean (), "Dynamic must be boolean");
@@ -123,6 +138,7 @@ inline void check_structure (const std::filesystem::path &root)
         }
         require (roles.at (owner) == "table", "Table owner cannot be a Session process");
     }
+    require (logical_ids.contains (MatchNames::pool_key), "Missing board Pool");
     const auto &spots = j.at ("spots");
     require (std::any_of (spots.begin (), spots.end (),
                           [] (const auto &spot) {
@@ -150,6 +166,9 @@ inline void check_structure (const std::filesystem::path &root)
     const decltype (edges) required_edges{
       {"players", "session", "STREAM", ""},
       {"session", "tableA", "relay", ""},
+      {"tableA", "matchmaker", "MatchRequest / EnterReport", ""},
+      {"matchmaker", "tableA", "PrepareRoom / CommitRoom", ""},
+      {"matchmaker", "location", "Location / lease", "location-authority"},
       {"tableA", "location", "Location / lease", "location-authority"}};
     require (
       std::includes (edges.begin (), edges.end (), required_edges.begin (), required_edges.end ()),

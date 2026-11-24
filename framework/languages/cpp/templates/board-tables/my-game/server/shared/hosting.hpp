@@ -36,18 +36,18 @@ class NodeControl final : public fx::hosted_service_t
     {
         auto &runtime = services.get_required<fx::framework_runtime_t> ();
         auto serving_ready = std::make_shared<fx::task_completion_source_t<void>> ();
-        auto runtime_observation = runtime.observe (
-          Limits::observation_capacity, [serving_ready] (const auto &observed) {
-                if (observed.loss.discarded_terminal_count != 0)
-                    serving_ready->complete (fx::result_t<void>::failure (
-                      fx::framework_error_kind_t::internal_failure, "Startup observation lost"));
-                else if (observed.status.state == fx::framework_runtime_state_t::serving)
-                    serving_ready->complete (fx::result_t<void>::success ());
-                else if (observed.status.state != fx::framework_runtime_state_t::preparing)
-                    serving_ready->complete (fx::result_t<void>::failure (
-                      fx::framework_error_kind_t::internal_failure,
-                      "Runtime startup failed: "
-                        + std::to_string (static_cast<int> (observed.status.state))));
+        auto runtime_observation =
+          runtime.observe (Limits::observation_capacity, [serving_ready] (const auto &observed) {
+              if (observed.loss.discarded_terminal_count != 0)
+                  serving_ready->complete (fx::result_t<void>::failure (
+                    fx::framework_error_kind_t::internal_failure, "Startup observation lost"));
+              else if (observed.status.state == fx::framework_runtime_state_t::serving)
+                  serving_ready->complete (fx::result_t<void>::success ());
+              else if (observed.status.state != fx::framework_runtime_state_t::preparing)
+                  serving_ready->complete (fx::result_t<void>::failure (
+                    fx::framework_error_kind_t::internal_failure,
+                    "Runtime startup failed: "
+                      + std::to_string (static_cast<int> (observed.status.state))));
           });
         co_await serving_ready->task ();
         runtime_observation->close ();
@@ -56,27 +56,23 @@ class NodeControl final : public fx::hosted_service_t
         auto mesh_ready = std::make_shared<fx::task_completion_source_t<void>> ();
         auto mesh_observation = meshes.observe (
           Names::mesh, Limits::observation_capacity, [this, mesh_ready] (const auto &observed) {
-                if (observed.loss.discarded_terminal_count != 0)
-                    mesh_ready->complete (fx::result_t<void>::failure (
-                      fx::framework_error_kind_t::internal_failure,
-                      "Readiness observation lost"));
-                else if (observed.status.is_ready
-                         && (!placement_ || observed.status.placement.is_available))
-                    mesh_ready->complete (fx::result_t<void>::success ());
+              if (observed.loss.discarded_terminal_count != 0)
+                  mesh_ready->complete (fx::result_t<void>::failure (
+                    fx::framework_error_kind_t::internal_failure, "Readiness observation lost"));
+              else if (observed.status.is_ready
+                       && (!placement_ || observed.status.placement.is_available))
+                  mesh_ready->complete (fx::result_t<void>::success ());
           });
         co_await mesh_ready->task ();
         mesh_observation->close ();
         nlohmann::json output{
           {"id", config_.Id},
           {"meshEndpoint",
-           runtime.listener_status (fx::listener_kind_t::route_mesh, Names::mesh)
-             .endpoint}};
+           runtime.listener_status (fx::listener_kind_t::route_mesh, Names::mesh).endpoint}};
         output["streamEndpoint"] =
           config_.StreamEndpoint
             ? nlohmann::json (
-                runtime
-                  .listener_status (fx::listener_kind_t::stream, Names::stream)
-                  .endpoint)
+                runtime.listener_status (fx::listener_kind_t::stream, Names::stream).endpoint)
             : nlohmann::json (nullptr);
         std::cout << Control::ready << output.dump () << std::endl;
         co_return;
@@ -111,8 +107,7 @@ class NodeControl final : public fx::hosted_service_t
                             std::cout << Control::relocated << std::endl;
                             // Availability of this public observation is required; state is not inferred.
                             (void) safe_to_shutdown (runtime.status ());
-                            auto safe =
-                              std::make_shared<fx::task_completion_source_t<void>> ();
+                            auto safe = std::make_shared<fx::task_completion_source_t<void>> ();
                             auto observation = runtime.observe (
                               Limits::observation_capacity, [safe] (const auto &observed) {
                                   if (observed.loss.discarded_terminal_count != 0)
