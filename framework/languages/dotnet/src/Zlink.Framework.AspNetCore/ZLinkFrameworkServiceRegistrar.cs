@@ -124,10 +124,6 @@ internal static class ZLinkFrameworkServiceRegistrar
             );
         });
 
-        // Framework-internal consumer for cross-node bound-session pushes
-        // (spec 31 §6); the node route dispatcher resolves it from DI when a
-        // relayed push arrives on a router-capable node.
-        services.TryAddScoped<ZLinkRemoteSessionPushRelayHandler>();
         services.TryAddScoped<ZLinkRemoteActorFrameRelayHandler>();
         services.TryAddScoped<ZLinkRemoteActorReplyRelayHandler>();
         registration.DispatchOptions.Diagnostics.LiveLevel ??= new ZLinkDiagnosticsLevelCell(

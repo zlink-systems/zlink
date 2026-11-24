@@ -57,6 +57,7 @@
     <ItemGroup>
         <Compile Include="Runtime/CanonicalSessionBindCrossLanguageTests.cs" Condition="'$(ZLinkCrossLanguageBind)' == 'true'"/>
         <Compile Include="Runtime/BoundSessionDisconnectTests.cs"/>
+        <Compile Include="Runtime/OrderedBoundSessionPushTests.cs"/>
         <Compile Include="Runtime/BoundSessionRelayPushOrderTests.cs"/>
         <Compile Include="Runtime/BoundSessionCloseOrderTests.cs"/>
         <Compile Include="Runtime/BoundSessionReplacementCloseTests.cs"/>
@@ -128,6 +129,7 @@
         <Compile Include="Runtime/ActorHandoffDrainTests.cs"/>
         <Compile Include="Runtime/JoinCallbackSendTests.cs"/>
         <Compile Include="Runtime/JoinCommitGenerationTests.cs"/>
+        <Compile Include="Runtime/RemoteActorSourceLeaveTests.cs"/>
         <Compile Include="Runtime/ActorJoinPrewarmRegistryTests.cs"/>
         <Compile Include="Runtime/ActorHandlerActivationTests.cs"/>
         <Compile Include="Runtime/ActorClientTests.cs"/>
@@ -331,7 +333,8 @@
         <Compile Include="Runtime/AuthorityAggregateRelocationTests.cs"/>
         <Compile Include="Runtime/CanonicalActorAcceptedJournalTests.cs"/>
         <Compile Include="Runtime/CanonicalAuthorityAggregateGenerationTests.cs"/>
-        <Compile Include="Runtime/RelocationStartupRecoveryTests.cs"/>
+        <Compile Include="Runtime/RelocationRuntimeTests.Publication.cs"/>
+        <Compile Include="Runtime/RelocationRuntimeTests.StagedAuthority.cs"/>
         <Compile Include="Runtime/RouteCodecTests.cs"/>
         <Compile Include="Runtime/RouteMeshReceiveFlowTests.cs"/>
         <Compile Include="Runtime/RouteMeshRuntimeServiceTests.cs"/>

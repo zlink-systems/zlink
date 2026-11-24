@@ -765,8 +765,8 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         (nodeRoutes ??= new(batch.Count)).Add(received);
     }
 
-    private ValueTask DispatchNodeRoutes(
-        List<ZLinkBackendRouteReceived>? nodeRoutes,
+    internal ValueTask DispatchNodeRoutes(
+        IReadOnlyList<ZLinkBackendRouteReceived>? nodeRoutes,
         CancellationToken cancellationToken
     )
     {
