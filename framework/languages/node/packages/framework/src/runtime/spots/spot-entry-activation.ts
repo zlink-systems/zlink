@@ -51,7 +51,11 @@ import {
   applyEntrySpotHandlerRegistrations,
   DefaultZLinkSpotHandlerRegistry
 } from './spot-handler-registry';
-import { DefaultZLinkSpotOutbound, type ZLinkSpotRoutedTransport } from './spot-outbound';
+import {
+  DefaultZLinkSpotOutbound,
+  type ZLinkSpotAddressTransport,
+  type ZLinkSpotRoutedTransport
+} from './spot-outbound';
 import { createFreshProviderInstance } from './spot-provider';
 import { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 import { ZLinkSpotSerialExecutor } from './spot-serial-executor';
@@ -89,6 +93,7 @@ interface ZLinkEntrySpotActivationOptions {
   readonly fanoutClient?: ZLinkFanoutClient;
   readonly spotPublisherClient?: ZLinkSpotPublisherClient;
   readonly routedTransport?: ZLinkSpotRoutedTransport;
+  readonly addressTransport?: ZLinkSpotAddressTransport;
   readonly spotRouterChannelIdForMesh?: (meshName: string) => string;
   readonly providerResolver?: ZLinkProviderResolver;
   readonly dispatchErrors?: ZLinkDispatchErrorReporter;
@@ -152,6 +157,7 @@ export class ZLinkEntrySpotActivation {
       channelClient: options.channelClient,
       spotPublisherClient: options.spotPublisherClient,
       routedTransport: options.routedTransport,
+      addressTransport: options.addressTransport,
       spotRouterChannelIdForMesh: options.spotRouterChannelIdForMesh,
       meshName: options.spotNodeName
     });
@@ -357,9 +363,20 @@ export class ZLinkEntrySpotActivation {
     );
   }
 
-  notifyJoinActor(actor: ZLinkActor, signal?: AbortSignal): Promise<void> {
+  notifyJoinActor(
+    actor: ZLinkActor,
+    signal?: AbortSignal,
+    onCallbackFailure?: (error: unknown) => void
+  ): Promise<void> {
     throwIfAborted(signal);
-    return this.serial.execute(() => notifyEntryActorJoined(this.entrySpot, actor));
+    return this.serial.execute(async () => {
+      try {
+        await notifyEntryActorJoined(this.entrySpot, actor);
+      } catch (error) {
+        if (onCallbackFailure === undefined) throw error;
+        onCallbackFailure(error);
+      }
+    });
   }
 
   /**
@@ -370,10 +387,11 @@ export class ZLinkEntrySpotActivation {
   async commitServiceActorJoin(
     actor: ZLinkActor,
     handoffBacklog: readonly ZLinkActorHandoffPacket[] = [],
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onCallbackFailure?: (error: unknown) => void
   ): Promise<void> {
     throwIfAborted(signal);
-    const notifyJoined = () => this.notifyJoinActor(actor, signal);
+    const notifyJoined = () => this.notifyJoinActor(actor, signal, onCallbackFailure);
     if (this.options.entryActorRuntime === undefined) {
       await notifyJoined();
     } else {
@@ -384,8 +402,12 @@ export class ZLinkEntrySpotActivation {
     }
   }
 
-  executeActor<T>(actorId: string, operation: () => Promise<T>): Promise<T> {
-    return this.spotSerialExecutor.executeActorLifecycle(actorId, operation);
+  executeActor<T>(
+    actorId: string,
+    operation: () => Promise<T>,
+    onFailure?: (error: unknown) => T
+  ): Promise<T> {
+    return this.spotSerialExecutor.executeActorLifecycle(actorId, operation, onFailure);
   }
 
   discardActor(actorId: string, error: unknown): void {
