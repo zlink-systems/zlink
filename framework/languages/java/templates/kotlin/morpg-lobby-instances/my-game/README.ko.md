@@ -54,6 +54,8 @@ Docker 이미지 빌드에는 `./run-e2e.sh --build-only` 또는 `.\run-e2e.cmd 
 
 서버 접속 정보는 `.logs/server.json`에 기록됩니다. 노드별 stdout, stderr, Framework message-flow와 시나리오 실패 상세는 `.logs/run-<id>/`에 남습니다. 연결 실행의 노드 로그는 서버가 출력한 경로에, 시나리오 실패 상세는 e2e가 출력한 경로에 기록됩니다. Docker 빌드·정리 로그는 `.logs/docker-<project>/`에 남습니다.
 
+Dungeon을 떠나려면 `LeaveDungeonRequest`를 보내고 `DungeonLeft` 응답을 기다립니다. 마지막 플레이어가 떠나면 서버는 응답 전에 Dungeon User Spot을 닫아 설정된 용량의 슬롯을 반환합니다. 연결이 끊기면 재접속에 사용할 멤버십을 유지합니다.
+
 ## 클라이언트 연결
 
 Session node의 기본 설정은 `server/config/session.json`의 `ws://127.0.0.1:0`입니다. 포트 `0`은 OS가 빈 포트를 배정하도록 지정합니다.

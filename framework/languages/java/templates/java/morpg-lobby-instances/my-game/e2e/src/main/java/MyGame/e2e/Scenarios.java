@@ -11,6 +11,14 @@ public final class Scenarios {
         Structure.require(Objects.equals(a, b), "Expected " + a + ", got " + b);
     }
 
+    private static void leaveDungeon(Client leader, Client member, DungeonView dungeon) {
+        var leaderLeft = leader.leaveDungeon();
+        var memberLeft = member.leaveDungeon();
+        Structure.require(
+                leaderLeft.dungeonId().equals(dungeon.dungeonId()) && leaderLeft.equals(memberLeft),
+                "Dungeon departure identified a different Spot");
+    }
+
     private static void sameState(DungeonView a, DungeonView b) {
         equal(a.dungeonId(), b.dungeonId());
         equal(a.partyId(), b.partyId());
@@ -135,6 +143,7 @@ public final class Scenarios {
                                 !separate.dungeonId().equals(initial.dungeonId())
                                         && !separate.runId().equals(initial.runId()),
                                 "Two parties shared run");
+                        leaveDungeon(c, d, separate);
                     }
                     advance(a, b, 2);
                     complete(a, b);
@@ -154,6 +163,7 @@ public final class Scenarios {
                                 "Reconnect reused Session");
                         advance(a, again, 2);
                         complete(a, again);
+                        leaveDungeon(a, again, initial);
                         equal(0, again.disconnects.get());
                     }
                 }
@@ -176,6 +186,7 @@ public final class Scenarios {
                                 !fresh.dungeonId().equals(initial.dungeonId())
                                         && !fresh.runId().equals(initial.runId()),
                                 "Two parties shared run");
+                        leaveDungeon(c, d, fresh);
                     }
                     advance(a, b, 2);
                     complete(a, b);
@@ -184,7 +195,10 @@ public final class Scenarios {
                 }
             }
             equal(0, a.disconnects.get());
-            if (scenario != Scenario.RECONNECT) equal(0, b.disconnects.get());
+            if (scenario != Scenario.RECONNECT) {
+                leaveDungeon(a, b, initial);
+                equal(0, b.disconnects.get());
+            }
         }
     }
 }

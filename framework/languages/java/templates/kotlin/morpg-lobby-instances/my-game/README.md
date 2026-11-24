@@ -56,6 +56,8 @@ The local server permits multiple Dungeons per instance. Isolated scenarios reta
 
 The server publishes its endpoints in `.logs/server.json`. Each run keeps node stdout, stderr, Framework message-flow records and failure details under `.logs/run-<id>/`. For an attached run, find the node logs under the directory printed by `run-server` and the scenario details under the directory printed by `run-e2e`. Docker build and cleanup logs are under `.logs/docker-<project>/`.
 
+Send `LeaveDungeonRequest` and wait for `DungeonLeft` to leave a Dungeon. After the last player leaves, the server closes the Dungeon User Spot before replying and returns the slot to the configured Dungeon capacity. A disconnect preserves membership for reconnect.
+
 ## Client connection
 
 ### Endpoint and first packet

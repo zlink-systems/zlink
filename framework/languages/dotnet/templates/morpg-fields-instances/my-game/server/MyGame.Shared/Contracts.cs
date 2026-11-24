@@ -133,6 +133,10 @@ public sealed record JoinDungeon(string DungeonId, string RunId);
 
 public sealed record ActionRejected(string Reason, int RetryAfterMs = 0);
 
+public sealed record LeaveDungeonRequest;
+
+public sealed record DungeonLeft(string DungeonId, ulong ObjectGeneration);
+
 public sealed record SessionInfoRequest;
 
 public sealed record SessionInfo(string SessionId, string ActorId, ulong ObjectGeneration);

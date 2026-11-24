@@ -53,6 +53,8 @@ Docker 빌드는 `server/MyGame.sln`의 프로젝트를 빌드합니다. 확인 
 
 서버를 빌드한 뒤 Redis는 Docker에서, 게임 노드는 로컬 프로세스로 시작합니다. `Server ready`에 표시되는 WebSocket 주소를 클라이언트에서 사용합니다. HTTP API가 있는 구성은 API 주소도 표시합니다. Ctrl+C로 노드와 Redis를 종료합니다. 서버가 실행 중이면 두 번째 시작을 거부합니다.
 
+Dungeon을 떠나려면 `LeaveDungeonRequest`를 보내고 `DungeonLeft` 응답을 기다립니다. 마지막 플레이어가 떠나면 서버는 응답 전에 Dungeon User Spot을 닫아 설정된 용량의 슬롯을 반환합니다. 연결이 끊기면 재접속에 사용할 멤버십을 유지합니다.
+
 ## 클라이언트 연결
 
 Session에 연결하고 예제의 첫 필드 입장 패킷을 보냅니다. 이동, 경계 가시성, 파티와 Dungeon 요청은 등록된 typed packet을 사용합니다. 접속 주소는 `Server ready` 또는 Session의 READY JSON에서 확인합니다. 로컬 주소는 같은 호스트에서 사용할 수 있습니다. 외부 클라이언트에는 접근 가능한 인터페이스와 포트를 제공하며 HTTPS 페이지에는 wss://를 설정합니다. 브라우저의 HTTP 호출에는 접근 가능한 origin과 CORS 정책도 필요합니다.

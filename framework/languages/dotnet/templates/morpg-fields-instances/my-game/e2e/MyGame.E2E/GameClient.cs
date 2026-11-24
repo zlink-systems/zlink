@@ -117,6 +117,9 @@ internal sealed class GameClient(
             ct
         );
 
+    public Task<DungeonLeft> LeaveDungeonAsync(CancellationToken ct) =>
+        Connector.Request(new LeaveDungeonRequest()).Async<DungeonLeft>(ct).AsTask();
+
     public Task<SessionInfo> SessionAsync(CancellationToken ct) =>
         Connector.Request(new SessionInfoRequest()).Async<SessionInfo>(ct).AsTask();
 

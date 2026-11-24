@@ -34,6 +34,21 @@ internal static class Scenarios
             throw new InvalidDataException(message);
     }
 
+    private static async Task LeaveAsync(
+        GameClient leader,
+        GameClient member,
+        DungeonView dungeon,
+        CancellationToken ct
+    )
+    {
+        var leaderLeft = await leader.LeaveDungeonAsync(ct);
+        var memberLeft = await member.LeaveDungeonAsync(ct);
+        Require(
+            leaderLeft.DungeonId == dungeon.DungeonId && leaderLeft == memberLeft,
+            "Dungeon departure identified a different Spot."
+        );
+    }
+
     private static void SameActor(SessionInfo before, SessionInfo after) =>
         Require(
             before.ActorId == after.ActorId && before.ObjectGeneration == after.ObjectGeneration,
@@ -345,6 +360,7 @@ internal static class Scenarios
                     ct
                 );
                 SameDungeon(freshAdvanced, await freshMember);
+                await LeaveAsync(p3, p4, fresh, ct);
             }
             if (selected.Contains(Party))
             {
@@ -367,6 +383,7 @@ internal static class Scenarios
                     separate.DungeonId != advanced.DungeonId && separate.RunId != advanced.RunId,
                     "Two parties shared a run."
                 );
+                await LeaveAsync(p3, p4, separate, ct);
             }
             for (var stage = 2; stage <= GameNames.FinalStage; stage++)
             {
@@ -397,6 +414,7 @@ internal static class Scenarios
                     ct
                 )
             );
+            await LeaveAsync(p1, p2, dungeon, ct);
         }
         finally
         {

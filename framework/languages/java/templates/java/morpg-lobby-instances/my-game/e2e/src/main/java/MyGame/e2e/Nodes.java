@@ -112,9 +112,7 @@ public final class Nodes implements AutoCloseable {
                             "my-game:" + runId + ":",
                             "tcp://127.0.0.1:0",
                             role == NodeRole.SESSION ? "ws://127.0.0.1:0" : null,
-                            console && declared.dungeonCapacity() > 0
-                                    ? Integer.MAX_VALUE
-                                    : declared.dungeonCapacity());
+                            declared.dungeonCapacity());
             var path = logs.resolve(id + ".json");
             Json.MAPPER.writeValue(path.toFile(), config);
             configs.put(id, path);

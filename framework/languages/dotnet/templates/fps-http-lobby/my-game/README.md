@@ -24,7 +24,7 @@ This template is a reference. To build a new game, create a new project and desi
 
 Default execution requires Docker Linux containers; no host .NET SDK is needed.
 
-Docker with Compose v2 (Linux containers), and PowerShell 7 on Windows or Bash on Linux. Public ZLink packages are pinned centrally to 0.34.0. No repository checkout is required. Supply any required ZLink license through the public package's license configuration; license files must not be committed.
+Docker with Compose v2 (Linux containers), and PowerShell 7 on Windows or Bash on Linux. Public ZLink packages are pinned centrally to 0.34.1. No repository checkout is required. Supply any required ZLink license through the public package's license configuration; license files must not be committed.
 
 ## Build
 
@@ -228,7 +228,7 @@ Message Follow is configured explicitly to 30 seconds. After `RELOCATED`, the sa
 
 Drain confirmation takes about 30 seconds, so a turn clock may expire during the wait. For an update scenario in a game with turn clocks, finish the round before relocating it. Verify that relocation preserves the remaining time in a domain check with a controlled clock.
 
-Validated against the published Framework 0.34.0 packages.
+Validated against the published Framework 0.34.1 packages.
 
 ## Deployment sequence
 

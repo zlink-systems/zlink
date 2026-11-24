@@ -29,7 +29,7 @@ This template is a reference. To build a new game, create a new project and desi
 
 Default execution requires Docker Linux containers; no host .NET SDK is needed.
 
-Docker with Compose v2 (Linux containers), and PowerShell 7 on Windows or Bash on Linux are required. Framework and connector packages are pinned to 0.34.0 in `Directory.Packages.props`. Binding 1.26.0 and Redis client 2.8.31 are pinned there as well. NuGet restore uses nuget.org. The template is independent of the ZLink source repository.
+Docker with Compose v2 (Linux containers), and PowerShell 7 on Windows or Bash on Linux are required. Framework and connector packages are pinned to 0.34.1 in `Directory.Packages.props`. Binding 1.26.0 and Redis client 2.8.31 are pinned there as well. NuGet restore uses nuget.org. The template is independent of the ZLink source repository.
 
 ## Build
 
@@ -206,7 +206,7 @@ Use `--check-structure` through the default script to validate without starting 
 
 Drain confirmation takes about 30 seconds, so a turn clock may expire during the wait. For an update scenario in a game with turn clocks, finish the round before relocating it. Verify that relocation preserves the remaining time in a domain check with a controlled clock.
 
-Validated against the published Framework 0.34.0 packages.
+Validated against the published Framework 0.34.1 packages.
 
 ## Deployment sequence
 

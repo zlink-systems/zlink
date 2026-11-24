@@ -61,7 +61,11 @@ enum class RunPhase {
     Completed,
 }
 
-@JsonSerialize class SessionInfoRequest
+@JsonSerialize class LeaveDungeonRequest
+
+data class DungeonLeft(val dungeonId: String, val objectGeneration: Long)
+
+class SessionInfoRequest
 
 data class SessionInfo(
     val sessionId: String = "",
@@ -156,7 +160,11 @@ object Rejection {
     const val MOVE_BUDGET = "move-budget"
 }
 
-data class PartyCommand(val actorId: String = "", val join: Boolean = false, val enter: Boolean = false)
+data class PartyCommand(
+    val actorId: String = "",
+    val join: Boolean = false,
+    val enter: Boolean = false,
+)
 
 data class PartyCommandResult(val view: PartyView? = null, val rejection: ActionRejected? = null)
 

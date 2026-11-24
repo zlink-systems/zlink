@@ -8,6 +8,7 @@ public final class Scenarios implements AutoCloseable {
     private final Nodes nodes;
     private final String playerSuffix = "-" + UUID.randomUUID();
     private final Set<Scenario> selectedScenarios;
+    private final Scenario lastScenario;
     private final List<Client> clients = new ArrayList<>();
     private Client leader, member;
     private DungeonView advanced;
@@ -15,6 +16,7 @@ public final class Scenarios implements AutoCloseable {
     Scenarios(Nodes nodes, List<Scenario> selectedScenarios) {
         this.nodes = nodes;
         this.selectedScenarios = Set.copyOf(selectedScenarios);
+        this.lastScenario = selectedScenarios.isEmpty() ? null : selectedScenarios.getLast();
     }
 
     private static void require(boolean value, String message) {
@@ -33,6 +35,14 @@ public final class Scenarios implements AutoCloseable {
                 before.actorId().equals(after.actorId())
                         && before.objectGeneration() == after.objectGeneration(),
                 "Actor identity changed");
+    }
+
+    private static void leaveDungeon(Client leader, Client member, DungeonView dungeon) {
+        var leaderLeft = leader.leaveDungeon();
+        var memberLeft = member.leaveDungeon();
+        Structure.require(
+                leaderLeft.dungeonId().equals(dungeon.dungeonId()) && leaderLeft.equals(memberLeft),
+                "Dungeon departure identified a different Spot");
     }
 
     private static void sameDungeon(DungeonView before, DungeonView after) {
@@ -292,6 +302,7 @@ public final class Scenarios implements AutoCloseable {
                             !other.dungeonId().equals(advanced.dungeonId())
                                     && !other.runId().equals(advanced.runId()),
                             "Different parties shared a dungeon run");
+                    leaveDungeon(otherLeader, otherMember, other);
                 }
             }
             case RECONNECT -> {
@@ -337,12 +348,14 @@ public final class Scenarios implements AutoCloseable {
                                 && !fresh.dungeonId().equals(advanced.dungeonId())
                                 && !fresh.runId().equals(advanced.runId()),
                         "Replacement did not accept new work");
+                leaveDungeon(p3, p4, fresh);
                 require(
                         s1.equals(leader.sessionInfo()) && s2.equals(member.sessionInfo()),
                         "Replacement interrupted Session");
             }
             default -> throw new IllegalStateException("Unexpected scenario");
         }
+        if (scenario == lastScenario) leaveDungeon(leader, member, advanced);
         for (var client : clients)
             require(client.disconnects.get() == 0, "Client disconnected: " + client.playerId);
     }

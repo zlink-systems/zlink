@@ -9,6 +9,15 @@ import java.util.concurrent.*;
 
 @ZLinkHandlerGroup(Names.PLAYER)
 public final class DungeonActions {
+    @ZLinkSpotActorRequest
+    public CompletionStage<DungeonLeft> leave(
+            Dungeon spot, Player actor, ZLinkMessageContext context, LeaveDungeonRequest request) {
+        var dungeon = spot.context();
+        return dungeon.leaveActor(actor)
+                .thenApply(
+                        ignored -> new DungeonLeft(dungeon.spotId(), dungeon.objectGeneration()));
+    }
+
     @ZLinkSpotActorSend
     public CompletionStage<Void> reconnect(
             Dungeon spot, Player actor, ZLinkMessageContext dispatch, JoinWorldRequest request) {

@@ -66,6 +66,8 @@ Java 배포본을 빌드한 후 Redis와 노드를 시작합니다. `Server read
 
 실행별 `.logs/run-<id>/`에 실제 노드 설정, 노드별 stdout·stderr, Framework message-flow(`*.flow.log`), 시나리오 실패 상세가 남습니다. 로컬 빌드 로그는 `.logs/build.log`, Docker 빌드와 정리 로그는 `.logs/docker-*/`에 남습니다.
 
+Dungeon을 떠나려면 `LeaveDungeonRequest`를 보내고 `DungeonLeft` 응답을 기다립니다. 마지막 플레이어가 떠나면 서버는 응답 전에 Dungeon User Spot을 닫아 설정된 용량의 슬롯을 반환합니다. 연결이 끊기면 재접속에 사용할 멤버십을 유지합니다.
+
 ## 클라이언트 연결
 
 Session의 `players` STREAM 리스너에 접속합니다. 기본 설정은 `ws://127.0.0.1:0`이며 포트 0은 운영체제가 가용 포트를 고르게 합니다. `READY`의 `streamEndpoint`가 실제 주소입니다. 브라우저, Unity WebGL, Cocos Creator 웹 클라이언트는 WebSocket 루트 경로(`/`)를 사용할 수 있습니다. HTTPS 페이지에서는 접근 가능한 `wss://` 주소를 사용합니다.

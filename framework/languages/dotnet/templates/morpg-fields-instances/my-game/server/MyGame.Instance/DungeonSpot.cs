@@ -18,6 +18,7 @@ public sealed class DungeonSpot(
 
     public void Configure()
     {
+        Context.Handlers.AddActorPacket<LeaveDungeon, PlayerActor>(nameof(LeaveDungeonRequest));
         Context.Handlers.AddActorPacket<DungeonSpotBorderVisibleNotification, PlayerActor>(
             nameof(BorderVisible)
         );

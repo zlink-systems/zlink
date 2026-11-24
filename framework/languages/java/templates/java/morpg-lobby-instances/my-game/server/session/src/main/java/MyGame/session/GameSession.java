@@ -4,6 +4,7 @@ import MyGame.*;
 
 import systems.zlink.framework.actors.*;
 import systems.zlink.framework.messaging.ZLinkMessage;
+import systems.zlink.framework.spots.ZLinkSpotManager;
 import systems.zlink.framework.streams.*;
 
 import java.util.concurrent.*;
@@ -18,13 +19,23 @@ public final class GameSession implements ZLinkSession {
                     "EnterDungeonRequest",
                     "AdvanceRequest",
                     "ViewRequest",
+                    "LeaveDungeonRequest",
                     "SessionInfoRequest");
     private final ZLinkSessionContext context;
     private final ZLinkActorManager actors;
 
-    public GameSession(ZLinkSessionContext context, ZLinkActorManager actors) {
+    private final ZLinkActorClient actorClient;
+    private final ZLinkSpotManager spots;
+
+    public GameSession(
+            ZLinkSessionContext context,
+            ZLinkActorManager actors,
+            ZLinkActorClient actorClient,
+            ZLinkSpotManager spots) {
         this.context = context;
         this.actors = actors;
+        this.actorClient = actorClient;
+        this.spots = spots;
     }
 
     public ZLinkSessionContext context() {
@@ -82,7 +93,32 @@ public final class GameSession implements ZLinkSession {
                                         .thenCompose(bound -> bound.relay(dispatch, payload));
                             });
         }
+        if (dispatch.packetName().equals(LeaveDungeonRequest.class.getSimpleName())) {
+            return leaveDungeon();
+        }
         return bound().relay(dispatch, payload);
+    }
+
+    private CompletionStage<Void> leaveDungeon() {
+        return actorClient
+                .requestToActor(bound().actorId(), new LeaveDungeonRequest())
+                .submit(DungeonLeft.class)
+                .thenCompose(
+                        left ->
+                                // Close outside the Dungeon turn, after its membership change
+                                // completes.
+                                spots.find(left.dungeonId())
+                                        .thenCompose(
+                                                found -> {
+                                                    if (found.isPresent()
+                                                            && found.get().objectGeneration()
+                                                                    == left.objectGeneration()) {
+                                                        return spots.close(found.get());
+                                                    }
+                                                    return CompletableFuture.completedFuture(false);
+                                                })
+                                        .thenCompose(
+                                                closed -> context.client().reply(left).submit()));
     }
 
     private ZLinkSessionActor bound() {

@@ -114,9 +114,7 @@ public final class Nodes implements AutoCloseable {
                             declared.streamEndpoint(),
                             declared.fieldIds(),
                             declared.fieldCapacity(),
-                            console && declared.dungeonCapacity() > 0
-                                    ? Integer.MAX_VALUE
-                                    : declared.dungeonCapacity());
+                            declared.dungeonCapacity());
             var path = logs.resolve(id + ".json");
             Json.MAPPER.writeValue(path.toFile(), config);
             configs.put(id, path);

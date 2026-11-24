@@ -11,9 +11,13 @@ object Names {
     const val DUNGEON = "Dungeon"
     const val PARTY_PREFIX = "party-"
     const val DUNGEON_PREFIX = "dungeon-"
+
     fun newPartyId() = PARTY_PREFIX + java.util.UUID.randomUUID().toString().replace("-", "")
+
     fun newRunId() = "run-" + java.util.UUID.randomUUID().toString().replace("-", "")
+
     fun dungeonId(runId: String) = DUNGEON_PREFIX + runId
+
     val SCENARIOS = Scenario.entries.map { it.id }
 }
 
@@ -52,7 +56,11 @@ object Rules {
     const val JOIN_REJECTED = "join-rejected"
 }
 
-@JsonSerialize class SessionInfoRequest
+@JsonSerialize class LeaveDungeonRequest
+
+data class DungeonLeft(val dungeonId: String, val objectGeneration: Long)
+
+class SessionInfoRequest
 
 @JsonSerialize class LobbyView
 
@@ -90,7 +98,11 @@ data class ActionRejected(val reason: String = "", val retryAfterMs: Int = 0)
 
 data class JoinDungeon(val dungeonId: String = "", val runId: String = "")
 
-data class PrepareDungeon(val runId: String = "", val partyId: String = "", val members: List<String> = emptyList())
+data class PrepareDungeon(
+    val runId: String = "",
+    val partyId: String = "",
+    val members: List<String> = emptyList(),
+)
 
 data class DungeonPrepared(val dungeonId: String = "", val runId: String = "")
 
@@ -104,9 +116,18 @@ data class DungeonView(
     val phase: RunPhase = RunPhase.Preparing,
 )
 
-enum class RunPhase { Forming, Preparing, Entering, Active, Completed }
+enum class RunPhase {
+    Forming,
+    Preparing,
+    Entering,
+    Active,
+    Completed,
+}
+
 data class RunStarted(val runId: String = "")
+
 data class RunCompleted(val runId: String = "")
+
 data class EnterPartyRun(val playerId: String = "")
 
 data class DungeonMemberEntered(val runId: String = "", val playerId: String = "")

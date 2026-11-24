@@ -18,6 +18,7 @@ public sealed class DungeonSpot(
 
     public void Configure()
     {
+        Context.Handlers.AddActorPacket<LeaveDungeon, PlayerActor>(nameof(LeaveDungeonRequest));
         Context.Handlers.AddActorPacket<DungeonEnter, PlayerActor>(nameof(EnterDungeonRequest));
         Context.Handlers.AddActorPacket<DungeonTravel, PlayerActor>(nameof(JoinDungeon));
         Context.Handlers.AddActorPacket<PartyDelivery, PlayerActor>(nameof(PartyView));

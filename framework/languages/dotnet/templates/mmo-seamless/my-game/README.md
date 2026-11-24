@@ -28,7 +28,7 @@ This template is a reference. To build a new game, create a new project and desi
 - Bash for Linux, WSL, or macOS; PowerShell 7 for Windows.
 - Linux native assets supported by the published `Zlink` package. Local process debugging additionally requires the .NET 8 SDK and ASP.NET Core 8 runtime.
 
-Packages come from public NuGet only. `Directory.Packages.props` pins the Framework package family to `0.34.0`. This project has no dependency on a ZLink source checkout or local package feed.
+Packages come from public NuGet only. `Directory.Packages.props` pins the Framework package family to `0.34.1`. This project has no dependency on a ZLink source checkout or local package feed.
 
 ## Build
 
@@ -216,7 +216,7 @@ Every e2e run validates the composition before starting nodes. `--check-structur
 
 Drain confirmation takes about 30 seconds, so a turn clock may expire during the wait. For an update scenario in a game with turn clocks, finish the round before relocating it. Verify that relocation preserves the remaining time in a domain check with a controlled clock.
 
-Validated against the published Framework 0.34.0 packages.
+Validated against the published Framework 0.34.1 packages.
 
 ## Deployment sequence
 

@@ -58,6 +58,8 @@ The foreground server allows multiple active Dungeons per play node. Isolated E2
 
 Each run keeps effective node settings, node stdout and stderr, Framework message-flow logs (`*.flow.log`), and any failure details in `.logs/run-<id>/`. Local build output is in `.logs/build.log` and isolated Docker build and cleanup output is in `.logs/docker-*/`.
 
+Send `LeaveDungeonRequest` and wait for `DungeonLeft` to leave a Dungeon. After the last player leaves, the server closes the Dungeon User Spot before replying and returns the slot to the configured Dungeon capacity. A disconnect preserves membership for reconnect.
+
 ## Client connection
 
 ### Endpoint and first packet

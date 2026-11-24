@@ -24,7 +24,7 @@ This template is a reference. To build a new game, create a new project and desi
 
 Default execution requires Docker Linux containers; no host .NET SDK is needed.
 
-.NET SDK 8 or later, Docker with Compose v2 and PowerShell 7 or Bash. Public NuGet packages are pinned in `Directory.Packages.props`: Framework and Stream Connector 0.34.0, binding 1.26.0. The template builds independently of the ZLink repository.
+.NET SDK 8 or later, Docker with Compose v2 and PowerShell 7 or Bash. Public NuGet packages are pinned in `Directory.Packages.props`: Framework and Stream Connector 0.34.1, binding 1.26.0. The template builds independently of the ZLink repository.
 
 ## Build
 
@@ -57,6 +57,8 @@ Run from the template directory with the .NET 8 SDK and Docker Compose v2 availa
 ```
 
 Connect clients to the WebSocket address in the `Server ready` line. When the topology has an HTTP API, the runner also prints its address. Ctrl+C stops the nodes and Redis. A second start is rejected while the server is running.
+
+Send `LeaveDungeonRequest` and wait for `DungeonLeft` to leave a Dungeon. After the last player leaves, the server closes the Dungeon User Spot before replying and returns the slot to the configured Dungeon capacity. A disconnect preserves membership for reconnect.
 
 ## Client connection
 
@@ -197,7 +199,7 @@ Run domain checks before scenario nodes with `./run-e2e.sh --check-domain` or `.
 
 Drain confirmation takes about 30 seconds, so a turn clock may expire during the wait. For an update scenario in a game with turn clocks, finish the round before relocating it. Verify that relocation preserves the remaining time in a domain check with a controlled clock.
 
-Validated against the published Framework 0.34.0 packages.
+Validated against the published Framework 0.34.1 packages.
 
 ## Deployment sequence
 

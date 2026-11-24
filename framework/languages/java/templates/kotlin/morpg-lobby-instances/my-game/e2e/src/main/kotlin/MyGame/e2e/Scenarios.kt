@@ -7,6 +7,14 @@ private fun equal(expected: Any?, actual: Any?) {
     check(expected == actual) { "Expected $expected, got $actual" }
 }
 
+private suspend fun leaveDungeon(leader: Client, member: Client, dungeon: DungeonView) {
+    val leaderLeft = leader.leaveDungeon()
+    val memberLeft = member.leaveDungeon()
+    check(leaderLeft.dungeonId == dungeon.dungeonId && leaderLeft == memberLeft) {
+        "Dungeon departure identified a different Spot"
+    }
+}
+
 private fun sameState(a: DungeonView, b: DungeonView) {
     equal(a.dungeonId, b.dungeonId)
     equal(a.partyId, b.partyId)
@@ -129,8 +137,11 @@ suspend fun scenario(scenario: Scenario, target: ScenarioTarget) {
         equal(sb, b.sessionInfo())
         when (scenario) {
             Scenario.PARTY -> {
-                val separate = enter(client("$id-second1"), client("$id-second2"))
+                val separateA = client("$id-second1")
+                val separateB = client("$id-second2")
+                val separate = enter(separateA, separateB)
                 check(separate.dungeonId != initial.dungeonId && separate.runId != initial.runId)
+                leaveDungeon(separateA, separateB, separate)
                 advance(a, b, 2L)
                 complete(a, b)
             }
@@ -148,6 +159,7 @@ suspend fun scenario(scenario: Scenario, target: ScenarioTarget) {
                 check(sb.sessionId != identity.sessionId) { "Reconnect reused Session" }
                 advance(a, again, 2L)
                 complete(a, again)
+                leaveDungeon(a, again, initial)
                 equal(0, again.disconnects)
             }
             Scenario.UPDATE -> {
@@ -165,6 +177,7 @@ suspend fun scenario(scenario: Scenario, target: ScenarioTarget) {
                 advance(freshA, freshB, 1L)
                 equal(before.nodeId, fresh.nodeId)
                 check(fresh.dungeonId != initial.dungeonId && fresh.runId != initial.runId)
+                leaveDungeon(freshA, freshB, fresh)
                 advance(a, b, 2L)
                 complete(a, b)
                 equal(sa, a.sessionInfo())
@@ -172,6 +185,9 @@ suspend fun scenario(scenario: Scenario, target: ScenarioTarget) {
             }
         }
         equal(0, a.disconnects)
-        if (scenario != Scenario.RECONNECT) equal(0, b.disconnects)
+        if (scenario != Scenario.RECONNECT) {
+            leaveDungeon(a, b, initial)
+            equal(0, b.disconnects)
+        }
     }
 }

@@ -119,3 +119,21 @@ public sealed class PartyDelivery : IZLinkSpotActorSendHandler<DungeonSpot, Play
         CancellationToken ct
     ) => actor.DeliverAsync(request);
 }
+
+[ZLinkSpotActorRequestHandler(nameof(LeaveDungeonRequest))]
+public sealed class LeaveDungeon
+    : IZLinkSpotActorRequestHandler<DungeonSpot, PlayerActor, LeaveDungeonRequest, DungeonLeft>
+{
+    public async ValueTask<DungeonLeft> HandleAsync(
+        DungeonSpot spot,
+        PlayerActor actor,
+        IZLinkMessageContext context,
+        LeaveDungeonRequest request,
+        CancellationToken ct
+    )
+    {
+        var dungeon = spot.Context;
+        await dungeon.LeaveActorAsync(actor, ct);
+        return new DungeonLeft(dungeon.SpotId, dungeon.ObjectGeneration);
+    }
+}

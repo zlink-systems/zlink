@@ -24,7 +24,7 @@ This template is a reference. To build a new game, create a new project and desi
 
 Default execution requires Docker Linux containers; no host .NET SDK is needed.
 
-Install Docker with Compose v2 (Linux containers) and Bash or PowerShell 7. Dependencies are pinned in `Directory.Packages.props`: Framework and STREAM connector 0.34.0 and binding 1.26.0. The template uses NuGet.org; it has no repository or local-feed dependency.
+Install Docker with Compose v2 (Linux containers) and Bash or PowerShell 7. Dependencies are pinned in `Directory.Packages.props`: Framework and STREAM connector 0.34.1 and binding 1.26.0. The template uses NuGet.org; it has no repository or local-feed dependency.
 
 ## Build
 
@@ -220,7 +220,7 @@ Integer contract values use the common maximum `9,007,199,254,740,991`; requests
 
 Drain confirmation takes about 30 seconds, so a turn clock may expire during the wait. For an update scenario in a game with turn clocks, finish the round before relocating it. Verify that relocation preserves the remaining time in a domain check with a controlled clock.
 
-Validated against the published Framework 0.34.0 packages.
+Validated against the published Framework 0.34.1 packages.
 
 ## Deployment sequence
 

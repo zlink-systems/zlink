@@ -95,6 +95,14 @@ public final class Client implements AutoCloseable {
         return next(DungeonView.class, view -> !view.nodeId().equals(previousHost));
     }
 
+    DungeonLeft leaveDungeon() {
+        return connector
+                .request(new LeaveDungeonRequest())
+                .submit(DungeonLeft.class)
+                .toCompletableFuture()
+                .join();
+    }
+
     SessionInfo sessionInfo() {
         return connector
                 .request(new SessionInfoRequest())

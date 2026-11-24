@@ -37,7 +37,7 @@ Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/dot
 
 Run one scenario with `./run-e2e.sh --scenario lobby`. Close the connection only after receiving the reply to the last request. The server may miss a send that is immediately followed by close.
 
-Use this template's domain as a reference when designing an FPS server in a separate project. This .NET 8 project runs an API node, a Session node, play nodes A and B (match), and a Redis Location Store. The API node pairs `POST /match` requests by mode, assigns a GUID Room ID and prepares the member list of a dynamic Room User Spot. Players connect to Session over STREAM and join the assigned Room. Public Framework and connector packages are pinned to 0.34.0 in `Directory.Packages.props`. The [README](README.md) owns execution, deployment and known issues; [zlink.structure.json](zlink.structure.json) describes initial topology and ordered scenarios.
+Use this template's domain as a reference when designing an FPS server in a separate project. This .NET 8 project runs an API node, a Session node, play nodes A and B (match), and a Redis Location Store. The API node pairs `POST /match` requests by mode, assigns a GUID Room ID and prepares the member list of a dynamic Room User Spot. Players connect to Session over STREAM and join the assigned Room. Public Framework and connector packages are pinned to 0.34.1 in `Directory.Packages.props`. The [README](README.md) owns execution, deployment and known issues; [zlink.structure.json](zlink.structure.json) describes initial topology and ordered scenarios.
 
 Run from this project root with Docker Compose v2 and Linux containers:
 

@@ -7,6 +7,7 @@ import systems.zlink.framework.actors.*
 import systems.zlink.framework.kotlin.*
 import systems.zlink.framework.locations.redis.*
 import systems.zlink.framework.messaging.ZLinkMessage
+import systems.zlink.framework.spots.ZLinkSpotManager
 import systems.zlink.framework.spring.*
 import systems.zlink.framework.streams.*
 
@@ -36,16 +37,32 @@ class Program {
 
 fun main(args: Array<String>) = runNode(Program::class.java, args)
 
-class GameSession(private val session: ZLinkSessionContext, private val actors: ZLinkActorManager) :
-    ZLinkSuspendingSession() {
+class GameSession(
+    private val session: ZLinkSessionContext,
+    private val actors: ZLinkActorManager,
+    private val actorClient: ZLinkActorClient,
+    private val spots: ZLinkSpotManager,
+) : ZLinkSuspendingSession() {
     override fun context() = session
 
     override suspend fun onDispatchSuspending(
         dispatch: ZLinkSessionDispatchContext,
         payload: ZLinkMessage,
     ) {
-        if (dispatch.packetName() !in setOf("JoinWorldRequest", "MoveRequest", "CreatePartyRequest",
-                "JoinPartyRequest", "EnterDungeonRequest", "AdvanceRequest", "ViewRequest", "SessionInfoRequest")) {
+        if (
+            dispatch.packetName() !in
+                setOf(
+                    "JoinWorldRequest",
+                    "MoveRequest",
+                    "CreatePartyRequest",
+                    "JoinPartyRequest",
+                    "EnterDungeonRequest",
+                    "AdvanceRequest",
+                    "ViewRequest",
+                    "LeaveDungeonRequest",
+                    "SessionInfoRequest",
+                )
+        ) {
             session.client().kotlin().send(ActionRejected("packet-not-allowed")).await()
             return
         }
@@ -82,6 +99,22 @@ class GameSession(private val session: ZLinkSessionContext, private val actors: 
                             error("Actor creation rejected: $result")
                     }
                 session.actors().bindOrGet(actor).await().kotlin().relay(dispatch, payload).await()
+            }
+            LeaveDungeonRequest::class.java.simpleName -> {
+                val actor = session.actors().bound().single()
+                val left =
+                    actorClient
+                        .kotlin()
+                        .requestToActor<DungeonLeft>(actor.actorId(), LeaveDungeonRequest())
+                        .await()
+
+                // Close outside the Dungeon turn, after its membership change completes.
+                val dungeon = spots.find(left.dungeonId).await().orElse(null)
+                if (dungeon?.objectGeneration() == left.objectGeneration) {
+                    spots.close(dungeon).await()
+                }
+
+                session.client().kotlin().reply(left).await()
             }
             else -> session.actors().bound().single().kotlin().relay(dispatch, payload).await()
         }

@@ -8,6 +8,14 @@ private fun sameActor(before: SessionInfo, after: SessionInfo) {
     }
 }
 
+private suspend fun leaveDungeon(leader: Client, member: Client, dungeon: DungeonView) {
+    val leaderLeft = leader.leaveDungeon()
+    val memberLeft = member.leaveDungeon()
+    check(leaderLeft.dungeonId == dungeon.dungeonId && leaderLeft == memberLeft) {
+        "Dungeon departure identified a different Spot"
+    }
+}
+
 private fun sameDungeon(before: DungeonView, after: DungeonView) {
     check(
         before.dungeonId == after.dungeonId &&
@@ -26,6 +34,7 @@ private fun party(view: PartyView, id: String, members: List<String>) =
 
 class Scenarios(private val target: ScenarioTarget, selectedScenarios: List<String>) {
     private val selectedScenarios = selectedScenarios.toSet()
+    private val lastScenario = selectedScenarios.lastOrNull()
     private val clients = mutableListOf<Client>()
     private lateinit var leader: Client
     private lateinit var member: Client
@@ -258,6 +267,7 @@ class Scenarios(private val target: ScenarioTarget, selectedScenarios: List<Stri
                     ) {
                         "Different parties shared a dungeon run"
                     }
+                    leaveDungeon(otherLeader, otherMember, other)
                 }
             }
             Names.RECONNECT -> {
@@ -304,12 +314,14 @@ class Scenarios(private val target: ScenarioTarget, selectedScenarios: List<Stri
                 ) {
                     "Replacement did not accept new work"
                 }
+                leaveDungeon(p3, p4, fresh)
                 check(s1 == leader.sessionInfo() && s2 == member.sessionInfo()) {
                     "Replacement interrupted Session"
                 }
             }
             else -> error("Unknown scenario: $name")
         }
+        if (name == lastScenario) leaveDungeon(leader, member, requireNotNull(advanced))
         for (client in clients) check(client.disconnects == 0) {
             "Client disconnected: ${client.playerId}"
         }

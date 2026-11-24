@@ -30,6 +30,21 @@ internal static class Scenarios
             throw new InvalidDataException(message);
     }
 
+    private static async Task LeaveAsync(
+        GameClient leader,
+        GameClient member,
+        DungeonView dungeon,
+        CancellationToken ct
+    )
+    {
+        var leaderLeft = await leader.LeaveDungeonAsync(ct);
+        var memberLeft = await member.LeaveDungeonAsync(ct);
+        Require(
+            leaderLeft.DungeonId == dungeon.DungeonId && leaderLeft == memberLeft,
+            "Dungeon departure identified a different Spot."
+        );
+    }
+
     private static void SameActor(SessionInfo before, SessionInfo after) =>
         Require(
             before.ActorId == after.ActorId && before.ObjectGeneration == after.ObjectGeneration,
@@ -302,8 +317,9 @@ internal static class Scenarios
                         other.DungeonId != dungeon.DungeonId && other.RunId != dungeon.RunId,
                         "Different parties shared a dungeon run."
                     );
+                    await LeaveAsync(otherLeader, otherMember, other, ct);
                 }
-                if (selected.Contains("dungeon"))
+                if (selected.Contains("dungeon") && selected[^1] != "dungeon")
                 {
                     log.Pass("dungeon");
                 }
@@ -328,7 +344,8 @@ internal static class Scenarios
                         "Reconnect changed the dungeon host."
                     );
                     SameActor(before2, await p2.SessionAsync(ct));
-                    log.Pass("reconnect");
+                    if (selected[^1] != "reconnect")
+                        log.Pass("reconnect");
                 }
                 if (selected.Contains("update"))
                 {
@@ -379,8 +396,10 @@ internal static class Scenarios
                             && fresh.RunId != advanced.RunId,
                         "Replacement instance did not accept new work."
                     );
-                    log.Pass("update");
+                    await LeaveAsync(p3, p4, fresh, ct);
                 }
+                await LeaveAsync(p1, p2, dungeon, ct);
+                log.Pass(selected[^1]);
             }
             finally
             {
