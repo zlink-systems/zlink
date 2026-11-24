@@ -4420,7 +4420,8 @@ class ended_user_reclaim_client_t final : public zlink::framework::hosted_servic
             EXPECT_EQ (factories->load (), 1);
         } else {
             EXPECT_FALSE (created);
-            EXPECT_EQ (created.error_kind (), fw::framework_error_kind_t::unavailable);
+            if (!created)
+                EXPECT_EQ (created.error_kind (), fw::framework_error_kind_t::unavailable);
             const auto after = std::get<fw::authority_snapshot_t> (
               repository.read_authority (rt::spot_authority_key ("ended-user")).result ().value ());
             EXPECT_EQ (after.store_version, before.store_version);
@@ -4445,6 +4446,8 @@ class ended_user_reclaim_client_t final : public zlink::framework::hosted_servic
 
 static void verify_ended_user_policy_source (bool provider, unsigned policy)
 {
+    SCOPED_TRACE (policy);
+    const bool target_disabled = policy != 0;
     namespace fw = zlink::framework;
     namespace rt = fw::runtime;
     using namespace std::chrono_literals;
@@ -4538,25 +4541,25 @@ static void verify_ended_user_policy_source (bool provider, unsigned policy)
                 ++factories;
                 return std::make_shared<context_owned_user_spot_t> (std::move (context));
             },
-            [policy] (auto &factory) {
-                if (policy == 0)
-                    factory.recreate_on_relocation ();
-                else
+            [target_disabled] (auto &factory) {
+                if (target_disabled)
                     factory.disable_relocation ();
+                else
+                    factory.recreate_on_relocation ();
             });
     });
-    auto client = std::make_unique<ended_user_reclaim_client_t> (app, policy == 0, factories);
+    auto client = std::make_unique<ended_user_reclaim_client_t> (app, target_disabled, factories);
     auto *observed = client.get ();
     app.add_hosted_service (std::move (client));
     EXPECT_EQ (app.run (0, nullptr), 0);
     EXPECT_TRUE (observed->observed);
 }
-TEST (ZLinkFrameworkStoreLocationResolvers, EndedEmptyUserProviderUsesRequestNodePolicy)
+TEST (ZLinkFrameworkStoreLocationResolvers, EndedEmptyUserProviderUsesFactoryTargetPolicy)
 {
     for (unsigned policy = 0; policy != 3; ++policy)
         verify_ended_user_policy_source (true, policy);
 }
-TEST (ZLinkFrameworkStoreLocationResolvers, EndedEmptyUserInMemoryUsesRequestNodePolicy)
+TEST (ZLinkFrameworkStoreLocationResolvers, EndedEmptyUserInMemoryUsesFactoryTargetPolicy)
 {
     for (unsigned policy = 0; policy != 3; ++policy)
         verify_ended_user_policy_source (false, policy);

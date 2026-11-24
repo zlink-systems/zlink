@@ -1503,11 +1503,14 @@ enum class user_spot_authority_case_t
     creating_target_ended
 };
 
+bool set_published_placement_weight (fw::service_provider_t &services, int weight);
+
 void user_spot_authority_qualification (user_spot_authority_case_t scenario)
 {
     using namespace fw::runtime;
     const bool creating = scenario == user_spot_authority_case_t::creating_target_ended;
     const bool retained = scenario == user_spot_authority_case_t::expired_retained;
+    const bool recreate = scenario == user_spot_authority_case_t::expired_ready;
     auto inner = std::make_shared<in_memory_location_store_t> ();
     provider_location_repository_t original (*inner);
     original.configure_reclaim_margin (std::chrono::milliseconds::zero ());
@@ -1567,6 +1570,13 @@ void user_spot_authority_qualification (user_spot_authority_case_t scenario)
         const auto committed = original.commit ({request.key, reserved->fence, payload}).result ();
         ASSERT_TRUE (committed);
         ASSERT_TRUE (std::holds_alternative<fw::object_committed_t> (committed.value ()));
+        const auto listed = original.list_mesh_nodes (mesh_name).result ();
+        ASSERT_TRUE (listed);
+        ASSERT_EQ (listed.value ().items.size (), 1u);
+        const auto &old_capacity = listed.value ().items.front ().capacity;
+        EXPECT_EQ (old_capacity.spots.active, 1u);
+        ASSERT_EQ (old_capacity.spot_types.size (), 1u);
+        EXPECT_EQ (old_capacity.spot_types.front ().usage.active, 1u);
     }
     std::shared_ptr<fw::location_store_t> view = inner;
     if (!creating) {
@@ -1585,10 +1595,8 @@ void user_spot_authority_qualification (user_spot_authority_case_t scenario)
     }
     auto evidence = std::make_shared<observations_t> ();
     host_t host;
-    // The source remains healthy but accepts no new placements. The ended
-    // owner's Ready record must be released before that capacity result.
     configure (host, evidence, first_rid, view, std::make_shared<in_memory_relocation_store_t> (),
-               default_follow_duration, 1, retained, entry_kind_t::member, 0);
+               default_follow_duration, 1, retained, entry_kind_t::member, creating ? 0 : 1);
     host.start ();
     ASSERT_TRUE (ready (host));
     auto services = host.app.advanced ().services ().build_provider ();
@@ -1601,41 +1609,57 @@ void user_spot_authority_qualification (user_spot_authority_case_t scenario)
       source_repository.read_authority (spot_authority_key (request.key.global_id)).result ();
     ASSERT_TRUE (observed);
     ASSERT_TRUE (std::holds_alternative<fw::authority_snapshot_t> (observed.value ()));
-    fw::location_reclaim_test_access_t reclaim_clock;
-    reclaim_clock.bind (source_repository);
-    if (!creating && !retained) {
-        const auto waiting = services.get_required<fw::spot_manager_t> ()
-                               .get_or_create (request.key.global_id, room_type)
-                               .timeout (wait_budget)
-                               .async ()
-                               .result ();
+    const auto &before = std::get<fw::authority_snapshot_t> (observed.value ());
+    const auto get_or_create = [&] {
+        return services.get_required<fw::spot_manager_t> ()
+          .get_or_create (request.key.global_id, room_type)
+          .timeout (wait_budget)
+          .async ()
+          .result ();
+    };
+    if (recreate) {
+        fw::location_reclaim_test_access_t reclaim_clock;
+        reclaim_clock.bind (source_repository);
+        const auto waiting = get_or_create ();
         ASSERT_FALSE (waiting);
         EXPECT_EQ (waiting.error_kind (), fw::framework_error_kind_t::unavailable);
+        ASSERT_TRUE (set_published_placement_weight (services, 0));
+        reclaim_clock.advance (15s);
+        const auto unplaced = get_or_create ();
+        ASSERT_FALSE (unplaced);
+        EXPECT_EQ (unplaced.error_kind (), fw::framework_error_kind_t::unavailable);
         const auto unchanged =
           source_repository.read_authority (spot_authority_key (request.key.global_id)).result ();
         ASSERT_TRUE (unchanged);
         ASSERT_TRUE (std::holds_alternative<fw::authority_snapshot_t> (unchanged.value ()));
         EXPECT_EQ (std::get<fw::authority_snapshot_t> (unchanged.value ()).store_version,
-                   std::get<fw::authority_snapshot_t> (observed.value ()).store_version);
-        reclaim_clock.advance (15s);
+                   before.store_version);
+        ASSERT_TRUE (set_published_placement_weight (services, 1));
     }
-    const auto result = services.get_required<fw::spot_manager_t> ()
-                          .get_or_create (request.key.global_id, room_type)
-                          .timeout (wait_budget)
-                          .async ()
-                          .result ();
-    ASSERT_FALSE (result);
-    EXPECT_EQ (result.error_kind (), fw::framework_error_kind_t::unavailable);
+    const auto result = get_or_create ();
+    if (recreate) {
+        ASSERT_TRUE (result) << (result.error () ? result.error ()->what () : "");
+        EXPECT_EQ (result.value ().state, fw::spot_create_state_t::created);
+        EXPECT_GT (result.value ().spot.object_generation (), before.object_generation);
+        EXPECT_EQ (result.value ().spot.node_rid ().value (), first_rid);
+    } else {
+        ASSERT_FALSE (result);
+        EXPECT_EQ (result.error_kind (), fw::framework_error_kind_t::unavailable);
+    }
     const auto current =
       original.read_authority (fw::runtime::spot_authority_key (request.key.global_id)).result ();
     ASSERT_TRUE (current);
     if (retained) {
         const auto *kept = std::get_if<fw::authority_snapshot_t> (&current.value ());
         ASSERT_NE (kept, nullptr);
-        EXPECT_EQ (kept->store_version,
-                   std::get<fw::authority_snapshot_t> (observed.value ()).store_version);
-    } else
+        EXPECT_EQ (kept->store_version, before.store_version);
+    } else if (recreate) {
+        const auto *replacement = std::get_if<fw::authority_snapshot_t> (&current.value ());
+        ASSERT_NE (replacement, nullptr);
+        EXPECT_EQ (replacement->object_generation, result.value ().spot.object_generation ());
+    } else {
         EXPECT_TRUE (std::holds_alternative<fw::authority_missing_t> (current.value ()));
+    }
     if (creating) {
         // The live owner's old descriptor ended; the released pending slot is
         // available to a replacement lifecycle through the normal reservation.
@@ -1665,12 +1689,16 @@ void user_spot_authority_qualification (user_spot_authority_case_t scenario)
         ASSERT_NE (old, listed.value ().items.end ());
         EXPECT_EQ (old->capacity.spots.active, retained ? 1u : 0u);
         EXPECT_EQ (old->capacity.spots.reserved, 0u);
+        ASSERT_EQ (old->capacity.spot_types.size (), 1u);
+        EXPECT_EQ (old->capacity.spot_types.front ().stable_type, room_type);
+        EXPECT_EQ (old->capacity.spot_types.front ().usage.active, retained ? 1u : 0u);
+        EXPECT_EQ (old->capacity.spot_types.front ().usage.reserved, 0u);
     }
     std::lock_guard lock (evidence->mutex);
-    EXPECT_EQ (evidence->room_factories, 0);
+    EXPECT_EQ (evidence->room_factories, recreate ? 1 : 0);
 }
 
-TEST (UserSpotCreation, ExpiredReadyUsesRepositoryReleaseBeforePlacement)
+TEST (UserSpotCreation, ExpiredReadyRecreatesAfterSelectingPlacement)
 {
     user_spot_authority_qualification (user_spot_authority_case_t::expired_ready);
 }
