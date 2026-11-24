@@ -137,7 +137,38 @@ export class MatchAssigned {
   ) {}
 }
 export class RoomAdmission {
-  constructor(readonly assignmentId: string) {}
+  constructor(
+    readonly assignmentId: string,
+    readonly chips: bigint
+  ) {}
+}
+export class TableAdmission {
+  constructor(
+    readonly join: JoinTableRequest,
+    readonly chips: bigint
+  ) {}
+}
+export class LoadPlayer {
+  constructor(readonly playerId: string) {}
+}
+export class PlayerRecord {
+  constructor(
+    readonly playerId: string,
+    readonly chips: bigint
+  ) {}
+}
+export class CommitRound {
+  constructor(
+    readonly tableId: string,
+    readonly handNumber: bigint,
+    readonly results: readonly { playerId: string; chips: bigint }[]
+  ) {}
+}
+export class RoundCommitted {
+  constructor(
+    readonly tableId: string,
+    readonly handNumber: bigint
+  ) {}
 }
 export class EnterReport {
   constructor(

@@ -5,7 +5,7 @@ import {
 } from '@zlink-systems/framework';
 import { ZLINK_SPOT_MANAGER } from '@zlink-systems/nestjs';
 import { Names } from '../shared/constants';
-import { failHost, runHost } from '../shared/hosting';
+import { addGameMesh, failHost, runHost } from '../shared/hosting';
 import {
   CancelPlayer,
   ConfirmWithdrawal,
@@ -16,7 +16,8 @@ import {
 } from './handlers';
 import { Pool, PoolRelocation } from './pool';
 
-runHost((_builder, _config, mesh) => {
+runHost((builder, config) => {
+  const mesh = addGameMesh(builder, config);
   mesh
     .objects()
     .server()
@@ -33,8 +34,7 @@ runHost((_builder, _config, mesh) => {
       UpdatePresence,
       ConfirmWithdrawal,
       ReportEntry,
-      ReportReturn,
-      UpdatePresence
+      ReportReturn
     ],
     listener: { kind: 'routeMesh', name: Names.mesh },
     ready: (status) => status.placement.isAvailable,

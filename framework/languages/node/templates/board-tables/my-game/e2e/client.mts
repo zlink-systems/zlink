@@ -76,6 +76,7 @@ function decodeWirePayload(name: string, payload: unknown): unknown {
   return payload;
 }
 export interface NodeControl {
+  restartTables(): Promise<void>;
   drain(id: string): Promise<void>;
   replace(id: string): Promise<void>;
 }
@@ -493,6 +494,20 @@ export async function scenario(
     }
     assert.equal(p1.disconnects, 0);
     assert.equal(p2.disconnects, 0);
+    if (name === 'persist') {
+      assert(control, 'The persist scenario requires an isolated run.');
+      assert(results[0].seats.every((seat) => seat.chips !== Game.initialChips));
+      await Promise.all([p1.close(), p2.close()]);
+      await control.restartTables();
+      for (const [index, session] of [session1, session2].entries()) {
+        const client = create(`persist-reconnected-${index + 1}`);
+        const view = await client.join(ids[index], `${tableId}-restored`);
+        const reconnected = await client.sessionInfo();
+        assert.equal(reconnected.actorId, session.actorId);
+        assert.notEqual(reconnected.objectGeneration, session.objectGeneration);
+        assert.equal(view.seats[view.yourSeat].chips, results[0].seats[index].chips);
+      }
+    }
     if (name === 'update') {
       assert(control, 'The update scenario requires an isolated run.');
       await control.replace(b1.nodeId);

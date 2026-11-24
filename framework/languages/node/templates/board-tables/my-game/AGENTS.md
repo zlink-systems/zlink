@@ -5,7 +5,7 @@
 Every server process in this project is a stateful ZLink node. Before writing code, decide which kind you are editing.
 
 - A game node is not a REST server. A player's state is owned by one session-bound Actor (or the Spot that owns a shared value). Load it once on connect; do not read the database while handling a request.
-- Write only results to the database, one transaction per round. Check duplicate requests in Actor or Spot memory.
+- Write only results to the database, one transaction per round. Check duplicate gameplay requests in Actor or Spot memory. The API node owns durable deduplication of round commits by table ID and hand number.
 - While a game is running, a Spot handler never awaits a remote request or a database reply: the await holds the Spot's turn and stops every message and timer in it. When a round ends, the Spot writes the results of all its Actors in one transaction, then tells each Actor after the commit.
 - Values many players see live in node memory or one owning Spot; values many requests update are applied by that one owning Spot. A process that does not own a value sends a request to its owner instead of writing it.
 - Spots and Actors already process one message at a time. Do not guard their state with locks, semaphores or process-wide static stores, and do not update memory from database commit hooks; the writer updates its owner's memory after commit, others send a message to the owner.
@@ -23,7 +23,7 @@ Details: [Stateful game nodes and the HTTP lobby](https://docs.zlink.systems/nod
 
 ## Project overview
 
-This Node.js 22 (TypeScript, NestJS) project is a board-table game server example in which players queue for a match or join a table by ID, play hands, and reconnect to the same seat. It runs a Session gateway, a Matchmaker node that hosts the Pool Spot, Table nodes A and B that host Table Spots and Player Actors, and Redis for location and relocation state. `package.json` pins the ZLink Framework and connector packages to `0.34.0`.
+This Node.js 22 (TypeScript, NestJS) project is a board-table game server example in which players queue for a match or join a table by ID, play hands, and reconnect to the same seat. It runs a Session gateway, a Matchmaker node that hosts the Pool Spot, Table nodes A and B that host Table Spots and Player Actors, and an API node that stores player records in the same Redis deployment used for location and relocation. `package.json` pins the ZLink Framework and connector packages to `0.34.0`.
 
 The project layout and feature procedure below describe where to add gameplay. The [README](README.md) covers prerequisites, local execution, and deployment. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 
@@ -39,7 +39,7 @@ Follow `e2e/client.mts`: connect, register listeners, and submit `JoinTableReque
 
 From this directory, run `./run-server.sh` on Linux or WSL, or `.\run-server.cmd` on Windows. It builds with Node.js 22 and npm, starts Redis in Docker and keeps the Node.js server processes running in the foreground. Wait for the printed Session WebSocket URL before connecting a client. Ctrl+C shuts down the server.
 
-Run `./run-e2e.sh` or `.\run-e2e.cmd` from a second terminal. If `.logs/server.json` identifies a live server, the runner attaches and runs the scenarios that preserve the deployment. Stop that server to run the default isolated Docker suite, including the `update` scenario. Use `--attach` or `-Attach` to require an active server. Docker builds and isolated Docker runs work without a host Node.js installation.
+Run `./run-e2e.sh` or `.\run-e2e.cmd` from a second terminal. If `.logs/server.json` identifies a live server, the runner attaches and runs the scenarios that preserve the deployment. Stop that server to run the default isolated Docker suite, including the `update` and `persist` scenarios. Use `--attach` or `-Attach` to require an active server. Docker builds and isolated Docker runs work without a host Node.js installation.
 
 ```powershell
 pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
@@ -70,6 +70,10 @@ For host process debugging, install Node.js 22 or later and npm, then add `--loc
 `server/matchmaker/main.ts` registers the Pool factory and starts the fixed `pool-board` Spot. The Entry handler queues a Player; the Pool selects the oldest waiting pair, prepares a Table, and commits after receiving both players' admission reports. The Pool also decides when to withdraw an assignment or remove a waiting ticket. The Pool holds a disconnected waiting player’s ticket for 15 seconds. A reserved ticket remains subject to the 10-second entry deadline. A waiting ticket expires after 120 seconds. The Table checks the assigned members and owns game state. Player Actors retain their own matchmaking state across moves.
 
 MatchRule in `server/matchmaker/domain/` owns pair selection. Extend it to consider ratings, and apply a competitive acceptance step in the Pool before commitment.
+
+### API node and player records
+
+The API node serves the ClientServer Channel. A Player Actor loads chips once before its first seating, through `loadPlayer`. After settlement the Table calls `commitRound` once with every seat's chips and publishes the results after the API acknowledges the Redis transaction. Redis stores records under the deployment prefix followed by `players:`.
 
 ### Tables and players
 
@@ -118,7 +122,7 @@ Requests in the example game follow this path. Reading the code along this path 
 1. The client connects to the Session node over STREAM and sends the first packet, `JoinTableRequest`. `Session` checks the first packet name, calls `getOrCreate` for the Player Actor by `playerId`, binds it to the Session, and relays the original packet.
 2. A new Actor starts in the Entry Spot `Entry`. The `EntryJoin` handler checks the identity, calls `getOrCreate` for the Table by `tableId`, and requests `joinSpot(...).defer()`.
 3. `Table.onActorJoin` seats the player through `TableState.admit`. When the table is full, `Player.onJoinCompleted` sends `ActionRejected` through the bound Session. After admission, `Table.onJoinedActor` publishes `TableView` to every seat by player ID, and the `Deliver` handler forwards it through each bound Session.
-4. `Start` and `Bet` call `TableState.start` and `TableState.bet`. A valid action publishes `TableView`, `HandDealt`, or `HandResult` to the seats; an invalid action sends `ActionRejected` to the requester through its bound Session.
+4. `Start` and `Bet` call `TableState.start` and `TableState.bet`. A valid action publishes `TableView`, `HandDealt`, or `HandResult` to the seats. For settlement, the Table commits the round through the API before publishing `TableView` and `HandResult`. An invalid action sends `ActionRejected` to the requester through its bound Session.
 5. After a reconnect, the new Session sends `JoinTableRequest` again. The `Rejoin` handler sends the table view and the player's cards directly through the bound Session.
 6. To replace a node, the `drain` command in `runHost` requests relocation. Framework takes the game state from `capture` in `TableRelocation` and calls `restore` on another node.
 

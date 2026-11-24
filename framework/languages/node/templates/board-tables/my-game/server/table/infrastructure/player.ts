@@ -9,6 +9,7 @@ import type {
   ZLinkActorRelocationAdapter,
   ZLinkSpotOutbound
 } from '@zlink-systems/framework';
+import { PlayerRecords } from '../application/player-records';
 import { MatchCancellation, Names, Reasons } from '../../shared/constants';
 import {
   ActionRejected,
@@ -36,19 +37,39 @@ interface PlayerMatch {
   };
 }
 
-export class Player implements ZLinkActor {
+interface PlayerState {
+  chips?: bigint;
   match?: PlayerMatch;
+}
+
+export class Player implements ZLinkActor {
+  state: PlayerState = {};
+
+  get match(): PlayerMatch | undefined {
+    return this.state.match;
+  }
+
+  set match(value: PlayerMatch | undefined) {
+    this.state.match = value;
+  }
 
   constructor(
     readonly context: ZLinkActorContext,
-    private readonly outbound: ZLinkSpotOutbound
+    private readonly outbound: ZLinkSpotOutbound,
+    private readonly records: PlayerRecords
   ) {}
+
+  async loadPlayer(): Promise<bigint> {
+    this.state.chips ??= await this.records.loadPlayer(this.context.actorId);
+    return this.state.chips;
+  }
 
   async findMatch(outbound: ZLinkSpotOutbound): Promise<void> {
     if (this.match?.ticketId) {
       await this.context.boundSession.send(new MatchQueued(this.match.ticketId)).submit();
       return;
     }
+    await this.loadPlayer();
     this.match ??= { requestKey: randomUUID() };
     const reply = await outbound
       .requestToSpot(Names.poolKey, new MatchRequest(this.match.requestKey, this.context.actorId))
@@ -98,7 +119,9 @@ export class Player implements ZLinkActor {
     const match = this.match;
     if (!match || match.ticketId !== message.ticketId || match.assignment) return;
     match.assignment = { id: message.assignmentId, phase: 'joining' };
-    this.context.joinSpot(message.roomId, new RoomAdmission(message.assignmentId)).defer();
+    const chips = this.state.chips;
+    if (chips === undefined) throw new Error('Player chips must be loaded before matchmaking');
+    this.context.joinSpot(message.roomId, new RoomAdmission(message.assignmentId, chips)).defer();
   }
 
   async committed(message: MatchCommitted): Promise<void> {
@@ -199,22 +222,32 @@ export class Player implements ZLinkActor {
 
 @Injectable()
 export class PlayerFactory implements ZLinkActorFactory<Player> {
-  constructor(@Inject(ZLINK_SPOT_OUTBOUND) private readonly outbound: ZLinkSpotOutbound) {}
+  constructor(
+    @Inject(ZLINK_SPOT_OUTBOUND) private readonly outbound: ZLinkSpotOutbound,
+    private readonly records: PlayerRecords
+  ) {}
 
   async create(context: ZLinkActorContext): Promise<Player> {
-    return new Player(context, this.outbound);
+    return new Player(context, this.outbound, this.records);
   }
 }
 
 @Injectable()
 export class PlayerRelocation implements ZLinkActorRelocationAdapter<Player> {
   async capture(actor: Player): Promise<Uint8Array> {
-    return actor.match ? Buffer.from(JSON.stringify(actor.match)) : new Uint8Array();
+    const { chips, match } = actor.state;
+    return Buffer.from(JSON.stringify({ chips: chips?.toString(), match }));
   }
 
   async restore(actor: Player, payload: Uint8Array): Promise<void> {
-    actor.match = payload.length
-      ? (JSON.parse(Buffer.from(payload).toString()) as PlayerMatch)
-      : undefined;
+    if (!payload.length) return;
+    const snapshot = JSON.parse(Buffer.from(payload).toString()) as {
+      chips?: string;
+      match?: PlayerMatch;
+    };
+    actor.state = {
+      chips: snapshot.chips === undefined ? undefined : BigInt(snapshot.chips),
+      match: snapshot.match
+    };
   }
 }

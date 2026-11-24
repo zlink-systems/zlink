@@ -216,6 +216,7 @@ async function main(): Promise<void> {
   const attach = args[0] === '--attach';
   if (foreground || attach) args.shift();
   if (foreground) assert.equal(args.length, 0);
+  const isolated = (name: string): boolean => name === 'update' || name === 'persist';
   let selected: readonly string[] = Scenarios;
   if (args.length) {
     assert.equal(args.length, 2);
@@ -235,10 +236,12 @@ async function main(): Promise<void> {
     const server = runningServer();
     assert(server?.endpoint, 'Start the server with run-server and wait for its STREAM endpoint.');
     if (args.length === 0) {
-      selected = selected.filter((name) => name !== 'update');
-      console.log('Running against the started server; update requires an isolated run.');
+      selected = selected.filter((name) => !isolated(name));
+      console.log(
+        'Running against the started server; update and persist require an isolated run.'
+      );
     }
-    assert(!selected.includes('update'), 'The update scenario requires an isolated run.');
+    assert(!selected.some(isolated), 'The update and persist scenarios require an isolated run.');
     console.log(`Attached to Session STREAM: ${server.endpoint}`);
     console.log(`Logs: ${logDir}`);
     process.exitCode = (await runScenarios(selected, server.endpoint, runId, logDir)) ? 0 : 1;
@@ -343,10 +346,11 @@ async function main(): Promise<void> {
       if (!isNodeRole(node.role)) continue;
       assert(node.config);
       const cfg = JSON.parse(readFileSync(node.config, 'utf8')) as NodeConfig;
-      if (node.role === 'table' && !foreground) cfg.tableCapacity = selected.length;
+      if (node.role === 'table' && !foreground)
+        cfg.tableCapacity = selected.filter((name) => name !== 'persist').length;
       cfg.redisEndpoint = redis;
       cfg.keyPrefix = `my-game:${runId}:`;
-      cfg.meshEndpoint = 'tcp://127.0.0.1:0';
+      if (cfg.meshEndpoint !== null) cfg.meshEndpoint = 'tcp://127.0.0.1:0';
       await start(cfg, node.role);
     }
     const ready = await Promise.all([...nodes.values()].map((n) => n.ready()));
@@ -369,6 +373,13 @@ async function main(): Promise<void> {
       return;
     }
     const control = {
+      async restartTables(): Promise<void> {
+        const tables = [...nodes.values()].filter((node) => node.role === 'table');
+        await Promise.all(tables.map((table) => table.stop()));
+        const replacements = [];
+        for (const table of tables) replacements.push(await start(table.config, table.role));
+        await Promise.all(replacements.map((table) => table.ready()));
+      },
       async drain(id: string): Promise<void> {
         const node = nodes.get(id);
         assert(node, `Unknown host ${id}`);

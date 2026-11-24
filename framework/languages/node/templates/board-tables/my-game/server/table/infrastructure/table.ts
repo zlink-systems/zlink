@@ -14,13 +14,14 @@ import { NODE_CONFIG, type NodeConfig } from '../../shared/config';
 import {
   TableView,
   HandDealt,
-  JoinTableRequest,
+  TableAdmission,
   MatchCommitted,
   RoomAdmission,
   RoomWithdrawn,
   type HandResult,
   type PrepareRoom
 } from '../../shared/messages';
+import { PlayerRecords } from '../application/player-records';
 import { TableState } from '../domain/table-state';
 import { Player } from './player';
 import { deserializeTableSnapshot, serializeTableSnapshot } from './table-snapshot-json';
@@ -54,7 +55,8 @@ export class Table implements ZLinkSpot<Player> {
   }
   constructor(
     @Inject(NODE_CONFIG) private readonly config: NodeConfig,
-    @Inject(ZLINK_ACTOR_CLIENT) private readonly actors: ZLinkActorClient
+    @Inject(ZLINK_ACTOR_CLIENT) private readonly actors: ZLinkActorClient,
+    private readonly records: PlayerRecords
   ) {}
   async onActorJoin(actorId: string, request: ZLinkMessage) {
     if (this.isMatchRoom) {
@@ -62,12 +64,15 @@ export class Table implements ZLinkSpot<Player> {
       if (!assignment || assignment.phase !== 'prepared' || !assignment.members.includes(actorId))
         return { accepted: false };
       const admission = request.decode(RoomAdmission);
-      return { accepted: admission.assignmentId === assignment.id && this.state.admit(actorId) };
+      return {
+        accepted:
+          admission.assignmentId === assignment.id && this.state.admit(actorId, admission.chips)
+      };
     }
-    const join = request.decode(JoinTableRequest);
+    const { join, chips } = request.decode(TableAdmission);
     if (join.playerId !== actorId || join.tableId !== String(this.context.spotId))
       throw new Error('Join identity mismatch');
-    return { accepted: this.state.admit(actorId) };
+    return { accepted: this.state.admit(actorId, chips) };
   }
   async onJoinedActor(_actor: Player): Promise<void> {
     if (!this.isMatchRoom) await this.publish();
@@ -142,6 +147,8 @@ export class Table implements ZLinkSpot<Player> {
     return new HandDealt(this.state.snapshot.handNumber, this.state.cards(playerId));
   }
   async publish(result: HandResult | null = null): Promise<void> {
+    if (result)
+      await this.records.commitRound(String(this.context.spotId), result.handNumber, result.seats);
     for (const seat of this.state.snapshot.seats) {
       await this.actors.sendToActor(seat.playerId, this.view(seat.playerId)).submit();
       if (result) await this.actors.sendToActor(seat.playerId, result).submit();

@@ -18,7 +18,7 @@
         ".\\run-e2e.cmd -Scenario match,match-cancel"
       ]
     },
-    "scenarios": ["table", "reconnect", "match", "match-cancel", "update"]
+    "scenarios": ["table", "reconnect", "match", "match-cancel", "update", "persist"]
   },
   "nodes": [
     {
@@ -52,13 +52,26 @@
       "config": "server/config/matchmaker.json"
     },
     {
+      "id": "api",
+      "role": "api",
+      "title": "API node (Actor DB)",
+      "config": "server/config/api.json"
+    },
+    {
       "id": "location",
       "role": "location-store",
       "title": "Location Store",
       "config": "docker-compose.yml"
     }
   ],
-  "channels": [],
+  "channels": [
+    {
+      "name": "my-game-player-records",
+      "kind": "clientServer",
+      "owner": "api",
+      "clients": ["tableA", "tableB"]
+    }
+  ],
   "spots": [
     {
       "id": "table-entry-a",
@@ -113,6 +126,21 @@
       "label": "Location / lease",
       "semantic": "location-authority",
       "from": "tableA"
+    },
+    {
+      "to": "api",
+      "label": "LoadPlayer / CommitRound",
+      "from": "tableA"
+    },
+    {
+      "to": "api",
+      "label": "LoadPlayer / CommitRound",
+      "from": "tableB"
+    },
+    {
+      "from": "api",
+      "to": "location",
+      "label": "Player records"
     }
   ]
 }
