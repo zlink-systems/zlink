@@ -425,6 +425,13 @@ bool stream_uses_websocket (const stream_snapshot_t &stream)
     return stream.bind_endpoint.rfind ("ws://", 0) == 0;
 }
 
+// The bind endpoint was validated with its scheme (tcp://, ws:// or tls://). Listener status
+// keeps that scheme with the acceptor's actual address and port.
+std::string stream_endpoint_scheme (const stream_snapshot_t &stream)
+{
+    return stream.bind_endpoint.substr (0, stream.bind_endpoint.find ("://") + 3);
+}
+
 bool stream_uses_tls (const stream_snapshot_t &stream)
 {
     return !stream.tls_certificate_file.empty () || !stream.tls_private_key_file.empty ()
@@ -1290,7 +1297,7 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                                          "STREAM endpoint bind/listen failed: " + error.message ());
         }
         if (const auto endpoint = socket_endpoint_text (_acceptor.local_endpoint ()))
-            _bound_endpoint = *endpoint;
+            _bound_endpoint = stream_endpoint_scheme (_stream) + *endpoint;
         start_boost_accept ();
         mark_started ();
         _io.run ();
