@@ -1,11 +1,11 @@
 # MyGame board tables
 
-A Java server template for four-seat card tables. Table User Spots own seats, chips, private hands, turns and settlement. Player Actors identify players and forward messages to their bound Sessions. Table nodes preserve application state during planned host relocation.
+A Java server template for four-seat card tables. Table User Spots own seats, chips, private hands, turns and settlement. Player Actors identify players and forward messages to their bound Sessions. Play nodes (table) preserve application state during planned host relocation.
 
 ```mermaid
 flowchart LR
-  players[Players] -->|STREAM| session[Session node]
-  session -->|relay| tables[Table node ×N]
+  players[Players] -->|STREAM| session["Session node"]
+  session -->|relay| tables["Play node ×N (table)"]
   tables -->|Location / lease| location[Location Store]
 ```
 
@@ -131,7 +131,7 @@ pwsh -NoProfile -File ./run-e2e.ps1
 pwsh -NoProfile -File ./run-e2e.ps1 -Scenario table,reconnect,update
 ```
 
-The runner checks `zlink.structure.json`, starts an isolated Redis Compose project, starts Table A, Table B and Session, and validates received typed messages. Each run uses OS-assigned ports and a unique Redis key prefix. Its configuration files and node stdout/stderr are retained under `.logs/run-<id>/`. Node stderr contains the Framework's Normal message-flow diagnostics. Cleanup failures cause exit code 1.
+The runner checks `zlink.structure.json`, starts an isolated Redis Compose project, starts play node A (table), play node B (table) and Session, and validates received typed messages. Each run uses OS-assigned ports and a unique Redis key prefix. Its configuration files and node stdout/stderr are retained under `.logs/run-<id>/`. Node stderr contains the Framework's Normal message-flow diagnostics. Cleanup failures cause exit code 1.
 
 | Scenario | Verification |
 | --- | --- |
@@ -164,9 +164,9 @@ Message Follow is explicitly configured for 30 seconds. The `SAFE_TO_SHUTDOWN` o
 1. Provision Redis and use one shared, deployment-specific key prefix in the node configuration files. Set mesh endpoints reachable by all nodes and a client-reachable Session stream endpoint.
 2. Start `server/table/build/install/table/bin/table` with `server/config/table-a.json` and `server/config/table-b.json`, each as a separate process. Windows launchers have a `.bat` suffix.
 3. Start `server/session/build/install/session/bin/session` with `server/config/session.json`. The processes publish `READY` with the endpoints actually bound by Framework.
-4. Send `drain` on the selected Table process's stdin. Wait for `RELOCATION_REQUESTED`, `RELOCATED` and `SAFE_TO_SHUTDOWN`, then send `shutdown` and wait for `STOPPED` and process exit.
-5. Start the replacement Table process with the same configuration. Wait for `READY` before submitting new work.
+4. Send `drain` on the selected play node (table)'s stdin. Wait for `RELOCATION_REQUESTED`, `RELOCATED` and `SAFE_TO_SHUTDOWN`, then send `shutdown` and wait for `STOPPED` and process exit.
+5. Start the replacement play node (table) with the same configuration. Wait for `READY` before submitting new work.
 
 Production launchers use the configuration files directly. The e2e runner derives its node IDs and configuration paths from the structure and replaces Redis, key-prefix and listener endpoint values only in its run-specific copies. Application transfer contains no Framework routing, membership or lease state.
 
-The e2e runner sets each node's optional `tableCapacity` to the number of selected scenarios through the public Table stable-type limit. Each scenario retains one table. After update drains the source, the surviving node is at capacity, so only the replacement can host the new table. Both new players must observe the replacement node ID. Omitted or zero capacity leaves deployment capacity unlimited. Entry declarations describe the application Entry on Table nodes only; there are no fixed User Spots in this template.
+The e2e runner sets each node's optional `tableCapacity` to the number of selected scenarios through the public Table stable-type limit. Each scenario retains one table. After update drains the source, the surviving node is at capacity, so only the replacement can host the new table. Both new players must observe the replacement node ID. Omitted or zero capacity leaves deployment capacity unlimited. Entry declarations describe the application Entry on play nodes (table) only; there are no fixed User Spots in this template.

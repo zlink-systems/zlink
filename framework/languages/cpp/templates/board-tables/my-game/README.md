@@ -1,11 +1,11 @@
 # MyGame board tables
 
-This C++ template hosts four-seat card tables on two Table node containers. The Session node binds each player to a persistent Player Actor and relays typed packets. Each Table User Spot owns its seats, chips, shuffled deck, private hands, turn and pot.
+This C++ template hosts four-seat card tables on two play node (table) containers. The Session node binds each player to a persistent Player Actor and relays typed packets. Each Table User Spot owns its seats, chips, shuffled deck, private hands, turn and pot.
 
 ```mermaid
 flowchart LR
-  Players -->|STREAM| Session
-  Session -->|relay| Tables["Table node ×N"]
+  Players -->|STREAM| Session["Session node"]
+  Session -->|relay| Tables["Play node ×N (table)"]
   Tables -->|"Location / lease"| Location["Location Store"]
 ```
 
@@ -131,13 +131,13 @@ The runner and nodes execute in containers. The script checks structure before R
 
 The runner removes its node containers. The script removes remaining containers carrying this run's label, its Compose resources and its image tags. Cleanup failures return exit code 1. Build and orchestration logs remain in `.logs/docker-<project>/`; node logs and generated configurations remain in `.logs/run-<id>/`. Unix runners use the caller UID and Docker socket group so those files remain caller-owned.
 
-The scripts and C++ runner validate actual structure files, start an isolated Redis Compose project with an ephemeral loopback port, start Table A, Table B and Session, and run the selected scenarios in canonical order. Generated configurations and node logs, including message flow, remain in `.logs/run-<id>/`. Scenario and cleanup failures return exit code 1. Windows child processes have no console window.
+The scripts and C++ runner validate actual structure files, start an isolated Redis Compose project with an ephemeral loopback port, start play node A (table), play node B (table) and Session, and run the selected scenarios in canonical order. Generated configurations and node logs, including message flow, remain in `.logs/run-<id>/`. Scenario and cleanup failures return exit code 1. Windows child processes have no console window.
 
 | Scenario | Assertions |
 | --- | --- |
 | `table` | Seats and chips, private cards, rejection of a server-originated packet, out-of-turn bets, over-limit values (`integer-out-of-range`) and insufficient chips. Each rejection has `retryAfterMs: 0` and leaves table state unchanged. Settlement reports every `cardCount` as zero; a private-hand query returns no cards. |
 | `reconnect` | Immediate connection replacement preserves Actor identity, generation, seat, chips, cards and turn while the other player stays connected. Settlement clears every hand, and a later private-hand query returns no cards. |
-| `update` | Drain the actual Table host, observe relocation and SafeToShutdown, preserve both Session identities and game state, settle on the replacement with empty hands, stop and replace the host, then finish a fresh table. |
+| `update` | Drain the actual play node (table), observe relocation and SafeToShutdown, preserve both Session identities and game state, settle on the replacement with empty hands, stop and replace the host, then finish a fresh table. |
 
 `ActionRejected.retryAfterMs` is a signed 32-bit JSON integer serialized with the `retryAfterMs` property name. Chip balances, the pot and hand numbers use signed 64-bit integers.
 
@@ -187,10 +187,10 @@ Message Follow is explicitly configured for 30 seconds. The `SAFE_TO_SHUTDOWN` o
 
 ## Deployment sequence
 
-Start Redis, Table A, Table B, then Session. Set deployment-specific Redis endpoints and a unique key prefix in all configurations. Both Table processes register Entry, Player and Table factories in `my-game-tables`; Session hosts only the `players` STREAM listener and mesh object client.
+Start Redis, play node A (table), play node B (table), then the session node. Set deployment-specific Redis endpoints and a unique key prefix in all configurations. Both Table processes register Entry, Player and Table factories in `my-game-tables`; Session nodes only the `players` STREAM listener and mesh object client.
 
-For an update, write `drain` to the affected Table host's standard input. Require `RELOCATION_REQUESTED`, `RELOCATED` and `SAFE_TO_SHUTDOWN`, then send `shutdown` and require `STOPPED` plus exit code zero. Restart with the same configuration. Existing Table identities remain under Location Store authority.
+For an update, write `drain` to the affected play node's standard input. Require `RELOCATION_REQUESTED`, `RELOCATED` and `SAFE_TO_SHUTDOWN`, then send `shutdown` and require `STOPPED` plus exit code zero. Restart with the same configuration. Existing Table identities remain under Location Store authority.
 
 Extend rules in `server/table/domain.hpp` and transport handlers in `server/table/table.hpp`. Player Actors hold no game-state copy. Request replies use the handler Actor's bound session. Other pushes use player IDs through the public Actor client and the Table's typed forwarding handler. Relocation adapters serialize application state only.
 
-The e2e runner sets each node's optional `TableCapacity` to the number of selected scenarios through the public Table stable-type limit. Each scenario retains one table. After update drains the source, the surviving node is at capacity, so only the replacement can host the new table. Both new players must observe the replacement node ID. Omitted or zero capacity leaves deployment capacity unlimited. Entry declarations describe the application Entry on Table nodes only; there are no fixed User Spots in this template.
+The e2e runner sets each node's optional `TableCapacity` to the number of selected scenarios through the public Table stable-type limit. Each scenario retains one table. After update drains the source, the surviving node is at capacity, so only the replacement can host the new table. Both new players must observe the replacement node ID. Omitted or zero capacity leaves deployment capacity unlimited. Entry declarations describe the application Entry on play nodes (table) only; there are no fixed User Spots in this template.

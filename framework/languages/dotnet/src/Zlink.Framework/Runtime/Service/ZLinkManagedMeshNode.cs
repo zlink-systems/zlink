@@ -3499,6 +3499,14 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         IReadOnlyList<Message> parts,
         SendFlags flags = SendFlags.None,
         ReadOnlyMemory<byte> metadata = default
+    ) => SendToNode(targetRid, parts, flags, metadata, null);
+
+    internal SubmitResult SendToNode(
+        RoutingId targetRid,
+        IReadOnlyList<Message> parts,
+        SendFlags flags,
+        ReadOnlyMemory<byte> metadata,
+        Action<Exception>? failureObserver
     ) =>
         SubmitApplication(
             targetRid,
@@ -3507,7 +3515,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             null,
             parts,
             flags,
-            metadata
+            metadata,
+            failureObserver
         );
 
     public SubmitResult RequestToNode(
@@ -12522,7 +12531,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         string? channelName,
         IReadOnlyList<Message> parts,
         SendFlags flags,
-        ReadOnlyMemory<byte> metadata
+        ReadOnlyMemory<byte> metadata,
+        Action<Exception>? failureObserver = null
     )
     {
         ArgumentNullException.ThrowIfNull(parts);
@@ -12596,7 +12606,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         if (!metadata.IsEmpty)
             wireParts.Add(metadata);
         wireParts.Add(ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(parts));
-        var sent = TryScheduleRoutedSend(peer.PhysicalRoutingId, wireParts);
+        var sent = TryScheduleRoutedSend(peer.PhysicalRoutingId, wireParts, failureObserver);
         if (!sent)
         {
             Publish(MeshMonitorEventKind.Backpressured, peerRid: targetRid);

@@ -109,7 +109,7 @@ fun checkStructure(root: Path) {
     val logical = mutableListOf<String>()
     var dynamic = false
     for (spot in spots) {
-        check(roles[owner(spot)] == Roles.MATCH) { "Room Spot owner must be a match node" }
+        check(roles[owner(spot)] == Roles.MATCH) { "Room Spot owner must be a play node (match)" }
         when (text(spot, "kind")) {
             "entry" ->
                 check(
@@ -140,7 +140,7 @@ fun checkStructure(root: Path) {
                 it.path("owner").asText() == text(node, "id") && it.path("kind").asText() == "entry"
             } == 1
         ) {
-            "Match node must declare exactly one application Entry Spot"
+            "play node (match) must declare exactly one application Entry Spot"
         }
     }
     val requiredEdges =

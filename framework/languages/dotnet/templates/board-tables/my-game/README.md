@@ -1,15 +1,15 @@
 # MyGame board table server
 
-The Session node accepts STREAM connections, binds them to Player Actors, and relays messages. Table nodes A and B host dynamically created Table User Spots and Player Actors. The Table Spot owns seats, chips, private cards, turns, and settlement.
+The Session node accepts STREAM connections, binds them to Player Actors, and relays messages. Play nodes A and B (table) host dynamically created Table User Spots and Player Actors. The Table Spot owns seats, chips, private cards, turns, and settlement.
 
 ```mermaid
 flowchart LR
-    players[Players] -->|STREAM| session[Session node]
-    session -->|relay| tables[Table node ×N]
+    players[Players] -->|STREAM| session["Session node"]
+    session -->|relay| tables["Play node ×N (table)"]
     tables -->|Location / lease| location[(Location Store)]
 ```
 
-`zlink.structure.json` describes the initial composition. Table nodes A and B run the same server project with different configurations. The Framework and Redis manage the actual Spot ownership and relocation. Extension points and public API boundaries are in [AGENTS.md](AGENTS.md).
+`zlink.structure.json` describes the initial composition. Play nodes A and B (table) run the same server project with different configurations. The Framework and Redis manage the actual Spot ownership and relocation. Extension points and public API boundaries are in [AGENTS.md](AGENTS.md).
 
 ## Prerequisites
 
@@ -70,7 +70,7 @@ Use the release pinned in `Directory.Packages.props`, at `PackageVersion Include
 
 ### First table example
 
-In a copy of this template, create a .NET 8 console project, reference `server/MyGame.Shared/MyGame.Shared.csproj`, and add `Zlink.Stream.Connector` using the pinned version described above. Save this as its `Program.cs` and run `dotnet run --project <client-project> -- <actual-session-endpoint>`. Keep Session, Table nodes, and Redis running separately from the temporary e2e deployment. Use fresh player/table IDs. `e2e/MyGame.E2E/GameClient.cs` shows the full game flow.
+In a copy of this template, create a .NET 8 console project, reference `server/MyGame.Shared/MyGame.Shared.csproj`, and add `Zlink.Stream.Connector` using the pinned version described above. Save this as its `Program.cs` and run `dotnet run --project <client-project> -- <actual-session-endpoint>`. Keep Session, play nodes (table), and Redis running separately from the temporary e2e deployment. Use fresh player/table IDs. `e2e/MyGame.E2E/GameClient.cs` shows the full game flow.
 
 ```csharp
 using MyGame.Shared;
@@ -149,7 +149,7 @@ pwsh -NoProfile -File ./run-e2e.ps1 -Scenario table,reconnect,update
 pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 ```
 
-The runner checks the structure, then starts Redis, Table A and B, and Session in order under a uniquely named Compose project. It uses OS-assigned loopback ports and a per-run Redis key prefix. It runs the scenarios after each process reports `READY` and cleans up the processes and containers it created. Configuration and logs are retained under `.logs/run-<id>/`.
+The runner checks the structure, then starts Redis, play node A (table) and B, and Session in order under a uniquely named Compose project. It uses OS-assigned loopback ports and a per-run Redis key prefix. It runs the scenarios after each process reports `READY` and cleans up the processes and containers it created. Configuration and logs are retained under `.logs/run-<id>/`.
 
 | Scenario | Verified behavior |
 | --- | --- |
@@ -186,16 +186,16 @@ Message Follow is explicitly configured for 30 seconds. The `SAFE_TO_SHUTDOWN` o
 Set the Redis address and the shared key prefix in `server/config/` for each environment. Set mesh addresses reachable between nodes and STREAM addresses reachable by clients.
 
 1. Start Redis. For a manual local Compose run, use `docker compose -p my-game-local up -d --wait` and read the assigned port with `docker compose -p my-game-local port location 6379`.
-2. Start Table A and B with their own configurations and wait for `READY`.
+2. Start play node A (table) and B with their own configurations and wait for `READY`.
 3. Start Session and connect clients to the STREAM endpoint it prints.
 
-Example of starting a Table node:
+Example of starting a play node (table):
 
 ```sh
 dotnet server/MyGame.Table/bin/Debug/net8.0/MyGame.Table.dll --config server/config/table-a.json
 ```
 
-To replace a Table process, send `drain` to its standard input. After `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN` appear, send `shutdown` and confirm a normal exit. Start a replacement process with the same configuration and wait for `READY`. Existing Tables stay on the node they were relocated to; the new process does not redistribute them automatically.
+To replace a play node (table), send `drain` to its standard input. After `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN` appear, send `shutdown` and confirm a normal exit. Start a replacement process with the same configuration and wait for `READY`. Existing Tables stay on the node they were relocated to; the new process does not redistribute them automatically.
 
 This procedure is a `PlannedMaintenance` example at the same application version. A production deployment orchestrator owns process lifetime and compatible version placement. Clean up a manually started Redis with `docker compose -p my-game-local down --volumes`.
 
@@ -219,4 +219,4 @@ Node stderr records the message flow from the dispatch diagnostics `Normal` logg
 
 Validated against the published Framework 0.32.0 packages.
 
-The e2e runner sets each node's optional `TableCapacity` to the number of selected scenarios through the public Table stable-type limit. Each scenario retains one table. After update drains the source, the surviving node is at capacity, so only the replacement can host the new table. Both new players must observe the replacement node ID. Omitted or zero capacity leaves deployment capacity unlimited. Entry declarations describe the application Entry on Table nodes only; there are no fixed User Spots in this template.
+The e2e runner sets each node's optional `TableCapacity` to the number of selected scenarios through the public Table stable-type limit. Each scenario retains one table. After update drains the source, the surviving node is at capacity, so only the replacement can host the new table. Both new players must observe the replacement node ID. Omitted or zero capacity leaves deployment capacity unlimited. Entry declarations describe the application Entry on play nodes (table) only; there are no fixed User Spots in this template.

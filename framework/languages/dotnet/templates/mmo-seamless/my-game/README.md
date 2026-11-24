@@ -1,14 +1,19 @@
 # MyGame MMORPG seamless world
 
-This project runs a Session node, two Zone nodes, an Instance node, and a Redis Location Store. It includes a C# e2e client. Add server gameplay to the extension points in [AGENTS.md](AGENTS.md); no game engine project is included.
+This project runs a Session node, two play nodes (zone), a play node (dungeon), and a Redis Location Store. It includes a C# e2e client. Add server gameplay to the extension points in [AGENTS.md](AGENTS.md); no game engine project is included.
 
 ```mermaid
 flowchart LR
-    players[Players] -->|STREAM| session[Session node]
-    session -->|relay| zoneA[Zone node A: Zones 1, 2, 3]
-    zoneA -->|relocation| zoneB[Zone node B: Zones 4, 5, 6]
+    subgraph playNodes["Play nodes"]
+      zoneA["Play node A (zone): Zones 1, 2, 3"]
+      zoneB["Play node B (zone): Zones 4, 5, 6"]
+      instance["Play node ×N (dungeon): Dungeon User Spots"]
+    end
+    players[Players] -->|STREAM| session["Session node"]
+    session -->|relay| zoneA
+    zoneA -->|relocation| zoneB
     zoneB -->|border pub/sub| zoneA
-    zoneB -->|GetOrCreate| instance[Instance node: Dungeon User Spots]
+    zoneB -->|GetOrCreate| instance
     zoneB -->|Location / lease| location[(Redis Location Store)]
 ```
 
@@ -71,7 +76,7 @@ Use the release pinned in `Directory.Packages.props`, at `PackageVersion Include
 
 ### First world entry example
 
-Create a .NET 8 console project in a copy, reference `server/MyGame.Shared/MyGame.Shared.csproj`, and add `Zlink.Stream.Connector` using the pinned version described above. Save as `Program.cs`, then run `dotnet run --project <client-project> -- <actual-session-endpoint>` against separately running Session, Zone/Instance nodes, and Redis. Use a fresh player ID. E2E removes its temporary deployment; its `GameClient.cs` shows the complete flow.
+Create a .NET 8 console project in a copy, reference `server/MyGame.Shared/MyGame.Shared.csproj`, and add `Zlink.Stream.Connector` using the pinned version described above. Save as `Program.cs`, then run `dotnet run --project <client-project> -- <actual-session-endpoint>` against separately running Session, Zone/play nodes (dungeon), and Redis. Use a fresh player ID. E2E removes its temporary deployment; its `GameClient.cs` shows the complete flow.
 
 ```csharp
 using MyGame.Shared;
@@ -165,7 +170,7 @@ pwsh -NoProfile -File ./run-e2e.ps1 -Local -NoBuild
 | reconnect | The client reconnects to the same Actor identity and authoritative coordinate and sequence through a new Session. |
 | update | A drains while a player continues sending movements. Zone snapshots preserve positions, sequences, and remaining movement-budget milliseconds. The Session remains connected and acknowledged movement continues after A is replaced. |
 
-The client also requests a Dungeon User Spot from the Instance node through `GetOrCreate`. Scenario results use `✓`/`✗` with a total and a nonzero exit code on failure. A failed run retains diagnostics; inspect that run before repeating it.
+The client also requests a Dungeon User Spot from the play node (dungeon) through `GetOrCreate`. Scenario results use `✓`/`✗` with a total and a nonzero exit code on failure. A failed run retains diagnostics; inspect that run before repeating it.
 
 Pass `--check-structure` or `--check-domain` to `run-e2e.sh`, or `-CheckStructure` or `-CheckDomain` to `run-e2e.ps1`, to check composition or domain boundaries without starting nodes. The domain check also runs before the default scenario nodes start. After a local build, structure validation can also run without Docker:
 
@@ -207,7 +212,7 @@ Example process invocation after updating the configuration's Redis port:
 dotnet server/MyGame.Zone/bin/Debug/net8.0/MyGame.Zone.dll --config server/config/zone-a.json
 ```
 
-For replacement, send `drain` to A's standard input. The application calls public host relocation in `PlannedMaintenance` mode, moving workload to the compatible remaining host. Wait for `RELOCATED` and `SAFE_TO_SHUTDOWN`, send `shutdown`, and wait for process exit. Start the replacement with the same logical node configuration. Like every Zone node, it runs `GetOrCreate` for all configured Zones at startup: Zones already moved to B end as existing and remain on B, and only the closed first Zone is created on the replacement. Replacement does not automatically redistribute existing Zones.
+For replacement, send `drain` to A's standard input. The application calls public host relocation in `PlannedMaintenance` mode, moving workload to the compatible remaining host. Wait for `RELOCATED` and `SAFE_TO_SHUTDOWN`, send `shutdown`, and wait for process exit. Start the replacement with the same logical node configuration. Like every play node (zone), it runs `GetOrCreate` for all configured Zones at startup: Zones already moved to B end as existing and remain on B, and only the closed first Zone is created on the replacement. Replacement does not automatically redistribute existing Zones.
 
 Use an external deployment orchestrator to control process lifetime in production. Planned maintenance here demonstrates drain and replacement at the same application version. A versioned rolling update requires a prepared compatible target and the Framework's `RollingUpdate` operation; changing a process binary alone does not migrate state.
 

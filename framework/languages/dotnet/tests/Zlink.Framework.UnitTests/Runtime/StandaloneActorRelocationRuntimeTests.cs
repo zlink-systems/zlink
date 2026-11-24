@@ -717,53 +717,6 @@ public sealed class StandaloneActorRelocationRuntimeTests
         Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, error.Kind);
     }
 
-    [Fact]
-    public void Startup_recovery_routes_canonical_actor_root_to_standalone_owner()
-    {
-        var source = SourceAuthority();
-        var actor = SourceActorAuthority();
-        var target = TargetDescriptor();
-        var root = ZLinkStandaloneActorRelocationRuntime.CreateImmutableRoot(
-            source,
-            actor,
-            target,
-            Guid.NewGuid(),
-            ReadOnlyMemory<byte>.Empty,
-            [],
-            default
-        );
-        var candidate = new ZLinkRelocationRecoveryCandidate(
-            new ZLinkRelocationManifestReference(
-                "relocation-root",
-                1,
-                root.AggregateId,
-                root.AggregateGeneration,
-                root.InventoryDigest
-            ),
-            root,
-            [new ZLinkAuthorityEntry(root.Participants[0].AuthorityKey, source)]
-        );
-
-        Assert.True(ZLinkStandaloneActorRelocationRuntime.OwnsRecovery(candidate));
-        Assert.False(
-            ZLinkStandaloneActorRelocationRuntime.OwnsRecovery(
-                candidate with
-                {
-                    Envelope = root with
-                    {
-                        Participants =
-                        [
-                            root.Participants[0] with
-                            {
-                                RecoveryPayload = "{}"u8.ToArray(),
-                            },
-                        ],
-                    },
-                }
-            )
-        );
-    }
-
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

@@ -41,19 +41,19 @@
     {
       "id": "zoneA",
       "role": "zone",
-      "title": "Zone node A",
+      "title": "Play node A (zone)",
       "config": "server/config/zone-a.json"
     },
     {
       "id": "zoneB",
       "role": "zone",
-      "title": "Zone node B",
+      "title": "Play node B (zone)",
       "config": "server/config/zone-b.json"
     },
     {
       "id": "instance",
       "role": "instance",
-      "title": "Instance node ×N",
+      "title": "Play node ×N (dungeon)",
       "config": "server/config/instance.json"
     },
     {

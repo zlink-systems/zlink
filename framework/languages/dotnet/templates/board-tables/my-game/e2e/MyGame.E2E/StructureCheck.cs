@@ -196,7 +196,7 @@ internal static class StructureCheck
                 spots.Count(spot =>
                     Text(spot, "kind") == "entry" && Text(spot, "owner") == tableNode
                 ) == 1,
-                $"Table node must declare exactly one application Entry Spot: {tableNode}."
+                $"play node (table) must declare exactly one application Entry Spot: {tableNode}."
             );
         var edges = Array(document, "edges");
         foreach (var required in RequiredEdges)
