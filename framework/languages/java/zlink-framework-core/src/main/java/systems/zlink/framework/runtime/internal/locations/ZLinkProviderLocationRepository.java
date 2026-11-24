@@ -47,7 +47,8 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
 
     @Override
     public CompletionStage<Void> convertStoreFormat(ZLinkStoreCancellation cancellation) {
-        return new ZLinkLocationStoreFormat(provider, cancellation::isCancellationRequested)
+        return new ZLinkLocationStoreFormat(
+                        provider, cancellation::isCancellationRequested, authority)
                 .convert();
     }
 

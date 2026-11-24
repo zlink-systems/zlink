@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locationprovider.*;
@@ -2532,6 +2533,198 @@ final class ZLinkProviderAuthorityRepository {
                         });
     }
 
+    CompletionStage<Void> settleLegacyAggregates(
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+        return scanLegacyAggregates(null, new ArrayList<>(), cancellation)
+                .thenCompose(
+                        items -> {
+                            // Validate every release before any legacy row is changed.
+                            var projected = new HashMap<ZLinkStoreKey, ZLinkLegacyCapacity>();
+                            CompletionStage<Void> validated = completed(null);
+                            for (var item : items) {
+                                validated =
+                                        validated.thenCompose(
+                                                ignored ->
+                                                        planLegacyRelease(
+                                                                        item,
+                                                                        legacyAggregate(item),
+                                                                        projected,
+                                                                        cancellation)
+                                                                .thenApply(put -> null));
+                            }
+                            return validated.thenCompose(
+                                    ignored -> {
+                                        CompletionStage<Void> settled = completed(null);
+                                        for (var item : items) {
+                                            settled =
+                                                    settled.thenCompose(
+                                                            done ->
+                                                                    settleLegacyAggregate(
+                                                                            item, cancellation));
+                                        }
+                                        return settled;
+                                    });
+                        });
+    }
+
+    private CompletionStage<List<ZLinkStoreScanItem>> scanLegacyAggregates(
+            ZLinkStoreScanCursor cursor,
+            List<ZLinkStoreScanItem> items,
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+        return provider.scan(
+                        new ZLinkStoreScanRequest(AGGREGATE_PREFIX, cursor, 1000), cancellation)
+                .thenComposeAsync(
+                        result -> {
+                            if (result instanceof ZLinkStoreScanExpired)
+                                return scanLegacyAggregates(null, new ArrayList<>(), cancellation);
+                            var page = ((ZLinkStoreScanPageResult) result).value();
+                            for (var item : page.items()) {
+                                legacyAggregate(item);
+                                items.add(item);
+                            }
+                            return page.nextCursor() == null
+                                    ? completed(items)
+                                    : scanLegacyAggregates(page.nextCursor(), items, cancellation);
+                        });
+    }
+
+    private static PreparedAggregate legacyAggregate(ZLinkStoreScanItem item) {
+        try {
+            PreparedAggregate aggregate = decodeAggregate(item.value().bytes());
+            if (aggregate.state() == AGGREGATE_COMMITTED
+                    || !aggregateKey(
+                                    new ZLinkAggregateFence(
+                                            aggregate.aggregateId(),
+                                            aggregate.aggregateGeneration()))
+                            .equals(item.key())) {
+                throw new IllegalStateException("v11 aggregate requires completion by a v11 owner");
+            }
+            aggregate.capacityBundle();
+            return aggregate;
+        } catch (IllegalArgumentException | IllegalStateException failure) {
+            throw new ZLinkConfigurationException(
+                    "Cannot settle v11 aggregate " + item.key().value(), failure);
+        }
+    }
+
+    private CompletionStage<Void> settleLegacyAggregate(
+            ZLinkStoreScanItem item,
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+        PreparedAggregate aggregate = legacyAggregate(item);
+        var fence =
+                new ZLinkAggregateFence(aggregate.aggregateId(), aggregate.aggregateGeneration());
+        var conditions = new ArrayList<ZLinkStoreCondition>();
+        conditions.add(new ZLinkStoreVersionCondition(item.key(), item.value().version()));
+        var mutations = new ArrayList<ZLinkStoreMutation>();
+        mutations.add(new ZLinkStoreDelete(item.key()));
+
+        return planLegacyRelease(item, aggregate, null, cancellation)
+                .thenCompose(
+                        release -> {
+                            if (release != null) {
+                                conditions.add(
+                                        new ZLinkStoreVersionCondition(
+                                                release.key(), release.version()));
+                                mutations.add(
+                                        new ZLinkStorePut(release.key(), release.bytes(), null));
+                            }
+                            // Leave the root discoverable until marker and inventory cleanup can be
+                            // resumed safely.
+                            return clearAggregateMarkersByScan(fence, cancellation)
+                                    .thenCompose(
+                                            cleared -> {
+                                                if (!cleared)
+                                                    return retryLegacyAggregate(
+                                                            item.key(), cancellation);
+                                                return aggregateInventory
+                                                        .delete(fence, cancellation)
+                                                        .thenCompose(
+                                                                ignored ->
+                                                                        write(
+                                                                                new ZLinkStoreWriteRequest(
+                                                                                        conditions,
+                                                                                        mutations),
+                                                                                cancellation))
+                                                        .thenCompose(
+                                                                result ->
+                                                                        result
+                                                                                        instanceof
+                                                                                        ZLinkStoreWriteApplied
+                                                                                ? completed(null)
+                                                                                : retryLegacyAggregate(
+                                                                                        item.key(),
+                                                                                        cancellation));
+                                            });
+                        });
+    }
+
+    private CompletionStage<LegacyCapacityRelease> planLegacyRelease(
+            ZLinkStoreScanItem item,
+            PreparedAggregate aggregate,
+            Map<ZLinkStoreKey, ZLinkLegacyCapacity> projected,
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+        var bundle = aggregate.capacityBundle();
+        if (aggregate.state() != AGGREGATE_PREPARED || isEmptyBundle(bundle))
+            return completed(null);
+        var key = ZLinkLegacyCapacity.key(aggregate.targetDescriptor());
+        return provider.read(key, cancellation)
+                .thenCompose(
+                        read ->
+                                provider.read(item.key(), cancellation)
+                                        .thenApply(
+                                                current -> {
+                                                    if (!(current
+                                                            instanceof ZLinkStoreReadFound root))
+                                                        return null;
+                                                    if (!root.value()
+                                                            .version()
+                                                            .equals(item.value().version()))
+                                                        throw new ZLinkConfigurationException(
+                                                                "v11 aggregate changed during conversion: "
+                                                                        + item.key().value());
+                                                    if (!(read
+                                                            instanceof
+                                                            ZLinkStoreReadFound capacity))
+                                                        throw new ZLinkConfigurationException(
+                                                                "Missing v11 capacity for aggregate "
+                                                                        + item.key().value());
+                                                    var row =
+                                                            projected == null
+                                                                    ? ZLinkLegacyCapacity.decode(
+                                                                            key,
+                                                                            capacity.value()
+                                                                                    .bytes())
+                                                                    : projected.computeIfAbsent(
+                                                                            key,
+                                                                            ignored ->
+                                                                                    ZLinkLegacyCapacity
+                                                                                            .decode(
+                                                                                                    key,
+                                                                                                    capacity.value()
+                                                                                                            .bytes()));
+                                                    return new LegacyCapacityRelease(
+                                                            key,
+                                                            capacity.value().version(),
+                                                            row.release(bundle));
+                                                }));
+    }
+
+    private record LegacyCapacityRelease(
+            ZLinkStoreKey key, ZLinkStoreVersion version, byte[] bytes) {}
+
+    private CompletionStage<Void> retryLegacyAggregate(
+            ZLinkStoreKey key,
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+        return provider.read(key, cancellation)
+                .thenComposeAsync(
+                        read ->
+                                read instanceof ZLinkStoreReadFound found
+                                        ? settleLegacyAggregate(
+                                                new ZLinkStoreScanItem(key, found.value()),
+                                                cancellation)
+                                        : completed(null));
+    }
+
     CompletionStage<ZLinkAggregateAbortResult> abortAggregate(
             ZLinkAggregateFence fence, ZLinkStoreCancellation cancellation) {
         ZLinkStoreKey key = aggregateKey(fence);
@@ -3732,7 +3925,8 @@ final class ZLinkProviderAuthorityRepository {
                 .thenApply(
                         result -> {
                             if (result instanceof ZLinkStoreWriteCorrupt) {
-                                throw new IllegalStateException(
+                                throw new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.DATA_LOST,
                                         "Location Store capacity record is inconsistent");
                             }
                             return result;
@@ -4432,7 +4626,7 @@ final class ZLinkProviderAuthorityRepository {
 
     private static ZLinkStoreKey aggregateKey(ZLinkAggregateFence fence) {
         return new ZLinkStoreKey(
-                "zlink:v11:aggregate:" + fence.aggregateId() + ":" + fence.aggregateGeneration());
+                AGGREGATE_PREFIX + fence.aggregateId() + ":" + fence.aggregateGeneration());
     }
 
     private static long ownerGeneration(byte[] bytes) {

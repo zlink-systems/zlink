@@ -1382,7 +1382,8 @@ final class ZLinkEndedSpotRecreationTest {
 
         var failure = assertThrows(CompletionException.class, () -> reserveNewSpot(fixture));
 
-        var accounting = assertInstanceOf(IllegalStateException.class, failure.getCause());
+        var accounting = assertInstanceOf(ZLinkFrameworkException.class, failure.getCause());
+        assertEquals(ZLinkFrameworkErrorKind.DATA_LOST, accounting.kind());
         assertEquals("Location Store capacity record is inconsistent", accounting.getMessage());
         assertEquals(spotVersion, read(fixture, fixture.key).storeVersion());
         assertEquals(memberVersion, read(fixture, member.authorityKey()).storeVersion());

@@ -2431,11 +2431,14 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
             installOwnerLeaseCore(claimed, operationStartedNanos);
         } else {
             recordFailureCore(failureMessage(failure));
-            if (unwrap(failure) instanceof OwnerLeaseClaimRejectedException
-                    || unwrap(failure) instanceof ZLinkConfigurationException) {
+            Throwable cause = unwrap(failure);
+            if (cause instanceof OwnerLeaseClaimRejectedException
+                    || cause instanceof ZLinkConfigurationException
+                    || cause instanceof ZLinkFrameworkException error
+                            && error.kind() == ZLinkFrameworkErrorKind.DATA_LOST) {
                 started = false;
                 return () -> {
-                    completion.completeExceptionally(unwrap(failure));
+                    completion.completeExceptionally(cause);
                     return CompletableFuture.completedFuture(null);
                 };
             }

@@ -1,15 +1,13 @@
 package systems.zlink.framework.runtime.internal.locations;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locationprovider.*;
 import systems.zlink.framework.locationprovider.ZLinkStoreCancellation;
-import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 
-import java.io.IOException;
+import java.io.ByteArrayOutputStream;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -31,17 +29,20 @@ final class ZLinkLocationStoreFormat {
 
     private static final ZLinkStoreKey FORMAT = new ZLinkStoreKey("zlink:v12:format");
     private static final byte[] CONVERTED = "converted".getBytes(StandardCharsets.UTF_8);
-    private static final String LEGACY_CAPACITY = "zlink:v11:capacity:";
     private static final int PAGE_SIZE = 1000;
-    private static final ObjectMapper JSON = new ObjectMapper();
 
     private final ZLinkLocationStore provider;
     private final ZLinkStoreCancellation cancellation;
+    private final ZLinkProviderAuthorityRepository authority;
     private final Map<String, List<RoutingId>> descriptorRids = new HashMap<>();
 
-    ZLinkLocationStoreFormat(ZLinkLocationStore provider, ZLinkStoreCancellation cancellation) {
+    ZLinkLocationStoreFormat(
+            ZLinkLocationStore provider,
+            ZLinkStoreCancellation cancellation,
+            ZLinkProviderAuthorityRepository authority) {
         this.provider = provider;
         this.cancellation = cancellation;
+        this.authority = authority;
     }
 
     CompletionStage<Void> convert() {
@@ -55,8 +56,26 @@ final class ZLinkLocationStoreFormat {
                                             "Unrecognized Location Store format");
                                 return CompletableFuture.completedFuture(null);
                             }
-                            return ensureFloor().thenCompose(ignored -> movePage(null));
+                            return authority
+                                    .settleLegacyAggregates(cancellation)
+                                    .exceptionallyCompose(
+                                            ZLinkLocationStoreFormat::settlementFailure)
+                                    .thenCompose(ignored -> ensureFloor())
+                                    .thenCompose(ignored -> movePage(null));
                         });
+    }
+
+    private static CompletionStage<Void> settlementFailure(Throwable failure) {
+        Throwable cause = unwrap(failure);
+        if (cause instanceof IllegalArgumentException
+                || cause instanceof IllegalStateException
+                || cause instanceof ZLinkFrameworkException error
+                        && error.kind() == ZLinkFrameworkErrorKind.DATA_LOST) {
+            cause =
+                    new ZLinkConfigurationException(
+                            "Cannot settle v11 aggregates before conversion", cause);
+        }
+        return CompletableFuture.failedFuture(cause);
     }
 
     private CompletionStage<Void> ensureFloor() {
@@ -77,7 +96,7 @@ final class ZLinkLocationStoreFormat {
     }
 
     private CompletionStage<Void> movePage(ZLinkStoreScanCursor cursor) {
-        return scan(LEGACY_CAPACITY, cursor)
+        return scan(ZLinkLegacyCapacity.PREFIX, cursor)
                 .thenCompose(
                         result -> {
                             if (result instanceof ZLinkStoreScanExpired) return nextPage(null);
@@ -102,12 +121,12 @@ final class ZLinkLocationStoreFormat {
     }
 
     private CompletionStage<Void> move(ZLinkStoreKey oldKey) {
-        String identity = oldKey.value().substring(LEGACY_CAPACITY.length());
+        String identity = oldKey.value().substring(ZLinkLegacyCapacity.PREFIX.length());
         int separator = identity.indexOf(':');
         if (separator < 0)
             throw new ZLinkConfigurationException("Malformed v11 capacity key " + oldKey.value());
         String mesh = URLDecoder.decode(identity.substring(0, separator), StandardCharsets.UTF_8);
-        String rid = URLDecoder.decode(identity.substring(separator + 1), StandardCharsets.UTF_8);
+        byte[] rid = decodeRid(oldKey, identity.substring(separator + 1));
         var known = descriptorRids.get(mesh);
         CompletionStage<List<RoutingId>> current =
                 known == null
@@ -158,7 +177,11 @@ final class ZLinkLocationStoreFormat {
     private CompletionStage<Void> writeCapacity(
             ZLinkStoreKey oldKey, ZLinkMeshNodeDescriptorKey target, ZLinkStoreValue oldValue) {
         byte[] bytes = oldValue.bytes();
-        var counters = capacityPuts(oldKey, target, bytes);
+        var counters = ZLinkLegacyCapacity.decode(oldKey, bytes).counterPuts(target);
+        if (counters.size() >= ZLinkLocationStoreLimits.MAXIMUM_BATCH_KEYS)
+            throw new ZLinkConfigurationException(
+                    "v11 capacity conversion exceeds the Location Store batch key limit for "
+                            + oldKey.value());
         var conditions = new ArrayList<ZLinkStoreCondition>(counters.size() + 1);
         var mutations = new ArrayList<ZLinkStoreMutation>(counters.size() + 1);
         conditions.add(new ZLinkStoreValueCondition(oldKey, bytes));
@@ -273,85 +296,51 @@ final class ZLinkLocationStoreFormat {
                 .thenCompose(batch -> provider.write(batch, cancellation));
     }
 
+    private static byte[] decodeRid(ZLinkStoreKey key, String encoded) {
+        byte[] bytes = encoded.getBytes(StandardCharsets.UTF_8);
+        var decoded = new ByteArrayOutputStream(bytes.length);
+        for (int i = 0; i < bytes.length; i++) {
+            int b = bytes[i];
+            if (b == '%') {
+                int high = i + 2 < bytes.length ? Character.digit(bytes[i + 1], 16) : -1;
+                int low = i + 2 < bytes.length ? Character.digit(bytes[i + 2], 16) : -1;
+                if (high < 0 || low < 0)
+                    throw new ZLinkConfigurationException(
+                            "Malformed v11 capacity RID " + key.value());
+                decoded.write((high << 4) | low);
+                i += 2;
+            } else {
+                decoded.write(b == '+' ? ' ' : b);
+            }
+        }
+        return decoded.toByteArray();
+    }
+
     private static RoutingId resolveRid(
-            ZLinkStoreKey oldKey, String rid, List<RoutingId> candidates) {
+            ZLinkStoreKey oldKey, byte[] rid, List<RoutingId> candidates) {
         var matches =
                 candidates.stream()
                         .distinct()
-                        .filter(candidate -> candidate.toString().equals(rid))
+                        .filter(
+                                candidate ->
+                                        Arrays.equals(candidate.toBytes(), rid)
+                                                || Arrays.equals(
+                                                        candidate
+                                                                .toString()
+                                                                .getBytes(StandardCharsets.UTF_8),
+                                                        rid))
                         .limit(2)
                         .toList();
         if (matches.size() > 1)
             throw new ZLinkConfigurationException(
                     "Several MeshNode descriptors match v11 capacity key " + oldKey.value());
         if (!matches.isEmpty()) return matches.getFirst();
-        // A v11 display string longer than the maximum RID cannot have been a text RID.
-        byte[] utf8 = rid.getBytes(StandardCharsets.UTF_8);
-        if (utf8.length > RoutingId.MAX_LENGTH && rid.startsWith("hex:"))
-            return RoutingId.fromHex(rid.substring("hex:".length()));
-        return RoutingId.from(utf8);
-    }
-
-    private static List<ZLinkStorePut> capacityPuts(
-            ZLinkStoreKey oldKey, ZLinkMeshNodeDescriptorKey target, byte[] bytes) {
         try {
-            JsonNode root = JSON.readTree(bytes);
-            if (root == null || !root.isObject())
-                throw new IllegalArgumentException("Invalid v11 capacity record");
-            var counters = new ArrayList<ZLinkStorePut>();
-            for (String state : List.of("active", "pending")) {
-                JsonNode usage = root.required(state);
-                addCounter(counters, target, "actors", state, usage.required("actors"));
-                addCounter(counters, target, "spots", state, usage.required("spots"));
-                JsonNode spotTypes = usage.required("spotTypes");
-                if (!spotTypes.isObject())
-                    throw new IllegalArgumentException("Invalid v11 spotTypes value");
-                for (var entry : spotTypes.properties()) {
-                    String key = entry.getKey();
-                    int separator = key.indexOf('\0');
-                    if (separator < 0)
-                        throw new IllegalArgumentException("Invalid v11 capacity spot type");
-                    var kind =
-                            switch (key.substring(0, separator)) {
-                                case "user_spot" -> ZLinkPlacementObjectKind.USER_SPOT;
-                                case "instance_spot" -> ZLinkPlacementObjectKind.INSTANCE_SPOT;
-                                default ->
-                                        throw new IllegalArgumentException(
-                                                "Invalid v11 capacity spot kind");
-                            };
-                    addCounter(
-                            counters,
-                            target,
-                            ZLinkCapacityCounters.spotType(kind, key.substring(separator + 1)),
-                            state,
-                            entry.getValue());
-                }
-            }
-            if (counters.size() >= ZLinkLocationStoreLimits.MAXIMUM_BATCH_KEYS)
-                throw new ZLinkConfigurationException(
-                        "v11 capacity conversion exceeds the Location Store batch key limit for "
-                                + oldKey.value());
-            return counters;
-        } catch (IOException | IllegalArgumentException failure) {
+            return RoutingId.from(rid);
+        } catch (IllegalArgumentException failure) {
             throw new ZLinkConfigurationException(
-                    "Invalid v11 capacity record " + oldKey.value(), failure);
+                    "Invalid v11 capacity RID " + oldKey.value(), failure);
         }
-    }
-
-    private static void addCounter(
-            List<ZLinkStorePut> counters,
-            ZLinkMeshNodeDescriptorKey target,
-            String dimension,
-            String state,
-            JsonNode value) {
-        if (!value.isIntegralNumber() || !value.canConvertToLong() || value.longValue() < 0)
-            throw new IllegalArgumentException("Invalid v11 capacity count");
-        if (value.longValue() != 0)
-            counters.add(
-                    new ZLinkStorePut(
-                            ZLinkCapacityCounters.key(target, dimension, state),
-                            encodeCounter(value.longValue()),
-                            null));
     }
 
     static byte[] encodeCounter(long value) {
@@ -371,7 +360,10 @@ final class ZLinkLocationStoreFormat {
             if (value != 0) return value;
             throw new NumberFormatException("outside generation range");
         } catch (NumberFormatException failure) {
-            throw new IllegalStateException("Location Store counter is invalid", failure);
+            throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.DATA_LOST,
+                    "Location Store counter is invalid",
+                    failure);
         }
     }
 
@@ -379,7 +371,7 @@ final class ZLinkLocationStoreFormat {
         if (!(result instanceof ZLinkStoreReadFound found)) return 1L;
         try {
             return decodeGeneration(found.value().bytes());
-        } catch (IllegalStateException invalid) {
+        } catch (ZLinkFrameworkException invalid) {
             throw new ZLinkConfigurationException(
                     "Invalid Location Store generation floor input", invalid);
         }

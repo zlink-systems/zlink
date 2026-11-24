@@ -13,6 +13,8 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locationprovider.ZLinkLocationStore;
 import systems.zlink.framework.locationprovider.ZLinkStoreCancellation;
 import systems.zlink.framework.locationprovider.ZLinkStoreDelete;
@@ -1409,7 +1411,9 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                                     key, reservation.storeVersion(), () -> false)
                                             .toCompletableFuture()
                                             .get());
-            assertInstanceOf(IllegalStateException.class, failure.getCause());
+            assertEquals(
+                    ZLinkFrameworkErrorKind.DATA_LOST,
+                    assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
             assertTrue(failure.getCause().getMessage().contains("capacity record is inconsistent"));
             var capacityAfter = provider.read(capacityKey, () -> false).toCompletableFuture().get();
             if (capacityBefore instanceof ZLinkStoreReadFound before) {
@@ -3352,7 +3356,9 @@ final class ZLinkProviderAuthorityRepositoryTest {
                                                         () -> false)
                                                 .toCompletableFuture()
                                                 .get());
-                assertInstanceOf(IllegalStateException.class, failure.getCause());
+                assertEquals(
+                        ZLinkFrameworkErrorKind.DATA_LOST,
+                        assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
                 assertEquals("Location Store counter is invalid", failure.getCause().getMessage());
             }
         }

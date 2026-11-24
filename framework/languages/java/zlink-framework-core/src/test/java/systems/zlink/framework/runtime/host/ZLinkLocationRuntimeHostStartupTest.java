@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.host;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -14,6 +15,8 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorContext;
 import systems.zlink.framework.actors.ZLinkActorFactory;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locationprovider.ZLinkLocationStore;
 import systems.zlink.framework.locationprovider.ZLinkStoreCancellation;
 import systems.zlink.framework.locationprovider.ZLinkStoreKey;
@@ -39,11 +42,14 @@ import systems.zlink.framework.spots.ZLinkTimerOptions;
 import systems.zlink.framework.spots.ZLinkTimerOverrunPolicy;
 import systems.zlink.framework.spots.ZLinkTimerTick;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -51,6 +57,39 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BooleanSupplier;
 
 final class ZLinkLocationRuntimeHostStartupTest {
+    @Test
+    void malformedOwnerCounterEndsStartupWithDataLost() throws Exception {
+        var store = new ZLinkInMemoryProviderLocationStore();
+        store.write(
+                        new ZLinkStoreWriteRequest(
+                                List.of(),
+                                List.of(
+                                        new ZLinkStorePut(
+                                                new ZLinkStoreKey("zlink:v11:owner-counter"),
+                                                "01".getBytes(StandardCharsets.UTF_8),
+                                                null))),
+                        () -> false)
+                .toCompletableFuture()
+                .join();
+        var options = new DefaultZLinkFrameworkOptions();
+        options.addLocationStore(store);
+        options.addRouteMesh("game").listen("inproc://invalid-owner-counter-" + UUID.randomUUID());
+        try (var runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
+            var failure =
+                    assertThrows(
+                            ExecutionException.class,
+                            () ->
+                                    ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
+                                            .toCompletableFuture()
+                                            .get(10, TimeUnit.SECONDS));
+            assertEquals(
+                    ZLinkFrameworkErrorKind.DATA_LOST,
+                    assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
+        }
+    }
+
     @Test
     void shutdownObservesPendingStartupClaimBeforeCompleting() throws Exception {
         PendingStartupStore store = new PendingStartupStore();
