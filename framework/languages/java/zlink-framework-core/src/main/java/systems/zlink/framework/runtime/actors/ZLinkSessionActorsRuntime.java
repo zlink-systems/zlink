@@ -562,7 +562,8 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                                                         () -> {
                                                                             removeBinding(actor);
                                                                             return CompletableFuture
-                                                                                    .completedFuture(null);
+                                                                                    .completedFuture(
+                                                                                            null);
                                                                         });
                                                                 return actor;
                                                             });
@@ -686,7 +687,8 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                                                     () -> {
                                                                         removeBinding(boundActor);
                                                                         return CompletableFuture
-                                                                                .completedFuture(null);
+                                                                                .completedFuture(
+                                                                                        null);
                                                                     });
                                                             boundSession.setRebindListener(
                                                                     target ->
