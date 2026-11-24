@@ -37,7 +37,7 @@ Use `./run-server.sh` in Bash or `.\run-server.cmd` on Windows to build and star
 
 ## Project and development
 
-Extend this template's domain to build an FPS server. This C++20 project runs a Session node, play nodes A and B (match), and a Redis Location Store. Entry Spots forward players to a fixed Matchmaking User Spot; same-mode players join dynamic Room User Spots. Public Framework and connector packages are pinned to 0.34.0 in `bootstrap.cmake`. The [README](README.md) owns execution, deployment and known issues; [zlink.structure.json](zlink.structure.json) describes the initial topology and ordered scenarios.
+Extend this template's domain to build an FPS server. This C++20 project runs a Session node, play nodes A and B (match), and a Redis Location Store. Entry Spots forward players to a fixed Matchmaking User Spot; same-mode players join dynamic Room User Spots. Public Framework and connector packages are pinned to 0.34.1 in `bootstrap.cmake`. The [README](README.md) owns execution, deployment and known issues; [zlink.structure.json](zlink.structure.json) describes the initial topology and ordered scenarios.
 
 Run from this project root with Docker Compose v2 and Linux containers:
 
@@ -84,7 +84,7 @@ Keep game state in the Spot domain and use public Actor and Spot APIs. Framework
 
 Use the [ZLink documentation](https://docs.zlink.systems/), [C++ server guide](https://docs.zlink.systems/cpp/guide/server/), [API reference](https://docs.zlink.systems/cpp/reference/) and [agent index](https://docs.zlink.systems/llms.txt). Check current documentation against the pinned package before using an API. Entry, Spot, Actor, Session, Location and relocation operations use public Framework APIs and default typed serialization. Do not use private APIs, raw frames or an application routing workaround.
 
-The pinned 0.34.0 headers do not match the documented typed `SessionInfoRequest` reply example: STREAM write/reply calls accept `zlink::message_t`, `fx::message_t::from(T)` returns a typed wrapper, and `submit()` returns `void`. Preserve request/reply semantics and default typed serialization; do not turn the reply into a push or add manual encoding to work around the public contract mismatch.
+The pinned 0.34.1 headers do not match the documented typed `SessionInfoRequest` reply example: STREAM write/reply calls accept `zlink::message_t`, `fx::message_t::from(T)` returns a typed wrapper, and `submit()` returns `void`. Preserve request/reply semantics and default typed serialization; do not turn the reply into a push or add manual encoding to work around the public contract mismatch.
 
 ## Diagnostics and defects
 
