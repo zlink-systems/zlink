@@ -129,8 +129,7 @@ fun runNode(application: Class<*>, args: Array<String>) = runBlocking {
                 }
                 if (observed.loss().discardedTerminalCount() != 0L)
                     ready.completeExceptionally(IllegalStateException("Startup observation lost"))
-                else if (status.state() == ZLinkFrameworkRuntimeState.SERVING)
-                    ready.complete(null)
+                else if (status.state() == ZLinkFrameworkRuntimeState.SERVING) ready.complete(null)
                 else if (status.state() != ZLinkFrameworkRuntimeState.PREPARING)
                     ready.completeExceptionally(
                         IllegalStateException("Runtime startup failed: ${status.state()}")

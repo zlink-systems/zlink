@@ -23,7 +23,7 @@ Details: [Stateful game nodes and the HTTP lobby](https://docs.zlink.systems/kot
 
 ## Project overview
 
-This Kotlin project (Kotlin 2.3.21 on a Java 25 toolchain, built with Gradle) is a four-player board table server. It runs a Session gateway for connections, two Table hosts (`tableA` and `tableB`), and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework packages to `0.34.0` (`frameworkVersion`) and the ZLink binding to `1.26.0` (`bindingVersion`).
+This Kotlin project (Kotlin 2.3.21 on a Java 25 toolchain, built with Gradle) is a four-player board table server. It runs a Session gateway for connections, two Table hosts (`tableA` and `tableB`), a Matchmaker node, and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework packages to `0.34.0` (`frameworkVersion`) and the ZLink binding to `1.26.0` (`bindingVersion`).
 
 The project layout and feature procedure below describe where to add gameplay. The [README](README.md) covers prerequisites, deployment, and the scenario assertions. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 
@@ -31,21 +31,23 @@ The project layout and feature procedure below describe where to add gameplay. T
 
 ## Development commands
 
-Default builds and e2e run nodes and the client in Docker without a host JDK. Run these commands from this directory.
+Run these commands from this directory. Install JDK 25 for the foreground server. It prints the Session WebSocket address once Redis and all nodes are ready. Stop it with Ctrl+C. From another terminal, run e2e to attach through `.logs/server.json`. The attached run leaves the server running and exercises all scenarios except `update`. Stop the server before requesting the isolated `update` scenario. The default isolated mode uses Docker without a host JDK.
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
-pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario table,reconnect,update
-pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+.\run-server.cmd
+.\run-e2e.cmd -BuildOnly
+.\run-e2e.cmd
+.\run-e2e.cmd -Scenario table,reconnect,match,match-cancel,update
+.\run-e2e.cmd -CheckStructure
 ```
 
 Bash provides the same workflow:
 
 ```bash
+./run-server.sh
 ./run-e2e.sh --build-only
 ./run-e2e.sh
-./run-e2e.sh --scenario table,reconnect,update
+./run-e2e.sh --scenario table,reconnect,match,match-cancel,update
 ./run-e2e.sh --check-structure
 ```
 
@@ -55,21 +57,27 @@ For host process debugging, install JDK 25 and add `--local` or `-Local`. Add `-
 
 ### Session gateway
 
-`server/session/src/main/kotlin/MyGame/session/Program.kt` registers the STREAM node and the RouteMesh client, and `GameSession` (in the same file) handles incoming packets. A Session is a communication object for a connection; Framework provides binding to associate it with a player state object. `GameSession` answers `SessionInfoRequest` from the binding, finds or creates the Player Actor and binds it when it receives `JoinTableRequest`, and relays every other packet to the bound Actor. Add authentication before binding and retain the typed packet relay so Framework can identify the connection for replies to that player.
+`server/session/src/main/kotlin/MyGame/session/Program.kt` registers the STREAM node and the RouteMesh client, and `GameSession` (in the same file) handles incoming packets. A Session is a communication object for a connection; Framework provides binding to associate it with a player state object. `GameSession` answers `SessionInfoRequest` from the binding, finds or creates the Player Actor and binds it when it receives `JoinTableRequest` or the first `FindMatch`, and relays every other packet to the bound Actor. Add authentication before binding and retain the typed packet relay so Framework can identify the connection for replies to that player.
 
 ### Tables and players
 
-An Actor is a game state object addressed by ID; `Player` in `server/table/src/main/kotlin/MyGame/table/Player.kt` is a minimal Actor that keeps no game state. A Spot is a state object that accepts Actors and executes shared game rules; `Table` in `server/table/src/main/kotlin/MyGame/table/Table.kt` is the Table User Spot that owns seats (`Seat`), chips, cards, turns, and the pot in `TableState`. Hidden information stays in the Table: `HandDealt` sends a player's cards only to that player, and `TableView` carries only card counts.
+An Actor is a game state object addressed by ID; `Player` in `server/table/src/main/kotlin/MyGame/table/Player.kt` keeps its current matchmaking ticket and assignment in relocatable state. A Spot is a state object that accepts Actors and executes shared game rules; `Table` in `server/table/src/main/kotlin/MyGame/table/Table.kt` is the Table User Spot that owns seats (`Seat`), chips, cards, turns, and the pot in `TableState`. Hidden information stays in the Table: `HandDealt` sends a player's cards only to that player, and `TableView` carries only card counts.
 
 `server/table/src/main/kotlin/MyGame/table/Program.kt` registers the handlers, the Entry Spot, the `Table` factory, and the `Player` factory. `Table` uses the default `SPOT_WIDE` execution mode, and the optional `tableCapacity` setting limits Tables per node with `stableTypeLimit` (omitted or zero leaves it unlimited). `Entry` and `Join` in `Player.kt` handle player entry, and the `Actions` class in `Table.kt` holds the handlers that connect player requests to Table rules. `Transfer.kt` defines `ensureActive` for the relocation adapters. When changing node composition, update registrations, `server/config/`, and the descriptor together so the structure check validates the same composition.
 
+### Matchmaker
+
+`server/matchmaker` registers only the SpotWide Instance Spot factory for `pool-board`. `MatchQueue.kt` stores tickets and reservations in memory. Edit `MatchRule.kt` to change pair selection. `Pool.kt` prepares the Table, commits entry after both Players report success, and withdraws the room on failure or after 10 seconds. The current Spot reports client disconnects to the Pool. A disconnected waiting ticket has up to 15 seconds of grace before cancellation. A reserved ticket follows the entry deadline. Waiting tickets expire after 120 seconds.
+
+`PlayerMatching.kt` handles the typed client requests and assignment notifications. `RoomReservation.kt` connects room preparation, commit, and withdrawal to the Table. Keep ticket decisions in the Pool and seat assignment in the Table.
+
 ### Shared contracts and hosting
 
-`server/shared/src/main/kotlin/MyGame/Contracts.kt` defines names, game constants, and the messages shared by processes. `Hosting.kt` defines `NodeConfig` (process settings), the Redis stores, `configure` for hosting and diagnostics, and `runNode`, which starts a node and handles the stdin control commands; `Control.kt` defines the control and readiness strings. `Names` and `Rules` hold the node names, the rejection reasons, and the game constants. Keep hosting and the control protocol here instead of duplicating them per role. Add contracts used by several processes in `Contracts.kt`, and keep table state in `Table` (the Player Actor keeps no copy) so separate processes do not independently modify the same fact.
+`server/shared/src/main/kotlin/MyGame/Contracts.kt` defines names, game constants, and the messages shared by processes. `Hosting.kt` defines `NodeConfig` (process settings), the Redis stores, `configure` for hosting and diagnostics, and `runNode`, which starts a node and handles the stdin control commands; `Control.kt` defines the control and readiness strings. `Names` and `Rules` hold the node names, the rejection reasons, and the game constants. Keep hosting and the control protocol here instead of duplicating them per role. Add contracts used by several processes in `Contracts.kt`, and keep game state in `Table` so one Spot owns it.
 
 ### E2E client
 
-`e2e/src/main/kotlin/MyGame/e2e/Client.kt` connects through the public stream connector, and `Scenarios.kt` checks results observable by the client. `Nodes.kt` manages the processes and the Compose project for each run, `Structure.kt` validates the composition, and `Program.kt` selects scenarios and sets the exit code (a failed scenario or a failed cleanup exits with 1). `DockerRuntime.kt` runs nodes as containers in Docker mode, and `Cleanup.kt` collects cleanup failures. Verify new gameplay through received client results. The project includes no separate unit-test module.
+`e2e/src/main/kotlin/MyGame/e2e/Client.kt` connects through the public stream connector, and `Scenarios.kt` checks results observable by the client. `Nodes.kt` manages processes and the Compose project. `ServerHost.kt` publishes the local Session address and closes the deployment on Ctrl+C, `Structure.kt` validates the composition, and `Program.kt` selects scenarios and sets the exit code (a failed scenario or a failed cleanup exits with 1). `DockerRuntime.kt` runs nodes as containers in Docker mode, and `Cleanup.kt` collects cleanup failures. Verify new gameplay through received client results. The project includes no separate unit-test module.
 
 ## ZLink concepts in this project
 

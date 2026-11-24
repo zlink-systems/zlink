@@ -43,6 +43,9 @@ class Client(endpoint: String, val playerId: String, val tableId: String) {
     init {
         listOf(
                 TableView::class.java,
+                MatchQueued::class.java,
+                MatchCancelled::class.java,
+                MatchFound::class.java,
                 HandDealt::class.java,
                 HandResult::class.java,
                 ActionRejected::class.java,
@@ -75,6 +78,11 @@ class Client(endpoint: String, val playerId: String, val tableId: String) {
             val ownSeat = it.seats.indexOfFirst { seat -> seat.playerId == playerId }
             ownSeat >= 0 && it.yourSeat == ownSeat
         }
+    }
+
+    suspend fun connectForMatch() {
+        connector.kotlin().connect().await()
+        send(FindMatch())
     }
 
     suspend fun sessionInfo(): SessionInfo =

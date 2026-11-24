@@ -27,6 +27,7 @@ data class TableState(
     var inHand: Boolean = false,
     var turnSeat: Int = Rules.NO_SEAT,
     var pot: Long = 0L,
+    var reservation: RoomReservation? = null,
 )
 
 class Table(
@@ -75,17 +76,85 @@ class Table(
         val winnerBalances: List<Long>,
     )
 
+    override fun configure() {
+        context.handlers().addHandler(CommitTable::class.java)
+        context.handlers().addHandler(WithdrawTable::class.java)
+    }
+
+    internal fun prepare(request: PrepareRoom): RoomPrepared {
+        val reservation = state.reservation
+        val ok =
+            request.assignmentId == context.spotId() &&
+                request.members.size == 2 &&
+                request.members.distinct() == request.members &&
+                state.seats.isEmpty() &&
+                (reservation == null ||
+                    (reservation.phase == RoomPhase.PREPARED &&
+                        reservation.members == request.members))
+        if (ok && reservation == null) {
+            state.reservation = RoomReservation(request.assignmentId, request.members)
+        }
+        return RoomPrepared(request.assignmentId, ok)
+    }
+
+    internal suspend fun commit(message: CommitRoom) {
+        val reservation = state.reservation ?: return
+        if (
+            reservation.assignmentId != message.assignmentId ||
+                reservation.phase != RoomPhase.PREPARED
+        )
+            return
+        state.reservation = reservation.copy(phase = RoomPhase.COMMITTED)
+        for (member in reservation.members) check(admit(member))
+        for (member in reservation.members) send(member, message)
+    }
+
+    internal fun withdraw(message: WithdrawRoom) {
+        if (message.assignmentId != context.spotId()) return
+        val reservation = state.reservation
+        if (reservation?.phase == RoomPhase.COMMITTED) return
+        if (reservation != null) {
+            state.reservation = reservation.copy(phase = RoomPhase.WITHDRAWN)
+        }
+        context.close()
+    }
+
+    internal fun committedView(playerId: String, assignmentId: String): TableView? {
+        val reservation = state.reservation ?: return null
+        if (
+            reservation.assignmentId != assignmentId ||
+                reservation.phase != RoomPhase.COMMITTED ||
+                playerId !in reservation.members
+        )
+            return null
+        return tableView(playerId)
+    }
+
     override suspend fun onActorJoinSuspending(
         actorId: String,
         request: ZLinkMessage,
     ): ZLinkSpotActorJoinResult {
+        state.reservation?.let { reservation ->
+            val admission = request.decode<RoomAdmission>()
+            return if (
+                reservation.phase == RoomPhase.PREPARED &&
+                    admission.assignmentId == reservation.assignmentId &&
+                    actorId in reservation.members
+            )
+                ZLinkSpotActorJoinResult.accept()
+            else ZLinkSpotActorJoinResult.reject()
+        }
         val join = request.decode<JoinTableRequest>()
         require(join.playerId == actorId && join.tableId == context.spotId())
         return if (admit(actorId)) ZLinkSpotActorJoinResult.accept()
         else ZLinkSpotActorJoinResult.reject()
     }
 
-    override suspend fun onJoinedActorSuspending(actor: Player) = broadcastViews()
+    override suspend fun onJoinedActorSuspending(actor: Player) {
+        if (state.reservation == null) broadcastViews()
+    }
+
+    override suspend fun onDisconnectActorSuspending(actor: Player) = actor.disconnected()
 
     // Seats the player at admission; a seated player is admitted again without a new seat.
     internal fun admit(actorId: String): Boolean {
@@ -95,7 +164,9 @@ class Table(
         return true
     }
 
-    override suspend fun onLeaveActorSuspending(actor: Player) {}
+    override suspend fun onLeaveActorSuspending(actor: Player) {
+        if (state.reservation?.phase == RoomPhase.WITHDRAWN) context.close()
+    }
 
     private fun tableView(playerId: String, seats: List<SeatView> = seatViews()) =
         TableView(
@@ -110,6 +181,10 @@ class Table(
         )
 
     suspend fun current(actor: Player) {
+        if (state.reservation?.let { it.phase != RoomPhase.COMMITTED } == true) {
+            reject(actor, Rules.NOT_SEATED)
+            return
+        }
         val playerId = actor.context().actorId()
         reply(actor, tableView(playerId))
         if (state.seats.any { it.playerId == playerId })
@@ -206,11 +281,7 @@ class Table(
             it != currentSeat && state.seats[it].cards.isNotEmpty() && !state.seats[it].acted
         } ?: Rules.NO_SEAT
 
-    private fun createSettlement(
-        bettor: Int,
-        betAmount: Long,
-        pot: Long,
-    ): SettlementPlan? {
+    private fun createSettlement(bettor: Int, betAmount: Long, pot: Long): SettlementPlan? {
         val hands =
             state.seats.mapIndexedNotNull { i, seat ->
                 if (seat.cards.isEmpty()) null else RevealedHand(i, seat.playerId, seat.cards)
@@ -228,8 +299,7 @@ class Table(
         val winnerBalances = mutableListOf<Long>()
         for (index in winners.indices) {
             val winner = winners[index]
-            var balance =
-                state.seats[winner].chips - if (winner == bettor) betAmount else 0L
+            var balance = state.seats[winner].chips - if (winner == bettor) betAmount else 0L
             balance = Rules.tryAddContractIntegers(balance, share) ?: return null
             if (index == 0 && remainder != 0L)
                 balance = Rules.tryAddContractIntegers(balance, remainder) ?: return null
