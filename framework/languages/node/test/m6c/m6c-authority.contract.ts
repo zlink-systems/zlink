@@ -527,14 +527,18 @@ for (const backend of ['provider', 'memory'] as const) {
             ]);
           }
           if (backend === 'provider') {
-            const capacity = await provider.read(storeKey('zlink:v11:capacity:mesh:node-a'));
-            if (capacity.kind !== 'found') throw new Error('capacity missing');
-            const stored = JSON.parse(Buffer.from(capacity.value.bytes).toString('utf8'));
-            assert.equal(stored.active.spots, 0);
-            assert.equal(
-              Object.values(stored.active.spotTypes).every((value) => value === 0),
-              true
+            const total = await provider.read(capacityCounterKey('node-a', 'spots', 'active'));
+            const type = await provider.read(
+              capacityCounterKey(
+                'node-a',
+                `spot-type\0${kind === 'user_spot' ? 'userSpot' : 'instanceSpot'}\0room`,
+                'active'
+              )
             );
+            if (total.kind !== 'found' || type.kind !== 'found')
+              throw new Error('capacity missing');
+            assert.equal(Buffer.from(total.value.bytes).toString(), '0');
+            assert.equal(Buffer.from(type.value.bytes).toString(), '0');
           }
         }
       });
@@ -565,10 +569,11 @@ for (const backend of ['provider', 'memory'] as const) {
         backend === 'provider'
           ? new ZLinkLocationStoreRepository(provider, () => now)
           : new ZLinkInMemoryLocationStore(() => now);
-      // Batch keys: Spot authority, owner lease, descriptor and capacity plus one key per
-      // member (all members share the Spot's owner and node). member-a plus 2,043 bulk
-      // members fill the unchanged 2,048-key bound exactly; route rows are not counted.
-      const bulk = scenario === 'batchFits' ? 2043 : scenario === 'batchBound' ? 2044 : 0;
+      // The provider batch shares one owner lease and descriptor. Spot total, Spot type
+      // and Actor total are three distinct active counter keys.
+      const batchFits = backend === 'provider' ? 2041 : 2043;
+      const bulk =
+        scenario === 'batchFits' ? batchFits : scenario === 'batchBound' ? batchFits + 1 : 0;
       const configure = async (descriptor: Awaited<ReturnType<typeof writeTargetDescriptor>>) => {
         await store.removeMeshNode({ meshName: 'mesh', rid: descriptor.rid }, descriptor);
         const configured = {
@@ -884,7 +889,7 @@ for (const backend of ['provider', 'memory'] as const) {
           ).kind,
           'applied'
         );
-        const capacityKey = storeKey('zlink:v11:capacity:mesh:node-d');
+        const capacityKey = capacityCounterKey('node-d', 'actors', 'active');
         const capacityBefore = await provider.read(capacityKey);
         const write = provider.write.bind(provider);
         let writes = 0;
@@ -899,27 +904,24 @@ for (const backend of ['provider', 'memory'] as const) {
         return;
       }
       if (scenario === 'memberCapacityCorrupt') {
-        const capacityKey = storeKey('zlink:v11:capacity:mesh:node-d');
+        const capacityKey = capacityCounterKey('node-d', 'actors', 'active');
         const capacity = await provider.read(capacityKey);
         if (capacity.kind !== 'found') throw new Error('member capacity missing');
-        const corrupted = JSON.parse(Buffer.from(capacity.value.bytes).toString('utf8'));
-        corrupted.active.actors = 0;
         assert.equal(
           (
             await provider.write({
               conditions: [{ kind: 'version', key: capacityKey, expected: capacity.value.version }],
-              mutations: [
-                { kind: 'put', key: capacityKey, bytes: Buffer.from(JSON.stringify(corrupted)) }
-              ]
+              mutations: [{ kind: 'put', key: capacityKey, bytes: Buffer.from('0') }]
             })
           ).kind,
           'applied'
         );
         const write = provider.write.bind(provider);
-        let writes = 0;
+        const results: string[] = [];
         provider.write = async (...args: Parameters<typeof write>) => {
-          writes++;
-          return write(...args);
+          const result = await write(...args);
+          results.push(result.kind);
+          return result;
         };
         await assert.rejects(
           store.reserve(next),
@@ -927,17 +929,22 @@ for (const backend of ['provider', 'memory'] as const) {
             error instanceof ZLinkFrameworkException &&
             error.kind === ZLinkFrameworkErrorKind.DataLost
         );
-        assert.equal(writes, 0);
+        assert.deepEqual(results, ['corrupt']);
         assert.deepEqual(await versions(), before);
         return;
       }
       if (scenario === 'memberReclaimed') {
-        const read = provider.read.bind(provider);
+        const write = provider.write.bind(provider);
         let replacementGeneration: bigint | undefined;
         let replacementVersion: string | undefined;
-        provider.read = async (...args: Parameters<typeof read>) => {
-          if (args[0].value === 'zlink:v11:capacity:mesh:node-d') {
-            provider.read = read;
+        provider.write = async (...args: Parameters<typeof write>) => {
+          if (
+            args[0].mutations.some(
+              (mutation) =>
+                mutation.kind === 'delete' && mutation.key.value === 'authority\0actor\0member-a'
+            )
+          ) {
+            provider.write = write;
             const replacement = await store.reserve({
               key: { kind: 'actor', globalId: 'member-a' },
               intent: {
@@ -962,7 +969,7 @@ for (const backend of ['provider', 'memory'] as const) {
             if (unchangedSpot.kind === 'snapshot')
               assert.equal(unchangedSpot.storeVersion.value, before[0]);
           }
-          return read(...args);
+          return write(...args);
         };
         const recreated = await store.reserve(next);
         assert.equal(recreated.kind, 'reserved');
@@ -975,12 +982,11 @@ for (const backend of ['provider', 'memory'] as const) {
         assert.equal(retained.objectGeneration, replacementGeneration);
         assert.equal(retained.storeVersion.value, replacementVersion);
         assert.equal(retained.allocation.state, 'reserved');
-        const releasedCapacity = await provider.read(storeKey('zlink:v11:capacity:mesh:node-d'));
-        if (releasedCapacity.kind !== 'found') throw new Error('member capacity missing');
-        assert.equal(
-          JSON.parse(Buffer.from(releasedCapacity.value.bytes).toString('utf8')).active.actors,
-          0
+        const releasedCapacity = await provider.read(
+          capacityCounterKey('node-d', 'actors', 'active')
         );
+        if (releasedCapacity.kind !== 'found') throw new Error('member capacity missing');
+        assert.equal(Buffer.from(releasedCapacity.value.bytes).toString(), '0');
         return;
       }
       if (scenario === 'dead' || scenario === 'staleRoute' || scenario === 'batchFits') {
@@ -992,12 +998,10 @@ for (const backend of ['provider', 'memory'] as const) {
         assert.ok((await versions()).slice(1).every((version) => version === 'missing'));
         assert.equal(await memberRow(), 'found');
         if (backend === 'provider') {
-          const capacity = await provider.read(storeKey('zlink:v11:capacity:mesh:node-a'));
-          if (capacity.kind !== 'found') throw new Error('capacity missing');
-          assert.equal(
-            JSON.parse(Buffer.from(capacity.value.bytes).toString('utf8')).active.actors,
-            0
-          );
+          const capacity = await provider.read(capacityCounterKey('node-a', 'actors', 'active'));
+          assert.equal(capacity.kind, scenario === 'staleRoute' ? 'missing' : 'found');
+          if (capacity.kind === 'found')
+            assert.equal(Buffer.from(capacity.value.bytes).toString(), '0');
         }
         // A released member is Missing: its next creation starts a new incarnation.
         const again = await store.reserve({
@@ -1194,15 +1198,13 @@ for (const backend of ['provider', 'memory'] as const) {
         assert.equal(retained.objectGeneration, first.creating.objectGeneration);
         assert.deepEqual(retained.payload, readyPayload);
       } else if (scenario === 'capacityCorrupt') {
-        const key = storeKey('zlink:v11:capacity:mesh:node-a');
+        const key = capacityCounterKey('node-a', 'actors', 'active');
         const read = await provider.read(key);
         assert.equal(read.kind, 'found');
         if (read.kind !== 'found') throw new Error('capacity missing');
-        const capacity = JSON.parse(Buffer.from(read.value.bytes).toString('utf8'));
-        capacity.active.actors = 0;
         const write = await provider.write({
           conditions: [{ kind: 'version', key, expected: read.value.version }],
-          mutations: [{ kind: 'put', key, bytes: Buffer.from(JSON.stringify(capacity)) }]
+          mutations: [{ kind: 'put', key, bytes: Buffer.from('0') }]
         });
         assert.equal(write.kind, 'applied');
         await assert.rejects(
@@ -1220,14 +1222,22 @@ for (const backend of ['provider', 'memory'] as const) {
           assert.deepEqual(current.payload, Buffer.from('old-state-and-membership'));
         }
       } else if (scenario === 'capacityRace') {
-        const read = provider.read.bind(provider);
+        const activeKey = capacityCounterKey('node-a', 'actors', 'active');
+        const write = provider.write.bind(provider);
         let winner: Awaited<ReturnType<typeof store.reserve>> | undefined;
-        provider.read = async (key, signal) => {
-          if (key.value.includes('capacity:')) {
-            provider.read = read;
+        provider.write = async (request, signal) => {
+          if (
+            request.mutations.some(
+              (mutation) =>
+                mutation.kind === 'add' &&
+                mutation.key.value === activeKey.value &&
+                mutation.delta < 0n
+            )
+          ) {
+            provider.write = write;
             winner = await store.reserve(next);
           }
-          return read(key, signal);
+          return write(request, signal);
         };
         const loser = await store.reserve(next);
         assert.equal(winner?.kind, 'reserved');
@@ -1249,13 +1259,10 @@ for (const backend of ['provider', 'memory'] as const) {
           assert.ok(result.creating.objectGeneration > first.creating.objectGeneration);
           assert.deepEqual(result.creating.payload, request.creatingPayload);
           if (backend === 'provider') {
-            const capacity = await provider.read(storeKey('zlink:v11:capacity:mesh:node-a'));
+            const capacity = await provider.read(capacityCounterKey('node-a', 'actors', 'active'));
             assert.equal(capacity.kind, 'found');
             if (capacity.kind === 'found')
-              assert.equal(
-                JSON.parse(Buffer.from(capacity.value.bytes).toString()).active.actors,
-                0
-              );
+              assert.equal(Buffer.from(capacity.value.bytes).toString(), '0');
           }
         }
       }
@@ -1337,6 +1344,12 @@ for (const backend of ['provider', 'memory'] as const) {
     monotonicMs = 30_000;
     assert.equal((await observer.reserve(request)).kind, 'reserved');
   });
+}
+
+function capacityCounterKey(nodeRid: string, dimension: string, state: 'active' | 'pending') {
+  return storeKey(
+    `zlink:v12:capacity\0mesh\0${Buffer.from(nodeRid).toString('hex')}\0${dimension}\0${state}`
+  );
 }
 
 test('a Missing authority row retains the previous owner token release delay', async (t) => {
@@ -1574,16 +1587,20 @@ test('an earlier live lease callback cannot clear a later invalid observation', 
     }),
     actorRelocationPolicy: 'disabled' as const
   };
-  const capacityKey = storeKey('zlink:v11:capacity:mesh:race-old-node');
+  const descriptorKey = opaqueRecordPreimage(
+    'mesh-node',
+    'mesh',
+    Buffer.from('race-old-node').toString('hex')
+  );
   let staleLeaseReadPending = true;
-  let capacityReadPending = true;
-  let signalCapacityEntered!: () => void;
-  const capacityEntered = new Promise<void>((resolve) => {
-    signalCapacityEntered = resolve;
+  let descriptorReadPending = true;
+  let signalDescriptorEntered!: () => void;
+  const descriptorEntered = new Promise<void>((resolve) => {
+    signalDescriptorEntered = resolve;
   });
-  let releaseCapacity!: () => void;
-  const capacityGate = new Promise<void>((resolve) => {
-    releaseCapacity = resolve;
+  let releaseDescriptor!: () => void;
+  const descriptorGate = new Promise<void>((resolve) => {
+    releaseDescriptor = resolve;
   });
   provider.read = async (key, signal) => {
     if (staleLeaseReadPending && key.value === leaseKey.value) {
@@ -1591,10 +1608,10 @@ test('an earlier live lease callback cannot clear a later invalid observation', 
       return liveLeaseRead;
     }
     const result = await originalRead(key, signal);
-    if (capacityReadPending && key.value === capacityKey.value) {
-      capacityReadPending = false;
-      signalCapacityEntered();
-      await capacityGate;
+    if (descriptorReadPending && key.value === descriptorKey) {
+      descriptorReadPending = false;
+      signalDescriptorEntered();
+      await descriptorGate;
     }
     return result;
   };
@@ -1602,7 +1619,7 @@ test('an earlier live lease callback cannot clear a later invalid observation', 
   now = new Date(201);
   monotonicMs = 9_000;
   const liveAttempt = store.reserve(request);
-  await capacityEntered;
+  await descriptorEntered;
   monotonicMs = 10_000;
   await assert.rejects(
     store.reserve(request),
@@ -1610,7 +1627,7 @@ test('an earlier live lease callback cannot clear a later invalid observation', 
       error instanceof ZLinkFrameworkException && error.kind === ZLinkFrameworkErrorKind.Unavailable
   );
   monotonicMs = 12_000;
-  releaseCapacity();
+  releaseDescriptor();
   assert.equal((await liveAttempt).kind, 'alreadyExists');
 
   monotonicMs = 40_000;
@@ -1863,7 +1880,7 @@ for (const scenario of ['live', 'expired', 'missingCapacity', 'underflow'] as co
     const first = await store.reserve(request);
     assert.equal(first.kind, 'reserved');
     if (first.kind !== 'reserved') throw new Error('reservation missing');
-    const capacityKey = storeKey('zlink:v11:capacity:mesh:node-a');
+    const capacityKey = capacityCounterKey('node-a', 'spots', 'pending');
     if (scenario === 'missingCapacity' || scenario === 'underflow') {
       await provider.write({
         conditions: [],
@@ -1873,27 +1890,21 @@ for (const scenario of ['live', 'expired', 'missingCapacity', 'underflow'] as co
             : {
                 kind: 'put',
                 key: capacityKey,
-                bytes: Buffer.from(
-                  JSON.stringify({
-                    active: { actors: 0, spots: 0, spotTypes: {} },
-                    pending: { actors: 0, spots: 0, spotTypes: {} }
-                  })
-                )
+                bytes: Buffer.from('0')
               }
         ]
       });
     }
     if (scenario !== 'live') now = new Date(61_000);
     const key = encodeAuthorityKey('user_spot', request.key.globalId);
-    if (scenario === 'underflow') {
+    if (scenario === 'underflow' || scenario === 'missingCapacity') {
       const capacityBefore = await provider.read(capacityKey);
-      assert.equal(capacityBefore.kind, 'found');
-      await assert.rejects(
-        store.releaseEndedReservation(key, first.creating.storeVersion.value),
-        /underflow/
-      );
+      assert.equal(capacityBefore.kind, scenario === 'underflow' ? 'found' : 'missing');
+      await assert.rejects(store.releaseEndedReservation(key, first.creating.storeVersion.value), {
+        kind: ZLinkFrameworkErrorKind.DataLost
+      });
       const capacityAfter = await provider.read(capacityKey);
-      assert.equal(capacityAfter.kind, 'found');
+      assert.deepEqual(capacityAfter, capacityBefore);
       if (capacityBefore.kind === 'found' && capacityAfter.kind === 'found') {
         assert.equal(capacityBefore.value.version.value, capacityAfter.value.version.value);
         assert.deepEqual(capacityBefore.value.bytes, capacityAfter.value.bytes);
@@ -1935,8 +1946,6 @@ for (const scenario of ['live', 'expired', 'missingCapacity', 'underflow'] as co
           'stale'
         );
       }
-      if (scenario === 'missingCapacity')
-        assert.equal((await provider.read(capacityKey)).kind, 'missing');
     }
   });
 }
@@ -2055,9 +2064,9 @@ test('startup releases previous lifecycle Creating and capacity before deleting 
           (await store.readAuthority(encodeAuthorityKey('instance_spot', 'startup-root'))).kind,
           'missing'
         );
-        const capacity = await provider.read(storeKey('zlink:v11:capacity:mesh:node-a'));
+        const capacity = await provider.read(capacityCounterKey('node-a', 'spots', 'pending'));
         if (capacity.kind !== 'found') throw new Error('capacity missing');
-        assert.equal(JSON.parse(Buffer.from(capacity.value.bytes).toString()).pending.spots, 0);
+        assert.equal(Buffer.from(capacity.value.bytes).toString(), '0');
         rootExists = false;
       }
     } as never,
@@ -2178,7 +2187,7 @@ for (const operation of [
     assert.equal(corrupted.value.expiresAt, undefined);
     const authorityKey = encodeAuthorityKey(request.key.kind, request.key.globalId);
     const authorityBefore = await store.readAuthority(authorityKey);
-    const capacityKey = storeKey('zlink:v11:capacity:mesh:node-a');
+    const capacityKey = capacityCounterKey('node-a', 'spots', 'pending');
     const capacityBefore = await provider.read(capacityKey);
     const write = provider.write.bind(provider);
     let writes = 0;
@@ -4556,13 +4565,14 @@ test('capacity Store observations follow reserve commit external polling and fai
   let fail = false;
   let reads = 0;
   const watched = {
-    read: async (...args: Parameters<typeof provider.read>) => {
-      reads++;
-      if (fail) throw new Error('capacity read failed');
-      return provider.read(...args);
-    },
+    read: provider.read.bind(provider),
     write: provider.write.bind(provider),
-    scan: provider.scan.bind(provider)
+    scan: async (...args: Parameters<typeof provider.scan>) => {
+      reads++;
+      if (fail && args[0].prefix.startsWith('zlink:v12:capacity\0'))
+        throw new Error('capacity read failed');
+      return provider.scan(...args);
+    }
   };
   const store = new ZLinkLocationStoreRepository(watched);
   const other = new ZLinkLocationStoreRepository(provider);
@@ -4585,6 +4595,7 @@ test('capacity Store observations follow reserve commit external polling and fai
   const first = await store.reserve(reserveRequest('capacity-one', placement));
   assert.equal(first.kind, 'reserved');
   if (first.kind !== 'reserved') throw new Error('missing reservation');
+  await store.listMeshNodes('mesh');
   assert.equal(store.confirmedCapacity(key, limits)?.spots.reserved, 1);
   assert.equal(store.confirmedCapacity(key, limits)?.spotTypes[0]?.reserved, 1);
   assert.equal(store.confirmedCapacity(key, limits)?.spots.limit, 8);
@@ -4600,6 +4611,7 @@ test('capacity Store observations follow reserve commit external polling and fai
     ).kind,
     'committed'
   );
+  await store.listMeshNodes('mesh');
   assert.equal(store.confirmedCapacity(key, limits)?.spots.active, 1);
   assert.equal(store.confirmedCapacity(key, limits)?.spots.reserved, 0);
   assert.equal((await other.reserve(reserveRequest('capacity-two', placement))).kind, 'reserved');

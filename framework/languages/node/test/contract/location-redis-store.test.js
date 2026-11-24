@@ -657,21 +657,20 @@ test('redis-backed aggregate prepare commit and abort converge across repository
       assert.equal(moved.kind, 'snapshot');
       assert.equal(moved.ownerId, targetOwner.token.ownerId);
       assert.equal(moved.objectGeneration, snapshots[index].objectGeneration);
-      assert.ok(
-        moved.authorityOwnerGeneration
-          > snapshots[index].authorityOwnerGeneration
-      );
-      assert.equal(moved.authorityOwnerGeneration, BigInt(index + 3));
+      assert.ok(moved.authorityOwnerGeneration > snapshots[index].authorityOwnerGeneration);
+      assert.equal(moved.authorityOwnerGeneration, 2n);
       assert.equal(
         Buffer.from(moved.payload).toString(),
         `relocated-room-${index.toString().padStart(2, '0')}`
       );
     }
-    const authorityOwnerCounter = await providerA.read({
-      value: 'zlink:v11:authority-owner-counter'
-    });
-    assert.equal(authorityOwnerCounter.kind, 'found');
-    assert.deepEqual(Buffer.from(authorityOwnerCounter.value.bytes), Buffer.from('5'));
+    for (let index = 0; index < request.participants.length; index++) {
+      const authorityOwnerCounter = await providerA.read({
+        value: `zlink:v12:authority-owner-counter\0spot\0room-${index.toString().padStart(2, '0')}`
+      });
+      assert.equal(authorityOwnerCounter.kind, 'found');
+      assert.deepEqual(Buffer.from(authorityOwnerCounter.value.bytes), Buffer.from('3'));
+    }
 
     const abortSnapshot = await createReadyUserSpot(
       source,
@@ -1054,28 +1053,32 @@ test('in-memory aggregate prepare, commit, and abort converge across repository 
   assert.equal(foreignPrepared.kind, 'prepared');
   if (foreignPrepared.kind !== 'prepared') return;
   const foreignSourceCapacityKey = {
-    value: 'zlink:v11:capacity:memory-play:memory-source-node'
+    value: `zlink:v12:capacity\0memory-play\0${Buffer.from('memory-source-node').toString('hex')}\0spots\0active`
   };
   const foreignSourceCapacity = await provider.read(foreignSourceCapacityKey);
   assert.equal(foreignSourceCapacity.kind, 'found');
   if (foreignSourceCapacity.kind !== 'found') return;
-  assert.equal((await provider.write({
-    conditions: [{
-      kind: 'version',
-      key: foreignSourceCapacityKey,
-      expected: foreignSourceCapacity.value.version
-    }],
-    mutations: [{ kind: 'delete', key: foreignSourceCapacityKey }]
-  })).kind, 'applied');
-  assert.deepEqual(
-    await recovery.commitAggregate(foreignPrepared.fence),
-    { kind: 'committed' }
+  assert.equal(
+    (
+      await provider.write({
+        conditions: [
+          {
+            kind: 'version',
+            key: foreignSourceCapacityKey,
+            expected: foreignSourceCapacity.value.version
+          }
+        ],
+        mutations: [{ kind: 'delete', key: foreignSourceCapacityKey }]
+      })
+    ).kind,
+    'applied'
   );
-  const foreignMoved = await recovery.readAuthority(
-    foreignRequest.participants[0].authorityKey
-  );
-  assert.equal(foreignMoved.kind, 'snapshot');
-  assert.equal(foreignMoved.ownerId, targetOwner.token.ownerId);
+  await assert.rejects(recovery.commitAggregate(foreignPrepared.fence), {
+    kind: frameworkInternal.ZLinkFrameworkErrorKind.DataLost
+  });
+  const retained = await recovery.readAuthority(foreignRequest.participants[0].authorityKey);
+  assert.equal(retained.kind, 'snapshot');
+  assert.equal(retained.ownerId, sourceOwner.token.ownerId);
 });
 
 test('redis opaque Relocation Store uses Framework-issued immutable references', async (t) => {
@@ -1191,16 +1194,22 @@ test('redis-backed repository writes the golden canonical authority allocation e
     );
     assert.ok(objectCounter);
     assert.ok(authorityOwnerCounter);
+    const idCounter = (counter) =>
+      key(counter.logicalKey.replace('zlink:v11:', 'zlink:v12:') + '\0actor\0user:42');
     const seededCounters = await store.write({
       conditions: [
-        { kind: 'missing', key: key(objectCounter.logicalKey) },
-        { kind: 'missing', key: key(authorityOwnerCounter.logicalKey) }
+        { kind: 'missing', key: idCounter(objectCounter) },
+        { kind: 'missing', key: idCounter(authorityOwnerCounter) }
       ],
       mutations: [
-        { kind: 'put', key: key(objectCounter.logicalKey), bytes: Buffer.from(objectCounter.issuedValue) },
         {
           kind: 'put',
-          key: key(authorityOwnerCounter.logicalKey),
+          key: idCounter(objectCounter),
+          bytes: Buffer.from(objectCounter.issuedValue)
+        },
+        {
+          kind: 'put',
+          key: idCounter(authorityOwnerCounter),
           bytes: Buffer.from(authorityOwnerCounter.issuedValue)
         }
       ]
@@ -1227,7 +1236,7 @@ test('redis-backed repository writes the golden canonical authority allocation e
       BigInt(authorityOwnerCounter.issuedValue)
     );
     for (const counter of [objectCounter, authorityOwnerCounter]) {
-      const read = await store.read(key(counter.logicalKey));
+      const read = await store.read(idCounter(counter));
       assert.equal(read.kind, 'found');
       assert.deepEqual(
         Buffer.from(read.value.bytes),
@@ -1245,7 +1254,7 @@ test('redis-backed repository writes the golden canonical authority allocation e
     assert.equal(committed.kind, 'committed');
 
     // Read the opaque row written by reserve()/commit(), rather than injecting
-    // fixture bytes into the provider. Dynamic Store-wide generations and the
+    // fixture bytes into the provider. Dynamic ID generations and the
     // lease token are intentionally compared by type; every fixed envelope
     // field must match the authoritative golden allocation exactly.
     const read = await store.read(key(authorityPreimage(authorityKey)));

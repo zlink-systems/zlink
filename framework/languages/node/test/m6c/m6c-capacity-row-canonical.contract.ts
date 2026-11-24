@@ -8,13 +8,10 @@ import {
   ZLinkLocationWriteIntent,
   ZLinkLocationWriteStatus
 } from '../../packages/framework/src/contracts/Locations/Writes';
-import {
-  ZLinkInMemoryProviderLocationStore,
-  storeKey
-} from '../../packages/framework/src/runtime/locations/in-memory-provider-location-store';
+import { ZLinkInMemoryProviderLocationStore } from '../../packages/framework/src/runtime/locations/in-memory-provider-location-store';
 import { ZLinkLocationStoreRepository } from '../../packages/framework/src/runtime/locations/location-store-repository';
 
-test('capacity rows serialize spotTypes in UTF-16 ordinal key order', async () => {
+test('capacity uses canonical v12 counter keys for each Spot type', async () => {
   const now = new Date('2026-08-23T00:00:00.000Z');
   const provider = new ZLinkInMemoryProviderLocationStore(() => now);
   const repository = new ZLinkLocationStoreRepository(provider, () => now);
@@ -90,11 +87,15 @@ test('capacity rows serialize spotTypes in UTF-16 ordinal key order', async () =
     assert.equal(reserved.kind, 'reserved');
   }
 
-  const capacity = await provider.read(storeKey('zlink:v11:capacity:play:node-a'));
-  assert.equal(capacity.kind, 'found');
-  if (capacity.kind !== 'found') return;
-  const json = Buffer.from(capacity.value.bytes).toString('utf8');
-  const alpha = json.indexOf('"user_spot\\u0000Alpha"');
-  const zulu = json.indexOf('"user_spot\\u0000Zulu"');
-  assert.ok(alpha >= 0 && zulu >= 0 && alpha < zulu, json);
+  const prefix = `zlink:v12:capacity\0play\0${Buffer.from('node-a').toString('hex')}\0spot-type\0userSpot\0`;
+  const capacity = await provider.scan({ prefix, limit: 10 });
+  assert.equal(capacity.kind, 'page');
+  if (capacity.kind !== 'page') return;
+  assert.deepEqual(
+    capacity.value.items.map(({ key, value }) => [key.value, Buffer.from(value.bytes).toString()]),
+    [
+      [`${prefix}Alpha\0pending`, '1'],
+      [`${prefix}Zulu\0pending`, '1']
+    ]
+  );
 });

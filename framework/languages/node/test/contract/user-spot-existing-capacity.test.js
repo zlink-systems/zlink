@@ -145,15 +145,20 @@ async function creationFixture(policy = 'disabled') {
       if (conflictRelease && request.mutations.some((item) => item.kind === 'delete')) {
         conflictRelease = false;
         const mutation = request.mutations.find(
-          (item) => item.kind === 'put' && item.key.value.startsWith('zlink:v11:capacity:')
+          (item) => item.kind === 'add' && item.key.value.startsWith('zlink:v12:capacity\0')
         );
         assert.ok(mutation);
-        const current = await super.read(mutation.key, signal);
+        const fence = request.conditions.find(
+          (condition) =>
+            condition.kind === 'version' && condition.key.value.startsWith('mesh-node\0')
+        );
+        assert.ok(fence);
+        const current = await super.read(fence.key, signal);
         assert.equal(current.kind, 'found');
         const changed = await super.write(
           {
-            conditions: [{ kind: 'version', key: mutation.key, expected: current.value.version }],
-            mutations: [{ kind: 'put', key: mutation.key, bytes: current.value.bytes }]
+            conditions: [{ kind: 'version', key: fence.key, expected: current.value.version }],
+            mutations: [{ kind: 'put', key: fence.key, bytes: current.value.bytes }]
           },
           signal
         );
@@ -337,7 +342,7 @@ test('expired Ready owner with relocation policy remains unavailable without uns
   assert.equal(current.allocation.state, 'active');
   assert.equal(f.factoryCalls, 1);
 });
-test('capacity race follows the same ID winner after a capacity-exhausted reservation', async () => {
+test('capacity race follows the same ID winner after reservation qualification changes', async () => {
   const f = await creationFixture(),
     entered = f.blockReserveDescriptor();
   const observed = f.create('racing-room').then(
@@ -353,7 +358,7 @@ test('capacity race follows the same ID winner after a capacity-exhausted reserv
     if (result.error) throw result.error;
     assert.equal(result.value.result.state, ZLinkSpotCreateState.Existing);
     assert.deepEqual(result.value.spot, winner.spot);
-    assert.ok(f.outcomes.includes('placementCapacityExhausted'));
+    assert.ok(f.outcomes.includes('alreadyExists'));
     assert.equal(f.factoryCalls, 1);
   } finally {
     f.releaseDescriptor();
@@ -461,7 +466,7 @@ test('expired Ready authority protected by an aggregate never bypasses lease val
   assert.equal(f.factoryCalls, 1);
 });
 
-test('capacity race forgets stale capacity exclusion after another Creating attempt is rejected', async () => {
+test('capacity race retries after the competing Creating attempt is rejected', async () => {
   const f = await creationFixture();
   const descriptorEntered = f.blockReserveDescriptor();
   const source = f.create('retry-room').then(
@@ -482,7 +487,7 @@ test('capacity race forgets stale capacity exclusion after another Creating atte
     const observed = f.observePending();
     f.releaseDescriptor();
     await observed;
-    assert.ok(f.outcomes.includes('placementCapacityExhausted'));
+    assert.ok(f.outcomes.includes('conflict'));
     reject.resolve();
     const rejected = await winner;
     assert.equal(rejected.result.state, ZLinkSpotCreateState.Rejected);

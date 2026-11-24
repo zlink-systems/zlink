@@ -85,12 +85,16 @@ test('opaque provider Reincarnate batches both generation counters and fences re
   const now = new Date(100);
   const inner = new framework.ZLinkInMemoryProviderLocationStore(() => now);
   const batches = [];
+  const counterKeys = new Set([
+    'zlink:v12:object-counter\0spot\0close-room',
+    'zlink:v12:authority-owner-counter\0spot\0close-room'
+  ]);
   let rejectReincarnate = false;
   let ownerToken;
   const provider = {
     read: inner.read.bind(inner), scan: inner.scan.bind(inner),
     async write(request, signal) {
-      const counters = request.mutations.filter((mutation) => mutation.key.value.endsWith('counter'));
+      const counters = request.mutations.filter((mutation) => counterKeys.has(mutation.key.value));
       if (counters.length === 2) {
         batches.push(request);
         if (rejectReincarnate) {
@@ -129,8 +133,11 @@ test('opaque provider Reincarnate batches both generation counters and fences re
   assert.deepEqual(after.allocation, before.allocation);
   const batch = batches.at(-1);
   assert.equal(batch.mutations.length, 3);
-  for (const counter of batch.mutations.filter((entry) => entry.key.value.endsWith('counter'))) {
-    assert.equal(batch.conditions.some((condition) => condition.key.value === counter.key.value), true);
+  for (const counter of batch.mutations.filter((entry) => counterKeys.has(entry.key.value))) {
+    assert.equal(
+      batch.conditions.some((condition) => condition.key.value === counter.key.value),
+      true
+    );
   }
   rejectReincarnate = true;
   assert.equal((await store.compareExchangeAuthority(fixture.key, after.storeVersion, mutation)).kind, 'conflict');

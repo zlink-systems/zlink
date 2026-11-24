@@ -22,11 +22,7 @@ for (const count of [0, 32, 2048]) {
       read(key, signal) {
         calls.reads++;
         if (key.value.startsWith('authority')) calls.authorityReads++;
-        if (
-          key.value.startsWith('mesh-node') ||
-          key.value.startsWith('owner') ||
-          key.value.startsWith('zlink:v11:capacity:')
-        )
+        if (key.value.startsWith('mesh-node') || key.value.startsWith('owner'))
           calls.maintenanceReads++;
         return inner.read(key, signal);
       },

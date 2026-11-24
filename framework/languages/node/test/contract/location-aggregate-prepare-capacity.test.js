@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
+  ZLinkFrameworkErrorKind,
   ZLinkInMemoryProviderLocationStore,
   ZLinkLocationStoreRepository,
   ZLinkLocationWriteIntent,
@@ -88,7 +89,7 @@ for (const targetLimit of [2, 1]) {
 
     const result = await repository.prepareAggregate(first);
 
-    assert.equal(firstWriteResult.kind, 'conflict');
+    assert.equal(firstWriteResult.kind, targetLimit === 2 ? 'applied' : 'conflict');
     assert.equal(competingResult.kind, 'prepared');
     assert.equal(result.kind, targetLimit === 2 ? 'prepared' : 'conflict');
     assert.equal((await repository.commitAggregate(competingResult.fence)).kind, 'committed');
@@ -102,3 +103,72 @@ for (const targetLimit of [2, 1]) {
     );
   });
 }
+
+test('aggregate prepare reuses the persisted ID generation after a marker reply is lost', async () => {
+  const store = new ZLinkInMemoryProviderLocationStore();
+  let loseMarkerReply = false;
+  const repository = new ZLinkLocationStoreRepository({
+    read: store.read.bind(store),
+    scan: store.scan.bind(store),
+    async write(request, signal) {
+      const result = await store.write(request, signal);
+      if (
+        loseMarkerReply &&
+        request.mutations.some(
+          (mutation) =>
+            mutation.key.value === 'zlink:v12:authority-owner-counter\0spot\0room-lost-reply'
+        )
+      ) {
+        assert.equal(result.kind, 'applied');
+        loseMarkerReply = false;
+        throw new Error('applied participant marker reply lost');
+      }
+      return result;
+    }
+  });
+  async function target(nodeRid) {
+    const lease = await repository.claimOwnerLease(nodeRid, 60_000);
+    assert.equal(lease.kind, 'claimed');
+    const value = {
+      meshName: 'play',
+      nodeRid,
+      nodeLifecycleGeneration: 1n,
+      owner: lease.token
+    };
+    const descriptor = await repository.updateMeshNode(
+      aggregateDescriptor(value, 1),
+      ZLinkLocationWriteIntent.NewClaim
+    );
+    assert.equal(descriptor.status, ZLinkLocationWriteStatus.Stored);
+    return value;
+  }
+  const source = await target('source-node');
+  const destination = await target('target-node');
+  const spot = await createReadyUserSpot(repository, 'room-lost-reply', source);
+  const request = aggregateRequest(
+    { value: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' },
+    1n,
+    [spot],
+    destination,
+    ['room-lost-reply']
+  );
+  loseMarkerReply = true;
+  await assert.rejects(
+    repository.prepareAggregate(request),
+    (error) =>
+      error.kind === ZLinkFrameworkErrorKind.Unavailable &&
+      error.cause?.message === 'applied participant marker reply lost'
+  );
+  const prepared = await repository.prepareAggregate(request);
+  assert.equal(prepared.kind, 'prepared');
+  assert.equal((await repository.commitAggregate(prepared.fence)).kind, 'committed');
+  const moved = await repository.readAuthority(request.participants[0].authorityKey);
+  assert.equal(moved.ownerId, destination.owner.ownerId);
+  assert.equal(moved.objectGeneration, spot.objectGeneration);
+  assert.equal(moved.authorityOwnerGeneration, spot.authorityOwnerGeneration + 1n);
+  const counter = await store.read({
+    value: 'zlink:v12:authority-owner-counter\0spot\0room-lost-reply'
+  });
+  assert.equal(counter.kind, 'found');
+  assert.equal(Buffer.from(counter.value.bytes).toString(), '3');
+});

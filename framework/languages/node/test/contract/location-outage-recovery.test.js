@@ -256,7 +256,7 @@ async function fixture(t, provider, kind = 'actor', capacity = 10, onDiscard, re
     legacyWrites,
     cas,
     discarded: () => discarded,
-    async addActor(actorId, objectGeneration = 2n) {
+    async addActor(actorId, objectGeneration = provider ? 1n : 2n) {
       const actor = { actorId, objectGeneration, meshName: 'play', nodeRid: rid };
       assert.equal((await lifecycle.claimActor('player', actorId, rid)).status, 'claimed');
       await lifecycle.setActorRef('player', actorId, actor, 1n);
@@ -965,7 +965,7 @@ for (const provider of [false, true]) {
       factory = capture;
       return track(owner, ready, discard, capture);
     };
-    const replacement = await s.addActor('recovery-actor');
+    const replacement = await s.addActor('recovery-actor', 2n);
     const current = await s.store.readAuthority(s.key);
     assert.equal(current.kind, 'snapshot');
     assert.notEqual(current.objectGeneration, s.authority.objectGeneration);
@@ -1107,7 +1107,7 @@ for (const provider of [false, true]) {
     for (let index = 1; index < 5000; index++)
       rows.push(
         index % 3 === 0
-          ? await s.addActor(`scale-actor-${index}`, BigInt(index + 1))
+          ? await s.addActor(`scale-actor-${index}`, provider ? 1n : BigInt(index + 1))
           : await addScaleSpot(s, index, index % 3 === 1 ? 'user_spot' : 'instance_spot')
       );
     const counts = iterationProbe(t);

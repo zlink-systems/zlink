@@ -422,7 +422,8 @@ async function cleanupFixture(
     originalOwner,
     cas,
     discarded: () => discarded,
-    async addActor(actorId, objectGeneration = 2n, onDiscard) {
+    async addActor(actorId, onDiscard) {
+      const objectGeneration = provider ? 1n : 2n;
       const actor = { actorId, objectGeneration, meshName: 'play', nodeRid: rid };
       assert.equal((await lifecycle.claimActor('player', actorId, rid)).status, 'claimed');
       await lifecycle.setActorRef('player', actorId, actor, 1n);
@@ -608,7 +609,7 @@ test('discarded User Spot retains another node member and does not treat failed 
   const memberKey = encodeAuthorityKey('actor', 'remote-member');
   await publishInitialActorAuthority(s.store, {
     actorType: 'player',
-    actor: { actorId: 'remote-member', objectGeneration: 3n, meshName: 'play', nodeRid: remoteRid },
+    actor: { actorId: 'remote-member', objectGeneration: 1n, meshName: 'play', nodeRid: remoteRid },
     meshName: 'play',
     ownerNodeGeneration: 1n,
     owner: remoteLease.token,
@@ -915,17 +916,18 @@ for (const expired of [false, true])
     assert.equal(lost, true);
     assert.equal((await s.store.readAuthority(s.key)).kind, 'missing');
     await s.runtime.reclaimOwnerAuthorities();
-    const capacity = await s.backing.scan({ prefix: 'zlink:v11:capacity:', limit: 10 });
+    const capacity = await s.backing.scan({ prefix: 'zlink:v12:capacity\0', limit: 10 });
     assert.equal(capacity.kind, 'page');
-    for (const row of capacity.value.items)
-      assert.equal(JSON.parse(Buffer.from(row.value.bytes)).active.actors, 0);
+    const active = capacity.value.items.filter((row) => row.key.value.endsWith('\0actors\0active'));
+    assert.ok(active.length > 0);
+    for (const row of active) assert.equal(Buffer.from(row.value.bytes).toString(), '0');
   });
 
 for (const pendingPhase of ['local', 'store'])
   test(`Spot membership snapshot waits for its Actor ${pendingPhase} cleanup while an unrelated Spot proceeds`, async (t) => {
     const s = await cleanupFixture(t, true, 'user_spot');
     const settled = deferred();
-    const member = await s.addActor('dependent-member', 2n, () =>
+    const member = await s.addActor('dependent-member', () =>
       pendingPhase === 'local' ? settled.promise : undefined
     );
     const authority = await s.store.readAuthority(member.key);
@@ -1067,13 +1069,19 @@ test('shutdown releases the owner and drains a rejected discarded cleanup operat
 for (let iteration = 1; iteration <= 40; iteration++)
   test(`authority Delete capacity race returns Conflict after winner Delete (${iteration})`, async (t) => {
     const s = await cleanupFixture(t, true, 'actor');
-    const read = s.backing.read.bind(s.backing);
     const write = s.backing.write.bind(s.backing);
     let race = true;
     let deletes = 0;
     let writes = 0;
     s.backing.write = async (request, signal) => {
       writes++;
+      if (race && request.mutations.some((mutation) => mutation.kind === 'add')) {
+        race = false;
+        assert.equal(
+          (await s.cas(s.key, s.authority.storeVersion, { kind: 'delete' })).kind,
+          'deleted'
+        );
+      }
       const result = await write(request, signal);
       if (result.kind === 'applied')
         deletes += request.mutations.filter(
@@ -1081,28 +1089,26 @@ for (let iteration = 1; iteration <= 40; iteration++)
         ).length;
       return result;
     };
-    s.backing.read = async (key, signal) => {
-      if (race && key.value.startsWith('zlink:v11:capacity:')) {
-        race = false;
-        assert.equal(
-          (await s.cas(s.key, s.authority.storeVersion, { kind: 'delete' })).kind,
-          'deleted'
-        );
-      }
-      return read(key, signal);
-    };
     let loser;
     try {
       loser = await s.cas(s.key, s.authority.storeVersion, { kind: 'delete' });
     } finally {
       assert.equal(race, false);
       assert.equal(deletes, 1);
-      assert.equal(writes, 1);
+      assert.equal(writes, 2);
       assert.equal((await s.store.readAuthority(s.key)).kind, 'missing');
-      const capacity = await s.backing.scan({ prefix: 'zlink:v11:capacity:', limit: 10 });
-      assert.equal(capacity.value.items.length, 1);
-      const usage = JSON.parse(Buffer.from(capacity.value.items[0].value.bytes));
-      assert.deepEqual(usage.active, { actors: 0, spots: 0, spotTypes: {} });
+      const capacity = await s.backing.scan({ prefix: 'zlink:v12:capacity\0', limit: 10 });
+      assert.equal(capacity.value.items.length, 2);
+      assert.deepEqual(
+        capacity.value.items.map((row) => [
+          row.key.value.split('\0').at(-1),
+          Buffer.from(row.value.bytes).toString()
+        ]),
+        [
+          ['active', '0'],
+          ['pending', '0']
+        ]
+      );
     }
     assert.equal(loser.kind, 'conflict');
     assert.equal(loser.current.kind, 'missing');
@@ -1115,8 +1121,12 @@ for (const change of ['unchanged', 'preserve', 'reincarnate'])
     let corrupt = true;
     let latest = s.authority;
     let originalCapacity;
-    s.backing.read = async (key, signal) => {
-      if (corrupt && key.value.startsWith('zlink:v11:capacity:')) {
+    const write = s.backing.write.bind(s.backing);
+    s.backing.write = async (request, signal) => {
+      const counter = request.mutations.find(
+        (mutation) => mutation.kind === 'add' && mutation.key.value.endsWith('\0spots\0active')
+      );
+      if (corrupt && counter !== undefined) {
         corrupt = false;
         if (change !== 'unchanged') {
           latest = await s.cas(s.key, s.authority.storeVersion, {
@@ -1126,21 +1136,20 @@ for (const change of ['unchanged', 'preserve', 'reincarnate'])
           });
           assert.equal(latest.kind, 'stored');
         }
+        const { key } = counter;
         const row = await read(key, signal);
         originalCapacity = { key, bytes: row.value.bytes };
-        const capacity = JSON.parse(Buffer.from(row.value.bytes));
-        capacity.active.spots = 0;
         assert.equal(
           (
-            await s.backing.write({
+            await write({
               conditions: [{ kind: 'version', key, expected: row.value.version }],
-              mutations: [{ kind: 'put', key, bytes: Buffer.from(JSON.stringify(capacity)) }]
+              mutations: [{ kind: 'put', key, bytes: Buffer.from('0') }]
             })
           ).kind,
           'applied'
         );
       }
-      return read(key, signal);
+      return write(request, signal);
     };
     try {
       const deletion = s.cas(s.key, s.authority.storeVersion, { kind: 'delete' });

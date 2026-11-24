@@ -2869,8 +2869,12 @@ test('production repository persists owner lease and MeshNode records through on
   assert.equal(envelope.payload, '3q2+7w==');
   assert.equal(envelope.objectGeneration, '1');
   assert.equal(envelope.authorityOwnerGeneration, '1');
-  const objectCounter = await provider.read({ value: 'zlink:v11:object-counter' });
-  const authorityOwnerCounter = await provider.read({ value: 'zlink:v11:authority-owner-counter' });
+  const objectCounter = await provider.read({
+    value: 'zlink:v12:object-counter\0actor\0canonical-actor'
+  });
+  const authorityOwnerCounter = await provider.read({
+    value: 'zlink:v12:authority-owner-counter\0actor\0canonical-actor'
+  });
   assert.equal(objectCounter.kind, 'found');
   assert.equal(authorityOwnerCounter.kind, 'found');
   assert.deepEqual(Buffer.from(objectCounter.value.bytes), Buffer.from('2'));
@@ -3374,12 +3378,23 @@ test('production repository leaves authority record and next-to-issue counters u
   const ceiling = Buffer.from('9223372036854775807');
   const seeded = await provider.write({
     conditions: [
-      { kind: 'missing', key: { value: 'zlink:v11:object-counter' } },
-      { kind: 'missing', key: { value: 'zlink:v11:authority-owner-counter' } }
+      { kind: 'missing', key: { value: 'zlink:v12:object-counter\0actor\0generation-ceiling' } },
+      {
+        kind: 'missing',
+        key: { value: 'zlink:v12:authority-owner-counter\0actor\0generation-ceiling' }
+      }
     ],
     mutations: [
-      { kind: 'put', key: { value: 'zlink:v11:object-counter' }, bytes: ceiling },
-      { kind: 'put', key: { value: 'zlink:v11:authority-owner-counter' }, bytes: Buffer.from('1') }
+      {
+        kind: 'put',
+        key: { value: 'zlink:v12:object-counter\0actor\0generation-ceiling' },
+        bytes: ceiling
+      },
+      {
+        kind: 'put',
+        key: { value: 'zlink:v12:authority-owner-counter\0actor\0generation-ceiling' },
+        bytes: Buffer.from('1')
+      }
     ]
   });
   assert.equal(seeded.kind, 'applied');
@@ -3397,8 +3412,12 @@ test('production repository leaves authority record and next-to-issue counters u
     creatingPayload: Buffer.from('creating')
   });
   assert.deepEqual(exhausted, { kind: 'generationExhausted' });
-  const objectCounter = await provider.read({ value: 'zlink:v11:object-counter' });
-  const authorityOwnerCounter = await provider.read({ value: 'zlink:v11:authority-owner-counter' });
+  const objectCounter = await provider.read({
+    value: 'zlink:v12:object-counter\0actor\0generation-ceiling'
+  });
+  const authorityOwnerCounter = await provider.read({
+    value: 'zlink:v12:authority-owner-counter\0actor\0generation-ceiling'
+  });
   assert.equal(objectCounter.kind, 'found');
   assert.equal(authorityOwnerCounter.kind, 'found');
   assert.deepEqual(Buffer.from(objectCounter.value.bytes), ceiling);
@@ -3442,13 +3461,15 @@ test('production repository leaves authority record and next-to-issue counters u
 
 test('production repository rejects non-canonical decimal bytes for every counter row', async () => {
   for (const malformed of ['0', '01', '+1', ' 1', '1 ']) {
-    for (const counterKey of ['zlink:v11:object-counter', 'zlink:v11:authority-owner-counter']) {
+    for (const counter of ['object-counter', 'authority-owner-counter']) {
+      const globalId = `counter-${counter}-${malformed}`;
+      const counterKey = `zlink:v12:${counter}\0actor\0${globalId}`;
       const provider = new internal.ZLinkInMemoryProviderLocationStore();
       const repository = testLocationStoreRepository(provider);
-      const owner = await repository.claimOwnerLease(`counter-${counterKey}-${malformed}`, 30_000);
+      const owner = await repository.claimOwnerLease(globalId, 30_000);
       assert.equal(owner.kind, 'claimed');
       if (owner.kind !== 'claimed') throw new Error('owner lease claim failed');
-      const nodeRid = `counter-node-${counterKey}-${malformed}`;
+      const nodeRid = `counter-node-${counter}-${malformed}`;
       assert.equal(
         (
           await repository.updateMeshNode(
@@ -3473,7 +3494,7 @@ test('production repository rejects non-canonical decimal bytes for every counte
       );
       await assert.rejects(
         repository.reserve({
-          key: { kind: 'actor', globalId: `counter-${counterKey}-${malformed}` },
+          key: { kind: 'actor', globalId: globalId },
           intent: {
             stableType: 'Player',
             requestContentReference: 'counter',
@@ -3489,7 +3510,7 @@ test('production repository rejects non-canonical decimal bytes for every counte
           capacity: { actors: 1, spots: 0 },
           creatingPayload: Buffer.from('counter')
         }),
-        /counter is not canonical decimal/
+        { kind: internal.ZLinkFrameworkErrorKind.DataLost }
       );
     }
 
@@ -3511,7 +3532,7 @@ test('production repository rejects non-canonical decimal bytes for every counte
     );
     await assert.rejects(
       testLocationStoreRepository(provider).claimOwnerLease(`owner-${malformed}`, 30_000),
-      /counter is not canonical decimal/
+      { kind: internal.ZLinkFrameworkErrorKind.DataLost }
     );
   }
 });
@@ -4288,7 +4309,9 @@ test('creation Store calculations follow authority and owner qualification', asy
             await arrived;
             await new Promise((resolve) => setImmediate(resolve));
             assert.equal(
-              reads.some((key) => key.includes('capacity:') || key.includes('counter')),
+              reads.some(
+                (key) => key.startsWith('zlink:v12:capacity\0') || key.includes('counter')
+              ),
               false,
               'Unqualified creation must not read shared calculation records.'
             );
@@ -4509,7 +4532,13 @@ for (const objectKind of ['actor', 'user_spot']) {
       const descriptor = await fixture.inner.read(fixture.descriptorKey);
       await applyCreationTransition(fixture, transition);
       const conditions = fixture.writes[0].conditions;
-      assert.equal(conditions.length, transition === 'Reserve' ? 6 : 4);
+      const expectedLimits = objectKind === 'actor' ? 1 : 2;
+      assert.equal(conditions.length, transition === 'Reserve' ? 5 + expectedLimits : 3);
+      assert.equal(
+        conditions.filter((condition) => condition.kind === 'sumAtMost').length,
+        transition === 'Reserve' ? expectedLimits : 0
+      );
+      assert.ok(fixture.writes[0].mutations.some((mutation) => mutation.kind === 'add'));
       assert.ok(
         conditions.some((c) => c.kind === 'value' && c.key.value === 'owner-lease\0creation-owner')
       );
@@ -4528,7 +4557,13 @@ for (const objectKind of ['actor', 'user_spot']) {
       fixture.writes.length = 0;
       fixture.beforeWrite(() => fixture.republish());
       await applyCreationTransition(fixture, transition);
-      assert.equal(fixture.writes.length, 2);
+      assert.equal(fixture.writes.length, transition === 'Reserve' ? 3 : 2);
+      if (transition === 'Reserve') {
+        assert.deepEqual(fixture.writes[1].mutations, []);
+        assert.ok(
+          fixture.writes[1].conditions.every((condition) => condition.kind === 'sumAtMost')
+        );
+      }
     });
   }
 }

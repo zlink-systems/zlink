@@ -1,5 +1,8 @@
 import type { RoutingId } from '../../contracts/Common/CoreTypes';
-import type { ZLinkCreationOperationIdentity } from './internal-location-contracts';
+import type {
+  ZLinkCreationOperationIdentity,
+  ZLinkPlacementAllocation
+} from './internal-location-contracts';
 import { encodeRoutingIdStorageHex } from '../routing-id';
 
 export function opaqueRecordPreimage(record: string, ...segments: readonly string[]): string {
@@ -18,4 +21,17 @@ export function creationTerminalPreimage(operation: ZLinkCreationOperationIdenti
 
 export function routingIdHexSegment(routingId: RoutingId): string {
   return encodeRoutingIdStorageHex(routingId).toLowerCase();
+}
+
+export function canonicalPlacementObjectKind(
+  kind: ZLinkPlacementAllocation['objectKind']
+): 'actor' | 'userSpot' | 'instanceSpot' {
+  switch (kind) {
+    case 'actor':
+      return 'actor';
+    case 'user_spot':
+      return 'userSpot';
+    case 'instance_spot':
+      return 'instanceSpot';
+  }
 }

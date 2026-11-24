@@ -1128,7 +1128,7 @@ async function membershipFailureFixture(backend) {
   }
   async function create(kind, id, target, payload) {
     const key = { kind, globalId: id };
-    const reserved = await store.reserve({
+    const requestToReserve = {
       key,
       intent: {
         stableType: kind === 'actor' ? 'Player' : 'Table',
@@ -1140,7 +1140,25 @@ async function membershipFailureFixture(backend) {
       creatingPayload: Buffer.from('creating'),
       capacity: kind === 'actor' ? { actors: 1, spots: 0 } : { actors: 0, spots: 1 },
       actorRelocationPolicy: 'disabled'
-    });
+    };
+    // The membership tests distinguish generations across two identities. Reserve the
+    // same Actor ID once before creation so the provider issues a second incarnation.
+    if (backend === 'provider-memory' && kind === 'actor') {
+      const abandoned = await store.reserve(requestToReserve);
+      assert.equal(abandoned.kind, 'reserved');
+      assert.equal(
+        (
+          await store.abort({
+            key,
+            target,
+            reservationId: abandoned.reservationId,
+            expectedStoreVersion: abandoned.creating.storeVersion.value
+          })
+        ).kind,
+        'aborted'
+      );
+    }
+    const reserved = await store.reserve(requestToReserve);
     assert.equal(reserved.kind, 'reserved');
     const readyPayload = payload(reserved.creating.objectGeneration);
     const request = {
