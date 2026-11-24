@@ -25,7 +25,8 @@ import type {
 import { ZLinkNativeFallbackBoundSession } from '../streams/native-fallback-bound-session';
 import type { ZLinkActorTransferRuntime } from './actor-transfer-runtime';
 import type { ZLinkRuntimeAdmissionGate } from '../admission';
-import type { ZLinkRemoteActorPacketTarget } from '../actors';
+import type { ZLinkRemoteActorPacketTarget, ZLinkRemoteBoundSessionTarget } from '../actors';
+import type { ServiceSessionBinding } from '../foundation/service-stateful-registry';
 import type { ZLinkActorJoinRelocation } from '../actors/actor-join-relocation';
 
 export interface ZLinkActorRuntimeOptionsFactoryOptions {
@@ -52,8 +53,9 @@ export interface ZLinkActorRuntimeOptionsFactoryOptions {
   readonly primaryMeshCompletions: () => ZLinkMeshCompletionTable | undefined;
   readonly meshNode: (meshName: string) => ZLinkBackendMeshNode | undefined;
   readonly boundSessionRoute: (
-    sessionNodeRid: RoutingId
-  ) => import('../actors/actor-runtime-state').ZLinkRemoteBoundSessionTarget | undefined;
+    sessionNodeRid: RoutingId,
+    previousRoute?: ZLinkRemoteBoundSessionTarget
+  ) => ZLinkRemoteBoundSessionTarget | undefined;
   readonly meshCompletions: (meshName: string) => ZLinkMeshCompletionTable | undefined;
   readonly notifyEntrySpotActorCreated: (
     nodeRid: RoutingId,
@@ -119,6 +121,13 @@ export class ZLinkActorRuntimeOptionsFactory {
     | 'admission'
   > {
     const actorTransferRegistry = this.options.actorTransferRegistry;
+    const boundSessionProjections = new WeakMap<
+      ServiceSessionBinding,
+      {
+        readonly route: ZLinkRemoteBoundSessionTarget;
+        readonly projection: ZLinkRemoteBoundSessionTarget;
+      }
+    >();
     return {
       terminateActorActivation: this.options.terminateActorActivation,
       actorMeshNameProvider: this.options.actorMeshName,
@@ -188,9 +197,11 @@ export class ZLinkActorRuntimeOptionsFactory {
         if (node?.actorSessionBinding === undefined) return undefined;
         const binding = node.actorSessionBinding(actor);
         if (binding === undefined) return null;
-        const route = this.options.boundSessionRoute(binding.sessionOwnerNodeRid);
+        const previous = boundSessionProjections.get(binding);
+        const route = this.options.boundSessionRoute(binding.sessionOwnerNodeRid, previous?.route);
         if (route === undefined) return null;
-        return {
+        if (route === previous?.route) return previous.projection;
+        const projection = Object.freeze({
           ...route,
           sessionNodeRid: binding.sessionOwnerNodeRid,
           sessionRid: binding.sessionRid,
@@ -198,7 +209,9 @@ export class ZLinkActorRuntimeOptionsFactory {
           sessionOwnerId: binding.sessionOwnerId,
           sessionOwnerLeaseGeneration: binding.sessionOwnerLeaseGeneration,
           bindingGeneration: binding.bindingGeneration
-        };
+        });
+        boundSessionProjections.set(binding, { route, projection });
+        return projection;
       },
       nativeActorCompletionTableProvider: this.options.primaryMeshCompletions,
       locationLifecycle: this.options.locationLifecycle(),
@@ -206,7 +219,7 @@ export class ZLinkActorRuntimeOptionsFactory {
         new ZLinkNativeFallbackBoundSession({
           runtime: this.options.streamBindingRuntime,
           routedTransport: this.options.routeTransport,
-          actorRefProvider: () => {
+          targetProvider: () => {
             const state = this.options.actorManager()?.getState(actorId);
             const actorRef = state?.nativeActorRef;
             const meshName =
@@ -218,18 +231,23 @@ export class ZLinkActorRuntimeOptionsFactory {
               actorRef?.generation ??
               (actorRef as unknown as { readonly objectGeneration?: bigint } | undefined)
                 ?.objectGeneration;
-            return actorRef === undefined || objectGeneration === undefined
-              ? undefined
-              : ({
-                  actorId: actorRef.actorId,
-                  objectGeneration,
-                  meshName: meshName ?? this.options.primaryMeshName() ?? '',
-                  nodeRid: actorRef.nodeRid,
-                  ownershipGeneration: state?.locationGeneration,
-                  ownerLeaseGeneration:
-                    this.options.locationLifecycle()?.currentOwnerToken?.leaseGeneration,
-                  bindingGeneration: state?.boundSessionBindingGeneration
-                } as ActorRef);
+            const binding = state?.boundSession;
+            return {
+              remoteTarget: state?.remoteBoundSessionTargetFor(binding),
+              actorRef:
+                actorRef === undefined || objectGeneration === undefined
+                  ? undefined
+                  : ({
+                      actorId: actorRef.actorId,
+                      objectGeneration,
+                      meshName: meshName ?? this.options.primaryMeshName() ?? '',
+                      nodeRid: actorRef.nodeRid,
+                      ownershipGeneration: state?.locationGeneration,
+                      ownerLeaseGeneration:
+                        this.options.locationLifecycle()?.currentOwnerToken?.leaseGeneration,
+                      bindingGeneration: binding?.bindingGeneration ?? 0n
+                    } as ActorRef)
+            };
           },
           nativeActorNodeProvider: () => {
             const state = this.options.actorManager()?.getState(actorId);
@@ -250,8 +268,6 @@ export class ZLinkActorRuntimeOptionsFactory {
           },
           localActorProvider: () =>
             this.options.actorManager()?.getState(actorId)?.actor !== undefined,
-          remoteBoundSessionTargetProvider: () =>
-            this.options.actorManager()?.getState(actorId)?.remoteBoundSessionTarget,
           remoteActorPacketTargetProvider: () => this.options.actorPacketTargetForState(actorId),
           requestTimeoutMs: this.options.registration.requestTimeoutMs,
           actorId,
