@@ -8,12 +8,12 @@ namespace Zlink.Framework.UnitTests;
 public sealed class InMemoryLocationCreationContentionTests(ITestOutputHelper output)
 {
     [Theory]
-    [InlineData(0)]
-    [InlineData(200)]
-    public Task DifferentActorIdsCreateWithTwoWritesAndNoConflicts(int actorLimit) =>
+    [InlineData("unlimited")]
+    [InlineData("at-limit")]
+    public Task DifferentActorIdsCreateWithTwoWritesAndNoConflicts(string caseId) =>
         LocationCreationContentionContract.VerifyAsync(
             new ZLinkInMemoryProviderLocationStore(),
-            actorLimit,
+            caseId,
             output
         );
 }

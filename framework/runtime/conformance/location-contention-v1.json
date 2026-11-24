@@ -1,0 +1,56 @@
+{
+  "fixture": "zlink.framework.location-contention",
+  "version": 1,
+  "distinctActorCreations": {
+    "actorCount": 200,
+    "actorIdPrefix": "contention-player-",
+    "actorType": "player",
+    "mesh": "creation-contention",
+    "cases": {
+      "unlimited": {
+        "actorLimit": 0,
+        "expectedReservationConditions": 0
+      },
+      "at-limit": {
+        "actorLimit": 200,
+        "expectedReservationConditions": 200
+      }
+    },
+    "expected": {
+      "createdActors": 200,
+      "authorityWritesPerActor": 2,
+      "writeConflicts": 0,
+      "objectGeneration": 1,
+      "activeActorSlots": 200,
+      "pendingActorSlots": 0
+    }
+  },
+  "concurrentStartupConversion": {
+    "mesh": "mesh",
+    "startupCount": 3,
+    "legacyNextObjectGeneration": 11,
+    "legacyNextAuthorityOwnerGeneration": 17,
+    "records": [
+      {
+        "legacyRid": "1",
+        "descriptorRoutingIdHex": "00000001",
+        "activeActorSlots": 2,
+        "pendingActorSlots": 4,
+        "expectedRoutingIdHex": "00000001"
+      },
+      {
+        "legacyRid": "no:descriptor",
+        "descriptorRoutingIdHex": null,
+        "activeActorSlots": 3,
+        "pendingActorSlots": 0,
+        "expectedRoutingIdHex": "6e6f3a64657363726970746f72"
+      }
+    ],
+    "expected": {
+      "format": "converted",
+      "generationFloor": 17,
+      "remainingLegacyRecords": 0,
+      "writesBeforeConversion": 0
+    }
+  }
+}

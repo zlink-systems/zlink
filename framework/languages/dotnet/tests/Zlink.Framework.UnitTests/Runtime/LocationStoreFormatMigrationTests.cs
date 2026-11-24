@@ -1,7 +1,9 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Locations;
+using Zlink.Framework.Tests;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
@@ -16,42 +18,115 @@ public sealed class LocationStoreFormatMigrationTests
     [Fact]
     public async Task ConcurrentStartupConvertsEachRecordOnceAndOmitsZeroCounters()
     {
+        var scenario = LocationContentionFixture.ReadScenario("concurrentStartupConversion");
+        var expected = scenario.GetProperty("expected");
+        var mesh = scenario.GetProperty("mesh").GetString()!;
+        var startupCount = scenario.GetProperty("startupCount").GetInt32();
+        var records = scenario.GetProperty("records");
         var store = new MigrationStore();
-        var binaryRid = RoutingId.From(1u);
-        await SeedDescriptorAsync(store, binaryRid);
-        var matchedKey = LegacyCapacity(binaryRid.ToString());
-        var missingKey = LegacyCapacity("absent");
-        await SeedAsync(store, "zlink:v11:object-counter", "19");
-        await SeedAsync(store, "zlink:v11:authority-owner-counter", "41");
-        await SeedAsync(store, matchedKey.Value, Capacity(2, 1, 0));
-        await SeedAsync(store, missingKey.Value, Capacity(0, 0, 3));
-        store.GateFirstScans(3);
-
-        await using var first = Runtime(store);
-        await using var second = Runtime(store);
-        await using var third = Runtime(store);
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-        await Task.WhenAll(
-            first.StartAsync(RoutingId.From("first"), deadline.Token).AsTask(),
-            second.StartAsync(RoutingId.From("second"), deadline.Token).AsTask(),
-            third.StartAsync(RoutingId.From("third"), deadline.Token).AsTask()
-        );
-
-        await AssertValueAsync(store, Format, "converted");
-        await AssertValueAsync(store, Floor, "41");
-        await AssertValueAsync(store, Counter(binaryRid, "actors", "active"), "2");
-        await AssertValueAsync(
+        await SeedAsync(
             store,
-            Counter(binaryRid, "spot-type\0userSpot\0room", "active"),
-            "1"
+            "zlink:v11:object-counter",
+            scenario
+                .GetProperty("legacyNextObjectGeneration")
+                .GetInt64()
+                .ToString(CultureInfo.InvariantCulture)
         );
-        await AssertValueAsync(store, Counter(RoutingId.From("absent"), "actors", "pending"), "3");
-        await AssertValueAsync(store, Counter(binaryRid, "actors", "pending"), null);
-        await AssertValueAsync(store, Counter(binaryRid, "spots", "pending"), null);
-        await AssertValueAsync(store, matchedKey, null);
-        await AssertValueAsync(store, missingKey, null);
-        Assert.Equal(2, store.ConvertedRecords);
-        Assert.Equal(0, store.OwnerWritesBeforeFormat);
+        await SeedAsync(
+            store,
+            "zlink:v11:authority-owner-counter",
+            scenario
+                .GetProperty("legacyNextAuthorityOwnerGeneration")
+                .GetInt64()
+                .ToString(CultureInfo.InvariantCulture)
+        );
+        const int activeSpotsWithDescriptor = 1;
+        foreach (var record in records.EnumerateArray())
+        {
+            var descriptorHex = record.GetProperty("descriptorRoutingIdHex").GetString();
+            if (descriptorHex is not null)
+                await SeedDescriptorAsync(store, RoutingId.FromHex(descriptorHex), mesh);
+            await SeedAsync(
+                store,
+                LegacyCapacity(record.GetProperty("legacyRid").GetString()!, mesh).Value,
+                Capacity(
+                    record.GetProperty("activeActorSlots").GetInt32(),
+                    descriptorHex is null ? 0 : activeSpotsWithDescriptor,
+                    record.GetProperty("pendingActorSlots").GetInt32()
+                )
+            );
+        }
+        store.GateFirstScans(startupCount);
+
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var runtimes = Enumerable.Range(0, startupCount).Select(_ => Runtime(store)).ToArray();
+        try
+        {
+            await Task.WhenAll(
+                runtimes.Select(
+                    (runtime, index) =>
+                        runtime
+                            .StartAsync(RoutingId.From($"startup-{index}"), deadline.Token)
+                            .AsTask()
+                )
+            );
+
+            await AssertValueAsync(store, Format, expected.GetProperty("format").GetString());
+            await AssertValueAsync(
+                store,
+                Floor,
+                expected
+                    .GetProperty("generationFloor")
+                    .GetInt64()
+                    .ToString(CultureInfo.InvariantCulture)
+            );
+            foreach (var record in records.EnumerateArray())
+            {
+                var expectedRid = record.GetProperty("expectedRoutingIdHex").GetString()!;
+                var active = record.GetProperty("activeActorSlots").GetInt32();
+                var pending = record.GetProperty("pendingActorSlots").GetInt32();
+                await AssertValueAsync(
+                    store,
+                    Counter(mesh, expectedRid, "actors", "active"),
+                    active == 0 ? null : active.ToString(CultureInfo.InvariantCulture)
+                );
+                await AssertValueAsync(
+                    store,
+                    Counter(mesh, expectedRid, "actors", "pending"),
+                    pending == 0 ? null : pending.ToString(CultureInfo.InvariantCulture)
+                );
+                if (record.GetProperty("descriptorRoutingIdHex").GetString() is not null)
+                {
+                    await AssertValueAsync(
+                        store,
+                        Counter(mesh, expectedRid, "spot-type\0userSpot\0room", "active"),
+                        activeSpotsWithDescriptor.ToString(CultureInfo.InvariantCulture)
+                    );
+                }
+                await AssertValueAsync(store, Counter(mesh, expectedRid, "spots", "pending"), null);
+                await AssertValueAsync(
+                    store,
+                    LegacyCapacity(record.GetProperty("legacyRid").GetString()!, mesh),
+                    null
+                );
+            }
+            var remaining = Assert.IsType<ZLinkStoreScanResult.Page>(
+                await store.Inner.ScanAsync(new ZLinkStoreScanRequest(LegacyPrefix, null, 1000))
+            );
+            Assert.Equal(
+                expected.GetProperty("remainingLegacyRecords").GetInt32(),
+                remaining.Value.Items.Count
+            );
+            Assert.Equal(records.GetArrayLength(), store.ConvertedRecords);
+            Assert.Equal(
+                expected.GetProperty("writesBeforeConversion").GetInt32(),
+                store.WritesBeforeFormat
+            );
+        }
+        finally
+        {
+            await Task.WhenAll(runtimes.Select(runtime => runtime.DisposeAsync().AsTask()));
+        }
     }
 
     [Fact]
@@ -71,7 +146,7 @@ public sealed class LocationStoreFormatMigrationTests
         await AssertValueAsync(store, Format, null);
         await AssertValueAsync(store, Floor, "1");
         Assert.Equal(1, store.ConvertedRecords);
-        Assert.Equal(0, store.OwnerWritesBeforeFormat);
+        Assert.Equal(0, store.WritesBeforeFormat);
         await using var resumed = Runtime(store);
         await resumed.StartAsync(RoutingId.From("resumed"));
 
@@ -81,7 +156,7 @@ public sealed class LocationStoreFormatMigrationTests
         await AssertValueAsync(store, LegacyCapacity("a"), null);
         await AssertValueAsync(store, LegacyCapacity("b"), null);
         Assert.Equal(2, store.ConvertedRecords);
-        Assert.Equal(0, store.OwnerWritesBeforeFormat);
+        Assert.Equal(0, store.WritesBeforeFormat);
     }
 
     [Fact]
@@ -98,7 +173,7 @@ public sealed class LocationStoreFormatMigrationTests
         await AssertValueAsync(store, legacyKey, null);
         await AssertValueAsync(store, Counter(RoutingId.From("node"), "actors", "active"), "1");
         Assert.Equal(1, store.ConvertedRecords);
-        Assert.Equal(0, store.OwnerWritesBeforeFormat);
+        Assert.Equal(0, store.WritesBeforeFormat);
     }
 
     [Fact]
@@ -167,10 +242,17 @@ public sealed class LocationStoreFormatMigrationTests
         new(new ZLinkLocationOptions(), new ZLinkProviderLocationRepository(store));
 
     private static ZLinkStoreKey Counter(RoutingId rid, string dimension, string state) =>
-        new($"zlink:v12:capacity\0{Mesh}\0{rid.ToHex()}\0{dimension}\0{state}");
+        Counter(Mesh, rid.ToHex(), dimension, state);
 
-    private static ZLinkStoreKey LegacyCapacity(string rid) =>
-        new($"{LegacyPrefix}{Uri.EscapeDataString(Mesh)}:{Uri.EscapeDataString(rid)}");
+    private static ZLinkStoreKey Counter(
+        string mesh,
+        string ridHex,
+        string dimension,
+        string state
+    ) => new($"zlink:v12:capacity\0{mesh}\0{ridHex}\0{dimension}\0{state}");
+
+    private static ZLinkStoreKey LegacyCapacity(string rid, string mesh = Mesh) =>
+        new($"{LegacyPrefix}{Uri.EscapeDataString(mesh)}:{Uri.EscapeDataString(rid)}");
 
     private static string Capacity(int activeActors, int activeSpots, int pendingActors) =>
         JsonSerializer.Serialize(
@@ -191,7 +273,11 @@ public sealed class LocationStoreFormatMigrationTests
             }
         );
 
-    private static async Task SeedDescriptorAsync(MigrationStore store, RoutingId rid)
+    private static async Task SeedDescriptorAsync(
+        MigrationStore store,
+        RoutingId rid,
+        string mesh = Mesh
+    )
     {
         var repository = new ZLinkProviderLocationRepository(store.Inner);
         var owner = Assert
@@ -200,12 +286,12 @@ public sealed class LocationStoreFormatMigrationTests
             )
             .Token;
         var descriptor = new ZLinkMeshNodeDescriptor(
-            Mesh,
+            mesh,
             rid,
             1,
             1,
             "tcp://127.0.0.1:12345",
-            new Dictionary<string, int>(StringComparer.Ordinal) { [Mesh] = 100 },
+            new Dictionary<string, int>(StringComparer.Ordinal) { [mesh] = 100 },
             string.Empty,
             owner.OwnerId,
             owner.LeaseGeneration,
@@ -253,12 +339,12 @@ public sealed class LocationStoreFormatMigrationTests
         );
         private int _scansToGate;
         private int _convertedRecords;
-        private int _earlyOwnerWrites;
+        private int _earlyWrites;
         public ZLinkInMemoryProviderLocationStore Inner { get; } = new();
         public CancellationTokenSource? InterruptAfterRecord { get; set; }
         public bool LoseResponseAfterRecord { get; init; }
         public int ConvertedRecords => Volatile.Read(ref _convertedRecords);
-        public int OwnerWritesBeforeFormat => Volatile.Read(ref _earlyOwnerWrites);
+        public int WritesBeforeFormat => Volatile.Read(ref _earlyWrites);
 
         public void GateFirstScans(int expected) => _scansToGate = expected;
 
@@ -287,25 +373,23 @@ public sealed class LocationStoreFormatMigrationTests
             CancellationToken cancellationToken = default
         )
         {
+            var convertsRecord = request
+                .Mutations.OfType<ZLinkStoreMutation.Delete>()
+                .Any(mutation =>
+                    mutation.Key.Value.StartsWith(LegacyPrefix, StringComparison.Ordinal)
+                );
+            var writesFormatMetadata =
+                request.Mutations is [ZLinkStoreMutation.Put put]
+                && (put.Key == Floor || put.Key == Format);
             if (
-                request
-                    .Mutations.OfType<ZLinkStoreMutation.Put>()
-                    .Any(mutation =>
-                        mutation.Key.Value.StartsWith("owner-lease\0", StringComparison.Ordinal)
-                    )
+                !convertsRecord
+                && !writesFormatMetadata
                 && await Inner.ReadAsync(Format, cancellationToken) is ZLinkStoreReadResult.Missing
             )
-                Interlocked.Increment(ref _earlyOwnerWrites);
+                Interlocked.Increment(ref _earlyWrites);
 
             var result = await Inner.WriteAsync(request, cancellationToken);
-            if (
-                result is ZLinkStoreWriteResult.Applied
-                && request
-                    .Mutations.OfType<ZLinkStoreMutation.Delete>()
-                    .Any(mutation =>
-                        mutation.Key.Value.StartsWith(LegacyPrefix, StringComparison.Ordinal)
-                    )
-            )
+            if (result is ZLinkStoreWriteResult.Applied && convertsRecord)
             {
                 var converted = Interlocked.Increment(ref _convertedRecords);
                 if (InterruptAfterRecord is { IsCancellationRequested: false } interrupt)

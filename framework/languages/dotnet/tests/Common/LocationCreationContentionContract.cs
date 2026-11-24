@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using Systems.Zlink;
@@ -12,15 +13,21 @@ namespace Zlink.Framework.Tests;
 
 internal static class LocationCreationContentionContract
 {
-    private const int CreationCount = 200;
-
     public static async Task VerifyAsync(
         IZLinkLocationStore provider,
-        int actorLimit,
+        string caseId,
         ITestOutputHelper output
     )
     {
-        var measured = new MeasuredStore(provider);
+        var scenario = LocationContentionFixture.ReadScenario("distinctActorCreations");
+        var settings = scenario.GetProperty("cases").GetProperty(caseId);
+        var expected = scenario.GetProperty("expected");
+        var actorCount = scenario.GetProperty("actorCount").GetInt32();
+        var actorLimit = settings.GetProperty("actorLimit").GetInt32();
+        var actorIdPrefix = scenario.GetProperty("actorIdPrefix").GetString()!;
+        var actorType = scenario.GetProperty("actorType").GetString()!;
+        var mesh = scenario.GetProperty("mesh").GetString()!;
+        var measured = new MeasuredStore(provider, actorCount);
         var repository = new ZLinkProviderLocationRepository(measured);
         await repository.EnsureStoreFormatAsync(CancellationToken.None);
         var owner = Assert
@@ -28,14 +35,14 @@ internal static class LocationCreationContentionContract
                 await repository.ClaimOwnerLeaseAsync("creation-owner", TimeSpan.FromMinutes(5))
             )
             .Token;
-        var rid = RoutingId.From("creation-host");
+        var rid = RoutingId.From(mesh);
         var descriptor = new ZLinkMeshNodeDescriptor(
-            "play",
+            mesh,
             rid,
             1,
             1,
             "tcp://127.0.0.1:7101",
-            new Dictionary<string, int> { ["play"] = 100 },
+            new Dictionary<string, int> { [mesh] = 100 },
             string.Empty,
             owner.OwnerId,
             owner.LeaseGeneration,
@@ -47,7 +54,7 @@ internal static class LocationCreationContentionContract
             [
                 new ZLinkObjectCapability(
                     ZLinkPlacementObjectKind.Actor,
-                    "player",
+                    actorType,
                     ZLinkObjectMaintenancePolicyKind.Disabled,
                     false,
                     0
@@ -58,7 +65,7 @@ internal static class LocationCreationContentionContract
                 new ZLinkPopulationCapacity(0, 0, 0),
                 []
             ),
-            EntrySpotId = "play-entry-00000000-0000-4000-8000-000000000001",
+            EntrySpotId = $"{mesh}-entry-00000000-0000-4000-8000-000000000001",
             State = ZLinkFrameworkRuntimeState.Serving,
         };
         Assert.Equal(
@@ -70,7 +77,7 @@ internal static class LocationCreationContentionContract
 
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
         var cancellationToken = timeout.Token;
-        var observations = await Task.WhenAll(Enumerable.Range(1, CreationCount).Select(Create));
+        var observations = await Task.WhenAll(Enumerable.Range(0, actorCount).Select(Create));
         var conflicts = observations.Sum(observation => observation.Conflicts);
         output.WriteLine(
             $"Creations={observations.Length} limit={actorLimit} conflicts={conflicts} "
@@ -82,21 +89,28 @@ internal static class LocationCreationContentionContract
                 + $"total-scans={observations.Sum(o => o.Scans)}"
         );
 
-        Assert.Equal(0, conflicts);
+        Assert.Equal(expected.GetProperty("createdActors").GetInt32(), observations.Length);
+        Assert.Equal(expected.GetProperty("writeConflicts").GetInt32(), conflicts);
+        Assert.Equal(
+            settings.GetProperty("expectedReservationConditions").GetInt32(),
+            observations.Sum(observation => observation.ReservationLimits)
+        );
+        var writesPerActor = expected.GetProperty("authorityWritesPerActor").GetInt32();
+        var objectGeneration = expected.GetProperty("objectGeneration").GetUInt64();
         Assert.All(
             observations,
             observation =>
             {
-                Assert.Equal(2, observation.Writes);
+                Assert.Equal(writesPerActor, observation.Writes);
                 Assert.Equal(actorLimit == 0 ? 0 : 1, observation.ReservationLimits);
                 Assert.Equal(0, observation.CompletionLimits);
-                Assert.Equal(1UL, observation.ObjectGeneration);
+                Assert.Equal(objectGeneration, observation.ObjectGeneration);
                 Assert.Equal(1UL, observation.AuthorityOwnerGeneration);
             }
         );
         if (actorLimit > 0)
             Assert.IsType<ZLinkObjectReserveResult.PlacementCapacityExhausted>(
-                await repository.ReserveAsync(Reservation(CreationCount + 1), cancellationToken)
+                await repository.ReserveAsync(Reservation(actorCount), cancellationToken)
             );
 
         var capacityKey = $"zlink:v12:capacity\0{descriptor.MeshName}\0{rid.ToHex()}\0actors";
@@ -109,8 +123,20 @@ internal static class LocationCreationContentionContract
                 cancellationToken
             )
         );
-        Assert.Equal("200", Encoding.UTF8.GetString(active.Value.Bytes.Span));
-        Assert.Equal("0", Encoding.UTF8.GetString(pending.Value.Bytes.Span));
+        Assert.Equal(
+            expected
+                .GetProperty("activeActorSlots")
+                .GetInt64()
+                .ToString(CultureInfo.InvariantCulture),
+            Encoding.UTF8.GetString(active.Value.Bytes.Span)
+        );
+        Assert.Equal(
+            expected
+                .GetProperty("pendingActorSlots")
+                .GetInt64()
+                .ToString(CultureInfo.InvariantCulture),
+            Encoding.UTF8.GetString(pending.Value.Bytes.Span)
+        );
 
         async Task<CreationObservation> Create(int index)
         {
@@ -136,7 +162,7 @@ internal static class LocationCreationContentionContract
                                     rid,
                                     descriptor.LifecycleGeneration,
                                     0,
-                                    (ulong)index
+                                    (ulong)index + 1
                                 ),
                                 new byte[] { 0x54 },
                                 DateTimeOffset.UtcNow.AddMinutes(5)
@@ -155,12 +181,12 @@ internal static class LocationCreationContentionContract
 
         ZLinkObjectReservationRequest Reservation(int index)
         {
-            var actorId = $"parallel-actor-{index}";
+            var actorId = $"{actorIdPrefix}{index.ToString(CultureInfo.InvariantCulture)}";
             var intent = Encoding.UTF8.GetBytes($"create:{actorId}");
             return new ZLinkObjectReservationRequest(
                 ZLinkPlacementObjectKind.Actor,
                 ZLinkAuthorityKeyCodec.EncodeActor(actorId),
-                "player",
+                actorType,
                 $"inline:{actorId}",
                 SHA256.HashData(intent),
                 intent.Length,
@@ -186,7 +212,8 @@ internal static class LocationCreationContentionContract
         public bool Reserved { get; set; }
     }
 
-    private sealed class MeasuredStore(IZLinkLocationStore inner) : IZLinkLocationStore
+    private sealed class MeasuredStore(IZLinkLocationStore inner, int actorCount)
+        : IZLinkLocationStore
     {
         private readonly TaskCompletionSource _firstWrites = new(
             TaskCreationOptions.RunContinuationsAsynchronously
@@ -225,7 +252,7 @@ internal static class LocationCreationContentionContract
             // Collect every first reservation after its reads and before any write reaches the store.
             if (++observation.Writes == 1)
             {
-                if (Interlocked.Increment(ref _arrived) == CreationCount)
+                if (Interlocked.Increment(ref _arrived) == actorCount)
                     _firstWrites.SetResult();
                 await _firstWrites.Task.WaitAsync(cancellationToken);
             }

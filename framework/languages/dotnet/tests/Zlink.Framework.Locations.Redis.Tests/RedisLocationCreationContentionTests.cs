@@ -10,12 +10,12 @@ public sealed class RedisLocationCreationContentionTests(
 )
 {
     [SkippableTheory]
-    [InlineData(0)]
-    [InlineData(200)]
-    public async Task DifferentActorIdsCreateWithTwoWritesAndNoConflicts(int actorLimit)
+    [InlineData("unlimited")]
+    [InlineData("at-limit")]
+    public async Task DifferentActorIdsCreateWithTwoWritesAndNoConflicts(string caseId)
     {
         Skip.IfNot(fixture.RedisAvailable, fixture.SkipReason);
         await using var store = fixture.CreateStore();
-        await LocationCreationContentionContract.VerifyAsync(store, actorLimit, output);
+        await LocationCreationContentionContract.VerifyAsync(store, caseId, output);
     }
 }
