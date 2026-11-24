@@ -3876,3 +3876,18 @@ test('login admission default uses the runtime affinity and cgroup quota', (t) =
   quota = '800000 100000';
   assert.equal(normalizeStreamAuthenticationAdmission(options).maxConcurrentAuthentications, 32);
 });
+
+test('login admission lease returns its slot once', () => {
+  const admission = new ZLinkAuthenticationAdmission(
+    normalizeStreamAuthenticationAdmission({
+      authenticationPacketName: 'Login',
+      maxConcurrentAuthentications: 1
+    })
+  );
+  const release = admission.tryAcquire();
+  assert.equal(typeof release, 'function');
+  release();
+  release();
+  assert.equal(typeof admission.tryAcquire(), 'function');
+  assert.equal(admission.tryAcquire(), undefined, 'a repeated release must not raise the limit');
+});

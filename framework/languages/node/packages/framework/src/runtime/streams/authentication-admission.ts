@@ -53,7 +53,11 @@ export class ZLinkAuthenticationAdmission {
       return undefined;
     }
     this.inFlight += 1;
+    // Each lease returns once, whichever terminal calls it first.
+    let released = false;
     return () => {
+      if (released) return;
+      released = true;
       this.inFlight -= 1;
     };
   }
