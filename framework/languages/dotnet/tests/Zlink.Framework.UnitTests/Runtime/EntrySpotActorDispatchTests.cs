@@ -5130,7 +5130,7 @@ public sealed partial class EntrySpotActorDispatchTests
             var nodeSendAttempted = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously
             );
-            node.OnNodeSend = () => nodeSendAttempted.TrySetResult();
+            node.OnNodeSend = _ => nodeSendAttempted.TrySetResult();
             var heldSend = context
                 .ActorCoordinator.RelayToActorAsync(
                     bound,
@@ -5425,7 +5425,7 @@ public sealed partial class EntrySpotActorDispatchTests
             var continuedSend = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously
             );
-            node.OnNodeSend = () => continuedSend.TrySetResult();
+            node.OnNodeSend = _ => continuedSend.TrySetResult();
             var fourthTarget = RoutingId.From("target-actor-four");
             Assert.True(
                 runtime.RouteCanonicalSessionActor(
@@ -5540,7 +5540,7 @@ public sealed partial class EntrySpotActorDispatchTests
             var afterTimeoutSend = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously
             );
-            node.OnNodeSend = () =>
+            node.OnNodeSend = _ =>
             {
                 if (node.NodeSendAttempts.Count == 2)
                     afterTimeoutSend.TrySetResult();
@@ -6039,10 +6039,10 @@ public sealed partial class EntrySpotActorDispatchTests
             var submitted = new TaskCompletionSource<ZLinkRemoteActorFrameRelay>(
                 TaskCreationOptions.RunContinuationsAsynchronously
             );
-            node.OnNodeSend = () =>
+            node.OnNodeSend = snapshot =>
                 submitted.TrySetResult(
                     ZLinkFrameworkJsonPayloadCodec.Deserialize<ZLinkRemoteActorFrameRelay>(
-                        node.NodeSendAttempts.Single()[1]
+                        snapshot[1]
                     )!
                 );
             var notification = runtime
@@ -6234,7 +6234,7 @@ public sealed partial class EntrySpotActorDispatchTests
         var replies = new List<byte[]>();
         var node = new CapturingSpotNode
         {
-            OnNodeSend = () => submitted.TrySetResult(),
+            OnNodeSend = _ => submitted.TrySetResult(),
             NodeSendAsyncHandler = async cancellationToken =>
             {
                 submitted.TrySetResult();
@@ -12991,9 +12991,23 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         var node = new CapturingSpotNode();
         var (runtime, actor) = await CreateStartedRuntimeAsync(node);
+        using var allowNodeSendAttemptPublication = new ManualResetEventSlim();
+        var nodeSendAttemptCountPublished = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var nodeSendAttempt = new TaskCompletionSource<IReadOnlyList<byte[]>>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         try
         {
             node.NodeSendAttempts.Clear();
+            node.OnNodeSendAttemptCountPublished = () =>
+            {
+                node.OnNodeSendAttemptCountPublished = null;
+                nodeSendAttemptCountPublished.TrySetResult();
+                allowNodeSendAttemptPublication.Wait();
+            };
+            node.OnNodeSend = snapshot => nodeSendAttempt.TrySetResult(snapshot);
             var sourceNodeRid = RoutingId.From("request-source");
             using var frame = CreateRelocationRequestFrame(
                 actor,
@@ -13039,11 +13053,12 @@ public sealed partial class EntrySpotActorDispatchTests
                 frame.DirectReply
             );
 
-            Assert.True(
-                SpinWait.SpinUntil(() => node.NodeSendAttempts.Count == 1, TimeSpan.FromSeconds(5))
-            );
+            await nodeSendAttemptCountPublished.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(nodeSendAttempt.Task.IsCompleted);
+            allowNodeSendAttemptPublication.Set();
+            var attempt = await nodeSendAttempt.Task.WaitAsync(TimeSpan.FromSeconds(5));
             var relay = ZLinkFrameworkJsonPayloadCodec.Deserialize<ZLinkRemoteActorFrameRelay>(
-                node.NodeSendAttempts.Single()[1]
+                attempt[1]
             );
             Assert.NotNull(relay);
             Assert.Equal(capturedCapability, relay.ReplyCapability);
@@ -13053,6 +13068,7 @@ public sealed partial class EntrySpotActorDispatchTests
         }
         finally
         {
+            allowNodeSendAttemptPublication.Set();
             await runtime.StopAsync(CancellationToken.None);
         }
     }
@@ -16506,7 +16522,9 @@ public sealed partial class EntrySpotActorDispatchTests
 
         public List<IReadOnlyList<byte[]>> NodeSendAttempts { get; } = [];
 
-        public Action? OnNodeSend { get; set; }
+        public Action? OnNodeSendAttemptCountPublished { get; set; }
+
+        public Action<IReadOnlyList<byte[]>>? OnNodeSend { get; set; }
 
         public int NodeSendAsyncCalls { get; private set; }
 
@@ -17121,8 +17139,17 @@ public sealed partial class EntrySpotActorDispatchTests
             LastNodeSendMetadata = metadata.ToArray();
             var copied = CopyParts(parts);
             LastNodeSendParts = copied;
-            NodeSendAttempts.Add(copied);
-            OnNodeSend?.Invoke();
+            if (OnNodeSendAttemptCountPublished is { } onNodeSendAttemptCountPublished)
+            {
+                NodeSendAttempts.Add(null!);
+                onNodeSendAttemptCountPublished();
+                NodeSendAttempts[^1] = copied;
+            }
+            else
+            {
+                NodeSendAttempts.Add(copied);
+            }
+            OnNodeSend?.Invoke(copied);
             return NodeSendResults.TryDequeue(out var result) ? result : SubmitResult.Ok;
         }
 

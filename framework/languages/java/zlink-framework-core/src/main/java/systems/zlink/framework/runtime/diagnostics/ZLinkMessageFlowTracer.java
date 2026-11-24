@@ -93,13 +93,24 @@ public final class ZLinkMessageFlowTracer {
             ZLinkDispatchErrorAction action,
             String actorId,
             Throwable failure) {
+        reportFailure(surface, messageKind, reason, action, null, actorId, failure);
+    }
+
+    public void reportFailure(
+            ZLinkDispatchErrorSurface surface,
+            ZLinkDispatchMessageKind messageKind,
+            ZLinkDispatchErrorReason reason,
+            ZLinkDispatchErrorAction action,
+            String packetName,
+            String actorId,
+            Throwable failure) {
         TracePoint point = beginDispatchError();
         if (point == null) return;
         point.trace(
                 ZLinkDispatchErrorReporter.failureEvent(
                         surface,
                         messageKind,
-                        null,
+                        packetName,
                         null,
                         null,
                         null,

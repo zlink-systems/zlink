@@ -11,31 +11,54 @@ namespace Zlink.Framework.Runtime.Streams;
 internal static class ZLinkRemoteSessionPushProtocol
 {
     public const string PacketName = "$zlink.session.push-relay.v1";
-    private static readonly byte[] EncodedPacketName = Encoding.UTF8.GetBytes(PacketName);
 
     internal static bool IsPush(ZLinkEnvelopeHeader header) =>
         header.Kind == ZLinkMessageKind.Command && header.MessageName == PacketName;
-
-    internal static bool IsPush(ZLinkMultipartPayloadView parts)
-    {
-        if (parts.Count == 0 || parts.GetSpan(0).IndexOf(EncodedPacketName) < 0)
-            return false;
-
-        try
-        {
-            return IsPush(ZLinkEnvelopeCodec.DecodeHeader(parts, validateFlow: false));
-        }
-        catch (ZLinkEnvelopeProtocolException)
-        {
-            // The node dispatcher reports malformed application envelopes.
-            return false;
-        }
-    }
 }
 
 internal static class ZLinkRemoteActorFrameProtocol
 {
     public const string PacketName = "$zlink.actor.frame-relay.v1";
+
+    internal static bool IsFrameRelay(ZLinkEnvelopeHeader header) =>
+        header.Kind == ZLinkMessageKind.Command && header.MessageName == PacketName;
+}
+
+internal static class ZLinkOrderedNodeRelayProtocol
+{
+    private static readonly byte[] PushPacketName = Encoding.UTF8.GetBytes(
+        ZLinkRemoteSessionPushProtocol.PacketName
+    );
+    private static readonly byte[] ActorFramePacketName = Encoding.UTF8.GetBytes(
+        ZLinkRemoteActorFrameProtocol.PacketName
+    );
+
+    internal static ZLinkEnvelopeHeader? DecodeHeader(
+        ZLinkMultipartPayloadView parts,
+        bool validateFlow
+    )
+    {
+        if (parts.Count == 0)
+            return null;
+        var bytes = parts.GetSpan(0);
+        if (bytes.IndexOf(PushPacketName) < 0 && bytes.IndexOf(ActorFramePacketName) < 0)
+            return null;
+
+        try
+        {
+            var header = ZLinkEnvelopeCodec.DecodeHeader(bytes, validateFlow);
+            return
+                ZLinkRemoteSessionPushProtocol.IsPush(header)
+                || ZLinkRemoteActorFrameProtocol.IsFrameRelay(header)
+                ? header
+                : null;
+        }
+        catch (ZLinkEnvelopeProtocolException)
+        {
+            // The node dispatcher reports malformed application envelopes.
+            return null;
+        }
+    }
 }
 
 internal static class ZLinkRemoteActorReplyProtocol

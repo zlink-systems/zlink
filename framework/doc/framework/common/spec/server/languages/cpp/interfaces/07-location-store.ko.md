@@ -105,8 +105,15 @@ struct store_value_condition_t {
     std::vector<std::byte> expected;
 };
 
+struct store_sum_at_most_condition_t {
+    std::vector<store_key_t> keys;
+    std::int64_t delta = 0;
+    std::int64_t limit = 0;
+};
+
 using store_condition_t =
-  std::variant<store_missing_condition_t, store_version_condition_t, store_value_condition_t>;
+  std::variant<store_missing_condition_t, store_version_condition_t, store_value_condition_t,
+               store_sum_at_most_condition_t>;
 
 struct store_put_t {
     store_key_t key;
@@ -118,7 +125,12 @@ struct store_delete_t {
     store_key_t key;
 };
 
-using store_mutation_t = std::variant<store_put_t, store_delete_t>;
+struct store_add_t {
+    store_key_t key;
+    std::int64_t delta = 0;
+};
+
+using store_mutation_t = std::variant<store_put_t, store_delete_t, store_add_t>;
 
 struct store_write_request_t {
     std::vector<store_condition_t> conditions;
@@ -139,8 +151,12 @@ struct store_write_conflict_t {
     std::chrono::system_clock::time_point store_now{};
 };
 
+struct store_write_corrupt_t {
+    std::chrono::system_clock::time_point store_now{};
+};
+
 using store_write_result_t =
-  std::variant<store_write_applied_t, store_write_conflict_t>;
+  std::variant<store_write_applied_t, store_write_conflict_t, store_write_corrupt_t>;
 
 struct store_scan_request_t {
     std::string prefix;
@@ -185,7 +201,8 @@ Value는 최대 1 MiB다. `retention`이 없으면 만료되지 않으며, 만�
 
 `write(...)`는 모든 condition을 먼저 검사하고 모두 참일 때만 모든 mutation을 하나의 atomic
 commit으로 적용한다. 조건 하나라도 거짓이면 mutation과 version 증가는 모두 0이고
-`store_write_conflict_t`를 반환한다. Condition은 Missing 또는 Version 비교만 제공한다.
+`store_write_conflict_t`를 반환한다. Condition 종류와 수용 공간 counter 연산(`store_sum_at_most_condition_t`·`store_add_t`), `store_write_corrupt_t`의 의미는
+[Location Store §4](../../../05-location-relocation/02-location-store-redis.ko.md#4-conditional-atomic-batch)·[§4.1](../../../05-location-relocation/02-location-store-redis.ko.md#41-수용-공간-counter)이 정한다.
 Conflict 결과에 domain state나 current value를 싣지 않으며 Framework가 필요한 key를 직접 read한다.
 
 한 write request는 condition과 mutation을 합쳐 최대 2,048개의 unique key와 최대 4 MiB의 encoded

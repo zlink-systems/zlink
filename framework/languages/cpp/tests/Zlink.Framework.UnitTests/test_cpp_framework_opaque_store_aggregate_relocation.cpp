@@ -285,10 +285,9 @@ class aggregate_lock_contention_store_t final : public location_store_t
             // The repository may resume on the inner store's lane, so await
             // the peer write instead of blocking that lane.
             const auto published = co_await inner.write (std::move (peer_request));
-            const auto now = std::holds_alternative<store_write_applied_t> (published)
-                               ? std::get<store_write_applied_t> (published).store_now
-                               : std::get<store_write_conflict_t> (published).store_now;
-            co_return store_write_conflict_t{now};
+            if (const auto *applied = std::get_if<store_write_applied_t> (&published))
+                co_return store_write_conflict_t{applied->store_now};
+            co_return published;
         }
         co_return co_await inner.write (std::move (request));
     }

@@ -68,6 +68,7 @@ interface ZLinkManagedActorBinding {
 }
 
 export class ZLinkManagedStream implements ZLinkStream {
+  shutdownSignal?: AbortSignal;
   private currentLocalAddr: string | undefined;
   private currentRemoteAddr: string | undefined;
   private transportClosed = false;
@@ -110,6 +111,10 @@ export class ZLinkManagedStream implements ZLinkStream {
     return this.transportClosed;
   }
 
+  isShutdownForced(): boolean {
+    return this.shutdownSignal?.aborted === true;
+  }
+
   private isTransportClosed(): boolean {
     return this.transportClosed;
   }
@@ -123,6 +128,7 @@ export class ZLinkManagedStream implements ZLinkStream {
   }
 
   write(payload: ZLinkMessage, flags?: ZLinkBackendSendFlags): boolean {
+    if (this.isShutdownForced()) return false;
     const message = encodeFrameworkPayloadMessage(payload, this.messageSerializers);
     try {
       return this.socket.send(this.backendRoutingId(), message, flags ?? 0);
@@ -132,10 +138,12 @@ export class ZLinkManagedStream implements ZLinkStream {
   }
 
   writeRaw(payload: Message, flags?: ZLinkBackendSendFlags): boolean {
+    if (this.isShutdownForced()) return false;
     return this.socket.send(this.backendRoutingId(), payload, flags ?? 0);
   }
 
   captureBoundSessionSubmission(actorId: string): (payload: Message) => Promise<ZLinkSubmitResult> {
+    if (this.isShutdownForced()) return (payload) => this.submitRaw(payload);
     const native = this.nativeActorBindings.get(actorId);
     if (native?.route === undefined || native.binding === undefined) {
       return (payload) => this.submitRaw(payload);
@@ -147,6 +155,7 @@ export class ZLinkManagedStream implements ZLinkStream {
   }
 
   async submitRaw(payload: Message): Promise<ZLinkSubmitResult> {
+    if (this.isShutdownForced()) return { status: ZLinkSubmitStatus.Shutdown };
     try {
       await this.socket.submit(this.backendRoutingId(), payload);
       return { status: ZLinkSubmitStatus.Submitted };
@@ -166,6 +175,7 @@ export class ZLinkManagedStream implements ZLinkStream {
 
   async close(signal?: AbortSignal): Promise<void> {
     throwIfAborted(signal);
+    if (this.isShutdownForced()) return;
     this.markTransportClosed();
 
     relocationDebug('closeForDrain.disconnectPeer.start', { sessionId: this.sessionId });
@@ -189,6 +199,7 @@ export class ZLinkManagedStream implements ZLinkStream {
   }
 
   async writeControl(name: string): Promise<void> {
+    if (this.isShutdownForced()) return;
     const control = streamControlFrame(name);
     try {
       await this.socket.submit(this.backendRoutingId(), control);
@@ -206,6 +217,7 @@ export class ZLinkManagedStream implements ZLinkStream {
     let failure: { error: unknown } | undefined;
     try {
       throwIfAborted(signal);
+      if (this.isShutdownForced()) return;
       this.markTransportClosed();
       const closing = NativeMessage.from(encodeSessionClosingFrame(diagnostic, reason));
       try {
@@ -227,6 +239,7 @@ export class ZLinkManagedStream implements ZLinkStream {
         closing.close();
       }
 
+      if (this.isShutdownForced()) return;
       relocationDebug('closeForDrain.disconnectPeer.start', { sessionId: this.sessionId });
       let failure: { error: unknown } | undefined;
       try {
@@ -417,6 +430,7 @@ export class ZLinkManagedStream implements ZLinkStream {
   }
 
   private async submitActorBindingControl(frame: Uint8Array): Promise<void> {
+    if (this.isShutdownForced()) return;
     const message = NativeMessage.from(frame);
     try {
       await this.socket.submit(this.backendRoutingId(), message);

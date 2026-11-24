@@ -19,6 +19,7 @@ import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.runtime.internal.json.ZLinkFrameworkJsonProfile;
+import systems.zlink.framework.runtime.internal.json.ZLinkJsonDiagnostic;
 import systems.zlink.framework.runtime.internal.messaging.ZLinkEncodedPayloadAccess;
 import systems.zlink.framework.runtime.internal.messaging.ZLinkOwnedMessageSerializer;
 import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
@@ -26,7 +27,6 @@ import systems.zlink.framework.spots.SpotRef;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
 import java.util.HashSet;
 import java.util.Set;
 
@@ -78,6 +78,8 @@ public final class ZLinkJsonMessageSerializer
         try {
             return mapper.writeValueAsBytes(value);
         } catch (JsonProcessingException ex) {
+            var diagnostic = value == null ? null : ZLinkJsonDiagnostic.from(value.getClass(), ex);
+            if (diagnostic != null) throw diagnostic;
             throw new IllegalArgumentException(
                     "failed to serialize message as JSON: " + valueTypeName(value), ex);
         }
@@ -118,12 +120,10 @@ public final class ZLinkJsonMessageSerializer
         try {
             return mapper.readValue(owned, type);
         } catch (IOException ex) {
+            var diagnostic = ZLinkJsonDiagnostic.from(type, ex);
+            if (diagnostic != null) throw diagnostic;
             throw new IllegalArgumentException(
-                    "failed to deserialize JSON message as "
-                            + type.getName()
-                            + " payload="
-                            + new String(owned, StandardCharsets.UTF_8),
-                    ex);
+                    "failed to deserialize JSON message as " + type.getName(), ex);
         }
     }
 
