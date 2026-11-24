@@ -33,7 +33,8 @@ public sealed class SpotTargetRelocationReleaseTests
                             CancellationToken.None
                         )
                         .AsTask();
-                }
+                },
+                static () => ValueTask.CompletedTask
             )
         );
 
@@ -60,7 +61,8 @@ public sealed class SpotTargetRelocationReleaseTests
         Assert.True(
             await executor.TryOpenRelocationAfterMessageFollowAsync(
                 seal,
-                () => reservation = executor.ReserveRelocationActorQueue(seal, "actor-1")
+                () => reservation = executor.ReserveRelocationActorQueue(seal, "actor-1"),
+                static () => ValueTask.CompletedTask
             )
         );
 
