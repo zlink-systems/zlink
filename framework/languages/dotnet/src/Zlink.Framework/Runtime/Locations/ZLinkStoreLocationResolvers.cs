@@ -23,6 +23,17 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
     private readonly ZLinkLocationOptions _options;
     private readonly TimeProvider _time;
     private readonly ZLinkStateLane _lane = new();
+    private readonly Dictionary<string, MeshObservation> _meshObservations = new(
+        StringComparer.Ordinal
+    );
+    private long _nextPlacementSelection;
+
+    private sealed record MeshObservation(IReadOnlyList<ZLinkMeshNodeDescriptor> Nodes)
+    {
+        internal TaskCompletionSource Changed { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
     internal ZLinkStateLane Lane => _lane;
 
     // Only in-flight reads retain observation state; the latest read may cache
@@ -67,6 +78,9 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
         CancellationToken cancellationToken = default
     )
     {
+        var previous = await _lane
+            .RunAsync(() => _meshObservations.GetValueOrDefault(meshName))
+            .ConfigureAwait(false);
         var rows = await ZLinkLocationStoreRead
             .ExecuteAsync(
                 _health,
@@ -90,7 +104,130 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
         ZLinkFrameworkDebugLog.SpotDiscovery(
             $"autoconnect_live_snapshot mesh={meshName} live_rows={live.Count} live_rids={string.Join(',', live.Select(static row => row.Rid.ToString()))}"
         );
+        await _lane
+            .RunAsync(() =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!ReferenceEquals(previous, _meshObservations.GetValueOrDefault(meshName)))
+                    return;
+                _meshObservations[meshName] = new MeshObservation(live);
+                previous?.Changed.TrySetResult();
+            })
+            .ConfigureAwait(false);
         return live;
+    }
+
+    internal async ValueTask<ZLinkMeshNodeDescriptor?> SelectPlacementAsync(
+        string meshName,
+        ZLinkPlacementObjectKind kind,
+        string stableType,
+        Func<
+            IReadOnlyList<ZLinkMeshNodeDescriptor>,
+            IReadOnlyList<ZLinkMeshNodeDescriptor>
+        > admitted,
+        IReadOnlySet<(RoutingId Rid, ulong Generation)> excluded,
+        CancellationToken cancellationToken
+    )
+    {
+        var refreshAvailable = true;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var observation = await _lane
+                .RunAsync(() => _meshObservations.GetValueOrDefault(meshName))
+                .ConfigureAwait(false);
+            var candidates =
+                observation
+                    ?.Nodes.Where(candidate =>
+                        !excluded.Contains((candidate.Rid, candidate.LifecycleGeneration))
+                        && HasPlacementCapacity(candidate, kind, stableType)
+                        && _leaseTracker.HasObservedAdmissionLease(
+                            new ZLinkLocationOwnerToken(
+                                candidate.OwnerId,
+                                candidate.LeaseGeneration
+                            )
+                        )
+                    )
+                    .OrderBy(static candidate => candidate.Rid, ZLinkRoutingIdOrder.Instance)
+                    .ToArray()
+                ?? [];
+            var eligible = admitted(
+                candidates
+                    .Where(static candidate =>
+                        candidate.State == ZLinkFrameworkRuntimeState.Serving
+                    )
+                    .ToArray()
+            );
+            if (
+                !ReferenceEquals(
+                    observation,
+                    await _lane
+                        .RunAsync(() => _meshObservations.GetValueOrDefault(meshName))
+                        .ConfigureAwait(false)
+                )
+            )
+                continue;
+
+            cancellationToken.ThrowIfCancellationRequested();
+            if (eligible.Count > 0)
+                return ZLinkWeightedSelector.Select(
+                    eligible,
+                    static candidate => candidate.PlacementWeight,
+                    ref _nextPlacementSelection
+                );
+            if (observation is not null && candidates.Length > 0)
+            {
+                await observation.Changed.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                continue;
+            }
+            if (!refreshAvailable)
+                return null;
+            refreshAvailable = false;
+            await ListLiveMeshNodesAsync(meshName, cancellationToken)
+                .AsTask()
+                .WaitAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+    }
+
+    internal static bool HasPlacementCapacity(
+        ZLinkMeshNodeDescriptor candidate,
+        ZLinkPlacementObjectKind kind,
+        string stableType
+    )
+    {
+        if (
+            candidate.State
+                is not (ZLinkFrameworkRuntimeState.Preparing or ZLinkFrameworkRuntimeState.Serving)
+            || candidate.ObjectRole != ZLinkMeshNodeObjectRole.Server
+            || candidate.PlacementWeight <= 0
+            || !candidate.ObjectCapabilities.Any(capability =>
+                capability.ObjectKind == kind
+                && string.Equals(capability.StableType, stableType, StringComparison.Ordinal)
+                && (
+                    kind != ZLinkPlacementObjectKind.Actor
+                    || (candidate.EntrySpotId is not null && capability.EntryAccepted)
+                )
+            )
+        )
+            return false;
+
+        if (kind == ZLinkPlacementObjectKind.Actor)
+        {
+            var actors = candidate.Capacity.Actors;
+            return actors.Limit == 0 || actors.Active + (long)actors.Reserved < actors.Limit;
+        }
+
+        var spots = candidate.Capacity.Spots;
+        return (spots.Limit == 0 || spots.Active + (long)spots.Reserved < spots.Limit)
+            && candidate.Capacity.SpotTypes.Any(capacity =>
+                capacity.ObjectKind == kind
+                && string.Equals(capacity.StableType, stableType, StringComparison.Ordinal)
+                && (
+                    capacity.Limit == 0
+                    || capacity.Active + (long)capacity.Reserved < capacity.Limit
+                )
+            );
     }
 
     internal async ValueTask<ZLinkResolvedSpotLocation?> ResolveSpotRowAsync(
