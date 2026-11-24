@@ -27,7 +27,7 @@ flowchart LR
 
 ## Prerequisites
 
-Docker with Compose v2, and PowerShell 7 on Windows. Gradle 9.3 is included. Dependencies come from Maven Central; Framework 0.34.0 and binding 1.26.0 are pinned in `build.gradle.kts`. No repository checkout is required.
+Docker with Compose v2, and PowerShell 7 on Windows. Gradle 9.3 is included. Dependencies come from Maven Central; Framework 0.34.1 and binding 1.26.0 are pinned in `build.gradle.kts`. No repository checkout is required.
 
 ## Build
 
@@ -182,7 +182,7 @@ The runner checks `zlink.structure.json`, starts its own two Redis containers an
 
 Drain confirmation takes about 30 seconds, so a turn clock may expire during the wait. For an update scenario in a game with turn clocks, finish the round before relocating it. Verify that relocation preserves the remaining time in a domain check with a controlled clock.
 
-Validated against the published Framework 0.34.0 packages.
+Validated against the published Framework 0.34.1 packages.
 
 ## Deployment sequence
 

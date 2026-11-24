@@ -18,7 +18,7 @@ flowchart LR
 
 ## Prerequisites
 
-Docker Compose v2 with a running Docker daemon, and PowerShell 7 on Windows. The Gradle wrapper downloads Gradle. Public ZLink Framework 0.34.0 and binding 1.26.0 are centrally pinned in `build.gradle.kts`.
+Docker Compose v2 with a running Docker daemon, and PowerShell 7 on Windows. The Gradle wrapper downloads Gradle. Public ZLink Framework 0.34.1 and binding 1.26.0 are centrally pinned in `build.gradle.kts`.
 
 ## Build
 
@@ -180,7 +180,7 @@ Message Follow is configured explicitly to 30 seconds. After `RELOCATED`, the sa
 
 Drain confirmation takes about 30 seconds, so a turn clock may expire during the wait. For an update scenario in a game with turn clocks, finish the round before relocating it. Verify that relocation preserves the remaining time in a domain check with a controlled clock.
 
-Validated against the published Framework 0.34.0 packages.
+Validated against the published Framework 0.34.1 packages.
 
 ## Deployment sequence
 

@@ -39,7 +39,7 @@ Run `./run-e2e.sh` or `.\run-e2e.cmd` in another terminal. The runner attaches u
 
 ## Project overview
 
-This Java 25 project is a MORPG example in which shared Fields are split across nodes like a seamless world and parties move from a Field into a private dungeon. It runs a Session node for connections, play nodes A and B (field) (four Fields, two per host), play nodes A and B (dungeon) that create Dungeons on demand, and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework to `0.34.0` and the binding to `1.26.0`.
+This Java 25 project is a MORPG example in which shared Fields are split across nodes like a seamless world and parties move from a Field into a private dungeon. It runs a Session node for connections, play nodes A and B (field) (four Fields, two per host), play nodes A and B (dungeon) that create Dungeons on demand, and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework to `0.34.1` and the binding to `1.26.0`.
 
 The project layout below describes where to add gameplay, and "Developing from this sample" describes how to carry its features into your own project. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 

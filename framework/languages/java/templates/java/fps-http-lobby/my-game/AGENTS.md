@@ -41,7 +41,7 @@ Run `./run-e2e.sh` or `.\run-e2e.cmd` in another terminal. The runner attaches u
 
 ## Project and commands
 
-This Java 25 project runs an API node, a Session node, play nodes A and B (match), and a Redis Location Store. The API node pairs `POST /match` requests by mode, assigns a GUID Room ID and prepares the member list for a dynamic Room User Spot. Players connect to Session over STREAM and join the assigned Room. Public Framework and connector versions are pinned to 0.34.0 in `gradle/libs.versions.toml`. The [README](README.md) owns execution and deployment instructions. [zlink.structure.json](zlink.structure.json) describes the topology and scenario order.
+This Java 25 project runs an API node, a Session node, play nodes A and B (match), and a Redis Location Store. The API node pairs `POST /match` requests by mode, assigns a GUID Room ID and prepares the member list for a dynamic Room User Spot. Players connect to Session over STREAM and join the assigned Room. Public Framework and connector versions are pinned to 0.34.1 in `gradle/libs.versions.toml`. The [README](README.md) owns execution and deployment instructions. [zlink.structure.json](zlink.structure.json) describes the topology and scenario order.
 
 Run commands from this project root with Docker Compose v2 and Linux containers:
 

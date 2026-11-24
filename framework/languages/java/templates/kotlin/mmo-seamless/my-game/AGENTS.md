@@ -33,7 +33,7 @@ Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/kot
 
 ## Project overview
 
-This Kotlin project (Kotlin 2.3.21 on a Java 25 toolchain, built with Gradle) is an MMO server example in which players move across Zone boundaries. It runs a Session node for connections, play nodes A and B (zone), a play node (dungeon) for Dungeons, and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework packages to `0.34.0` (`frameworkVersion`) and the ZLink binding to `1.26.0` (`bindingVersion`).
+This Kotlin project (Kotlin 2.3.21 on a Java 25 toolchain, built with Gradle) is an MMO server example in which players move across Zone boundaries. It runs a Session node for connections, play nodes A and B (zone), a play node (dungeon) for Dungeons, and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework packages to `0.34.1` (`frameworkVersion`) and the ZLink binding to `1.26.0` (`bindingVersion`).
 
 The project layout and feature procedure below describe where to add gameplay. The [README](README.md) covers prerequisites, deployment, and the scenario assertions. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 
@@ -241,7 +241,7 @@ The value applies to child processes started from that environment. In Bash, set
 export ZLINK_JAVA_STREAM_TRACE=1
 ```
 
-`ZLINK_JAVA_STREAM_TRACE` is a version-specific diagnostic switch in the public `0.34.0` package, so do not use it as a routing API. Let the runner clean up its own processes and Compose project, keep its Docker socket control path, preserve cleanup failures, and avoid stopping unrelated processes or containers.
+`ZLINK_JAVA_STREAM_TRACE` is a version-specific diagnostic switch in the public `0.34.1` package, so do not use it as a routing API. Let the runner clean up its own processes and Compose project, keep its Docker socket control path, preserve cleanup failures, and avoid stopping unrelated processes or containers.
 
 ## Reporting ZLink defects
 

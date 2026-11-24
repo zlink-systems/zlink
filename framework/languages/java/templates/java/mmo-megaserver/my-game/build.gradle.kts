@@ -1,4 +1,4 @@
-extra["frameworkVersion"] = "0.34.0"
+extra["frameworkVersion"] = "0.34.1"
 extra["bindingVersion"] = "1.26.0"
 subprojects {
     apply(plugin = "java-library")

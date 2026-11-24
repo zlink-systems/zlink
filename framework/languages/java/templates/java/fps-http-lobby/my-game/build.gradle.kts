@@ -1,5 +1,5 @@
 extra["junitVersion"] = "5.11.4"
-extra["frameworkVersion"] = "0.34.0"
+extra["frameworkVersion"] = "0.34.1"
 extra["bindingVersion"] = "1.26.0"
 extra["springBootVersion"] = "3.5.14"
 subprojects {
