@@ -55,10 +55,21 @@ if [ "$package" = java ]; then
     echo "run-template: foojay resolver still declared in $game settings" >&2
     exit 1
   fi
+  # The mirror skips ZLink artifacts so a local package (source=local) is never replaced by a
+  # published one. A public run has no local package, so it may take ZLink artifacts from the
+  # mirror too; otherwise every Java and Kotlin job fetches them from Maven Central at once and
+  # receives 429 Too Many Requests (#5472).
+  if [ "$TEMPLATE_SOURCE" != local ]; then
+    sed -i '/excludeGroupByRegex(\/systems\\.zlink/d' "$game/ci-mirror.gradle"
+    if grep -q 'systems\\.zlink' "$game/ci-mirror.gradle"; then
+      echo "run-template: ZLink exclusion still present in the public mirror policy" >&2
+      exit 1
+    fi
+  fi
   # The first (host) build uses the same policy without changing template files.
   export GRADLE_USER_HOME="${GRADLE_USER_HOME:-$TEMPLATE_WORK/gradle-home}"
   mkdir -p "$GRADLE_USER_HOME/init.d"
-  cp "$repo_root/scripts/ci/gradle/ci-mirror.gradle" "$GRADLE_USER_HOME/init.d/ci-mirror.gradle"
+  cp "$game/ci-mirror.gradle" "$GRADLE_USER_HOME/init.d/ci-mirror.gradle"
   export GRADLE_OPTS="${GRADLE_OPTS:-} -Dorg.gradle.internal.repository.max.retries=5 -Dorg.gradle.internal.repository.initial.backoff=1000"
   export DOCKER_BUILDKIT=1 BUILDKIT_PROGRESS=plain COMPOSE_PARALLEL_LIMIT=1
 fi
