@@ -59,7 +59,7 @@ def generate_framework_cmake(conanfile, toolchain):
 
 class ZlinkFrameworkConan(ConanFile):
     name = "zlink-framework"
-    version = "0.34.0"
+    version = "0.34.1"
     package_type = "static-library"
     license = "Elastic-2.0"
     homepage = "https://github.com/zlink-systems/zlink"
