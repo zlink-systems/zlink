@@ -6613,7 +6613,9 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     }
 
     CompletionStage<Void> dispatchQueuedInstanceMessage(
-            ZLinkInstanceSpotActivation previous, ZLinkBackendReceived received) {
+            ZLinkInstanceSpotActivation previous,
+            ZLinkBackendReceived received,
+            ZLinkFlowContext.State inboundFlow) {
         ZLinkInstanceSpotActivation fresh = instanceSpotActivations.get(previous.context.spotId());
         if (fresh == null) {
             ZLinkFrameworkErrorKind releaseFailure =
@@ -6626,7 +6628,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             received.close();
             return CompletableFuture.failedFuture(failure);
         }
-        return fresh.replayMessage(received);
+        return fresh.replayMessage(received, inboundFlow);
     }
 
     private ZLinkFrameworkErrorKind instanceCloseReleaseFailure() {

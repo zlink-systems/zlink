@@ -10,13 +10,13 @@ internal enum ZLinkStreamLivenessDecision
 
 internal sealed class ZLinkStreamSessionLiveness
 {
-    public static readonly TimeSpan SweepInterval = TimeSpan.FromSeconds(1);
     private readonly ZLinkStreamNodeRegistration _options;
 
     private readonly TimeProvider _time;
     private long _lastApplicationInbound;
-    private long _lastHeartbeatPing;
-    private long _lastInbound;
+    private readonly long _createdAt;
+    private TimeSpan _lastHeartbeatPhase;
+    private long _lastInbound = long.MinValue;
 
     public ZLinkStreamSessionLiveness(
         TimeProvider? timeProvider = null,
@@ -25,10 +25,8 @@ internal sealed class ZLinkStreamSessionLiveness
     {
         _options = options ?? new ZLinkStreamNodeRegistration { StreamNodeName = string.Empty };
         _time = timeProvider ?? TimeProvider.System;
-        var connectedAt = _time.GetTimestamp();
-        _lastApplicationInbound = connectedAt;
-        _lastHeartbeatPing = connectedAt;
-        _lastInbound = connectedAt;
+        _createdAt = _time.GetTimestamp();
+        _lastApplicationInbound = _createdAt;
     }
 
     public void RecordApplicationInbound()
@@ -49,34 +47,43 @@ internal sealed class ZLinkStreamSessionLiveness
         }
     }
 
-    public void RecordHeartbeatPing()
-    {
-        Interlocked.Exchange(ref _lastHeartbeatPing, _time.GetTimestamp());
-    }
-
-    public ZLinkStreamLivenessDecision Evaluate(long? connectedAt = null)
+    public (ZLinkStreamLivenessDecision Decision, TimeSpan Delay) Evaluate(long? connectedAt = null)
     {
         var now = _time.GetTimestamp();
-        var inboundBaseline = Volatile.Read(ref _lastInbound);
-        var pingBaseline = Volatile.Read(ref _lastHeartbeatPing);
-        if (connectedAt is { } connectedTimestamp)
+        var established = connectedAt ?? _createdAt;
+        var inboundBaseline = Math.Min(now, Math.Max(Volatile.Read(ref _lastInbound), established));
+        var heartbeatTimeout =
+            _options.HeartbeatTimeout - _time.GetElapsedTime(inboundBaseline, now);
+        if (heartbeatTimeout <= TimeSpan.Zero)
+            return (ZLinkStreamLivenessDecision.HeartbeatTimeout, Timeout.InfiniteTimeSpan);
+
+        var idleTimeout = TimeSpan.MaxValue;
+        if (_options.IdleTimeout > TimeSpan.Zero)
         {
-            inboundBaseline = Math.Max(inboundBaseline, connectedTimestamp);
-            pingBaseline = Math.Max(pingBaseline, connectedTimestamp);
+            var applicationBaseline = Math.Min(now, Volatile.Read(ref _lastApplicationInbound));
+            idleTimeout = _options.IdleTimeout - _time.GetElapsedTime(applicationBaseline, now);
+            if (idleTimeout <= TimeSpan.Zero)
+                return (ZLinkStreamLivenessDecision.IdleTimeout, Timeout.InfiniteTimeSpan);
         }
-        if (_time.GetElapsedTime(inboundBaseline, now) >= _options.HeartbeatTimeout)
-            return ZLinkStreamLivenessDecision.HeartbeatTimeout;
 
-        if (
-            _options.IdleTimeout > TimeSpan.Zero
-            && _time.GetElapsedTime(Volatile.Read(ref _lastApplicationInbound), now)
-                >= _options.IdleTimeout
-        )
-            return ZLinkStreamLivenessDecision.IdleTimeout;
-
-        if (_time.GetElapsedTime(pingBaseline, now) >= _options.HeartbeatInterval)
-            return ZLinkStreamLivenessDecision.SendHeartbeat;
-
-        return ZLinkStreamLivenessDecision.None;
+        var age = _time.GetElapsedTime(established, now);
+        var interval = _options.HeartbeatInterval;
+        var sinceLastPhase = age - _lastHeartbeatPhase;
+        var decision = ZLinkStreamLivenessDecision.None;
+        if (sinceLastPhase >= interval)
+        {
+            sinceLastPhase = TimeSpan.FromTicks(sinceLastPhase.Ticks % interval.Ticks);
+            _lastHeartbeatPhase = age - sinceLastPhase;
+            decision = ZLinkStreamLivenessDecision.SendHeartbeat;
+        }
+        return (
+            decision,
+            TimeSpan.FromTicks(
+                Math.Min(
+                    (interval - sinceLastPhase).Ticks,
+                    Math.Min(heartbeatTimeout.Ticks, idleTimeout.Ticks)
+                )
+            )
+        );
     }
 }

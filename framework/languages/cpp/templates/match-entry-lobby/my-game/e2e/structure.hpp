@@ -140,7 +140,7 @@ inline void check_structure (const std::filesystem::path &root)
     require (!bootstrap_owners.empty (), "Missing fixed Matchmaking Spot");
     for (const auto &[id, config] : configurations) {
         if (roles.at (id) == "match") {
-            require (entry_owners.contains (id), "Match node lacks Entry Spot");
+            require (entry_owners.contains (id), "play node (match) lacks Entry Spot");
             require (config.at ("RoomCapacity").get<int> () > 0, "Room capacity must be positive");
             require (config.value ("BootstrapMatchmaking", false) == bootstrap_owners.contains (id),
                      "Bootstrap differs from fixed Spot ownership");

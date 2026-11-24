@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Globalization;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using Systems.Zlink;
@@ -109,38 +110,37 @@ internal static class OutageCanonicalStoreReader
             && body.End;
     }
 
-    internal static Relocation? ReadRelocation(byte[] payload)
+    private static readonly Lazy<MethodInfo> ReadAuthorityAggregate = new(() =>
+        typeof(Zlink.Framework.Contracts.Locations.ZLinkLocationOptions)
+            .Assembly.GetType(
+                "Zlink.Framework.Runtime.Locations.ZLinkAuthorityAggregateCodec",
+                throwOnError: true
+            )!
+            .GetMethod("Read", BindingFlags.Static | BindingFlags.NonPublic)!
+    );
+
+    internal static Relocation? ReadRelocation(ReadOnlyMemory<byte> bytes)
     {
-        var body = AuthorityBody(payload);
-        body.Skip(2); // operationKind, objectKind
-        body.Skip(body.U16()); // authority-object-identity
-        _ = body.Text8(); // ownerId
-        body.Skip(8); // ownerLeaseGeneration
-        _ = body.Text8(); // ownerMeshName
-        _ = body.Text8(); // ownerNodeRid
-        body.Skip(8); // ownerNodeGeneration
-        var present = body.U8();
-        var slot = new Reader(body.Take(checked((int)body.U32())));
-        if (present == 0)
-        {
-            if (!slot.End)
-                throw new InvalidDataException("Absent relocation has a nonempty body.");
+        using var document = Record(bytes);
+        if (
+            !document.RootElement.TryGetProperty("aggregate", out var aggregate)
+            || aggregate.ValueKind == JsonValueKind.Null
+        )
             return null;
-        }
-        if (present != 1)
-            throw new InvalidDataException("Invalid relocation presence.");
-        slot.Skip(32); // relocation ID, aggregateGeneration, targetAttemptGeneration
-        slot.Skip(slot.U16()); // relocationReference
-        slot.Skip(4); // relocationChecksumCrc32c
-        _ = slot.Text8(); // sourceNodeRid
-        slot.Skip(8); // sourceNodeGeneration
-        var sourceOwner = slot.Text8();
-        var sourceLease = slot.U64();
-        _ = slot.Text8(); // targetNodeRid
-        slot.Skip(8); // targetNodeGeneration
-        _ = slot.Text8(); // targetOwnerId
-        slot.Skip(8); // targetOwnerLeaseGeneration
-        return new(sourceOwner, sourceLease, slot.Text8(), slot.U64());
+
+        var relocation = ReadAuthorityAggregate.Value.Invoke(null, [aggregate]);
+        if (relocation is null)
+            return null;
+
+        var relocationType = relocation.GetType();
+        var source = relocationType.GetProperty("Source")!.GetValue(relocation)!;
+        var coordinator = relocationType.GetProperty("Coordinator")!.GetValue(relocation)!;
+        return new(
+            (string)source.GetType().GetProperty("OwnerId")!.GetValue(source)!,
+            (ulong)source.GetType().GetProperty("OwnerLeaseGeneration")!.GetValue(source)!,
+            (string)coordinator.GetType().GetProperty("OwnerId")!.GetValue(coordinator)!,
+            (ulong)coordinator.GetType().GetProperty("OwnerLeaseGeneration")!.GetValue(coordinator)!
+        );
     }
 
     private static Reader AuthorityBody(byte[] payload)
@@ -192,8 +192,6 @@ internal static class OutageCanonicalStoreReader
         internal ushort U16() => BinaryPrimitives.ReadUInt16BigEndian(Take(2));
 
         internal uint U32() => BinaryPrimitives.ReadUInt32BigEndian(Take(4));
-
-        internal ulong U64() => BinaryPrimitives.ReadUInt64BigEndian(Take(8));
 
         internal string Text8() => new UTF8Encoding(false, true).GetString(Take(U8()));
     }

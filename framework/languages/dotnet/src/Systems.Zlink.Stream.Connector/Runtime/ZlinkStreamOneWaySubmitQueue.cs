@@ -88,6 +88,7 @@ internal sealed class ZlinkStreamOneWaySubmitQueue
     }
 
     public ValueTask SubmitRequestAsync(
+        IZlinkStreamConnection connection,
         ZlinkStreamOutboundFrame frame,
         CancellationToken cancellationToken,
         Action onAccepted
@@ -99,16 +100,20 @@ internal sealed class ZlinkStreamOneWaySubmitQueue
         );
         lock (_gate)
         {
-            var connection = GetConnection();
             if (
                 !_queue.Writer.TryWrite(
                     new SubmitItem(connection, frame, written, cancellationToken)
                 )
             )
-                throw ZlinkStreamConnector.Error(
-                    ZlinkStreamErrorCode.SendFailed,
-                    "Connector outbound frame queue is full."
-                );
+                throw _accepting
+                    ? ZlinkStreamConnector.Error(
+                        ZlinkStreamErrorCode.SendFailed,
+                        "Connector outbound frame queue is full."
+                    )
+                    : ZlinkStreamConnector.Error(
+                        ZlinkStreamErrorCode.Disconnected,
+                        "Connector is not connected."
+                    );
             onAccepted();
         }
         return new ValueTask(written.Task.WaitAsync(cancellationToken));

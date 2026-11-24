@@ -2,14 +2,14 @@
 
 ## Rules for AI
 
-`server/lobby` is an HTTP lobby that holds no game state; every other server process is a stateful ZLink node. Before writing code, decide which kind you are editing.
+`server/lobby` is an API node that holds no game state; the session node manages client connections, and the play nodes host the game Spots. Before writing code, decide which kind you are editing.
 
-- A game node is not a REST server. A player's state is owned by one session-bound Actor (or the Spot that owns a shared value). Load it once on connect; do not read the database while handling a request.
+- A play node hosts Spots. A session-bound Actor owns the player's state, and a Spot owns shared state. Load it once on connect; do not read the database while handling a request.
 - Write only results to the database, one transaction per round. Check duplicate requests in Actor or Spot memory.
 - While a game is running, a Spot handler never awaits a remote request or a database reply: the await holds the Spot's turn and stops every message and timer in it. When a round ends, the Spot writes the results of all its Actors in one transaction, then tells each Actor after the commit.
 - Values many players see live in node memory or one owning Spot; values many requests update are applied by that one owning Spot. A process that does not own a value sends a request to its owner instead of writing it.
 - Spots and Actors already process one message at a time. Do not guard their state with locks, semaphores or process-wide static stores, and do not update memory from database commit hooks; the writer updates its owner's memory after commit, others send a message to the owner.
-- Split roles so the game can scale out from day one: game nodes host lobby and room Spots and player Actors and are the only processes you add; a shared node hosts only game-wide Instance Spots (matchmaking, game-wide values), and game nodes do not register those factories. Send and request by Spot ID only; placement is configuration. Keep shared-Spot values recoverable from room resends or a database read at startup.
+- Split roles so the game can scale out from day one: play nodes host lobby and room Spots and player Actors and are the only processes you add; a dedicated play node hosts only game-wide Instance Spots (matchmaking, game-wide values), and the API node and room hosts omit those factories. Send and request by Spot ID only; placement is configuration. Keep shared-Spot values recoverable from room resends or a database read at startup.
 - Never have two Actors or Spots wait on requests to each other inside a turn; notify with send and let the state owner decide.
 - Actors move between nodes when they join a Spot or relocate. Keep all mutable Actor fields in one state record, register stateful Actors with the state-preserving relocation policy, and test that save and restore preserve every field.
 - Player data reaches a Spot with the Actor that joins it; do not request it per player at Spot entry. If a Spot truly needs extra data, fetch it for all players in one request before the game starts.
@@ -19,13 +19,13 @@
 - Send money or reward results only after the database commit.
 - One decision has one owner; find the existing one before adding another. Take test expectations from the spec, not from the implementation.
 
-The HTTP lobby may read and write the database per request, but it holds no game state and changes game state only by sending requests to game nodes.
+The API node may read and write the database per request, but it holds no game state and changes game state only by sending requests to play nodes.
 
-Details: [Stateful game nodes and the HTTP lobby](https://docs.zlink.systems/kotlin/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
+Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/kotlin/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
 
 ## Project overview
 
-This Kotlin project (Kotlin 2.3.21 on a Java 25 toolchain, built with Gradle) is a duel server that pairs two players through HTTP and runs the duel over ZLink STREAM. It runs an HTTP lobby, a Session gateway for connections, two Match hosts (`matchA` and `matchB`), and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework packages to `0.32.0` (`frameworkVersion`) and the ZLink binding to `1.23.0` (`bindingVersion`).
+This Kotlin project (Kotlin 2.3.21 on a Java 25 toolchain, built with Gradle) is a duel server that pairs two players through HTTP and runs the duel over ZLink STREAM. It runs an API node, a Session node for connections, two play nodes (match) (`matchA` and `matchB`), and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework packages to `0.32.0` (`frameworkVersion`) and the ZLink binding to `1.23.0` (`bindingVersion`).
 
 The project layout and feature procedure below describe where to add gameplay. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 
@@ -55,15 +55,15 @@ For host process debugging, install JDK 25 and add `--local` or `-Local`. Add `-
 
 ## Project layout and extension points
 
-### HTTP lobby
+### API node
 
-`server/lobby/src/main/kotlin/MyGame/lobby/Program.kt` starts the lobby as a RouteMesh client and creates the `HttpLobby` bean. `server/lobby/src/main/kotlin/MyGame/lobby/infrastructure/HttpLobby.kt` implements the HTTP endpoint (`POST` on `Names.MATCH_PATH`) with `RequestHandler`; `ZLinkRooms` creates the Room through the public Spot manager, sends the matched member list in `PrepareRoom`, and waits for the matching `RoomPrepared` reply before returning `MatchResponse`. `server/lobby/src/main/kotlin/MyGame/lobby/application/Matchmaker.kt` owns mode pairing, default mode `duel`, and a Room ID formed from `Names.ROOM_PREFIX` plus a hyphen-free UUID. The lobby defers the response to the first request of a mode until another player asks for the same mode, and a client that disconnects while waiting is removed from the queue. Set the `sessionEndpoint` setting to the Session node's `READY` endpoint before starting the lobby; `httpEndpoint` is the lobby's own listener.
+`server/lobby/src/main/kotlin/MyGame/lobby/Program.kt` starts the API node as a RouteMesh client and creates the `HttpLobby` bean. `server/lobby/src/main/kotlin/MyGame/lobby/infrastructure/HttpLobby.kt` implements the HTTP endpoint (`POST` on `Names.MATCH_PATH`) with `RequestHandler`; `ZLinkRooms` creates the Room through the public Spot manager, sends the matched member list in `PrepareRoom`, and waits for the matching `RoomPrepared` reply before returning `MatchResponse`. `server/lobby/src/main/kotlin/MyGame/lobby/application/Matchmaker.kt` owns mode pairing, default mode `duel`, and a Room ID formed from `Names.ROOM_PREFIX` plus a hyphen-free UUID. The API node defers the response to the first request of a mode until another player asks for the same mode, and a client that disconnects while waiting is removed from the queue. Set the `sessionEndpoint` setting to the Session node's `READY` endpoint before starting the API node; `httpEndpoint` is the API node's own listener.
 
-### Session gateway
+### Session node
 
 `server/session/src/main/kotlin/MyGame/session/Program.kt` registers the STREAM node and the RouteMesh client, and `GameSession` (in the same file) handles incoming packets. A Session is a communication object for a connection; Framework provides binding to associate it with a player state object. `GameSession` answers `SessionInfoRequest` from the binding, finds or creates the Player Actor and binds it when it receives `JoinRoomRequest`, and relays only the client packet allowlist (`JoinRoomRequest`, `RoomViewRequest`, `MoveRequest`, `ShootRequest`, and `SessionInfoRequest`). It rejects internal packets with `ActionRejected("packet-not-allowed", 0)`. Add authentication before binding and retain typed packet relay so Framework can identify the connection for replies to that player.
 
-### Match nodes
+### play nodes (match)
 
 An Actor is a game state object addressed by ID; `Player` in `server/match/src/main/kotlin/MyGame/match/infrastructure/zlink/Player.kt` keeps no application state. A Spot is a state object that accepts Actors and executes shared game rules; `Room` in `server/match/src/main/kotlin/MyGame/match/infrastructure/zlink/Room.kt` is a dynamic User Spot. `RoomState` owns positions, HP, accepted action sequences, movement budget, fire cooldown, phase, winner, and action decisions. `RoomRoster` owns the matched member list and Room admission.
 
@@ -81,11 +81,11 @@ An Actor is a game state object addressed by ID; `Player` in `server/match/src/m
 
 ### RouteMesh and channels
 
-A RouteMesh connects nodes that exchange messages between processes; this project uses `Names.MESH` (`my-game-arena`). The Match nodes serve objects in the mesh, while the lobby and Session nodes join it as clients. Channels distinguish messages by purpose and name; this project declares no application channels (`channels` is empty in `zlink.structure.json`). [Channel messaging](https://docs.zlink.systems/kotlin/guide/server/20-channel-messaging/) describes registration and calls.
+A RouteMesh connects nodes that exchange messages between processes; this project uses `Names.MESH` (`my-game-arena`). The play nodes (match) serve objects in the mesh, while the API node and Session nodes join it as clients. Channels distinguish messages by purpose and name; this project declares no application channels (`channels` is empty in `zlink.structure.json`). [Channel messaging](https://docs.zlink.systems/kotlin/guide/server/20-channel-messaging/) describes registration and calls.
 
 ### Spots and Actors
 
-`Entry` handles Actor entry and `Room` is a User Spot that the lobby creates on demand for each pair of players. The [Spot guide](https://docs.zlink.systems/kotlin/guide/server/21-spot/) describes registration and calls for these objects. `Player` is addressed by player ID and keeps no application state; the [Actor guide](https://docs.zlink.systems/kotlin/guide/server/22-actor/) describes Actor creation and calls.
+`Entry` handles Actor entry and `Room` is a User Spot that the API node creates on demand for each pair of players. The [Spot guide](https://docs.zlink.systems/kotlin/guide/server/21-spot/) describes registration and calls for these objects. `Player` is addressed by player ID and keeps no application state; the [Actor guide](https://docs.zlink.systems/kotlin/guide/server/22-actor/) describes Actor creation and calls.
 
 ### STREAM and Sessions
 
@@ -101,23 +101,23 @@ A membership change moves an Actor from one Spot to another. Admission is the ta
 
 ### Host relocation and drain
 
-Relocation changes an object's execution host; drain moves a host's workload elsewhere so the host can shut down. Application adapters capture and restore game state, while Framework transfers workload and routes. `runNode` in `Hosting.kt` requests host relocation when it reads `drain` and reports `SAFE_TO_SHUTDOWN` after observing it; `RoomTransfer` stores `{game, roster}` and timer durations as remaining milliseconds. It does not store process clock readings. `PlayerTransfer` stores no application state, and the lobby stays outside host relocation. The [Relocation guide](https://docs.zlink.systems/kotlin/guide/server/37-relocation/) explains the procedure.
+Relocation changes an object's execution host; drain moves a host's workload elsewhere so the host can shut down. Application adapters capture and restore game state, while Framework transfers workload and routes. `runNode` in `Hosting.kt` requests host relocation when it reads `drain` and reports `SAFE_TO_SHUTDOWN` after observing it; `RoomTransfer` stores `{game, roster}` and timer durations as remaining milliseconds. It does not store process clock readings. `PlayerTransfer` stores no application state, and the API node stays outside host relocation. The [Relocation guide](https://docs.zlink.systems/kotlin/guide/server/37-relocation/) explains the procedure.
 
-### Creating Spots from the lobby
+### Creating Spots from the API node
 
-The lobby is a RouteMesh client that creates the Room through the public Spot manager and sends `PrepareRoom(matchId, members)` through the public route client. It returns the HTTP assignment only after the Room replies with `RoomPrepared` for the same match ID. The [Spot guide](https://docs.zlink.systems/kotlin/guide/server/21-spot/) describes Spot creation.
+The API node is a RouteMesh client that creates the Room through the public Spot manager and sends `PrepareRoom(matchId, members)` through the public route client. It returns the HTTP assignment only after the Room replies with `RoomPrepared` for the same match ID. The [Spot guide](https://docs.zlink.systems/kotlin/guide/server/21-spot/) describes Spot creation.
 
 ## Request flow
 
 Requests in the example game follow this path. Reading the code along this path before adding or transferring a feature locates the places to change.
 
-1. The client sends `POST` `Names.MATCH_PATH` with a `MatchRequest` to the lobby. Omitted `mode` selects `duel`; `Matchmaker.match` defers the response until another player requests the same mode.
+1. The client sends `POST` `Names.MATCH_PATH` with a `MatchRequest` to the API node. Omitted `mode` selects `duel`; `Matchmaker.match` defers the response until another player requests the same mode.
 2. When two players are paired, `Matchmaker` creates a UUID Room ID and passes both member IDs to `ZLinkRooms.prepare`. `ZLinkRooms` creates the Room, sends `PrepareRoom`, and waits for `RoomPrepared`; only then do both HTTP requests complete with the same `MatchResponse`.
 3. Each client connects to the Session node over STREAM and sends the first packet, `JoinRoomRequest`. `GameSession` calls `getOrCreate` for the Player Actor by `playerId`, binds it to the Session with `bindOrGet`, and relays the original packet.
 4. A new Actor starts in the Entry Spot `Entry`. `Join.join` checks the identity and requests `joinSpot(request.roomId, request).defer()`. `Room.onActorJoinSuspending` asks `RoomRoster.canAdmit` before `RoomState.admit`; the server selects the spawn. `Room.onJoinedActorSuspending` broadcasts `RoomView`.
 5. `move` and `shoot` requests reach `Room`, which applies `RoomState` rules and computes outcomes on the server. Rejections use `ActionRejected(reason, retryAfterMs)` and leave game values, sequence, and timers unchanged. Accepted actions update the sequence and broadcast `RoomView`; the winner is announced with `MatchEnded`.
 6. A reconnecting client sends `JoinRoomRequest` on a new Session. The same Actor is bound, and `Actions.join` resends the room view after checking the identity.
-7. To replace a match node, `drain` in `runNode` requests relocation. Framework transfers the application snapshot from `RoomTransfer`, which contains game state, roster, and remaining timer milliseconds.
+7. To replace a play node (match), `drain` in `runNode` requests relocation. Framework transfers the application snapshot from `RoomTransfer`, which contains game state, roster, and remaining timer milliseconds.
 
 ## Extend this template's domain
 
@@ -135,13 +135,13 @@ Extend this template's domain to build a two-dimensional action server. Keep eac
 
 Use the public packages from Maven Central at the versions pinned in `build.gradle.kts`, and keep project dependencies between this project's own Gradle modules. Process typed messages with the default Framework JSON serializer so processes use the same contract. Limit direct serialization in relocation adapters (the `*Transfer` classes) to application state, keeping management of Framework execution state separate from game state. Framework owns routing, leases, membership, completion, queues, and execution gates; do not duplicate those decisions in application state.
 
-Manage each game fact, such as a player's HP, in the object responsible for changing it (`Room`). The lobby keeps only the waiting requests, which are not game state. Replies inside an Actor handler go through that Actor's bound Session; other pushes address the Actor by player ID with the public Actor client, and the receiving Actor handler forwards them through its bound Session. A Spot must not retain Actor references for later delivery because host relocation does not repeat `onJoinedActor` on the target. Session binding owns Actor identity, so game messages do not duplicate it (`SessionInfo` reads the current binding). Sessions forward packets after binding; the Actor or Spot responsible for the state makes gameplay decisions.
+Manage each game fact, such as a player's HP, in the object responsible for changing it (`Room`). The API node keeps only the waiting requests, which are not game state. Replies inside an Actor handler go through that Actor's bound Session; other pushes address the Actor by player ID with the public Actor client, and the receiving Actor handler forwards them through its bound Session. A Spot must not retain Actor references for later delivery because host relocation does not repeat `onJoinedActor` on the target. Session binding owns Actor identity, so game messages do not duplicate it (`SessionInfo` reads the current binding). Sessions forward packets after binding; the Actor or Spot responsible for the state makes gameplay decisions.
 
 ### Asynchronous execution and lifecycle
 
 Await public calls with `await()` as the template does, and avoid blocking calls such as `.join()`, `.get()`, `runBlocking`, or `Thread.sleep` in handlers and callbacks. `Room` uses the default `SPOT_WIDE` execution mode, which gives Spot handlers, member Actor handlers, and lifecycle callbacks of the same Room a shared execution gate. Do not protect the same state again with another lock or queue. Awaiting can retain the turn, so do not await work that requires that turn to finish, such as a request back to the same Spot; perform long-running work outside handlers. The [Execution model](https://docs.zlink.systems/kotlin/guide/server/32-execution-model/) explains these execution boundaries. `Matchmaker` guards its waiting maps with its own `synchronized` blocks because they are HTTP-layer state outside any Spot and execution gate; do not copy that pattern for Spot state.
 
-Keep type registration and per-instance callbacks in their defined lifecycle phases. `Room` is a User Spot that the lobby creates on demand with `getOrCreate`; [Activation and lifetime](https://docs.zlink.systems/kotlin/guide/server/34-activation-lifetime/) explains creation and initialization. Use `joinSpot(...).defer()` and the public completion callback (`onJoinCompletedSuspending`) for membership changes, and relocation with runtime observations (`drain`, then `SAFE_TO_SHUTDOWN`) for host shutdown, so request acceptance is not mistaken for completion. `Control.kt` derives the safe-shutdown wait (`SAFE_DEADLINE`) from the Message Follow duration (`MESSAGE_FOLLOW`) and the host deadline (`HOST_DEADLINE`); change them there only.
+Keep type registration and per-instance callbacks in their defined lifecycle phases. `Room` is a User Spot that the API node creates on demand with `getOrCreate`; [Activation and lifetime](https://docs.zlink.systems/kotlin/guide/server/34-activation-lifetime/) explains creation and initialization. Use `joinSpot(...).defer()` and the public completion callback (`onJoinCompletedSuspending`) for membership changes, and relocation with runtime observations (`drain`, then `SAFE_TO_SHUTDOWN`) for host shutdown, so request acceptance is not mistaken for completion. `Control.kt` derives the safe-shutdown wait (`SAFE_DEADLINE`) from the Message Follow duration (`MESSAGE_FOLLOW`) and the host deadline (`HOST_DEADLINE`); change them there only.
 
 ### Reconnection and failure handling
 

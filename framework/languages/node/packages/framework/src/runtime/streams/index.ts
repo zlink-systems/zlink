@@ -123,7 +123,8 @@ export interface ZLinkStreamBindingRuntimeOptions {
   readonly actorRefResolver?: (actor: ZLinkActor) => ActorRef;
   readonly actorAuthorityFenceResolver?: (
     actorId: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    bindTarget?: ActorRef
   ) => Promise<ZLinkActorSessionAuthorityFence | undefined>;
   readonly nativeActorNodeProvider?: () =>
     | {
@@ -342,10 +343,10 @@ export class ZLinkStreamRuntimeManager {
     }
   }
 
-  async dispose(): Promise<void> {
+  async dispose(shutdownSignal?: AbortSignal): Promise<void> {
     const nodes = [...this.nodes.values()];
     for (const node of nodes.reverse()) {
-      await node.runtime?.dispose();
+      await node.runtime?.dispose(node.meshName === undefined ? shutdownSignal : undefined);
       for (const service of node.nativeSessionServices) {
         service.shutdown(DEFAULT_STREAM_SERVICE_SHUTDOWN_TIMEOUT_MS);
         service.close();
@@ -377,11 +378,11 @@ export class ZLinkStreamRuntimeManager {
     );
   }
 
-  async notifyUnscopedServerDrain(): Promise<void> {
+  async notifyUnscopedServerDrain(shutdownSignal: AbortSignal): Promise<void> {
     await Promise.all(
       [...this.nodes.values()]
         .filter((node) => node.meshName === undefined)
-        .map((node) => node.runtime?.drainCloseSessions())
+        .map((node) => node.runtime?.drainCloseSessions(shutdownSignal))
     );
   }
 }

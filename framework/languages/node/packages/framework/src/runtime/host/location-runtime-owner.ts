@@ -25,6 +25,7 @@ export interface ZLinkLocationRuntimeOwnerOptions {
   readonly metrics: import('../diagnostics').ZLinkRuntimeMetrics;
   readonly monotonicNowMs?: () => number;
   readonly observeActorAuthorityVersion?: (actorId: string, storeVersion: string) => void;
+  readonly observeSpotAuthorityVersion?: (spotId: RoutingId, storeVersion: string) => void;
 }
 
 export interface ZLinkLocationRuntimeStopSnapshot {
@@ -117,7 +118,8 @@ export class ZLinkLocationRuntimeOwner {
       stores.authorityStore,
       stores.spotStore,
       (spotId) => this.spotRouteInvalidator?.(spotId),
-      this.options.observeActorAuthorityVersion
+      this.options.observeActorAuthorityVersion,
+      this.options.observeSpotAuthorityVersion
     );
     return runtime;
   }

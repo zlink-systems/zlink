@@ -68,6 +68,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -266,13 +267,18 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 ownsContext,
                 admission,
                 System::nanoTime,
-                () ->
-                        Executors.newSingleThreadScheduledExecutor(
-                                task -> {
-                                    Thread thread = new Thread(task, "zlink-stream-liveness");
-                                    thread.setDaemon(true);
-                                    return thread;
-                                }));
+                () -> {
+                    var scheduler =
+                            new ScheduledThreadPoolExecutor(
+                                    1,
+                                    task -> {
+                                        Thread thread = new Thread(task, "zlink-stream-liveness");
+                                        thread.setDaemon(true);
+                                        return thread;
+                                    });
+                    scheduler.setRemoveOnCancelPolicy(true);
+                    return scheduler;
+                });
     }
 
     ZLinkStreamRuntime(
@@ -567,23 +573,6 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             receiveLoops.add(new StreamReceiveLoop(streamNode, stream));
         }
         receiveLoops.forEach(StreamReceiveLoop::start);
-        long sweepNanos =
-                TimeUnit.NANOSECONDS.convert(
-                        registration.streamNodes().stream()
-                                .map(
-                                        node ->
-                                                !node.idleTimeout().isZero()
-                                                                && node.idleTimeout()
-                                                                                .compareTo(
-                                                                                        node
-                                                                                                .heartbeatInterval())
-                                                                        < 0
-                                                        ? node.idleTimeout()
-                                                        : node.heartbeatInterval())
-                                .min(Duration::compareTo)
-                                .orElseThrow());
-        livenessExecutor.scheduleAtFixedRate(
-                this::checkSessionLiveness, sweepNanos, sweepNanos, TimeUnit.NANOSECONDS);
         return this;
     }
 
@@ -1221,7 +1210,9 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
 
     private boolean isCurrentSessionState(SessionState state) {
         return inStateLane(
-                () -> findSessionState(state.streamNode.name(), state.routingId()) == state);
+                () ->
+                        findSessionState(state.streamNode.name(), state.routingId()) == state
+                                && !state.serials().admissionSealed());
     }
 
     private final class StreamReceiveLoop implements AutoCloseable {
@@ -1377,7 +1368,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         private void isolatePeer(RoutingId routingId, Throwable failure) {
             boolean messageTooLarge = failure instanceof ZLinkStreamMessageTooLargeException;
             String reason = messageTooLarge ? "EMSGSIZE" : "malformed STREAM frame";
-            SessionState session = removeSessionState(streamNode, routingId);
+            SessionState session = sealSessionAdmission(streamNode, routingId);
             try {
                 sendSessionClosing(
                         stream, routingId, ZLinkSessionClosingControl.PROTOCOL_ERROR, reason);
@@ -1670,13 +1661,19 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         }
     }
 
-    private SessionState removeSessionState(
+    private SessionState sealSessionAdmission(
             StreamNodeRegistration streamNode, RoutingId routingId) {
-        return inStateLane(
-                () -> {
-                    Map<RoutingId, SessionState> streamSessions = sessions.get(streamNode.name());
-                    return streamSessions == null ? null : streamSessions.remove(routingId);
-                });
+        return inStateLane(() -> sealSessionAdmissionOnLane(streamNode, routingId));
+    }
+
+    private SessionState sealSessionAdmissionOnLane(
+            StreamNodeRegistration streamNode, RoutingId routingId) {
+        SessionState state = findSessionState(streamNode.name(), routingId);
+        // Keep the Session registered while its terminal callback is pending. Packet receive
+        // then observes this queue's closed admission instead of constructing a second Session.
+        if (state == null || !state.serials().sealAdmission()) return null;
+        state.cancelLivenessTimer();
+        return state;
     }
 
     private void reportTransportError(
@@ -1693,7 +1690,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 .filter(loop -> loop.streamNode().equals(streamNode))
                 .findFirst()
                 .ifPresent(loop -> loop.removePeer(routingId));
-        SessionState state = removeSessionState(streamNode, routingId);
+        SessionState state = sealSessionAdmission(streamNode, routingId);
         if (state == null) {
             return;
         }
@@ -1744,6 +1741,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                                                 .metricName(),
                                         state.metricTags);
                                 dispatchConnected(state);
+                                scheduleSessionLiveness(state, nanoTime.getAsLong());
                             }
                             return current;
                         });
@@ -1893,7 +1891,8 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
 
     private Stream<SessionState> sessionStates() {
         return sessions.values().stream()
-                .flatMap(streamSessions -> streamSessions.values().stream());
+                .flatMap(streamSessions -> streamSessions.values().stream())
+                .filter(state -> !state.serials().admissionSealed());
     }
 
     @Override
@@ -1902,35 +1901,22 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     }
 
     public CompletionStage<Void> closeAsync() {
-        List<SessionState> activeSessions = inStateLane(() -> sessionStates().toList());
-        Map<ZLinkStreamSessionContextState, CompletionStage<Void>> cleanups = new HashMap<>();
-        for (ZLinkStreamSessionContextState session : List.copyOf(sessionContexts)) {
-            cleanups.put(session, disconnectInfrastructure(session));
-        }
-        List<CompletableFuture<Void>> callbacks = new ArrayList<>();
-        for (SessionState state : activeSessions) {
-            CompletionStage<Void> cleanup =
-                    cleanups.computeIfAbsent(state.context(), this::disconnectInfrastructure);
-            callbacks.add(
-                    cleanup.thenCompose(
-                                    ignored ->
-                                            state.serials()
-                                                    .executeFinal(
-                                                            () ->
-                                                                    executeHandler(
-                                                                            () ->
-                                                                                    disconnectSessionStage(
-                                                                                            state))))
-                            .toCompletableFuture());
-        }
-        CompletableFuture<Void> infrastructure =
-                CompletableFuture.allOf(
-                        cleanups.values().stream()
-                                .map(CompletionStage::toCompletableFuture)
-                                .toArray(CompletableFuture[]::new));
-        return CompletableFuture.allOf(
-                        infrastructure,
-                        CompletableFuture.allOf(callbacks.toArray(CompletableFuture[]::new)))
+        List<SessionState> activeSessions =
+                inStateLane(
+                        () ->
+                                sessionStates()
+                                        .filter(state -> state.serials().sealAdmission())
+                                        .toList());
+        CompletableFuture<?>[] cleanups =
+                activeSessions.stream()
+                        .map(
+                                state ->
+                                        disconnectSession(
+                                                        state, () -> disconnectSessionStage(state))
+                                                .toCompletableFuture())
+                        .toArray(CompletableFuture<?>[]::new);
+        sessionContexts.forEach(ZLinkStreamSessionContextState::closeReplyRetries);
+        return CompletableFuture.allOf(cleanups)
                 .handle(
                         (ignored, failure) -> {
                             finishClose(activeSessions);
@@ -1941,6 +1927,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     private void finishClose(List<SessionState> activeSessions) {
         inStateLane(
                 () -> {
+                    sessionStates().forEach(SessionState::cancelLivenessTimer);
                     sessions.clear();
                     return null;
                 });
@@ -2044,60 +2031,72 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 "STREAM session-closing control failed during transport teardown: ");
     }
 
-    void checkSessionLiveness() {
-        long now = nanoTime.getAsLong();
-        List<SessionState> snapshot = inStateLane(() -> sessionStates().toList());
-        for (SessionState state : snapshot) {
-            Integer reason =
-                    inStateLane(
-                            () -> {
-                                if (findSessionState(state.streamNode.name(), state.routingId())
-                                        != state) {
-                                    return null;
-                                }
-                                StreamNodeRegistration settings = state.streamNode;
-                                int expired = 0;
-                                if (now - state.lastInboundNanos()
-                                        >= TimeUnit.NANOSECONDS.convert(
-                                                settings.heartbeatTimeout())) {
-                                    expired = ZLinkSessionClosingControl.HEARTBEAT_TIMEOUT;
-                                } else if (!settings.idleTimeout().isZero()
-                                        && now - state.lastApplicationNanos()
-                                                >= TimeUnit.NANOSECONDS.convert(
-                                                        settings.idleTimeout())) {
-                                    expired = ZLinkSessionClosingControl.IDLE_TIMEOUT;
-                                }
-                                if (expired != 0) {
-                                    sessions.get(state.streamNode.name()).remove(state.routingId());
-                                    return expired;
-                                }
-                                if (now - state.lastHeartbeatPingNanos
-                                        < TimeUnit.NANOSECONDS.convert(
-                                                settings.heartbeatInterval())) return null;
-                                state.lastHeartbeatPingNanos = now;
-                                return 0;
-                            });
-            if (reason == null) {
-                continue;
-            }
-            if (reason == 0) {
-                sendHeartbeatPing(state);
-                continue;
-            }
-            sendSessionClosing(
-                    state.stream(),
-                    state.routingId(),
-                    reason,
-                    reason == ZLinkSessionClosingControl.HEARTBEAT_TIMEOUT
-                            ? "heartbeat timeout"
-                            : "idle timeout");
-            recordSessionClosed(
-                    state,
-                    reason == ZLinkSessionClosingControl.HEARTBEAT_TIMEOUT
-                            ? "heartbeat_timeout"
-                            : "idle_timeout");
-            disconnectSession(state, () -> disconnectSessionStage(state));
+    private void scheduleSessionLiveness(SessionState state, long now) {
+        long delay =
+                Math.min(
+                        state.pingRemainingNanos(now),
+                        Math.min(state.inboundRemainingNanos(now), state.idleRemainingNanos(now)));
+        state.livenessTimer =
+                livenessExecutor.schedule(
+                        () -> checkSessionLiveness(state),
+                        Math.max(0, delay),
+                        TimeUnit.NANOSECONDS);
+    }
+
+    private void checkSessionLiveness(SessionState state) {
+        Integer reason =
+                inStateLane(
+                        () -> {
+                            if (findSessionState(state.streamNode.name(), state.routingId())
+                                    != state) {
+                                return null;
+                            }
+                            state.livenessTimer = null;
+                            if (state.serials().admissionSealed()) {
+                                return null;
+                            }
+                            long now = nanoTime.getAsLong();
+                            int expired = 0;
+                            if (state.inboundRemainingNanos(now) <= 0) {
+                                expired = ZLinkSessionClosingControl.HEARTBEAT_TIMEOUT;
+                            } else if (state.idleRemainingNanos(now) <= 0) {
+                                expired = ZLinkSessionClosingControl.IDLE_TIMEOUT;
+                            }
+                            if (expired != 0) {
+                                // Seal instead of removing: the Session stays registered until
+                                // its previously accepted packets and terminal callback finish.
+                                return state.serials().sealAdmission() ? expired : null;
+                            }
+
+                            boolean sendPing = state.pingRemainingNanos(now) <= 0;
+                            if (sendPing) {
+                                long elapsed = now - state.lastHeartbeatPhaseNanos;
+                                state.lastHeartbeatPhaseNanos =
+                                        now - elapsed % state.heartbeatIntervalNanos;
+                            }
+                            scheduleSessionLiveness(state, now);
+                            return sendPing ? 0 : null;
+                        });
+        if (reason == null) {
+            return;
         }
+        if (reason == 0) {
+            sendHeartbeatPing(state);
+            return;
+        }
+        sendSessionClosing(
+                state.stream(),
+                state.routingId(),
+                reason,
+                reason == ZLinkSessionClosingControl.HEARTBEAT_TIMEOUT
+                        ? "heartbeat timeout"
+                        : "idle timeout");
+        recordSessionClosed(
+                state,
+                reason == ZLinkSessionClosingControl.HEARTBEAT_TIMEOUT
+                        ? "heartbeat_timeout"
+                        : "idle_timeout");
+        disconnectSession(state, () -> disconnectSessionStage(state));
     }
 
     private static void sendHeartbeatPing(SessionState state) {
@@ -2171,22 +2170,35 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
 
     private CompletionStage<Void> disconnectSession(
             SessionState state, Supplier<CompletionStage<Void>> callback) {
-        return disconnectInfrastructure(state.context())
+        CompletionStage<Void> acceptedPackets = state.serials().acceptedPackets();
+        return CompletableFuture.completedFuture(acceptedPackets)
+                .thenComposeAsync(
+                        accepted -> {
+                            state.context().closeReplyRetries();
+                            return state.context()
+                                    .notifyBoundActorsDisconnected(
+                                            accepted, PHYSICAL_DISCONNECT_TIMEOUT);
+                        })
+                .handle((ignored, error) -> (Void) null)
                 .thenCompose(
-                        ignored ->
-                                state.serials()
-                                        .executeInfrastructure(() -> executeHandler(callback)));
+                        ignored -> state.serials().executeFinal(() -> executeHandler(callback)))
+                .whenComplete((ignored, failure) -> removeClosedSession(state));
     }
 
-    private CompletionStage<Void> disconnectInfrastructure(ZLinkStreamSessionContextState session) {
-        session.closeReplyRetries();
-        return session.notifyBoundActorsDisconnected(PHYSICAL_DISCONNECT_TIMEOUT)
-                .handle((ignored, error) -> (Void) null);
+    private void removeClosedSession(SessionState state) {
+        inStateLane(
+                () -> {
+                    Map<RoutingId, SessionState> streamSessions =
+                            sessions.get(state.streamNode.name());
+                    if (streamSessions != null) streamSessions.remove(state.routingId(), state);
+                    state.cancelLivenessTimer();
+                    return null;
+                });
+        sessionContexts.remove(state.context());
     }
 
     private CompletionStage<Void> disconnectSessionStage(SessionState state) {
-        return ZLinkHandlerStages.fromStageSupplier(state.session()::onDisconnected)
-                .whenComplete((ignored, failure) -> sessionContexts.remove(state.context()));
+        return ZLinkHandlerStages.fromStageSupplier(state.session()::onDisconnected);
     }
 
     private CompletionStage<Void> transportErrorDisconnectSessionStage(
@@ -2201,7 +2213,11 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
 
     static final class SessionState {
         private final StreamNodeRegistration streamNode;
-        private long lastHeartbeatPingNanos;
+        private final long heartbeatIntervalNanos;
+        private final long heartbeatTimeoutNanos;
+        private final long idleTimeoutNanos;
+        private long lastHeartbeatPhaseNanos;
+        private ScheduledFuture<?> livenessTimer;
         private final ZLinkSession session;
         private final ZLinkSessionSerialExecutor serials;
         private final ZLinkStreamSessionContextState context;
@@ -2231,7 +2247,10 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 long createdNanos) {
             this.streamNode = streamNode;
             this.metricTags = streamNode.metricTags();
-            lastHeartbeatPingNanos = connectedNanos;
+            heartbeatIntervalNanos = TimeUnit.NANOSECONDS.convert(streamNode.heartbeatInterval());
+            heartbeatTimeoutNanos = TimeUnit.NANOSECONDS.convert(streamNode.heartbeatTimeout());
+            idleTimeoutNanos = TimeUnit.NANOSECONDS.convert(streamNode.idleTimeout());
+            lastHeartbeatPhaseNanos = connectedNanos;
             this.session = session;
             this.serials = serials;
             this.context = context;
@@ -2295,12 +2314,25 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             return replacements.contains(identity);
         }
 
-        long lastApplicationNanos() {
-            return lastApplicationNanos;
+        long pingRemainingNanos(long now) {
+            return heartbeatIntervalNanos - (now - lastHeartbeatPhaseNanos);
         }
 
-        long lastInboundNanos() {
-            return lastInboundNanos;
+        long inboundRemainingNanos(long now) {
+            return heartbeatTimeoutNanos - (now - lastInboundNanos);
+        }
+
+        long idleRemainingNanos(long now) {
+            return idleTimeoutNanos == 0
+                    ? Long.MAX_VALUE
+                    : idleTimeoutNanos - (now - lastApplicationNanos);
+        }
+
+        void cancelLivenessTimer() {
+            if (livenessTimer != null) {
+                livenessTimer.cancel(false);
+                livenessTimer = null;
+            }
         }
 
         AtomicBoolean closeMetricRecorded() {

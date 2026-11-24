@@ -443,7 +443,7 @@ bool capacity_available (const capacity_usage_t &usage)
 
 bool placement_capacity_available (const mesh_node_descriptor_t &descriptor,
                                    placement_object_kind_t kind,
-                                   const std::string &stable_type)
+                                   std::string_view stable_type)
 {
     if (kind == placement_object_kind_t::actor)
         return capacity_available (descriptor.capacity.actors);
@@ -901,38 +901,78 @@ actor_manager_t mesh_node_host_service_t::actor_manager ()
       [this] (actor_ref_t actor) { return destroy_actor (std::move (actor)); });
 }
 
-task_t<std::vector<mesh_node_descriptor_t>> mesh_node_host_service_t::actor_placement_targets (
-  std::string mesh_name,
-  std::string stable_type,
-  std::shared_ptr<detail::mesh_node_runtime_t> source)
+namespace
 {
-    auto listed = co_await await_result (
-      _services->get_required<store_location_resolvers_t> ().list_live_mesh_nodes (mesh_name));
-    if (!listed)
-        co_return detail::propagate_failure<std::vector<mesh_node_descriptor_t>> (
-          listed, "Actor target lookup failed");
-    const auto source_rid = source->status ().routing_id ();
-    std::vector<mesh_node_descriptor_t> candidates;
-    for (auto &descriptor : std::move (listed).value ()) {
-        const auto capability = std::find_if (
-          descriptor.object_capabilities.begin (), descriptor.object_capabilities.end (),
-          [&] (const object_capability_t &value) {
-              return value.object_kind == placement_object_kind_t::actor
-                     && value.stable_type == stable_type;
-          });
-        if (descriptor.mesh_name != mesh_name
-            || descriptor.state != framework_runtime_state_t::serving
-            || descriptor.object_role != object_role_t::server || descriptor.placement_weight <= 0
-            || capability == descriptor.object_capabilities.end () || !capability->entry_accepted
-            || !placement_capacity_available (descriptor, placement_object_kind_t::actor,
-                                              stable_type))
-            continue;
-        if (descriptor.rid == source_rid
-            || source->has_admitted_peer (descriptor.rid, descriptor.lifecycle_generation))
-            candidates.push_back (std::move (descriptor));
-    }
-    co_return candidates;
+bool supports_placement (const mesh_node_descriptor_t &descriptor,
+                         placement_object_kind_t kind,
+                         std::string_view stable_type)
+{
+    return descriptor.object_role == object_role_t::server && descriptor.placement_weight > 0
+           && (descriptor.state == framework_runtime_state_t::serving
+               || descriptor.state == framework_runtime_state_t::preparing)
+           && placement_capacity_available (descriptor, kind, stable_type)
+           && std::any_of (
+             descriptor.object_capabilities.begin (), descriptor.object_capabilities.end (),
+             [&] (const auto &capability) {
+                 return capability.object_kind == kind && capability.stable_type == stable_type
+                        && (kind != placement_object_kind_t::actor
+                            || (descriptor.entry_spot_id && capability.entry_accepted));
+             });
 }
+
+task_t<std::vector<mesh_node_descriptor_t>>
+placement_candidates (live_location_reader_t &discovery,
+                      std::string mesh_name,
+                      placement_object_kind_t kind,
+                      std::string stable_type,
+                      std::shared_ptr<detail::mesh_node_runtime_t> source,
+                      std::chrono::steady_clock::time_point deadline,
+                      std::function<bool (const mesh_node_descriptor_t &)> excluded)
+{
+    bool refresh_available = true;
+    while (std::chrono::steady_clock::now () < deadline) {
+        const auto observation = discovery.mesh_observation (mesh_name);
+        std::vector<mesh_node_descriptor_t> serving;
+        bool wait_for_refresh = false;
+        if (observation) {
+            const auto local = source->status ();
+            for (const auto &row : observation->sources) {
+                const auto &descriptor = row.descriptor;
+                if (!row.available () || !supports_placement (descriptor, kind, stable_type)
+                    || excluded (descriptor))
+                    continue;
+                if (descriptor.state == framework_runtime_state_t::serving
+                    && (descriptor.rid == local.routing_id ()
+                          ? descriptor.lifecycle_generation == local.lifecycle_generation ()
+                          : source->has_admitted_peer (descriptor.rid,
+                                                       descriptor.lifecycle_generation)))
+                    serving.push_back (descriptor);
+                else
+                    wait_for_refresh = true;
+            }
+        }
+        if (observation != discovery.mesh_observation (mesh_name))
+            continue;
+        if (std::chrono::steady_clock::now () >= deadline)
+            break;
+        if (!serving.empty ())
+            co_return serving;
+        if (wait_for_refresh) {
+            auto changed = co_await observe_until (observation->changed.task (), deadline);
+            if (!changed)
+                co_return detail::propagate_failure<std::vector<mesh_node_descriptor_t>> (
+                  changed, "Placement discovery wait failed");
+        } else if (refresh_available) {
+            refresh_available = false;
+            co_await discovery.poll_mesh_sources (mesh_name, deadline);
+        } else {
+            co_return serving;
+        }
+    }
+    co_return result_t<std::vector<mesh_node_descriptor_t>>::failure (
+      framework_error_kind_t::deadline_exceeded, "Placement deadline exceeded");
+}
+} // namespace
 
 task_t<mesh_node_descriptor_t> mesh_node_host_service_t::select_actor_entry_spot (actor_ref_t actor)
 {
@@ -941,11 +981,17 @@ task_t<mesh_node_descriptor_t> mesh_node_host_service_t::select_actor_entry_spot
         co_return result_t<mesh_node_descriptor_t>::failure (
           framework_error_kind_t::unavailable, "Actor source MeshNode is unavailable");
     const auto identity = co_await source->identity_async ();
-    auto candidates = co_await actor_placement_targets (
-      identity.first, std::string (detail::actor_ref_access_t::actor_type (actor)), source);
-    std::erase_if (candidates, [] (const auto &descriptor) {
-        return !descriptor.entry_spot_id || descriptor.lifecycle_generation == 0
-               || descriptor.lease_generation <= 0;
+    auto candidates =
+      co_await _services->get_required<store_location_resolvers_t> ().list_live_mesh_nodes (
+        identity.first);
+    const auto stable_type = detail::actor_ref_access_t::actor_type (actor);
+    const auto source_rid = source->status ().routing_id ();
+    std::erase_if (candidates, [&] (const auto &descriptor) {
+        return descriptor.state != framework_runtime_state_t::serving
+               || !supports_placement (descriptor, placement_object_kind_t::actor, stable_type)
+               || (descriptor.rid != source_rid
+                   && !source->has_admitted_peer (descriptor.rid, descriptor.lifecycle_generation))
+               || descriptor.lifecycle_generation == 0 || descriptor.lease_generation <= 0;
     });
     if (candidates.empty ())
         co_return result_t<mesh_node_descriptor_t>::failure (
@@ -1002,57 +1048,47 @@ mesh_node_host_service_t::create_actor (bool exclusive,
             current.allocation.target.node_rid, current.allocation.stable_type,
             std::string (actor_id.value ()), current.object_generation)});
     };
-    std::vector<mesh_node_descriptor_t> candidates;
-    struct refresh_actor_candidates_t
-    {
-        static task_t<std::vector<mesh_node_descriptor_t>>
-        run (mesh_node_host_service_t *self,
-             std::string selected_mesh,
-             std::string stable_type,
-             std::set<unavailable_target_t> unavailable_targets,
-             std::shared_ptr<detail::mesh_node_runtime_t> source_node)
-        {
-            auto refreshed = co_await self->actor_placement_targets (
-              std::move (selected_mesh), std::move (stable_type), source_node);
-            std::erase_if (refreshed, [&] (const mesh_node_descriptor_t &descriptor) {
-                if (unavailable_targets.contains (
-                      {descriptor.rid.to_hex (), descriptor.lifecycle_generation, std::nullopt}))
-                    return true;
-                const auto epoch = source_node->admitted_peer_epoch (
-                  descriptor.rid, descriptor.lifecycle_generation);
-                return epoch
-                       && unavailable_targets.contains (
-                         {descriptor.rid.to_hex (), descriptor.lifecycle_generation, *epoch});
-            });
-            co_return refreshed;
-        }
-    };
-    auto refresh_candidates = [&] () {
-        return refresh_actor_candidates_t::run (this, selected_mesh, stable_type,
-                                                unavailable_targets, source_node);
-    };
-    candidates = co_await refresh_candidates ();
-    if (candidates.empty ()) {
-        // Entry acceptance restricts new creation; an existing Ready Actor needs no candidate.
-        if (!exclusive) {
-            live_location_reader_t reader (*_location_store);
-            const auto current =
-              co_await reader.read_authority (actor_authority_key (actor_id.value ()));
-            if (const auto *snapshot = std::get_if<authority_snapshot_t> (&current);
-                snapshot && snapshot->allocation.state == placement_allocation_state_t::active) {
-                const auto projection =
-                  decode_actor_authority_payload (snapshot->payload, snapshot->object_generation);
-                if (projection && projection->state == actor_authority_state_t::ready) {
-                    const auto owner_available = co_await reader.owner_available (snapshot->owner);
-                    if (owner_available)
-                        co_return complete_existing (*snapshot);
-                }
+    const auto terminal = co_await _location_store->read_creation_terminal (operation);
+    if (terminal || !exclusive) {
+        live_location_reader_t reader (*_location_store);
+        const auto current =
+          co_await reader.read_authority (actor_authority_key (actor_id.value ()));
+        const auto *snapshot = std::get_if<authority_snapshot_t> (&current);
+        if (terminal)
+            co_return result_t<actor_create_result_t>::success (actor_result_from_terminal (
+              *terminal, snapshot ? snapshot->allocation.target.node_rid : node_rid_t{},
+              stable_type, [this] (zlink::message_t raw) {
+                  return message_t::from_raw (std::move (raw), _serializers);
+              }));
+        if (snapshot && snapshot->allocation.state == placement_allocation_state_t::active) {
+            const auto projection =
+              decode_actor_authority_payload (snapshot->payload, snapshot->object_generation);
+            if (projection && projection->state == actor_authority_state_t::ready) {
+                const auto owner_available = co_await reader.owner_available (snapshot->owner);
+                if (owner_available)
+                    co_return complete_existing (*snapshot);
             }
         }
-        co_return result_t<actor_create_result_t>::failure (
-          framework_error_kind_t::unavailable,
-          "No eligible Actor target has an admitted RouteMesh peer");
     }
+    auto refresh_candidates = [&] {
+        return placement_candidates (
+          _services->get_required<live_location_reader_t> (), selected_mesh,
+          placement_object_kind_t::actor, stable_type, source_node, deadline,
+          [&] (const mesh_node_descriptor_t &descriptor) {
+              if (unavailable_targets.contains (
+                    {descriptor.rid.to_hex (), descriptor.lifecycle_generation, std::nullopt}))
+                  return true;
+              const auto epoch =
+                source_node->admitted_peer_epoch (descriptor.rid, descriptor.lifecycle_generation);
+              return epoch
+                     && unavailable_targets.contains (
+                       {descriptor.rid.to_hex (), descriptor.lifecycle_generation, *epoch});
+          });
+    };
+    auto candidates = co_await refresh_candidates ();
+    if (candidates.empty ())
+        co_return result_t<actor_create_result_t>::failure (
+          framework_error_kind_t::unavailable, "No eligible Actor placement target is ready");
     const auto choose_target = [&] {
         return choose_placement_target (candidates, actor_id.value ());
     };
@@ -1135,12 +1171,6 @@ mesh_node_host_service_t::create_actor (bool exclusive,
                                            stable_type, actor_id);
     };
     std::tie (target, target_runtime, target_peer_epoch, reserve) = co_await select_target ();
-    if (const auto terminal = co_await _location_store->read_creation_terminal (operation))
-        co_return result_t<actor_create_result_t>::success (actor_result_from_terminal (
-          *terminal, node_rid_t::from_string (target.rid.to_string ()), stable_type,
-          [this] (zlink::message_t raw) {
-              return message_t::from_raw (std::move (raw), _serializers);
-          }));
     //  Location runtime §7 and Actor model §6.3: a target that cannot take this creation (no
     //  capacity, no longer serving, or no Entry Spot accepting the type) is excluded for its host
     //  execution generation and another candidate is chosen. No task when none remains.
@@ -1735,37 +1765,7 @@ task_t<spot_create_result_t> mesh_node_host_service_t::create_user_spot (
         }
     }
     const auto selected_mesh = mesh_name.value_or (source->mesh_name ());
-    const auto read_live_descriptors = [&] () -> task_t<std::vector<mesh_node_descriptor_t>> {
-        auto listed = co_await await_result (
-          _services->get_required<store_location_resolvers_t> ().list_live_mesh_nodes (
-            selected_mesh));
-        if (!listed.has_value ())
-            co_return detail::propagate_failure<std::vector<mesh_node_descriptor_t>> (
-              listed, "User Spot target lookup failed");
-        co_return std::move (listed).value ();
-    };
-    const auto eligible_candidates = [&] (const std::vector<mesh_node_descriptor_t> &descriptors) {
-        std::vector<mesh_node_descriptor_t> candidates;
-        for (auto &descriptor : descriptors) {
-            const auto capable = std::any_of (
-              descriptor.object_capabilities.begin (), descriptor.object_capabilities.end (),
-              [&] (const object_capability_t &capability) {
-                  return capability.object_kind == placement_object_kind_t::user_spot
-                         && capability.stable_type == stable_type;
-              });
-            if (descriptor.state == framework_runtime_state_t::serving
-                && descriptor.object_role == object_role_t::server
-                && descriptor.placement_weight > 0
-                && placement_capacity_available (descriptor, placement_object_kind_t::user_spot,
-                                                 stable_type)
-                && capable)
-                candidates.push_back (std::move (descriptor));
-        }
-        return candidates;
-    };
-    const auto choose_target = [&] (const std::vector<mesh_node_descriptor_t> &candidates) {
-        return choose_placement_target (candidates, *spot_id);
-    };
+    std::set<std::pair<std::string, std::uint64_t>> excluded_targets;
     mesh_node_descriptor_t target;
     std::vector<std::byte> application_bytes;
     if (request) {
@@ -1816,7 +1816,6 @@ task_t<spot_create_result_t> mesh_node_host_service_t::create_user_spot (
     }
     object_reserve_result_t reserved;
     live_location_reader_t authority_reader (*_location_store);
-    auto live_descriptors = co_await read_live_descriptors ();
     while (true) {
         if (std::chrono::steady_clock::now () >= deadline)
             co_return result_t<spot_create_result_t>::failure (
@@ -1878,7 +1877,13 @@ task_t<spot_create_result_t> mesh_node_host_service_t::create_user_spot (
                           deadline - std::chrono::steady_clock::now ())));
             continue;
         }
-        const auto candidates = eligible_candidates (live_descriptors);
+        const auto candidates = co_await placement_candidates (
+          _services->get_required<live_location_reader_t> (), selected_mesh,
+          placement_object_kind_t::user_spot, stable_type, source, deadline,
+          [&] (const auto &candidate) {
+              return excluded_targets.contains (
+                {candidate.rid.to_hex (), candidate.lifecycle_generation});
+          });
         if (candidates.empty ()) {
             // A winner may have committed between the Missing observation and
             // placement lookup. Only the outer observation classifies it.
@@ -1888,7 +1893,7 @@ task_t<spot_create_result_t> mesh_node_host_service_t::create_user_spot (
             co_return result_t<spot_create_result_t>::failure (
               framework_error_kind_t::unavailable, "No eligible User Spot target is ready");
         }
-        target = choose_target (candidates);
+        target = choose_placement_target (candidates, *spot_id);
         reserve_request.target = {selected_mesh,
                                   node_rid_t::from_string (target.rid.to_string ()),
                                   target.lifecycle_generation,
@@ -1901,7 +1906,7 @@ task_t<spot_create_result_t> mesh_node_host_service_t::create_user_spot (
               framework_error_kind_t::already_exists,
               "Framework-generated User SpotId already has an authority claim");
         if (std::holds_alternative<object_placement_capacity_exhausted_t> (reserved)) {
-            live_descriptors = co_await read_live_descriptors ();
+            excluded_targets.emplace (target.rid.to_hex (), target.lifecycle_generation);
             continue;
         }
         if (std::holds_alternative<object_already_exists_t> (reserved)

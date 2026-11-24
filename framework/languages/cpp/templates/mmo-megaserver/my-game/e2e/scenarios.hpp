@@ -132,7 +132,7 @@ inline void dungeon (const std::string &endpoint)
     const auto id = "dungeon-" + unique_id ();
     const auto opened = client.dungeon (id);
     require (opened.DungeonId == id && opened.NodeId == "instance",
-             "Dungeon placed outside Instance node");
+             "Dungeon placed outside play node (dungeon)");
     client.close ();
 }
 
@@ -200,7 +200,7 @@ inline void update (const std::string &endpoint, World &world)
     Client fresh (endpoint, "fresh");
     const auto created = fresh.join ("desert");
     require (created.NodeId == before.NodeId,
-             "New Region was not accepted by the replacement Region node");
+             "New Region was not accepted by the replacement play node (region)");
     require (created.Players.size () == 1 && created.Players.front ().PlayerId == "fresh",
              "New Region membership mismatch");
     fresh.close ();

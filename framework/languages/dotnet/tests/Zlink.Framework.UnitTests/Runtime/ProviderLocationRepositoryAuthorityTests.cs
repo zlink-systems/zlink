@@ -5886,8 +5886,31 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
                 await repository.CommitAsync(reserved.Reservation, new byte[] { 0x65 })
             )
             .Snapshot;
+        var relocationId = Guid.NewGuid();
+        var sourceFence = new ZLinkAuthorityRelocation.CoordinatorFence(
+            sourceDescriptor.Rid.ToHex(),
+            sourceDescriptor.LifecycleGeneration,
+            sourceOwner.OwnerId,
+            (ulong)sourceOwner.LeaseGeneration,
+            created.StoreVersion
+        );
+        var relocation = new ZLinkAuthorityRelocation(
+            relocationId,
+            ServiceWireCodec.RelocationPhase.Committed,
+            sourceFence.Identity,
+            new(
+                targetDescriptor.Rid.ToHex(),
+                targetDescriptor.LifecycleGeneration,
+                targetOwner.OwnerId,
+                (ulong)targetOwner.LeaseGeneration,
+                1
+            ),
+            sourceFence,
+            Convert.ToHexString(Enumerable.Repeat((byte)0x68, 32).ToArray()).ToLowerInvariant(),
+            1
+        );
         var request = new ZLinkAggregatePrepareRequest(
-            Guid.NewGuid(),
+            relocationId,
             1,
             [
                 new ZLinkAggregateParticipant(
@@ -5903,7 +5926,10 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
             targetDescriptor.LifecycleGeneration,
             new ZLinkCapacityVector(1, 0, null),
             targetOwner
-        );
+        )
+        {
+            Relocation = relocation,
+        };
         var prepared = Assert.IsType<ZLinkAggregatePrepareResult.Prepared>(
             await repository.PrepareAggregateAsync(request)
         );
@@ -5928,6 +5954,7 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
             visible.AuthorityOwnerGeneration
         );
         Assert.Equal(targetDescriptor.Rid, visible.Allocation.Descriptor.Rid);
+        Assert.Equal(relocation, visible.Relocation);
 
         provider.BlockWrites = false;
         Assert.Equal(
@@ -5941,6 +5968,38 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
             .Snapshot;
         Assert.Equal(visible.Payload.ToArray(), normalized.Payload.ToArray());
         Assert.Equal(visible.AuthorityOwnerGeneration, normalized.AuthorityOwnerGeneration);
+        Assert.Equal(relocation, normalized.Relocation);
+
+        var normalization = request with
+        {
+            AggregateGeneration = 2,
+            Capacity = new ZLinkCapacityVector(0, 0, null),
+            Participants =
+            [
+                request.Participants[0] with
+                {
+                    ExpectedStoreVersion = normalized.StoreVersion,
+                    OwnerTransition = ZLinkAuthorityGenerationTransition.Preserve,
+                },
+            ],
+            Relocation = null,
+            ClearRelocation = true,
+        };
+        var cleanup = Assert.IsType<ZLinkAggregatePrepareResult.Prepared>(
+            await repository.PrepareAggregateAsync(normalization)
+        );
+        Assert.Equal(
+            ZLinkAggregateCommitResult.Committed,
+            await repository.CommitAggregateAsync(cleanup.Fence)
+        );
+        var steady = Assert
+            .IsType<ZLinkAuthorityReadResult.Found>(
+                await repository.ReadAuthorityAsync(createRequest.Key)
+            )
+            .Snapshot;
+        Assert.Null(steady.Relocation);
+        Assert.Equal(targetOwner.OwnerId, steady.OwnerId);
+        Assert.Equal(normalized.AuthorityOwnerGeneration, steady.AuthorityOwnerGeneration);
     }
 
     [Fact]

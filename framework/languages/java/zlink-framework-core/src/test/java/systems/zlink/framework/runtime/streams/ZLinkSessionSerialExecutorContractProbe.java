@@ -19,8 +19,6 @@ public final class ZLinkSessionSerialExecutorContractProbe {
                                 .toCompletableFuture(),
                         serial.executeControl(() -> completed(executed, "control"))
                                 .toCompletableFuture(),
-                        serial.executeInfrastructure(() -> completed(executed, "infrastructure"))
-                                .toCompletableFuture(),
                         serial.executeFinal(() -> completed(executed, "final"))
                                 .toCompletableFuture())
                 .get(3, TimeUnit.SECONDS);

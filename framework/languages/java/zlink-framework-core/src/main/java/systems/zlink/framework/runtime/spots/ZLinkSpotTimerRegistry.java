@@ -52,18 +52,7 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
     }
 
     private <T> T inStateLane(Supplier<T> work) {
-        try {
-            return stateLane.runAsync(work).toCompletableFuture().join();
-        } catch (CompletionException failure) {
-            Throwable cause = failure.getCause();
-            if (cause instanceof RuntimeException runtimeFailure) {
-                throw runtimeFailure;
-            }
-            if (cause instanceof Error error) {
-                throw error;
-            }
-            throw failure;
-        }
+        return stateLane.awaitResult(work);
     }
 
     ZLinkSpotTimerRegistry(
@@ -437,7 +426,16 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
         }
 
         private void scheduleNext(long delayNanos) {
-            SchedulePlan plan = inStateLane(() -> prepareScheduleCore(delayNanos));
+            stateLane
+                    .runNowOrQueue(() -> prepareScheduleCore(delayNanos))
+                    .whenComplete(this::publishScheduleOrReport);
+        }
+
+        private void publishScheduleOrReport(SchedulePlan plan, Throwable failure) {
+            if (failure != null) {
+                reportCompletionFailure(failure);
+                return;
+            }
             publishSchedule(plan);
         }
 
@@ -459,8 +457,8 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
             ScheduledFuture<?> task =
                     executor.schedule(
                             () -> run(plan.attempt()), plan.delayNanos(), TimeUnit.NANOSECONDS);
-            boolean cancel =
-                    inStateLane(
+            stateLane
+                    .runNowOrQueue(
                             () -> {
                                 if (disposed
                                         || phase != Phase.RUNNING
@@ -469,15 +467,21 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
                                 }
                                 future = task;
                                 return false;
+                            })
+                    .whenComplete(
+                            (cancel, failure) -> {
+                                if (failure != null) {
+                                    task.cancel(false);
+                                    reportCompletionFailure(failure);
+                                } else if (cancel) {
+                                    task.cancel(false);
+                                }
                             });
-            if (cancel) {
-                task.cancel(false);
-            }
         }
 
         private void run(ScheduleAttempt attempt) {
-            ZLinkSpotTimerSchedule.PendingTick selected =
-                    inStateLane(
+            stateLane
+                    .runNowOrQueue(
                             () -> {
                                 if (disposed || phase != Phase.RUNNING || scheduled != attempt) {
                                     return null;
@@ -489,19 +493,30 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
                                 pendingTick = next;
                                 nextScheduledAt = null;
                                 return next;
+                            })
+                    .whenComplete(
+                            (selected, failure) -> {
+                                if (failure != null) reportCompletionFailure(failure);
+                                else if (selected != null) dispatchPending(selected);
                             });
-            if (selected != null) {
-                dispatchPending(selected);
-            }
         }
 
         private void dispatchPending(ZLinkSpotTimerSchedule.PendingTick selected) {
-            if (inStateLane(
-                    () -> {
-                        if (!dispatch.paused()) return false;
-                        scheduled = null;
-                        return true;
-                    })) return;
+            stateLane
+                    .runNowOrQueue(
+                            () -> {
+                                if (!dispatch.paused()) return false;
+                                scheduled = null;
+                                return true;
+                            })
+                    .whenComplete(
+                            (paused, failure) -> {
+                                if (failure != null) reportCompletionFailure(failure);
+                                else if (!paused) enqueueDispatch(selected);
+                            });
+        }
+
+        private void enqueueDispatch(ZLinkSpotTimerSchedule.PendingTick selected) {
             ZLinkTimerTick tick = selected.tick();
             dispatch.enqueue(name, () -> dispatchClaimed(selected, tick))
                     .whenComplete(
@@ -679,8 +694,8 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
         }
 
         void resume() {
-            ResumePlan plan =
-                    inStateLane(
+            stateLane
+                    .runNowOrQueue(
                             () -> {
                                 if (disposed) {
                                     return null;
@@ -700,15 +715,19 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
                                                 ? schedule.delayAfterDispatchNanos()
                                                 : nanosUntil(scheduledAt);
                                 return new ResumePlan(null, delay);
+                            })
+                    .whenComplete(
+                            (plan, failure) -> {
+                                if (failure != null) {
+                                    reportCompletionFailure(failure);
+                                } else if (plan != null) {
+                                    if (plan.pendingTick() != null) {
+                                        dispatchPending(plan.pendingTick());
+                                    } else {
+                                        scheduleNext(plan.delayNanos());
+                                    }
+                                }
                             });
-            if (plan == null) {
-                return;
-            }
-            if (plan.pendingTick() != null) {
-                dispatchPending(plan.pendingTick());
-            } else {
-                scheduleNext(plan.delayNanos());
-            }
         }
 
         TimerSnapshot snapshot() {

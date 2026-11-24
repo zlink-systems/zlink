@@ -137,7 +137,7 @@ public sealed partial class EntrySpotActorDispatchTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Restarted_target_recovery_owns_prefix_and_finishes_session_route(
+    public async Task Restarted_target_does_not_restore_a_committed_actor_from_durable_payload(
         bool routedJoin
     )
     {
@@ -377,48 +377,68 @@ public sealed partial class EntrySpotActorDispatchTests
                     )
                 )
                 .Snapshot;
-            var candidate = new ZLinkRelocationRecoveryCandidate(
-                new ZLinkRelocationManifestReference(
-                    stored.Root.Reference,
-                    stored.Root.ChecksumCrc32c,
-                    identity.AggregateId,
-                    identity.AggregateGeneration,
-                    identity.InventoryDigest
-                ),
-                identity,
-                [new ZLinkAuthorityEntry(key, published)]
+            var routes = 0;
+            node.OnRoute = () => routes++;
+            var coordinator = new ZLinkServiceWireCodec.RelocationCoordinatorFence(
+                descriptor.OwnerId,
+                checked((ulong)descriptor.LeaseGeneration),
+                node.RoutingId,
+                descriptor.LifecycleGeneration,
+                source.StoreVersion
             );
-            var routeSubmitted = false;
-            node.OnRoute = () =>
-            {
-                var state = runtime.GetOrCreateActorState(actorRef.ActorId);
-                // Observe the actual runtime wiring at command 44 submission.
-                var authority = Assert.IsType<ZLinkAuthorityReadResult.Found>(
-                    store.ReadAuthorityAsync(key).GetAwaiter().GetResult()
-                );
-                Assert.Equal(
-                    routedJoin,
-                    ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(authority.Snapshot, out _)
-                );
-                Assert.NotNull(Assert.Single(state.Handoff.SnapshotFinalReplay()).Withdraw);
-                Assert.False(probe.ActorASecondStarted.Task.IsCompleted);
-                Assert.False(state.Handoff.TargetActivation.IsCompleted);
-                Assert.True(state.Handoff.IsCanonicalMaintenanceHandoff(handoffId));
-                routeSubmitted = true;
-            };
-            await runtime.StandaloneActorRelocationRuntime.RecoverPublishedAsync(
-                candidate,
+            var actor = new ZLinkServiceWireCodec.RelocationObjectRecord(
+                1,
+                "probe",
+                actorRef.ActorId,
+                source.ObjectGeneration,
+                source.AuthorityOwnerGeneration
+            );
+            await runtime.StandaloneActorRelocationRuntime.CutoverTargetAsync(
+                new ZLinkServiceWireCodec.RelocationCutoverRecord(
+                    new ZLinkServiceWireCodec.RelocationWireId(
+                        canonical.RelocationHigh,
+                        canonical.RelocationLow
+                    ),
+                    1,
+                    coordinator,
+                    1,
+                    actor,
+                    0,
+                    0
+                ),
+                node.RoutingId,
                 default
             );
-            var restored = runtime.GetOrCreateActorState(actorRef.ActorId);
-            Assert.NotNull(restored.Actor);
-            Assert.True(
-                routeSubmitted,
-                $"canonical={restored.Handoff.IsCanonicalMaintenanceHandoff(handoffId)} activation={restored.Handoff.TargetActivation.Status} staged={restored.TryGetStagedRelocationSessionRoute(handoffId, out _)} committed={restored.TryGetCommittedRelocationSessionRoute(handoffId, out _)} bound={restored.TryGetBoundSession(out _)}"
+            var rejected = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                runtime
+                    .CompleteRoutedActorHandoffAsync(
+                        descriptor.EntrySpotId!,
+                        new ZLinkRemoteActorHandoffCompletionRequest(
+                            actorRef.ActorId,
+                            handoffId,
+                            sourceActor.CurrentSpotId,
+                            node.RoutingId.ToBytes().ToArray(),
+                            descriptor.EntrySpotId!,
+                            []
+                        ),
+                        default
+                    )
+                    .AsTask()
             );
-            Assert.True(restored.Handoff.TargetActivation.IsCompletedSuccessfully);
-            Assert.True(restored.TryGetBoundSession(out _));
-            await probe.ActorASecondStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(ZLinkFrameworkErrorKind.Rejected, rejected.Kind);
+
+            Assert.Null(runtime.GetOrCreateActorState(actorRef.ActorId).Actor);
+            Assert.Equal(0, routes);
+            Assert.False(probe.ActorASecondStarted.Task.IsCompleted);
+            var current = Assert.IsType<ZLinkAuthorityReadResult.Found>(
+                await store.ReadAuthorityAsync(key)
+            );
+            Assert.Equal(published.StoreVersion, current.Snapshot.StoreVersion);
+            Assert.Equal(published.OwnerId, current.Snapshot.OwnerId);
+            Assert.Equal(
+                published.AuthorityOwnerGeneration,
+                current.Snapshot.AuthorityOwnerGeneration
+            );
         }
         finally
         {

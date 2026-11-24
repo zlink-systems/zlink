@@ -93,7 +93,7 @@ final class ZLinkSpotOutboundFailureTest {
                                         reply::set,
                                         () -> {});
 
-                        activation.replayMessage(received).toCompletableFuture().join();
+                        activation.replayMessage(received, null).toCompletableFuture().join();
 
                         assertTrue(reply.get() != null && !reply.get().isEmpty());
                         assertEquals(

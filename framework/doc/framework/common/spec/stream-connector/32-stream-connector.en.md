@@ -536,7 +536,7 @@ that request again on the same connection automatically. Applications don't buil
   unchanged (a request the caller cancelled doesn't run the reply received hook).
 - The wait ends at the earlier of the original request deadline and `first rejection time + MaxAdmissionWait`; the
   original deadline is never extended. If the request hasn't succeeded by then, it ends with `RequestTimeout`, and
-  nothing is sent after that point. `MaxAdmissionWait` defaults to the request's effective request timeout.
+  nothing is sent after that point. `MaxAdmissionWait` defaults to the request's effective request timeout. When set, it must be positive; zero or less is a configuration error.
 - If the connection drops, a waiting request ends by the existing connection lifecycle rules (§6). Reconnecting
   doesn't restore a waiting request.
 
@@ -689,7 +689,7 @@ packet.
 | `HeartbeatTimeout` | Disconnected because heartbeat didn't respond |
 | `ServerDrain` | The server closed the session with **graceful drain** |
 | `ProtocolError` | Disconnected due to a protocol violation |
-| `TransportError` | Disconnected due to a transport-level failure |
+| `TransportError` | Disconnected due to a transport-level failure, or because the server couldn't build the session object for that connection |
 
 A client that received `ServerDrain` looks at this value to **decide
 reconnection and backoff**

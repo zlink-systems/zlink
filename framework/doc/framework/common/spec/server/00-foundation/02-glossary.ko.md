@@ -336,7 +336,7 @@ generation의 lifecycle·relocation control이 새 incarnation의 상태를 바�
 | 형태 | 증가하는 generation 값 |
 | .NET 표기 | `ulong` |
 | 공개 구성 | `1..long.MaxValue` 범위의 정수 하나다. JSON에서는 decimal string으로 표현한다. |
-| 생성·관리 | Location Store provider의 transaction domain global counter가 발급한다. |
+| 생성·관리 | Location Store provider가 그 Actor·Spot ID의 counter로 발급한다([Location Store §8](../05-location-relocation/02-location-store-redis.ko.md#8-공식-redis-provider--counter-발급)). 서로 다른 ID의 값은 비교하지 않는다. |
 | 수명 | 같은 logical incarnation 동안 유지된다. Same-node Join, cross-node relocation과 `RecreateOnRelocation`에서도 바꾸지 않는다. Logical incarnation을 종료한 뒤 새 object를 만들 때 새 값을 발급한다. 최대값 뒤에는 값을 처음으로 되돌리지 않고 `GenerationExhausted`로 실패한다. |
 
 <a id="owner"></a>
@@ -2261,15 +2261,16 @@ Framework가 자동 발급한 RID를 claim할 때 이미 active identity가 사�
 <a id="spot-id-conflict"></a>
 ### SpotIdConflict
 
-Global Spot ID namespace에서 Entry·User·Instance Spot identity claim이 이미 사용 중임을 확인한 결과다.
+Global Spot ID namespace에서 User·Instance Spot identity claim이 이미 사용 중임을 확인한 결과다. Entry Spot ID는
+Framework가 lifecycle마다 새 UUID v4로 발급하므로 이 판정 대상이 아니다.
 Framework는 기존 claim을 덮어쓰거나 새 UUID를 만들어 같은 operation을 다시 시도하지 않는다.
 
 | 항목 | 내용 |
 |---|---|
-| 형태 | Startup 또는 create failure |
-| .NET 표기 | Startup은 `ZLinkConfigurationException`, exclusive create는 `ZLinkFrameworkErrorKind.AlreadyExists` |
+| 형태 | Create failure |
+| .NET 표기 | Exclusive create는 `ZLinkFrameworkErrorKind.AlreadyExists` |
 | 공개 구성 | Global Spot ID claim이 충돌했음을 설명한다. 충돌한 owner token은 포함하지 않는다. |
-| 수명 | 해당 startup 또는 create operation을 terminal failure로 끝낸다. |
+| 수명 | 해당 create operation을 terminal failure로 끝낸다. |
 
 ## 10. STREAM session과 Actor binding
 

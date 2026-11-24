@@ -1158,7 +1158,9 @@ reservation's target lifecycle has ended. The Framework then changes `Reserved �
 returns the pending capacity without the eligibility that created the reservation. The request
 checks, as conditions together, the authority `StoreVersion` as first read, the state of the owner
 lease record as read (version or absent), the state of the descriptor record as read, and the
-capacity record. If the capacity record is absent, only the authority changes. There's one capacity record per
+capacity record. Capacity is the counter
+keys of [Location Store §4.1](02-location-store-redis.en.md), which a reservation always creates, so a release whose
+key is absent means Store data corruption (once the v11 capacity records have been moved to counter keys). There's one capacity record per
 Mesh name and RID, and it carries over when the MeshNode lifecycle changes — it counts every
 unreleased allocation and isn't reset when the descriptor is published again. Releasing a previous
 lifecycle's reservation therefore returns capacity to the same record. If the return would
@@ -1171,16 +1173,28 @@ lease is valid and the descriptor is the same lifecycle, the reservation isn't r
 operation that creates a new incarnation of the same ID is an Actor `Create` or `GetOrCreate`, a User
 Spot `GetOrCreate`, or a new message with [Instance intent](../00-foundation/02-glossary.en.md#instance-intent). When such an operation reads a
 steady `Ready` record whose owner lease is missing, has a different `LeaseGeneration`, or has
-expired, and the relocation policy registered for that type on the node that `Reserve`s the new
-incarnation is `Disabled`, the Location repository releases that record. A User Spot's `Closing` and
+expired, and the relocation policy registered for that type on the node that will run the new
+incarnation's factory is `Disabled`, the Location repository releases that record. A User Spot's `Closing` and
 an incomplete initial activation aren't eligible merely because their allocation is `Active`; they
 follow their own lifecycle or recovery procedures. An Actor's `Closing` is a state in which the destroy
 has already closed admission, so if its owner lease is missing, has a different `LeaseGeneration`, or
 has expired, it's released by the same conditional batch. In that case the relocation policy condition
 doesn't apply, and both a creating operation and a call that destroys the same generation start this
-release. The node that `Reserve`s is the node that requested
-creation for an Actor or User Spot, and the target that received the activation envelope for an
-Instance Spot. If the type isn't registered on that node, the policy isn't treated as `Disabled`. A
+release. The node that runs the factory is the target the create operation selected for this attempt for an
+Actor or User Spot, and the target that received the activation envelope for an Instance Spot. When
+an Actor or User Spot create operation reads a steady `Ready` record whose owner lease is invalid, it
+first selects this attempt's target by the existing placement rules ([Actor model §6.3](../03-spot-actor/04-actor-model.en.md#63-selecting-mesh-and-placement-target),
+User Spot creation target selection) before deciding the release. If `Reserve` fails after the
+release commits and another target is chosen, the record is already `Missing`, so the ordinary
+creation procedure applies. The node
+that requested creation doesn't need to register the type — in a deployment that splits session
+nodes from play nodes, the requesting node has no factory. The policy is read from the `policy` of
+the `objectCapabilities` element ([§3.4](#34-how-different-languages-read-and-write-the-same-redis-record)) with the same `objectKind` and `stableType` in the MeshNode
+descriptor that target published; when the requesting node is the target, this equals its own
+registration. Only `disabled` counts as `Disabled`; a missing element or any other value doesn't.
+Only in a release that checks the policy, the same batch also conditions on the `StoreVersion` of
+the target descriptor record the policy was read from, in addition to the batch conditions below.
+The Actor `Closing` release and the §5.1 cleanup, which don't check the policy, don't add this condition. A
 User Spot is released only when every Actor membership remaining for that SpotId and
 `ObjectGeneration` belongs to an **ended-owner member**; no membership at all satisfies this. An
 ended-owner member is an Actor whose authority is a steady `Ready` record pointing at the same
@@ -2051,7 +2065,7 @@ route depends on the reread owner.
   received by the current owner holding that value.
 - **If the owner is neither the first target nor the source** (a further move followed from the first
   target), the reread authority no longer holds the first target's commit value, and the Store issues
-  generations from a global counter, so the source cannot know it. The source installs no §7.3 route.
+  a new generation from that ID's counter on each later move, so the source cannot know it. The source installs no §7.3 route.
   Under this **chained-move exception**, a message that later reaches the source ends with §7.3's
   no-route result (`Unavailable`). The source neither creates a route straight to the reread current
   owner nor guesses the first target's generation. Bound Session routes are moved by each target's command 44
@@ -2267,7 +2281,9 @@ store record golden fixture. Each item maps to one test.
   member whose owner lease is valid or that is moving, members exceeding the provider's single-batch bound, a recovery pointer, a User Spot's `Closing`, an Actor `Closing` with a valid owner lease, aggregate or relocation progress, an ordinary
   message or `Find`) verify that authority, membership, capacity, and factory execution count don't
   change. Inputs whose registered policies differ between the requesting node and the factory
-  target (for an Instance, the source and the receiving target) verify the policy source. Releasing a User
+  target (for an Instance, the source and the receiving target) verify that the policy comes from the
+  factory target, including a split deployment where the requesting node doesn't register the type
+  and the target's `disabled` policy releases the record. Releasing a User
   Spot with only ended-owner members verifies that those member Actor authorities and capacity are released in the same
   batch and that a later creation of the same ActorId starts a new incarnation.
 - A scan with a member after the first page, snapshot expiry, and Store failure aren't treated as

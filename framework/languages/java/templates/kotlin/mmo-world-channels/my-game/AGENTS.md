@@ -4,12 +4,12 @@
 
 Every server process in this project is a stateful ZLink node. Before writing code, decide which kind you are editing.
 
-- A game node is not a REST server. A player's state is owned by one session-bound Actor (or the Spot that owns a shared value). Load it once on connect; do not read the database while handling a request.
+- A play node hosts Spots. A session-bound Actor owns the player's state, and a Spot owns shared state. Load it once on connect; do not read the database while handling a request.
 - Write only results to the database, one transaction per round. Check duplicate requests in Actor or Spot memory.
 - While a game is running, a Spot handler never awaits a remote request or a database reply: the await holds the Spot's turn and stops every message and timer in it. When a round ends, the Spot writes the results of all its Actors in one transaction, then tells each Actor after the commit.
 - Values many players see live in node memory or one owning Spot; values many requests update are applied by that one owning Spot. A process that does not own a value sends a request to its owner instead of writing it.
 - Spots and Actors already process one message at a time. Do not guard their state with locks, semaphores or process-wide static stores, and do not update memory from database commit hooks; the writer updates its owner's memory after commit, others send a message to the owner.
-- Split roles so the game can scale out from day one: game nodes host lobby and room Spots and player Actors and are the only processes you add; a shared node hosts only game-wide Instance Spots (matchmaking, game-wide values), and game nodes do not register those factories. Send and request by Spot ID only; placement is configuration. Keep shared-Spot values recoverable from room resends or a database read at startup.
+- Split roles so the game can scale out from day one: play nodes host lobby and room Spots and player Actors and are the only processes you add; a dedicated play node hosts only game-wide Instance Spots (matchmaking, game-wide values), and the lobby and room hosts omit those factories. Send and request by Spot ID only; placement is configuration. Keep shared-Spot values recoverable from room resends or a database read at startup.
 - Never have two Actors or Spots wait on requests to each other inside a turn; notify with send and let the state owner decide.
 - Actors move between nodes when they join a Spot or relocate. Keep all mutable Actor fields in one state record, register stateful Actors with the state-preserving relocation policy, and test that save and restore preserve every field.
 - Player data reaches a Spot with the Actor that joins it; do not request it per player at Spot entry. If a Spot truly needs extra data, fetch it for all players in one request before the game starts.
@@ -19,11 +19,11 @@ Every server process in this project is a stateful ZLink node. Before writing co
 - Send money or reward results only after the database commit.
 - One decision has one owner; find the existing one before adding another. Take test expectations from the spec, not from the implementation.
 
-Details: [Stateful game nodes and the HTTP lobby](https://docs.zlink.systems/kotlin/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
+Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/kotlin/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
 
 ## Project overview
 
-This Kotlin project (Kotlin 2.3.21 on a Java 25 toolchain, built with Gradle) is an MMORPG example with two independent worlds, each with switchable field channels. It runs an Accounts node that lists the worlds over HTTP, two Session nodes (`sessionA` and `sessionB`), three Channel nodes (`channelA1`, `channelA2`, and `channelB`), and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework packages to `0.32.0` (`frameworkVersion`) and the ZLink binding to `1.23.0` (`bindingVersion`).
+This Kotlin project (Kotlin 2.3.21 on a Java 25 toolchain, built with Gradle) is an MMORPG example with two independent worlds, each with switchable field channels. It runs an accounts API node that lists the worlds over HTTP, two Session nodes (`sessionA` and `sessionB`), three play nodes (channel) (`channelA1`, `channelA2`, and `channelB`), and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework packages to `0.32.0` (`frameworkVersion`) and the ZLink binding to `1.23.0` (`bindingVersion`).
 
 The project layout and feature procedure below describe where to add gameplay. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 
@@ -57,7 +57,7 @@ For host process debugging, install JDK 25 and add `--local` or `-Local`. Add `-
 
 `server/accounts/src/main/kotlin/MyGame/accounts/Program.kt` publishes the world list (`WorldInfo`: world ID, name, and Session endpoint from its `worlds` setting) at `GET` `Names.WORLD_LIST_PATH` with the JDK `HttpServer`, and accepts only the `shutdown` control command. It does not join a RouteMesh. Player IDs come from this example client, so a production Session must authenticate them.
 
-### Session gateway
+### Session node
 
 `GameSession` answers `SessionInfoRequest` from the binding, finds or creates the Player Actor and binds it when it receives `EnterWorldRequest`, relays only packets in its client allowlist, and sends `ActionRejected(packet-not-allowed, 0)` for other packets. Add authentication before binding and retain the typed packet relay so Framework can identify the connection for replies to that player. Each Session node serves one world: `config.worldId` selects the mesh (`Names.mesh`) in which it creates the Player Actor.
 
@@ -111,7 +111,7 @@ Requests in the example game follow this path. Reading the code along this path 
 4. `ChangeChannelRequest` reaches `Actions.change`, which requests `joinSpot` to the Zone of the new channel. The client connection and `SessionInfo` do not change, even when that Zone is on another node.
 5. `EarnRequest` reaches `Actions.earn`. `GoldBalance` rejects an early or over-limit earn without changing state; accepted gold is saved before the Actor changes. `ViewRequest` and `Zone.show` return the current `PlayerView`.
 6. A reconnecting client sends `EnterWorldRequest` on a new Session. The same Actor is bound, and `Actions.enter` resends the view after checking the identity.
-7. To replace a Channel node, `runNode` in `Hosting.kt` requests relocation. Framework transfers the gold snapshot from `PlayerTransfer` and connected player IDs from `ZoneTransfer` to another node.
+7. To replace a play node (channel), `runNode` in `Hosting.kt` requests relocation. Framework transfers the gold snapshot from `PlayerTransfer` and connected player IDs from `ZoneTransfer` to another node.
 
 ## Extend this template's domain
 

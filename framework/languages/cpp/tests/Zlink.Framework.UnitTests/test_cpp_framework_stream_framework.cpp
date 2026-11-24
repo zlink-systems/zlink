@@ -2027,8 +2027,12 @@ int transport_bound_close (bool tls, bool remote = false)
         }
     } cleanup{host, *mesh, session};
     host.start (provider).result ().value ();
-    const auto port = endpoint_port (
-      listener_endpoint (*listeners, listener_kind_t::stream, "transport-close-stream"));
+    const auto bound_endpoint =
+      listener_endpoint (*listeners, listener_kind_t::stream, "transport-close-stream");
+    // Listener status keeps the configured scheme (#5460).
+    if (!bound_endpoint.starts_with (tls ? "tls://127.0.0.1:" : "ws://127.0.0.1:"))
+        return 360;
+    const auto port = endpoint_port (bound_endpoint);
     boost::asio::io_context io;
     boost::asio::ssl::context ssl (boost::asio::ssl::context::tls_client);
     ssl.set_verify_mode (boost::asio::ssl::verify_none);

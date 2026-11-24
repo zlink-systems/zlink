@@ -8,12 +8,12 @@
 
 Every server process in this project is a stateful ZLink node. Before writing code, decide which kind you are editing.
 
-- A game node is not a REST server. A player's state is owned by one session-bound Actor (or the Spot that owns a shared value). Load it once on connect; do not read the database while handling a request.
+- A play node hosts Spots. A session-bound Actor owns the player's state, and a Spot owns shared state. Load it once on connect; do not read the database while handling a request.
 - Write only results to the database, one transaction per round. Check duplicate requests in Actor or Spot memory.
 - While a game is running, a Spot handler never awaits a remote request or a database reply: the await holds the Spot's turn and stops every message and timer in it. When a round ends, the Spot writes the results of all its Actors in one transaction, then tells each Actor after the commit.
 - Values many players see live in node memory or one owning Spot; values many requests update are applied by that one owning Spot. A process that does not own a value sends a request to its owner instead of writing it.
 - Spots and Actors already process one message at a time. Do not guard their state with locks, semaphores or process-wide static stores, and do not update memory from database commit hooks; the writer updates its owner's memory after commit, others send a message to the owner.
-- Split roles so the game can scale out from day one: game nodes host lobby and room Spots and player Actors and are the only processes you add; a shared node hosts only game-wide Instance Spots (matchmaking, game-wide values), and game nodes do not register those factories. Send and request by Spot ID only; placement is configuration. Keep shared-Spot values recoverable from room resends or a database read at startup.
+- Split roles so the game can scale out from day one: play nodes host lobby and room Spots and player Actors and are the only processes you add; a dedicated play node hosts only game-wide Instance Spots (matchmaking, game-wide values), and the lobby and room hosts omit those factories. Send and request by Spot ID only; placement is configuration. Keep shared-Spot values recoverable from room resends or a database read at startup.
 - Never have two Actors or Spots wait on requests to each other inside a turn; notify with send and let the state owner decide.
 - Actors move between nodes when they join a Spot or relocate. Keep all mutable Actor fields in one state record, register stateful Actors with the state-preserving relocation policy, and test that save and restore preserve every field.
 - Player data reaches a Spot with the Actor that joins it; do not request it per player at Spot entry. If a Spot truly needs extra data, fetch it for all players in one request before the game starts.
@@ -23,11 +23,11 @@ Every server process in this project is a stateful ZLink node. Before writing co
 - Send money or reward results only after the database commit.
 - One decision has one owner; find the existing one before adding another. Take test expectations from the spec, not from the implementation.
 
-Details: [Stateful game nodes and the HTTP lobby](https://docs.zlink.systems/cpp/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
+Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/cpp/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
 
 ## Project overview
 
-This C++20 project is an MORPG example with shared fields on several nodes and party dungeons. It runs a Session gateway for connections, Field nodes A and B that host four Fields with border visibility and dynamic Party Spots, Instance nodes A and B that host party Dungeons, and Redis for location and relocation state. A Party Spot is independent of Fields and its ID is the party ID. `bootstrap.cmake` installs the ZLink Framework prebuilt of the version named by its `ZLINK_FRAMEWORK_CPP_VERSION`, the only place that names the Framework version; no package manager runs.
+This C++20 project is an MORPG example with shared fields on several nodes and party dungeons. It runs a Session node for connections, play nodes A and B (field) that host four Fields with border visibility and dynamic Party Spots, play nodes A and B (dungeon) that host party Dungeons, and Redis for location and relocation state. A Party Spot is independent of Fields and its ID is the party ID. `bootstrap.cmake` installs the ZLink Framework prebuilt of the version named by its `ZLINK_FRAMEWORK_CPP_VERSION`, the only place that names the Framework version; no package manager runs.
 
 The project layout and feature procedure below describe where to add gameplay. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 
@@ -58,13 +58,13 @@ For host process debugging, install a C++20 compiler (GCC 13 or later, or Visual
 
 ## Project layout and extension points
 
-### Session gateway
+### Session node
 
 `server/session/main.cpp` registers the STREAM listener and `Session`, and `server/session/session.hpp` handles connection callbacks and forwards incoming packets in `Session::on_packet`. A Session is a communication object for a connection; Framework provides binding to associate it with a player state object. Add authentication before binding and retain the existing typed packet relay so Framework can identify the connection for replies to that player. `Session` answers `SessionInfoRequest` with a `SessionInfo` push built from the bound Actor, because a C++ Session cannot yet send a typed reply that it creates (see Known issues in the README).
 
 ### Fields, parties and players
 
-An Actor is a game state object addressed by ID; `Player` in `server/shared/player.hpp` hosts the player's `PlayerState`, which retains accepted coordinates, movement sequence, and Party ID. `FieldPositionDomain` in `server/field/domain.hpp` owns movement decisions, arrival validation, and remaining movement budget. `WorldEntry` in `server/shared/entry.hpp` handles the first packet, and both Field and Instance nodes register it together with the `Player` factory. A Spot is a state object that accepts Actors and executes shared game rules; `Field` in `server/field/field.hpp` manages field visibility and movement observations, while `PartySpot` in `server/field/party.hpp` owns party membership and run progress. Visibility values are copies of Actor movement state used for observation, so apply accepted player state changes to the Actor.
+An Actor is a game state object addressed by ID; `Player` in `server/shared/player.hpp` hosts the player's `PlayerState`, which retains accepted coordinates, movement sequence, and Party ID. `FieldPositionDomain` in `server/field/domain.hpp` owns movement decisions, arrival validation, and remaining movement budget. `WorldEntry` in `server/shared/entry.hpp` handles the first packet, and both play nodes (field and dungeon) register it together with the `Player` factory. A Spot is a state object that accepts Actors and executes shared game rules; `Field` in `server/field/field.hpp` manages field visibility and movement observations, while `PartySpot` in `server/field/party.hpp` owns party membership and run progress. Visibility values are copies of Actor movement state used for observation, so apply accepted player state changes to the Actor.
 
 `server/field/main.cpp` registers `WorldEntry`, the `Player` factory, the dynamic `PartySpot` factory, and the `Field` factory with the `FieldCapacity` stable type limit. `NodeControl` creates the fields listed in `FieldIds` at startup. Add handlers in `Field::configure()` with `add_actor_send`. When changing node composition, update registrations, `server/config/`, and the descriptor together so the structure check validates the same composition.
 
@@ -158,7 +158,7 @@ Investigate Framework failures using actual replies, events, and lifecycle resul
 
 Preserve the first failing run and read its logs before deciding whether to run it again. An intermittent failure is an observed defect; a subsequent pass does not invalidate it. `.logs/run-<id>/` contains the effective settings that `e2e/world.hpp` writes at node startup and the logs for each node. Each selected scenario starts its own nodes and writes to its own `.logs/run-<id>/` directory.
 
-Settings files are `fieldA.json`, `fieldB.json`, `instanceA.json`, `instanceB.json`, and `session.json`; a replaced Instance node uses its file name with the suffix `-replacement`. `e2e/process.hpp` records diagnostic stderr in `<node>.err.log` and readiness/control stdout in `<node>.out.log`, where `<node>` is the settings file name without `.json`. Helper commands (Compose and Docker CLI calls) write `command-<n>.out.log` and `command-<n>.err.log`. Local build output is in `.logs/build.log`. Docker build and outer cleanup logs are in `.logs/docker-<project>/`: `build.log`, `redis-start.log`, `redis.log`, `cleanup.log`, and `containers-stop.log` from the PowerShell runner.
+Settings files are `fieldA.json`, `fieldB.json`, `instanceA.json`, `instanceB.json`, and `session.json`; a replaced play node (dungeon) uses its file name with the suffix `-replacement`. `e2e/process.hpp` records diagnostic stderr in `<node>.err.log` and readiness/control stdout in `<node>.out.log`, where `<node>` is the settings file name without `.json`. Helper commands (Compose and Docker CLI calls) write `command-<n>.out.log` and `command-<n>.err.log`. Local build output is in `.logs/build.log`. Docker build and outer cleanup logs are in `.logs/docker-<project>/`: `build.log`, `redis-start.log`, `redis.log`, `cleanup.log`, and `containers-stop.log` from the PowerShell runner.
 
 ### Diagnostic levels
 

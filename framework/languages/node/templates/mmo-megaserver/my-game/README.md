@@ -1,13 +1,18 @@
 # MyGame megaserver
 
-Players share one world mesh. Entry selects the first region instance with room; each Region owns its admission, membership and positions. Dungeon Spots run on the instance process. A Session binds a persistent Player Actor and relays typed packets.
+Players share one world mesh. Entry selects the first region instance with room; each Region owns its admission, membership and positions. Dungeon Spots run on the play node (dungeon). A Session binds a persistent Player Actor and relays typed packets.
 
 ```mermaid
 flowchart LR
-  players[Players] -->|STREAM| session[Session]
-  session -->|relay| regionA[Region A]
-  regionA --- regionB[Region B]
-  regionA -->|GetOrCreate| instance[Dungeon]
+  subgraph playNodes["Play nodes"]
+    regionA["Play node A (region)"]
+    regionB["Play node B (region)"]
+    instance["Play node (dungeon)"]
+  end
+  players[Players] -->|STREAM| session["Session node"]
+  session -->|relay| regionA
+  regionA --- regionB
+  regionA -->|GetOrCreate| instance
   regionA -->|Location / lease| location[Redis]
 ```
 
@@ -61,7 +66,7 @@ Use the same connector release as `package.json` dependencies `@zlink-systems/fr
 
 ### First region example
 
-Save as `e2e/connect-once.mts` in a copy, run `npm run build`, then `node dist/e2e/connect-once.mjs <actual-session-endpoint>`. Keep Session, Region/Instance nodes, and Redis running separately; e2e removes its temporary deployment. Use a fresh player ID. Received contract int64 values remain decimal strings with the JSON codec; the example prints the payload without numeric conversion. See `e2e/client.mts` for the complete flow.
+Save as `e2e/connect-once.mts` in a copy, run `npm run build`, then `node dist/e2e/connect-once.mjs <actual-session-endpoint>`. Keep Session, Region/play nodes (dungeon), and Redis running separately; e2e removes its temporary deployment. Use a fresh player ID. Received contract int64 values remain decimal strings with the JSON codec; the example prints the payload without numeric conversion. See `e2e/client.mts` for the complete flow.
 
 ```typescript
 import '../.zlink-framework-json-schemas.cjs';
@@ -120,9 +125,9 @@ pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
 | --------- | ---------------------------------------------------------------------------------------------------------------------- |
 | region    | Region replicas reach capacity, unknown regions are rejected, and the client remains connected after both replies. |
 | movement  | The server validates delta and sequence, keeps state after rejection, and accepts after its `RetryAfterMs`. |
-| dungeon   | Region creates a Dungeon and receives its identity from the instance process.                                          |
+| dungeon   | Region creates a Dungeon and receives its identity from the play node (dungeon).                                          |
 | reconnect | A new connection preserves Actor identity, generation, instance and position.                                          |
-| update    | Region host relocation preserves connected Sessions and game state. The stopped host is replaced and accepts new work. |
+| update    | play node (region) relocation preserves connected Sessions and game state. The stopped host is replaced and accepts new work. |
 
 Each scenario uses an isolated Compose project, Redis prefix and `.logs/run-<id>/` directory. Redis uses an OS-assigned loopback port. The runner observes protocol output and cleans up its own nodes and Compose project. Cleanup failure returns a nonzero exit code.
 
@@ -144,10 +149,10 @@ Node typed handler forwarding requires the packet-name-to-class table in `server
 
 ## Deployment sequence
 
-Start Redis, then the region and instance processes, then the Session process. Each role has its own entrypoint under `server/`; pass its JSON configuration path as the first argument. Use a unique node ID, shared Redis prefix and mesh name, and reachable advertised endpoints in deployed configurations.
+Start Redis, then the region and instance processes, then the Session node. Each role has its own entrypoint under `server/`; pass its JSON configuration path as the first argument. Use a unique node ID, shared Redis prefix and mesh name, and reachable advertised endpoints in deployed configurations.
 
-Send `drain` to the selected region process. Wait for `RELOCATION_REQUESTED`, `RELOCATED` and `SAFE_TO_SHUTDOWN`. Send `shutdown`, verify `STOPPED` with outcome Stopped and reason None, then start the replacement with the same configuration. Capacity defaults to two players per Region and Region stable-type limit defaults to two instances per region process. Ensure the surviving host has capacity for relocation.
+Send `drain` to the selected play node (region). Wait for `RELOCATION_REQUESTED`, `RELOCATED` and `SAFE_TO_SHUTDOWN`. Send `shutdown`, verify `STOPPED` with outcome Stopped and reason None, then start the replacement with the same configuration. Capacity defaults to two players per Region and Region stable-type limit defaults to two instances per play node (region). Ensure the surviving host has capacity for relocation.
 
-The e2e fixture limits each Region node to two Region Spots and keeps forest-1 and forest-2 occupied before drain. After relocation the survivor is full. Once the replacement reports `READY`, a new desert Region must be served by that replacement. Existing Region state and Session identity checks remain required. Only Region nodes register the application Entry and its first admission handler, so only those nodes declare an Entry in `zlink.structure.json`.
+The e2e fixture limits each play node (region) to two Region Spots and keeps forest-1 and forest-2 occupied before drain. After relocation the survivor is full. Once the replacement reports `READY`, a new desert Region must be served by that replacement. Existing Region state and Session identity checks remain required. Only play nodes (region) register the application Entry and its first admission handler, so only those nodes declare an Entry in `zlink.structure.json`.
 
 Message Follow is explicitly set to 30 seconds. The `SAFE_TO_SHUTDOWN` observation budget is the follow duration plus the existing relocation budget; the relocation operation deadline is unchanged.

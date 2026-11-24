@@ -40,6 +40,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
@@ -104,18 +105,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     private boolean relocationFailed;
 
     private <T> T inStateLane(Supplier<T> work) {
-        try {
-            return stateLane.runAsync(work).toCompletableFuture().join();
-        } catch (CompletionException failure) {
-            Throwable cause = failure.getCause();
-            if (cause instanceof RuntimeException runtimeFailure) {
-                throw runtimeFailure;
-            }
-            if (cause instanceof Error error) {
-                throw error;
-            }
-            throw failure;
-        }
+        return stateLane.awaitResult(work);
     }
 
     private <T> CompletionStage<T> onStateLane(Supplier<T> work) {
@@ -381,14 +371,34 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     }
 
     public CompletionStage<Void> notifyDisconnectedAll() {
-        return notifyDisconnectedAllCore(RELAY_SUBMIT_TIMEOUT);
+        return notifyDisconnectedAll(RELAY_SUBMIT_TIMEOUT);
     }
 
     public CompletionStage<Void> notifyDisconnectedAll(Duration timeout) {
-        return notifyDisconnectedAllCore(timeout);
+        return notifyDisconnectedAllCore(timeout, null);
     }
 
-    private CompletionStage<Void> notifyDisconnectedAllCore(Duration timeout) {
+    public CompletionStage<Void> notifyDisconnectedAll(
+            CompletionStage<Void> acceptedPackets, Duration timeout) {
+        if (bound.isEmpty() || acceptedPackets.toCompletableFuture().isDone()) {
+            return notifyDisconnectedAll(timeout);
+        }
+        long deadlineNanos = System.nanoTime() + timeout.toNanos();
+        var deadline =
+                new CompletableFuture<Void>().orTimeout(timeout.toNanos(), TimeUnit.NANOSECONDS);
+        return CompletableFuture.anyOf(acceptedPackets.toCompletableFuture(), deadline)
+                .handle((ignored, failure) -> null)
+                .thenComposeAsync(
+                        ignored ->
+                                notifyDisconnectedAllCore(
+                                        Duration.ofNanos(
+                                                Math.max(0, deadlineNanos - System.nanoTime())),
+                                        deadline))
+                .whenComplete((ignored, failure) -> deadline.complete(null));
+    }
+
+    private CompletionStage<Void> notifyDisconnectedAllCore(
+            Duration timeout, CompletableFuture<Void> deadline) {
         Objects.requireNonNull(timeout, "timeout");
         // The existing state owner fixes the binding identities and ends its admission together.
         StopRelocationState stopped = stopRelocationOwnerCore(null, null);
@@ -400,7 +410,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                         "Session disconnected while relocation state was pending"));
         return CompletableFuture.allOf(
                         current.stream()
-                                .map(actor -> notifyDisconnectedSafely(actor, timeout))
+                                .map(actor -> notifyDisconnectedSafely(actor, timeout, deadline))
                                 .toArray(CompletableFuture[]::new))
                 .whenComplete(
                         (ignored, error) -> {
@@ -457,10 +467,10 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
             List<ZLinkSessionActor> disconnected) {}
 
     private static CompletableFuture<Void> notifyDisconnectedSafely(
-            ZLinkSessionActor actor, Duration timeout) {
+            ZLinkSessionActor actor, Duration timeout, CompletableFuture<Void> deadline) {
         try {
             return actor instanceof ZLinkBoundActor boundActor
-                    ? boundActor.notifyDisconnected(timeout).toCompletableFuture()
+                    ? boundActor.notifyDisconnected(timeout, deadline).toCompletableFuture()
                     : actor.notifyDisconnected().toCompletableFuture();
         } catch (RuntimeException error) {
             return CompletableFuture.failedFuture(error);
@@ -704,6 +714,10 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                 (ignored, current) -> current.toNativeTarget(targetActor)));
     }
 
+    boolean hasBindingTransition(String actorId) {
+        return bindingTransitions.containsKey(actorId);
+    }
+
     private CompletionStage<ZLinkBoundActor> replaceBinding(
             String actorId, Supplier<CompletionStage<ZLinkBoundActor>> createBinding) {
         CompletableFuture<Void> tail = new CompletableFuture<>();
@@ -726,11 +740,10 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                     tail.completeAsync(() -> null)
                             .whenComplete(
                                     (completed, ignoredError) ->
-                                            inStateLane(
-                                                    () -> {
-                                                        bindingTransitions.remove(actorId, tail);
-                                                        return null;
-                                                    }));
+                                            stateLane.runNowOrQueue(
+                                                    () ->
+                                                            bindingTransitions.remove(
+                                                                    actorId, tail)));
                 });
         return installation;
     }
@@ -750,17 +763,30 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         }
         return created.thenCompose(
                 actor -> {
-                    previous.forEach(this::removeBinding);
-                    BindingPublication publication =
-                            inStateLane(
-                                    () -> {
-                                        BindingCleanup cleanup = installBindingOnLane(actor);
-                                        CompletionStage<Void> physical = announceBound(actor);
-                                        stream.publishBoundActor(sessionRid, actor.actorId());
-                                        return new BindingPublication(cleanup, physical);
+                    CompletableFuture<?>[] removals =
+                            previous.stream()
+                                    .map(this::removeBinding)
+                                    .map(CompletionStage::toCompletableFuture)
+                                    .toArray(CompletableFuture<?>[]::new);
+                    return CompletableFuture.allOf(removals)
+                            .thenCompose(
+                                    ignored ->
+                                            stateLane.runNowOrQueue(
+                                                    () -> {
+                                                        BindingCleanup cleanup =
+                                                                installBindingOnLane(actor);
+                                                        CompletionStage<Void> physical =
+                                                                announceBound(actor);
+                                                        stream.publishBoundActor(
+                                                                sessionRid, actor.actorId());
+                                                        return new BindingPublication(
+                                                                cleanup, physical);
+                                                    }))
+                            .thenCompose(
+                                    publication -> {
+                                        finishBindingInstall(actor, publication.cleanup());
+                                        return publication.physical().thenApply(ignored -> actor);
                                     });
-                    finishBindingInstall(actor, publication.cleanup());
-                    return publication.physical().thenApply(ignored -> actor);
                 });
     }
 
@@ -888,9 +914,9 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         }
     }
 
-    private void removeBinding(ZLinkSessionActor actor) {
-        BindingCleanup cleanup =
-                inStateLane(
+    private CompletionStage<Void> removeBinding(ZLinkSessionActor actor) {
+        return stateLane
+                .runNowOrQueue(
                         () -> {
                             if (!bound.remove(actor)) {
                                 return null;
@@ -923,24 +949,44 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                 removeSealRecords(actor.actorId());
                             }
                             return new BindingCleanup(abandoned, abandonedSeal);
+                        })
+                .thenCompose(
+                        cleanup ->
+                                cleanup == null
+                                        ? CompletableFuture.<Void>completedFuture(null)
+                                        : finishRemoval(actor, cleanup))
+                .whenComplete(
+                        (ignored, failure) -> {
+                            // Callers may discard the stage, so report failures here.
+                            if (failure != null) {
+                                LOGGER.log(Level.WARNING, "Actor binding cleanup failed", failure);
+                            }
                         });
-        if (cleanup != null) {
-            if (!inStateLane(() -> relocationStopped)) {
-                announceUnbound((ZLinkBoundActor) actor);
-            }
-            failHeld(
-                    cleanup.held(),
-                    new ZLinkConfigurationException(
-                            "bound Actor was removed while relocation ingress was held: "
-                                    + actor.actorId()));
-            if (cleanup.seal() != null) {
-                cleanup.seal()
-                        .fail(
-                                new ZLinkConfigurationException(
-                                        "bound Actor was removed before relocation seal drained: "
-                                                + actor.actorId()));
-            }
-        }
+    }
+
+    private CompletionStage<Void> finishRemoval(ZLinkSessionActor actor, BindingCleanup cleanup) {
+        return stateLane
+                .runNowOrQueue(() -> relocationStopped)
+                .thenAccept(
+                        stopped -> {
+                            if (!stopped) {
+                                announceUnbound((ZLinkBoundActor) actor);
+                            }
+                            failHeld(
+                                    cleanup.held(),
+                                    new ZLinkConfigurationException(
+                                            "bound Actor was removed while relocation ingress was"
+                                                    + " held: "
+                                                    + actor.actorId()));
+                            if (cleanup.seal() != null) {
+                                cleanup.seal()
+                                        .fail(
+                                                new ZLinkConfigurationException(
+                                                        "bound Actor was removed before relocation"
+                                                                + " seal drained: "
+                                                                + actor.actorId()));
+                            }
+                        });
     }
 
     private record BindingCleanup(List<HeldIngress> held, SealTerminal seal) {}
@@ -958,27 +1004,11 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         IngressAdmissionState admission =
                 inStateLane(
                         () -> {
-                            if (!isCurrentBinding(actor)) {
-                                return new IngressAdmissionState(
-                                        null,
-                                        CompletableFuture.<Void>failedFuture(
-                                                new ZLinkFrameworkException(
-                                                        ZLinkFrameworkErrorKind.UNAVAILABLE,
-                                                        "bound Actor is no longer the current"
-                                                                + " Session binding: "
-                                                                + actor.actorId())));
-                            }
-                            StoredBindingRoute route = bindingRoutes.get(actor.actorId());
                             IngressGate gate = ingressGates.get(actor.actorId());
-                            if (route == null || gate == null) {
-                                return new IngressAdmissionState(
-                                        null,
-                                        CompletableFuture.<Void>failedFuture(
-                                                new ZLinkFrameworkException(
-                                                        ZLinkFrameworkErrorKind.UNAVAILABLE,
-                                                        "Session ingress binding state is"
-                                                                + " unavailable: "
-                                                                + actor.actorId())));
+                            if (!isCurrentBinding(actor)
+                                    || !bindingRoutes.containsKey(actor.actorId())
+                                    || gate == null) {
+                                return null;
                             }
                             if (gate.seal != null) {
                                 CompletableFuture<Void> held = new CompletableFuture<>();
@@ -990,12 +1020,23 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                             CompletionStage<Void> submission = invokeIngress(operation, accepted);
                             return new IngressAdmissionState(gate, submission);
                         });
+        if (admission == null) {
+            return CompletableFuture.failedFuture(new RelayBindingUnavailable(actor.actorId()));
+        }
         if (admission.gate() != null) {
             admission
                     .submission()
                     .whenComplete((ignored, failure) -> completeIngress(actor, admission.gate()));
         }
         return admission.submission();
+    }
+
+    static final class RelayBindingUnavailable extends ZLinkFrameworkException {
+        RelayBindingUnavailable(String actorId) {
+            super(
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    "Session ingress binding state is unavailable: " + actorId);
+        }
     }
 
     private record IngressAdmissionState(IngressGate gate, CompletionStage<Void> submission) {}
@@ -1209,7 +1250,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                         disconnectFailure);
         }
         stopped.disconnected()
-                .forEach(actor -> notifyDisconnectedSafely(actor, RELAY_SUBMIT_TIMEOUT));
+                .forEach(actor -> notifyDisconnectedSafely(actor, RELAY_SUBMIT_TIMEOUT, null));
         completeRelocationStop(stopped, failure);
     }
 

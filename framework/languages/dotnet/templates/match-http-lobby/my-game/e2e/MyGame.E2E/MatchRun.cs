@@ -189,7 +189,7 @@ internal sealed class MatchRun(string root) : IAsyncDisposable
     public async Task RestartLobbyAsync(CancellationToken ct)
     {
         if (lobbyProcess is null)
-            throw new InvalidOperationException("The HTTP lobby is not running.");
+            throw new InvalidOperationException("The API node is not running.");
         await lobbyProcess.StopAsync();
         var lobby = await StartNodeAsync("lobby", "MyGame.Lobby", true, ct);
         lobbyProcess = lobby.Process;

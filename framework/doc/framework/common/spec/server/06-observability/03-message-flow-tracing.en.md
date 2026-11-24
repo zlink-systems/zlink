@@ -138,9 +138,10 @@ When `zlink.message_flow` records the cause of a failure, backpressure,
 or drop, `reason` is one of the following values.
 
 `backpressure`, `stale_target`, `target_closed`, `shutdown`,
-`location_unavailable`, `activation_rejected`, `activation_timeout`.
+`location_unavailable`, `activation_rejected`, `activation_timeout`,
+`session_creation_failed`.
 
-The last three values respectively mean that an Instance Spot's location
+`session_creation_failed` means the session object of a STREAM connection couldn't be built, so that packet wasn't delivered ([STREAM session §7](../04-session/01-stream-session.en.md#7-error-boundary)). The three values before it respectively mean that an Instance Spot's location
 couldn't be found, new Spot creation was declined, or creation wasn't
 finished within the time limit. Instance Spot close and lease fencing are
 recorded as `target_closed`.
@@ -150,7 +151,17 @@ the following values.
 
 `no_handler`, `decode_error`, `handler_exception`, `invalid_frame`,
 `reply_path_missing`, `unexpected_reply`, `backpressure`, `stale_target`,
-`shutdown`.
+`shutdown`, `session_creation_failed`, `encode_error`.
+
+`encode_error` means the sender could not encode an application message into wire bytes and so did
+not send it — for example, a field not declared nullable is null, or a value exceeds the wire format's
+range ([Message model](../00-foundation/05-message-model.en.md)). The failure happens before the `sent`
+boundary in §2.1, so no `zlink.message_flow` stage record is written; instead one `zlink.dispatch_error`
+is recorded with the packet and flow that were about to be sent. It carries no `phase`, and its
+`action` is `fail_caller` — the send or request caller ends with the same failure. The record carries
+the message type name and the error message carries the field path. When the send happened inside a
+handler and that failure makes the handler fail, the handler's own record (`handler_exception`) is
+written separately.
 
 Use `no_handler` only when the existing admission and Message Follow rules have established the local
 dispatch target and only its packet-handler lookup fails. Use `stale_target` when those rules terminate

@@ -149,7 +149,7 @@ inline void check_structure (const std::filesystem::path &root)
                                     return spot.at ("owner") == id && spot.at ("kind") == "entry";
                                 })
                    == 1,
-                 "Room node lacks Entry Spot");
+                 "play node (match) lacks Entry Spot");
     std::set<std::tuple<std::string, std::string, std::string, std::string>> edges;
     for (const auto &edge : j.at ("edges")) {
         const auto from = nonempty (edge, "from"), to = nonempty (edge, "to"),

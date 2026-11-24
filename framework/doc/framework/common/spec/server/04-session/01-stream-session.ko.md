@@ -221,6 +221,14 @@ connector는 connector instance별 typed codec option
 | Handshake 실패 | Session이 만들어지기 전의 실패이므로 session callback을 실행할 대상이 없다. Runtime monitoring에만 기록한다. |
 | Socket·node 단위 오류 | 특정 session 하나의 오류로 확정할 수 없으므로 session callback을 실행하지 않고 Runtime monitoring에 기록한다. |
 | Application handler 예외 | Transport 오류가 아니므로 session 오류 callback을 실행하지 않고 handler 예외 처리 경로를 사용한다. |
+| Session 객체 생성 실패(등록한 session type의 factory·DI가 예외로 끝남) | 아래 "Session 생성 실패" 규칙을 따른다. Session이 없으므로 session 오류 callback을 실행하지 않는다. |
+
+**Session 생성 실패.** Framework가 연결 하나의 session 객체를 만들지 못하면(연결 수립 시점이든 첫 packet 시점이든) 그 연결의 session admission 경계 한 곳에서 다음을 정확히 한 번 한다. 같은 실패를 연결 수립과 첫 packet이 함께 보아도 한 번이다.
+
+- 원래 예외를 기존 runtime logger에 `Error` 수준으로 기록한다. Debug 설정과 무관하게 기록한다.
+- 생성을 일으킨 packet이 있으면 그 packet을 handler에 전달하지 않고 그 packet의 message-flow를 `outcome=failed`, `reason=session_creation_failed`로 끝낸다([Message-flow tracing §3.1](../06-observability/03-message-flow-tracing.ko.md#31-모든-언어가-공유하는-닫힌-값)). `Request`는 같은 sequence의 `Error` reply(`InternalFailure`)로 끝내며, 이 reply를 먼저 제출한 뒤 아래 `session-closing`을 제출하고 [§4.1](#41-transport-종료-경계)의 transport 종료를 시작한다. 연결 수립만 있고 packet이 없으면 message가 없으므로 message-flow 기록을 만들지 않는다.
+- 그 연결을 `session-closing` control packet의 종료 사유 `TransportError`로 닫는다. 진단 문자열에는 session 생성 실패임을 적는다. 새 종료 사유를 만들지 않는다 — `TransportError`의 의미에 이 경우가 포함되고, 종료 사유는 [Stream Connector §6.2](../../stream-connector/32-stream-connector.ko.md#62-종료-사유)의 닫힌 집합이고, client 쪽에서 이 연결은 서버가 session을 열지 못한 transport 실패와 같게 다룬다. `ProtocolError`는 client의 위반을 뜻하므로 쓰지 않는다.
+- 연결 하나의 생성 실패로 process나 다른 연결을 끝내지 않는다.
 
 Session 오류 callback은 monitor에서 관찰 가능한 transport 오류를 session 단위로 다시
 올려주는 축으로만 제한한다. Core monitor의 `DISCONNECTED` event로 연결이 끝나면 Framework는 네 언어 모두
@@ -230,8 +238,9 @@ session 오류 callback을 `TransportError` 종류로 한 번 실행한 뒤 기�
 오류에만 있고, `UNKNOWN`(0)도 값이 있는 것으로 본다([Core monitoring §3.2](../../../../../../../core/doc/spec/core/06-monitoring.ko.md#32-value와-flags)). Framework는 이 값을 해석하거나 다른 종료 사유로 바꾸지 않는다.
 
 서버 STREAM session의 liveness는 [Stream Connector §6](../../stream-connector/32-stream-connector.ko.md#6-연결-생명주기)의 heartbeat 규칙을 따른다. Heartbeat interval과 timeout의 기본값은 그 절의 기본값이며 Stream node 설정으로 바꿀 수 있다. 서버에서 무수신 timeout의 결과는 reconnect가 아니라 `heartbeat_timeout`으로 session을 닫는 것이다.
+Session마다 ping 시각은 연결이 성립한 시각에 interval의 배수를 더한 시각이다. 첫 ping은 연결 시각 + interval에 보낸다. 실행이 늦어 여러 시각을 지나쳤으면 ping을 한 번만 보내고, 다음 ping은 같은 배수 위의 다음 미래 시각에 보낸다.
 
-애플리케이션 유휴 종료는 Stream node의 idle timeout을 양수로 설정했을 때만 동작한다. 기본값은 0이며 0은 유휴 종료를 하지 않음을 뜻한다. 켜면 마지막 애플리케이션 packet을 받은 뒤 idle timeout이 지난 session을 `idle_timeout`으로 닫는다. Heartbeat control frame은 애플리케이션 활동으로 세지 않는다.
+애플리케이션 유휴 종료는 Stream node의 idle timeout을 양수로 설정했을 때만 동작한다. 기본값은 0이며 0은 유휴 종료를 하지 않음을 뜻한다. 켜면 마지막 애플리케이션 packet을 받은 뒤 idle timeout이 지난 session을 `idle_timeout`으로 닫는다. Heartbeat control frame은 애플리케이션 활동으로 세지 않는다. 무수신 기한과 idle 기한이 함께 지났으면 `heartbeat_timeout`으로 닫는다.
 
 Heartbeat interval과 timeout은 양수이고 timeout이 interval보다 커야 한다. Idle timeout은 0 이상이다. 이 조건을 어긴 설정은 host 시작 전에 설정 오류로 거부한다.
 
@@ -342,6 +351,7 @@ STREAM packet과 cross-node Session record가 공유하는 host permit 규칙은
   매칭해 정상 완료한다.
 - Handshake 실패와 socket 단위 오류는 session 오류 callback을 실행하지 않고 runtime monitoring에만
   기록된다.
+- Session factory가 예외를 던지면, 연결 수립 시점과 첫 packet 시점 각각에서 원래 예외가 Error로 한 번 기록되고 client는 `TransportError` 종료 사유로 끊김을 관찰한다. 첫 packet이 `Request`면 `Error(InternalFailure)` reply를 받는다. 같은 host의 다른 연결은 계속 동작한다.
 - Core `DISCONNECTED` event로 끝난 session의 오류 callback에서 그 event의 `zlink_disconnect_reason_t`
   값을 읽을 수 있고, 값은 Core가 알린 값과 같다.
 

@@ -1650,20 +1650,23 @@ for (const provider of [false, true]) {
 
 test('a yielded turn waits for the same gate to reopen', async () => {
   let allowed = true,
-    wake,
     complete,
-    signalYielded;
+    signalYielded,
+    signalPaused;
   const source = new Promise((resolve) => {
     complete = resolve;
   });
   const yielded = new Promise((resolve) => {
     signalYielded = resolve;
   });
+  const paused = new Promise((resolve) => {
+    signalPaused = resolve;
+  });
   const barrier = new internal.ZLinkExecutionBarrier();
   barrier.setExecutionPolicy(() => ({
     executionDecision: (_owner, onWake) => {
       if (allowed) return 'allowed';
-      wake = onWake;
+      signalPaused(onWake);
       return 'paused';
     },
     executionFailure: () => assert.fail('a pause is not a loss')
@@ -1679,7 +1682,7 @@ test('a yielded turn waits for the same gate to reopen', async () => {
   await yielded;
   allowed = false;
   complete();
-  await new Promise((resolve) => setImmediate(resolve));
+  const wake = await Promise.race([paused, pending]);
   assert.equal(calls, 0);
   assert.equal(typeof wake, 'function');
   allowed = true;

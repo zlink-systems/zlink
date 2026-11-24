@@ -4,10 +4,15 @@ This Node.js template creates parties in a lobby and moves ready parties into Du
 
 ```mermaid
 flowchart LR
-  players[Players] -->|STREAM| session[Session]
-  session -->|relay| lobby[Lobby: Entry and Party]
-  lobby -->|GetOrCreate| instanceA[Instance A: Entry and Dungeon]
-  instanceA <-->|host relocation| instanceB[Instance B: Dungeon]
+  subgraph playNodes["Play nodes"]
+    lobby["Play node (party lobby): Entry and Party"]
+    instanceA["Play node A (dungeon): Entry and Dungeon"]
+    instanceB["Play node B (dungeon): Dungeon"]
+  end
+  players[Players] -->|STREAM| session["Session node"]
+  session -->|relay| lobby
+  lobby -->|GetOrCreate| instanceA
+  instanceA <-->|host relocation| instanceB
   lobby -->|Location / lease| location[Redis]
 ```
 
@@ -63,7 +68,7 @@ Use the same connector release as `package.json` dependencies `@zlink-systems/fr
 
 ### First lobby example
 
-Save as `e2e/connect-once.mts` in a copy, run `npm run build`, then `node dist/e2e/connect-once.mjs <actual-session-endpoint>`. Keep Session, Lobby/Instance nodes, and Redis running separately; e2e removes its temporary deployment. Use a fresh player ID for the `LobbyView` path. See `e2e/client.mts` for the complete party and Dungeon flow.
+Save as `e2e/connect-once.mts` in a copy, run `npm run build`, then `node dist/e2e/connect-once.mjs <actual-session-endpoint>`. Keep Session, Lobby/play nodes (dungeon), and Redis running separately; e2e removes its temporary deployment. Use a fresh player ID for the `LobbyView` path. See `e2e/client.mts` for the complete party and Dungeon flow.
 
 ```typescript
 import '../.zlink-framework-json-schemas.cjs';
@@ -135,6 +140,6 @@ Node typed handler payloads require the packet-name-to-class restoration table b
 
 ## Deployment sequence
 
-Start Redis, then Lobby and Instance processes, and finally Session. Each role has a separate entry point: `dist/server/lobby/main.js`, `dist/server/instance/main.js`, and `dist/server/session/main.js`. Pass the corresponding `server/config/<node>.json` as its sole argument. Listener endpoints use port zero; `READY` reports the bound endpoint. Instance capacity is one Dungeon per node in the example so the update test can prove replacement admission.
+Start Redis, then Lobby and Instance processes, and finally the session node. Each role has a separate entry point: `dist/server/lobby/main.js`, `dist/server/instance/main.js`, and `dist/server/session/main.js`. Pass the corresponding `server/config/<node>.json` as its sole argument. Listener endpoints use port zero; `READY` reports the bound endpoint. Instance capacity is one Dungeon per node in the example so the update test can prove replacement admission.
 
-For maintenance, send `drain` on the selected Instance process's stdin. Wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Send `shutdown` and verify `STOPPED` with outcome `Stopped` and reason `None` before starting its replacement with the same settings. Production hosting must provide a reachable mesh address and Redis credentials appropriate to its environment.
+For maintenance, send `drain` on the selected play node (dungeon)'s stdin. Wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Send `shutdown` and verify `STOPPED` with outcome `Stopped` and reason `None` before starting its replacement with the same settings. Production hosting must provide a reachable mesh address and Redis credentials appropriate to its environment.
