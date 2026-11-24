@@ -29,6 +29,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
@@ -435,19 +436,7 @@ public final class ZLinkUserSpotRetireRuntime {
                 new ZLinkRelocationTargetPolicy(
                         mode, applicationVersion, maintenanceWave, targetApplicationVersion);
         ZLinkStoreCancellation cancellation = () -> !Instant.now().isBefore(deadline);
-        List<String> spotIds = spots.activeUserSpotIds().stream().sorted().toList();
-        HashSet<String> aggregateActors = new HashSet<>();
-        for (String spotId : spotIds) {
-            aggregateActors.addAll(spots.actorSessions().actorIdsInSpot(spotId));
-        }
-        ArrayList<String> actorIds = new ArrayList<>();
-        for (String actorId : actors.activeActorIds()) {
-            if (!aggregateActors.contains(actorId)) {
-                actorIds.add(actorId);
-            }
-        }
-        actorIds.sort(String::compareTo);
-        var plan = new RelocationPlan(spotIds, List.copyOf(actorIds));
+        var plan = snapshotPlan();
         //  Spec 30 §5.1: with no unit to move the host finishes Relocated/None
         //  without target discovery, so the host-wide target population is
         //  required only when this inventory holds a unit.
@@ -554,33 +543,40 @@ public final class ZLinkUserSpotRetireRuntime {
         for (String actorId : plan.actorIds()) {
             preflight = preflight.thenCompose(ignored -> actorPreflight.execute(actorId));
         }
-        return preflight.thenCompose(
-                ignored -> {
-                    CompletionStage<Void> admission =
-                            Objects.requireNonNull(
-                                    onPreflightPassed.get(), "onPreflightPassed result");
-                    return admission.thenCompose(
-                            admissionIgnored -> {
-                                //  Every unit starts here. The spec unit gate of
-                                //  30-host-relocation-flow §7 (outbound 64, inbound 64,
-                                ArrayList<CompletionStage<Void>> started =
-                                        new ArrayList<>(
-                                                plan.spotIds().size() + plan.actorIds().size());
-                                for (String spotId : plan.spotIds()) {
-                                    started.add(
-                                            startUnit(
-                                                    stopBeforeNextUnit,
-                                                    () -> spotRelocation.execute(spotId)));
-                                }
-                                for (String actorId : plan.actorIds()) {
-                                    started.add(
-                                            startUnit(
-                                                    stopBeforeNextUnit,
-                                                    () -> actorRelocation.execute(actorId)));
-                                }
-                                return awaitAllUnits(started);
-                            });
-                });
+        return preflight
+                .thenCompose(
+                        ignored ->
+                                Objects.requireNonNull(
+                                        onPreflightPassed.get(), "onPreflightPassed result"))
+                .thenCompose(
+                        ignored -> {
+                            var committed = new AtomicInteger();
+                            // Host relocation flow §7: Actor units settle before Spot aggregates.
+                            return relocateBatch(
+                                            plan.actorIds(),
+                                            actorRelocation,
+                                            stopBeforeNextUnit,
+                                            committed)
+                                    .thenCompose(
+                                            actorsSettled ->
+                                                    relocateBatch(
+                                                            plan.spotIds(),
+                                                            spotRelocation,
+                                                            stopBeforeNextUnit,
+                                                            committed));
+                        });
+    }
+
+    private static CompletionStage<Void> relocateBatch(
+            List<String> unitIds,
+            UnitOperation relocation,
+            BooleanSupplier stopBeforeNextUnit,
+            AtomicInteger committed) {
+        var started = new ArrayList<CompletionStage<Void>>(unitIds.size());
+        for (String unitId : unitIds) {
+            started.add(startUnit(stopBeforeNextUnit, () -> relocation.execute(unitId)));
+        }
+        return awaitAllUnits(started, committed);
     }
 
     //  Shutdown is re-checked as the unit starts, not when the plan was built.
@@ -596,17 +592,15 @@ public final class ZLinkUserSpotRetireRuntime {
         }
     }
 
-    //  Mirrors Task.WhenAll: every unit runs to a terminal state and the first
-    //  failure is the reported one. Later failures are attached to it. A unit
-    //  completes normally only after its target commit is confirmed, so a
-    //  failure beside a completed unit leaves authority on both sides (spec 30 §13).
-    private static CompletionStage<Void> awaitAllUnits(List<CompletionStage<Void>> units) {
+    // Every unit in the batch reaches terminal. The first failure is reported with later
+    // failures attached. A failure after a confirmed target commit, including in an earlier
+    // batch, leaves authority on both sides (Host relocation flow §13).
+    private static CompletionStage<Void> awaitAllUnits(
+            List<CompletionStage<Void>> units, AtomicInteger committed) {
         if (units.isEmpty()) {
             return CompletableFuture.completedFuture(null);
         }
         AtomicReference<Throwable> firstFailure = new AtomicReference<>();
-        java.util.concurrent.atomic.AtomicInteger committed =
-                new java.util.concurrent.atomic.AtomicInteger();
         CompletableFuture<?>[] settled =
                 units.stream()
                         .map(
