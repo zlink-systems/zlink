@@ -1,4 +1,7 @@
-import { ZlinkStreamControlPacket } from '@zlink-systems/stream-wire';
+import {
+  ZLINK_STREAM_FRAME_PREFIX_BYTES,
+  ZlinkStreamControlPacket
+} from '@zlink-systems/stream-wire';
 import {
   type RequiredZlinkStreamConnectorOptions,
   type ZlinkStreamEncodedPayload,
@@ -46,6 +49,24 @@ export class ZlinkStreamFrameProtocol {
       actorSlot
     );
     return this.encodeFrame(header, payloadBytes);
+  }
+
+  reencodeRequest(frame: Uint8Array, requestSeq: bigint): Uint8Array {
+    // The first write already encoded the header and compressed the payload if requested.
+    // Use views of this locally encoded frame so the payload is copied only into the new frame.
+    const headerLength = new DataView(frame.buffer, frame.byteOffset, frame.byteLength).getUint16(
+      0
+    );
+    const payloadOffset = ZLINK_STREAM_FRAME_PREFIX_BYTES + headerLength;
+    const header = ZlinkStreamHeaderCodec.encodeRetryHeader(
+      frame.subarray(ZLINK_STREAM_FRAME_PREFIX_BYTES, payloadOffset),
+      requestSeq
+    );
+    return ZlinkStreamFrameCodec.encode(
+      header,
+      frame.subarray(payloadOffset),
+      this.options.maxSendPayloadSize
+    );
   }
 
   encodeControl(name: string, payload = new Uint8Array()): Uint8Array {

@@ -7,7 +7,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToke
 import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptor;
 
 import java.time.Instant;
-import java.util.List;
+import java.util.ArrayList;
 import java.util.Map;
 import java.util.Optional;
 
@@ -19,7 +19,18 @@ final class ZLinkLocationDescriptorFixture {
             String rid,
             ZLinkPlacementObjectKind kind,
             int actorLimit) {
-        return descriptor(owner, rid, kind, actorLimit, ZLinkObjectMaintenancePolicyKind.DISABLED);
+        return descriptor(
+                owner, rid, kind, actorLimit, ZLinkObjectMaintenancePolicyKind.DISABLED, 1);
+    }
+
+    static ZLinkMeshNodeDescriptor descriptor(
+            ZLinkLocationOwnerToken owner,
+            String rid,
+            ZLinkPlacementObjectKind kind,
+            int actorLimit,
+            long revision) {
+        return descriptor(
+                owner, rid, kind, actorLimit, ZLinkObjectMaintenancePolicyKind.DISABLED, revision);
     }
 
     static ZLinkMeshNodeDescriptor descriptor(
@@ -28,7 +39,17 @@ final class ZLinkLocationDescriptorFixture {
             ZLinkPlacementObjectKind kind,
             int actorLimit,
             ZLinkObjectMaintenancePolicyKind spotPolicy) {
-        var capabilities = new java.util.ArrayList<ZLinkObjectCapability>();
+        return descriptor(owner, rid, kind, actorLimit, spotPolicy, 1);
+    }
+
+    static ZLinkMeshNodeDescriptor descriptor(
+            ZLinkLocationOwnerToken owner,
+            String rid,
+            ZLinkPlacementObjectKind kind,
+            int actorLimit,
+            ZLinkObjectMaintenancePolicyKind spotPolicy,
+            long revision) {
+        var capabilities = new ArrayList<ZLinkObjectCapability>();
         if (spotPolicy != null) {
             capabilities.add(new ZLinkObjectCapability(kind, "room", spotPolicy, false, 1));
         }
@@ -43,7 +64,7 @@ final class ZLinkLocationDescriptorFixture {
                 "mesh",
                 RoutingId.from(rid),
                 1,
-                1,
+                revision,
                 "tcp://127.0.0.1:7100",
                 Map.of(),
                 1,
@@ -54,7 +75,7 @@ final class ZLinkLocationDescriptorFixture {
                 new ZLinkPlacementCapacity(
                         new ZLinkCapacityUsage(0, 0, actorLimit),
                         new ZLinkCapacityUsage(0, 0, 1),
-                        List.of()),
+                        java.util.List.of()),
                 new ZLinkActivationConcurrency(0, 64),
                 Optional.empty(),
                 ZLinkFrameworkRuntimeState.SERVING,

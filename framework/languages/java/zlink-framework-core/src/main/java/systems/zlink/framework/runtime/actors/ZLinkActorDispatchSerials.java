@@ -204,7 +204,10 @@ final class ZLinkActorDispatchSerials {
     private QueuedTurn initializeOnRegistry(QueuedTurn turn) {
         if (turn.incarnation() instanceof ZLinkActorRuntime.DefaultActorContext context) {
             ZLinkSpotCloseCallAccess.executionPolicy(
-                    turn.activation().relocationLane(), new IncarnationExecution(turn, context));
+                    turn.activation().relocationLane(),
+                    turn.target() == legacyTarget
+                            ? context.execution
+                            : new IncarnationExecution(turn, context));
         }
         CompletionStage<Void> barrier = lifecycleBarriers.get(turn.actorId());
         if (barrier == null

@@ -38,6 +38,7 @@ import systems.zlink.framework.runtime.internal.service.ZLinkInstanceActivationR
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6AWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceRequestProgress.InstanceReply;
 import systems.zlink.framework.runtime.internal.streams.ZLinkStreamErrorPayload;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
@@ -3419,7 +3420,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             ZLinkServiceM6BWireCodec.InstanceSpotMessage header,
             byte[] metadata,
             List<Message> parts,
-            Consumer<List<Message>> reply) {
+            InstanceReply reply) {
         return enqueueRemoteInstanceSpot(
                 sourceNodeRid, header, metadata, parts, null, reply, ignored -> {});
     }
@@ -3430,7 +3431,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             byte[] metadata,
             List<Message> parts,
             String contentType,
-            Consumer<List<Message>> reply) {
+            InstanceReply reply) {
         return enqueueRemoteInstanceSpot(
                 sourceNodeRid, header, metadata, parts, contentType, reply, ignored -> {});
     }
@@ -3441,7 +3442,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             byte[] metadata,
             List<Message> parts,
             String contentType,
-            Consumer<List<Message>> reply,
+            InstanceReply reply,
             Consumer<Throwable> failure) {
         if (header.route() instanceof ZLinkServiceM6BWireCodec.InstanceColdActivation cold) {
             var envelope =
@@ -3463,17 +3464,9 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                             metadata,
                             ZLinkServiceM6AWireCodec.encodeFrameworkMultipartFrame(parts));
             var received =
-                    new ZLinkBackendReceived(
-                            ZLinkBackendRequestResult.OK,
-                            Optional.of(sourceNodeRid),
-                            Optional.ofNullable(header.sourceSpotId()),
-                            Optional.ofNullable(header.replyRouteId()),
-                            metadata,
-                            new byte[0],
-                            parts,
-                            header.request() ? reply : null,
-                            () -> {},
-                            contentType);
+                    reply.progress()
+                            .receiveInstance(
+                                    sourceNodeRid, header, metadata, parts, reply, contentType);
             received.retainActivationMessage(header);
             instanceActivationValidator
                     .apply(envelope)
@@ -3556,7 +3549,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             byte[] metadata,
             List<Message> parts,
             String contentType,
-            Consumer<List<Message>> reply,
+            InstanceReply reply,
             Consumer<Throwable> failure) {
         InstanceAuthority authority = instanceAuthorities.get(header.route().targetSpotId());
         if (authority == null) {
@@ -3566,17 +3559,14 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             owner.executeApplication(
                     () -> {
                         ZLinkBackendReceived received =
-                                new ZLinkBackendReceived(
-                                        ZLinkBackendRequestResult.OK,
-                                        Optional.of(sourceNodeRid),
-                                        Optional.ofNullable(header.sourceSpotId()),
-                                        Optional.ofNullable(header.replyRouteId()),
-                                        metadata,
-                                        new byte[0],
-                                        parts,
-                                        header.request() ? reply : null,
-                                        () -> {},
-                                        contentType);
+                                reply.progress()
+                                        .receiveInstance(
+                                                sourceNodeRid,
+                                                header,
+                                                metadata,
+                                                parts,
+                                                reply,
+                                                contentType);
                         if (header.instanceIntent()) received.retainActivationMessage(header);
                         CompletionStage<Void> retained;
                         try {

@@ -581,6 +581,9 @@ public interface systems.zlink.framework.configuration.ZLinkStreamNodeBuilder {
  public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder enableActorDispatch();
  public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder heartbeat(java.time.Duration, java.time.Duration);
  public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder idleTimeout(java.time.Duration);
+ public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder authenticationPacketName(java.lang.String);
+ public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder maxConcurrentAuthentications(int);
+ public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder authenticationRetryDelay(java.time.Duration);
  public abstract systems.zlink.framework.configuration.ZLinkStreamNodeBuilder addSessionPacketHandler(java.lang.Class<?>);
 }
 public interface systems.zlink.framework.configuration.ZLinkStreamSocketConfig {
@@ -828,3 +831,5 @@ in flight per peer connection, defaulting to 16 MiB; `0` disables the budget.
 node-wide sum and defaults to `0`, meaning not applied. `relocationCutoverWaitTimeout` is the cutover-wait Warning threshold, defaulting to
 one second. Source copy retention and authority CAS follow [common relocation §4.4](../../../05-location-relocation/04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). All four values are
 startup-only, and negative values are a configuration error before socket bind.
+
+Defaults and validation for authentication admission are defined by [authentication admission](../../../04-session/03-authentication-admission.en.md).
