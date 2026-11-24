@@ -40,6 +40,10 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         // Alternate backends may report transport failures through their own diagnostics path.
     }
 
+    default int[] actorCreateFailure(String actorId, RoutingId sourceRid, Throwable failure) {
+        return ZLinkRequestFailureMapping.actorCreation(failure);
+    }
+
     default void setApplicationJobQueue(ZLinkApplicationJobQueue value) {
         // Alternate backends may provide their own ordinary-claim boundary.
     }

@@ -16,8 +16,7 @@
 
 ### 1.1 메시지 계약
 
-계약은 평범한 record다. 별도 등록이나 attribute 선언이 필요하지 않다. 단방향 메시지에는
-대응하는 응답 타입을 두지 않는다.
+계약은 평범한 record다. 단방향 메시지에는 대응하는 응답 타입을 두지 않는다.
 
 === "C#/.NET"
 
@@ -49,7 +48,68 @@
     --8<-- "framework/languages/node/tutorial/Shared/contracts.ts:channel-contracts"
     ```
 
-### 1.2 응답을 돌려주는 handler
+### 1.2 메시지 값 규칙
+
+메시지 계약은 속성이 반드시 있어야 하는지와 그 값에 `null`을 허용하는지를 따로 정한다.
+nullable로 선언한 속성만 `null`을 허용하고, 생략을 허용한 속성만 생략할 수 있다.
+필수 속성은 값이 `null`이어도 JSON에 포함해야 한다.
+
+| 값 또는 속성 | JSON 표현 또는 처리 |
+|---|---|
+| 부호 있는 또는 부호 없는 64비트 정수 | `"9223372036854775807"`처럼 앞에 0이 붙지 않은 10진 문자열. 값은 선언한 타입의 범위에 들어야 한다. |
+| 32비트 이하 정수 | `42`처럼 소수부가 없는 JSON 숫자. |
+| enum | `"Ready"`처럼 선언한 이름을 담은 문자열. 대소문자를 구분한다. |
+| 객체 속성 | 기본 decoder는 알 수 없는 속성을 무시하고 중복 속성이나 필수 속성이 누락된 메시지를 거절한다. |
+
+=== "C#/.NET"
+
+    nullable을 활성화한 문맥에서 참조 타입은 `string?`, 값 타입은 `int?`처럼 선언하면
+    `null`을 허용한다. `record Profile(string? Nickname, int Level = 1);`처럼 생성자
+    매개변수에 기본값을 선언하면 생략을 허용한다. `Nickname`도 생략하려면
+    `string? Nickname = null`로 선언한다.
+
+=== "C++"
+
+    `std::optional<T>`로 `null`을 허용한다. 생략을 허용하려면 `dto_traits`에서
+    `zlink::json::field("level", &Profile::level, zlink::json::defaulted)`처럼 멤버를 등록한다.
+    속성을 생략하면 decoder는 기본 생성한 DTO의 멤버 값을 사용한다.
+
+=== "Java"
+
+    record의 참조 타입 component에서 `null`을 허용하려면 런타임에 읽을 수 있고 단순 이름이
+    `Nullable`인 annotation을 붙인다. JSpecify의 타입 사용 annotation과 JSR 305나 Jakarta의
+    선언 annotation을 인식한다. 생략은 `@ZLinkJsonOptional`로 허용한다. 둘 다 허용하려면
+    `@ZLinkJsonOptional @Nullable String nickname`으로 선언한다. 기본형 component에는
+    `null`을 넣을 수 없다.
+
+    예를 들어 직렬화에 실패하면 `failed to serialize message as JSON: Omok.GameSnapshot`과
+    함께 원인으로 `Property 'winner' does not allow null.`을 보고한다. 64비트 필드에
+    JSON 숫자를 받으면 원인은 `64-bit integers must be decimal JSON strings`다.
+
+=== "Kotlin"
+
+    타입에 `?`를 붙이면 `null`을 허용한다. `data class Profile(val nickname: String?, val level: Int = 1)`처럼
+    주 생성자 매개변수에 기본값을 선언하면 생략을 허용한다. `nickname`도 생략하려면
+    `val nickname: String? = null`로 선언한다.
+
+=== "Node/TypeScript"
+
+    `nickname: string | null`은 `null`을 허용하고 `nickname?: string`은 생략을 허용한다.
+    packet schema를 생성하면 union은 `nullable` schema가 되고, `?`를 붙인 속성은
+    `required`에서 빠진다. schema를 직접 작성할 때는
+    `{ type: 'nullable', value: { type: 'string' } }`로 선언하고, 생략도 허용하려면
+    `required`에서 해당 속성을 뺀다.
+
+브라우저에서 TypeScript stream connector로 보낼 JSON을 직접 구성할 때는
+`{ "score": "9223372036854775807" }`처럼 64비트 정수를 문자열로 넣는다. connector의 JSON
+codec은 `bigint`도 문자열로 바꾼다. Java와 .NET connector는 타입이 지정된 64비트 정수를
+자동으로 변환하므로, 이 connector로 실행하는 서버 E2E에서는 브라우저가 JSON 숫자를 보내는
+경우를 검증할 수 없다.
+
+전체 `framework-json-v1` 규칙은
+[메시지 모델 §5](../../../common/spec/server/00-foundation/05-message-model.ko.md#5-framework-json-v1-typed-payload-profile)에 있다.
+
+### 1.3 응답을 돌려주는 handler
 
 handler의 반환값이 그대로 응답이 된다.
 
@@ -83,7 +143,7 @@ handler의 반환값이 그대로 응답이 된다.
     --8<-- "framework/languages/node/tutorial/Server/Channel/get-player-profile-handler.ts:channel-request-handler"
     ```
 
-### 1.3 응답이 없는 handler
+### 1.4 응답이 없는 handler
 
 `send`로 온 메시지를 받는다. 반환값이 없으므로 호출한 쪽은 처리 결과를 알 수 없다.
 
@@ -117,7 +177,7 @@ handler의 반환값이 그대로 응답이 된다.
     --8<-- "framework/languages/node/tutorial/Server/Channel/record-login-handler.ts:channel-send-handler"
     ```
 
-### 1.4 호출의 종결자 — 마지막 조각이 호출을 보낸다
+### 1.5 호출의 종결자 — 마지막 조각이 호출을 보낸다
 
 이 장의 호출은 모두 **대상을 정하는 앞부분과 보내는 마지막 한 조각**으로 되어 있다. 대상 이름과
 메시지를 고르는 앞부분은 호출을 준비할 뿐 아직 아무것도 보내지 않는다. 마지막 조각을 호출하는

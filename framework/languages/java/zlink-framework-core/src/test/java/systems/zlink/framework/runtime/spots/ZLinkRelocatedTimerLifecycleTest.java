@@ -967,7 +967,7 @@ final class ZLinkRelocatedTimerLifecycleTest {
         }
     }
 
-    private static final class DirectExecutor extends java.util.concurrent.AbstractExecutorService {
+    static final class DirectExecutor extends java.util.concurrent.AbstractExecutorService {
         private boolean shutdown;
 
         @Override
