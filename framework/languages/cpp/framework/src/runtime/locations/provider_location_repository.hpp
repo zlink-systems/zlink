@@ -911,10 +911,12 @@ class provider_location_repository_t final : public location_repository_t
                 *retry_reclaim = qualified
                                  && target_accepts (qualified->descriptor, request.key.kind,
                                                     request.intent.stable_type);
-                if (*retry_reclaim && qualified->provider_version == target->provider_version
-                    && !co_await capacity_still_available (capacity)) {
-                    *retry_reclaim = false;
-                    co_return object_reserve_result_t{object_placement_capacity_exhausted_t{}};
+                if (*retry_reclaim && qualified->provider_version == target->provider_version) {
+                    const auto available = co_await capacity_still_available (capacity);
+                    if (!available) {
+                        *retry_reclaim = false;
+                        co_return object_reserve_result_t{object_placement_capacity_exhausted_t{}};
+                    }
                 }
             }
             auto observed = co_await read_authority_value_async (object_key (request.key));
@@ -1735,10 +1737,13 @@ class provider_location_repository_t final : public location_repository_t
             if (!authority_qualified)
                 break;
             auto qualified = co_await read_target_descriptor_async (target);
-            if (!qualified
-                || (qualified->provider_version == target_descriptor->provider_version
-                    && !co_await capacity_still_available (capacity)))
+            if (!qualified)
                 break;
+            if (qualified->provider_version == target_descriptor->provider_version) {
+                const auto available = co_await capacity_still_available (capacity);
+                if (!available)
+                    break;
+            }
             target_descriptor = std::move (qualified);
         }
         (void) co_await abort_aggregate (reservation);
@@ -2821,8 +2826,11 @@ class provider_location_repository_t final : public location_repository_t
         const store_key_t key{domain + authority.value.substr (authority_domain.size ())};
         const auto counter = co_await _store.read (key);
         const auto *found = std::get_if<store_found_t> (&counter);
-        const auto next =
-          found ? read_counter (found->value.bytes, true) : co_await generation_floor ();
+        std::uint64_t next;
+        if (found)
+            next = read_counter (found->value.bytes, true);
+        else
+            next = co_await generation_floor ();
         if (next == max_generation)
             co_return std::nullopt;
         write_request.conditions.push_back (condition_for (key, counter));
@@ -4094,10 +4102,13 @@ class provider_location_repository_t final : public location_repository_t
                 co_return co_await authority_conflict (current_authority);
             auto qualified = co_await read_target_descriptor_async (placement);
             if (!qualified
-                || !target_accepts (qualified->descriptor, source.object_kind, source.stable_type)
-                || (qualified->provider_version == descriptor.provider_version
-                    && !co_await capacity_still_available (capacity)))
+                || !target_accepts (qualified->descriptor, source.object_kind, source.stable_type))
                 co_return co_await authority_conflict (current_authority);
+            if (qualified->provider_version == descriptor.provider_version) {
+                const auto available = co_await capacity_still_available (capacity);
+                if (!available)
+                    co_return co_await authority_conflict (current_authority);
+            }
             descriptor = std::move (*qualified);
         }
 

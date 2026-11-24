@@ -198,9 +198,10 @@ bool verify_remote_actor_create_target_owns_completion ()
       exceptional_reply_replay
         ? std::get_if<zlink::framework::actor_create_created_t> (&exceptional_reply_replay.value ())
         : nullptr;
+    // This distinct Actor ID starts at the fresh Store's generation floor.
     const bool exceptional_reply_replayed =
       exception_created && exception_created->actor.actor_id ().value () == "actor-exception-replay"
-      && exception_created->actor.object_generation () == 2
+      && exception_created->actor.object_generation () == 1
       && source_location_store->terminal_reads.load (std::memory_order_acquire)
            == exceptional_terminal_reads_before + 2;
 

@@ -1648,7 +1648,6 @@ void user_spot_authority_qualification (user_spot_authority_case_t scenario)
                      .value ()
                      .status,
                    fw::location_write_status_t::stored);
-        request.key.global_id = "after-ended-creating";
         request.target.node_lifecycle_generation = 2;
         const auto next = original.reserve (request).result ();
         ASSERT_TRUE (next);
