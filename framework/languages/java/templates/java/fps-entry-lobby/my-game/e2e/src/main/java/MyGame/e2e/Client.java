@@ -122,7 +122,8 @@ public final class Client implements AutoCloseable {
             for (int i = 0; i < pending.size(); i++)
                 if (type.isInstance(pending.get(i)) && predicate.test(type.cast(pending.get(i))))
                     return type.cast(pending.remove(i));
-            Object event = queue.poll(Math.max(0, expires - System.nanoTime()), TimeUnit.NANOSECONDS);
+            Object event =
+                    queue.poll(Math.max(0, expires - System.nanoTime()), TimeUnit.NANOSECONDS);
             if (event == null)
                 throw new IllegalStateException(
                         "Timed out waiting for " + type.getSimpleName() + ", received=" + history);

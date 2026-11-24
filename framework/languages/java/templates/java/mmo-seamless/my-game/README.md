@@ -1,5 +1,7 @@
 # my-game
 
+[한국어](README.ko.md)
+
 A Java seamless MMORPG template using public ZLink Framework 0.34.0 packages. Session processes bind players to Actors; Zone processes host a six-zone world; Instance processes create Dungeon User Spots on demand. Player Actors retain movement state across cross-node joins and planned host relocation.
 
 ```mermaid
@@ -30,16 +32,36 @@ Docker with Compose v2, and PowerShell 7 on Windows. Local debugging additionall
 ```
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
+.\run-e2e.cmd -BuildOnly
 ```
+
+## Local server
+
+Install JDK 25 and keep Docker with Compose v2 running for Redis. Run the command from this project directory.
+
+```sh
+./run-server.sh
+```
+
+On Windows, install PowerShell 7 and run the CMD wrapper.
+
+```powershell
+.\run-server.cmd
+```
+
+The server builds the Java distributions, starts the nodes and Redis, and prints the WebSocket endpoint after `Server ready:`. Keep the terminal open. Press Ctrl+C to stop the nodes and Redis. A second server invocation is refused.
+
+Run `./run-e2e.sh` or `.\run-e2e.cmd` in another terminal to use the running server. The runner detects `.logs/server.json` and prints `Using the running server`. With the server stopped, the default runner starts an isolated Docker stack. Attached runs skip `update` because it drains and replaces a play node.
+
+Each run keeps effective node settings, node stdout and stderr, Framework message-flow logs (`*.flow.log`), and any failure details in `.logs/run-<id>/`. Local build output is in `.logs/build.log` and isolated Docker build and cleanup output is in `.logs/docker-*/`.
 
 ## Client connection
 
 ### Endpoint and first packet
 
-Connect to the Session node's `players` STREAM listener. `server/config/session.json` configures `tcp://127.0.0.1:0`: loopback with port `0` requesting an OS-selected port. `server/shared/src/main/java/MyGame/Hosting.java` prints `READY {"id":"...","meshEndpoint":"...","streamEndpoint":"..."}`; use its actual `streamEndpoint`, not port `0`. Mesh and Redis endpoints are not client endpoints.
+Connect to the Session node's `players` STREAM listener. `server/config/session.json` configures `ws://127.0.0.1:0`: loopback with port `0` requesting an OS-selected port. `server/shared/src/main/java/MyGame/Hosting.java` prints `READY {"id":"...","meshEndpoint":"...","streamEndpoint":"..."}`; use its actual `streamEndpoint`, not port `0`. Mesh and Redis endpoints are not client endpoints.
 
-This is TCP with no URL path. Web browsers, Unity WebGL and Cocos Creator web cannot connect to this default TCP listener. Those targets need a separately configured WebSocket listener and a reachable `ws://` or `wss://` endpoint. Loopback is reachable only from the same host/network namespace. The Docker e2e runner owns and removes its temporary deployment. For an external client, keep a deployment running, bind a reachable interface and port, expose the container port, and use the server's reachable host.
+The default WebSocket endpoint uses the root path (`/`) and supports browsers, Unity WebGL and Cocos Creator web. An HTTPS page needs a reachable `wss://` endpoint. Loopback is reachable only from the same host/network namespace. The Docker e2e runner owns and removes its temporary deployment. For an external client, keep a deployment running, bind a reachable interface and port, expose the container port, and use the server's reachable host.
 
 Send `JoinWorldRequest(playerId, x)` first. Successful entry pushes `WorldState(zoneId, nodeId, x, sequence)`. Movement and zone transitions continue on this Session; `ActionRejected` reports a rejected action.
 
@@ -109,7 +131,9 @@ public final class ConnectOnce {
 }
 ```
 
-## Docker e2e
+## End-to-end scenarios
+
+The following scenarios run in an isolated Docker stack when a local server is unavailable.
 
 ```sh
 ./run-e2e.sh
@@ -117,8 +141,8 @@ public final class ConnectOnce {
 ```
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario cross,border,reconnect
+.\run-e2e.cmd
+.\run-e2e.cmd -Scenario cross,border,reconnect
 ```
 
 Docker builds a shared node image and a runner image. The containerized runner validates the structure, starts each role and runs the selected scenarios. Nodes share its network namespace and retain stdin/stdout lifecycle control. The Docker socket is mounted only in the runner. Redis and Framework listeners bind ephemeral loopback ports. Each run has a unique Redis prefix and `.logs/run-<id>/` directory. Normal message-flow diagnostics go to node stderr. Cleanup failures cause a nonzero exit code.
@@ -130,11 +154,11 @@ Docker builds a shared node image and a runner image. The containerized runner v
 | reconnect | A new physical Session rebinds the same Actor and preserves position, sequence and logical Zone. |
 | update | Movement continues during Zone A drain; relocation signals complete; Session and Actor identity persist after replacement; fresh work remains available. |
 
-For local process debugging, use `./run-e2e.sh --local` or `pwsh -NoProfile -File ./run-e2e.ps1 -Local`. Add `--no-build` or `-NoBuild` to reuse a local build. Docker runs reuse image layers automatically. Each run removes its own containers, network and image tags; shared build cache remains available.
+For local process debugging, use `./run-e2e.sh --local` or `.\run-e2e.cmd -Local`. Add `--no-build` or `-NoBuild` to reuse a local build. Docker runs reuse image layers automatically. Each run removes its own containers, network and image tags; shared build cache remains available.
 
 The Dockerfile owns pinned Eclipse Temurin JDK/JRE 25.0.2+10 bases and Docker CLI 28.5.1. Replace its image ARG defaults when adopting a deployment base image. Logs remain under `.logs/` on the host.
 
-Structure-only validation: `./run-e2e.sh --check-structure` or `pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure`. Domain boundary checks: `./run-e2e.sh --check-domain` or `pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain`.
+Structure-only validation: `./run-e2e.sh --check-structure` or `.\run-e2e.cmd -CheckStructure`. Domain boundary checks: `./run-e2e.sh --check-domain` or `.\run-e2e.cmd -CheckDomain`.
 
 ## Framework behavior to know
 

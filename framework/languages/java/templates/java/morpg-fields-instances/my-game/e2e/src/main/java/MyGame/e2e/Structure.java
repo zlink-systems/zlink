@@ -129,15 +129,19 @@ public final class Structure {
                     userTypes.add(spotType);
                     var ownerRole = roles.get(owner(spot, roles));
                     require(
-                            spotType.equals(ownerRole.equals(Roles.FIELD)
-                                    ? (spot.path("dynamic").asBoolean() ? Names.PARTY : Names.FIELD)
-                                    : Names.DUNGEON),
+                            spotType.equals(
+                                    ownerRole.equals(Roles.FIELD)
+                                            ? (spot.path("dynamic").asBoolean()
+                                                    ? Names.PARTY
+                                                    : Names.FIELD)
+                                            : Names.DUNGEON),
                             "Unregistered stable type");
                     if (spot.has("dynamic"))
                         require(spot.path("dynamic").isBoolean(), "Invalid dynamic flag");
                     require(
                             spot.path("dynamic").asBoolean()
-                                    == (spotType.equals(Names.DUNGEON) || spotType.equals(Names.PARTY)),
+                                    == (spotType.equals(Names.DUNGEON)
+                                            || spotType.equals(Names.PARTY)),
                             "Spot family dynamic mismatch");
                     if (spot.path("dynamic").asBoolean()) {
                         require(!spot.has("logicalId"), "Dynamic Spot declares logicalId");

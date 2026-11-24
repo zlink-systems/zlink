@@ -5,6 +5,7 @@ import MyGame.*;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import java.io.*;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.*;
@@ -20,6 +21,7 @@ public final class Nodes implements AutoCloseable {
     private static final String DOCKER_PROJECT = System.getenv("MY_GAME_DOCKER_PROJECT");
     private static final boolean DOCKER = DOCKER_PROJECT != null;
     private boolean composeStarted;
+    boolean console;
     String endpoint;
 
     static boolean windows() {
@@ -27,8 +29,31 @@ public final class Nodes implements AutoCloseable {
     }
 
     Nodes(Path root) throws Exception {
+        this(root, root.resolve(".logs/run-" + UUID.randomUUID()));
+    }
+
+    Nodes(Path root, Path logs) throws Exception {
         this.root = root;
-        logs = Files.createDirectories(root.resolve(".logs/run-" + runId));
+        this.logs = Files.createDirectories(logs);
+    }
+
+    com.fasterxml.jackson.databind.node.ObjectNode connection() {
+        var state = Json.MAPPER.createObjectNode();
+        state.put("endpoint", endpoint);
+        return state;
+    }
+
+    void attach(JsonNode state) {
+        endpoint = state.path("endpoint").asText();
+    }
+
+    void printReady() {
+        System.out.println("Server ready: " + endpoint + " (game clients connect here)");
+        System.out.println("Logs: " + logs);
+    }
+
+    private void announce(String node, String message) {
+        if (console) System.out.printf("[%s] %s%n", node, message);
     }
 
     private String compose(String... args) throws Exception {
@@ -58,12 +83,14 @@ public final class Nodes implements AutoCloseable {
         return output.trim();
     }
 
-    void start() throws Exception {
+    synchronized void start() throws Exception {
         if (!DOCKER) {
             composeStarted = true;
+            announce("Redis", "Starting");
             compose("up", "-d", "--wait", "redis");
         }
         String redis = (DOCKER ? "redis:6379" : compose("port", "redis", "6379"));
+        announce("Redis", "Ready");
         var structure = Json.MAPPER.readTree(root.resolve("zlink.structure.json").toFile());
         var declarations = new ArrayList<JsonNode>();
         structure.path("nodes").forEach(declarations::add);
@@ -84,8 +111,10 @@ public final class Nodes implements AutoCloseable {
                             redis,
                             "my-game:" + runId + ":",
                             "tcp://127.0.0.1:0",
-                            role == NodeRole.SESSION ? "tcp://127.0.0.1:0" : null,
-                            declared.dungeonCapacity());
+                            role == NodeRole.SESSION ? "ws://127.0.0.1:0" : null,
+                            console && declared.dungeonCapacity() > 0
+                                    ? Integer.MAX_VALUE
+                                    : declared.dungeonCapacity());
             var path = logs.resolve(id + ".json");
             Json.MAPPER.writeValue(path.toFile(), config);
             configs.put(id, path);
@@ -110,11 +139,11 @@ public final class Nodes implements AutoCloseable {
     }
 
     void replace(String id) throws Exception {
-        nodes.get(id).stop();
+        nodes.remove(id).cleanup();
         startNode(id);
     }
 
-    public void close() throws Exception {
+    public synchronized void close() throws Exception {
         Exception failure = null;
         for (var node : new ArrayList<>(nodes.values()).reversed())
             try {
@@ -123,9 +152,16 @@ public final class Nodes implements AutoCloseable {
                 if (failure == null) failure = error;
                 else failure.addSuppressed(error);
             }
+        nodes.clear();
         if (composeStarted)
             try {
-                compose("down", "--volumes", "--remove-orphans");
+                composeStarted = false;
+                try {
+                    Files.writeString(logs.resolve("redis.log"), compose("logs", "--no-color"));
+                } finally {
+                    compose("down", "--volumes", "--remove-orphans");
+                    announce("Redis", "Stopped");
+                }
             } catch (Exception error) {
                 if (failure == null) failure = error;
                 else failure.addSuppressed(error);
@@ -142,10 +178,11 @@ public final class Nodes implements AutoCloseable {
         Structure.require(process.waitFor() == 0, "Docker failed: " + output);
     }
 
-    private static final class Node {
+    private final class Node {
         private static final long DOCKER_CLEANUP_SECONDS = 120;
 
         private final String id;
+        private final Path logs;
         private final Process process;
         private final String container;
         private final BufferedWriter input;
@@ -153,6 +190,8 @@ public final class Nodes implements AutoCloseable {
 
         Node(String id, String module, Path config, Path root, Path logs) throws Exception {
             this.id = id;
+            this.logs = logs;
+            announce(id, "Starting");
             List<String> command;
             container =
                     DOCKER
@@ -173,6 +212,9 @@ public final class Nodes implements AutoCloseable {
                         "--network",
                         "container:" + System.getenv("MY_GAME_RUNNER_CONTAINER"),
                         System.getenv("MY_GAME_NODE_IMAGE"),
+                        "-DMyGame.flowFile=/app/logs/" + id + ".flow.log",
+                        "-Dstdout.encoding=UTF-8",
+                        "-Dstderr.encoding=UTF-8",
                         "-cp",
                         "/app/" + module + "/lib/*",
                         "MyGame." + module + ".Program",
@@ -189,6 +231,9 @@ public final class Nodes implements AutoCloseable {
                                                         windows() ? "java.exe" : "java")
                                                 .toString(),
                                         "--enable-native-access=ALL-UNNAMED",
+                                        "-DMyGame.flowFile=" + logs.resolve(id + ".flow.log"),
+                                        "-Dstdout.encoding=UTF-8",
+                                        "-Dstderr.encoding=UTF-8",
                                         "-cp",
                                         root.resolve(
                                                                 "server/"
@@ -200,6 +245,11 @@ public final class Nodes implements AutoCloseable {
                                                 + "/*",
                                         "MyGame." + module + ".Program",
                                         config.toString()));
+            }
+            if (console) {
+                // The host handles Ctrl+C and shuts down nodes through their stdin.
+                if (windows()) command.add(1, "-Xrs");
+                else command.addAll(0, List.of("sh", "-c", "trap '' INT; exec \"$@\"", "node"));
             }
             process =
                     new ProcessBuilder(command)
@@ -215,12 +265,19 @@ public final class Nodes implements AutoCloseable {
                                 try (var writer =
                                                 Files.newBufferedWriter(
                                                         logs.resolve(id + "-stdout.log"));
-                                        var reader = process.inputReader()) {
+                                        var reader = process.inputReader(StandardCharsets.UTF_8)) {
                                     for (String line; (line = reader.readLine()) != null; ) {
                                         writer.write(line);
                                         writer.newLine();
                                         writer.flush();
-                                        output.add(line);
+                                        if (line.startsWith(Control.READY)) announce(id, "Ready");
+                                        if (line.startsWith(Control.READY)
+                                                || line.startsWith(Control.RELOCATION_REQUESTED)
+                                                || line.startsWith(Control.RELOCATED)
+                                                || line.startsWith(Control.SAFE_TO_SHUTDOWN)
+                                                || line.startsWith(Control.STOPPED))
+                                            output.add(line);
+                                        else announce(id, line);
                                     }
                                     output.add(Control.PROCESS_EXIT + process.waitFor());
                                 } catch (Exception error) {
@@ -240,9 +297,20 @@ public final class Nodes implements AutoCloseable {
                         output.poll(Math.max(0, expires - System.nanoTime()), TimeUnit.NANOSECONDS);
                 if (line == null)
                     throw new IllegalStateException(
-                            id + " timed out waiting for " + prefix + "; inspect node stderr");
+                            id
+                                    + " timed out waiting for "
+                                    + prefix
+                                    + "; inspect "
+                                    + logs.resolve(id + "-stderr.log"));
                 if (line.startsWith(Control.PROCESS_EXIT))
-                    throw new IllegalStateException(id + " exited before " + prefix + ": " + line);
+                    throw new IllegalStateException(
+                            id
+                                    + " exited before "
+                                    + prefix
+                                    + ": "
+                                    + line
+                                    + "; inspect "
+                                    + logs.resolve(id + "-stderr.log"));
                 if (line.startsWith(prefix)) return line;
             }
         }
@@ -264,7 +332,6 @@ public final class Nodes implements AutoCloseable {
                     System.err.println(
                             "infra cleanup delay: " + id + " " + DOCKER_CLEANUP_SECONDS + "s");
                     process.destroyForcibly().waitFor();
-                    docker("rm", "-f", container);
                     return;
                 }
             } else if (!process.waitFor(Control.PROCESS_SECONDS, TimeUnit.SECONDS)) {
@@ -274,7 +341,6 @@ public final class Nodes implements AutoCloseable {
             }
             Structure.require(
                     process.exitValue() == 0, id + " shutdown exit: " + process.exitValue());
-            if (container != null) docker("rm", container);
         }
 
         // SIGQUIT makes HotSpot print a thread dump to stdout.
@@ -303,8 +369,18 @@ public final class Nodes implements AutoCloseable {
                     if (process.isAlive()) {
                         process.destroyForcibly();
                         process.waitFor();
-                        if (container != null) docker("rm", "-f", container);
                     }
+                    if (container != null) {
+                        try {
+                            docker(
+                                    "cp",
+                                    container + ":/app/logs/" + id + ".flow.log",
+                                    logs.toString());
+                        } finally {
+                            docker("rm", "-f", container);
+                        }
+                    }
+                    announce(id, "Stopped");
                 } catch (Exception | Error error) {
                     if (primary != null) primary.addSuppressed(error);
                     else throw error;

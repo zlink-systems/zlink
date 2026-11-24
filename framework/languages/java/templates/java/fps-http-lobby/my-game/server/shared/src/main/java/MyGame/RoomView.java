@@ -1,7 +1,12 @@
 package MyGame;
 
-import java.util.List;
 import org.jspecify.annotations.Nullable;
 
+import java.util.List;
+
 public record RoomView(
-        String roomId, String nodeId, List<PlayerView> players, MatchPhase phase, @Nullable String winner) {}
+        String roomId,
+        String nodeId,
+        List<PlayerView> players,
+        MatchPhase phase,
+        @Nullable String winner) {}

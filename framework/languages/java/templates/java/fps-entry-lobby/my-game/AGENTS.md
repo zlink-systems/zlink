@@ -2,7 +2,11 @@
 
 ## Client connection
 
-Use [Client connection in README](README.md#client-connection) for this template's endpoint, first application flow, connector choices and Java example. Keep the endpoint and packet order consistent with `server/config/`, Session startup, shared DTOs and the e2e client. Register push handlers before sending; preserve the documented join and HTTP preconditions. TCP listeners cannot serve browser, WebGL or Cocos Creator web targets. Use the release pinned by `build.gradle.kts` extra `frameworkVersion` for connectors and `bindingVersion` for the binding; `<version>` and `<binding-version>` in this file refer to those keys. Do not add literal release versions or copy engine sample packets into this template.
+Use [Client connection in README](README.md#client-connection) for this template's endpoint, first application flow, connector choices and Java example. Keep the endpoint and packet order consistent with `server/config/`, Session startup, shared DTOs and the e2e client. Register push handlers before sending; preserve the documented join and HTTP preconditions. Use the published WebSocket endpoint for browser, WebGL and Cocos Creator web targets. Use the release pinned by `build.gradle.kts` extra `frameworkVersion` for connectors and `bindingVersion` for the binding; `<version>` and `<binding-version>` in this file refer to those keys. Do not add literal release versions or copy engine sample packets into this template.
+
+## Use this template as a reference
+
+This template is a reference. To build a new game, create a new project and design its nodes, Spots, Actors and messages for that game, using this template's structure and rules as reference; do not rename or edit this template in place into the game.
 
 ## Rules for AI
 
@@ -25,6 +29,12 @@ Every server process in this project is a stateful ZLink node. Before writing co
 
 Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/java/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
 
+## Local server and E2E
+
+Start the server with `./run-server.sh` or `.\run-server.cmd` on Windows. Use its reported `ws://` endpoint and press Ctrl+C in its terminal to stop the nodes and Redis.
+
+Run `./run-e2e.sh` or `.\run-e2e.cmd` in another terminal. The runner attaches using `.logs/server.json` while the server is running and otherwise starts an isolated Docker stack. The [README](README.md#local-server) describes the checks that require isolation. Use `.logs/run-<id>/` for stdout, stderr, Framework message-flow logs and failure details. Docker build and cleanup output is under `.logs/docker-*/`.
+
 ## Project and commands
 
 This Java 25 project runs a Session node, play nodes A and B (match), and a Redis Location Store. Entry Spots forward players to the fixed Matchmaking User Spot; same-mode players enter dynamic Room User Spots. Public Framework and connector versions are pinned to 0.34.0 in `gradle/libs.versions.toml`. The [README](README.md) owns execution and deployment instructions. [zlink.structure.json](zlink.structure.json) describes the topology and scenario order.
@@ -36,16 +46,16 @@ Run commands from this project root with Docker Compose v2 and Linux containers:
 ./run-e2e.sh
 ./run-e2e.sh --scenario matchmaking,hit,wall,input,reconnect,update
 ./run-e2e.sh --check-structure
-./gradlew --no-daemon :server:match:test
+./gradlew --no-daemon --max-workers=4 :server:match:test
 ```
 
 PowerShell 7 provides the same runner commands:
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
-pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario matchmaking,hit,wall,input,reconnect,update
-pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
+.\run-e2e.cmd -BuildOnly
+.\run-e2e.cmd
+.\run-e2e.cmd -Scenario matchmaking,hit,wall,input,reconnect,update
+.\run-e2e.cmd -CheckStructure
 ```
 
 For host-process debugging, install JDK 25 and add `--local` or `-Local`. The scripts preserve logs under `.logs/`; inspect the first failing run before rerunning it.
