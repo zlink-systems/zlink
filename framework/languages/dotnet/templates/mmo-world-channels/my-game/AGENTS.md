@@ -4,12 +4,12 @@
 
 Every server process in this project is a stateful ZLink node. Before writing code, decide which kind you are editing.
 
-- A game node is not a REST server. A player's state is owned by one session-bound Actor (or the Spot that owns a shared value). Load it once on connect; do not read the database while handling a request.
+- A play node hosts Spots. A session-bound Actor owns the player's state, and a Spot owns shared state. Load it once on connect; do not read the database while handling a request.
 - Write only results to the database, one transaction per round. Check duplicate requests in Actor or Spot memory.
 - While a game is running, a Spot handler never awaits a remote request or a database reply: the await holds the Spot's turn and stops every message and timer in it. When a round ends, the Spot writes the results of all its Actors in one transaction, then tells each Actor after the commit.
 - Values many players see live in node memory or one owning Spot; values many requests update are applied by that one owning Spot. A process that does not own a value sends a request to its owner instead of writing it.
 - Spots and Actors already process one message at a time. Do not guard their state with locks, semaphores or process-wide static stores, and do not update memory from database commit hooks; the writer updates its owner's memory after commit, others send a message to the owner.
-- Split roles so the game can scale out from day one: game nodes host lobby and room Spots and player Actors and are the only processes you add; a shared node hosts only game-wide Instance Spots (matchmaking, game-wide values), and game nodes do not register those factories. Send and request by Spot ID only; placement is configuration. Keep shared-Spot values recoverable from room resends or a database read at startup.
+- Split roles so the game can scale out from day one: play nodes host lobby and room Spots and player Actors and are the only processes you add; a dedicated play node hosts only game-wide Instance Spots (matchmaking, game-wide values), and the lobby and room hosts omit those factories. Send and request by Spot ID only; placement is configuration. Keep shared-Spot values recoverable from room resends or a database read at startup.
 - Never have two Actors or Spots wait on requests to each other inside a turn; notify with send and let the state owner decide.
 - Actors move between nodes when they join a Spot or relocate. Keep all mutable Actor fields in one state record, register stateful Actors with the state-preserving relocation policy, and test that save and restore preserve every field.
 - Player data reaches a Spot with the Actor that joins it; do not request it per player at Spot entry. If a Spot truly needs extra data, fetch it for all players in one request before the game starts.
@@ -19,11 +19,11 @@ Every server process in this project is a stateful ZLink node. Before writing co
 - Send money or reward results only after the database commit.
 - One decision has one owner; find the existing one before adding another. Take test expectations from the spec, not from the implementation.
 
-Details: [Stateful game nodes and the HTTP lobby](https://docs.zlink.systems/dotnet/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
+Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/dotnet/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
 
 ## Project overview
 
-This C#/.NET 8 project is an MMORPG server example with independent worlds, each with its own Session process, channel servers, route mesh, and Redis data, and with channels that a player can switch while the connection stays open. It runs an accounts service that lists worlds, a Session gateway per world, channel hosts, and one Redis store per world. `Directory.Packages.props` pins the ZLink Framework and connector packages to `0.34.0`.
+This C#/.NET 8 project is an MMORPG server example with independent worlds, each with its own Session node, channel servers, route mesh, and Redis data, and with channels that a player can switch while the connection stays open. It runs an accounts service that lists worlds, a Session node per world, play nodes (channel), and one Redis store per world. `Directory.Packages.props` pins the ZLink Framework and connector packages to `0.32.0`.
 
 The project layout and feature procedure below describe where to add gameplay. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 
@@ -53,7 +53,7 @@ For host process debugging, install the .NET 8 SDK and add `--local` or `-Local`
 
 ## Project layout and extension points
 
-### Accounts and Session gateway
+### Accounts and Session node
 
 `server/MyGame.Accounts/Program.cs` serves `GET /worlds`, which lists each world and its Session endpoint; it is a stateless host that uses no Redis or mesh and only answers the drain and shutdown controls. `server/MyGame.Session/Program.cs` registers connection handling, and `server/MyGame.Session/PlayerSession.cs` handles connection callbacks and forwards incoming packets. A Session is a communication object for a connection; Framework provides binding to associate it with a player state object. The first STREAM packet must be `EnterWorldRequest`, and the example trusts the player ID in it; add authentication before binding and retain the existing typed packet relay so Framework can identify the connection for replies to that player.
 
@@ -79,7 +79,7 @@ A RouteMesh connects nodes that exchange messages between processes. This projec
 
 ### Spots and Actors
 
-`ZoneEntry` is the Entry Spot that receives the first packet, and `ZoneSpot` is a fixed User Spot created at host startup for each channel. The [Spot guide](https://docs.zlink.systems/dotnet/guide/server/21-spot/) describes registration and calls for these objects. `PlayerActor` is requested by the Session node with `GetOrCreate`, loads its gold from Redis in `PlayerFactory`, and is hosted on a channel node; the [Actor guide](https://docs.zlink.systems/dotnet/guide/server/22-actor/) describes Actor creation and calls.
+`ZoneEntry` is the Entry Spot that receives the first packet, and `ZoneSpot` is a fixed User Spot created at host startup for each channel. The [Spot guide](https://docs.zlink.systems/dotnet/guide/server/21-spot/) describes registration and calls for these objects. `PlayerActor` is requested by the Session node with `GetOrCreate`, loads its gold from Redis in `PlayerFactory`, and is hosted on a play node (channel); the [Actor guide](https://docs.zlink.systems/dotnet/guide/server/22-actor/) describes Actor creation and calls.
 
 ### STREAM and Sessions
 
@@ -131,7 +131,7 @@ Manage each game fact in the object responsible for changing it: gold in `Player
 
 Await public asynchronous calls as the template does, and avoid `.Wait()`, `.Result`, or synchronous I/O that blocks handler execution. Since `SpotWide` limits execution over the same state, do not protect that state again with another lock or queue. Awaiting can retain the turn, so do not await work that requires that turn to finish, such as a request back to the same Spot; perform long-running work outside handlers. The [Execution model](https://docs.zlink.systems/dotnet/guide/server/32-execution-model/) explains these execution boundaries.
 
-Move Actors between channels with `JoinSpot(...).Defer()` and the public completion callback, and use relocation with runtime observations for host shutdown, so request acceptance is not mistaken for completion. `ZoneSpot` is an application-created User Spot created at startup by the node; [Activation and lifetime](https://docs.zlink.systems/dotnet/guide/server/34-activation-lifetime/) explains creation and initialization. `ZoneCapacity` sets the stable-type limit per channel node: the runner starts channelA1 with room for one Zone and channelA2 with room for two, so channelA2 can receive channelA1 during maintenance. Do not rely on a fixed Zone-to-node assignment.
+Move Actors between channels with `JoinSpot(...).Defer()` and the public completion callback, and use relocation with runtime observations for host shutdown, so request acceptance is not mistaken for completion. `ZoneSpot` is an application-created User Spot created at startup by the node; [Activation and lifetime](https://docs.zlink.systems/dotnet/guide/server/34-activation-lifetime/) explains creation and initialization. `ZoneCapacity` sets the stable-type limit per play node (channel): the runner starts channelA1 with room for one Zone and channelA2 with room for two, so channelA2 can receive channelA1 during maintenance. Do not rely on a fixed Zone-to-node assignment.
 
 ### Reconnection and failure handling
 
@@ -179,7 +179,7 @@ The value applies to child processes started from that environment; preserve std
 export ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY=1
 ```
 
-`ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY` is a version-specific diagnostic switch in the public `0.34.0` package, so do not use it as a routing API. Let the runner clean up its own processes and Compose project, preserve cleanup failures, and avoid stopping unrelated processes or containers.
+`ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY` is a version-specific diagnostic switch in the public `0.32.0` package, so do not use it as a routing API. Let the runner clean up its own processes and Compose project, preserve cleanup failures, and avoid stopping unrelated processes or containers.
 
 ## Reporting ZLink defects
 

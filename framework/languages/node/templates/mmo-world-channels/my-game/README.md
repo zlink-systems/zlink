@@ -1,12 +1,21 @@
 # my-game — MMO worlds and channels
 
 Each world has a separate Session endpoint, mesh, Redis database and Player Actors.
-Accounts publishes the world list over HTTP. Players earn persistent gold and move
+The accounts API node publishes the world list over HTTP. Players earn persistent gold and move
 between fixed Zone User Spots without replacing their connected Session.
 
 ```mermaid
 flowchart LR
-  players -->|HTTP| accounts
+  subgraph sessionNodes["Session nodes"]
+    sessionA["Session node A"]
+    sessionB["Session node B"]
+  end
+  subgraph playNodes["Play nodes"]
+    channelA1["Play node A1 (channel)"]
+    channelB["Play node B (channel)"]
+    channelA2["Play node A2 (channel)"]
+  end
+  players -->|HTTP| accounts["API node (accounts)"]
   players -->|STREAM| sessionA
   players -->|STREAM| sessionB
   sessionA -->|relay| channelA1
@@ -43,9 +52,9 @@ the shared DTO declarations. Messages use the default typed JSON serializer.
 
 ### Endpoint and first packet
 
-First call `GET /worlds` on Accounts. `server/config/accounts.json` defaults to `http://127.0.0.1:0`; use the actual HTTP `endpoint` from Accounts `READY` JSON. The response lists `worldId`, `name`, and `sessionEndpoint`. Choose a world and connect to its advertised STREAM endpoint. `server/config/sessionA.json` and `sessionB.json` default to `ws://127.0.0.1:0`, with root path `/`; use each Session's actual `endpoint` from `READY`. Configure Accounts `worlds[].sessionEndpoint` with those running listener addresses, as `e2e/runner.ts` does. Port `0` is not a client destination. Channel mesh listeners and Redis are internal endpoints.
+First call `GET /worlds` on the accounts API node. `server/config/accounts.json` defaults to `http://127.0.0.1:0`; use the actual HTTP `endpoint` from the accounts API node `READY` JSON. The response lists `worldId`, `name`, and `sessionEndpoint`. Choose a world and connect to its advertised STREAM endpoint. `server/config/sessionA.json` and `sessionB.json` default to `ws://127.0.0.1:0`, with root path `/`; use each Session's actual `endpoint` from `READY`. Configure Accounts `worlds[].sessionEndpoint` with those running listener addresses, as `e2e/runner.ts` does. Port `0` is not a client destination. Channel mesh listeners and Redis are internal endpoints.
 
-Send `EnterWorldRequest(playerId)` first. Session creates/binds the Actor and returns a `PlayerView` push with world/channel and persisted player data. World A and B have separate state; channel changes happen after entry with `ChangeChannelRequest`. `ActionRejected` reports rejected actions. Entry is send/push; `SessionInfoRequest` is request/reply after binding. Accounts lists worlds but does not authenticate a player; validate identity before binding when adding authentication.
+Send `EnterWorldRequest(playerId)` first. Session creates/binds the Actor and returns a `PlayerView` push with world/channel and persisted player data. World A and B have separate state; channel changes happen after entry with `ChangeChannelRequest`. `ActionRejected` reports rejected actions. Entry is send/push; `SessionInfoRequest` is request/reply after binding. The accounts API node lists worlds but does not authenticate a player; validate identity before binding when adding authentication.
 
 ### Connector installation
 
@@ -175,7 +184,7 @@ The node entrypoints are `dist/server/channel/main.js`,
 `dist/server/session/main.js` and `dist/server/accounts/main.js`. Pass the
 configuration path as their first argument. Read `READY` for bound endpoints.
 
-To update a channel host, write `drain` to its stdin. Wait for
+To update a play node (channel), write `drain` to its stdin. Wait for
 `RELOCATION_REQUESTED`, `RELOCATED` and `SAFE_TO_SHUTDOWN`. Then write `shutdown`,
 verify `STOPPED`, and start a replacement with the same configuration. Framework
 owns relocation, routing and membership. Accounts is an ordinary HTTP service;

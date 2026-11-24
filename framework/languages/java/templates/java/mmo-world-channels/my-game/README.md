@@ -1,10 +1,19 @@
 # MyGame world and channel servers
 
-This Java template separates two MMORPG worlds into independent meshes and Redis stores. Accounts publishes the world list over HTTP. Session nodes relay typed STREAM messages to Player Actors. `GoldBalance` owns each player's gold and earn timing; each Zone owns the IDs of its connected players.
+This Java template separates two MMORPG worlds into independent meshes and Redis stores. The accounts API node publishes the world list over HTTP. Session nodes relay typed STREAM messages to Player Actors. `GoldBalance` owns each player's gold and earn timing; each Zone owns the IDs of its connected players.
 
 ```mermaid
 flowchart LR
-  players -->|HTTP| accounts
+  subgraph sessionNodes["Session nodes"]
+    sessionA["Session node A"]
+    sessionB["Session node B"]
+  end
+  subgraph playNodes["Play nodes"]
+    channelA1["Play node A1 (channel)"]
+    channelB["Play node B (channel)"]
+    channelA2["Play node A2 (channel)"]
+  end
+  players -->|HTTP| accounts["API node (accounts)"]
   players -->|STREAM| sessionA
   players -->|STREAM| sessionB
   sessionA -->|relay| channelA1

@@ -4,12 +4,12 @@
 
 Every server process in this project is a stateful ZLink node. Before writing code, decide which kind you are editing.
 
-- A game node is not a REST server. A player's state is owned by one session-bound Actor (or the Spot that owns a shared value). Load it once on connect; do not read the database while handling a request.
+- A play node hosts Spots. A session-bound Actor owns the player's state, and a Spot owns shared state. Load it once on connect; do not read the database while handling a request.
 - Write only results to the database, one transaction per round. Check duplicate requests in Actor or Spot memory.
 - While a game is running, a Spot handler never awaits a remote request or a database reply: the await holds the Spot's turn and stops every message and timer in it. When a round ends, the Spot writes the results of all its Actors in one transaction, then tells each Actor after the commit.
 - Values many players see live in node memory or one owning Spot; values many requests update are applied by that one owning Spot. A process that does not own a value sends a request to its owner instead of writing it.
 - Spots and Actors already process one message at a time. Do not guard their state with locks, semaphores or process-wide static stores, and do not update memory from database commit hooks; the writer updates its owner's memory after commit, others send a message to the owner.
-- Split roles so the game can scale out from day one: game nodes host lobby and room Spots and player Actors and are the only processes you add; a shared node hosts only game-wide Instance Spots (matchmaking, game-wide values), and game nodes do not register those factories. Send and request by Spot ID only; placement is configuration. Keep shared-Spot values recoverable from room resends or a database read at startup.
+- Split roles so the game can scale out from day one: play nodes host lobby and room Spots and player Actors and are the only processes you add; a dedicated play node hosts only game-wide Instance Spots (matchmaking, game-wide values), and the lobby and room hosts omit those factories. Send and request by Spot ID only; placement is configuration. Keep shared-Spot values recoverable from room resends or a database read at startup.
 - Never have two Actors or Spots wait on requests to each other inside a turn; notify with send and let the state owner decide.
 - Actors move between nodes when they join a Spot or relocate. Keep all mutable Actor fields in one state record, register stateful Actors with the state-preserving relocation policy, and test that save and restore preserve every field.
 - Player data reaches a Spot with the Actor that joins it; do not request it per player at Spot entry. If a Spot truly needs extra data, fetch it for all players in one request before the game starts.
@@ -19,11 +19,11 @@ Every server process in this project is a stateful ZLink node. Before writing co
 - Send money or reward results only after the database commit.
 - One decision has one owner; find the existing one before adding another. Take test expectations from the spec, not from the implementation.
 
-Details: [Stateful game nodes and the HTTP lobby](https://docs.zlink.systems/dotnet/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
+Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/dotnet/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
 
 ## Project overview
 
-This C#/.NET 8 project is an MMO server example with one world whose regions are capacity-limited instances: when a Region is full, the next instance of the same region is created. It runs a Session gateway for connections, Region hosts A and B, an Instance host for Dungeons, and Redis for location and relocation state. `Directory.Packages.props` pins the ZLink Framework and connector packages to `0.34.0`.
+This C#/.NET 8 project is an MMO server example with one world whose regions are capacity-limited instances: when a Region is full, the next instance of the same region is created. It runs a Session node for connections, play nodes A and B (region), a play node (dungeon) for Dungeons, and Redis for location and relocation state. `Directory.Packages.props` pins the ZLink Framework and connector packages to `0.32.0`.
 
 The project layout and feature procedure below describe where to add gameplay. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 
@@ -55,7 +55,7 @@ For host process debugging, install the .NET 8 SDK and add `--local` or `-Local`
 
 ## Project layout and extension points
 
-### Session gateway
+### Session node
 
 `server/MyGame.Session/Program.cs` registers connection handling, and `server/MyGame.Session/Infrastructure/ZLink/PlayerSession.cs` checks client packet names against `AllowedPackets`, binds the Player Actor, and relays allowed packets. The first packet must be `EnterRegionRequest`, and the example trusts the player ID in it; add authentication before binding. Internal messages stay outside the client allowlist.
 
@@ -85,7 +85,7 @@ A RouteMesh connects nodes that exchange messages between processes; this projec
 
 ### Spots and Actors
 
-`RegionEntry` is the Entry Spot that receives the first packet, `RegionSpot` is a User Spot created on demand for each instance such as `forest-1`, and `DungeonSpot` is a User Spot on the Instance node. The [Spot guide](https://docs.zlink.systems/dotnet/guide/server/21-spot/) describes registration and calls for these objects, including the request that `RegionSpot.OpenAsync` sends to a Dungeon. `PlayerActor` is requested by the Session node with `GetOrCreate` and hosted on a Region node; the [Actor guide](https://docs.zlink.systems/dotnet/guide/server/22-actor/) describes Actor creation and calls.
+`RegionEntry` is the Entry Spot that receives the first packet, `RegionSpot` is a User Spot created on demand for each instance such as `forest-1`, and `DungeonSpot` is a User Spot on the play node (dungeon). The [Spot guide](https://docs.zlink.systems/dotnet/guide/server/21-spot/) describes registration and calls for these objects, including the request that `RegionSpot.OpenAsync` sends to a Dungeon. `PlayerActor` is requested by the Session node with `GetOrCreate` and hosted on a play node (region); the [Actor guide](https://docs.zlink.systems/dotnet/guide/server/22-actor/) describes Actor creation and calls.
 
 ### STREAM and Sessions
 
@@ -111,7 +111,7 @@ Requests in the example game follow this path. Reading the code along this path 
 2. A new Actor starts in the Entry Spot `RegionEntry`. `EnterRegion` checks the identity, and `SelectAsync` calls `GetOrCreate` for the first instance (`forest-1`) and requests `JoinSpot(...).Defer()`.
 3. `RegionSpot.OnActorJoinAsync` accepts the player while fewer than `Capacity` players are inside. `OnJoinedActorAsync` then sends `RegionView` to every member by player ID, and `DeliverRegion` forwards it through each Actor's bound Session.
 4. A full Region rejects a join with `RegionFull`. `PlayerActor.OnJoinCompletedAsync` forwards that reply to the Entry, which selects the next allowed replica. The Entry returns `RegionUnavailable` after `MaxReplicasPerRegion` is full; the Actor never chooses a target.
-5. `MoveRequest` reaches `MovePlayer`, which delegates to `Positions`. The domain validates Delta and Sequence, checks region bounds and the movement budget, and changes state only after acceptance. The caller receives the accepted RegionView through its bound Session; other members receive one Actor broadcast. `OpenDungeonRequest` reaches `OpenDungeon`, which calls `GetOrCreate` for the Dungeon on the Instance node, sends a typed request to it, and replies to the client with `DungeonOpened`.
+5. `MoveRequest` reaches `MovePlayer`, which delegates to `Positions`. The domain validates Delta and Sequence, checks region bounds and the movement budget, and changes state only after acceptance. The caller receives the accepted RegionView through its bound Session; other members receive one Actor broadcast. `OpenDungeonRequest` reaches `OpenDungeon`, which calls `GetOrCreate` for the Dungeon on the play node (dungeon), sends a typed request to it, and replies to the client with `DungeonOpened`.
 6. When the same player reconnects, `PlayerSession` binds the existing Actor to the new Session, and `ReconnectRegion` checks the identity and resends the current `RegionView`. A disconnected Session keeps the membership and position.
 7. To replace a node, `drain` in `NodeControl` requests relocation. Framework takes the positions, sequences, and remaining movement-budget milliseconds from `RegionRelocation` and restores them on another node; Dungeons are recreated.
 
@@ -154,7 +154,7 @@ Manage each game fact in the object responsible for changing it: population in `
 
 Await public asynchronous calls as the template does, and avoid `.Wait()`, `.Result`, or synchronous I/O that blocks handler execution. Since `SpotWide` limits execution over the same state, do not protect that state again with another lock or queue. Awaiting can retain the turn, so do not await work that requires that turn to finish, such as a request back to the same Spot; perform long-running work outside handlers. The [Execution model](https://docs.zlink.systems/dotnet/guide/server/32-execution-model/) explains these execution boundaries.
 
-Create Regions and Dungeons with `GetOrCreate`, move Actors with `JoinSpot(...).Defer()` and the public completion callback, and use relocation with runtime observations for host shutdown, so request acceptance is not mistaken for completion. `RegionSpot` and `DungeonSpot` are application-created User Spots; [Activation and lifetime](https://docs.zlink.systems/dotnet/guide/server/34-activation-lifetime/) explains creation and initialization. Apply the User Spot contract to `DungeonSpot` even though its process is named Instance. The runner limits each Region node to two Region Spots through `RegionLimit`, so the survivor is full after a drain and only the replacement can host a new Region; do not rely on a fixed Region-to-node assignment.
+Create Regions and Dungeons with `GetOrCreate`, move Actors with `JoinSpot(...).Defer()` and the public completion callback, and use relocation with runtime observations for host shutdown, so request acceptance is not mistaken for completion. `RegionSpot` and `DungeonSpot` are application-created User Spots; [Activation and lifetime](https://docs.zlink.systems/dotnet/guide/server/34-activation-lifetime/) explains creation and initialization. Apply the User Spot contract to `DungeonSpot` even though its process is named Instance. The runner limits each play node (region) to two Region Spots through `RegionLimit`, so the survivor is full after a drain and only the replacement can host a new Region; do not rely on a fixed Region-to-node assignment.
 
 ### Reconnection and failure handling
 
@@ -202,7 +202,7 @@ The value applies to child processes started from that environment; preserve std
 export ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY=1
 ```
 
-`ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY` is a version-specific diagnostic switch in the public `0.34.0` package, so do not use it as a routing API. Let the runner clean up its own processes and Compose project, preserve cleanup failures, and avoid stopping unrelated processes or containers.
+`ZLINK_DEBUG_FRAMEWORK_SPOT_DISCOVERY` is a version-specific diagnostic switch in the public `0.32.0` package, so do not use it as a routing API. Let the runner clean up its own processes and Compose project, preserve cleanup failures, and avoid stopping unrelated processes or containers.
 
 ## Reporting ZLink defects
 

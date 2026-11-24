@@ -4,10 +4,15 @@ Players connect to Session, form a party in Lobby and enter a Dungeon without a 
 
 ```mermaid
 flowchart LR
-    players[Players] -->|STREAM| session[Session]
-    session -->|relay| lobby[Lobby: Entry and Party]
-    lobby -->|GetOrCreate| instanceA[Instance A: Entry and Dungeon]
-    instanceA --- instanceB[Instance B: Entry and Dungeon relocation target]
+    subgraph playNodes["Play nodes"]
+      lobby["Play node (party lobby): Entry and Party"]
+      instanceA["Play node A (dungeon): Entry and Dungeon"]
+      instanceB["Play node B (dungeon): Entry and Dungeon relocation target"]
+    end
+    players[Players] -->|STREAM| session["Session node"]
+    session -->|relay| lobby
+    lobby -->|GetOrCreate| instanceA
+    instanceA --- instanceB
     lobby -->|Location / lease| location[Redis]
 ```
 
@@ -67,7 +72,7 @@ Use the release pinned in `Directory.Packages.props`, at `PackageVersion Include
 
 ### First lobby example
 
-Create a .NET 8 console project in a copy, reference `server/MyGame.Shared/MyGame.Shared.csproj`, and add `Zlink.Stream.Connector` using the pinned version described above. Save as `Program.cs`, then run `dotnet run --project <client-project> -- <actual-session-endpoint>` against separately running Session, Lobby/Instance nodes, and Redis. Use a fresh player ID for the `LobbyView` path. E2E removes its temporary deployment; its `GameClient.cs` shows the complete flow.
+Create a .NET 8 console project in a copy, reference `server/MyGame.Shared/MyGame.Shared.csproj`, and add `Zlink.Stream.Connector` using the pinned version described above. Save as `Program.cs`, then run `dotnet run --project <client-project> -- <actual-session-endpoint>` against separately running Session, Lobby/play nodes (dungeon), and Redis. Use a fresh player ID for the `LobbyView` path. E2E removes its temporary deployment; its `GameClient.cs` shows the complete flow.
 
 ```csharp
 using MyGame.Shared;
@@ -174,6 +179,6 @@ Validated against the published Framework 0.34.0 packages.
 
 ## Deployment sequence
 
-Start Redis, Lobby and instance nodes before Session. Set `RedisEndpoint` and a deployment-specific `KeyPrefix` in `server/config/*.json`. Listener endpoints bind port zero for local runs; expose the published endpoints as appropriate for your deployment. Start each role with its own executable and `--config <file>`.
+Start Redis, play nodes (party lobby and dungeon) before Session. Set `RedisEndpoint` and a deployment-specific `KeyPrefix` in `server/config/*.json`. Listener endpoints bind port zero for local runs; expose the published endpoints as appropriate for your deployment. Start each role with its own executable and `--config <file>`.
 
 For an instance update, write `drain` to its stdin, wait for `RELOCATION_REQUESTED`, `RELOCATED` and `SAFE_TO_SHUTDOWN`, then write `shutdown` and wait for `STOPPED`. Start a replacement instance with the same configuration and wait for `READY`. A healthy instance with free capacity must be available as the relocation target. Party Spots are not stored in Entry and their adapters preserve only game state.

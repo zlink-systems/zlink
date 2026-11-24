@@ -144,7 +144,7 @@ internal static class StructureCheck
             var owner = Text(spot, "owner");
             Require(
                 settings.ContainsKey(owner) && roles[owner] == "match",
-                "Spot owner must reference a match node."
+                "Spot owner must reference a play node (match)."
             );
             if (spot!["mesh"] is not null)
                 Require(Text(spot, "mesh") == GameNames.WorldMesh, "Spot mesh differs from server registration.");
@@ -189,7 +189,7 @@ internal static class StructureCheck
                 Require(
                     spots.Count(spot => Text(spot, "owner") == id && Text(spot, "kind") == "entry")
                         == 1,
-                    "Room node lacks Entry Spot."
+                    "play node (match) lacks Entry Spot."
                 );
         var edges = Array(document, "edges");
         foreach (var edge in edges)

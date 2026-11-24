@@ -4,7 +4,13 @@ Players gather in two town channels, form parties of up to four members, and ent
 
 ```mermaid
 flowchart LR
-  Players -->|STREAM| Session
+  subgraph playNodes["Play nodes"]
+    TownA["Play node A (town)"]
+    TownB["Play node B (town)"]
+    InstanceA["Play node A (dungeon)"]
+    InstanceB["Play node B (dungeon)"]
+  end
+  Players -->|STREAM| Session["Session node"]
   Session -->|relay| TownA
   TownA -->|relocation| TownB
   TownB -->|GetOrCreate| InstanceA
@@ -146,7 +152,7 @@ The scripts and runner validate the actual structure files, start Redis with an 
 | `reconnect` | Reconnect the second player with a new physical Session, retaining Actor identity, RunId, Phase, stage and Dungeon roster. |
 | `update` | Drain the completed Instance, observe relocation and SafeToShutdown, preserve both Sessions and Dungeon state, stop and replace that Instance, then verify it accepts a distinct new party run. |
 
-The three party scenarios share a fixture so each can run alone or in combination. Both Instance nodes have `DungeonCapacity: 1`; the occupied target leaves the replacement as the available owner for a fresh dungeon. Placement remains a Framework decision. `./run-e2e.sh --check-structure` validates the actual files without starting Redis or game nodes. `./run-e2e.sh --check-domain` runs the 91 domain checks without starting Redis or game nodes.
+The three party scenarios share a fixture so each can run alone or in combination. Both play nodes (dungeon) have `DungeonCapacity: 1`; the occupied target leaves the replacement as the available owner for a fresh dungeon. Placement remains a Framework decision. `./run-e2e.sh --check-structure` validates the actual files without starting Redis or play nodes. `./run-e2e.sh --check-domain` runs the 91 domain checks without starting Redis or play nodes.
 
 ## Local debugging
 
@@ -188,10 +194,10 @@ This template answers `SessionInfoRequest` with a typed `SessionInfo` push; Fram
 
 Bootstrap Town providers sequentially and wait for each READY before starting the next. Each provider's public Town stable-type capacity must equal its configured fixed Town count; the structure checker enforces this. Earlier providers are full and later providers are absent, making each fixed Town's declared initial owner deterministic. Entry declarations describe the application Entry registered by Town and Instance, excluding Framework default Entries.
 
-Start Redis, townA (town-1), townB (town-2), instanceA, instanceB, then Session. Wait for each process's `READY` record. All listeners bind port zero and readiness reports Framework-published endpoints. Configure production Redis and key prefixes through `server/config/*.json`; distribute each actual Session endpoint to clients. Party order defines the leader. Members can leave a party while it is Forming; after preparation starts, the PartyRun retains its roster through Dungeon entry, completion and relocation.
+Start Redis, townA (town-1), townB (town-2), instanceA, instanceB, then the session node. Wait for each process's `READY` record. All listeners bind port zero and readiness reports Framework-published endpoints. Configure production Redis and key prefixes through `server/config/*.json`; distribute each actual Session endpoint to clients. Party order defines the leader. Members can leave a party while it is Forming; after preparation starts, the PartyRun retains its roster through Dungeon entry, completion and relocation.
 
 For maintenance, send `drain` on the selected process's stdin. Wait for `RELOCATION_REQUESTED`, `RELOCATED` and `SAFE_TO_SHUTDOWN`, then send `shutdown` and require `STOPPED` plus exit code 0. Start the replacement with the same configuration and wait for `READY` before assigning new work. A failed lifecycle operation must stop the deployment sequence.
 
-All Object Servers that register Player factories also register the shared Entry and first-admission handler, including both Instance nodes. Entry admission joins the requested fixed Town channel. Each Instance declares its dynamic Dungeon factory in `zlink.structure.json`.
+All Object Servers that register Player factories also register the shared Entry and first-admission handler, including both play nodes (dungeon). Entry admission joins the requested fixed Town channel. Each Instance declares its dynamic Dungeon factory in `zlink.structure.json`.
 
 The e2e configuration uses one Dungeon slot per Instance. After drain, the surviving Instance is full, so only the replacement can accept the fresh Dungeon. The structure checker enforces this configuration. Message Follow remains 30 seconds; the SafeToShutdown observation budget is derived from that duration plus the existing relocation operation budget.

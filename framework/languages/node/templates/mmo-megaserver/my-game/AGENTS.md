@@ -4,12 +4,12 @@
 
 Every server process in this project is a stateful ZLink node. Before writing code, decide which kind you are editing.
 
-- A game node is not a REST server. A player's state is owned by one session-bound Actor (or the Spot that owns a shared value). Load it once on connect; do not read the database while handling a request.
+- A play node hosts Spots. A session-bound Actor owns the player's state, and a Spot owns shared state. Load it once on connect; do not read the database while handling a request.
 - Write only results to the database, one transaction per round. Check duplicate requests in Actor or Spot memory.
 - While a game is running, a Spot handler never awaits a remote request or a database reply: the await holds the Spot's turn and stops every message and timer in it. When a round ends, the Spot writes the results of all its Actors in one transaction, then tells each Actor after the commit.
 - Values many players see live in node memory or one owning Spot; values many requests update are applied by that one owning Spot. A process that does not own a value sends a request to its owner instead of writing it.
 - Spots and Actors already process one message at a time. Do not guard their state with locks, semaphores or process-wide static stores, and do not update memory from database commit hooks; the writer updates its owner's memory after commit, others send a message to the owner.
-- Split roles so the game can scale out from day one: game nodes host lobby and room Spots and player Actors and are the only processes you add; a shared node hosts only game-wide Instance Spots (matchmaking, game-wide values), and game nodes do not register those factories. Send and request by Spot ID only; placement is configuration. Keep shared-Spot values recoverable from room resends or a database read at startup.
+- Split roles so the game can scale out from day one: play nodes host lobby and room Spots and player Actors and are the only processes you add; a dedicated play node hosts only game-wide Instance Spots (matchmaking, game-wide values), and the lobby and room hosts omit those factories. Send and request by Spot ID only; placement is configuration. Keep shared-Spot values recoverable from room resends or a database read at startup.
 - Never have two Actors or Spots wait on requests to each other inside a turn; notify with send and let the state owner decide.
 - Actors move between nodes when they join a Spot or relocate. Keep all mutable Actor fields in one state record, register stateful Actors with the state-preserving relocation policy, and test that save and restore preserve every field.
 - Player data reaches a Spot with the Actor that joins it; do not request it per player at Spot entry. If a Spot truly needs extra data, fetch it for all players in one request before the game starts.
@@ -19,11 +19,11 @@ Every server process in this project is a stateful ZLink node. Before writing co
 - Send money or reward results only after the database commit.
 - One decision has one owner; find the existing one before adding another. Take test expectations from the spec, not from the implementation.
 
-Details: [Stateful game nodes and the HTTP lobby](https://docs.zlink.systems/node/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
+Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/node/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
 
 ## Project overview
 
-This Node.js 22 (TypeScript, NestJS) project is an MMO server example with one shared world in which a Region fills to its capacity and the next Region instance takes the following players. It runs a Session gateway for connections, Region nodes A and B that host capacity-limited Region Spots, an Instance node that hosts Dungeons, and Redis for location and relocation state. `package.json` pins the ZLink Framework and connector packages to `0.34.0`.
+This Node.js 22 (TypeScript, NestJS) project is an MMO server example with one shared world in which a Region fills to its capacity and the next Region instance takes the following players. It runs a Session node for connections, play nodes A and B (region) that host capacity-limited Region Spots, a play node (dungeon) that hosts Dungeons, and Redis for location and relocation state. `package.json` pins the ZLink Framework and connector packages to `0.32.0`.
 
 The project layout and feature procedure below describe where to add gameplay. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 
@@ -53,7 +53,7 @@ For host process debugging, install Node.js 22 or later and npm, then add `--loc
 
 ## Project layout and extension points
 
-### Session gateway
+### Session node
 
 `server/session/main.ts` registers STREAM and the mesh listener, and `server/session/session.ts` handles connection callbacks and forwards incoming packets. A Session is a communication object for a connection; Framework provides binding to associate it with a player state object. `Session` accepts `EnterRegionRequest` as the first packet. Add authentication before binding and retain the existing typed packet relay so Framework can identify the connection for replies to that player.
 
@@ -65,7 +65,7 @@ A Spot is a state object that accepts Actors and executes shared game rules; `Re
 
 ### Dungeons
 
-`server/instance/main.ts` registers the Instance node, and `Dungeon` in `server/instance/infrastructure/zlink/spots.ts` is created on demand and answers an information request through `DungeonInfo`. `Dungeon` is an application-created User Spot, distinct from the Framework Instance Spot with its separate creation and initialization contract. It keeps no state, so its factory uses `recreateOnRelocation` instead of a snapshot adapter. Add party admission rules, encounters, rewards, and Dungeon lifecycle behavior in this project.
+`server/instance/main.ts` registers the play node (dungeon), and `Dungeon` in `server/instance/infrastructure/zlink/spots.ts` is created on demand and answers an information request through `DungeonInfo`. `Dungeon` is an application-created User Spot, distinct from the Framework Instance Spot with its separate creation and initialization contract. It keeps no state, so its factory uses `recreateOnRelocation` instead of a snapshot adapter. Add party admission rules, encounters, rewards, and Dungeon lifecycle behavior in this project.
 
 ### Shared contracts and hosting
 
@@ -134,7 +134,7 @@ Feature names match the feature table in the starter's `AGENTS.md`. Paths are re
 
 Transfer one row at a time and run the build, the structure check, and the related e2e scenario after each. Add a scenario ID to the `Scenarios` list in `server/shared/constants.ts`, to `run.scenarios`, and to the selection examples in `run.commands` of `zlink.structure.json` together. Judge results by the replies and events actually received; do not make tests pass with fixed sleeps or longer deadlines.
 
-Start with the message contracts. Define the classes in `messages.ts` first, then move each handler that fails to compile to the new messages. The build generates packet schemas from `server/shared`, so messages defined elsewhere are not registered. When you change the first-entry packet, update the first-packet check in `Session`, `EnterRegion`, and `ReconnectRegion` to receive the same packet. Only Region nodes register the application Entry and its first-admission handler, so only those nodes declare an Entry in `zlink.structure.json`.
+Start with the message contracts. Define the classes in `messages.ts` first, then move each handler that fails to compile to the new messages. The build generates packet schemas from `server/shared`, so messages defined elsewhere are not registered. When you change the first-entry packet, update the first-packet check in `Session`, `EnterRegion`, and `ReconnectRegion` to receive the same packet. Only play nodes (region) register the application Entry and its first-admission handler, so only those nodes declare an Entry in `zlink.structure.json`.
 
 Keep each piece of state in the object that decides it. Membership belongs in `Region`; `Positions` owns position, sequence, budget, and time validation. `Entry` owns allowed regions, bounded replica selection, and the final unavailable response. When you change state fields, update `Positions` and the `RegionRelocation` snapshot together. A missing field disappears after relocation, and the `update` scenario detects the loss.
 
@@ -204,7 +204,7 @@ The value applies to child processes started from that environment; preserve std
 export ZLINK_DEBUG_FRAMEWORK_RELOCATION=1
 ```
 
-`ZLINK_DEBUG_FRAMEWORK_RELOCATION` is a version-specific diagnostic switch in the public `0.34.0` package, so do not use it as a routing API. Let the runner clean up its own processes and Compose project, preserve cleanup failures, and avoid stopping unrelated processes or containers.
+`ZLINK_DEBUG_FRAMEWORK_RELOCATION` is a version-specific diagnostic switch in the public `0.32.0` package, so do not use it as a routing API. Let the runner clean up its own processes and Compose project, preserve cleanup failures, and avoid stopping unrelated processes or containers.
 
 ## Reporting ZLink defects
 

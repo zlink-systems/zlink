@@ -4,12 +4,12 @@
 
 Every server process in this project is a stateful ZLink node. Before writing code, decide which kind you are editing.
 
-- A game node is not a REST server. A player's state is owned by one session-bound Actor (or the Spot that owns a shared value). Load it once on connect; do not read the database while handling a request.
+- A play node hosts Spots. A session-bound Actor owns the player's state, and a Spot owns shared state. Load it once on connect; do not read the database while handling a request.
 - Write only results to the database, one transaction per round. Check duplicate requests in Actor or Spot memory.
 - While a game is running, a Spot handler never awaits a remote request or a database reply: the await holds the Spot's turn and stops every message and timer in it. When a round ends, the Spot writes the results of all its Actors in one transaction, then tells each Actor after the commit.
 - Values many players see live in node memory or one owning Spot; values many requests update are applied by that one owning Spot. A process that does not own a value sends a request to its owner instead of writing it.
 - Spots and Actors already process one message at a time. Do not guard their state with locks, semaphores or process-wide static stores, and do not update memory from database commit hooks; the writer updates its owner's memory after commit, others send a message to the owner.
-- Split roles so the game can scale out from day one: game nodes host lobby and room Spots and player Actors and are the only processes you add; a shared node hosts only game-wide Instance Spots (matchmaking, game-wide values), and game nodes do not register those factories. Send and request by Spot ID only; placement is configuration. Keep shared-Spot values recoverable from room resends or a database read at startup.
+- Split roles so the game can scale out from day one: play nodes host lobby and room Spots and player Actors and are the only processes you add; a dedicated play node hosts only game-wide Instance Spots (matchmaking, game-wide values), and the lobby and room hosts omit those factories. Send and request by Spot ID only; placement is configuration. Keep shared-Spot values recoverable from room resends or a database read at startup.
 - Never have two Actors or Spots wait on requests to each other inside a turn; notify with send and let the state owner decide.
 - Actors move between nodes when they join a Spot or relocate. Keep all mutable Actor fields in one state record, register stateful Actors with the state-preserving relocation policy, and test that save and restore preserve every field.
 - Player data reaches a Spot with the Actor that joins it; do not request it per player at Spot entry. If a Spot truly needs extra data, fetch it for all players in one request before the game starts.
@@ -19,11 +19,11 @@ Every server process in this project is a stateful ZLink node. Before writing co
 - Send money or reward results only after the database commit.
 - One decision has one owner; find the existing one before adding another. Take test expectations from the spec, not from the implementation.
 
-Details: [Stateful game nodes and the HTTP lobby](https://docs.zlink.systems/kotlin/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
+Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/kotlin/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
 
 ## Project overview
 
-This Kotlin project (Kotlin 2.3.21 on a Java 25 toolchain, built with Gradle) is an MMO megaserver example in which a Region adds instances when it reaches its capacity. It runs a Session gateway for connections, two Region hosts (`regionA` and `regionB`), an Instance host for Dungeons, and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework packages to `0.34.0` (`frameworkVersion`) and the ZLink binding to `1.26.0` (`bindingVersion`).
+This Kotlin project (Kotlin 2.3.21 on a Java 25 toolchain, built with Gradle) is an MMO megaserver example in which a Region adds instances when it reaches its capacity. It runs a Session node for connections, two play nodes (region) (`regionA` and `regionB`), a play node (dungeon) for Dungeons, and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework packages to `0.32.0` (`frameworkVersion`) and the ZLink binding to `1.23.0` (`bindingVersion`).
 
 The project layout and feature procedure below describe where to add gameplay. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 
@@ -53,7 +53,7 @@ For host process debugging, install JDK 25 and add `--local` or `-Local`. Add `-
 
 ## Project layout and extension points
 
-### Session gateway
+### Session node
 
 `server/session/src/main/kotlin/MyGame/session/Program.kt` registers the STREAM node and the RouteMesh client, and `GameSession` (in `server/session/src/main/kotlin/MyGame/session/infrastructure/zlink/GameSession.kt`) handles incoming packets. A Session is a communication object for a connection; Framework provides binding to associate it with a player state object. `GameSession` answers `SessionInfoRequest` from the binding, finds or creates the Player Actor and binds it when it receives `EnterRegionRequest`, and relays every other packet to the bound Actor. Add authentication before binding and retain the typed packet relay so Framework can identify the connection for replies to that player.
 
@@ -109,7 +109,7 @@ Requests in the example game follow this path. Reading the code along this path 
 2. A new Actor starts in the Entry Spot `Entry`. `Enter.enter` checks the identity and calls `Entry.select` with the first index, which creates the instance `<region>-1` with `getOrCreate` and requests `joinSpot(...).defer()`.
 3. `Region.onActorJoinSuspending` admits the player through `Positions.admit`. When the instance is full it rejects with `RegionFull`; `Player.onJoinCompletedSuspending` sends that message to the Actor, and `Enter.next` calls `Entry.select` with the next index.
 4. After an accepted join, `Region.onJoinedActorSuspending` broadcasts `RegionView`. `ViewRequest`, `MoveRequest`, and `OpenDungeonRequest` are handled by `Actions` in the Region that holds the Actor; replies go through the bound Session, and pushes to other members use `sendToActor` and `Actions.deliver`.
-5. For a Dungeon, `Actions.dungeon` creates it with `getOrCreate` and sends `requestToSpot` to `DungeonActions.open` on the Instance node, then returns `DungeonOpened` through the bound Session.
+5. For a Dungeon, `Actions.dungeon` creates it with `getOrCreate` and sends `requestToSpot` to `DungeonActions.open` on the play node (dungeon), then returns `DungeonOpened` through the bound Session.
 6. A reconnecting client sends `EnterRegionRequest` on a new Session. The same Actor is bound, and `Actions.reconnect` resends the Region view. A Session disconnect does not remove the Actor from the Region (`onDisconnectActorSuspending` does nothing).
 7. To replace a node, `drain` in `runNode` requests relocation. Framework takes the application state from `capture` in `RegionTransfer` and `PlayerTransfer` and calls `restore` on another node.
 
@@ -184,7 +184,7 @@ The value applies to child processes started from that environment. In Bash, set
 export ZLINK_JAVA_STREAM_TRACE=1
 ```
 
-`ZLINK_JAVA_STREAM_TRACE` is a version-specific diagnostic switch in the public `0.34.0` package, so do not use it as a routing API. Let the runner clean up its own processes and Compose project, keep its Docker socket control path, preserve cleanup failures, and avoid stopping unrelated processes or containers.
+`ZLINK_JAVA_STREAM_TRACE` is a version-specific diagnostic switch in the public `0.32.0` package, so do not use it as a routing API. Let the runner clean up its own processes and Compose project, keep its Docker socket control path, preserve cleanup failures, and avoid stopping unrelated processes or containers.
 
 ## Reporting ZLink defects
 

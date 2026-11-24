@@ -4,10 +4,14 @@ This Kotlin template provides an action/FPS lobby and authoritative two-player r
 
 ```mermaid
 flowchart LR
-  players[Players] -->|STREAM| session[Session]
-  session -->|relay| matchA[Match A: Entry / Matchmaking / Room]
+  subgraph playNodes["Play nodes"]
+    matchA["Play node A (match): Entry / Matchmaking / Room"]
+    matchB["Play node B (match): Entry / Room"]
+  end
+  players[Players] -->|STREAM| session["Session node"]
+  session -->|relay| matchA
   matchA -->|Location / lease| location[(Redis)]
-  matchA <-->|host relocation| matchB[Match B: Entry / Room]
+  matchA <-->|host relocation| matchB
 ```
 
 ## Prerequisites
@@ -162,11 +166,11 @@ Validated against the published Framework 0.34.0 packages.
 
 ## Deployment sequence
 
-Wait for the bootstrap owner to report `READY` before starting another match host. Its public GetOrCreate completes while it is the only placement candidate, so the fixed Matchmaking Spot starts on its declared owner.
+Wait for the bootstrap owner to report `READY` before starting another play node (match). Its public GetOrCreate completes while it is the only placement candidate, so the fixed Matchmaking Spot starts on its declared owner.
 
-Start Redis, then matchA with `bootstrap: true`, matchB, and session. Each node has a separate entry point; both match nodes use the match application. Set production endpoints and a deployment-specific Redis key prefix in `server/config/`. The e2e runner overrides Redis addressing and the prefix for each run, sets Room capacity to one per match host, and obtains the actual port-zero endpoints from `READY`. The capacity setting lets the update scenario verify that the replacement accepts a new room while the surviving host retains the relocated room.
+Start Redis, then matchA with `bootstrap: true`, matchB, and session. Each node has a separate entry point; both play nodes (match) use the match application. Set production endpoints and a deployment-specific Redis key prefix in `server/config/`. The e2e runner overrides Redis addressing and the prefix for each run, sets Room capacity to one per play node (match), and obtains the actual port-zero endpoints from `READY`. The capacity setting lets the update scenario verify that the replacement accepts a new room while the surviving host retains the relocated room.
 
-For planned maintenance, send `drain` to the room host's stdin and wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Send `shutdown`, wait for `STOPPED`, and start the replacement with the same configuration; bootstrap uses GetOrCreate and accepts the existing Matchmaking object on the surviving host. The runner performs this sequence through the public relocation API.
+For planned maintenance, send `drain` to the play node's stdin and wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Send `shutdown`, wait for `STOPPED`, and start the replacement with the same configuration; bootstrap uses GetOrCreate and accepts the existing Matchmaking object on the surviving host. The runner performs this sequence through the public relocation API.
 
 Players start at `(40, 10)` and `(60, 10)` with 100 HP. `MoveRequest` carries displacement. The server checks finite values, `MaxStep` 2.0, map bounds `[0, 100]` on each axis, the closed wall segment at `x=50, y=20..60`, and the movement budget `min(MaxStep, MaxSpeed × elapsed)` with `MaxSpeed` 10 units per second. Shots have range 80, damage 25, and a 250 ms fire interval. Contract integers are limited to `9,007,199,254,740,991`; values outside that range are rejected. Only accepted moves and shots advance `LastSequence`; rejected actions preserve room state. `ActionRejected` carries `Reason` and `RetryAfterMs`; only time-limited rejections have a positive delay, and clients wait for that returned value before retrying the same request. `RoomView` includes each player's `LastSequence`, the room `Phase`, and `Winner`. Relocation snapshots store remaining cooldown and movement-budget time in milliseconds, not process timestamps.
 

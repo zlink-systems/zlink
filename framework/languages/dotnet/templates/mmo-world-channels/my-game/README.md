@@ -1,10 +1,19 @@
 # MyGame world channels
 
-This template runs independent MMORPG worlds. Each world has its own Session process, channel servers, Redis data and route mesh. A Player Actor owns gold. Fixed Zone User Spots host channels, and changing channels uses public Actor relocation while preserving the client connection.
+This template runs independent MMORPG worlds. Each world has its own Session node, channel servers, Redis data and route mesh. A Player Actor owns gold. Fixed Zone User Spots host channels, and changing channels uses public Actor relocation while preserving the client connection.
 
 ```mermaid
 flowchart LR
-  players -->|HTTP| accounts
+  subgraph sessionNodes["Session nodes"]
+    sessionA["Session node A"]
+    sessionB["Session node B"]
+  end
+  subgraph playNodes["Play nodes"]
+    channelA1["Play node A1 (channel)"]
+    channelB["Play node B (channel)"]
+    channelA2["Play node A2 (channel)"]
+  end
+  players -->|HTTP| accounts["API node (accounts)"]
   players -->|STREAM| sessionA
   players -->|STREAM| sessionB
   sessionA -->|relay| channelA1
@@ -42,9 +51,9 @@ Scripts remove unique image tags after each invocation. Docker retains build lay
 
 ### Endpoint and first packet
 
-First call `GET /worlds` on Accounts. `server/config/accounts.json` defaults `HttpEndpoint` to `http://127.0.0.1:0`; use `httpEndpoint` from Accounts `READY` JSON. The response lists `WorldId`, `Name`, and `SessionEndpoint`. Select a world and connect to its advertised STREAM endpoint. `server/config/sessionA.json` and `sessionB.json` default `StreamEndpoint` to `ws://127.0.0.1:0`, root path `/`. Use each Session's `streamEndpoint` from `READY`. Configure Accounts `Worlds[].SessionEndpoint` with those actual addresses, as `e2e/MyGame.E2E/WorldRun.cs` does. Port `0` is not a client destination. Channel mesh listeners and Redis are internal endpoints.
+First call `GET /worlds` on the accounts API node. `server/config/accounts.json` defaults `HttpEndpoint` to `http://127.0.0.1:0`; use `httpEndpoint` from the accounts API node `READY` JSON. The response lists `WorldId`, `Name`, and `SessionEndpoint`. Select a world and connect to its advertised STREAM endpoint. `server/config/sessionA.json` and `sessionB.json` default `StreamEndpoint` to `ws://127.0.0.1:0`, root path `/`. Use each Session's `streamEndpoint` from `READY`. Configure Accounts `Worlds[].SessionEndpoint` with those actual addresses, as `e2e/MyGame.E2E/WorldRun.cs` does. Port `0` is not a client destination. Channel mesh listeners and Redis are internal endpoints.
 
-Send `EnterWorldRequest(PlayerId)` first. Successful Actor binding and entry produce a `PlayerView` push with world/channel and persisted player data. World A and B keep separate state; channel changes use `ChangeChannelRequest` after entry. `ActionRejected` reports rejected actions. Entry is send/push; `SessionInfoRequest` is request/reply after binding. Accounts lists worlds but does not authenticate players; validate identity before binding when adding authentication.
+Send `EnterWorldRequest(PlayerId)` first. Successful Actor binding and entry produce a `PlayerView` push with world/channel and persisted player data. World A and B keep separate state; channel changes use `ChangeChannelRequest` after entry. `ActionRejected` reports rejected actions. Entry is send/push; `SessionInfoRequest` is request/reply after binding. The accounts API node lists worlds but does not authenticate players; validate identity before binding when adding authentication.
 
 ### Connector installation
 

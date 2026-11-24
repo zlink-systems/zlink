@@ -1,12 +1,16 @@
 # MyGame FPS entry lobby
 
-This C++20 FPS template pairs players by mode through Entry Spots, a fixed Matchmaking User Spot, and dynamic Room User Spots. Session binds each connection to a Player Actor; RoomState owns movement budgets, ray hit decisions, HP, shared input sequences and match completion. Disconnected players resume the same Actor and Room. Draining a Match host relocates ongoing matches without reconnecting clients.
+This C++20 FPS template pairs players by mode through Entry Spots, a fixed Matchmaking User Spot, and dynamic Room User Spots. Session binds each connection to a Player Actor; RoomState owns movement budgets, ray hit decisions, HP, shared input sequences and match completion. Disconnected players resume the same Actor and Room. Draining a play node (match) relocates ongoing matches without reconnecting clients.
 
 ```mermaid
 flowchart LR
-    players[Players] -->|STREAM| session[Session]
-    session -->|relay| matchA[Match A: Entry, Matchmaking, Rooms]
-    matchA <-->|mesh / relocation| matchB[Match B: Entry, Rooms]
+    subgraph playNodes["Play nodes"]
+      matchA["Play node A (match): Entry, Matchmaking, Rooms"]
+      matchB["Play node B (match): Entry, Rooms"]
+    end
+    players[Players] -->|STREAM| session["Session node"]
+    session -->|relay| matchA
+    matchA <-->|mesh / relocation| matchB
     matchA -->|Location / lease| location[(Redis)]
 ```
 
@@ -133,7 +137,7 @@ The runner and nodes execute in containers. The script checks structure before R
 
 The runner removes its node containers. The script removes remaining containers carrying this run's label, its Compose resources and its image tags. Cleanup failures return exit code 1. Build and orchestration logs remain in `.logs/docker-<project>/`; node logs and generated configurations remain in `.logs/run-<id>/`. Unix runners use the caller UID and Docker socket group so those files remain caller-owned.
 
-The scripts and runner check `zlink.structure.json`, start a uniquely named Redis Compose project on an ephemeral loopback port, start Match A before Match B and Session, and save configuration, stdout, stderr message-flow records and typed client observations in `.logs/run-<id>/`. They clean up only their own processes and Compose project. Cleanup failures cause a failing exit code.
+The scripts and runner check `zlink.structure.json`, start a uniquely named Redis Compose project on an ephemeral loopback port, start play node A (match) before play node B (match) and Session, and save configuration, stdout, stderr message-flow records and typed client observations in `.logs/run-<id>/`. They clean up only their own processes and Compose project. Cleanup failures cause a failing exit code.
 
 | Scenario | Assertions |
 | --- | --- |
@@ -148,7 +152,7 @@ The runner executes 46 domain checks before starting scenarios. The separate `my
 
 The wire contracts are in `server/shared/contracts.hpp`; `server/match/domain.hpp` defines `Vec3`, closed slab ray/AABB intersection, the static map, spawn points and player boxes. `RoomViewRequest` asks the authoritative Room for its current view. `SessionInfoRequest` receives a typed request reply. Requests and pushes use the Framework default typed JSON serializer. The runner never retries a failed scenario.
 
-Each scenario uses isolated Redis key prefixes and node containers, with Room capacity set to one per match host. After relocation fills the surviving host, only the replacement has capacity for a new Room. Deployment capacity is configured independently.
+Each scenario uses isolated Redis key prefixes and node containers, with Room capacity set to one per play node (match). After relocation fills the surviving host, only the replacement has capacity for a new Room. Deployment capacity is configured independently.
 
 Message Follow is configured explicitly to 30 seconds. After `RELOCATED`, the safe shutdown observation budget is the follow duration plus the existing relocation observation budget; the relocation operation deadline is unchanged.
 
@@ -189,11 +193,11 @@ Validated against the published Framework 0.34.0 packages.
 - [#1786](https://github.com/zlink-systems/zlink/issues/1786) (open, planned for 0.31.0): the first push sent from `on_actor_joined` after a deferred join can be lost without an error; it was not observed in 0.31.0 validation.
 ## Deployment sequence
 
-Wait for the bootstrap owner to report `READY` before starting another match host. Its public GetOrCreate completes while it is the only placement candidate, so the fixed Matchmaking Spot starts on its declared owner.
+Wait for the bootstrap owner to report `READY` before starting another play node (match). Its public GetOrCreate completes while it is the only placement candidate, so the fixed Matchmaking Spot starts on its declared owner.
 
 1. Start Redis and give all node configurations the same deployment-specific `RedisEndpoint` and `KeyPrefix`.
-2. Start the Matchmaking bootstrap owner (`my-game-match server/config/match-a.json`), then other Match hosts (`my-game-match server/config/match-b.json`), then Session (`my-game-session server/config/session.json`). Every role has its own executable; configuration does not select the role.
-3. Keep Room capacity available on surviving hosts. Write `drain` to the selected Match host's stdin. Wait for all three relocation markers, then write `shutdown` and require `STOPPED` and exit code zero.
+2. Start the Matchmaking bootstrap owner (`my-game-match server/config/match-a.json`), then other play nodes (match) (`my-game-match server/config/match-b.json`), then the session node (`my-game-session server/config/session.json`). Every role has its own executable; configuration does not select the role.
+3. Keep Room capacity available on surviving hosts. Write `drain` to the selected play node's stdin. Wait for all three relocation markers, then write `shutdown` and require `STOPPED` and exit code zero.
 4. Start its replacement with the same node settings and `BootstrapMatchmaking` disabled. Require `READY` before accepting new work. Framework owns Actor placement, membership, binding and relocation; application adapters preserve only queue and combat state.
 
 ## FPS rules and extension points

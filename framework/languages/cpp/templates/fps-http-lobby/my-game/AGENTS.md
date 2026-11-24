@@ -6,14 +6,14 @@
 
 ## Rules for AI
 
-`server/lobby` is an HTTP lobby that holds no game state; every other server process is a stateful ZLink node. Before writing code, decide which kind you are editing.
+`server/lobby` is an API node that holds no game state; the session node manages client connections, and the play nodes host the game Spots. Before writing code, decide which kind you are editing.
 
-- A game node is not a REST server. A player's state is owned by one session-bound Actor (or the Spot that owns a shared value). Load it once on connect; do not read the database while handling a request.
+- A play node hosts Spots. A session-bound Actor owns the player's state, and a Spot owns shared state. Load it once on connect; do not read the database while handling a request.
 - Write only results to the database, one transaction per round. Check duplicate requests in Actor or Spot memory.
 - While a game is running, a Spot handler never awaits a remote request or a database reply: the await holds the Spot's turn and stops every message and timer in it. When a round ends, the Spot writes the results of all its Actors in one transaction, then tells each Actor after the commit.
 - Values many players see live in node memory or one owning Spot; values many requests update are applied by that one owning Spot. A process that does not own a value sends a request to its owner instead of writing it.
 - Spots and Actors already process one message at a time. Do not guard their state with locks, semaphores or process-wide static stores, and do not update memory from database commit hooks; the writer updates its owner's memory after commit, others send a message to the owner.
-- Split roles so the game can scale out from day one: game nodes host lobby and room Spots and player Actors and are the only processes you add; a shared node hosts only game-wide Instance Spots (matchmaking, game-wide values), and game nodes do not register those factories. Send and request by Spot ID only; placement is configuration. Keep shared-Spot values recoverable from room resends or a database read at startup.
+- Split roles so the game can scale out from day one: play nodes host lobby and room Spots and player Actors and are the only processes you add; a dedicated play node hosts only game-wide Instance Spots (matchmaking, game-wide values), and the API node and room hosts omit those factories. Send and request by Spot ID only; placement is configuration. Keep shared-Spot values recoverable from room resends or a database read at startup.
 - Never have two Actors or Spots wait on requests to each other inside a turn; notify with send and let the state owner decide.
 - Actors move between nodes when they join a Spot or relocate. Keep all mutable Actor fields in one state record, register stateful Actors with the state-preserving relocation policy, and test that save and restore preserve every field.
 - Player data reaches a Spot with the Actor that joins it; do not request it per player at Spot entry. If a Spot truly needs extra data, fetch it for all players in one request before the game starts.
@@ -23,13 +23,13 @@
 - Send money or reward results only after the database commit.
 - One decision has one owner; find the existing one before adding another. Take test expectations from the spec, not from the implementation.
 
-The HTTP lobby may read and write the database per request, but it holds no game state and changes game state only by sending requests to game nodes.
+The API node may read and write the database per request, but it holds no game state and changes game state only by sending requests to play nodes.
 
-Details: [Stateful game nodes and the HTTP lobby](https://docs.zlink.systems/cpp/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
+Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/cpp/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
 
 ## Project and development
 
-Extend this C++20 FPS template with the game rules in this project. It runs an HTTP Lobby, a Session gateway, Match hosts A and B, and a Redis Location Store. The Lobby pairs `POST /match` requests by mode, creates a Room ID from the configured prefix and a UUID, and waits for `RoomPrepared` before returning the Room ID and Session endpoint. Session accepts `JoinRoomRequest` as the first game packet; `RoomRoster` owns admission. Public Framework and connector packages are pinned to 0.34.0 in `bootstrap.cmake`. The [README](README.md) owns execution, deployment and known issues; [zlink.structure.json](zlink.structure.json) describes topology and scenario order.
+Extend this C++20 FPS template with the game rules in this project. It runs an API node, a Session node, play nodes A and B (match), and a Redis Location Store. The API node pairs `POST /match` requests by mode, creates a Room ID from the configured prefix and a UUID, and waits for `RoomPrepared` before returning the Room ID and Session endpoint. Session accepts `JoinRoomRequest` as the first game packet; `RoomRoster` owns admission. Public Framework and connector packages are pinned to 0.32.0 in `bootstrap.cmake`. The [README](README.md) owns execution, deployment and known issues; [zlink.structure.json](zlink.structure.json) describes topology and scenario order.
 
 Run from this project root with Docker Compose v2 and Linux containers:
 
@@ -56,7 +56,7 @@ For host-process debugging, install a C++20 compiler (GCC 13 or later, or Visual
 - `server/shared/contracts.hpp` and `server/match/domain.hpp`: game contracts, limits, geometry, map, spawns, player boxes and `RoomState`. Keep the entry and HTTP template copies byte-identical.
 - `server/shared/http_lobby_contracts.hpp`: HTTP and server-only preparation contracts. `server/shared/hosting.hpp` publishes HTTP readiness without adding it to the client packet allowlist.
 - `server/lobby/matchmaker.hpp`: mode queues, pairing and the single Room ID issuance point. IDs use `RoomPrefix` plus a generated UUID with no counter.
-- `server/lobby/http.hpp`: HTTP endpoint and Room provisioning. The Lobby sends `PrepareRoom(MatchId, Members)` and responds only after matching `RoomPrepared(MatchId)` arrives.
+- `server/lobby/http.hpp`: HTTP endpoint and Room provisioning. The API node sends `PrepareRoom(MatchId, Members)` and responds only after matching `RoomPrepared(MatchId)` arrives.
 - `server/match/roster.hpp`: Room roster validation, idempotent preparation, admission and relocation snapshot state. A different roster cannot replace a prepared roster.
 - `server/match/room.hpp` and `server/match/player.hpp`: Room handlers, Player Actor, reconnect and relocation. Keep Framework callbacks out of the game domain.
 - `server/session/session.hpp`: connection callbacks, Actor binding and client packet allowlist. Authenticate `JoinRoomRequest.PlayerId` before binding. Do not relay `PrepareRoom`, `RoomPrepared`, `HttpNodeReady` or internal result packets from clients.
@@ -67,7 +67,7 @@ For host-process debugging, install a C++20 compiler (GCC 13 or later, or Visual
 
 `RoomState` is the only owner of movement budget, fire interval, hit selection, HP, input sequences and match completion. Y is up; the map bounds and two wall AABBs are shared server constants. Movement checks the feet-position segment against closed wall boxes. Feet remain at Y=0; nonzero `Delta.Y` is `vertical-move`. Jumping and gravity are not implemented. Ray contact with a box face counts as an intersection, and a wall wins equal-distance ties. Accepted misses and wall-blocked shots consume sequence and cooldown. Rejected inputs leave game state and timing unchanged. Snapshots store remaining milliseconds and no absolute process clock readings.
 
-`RoomRoster` owns the prepared member list and admission decision. The HTTP Lobby sends one roster for a paired Room. The same preparation is idempotent; a different roster is rejected. Relocation captures `{Game, Roster}` so a moved Room keeps its members and combat state. `Matchmaker` owns mode separation and Room ID issuance. Pending HTTP requests remain in Lobby process memory and do not move with a Match host.
+`RoomRoster` owns the prepared member list and admission decision. The API node sends one roster for a paired Room. The same preparation is idempotent; a different roster is rejected. Relocation captures `{Game, Roster}` so a moved Room keeps its members and combat state. `Matchmaker` owns mode separation and Room ID issuance. Pending HTTP requests remain in Lobby process memory and do not move with a play node (match).
 
 Keep game state in the Spot domain and use public Actor, Spot and RouteMesh APIs. Framework execution serializes handler turns; do not add another lock, queue or generation check for the same execution permission. Do not synchronously wait for infrastructure inside a handler turn. Relocation adapters serialize application state; Framework owns host transfer, membership, location and route continuity. Validate relocation completion and safe-shutdown observations, not command acceptance alone.
 
@@ -75,7 +75,7 @@ Keep game state in the Spot domain and use public Actor, Spot and RouteMesh APIs
 
 Use the [ZLink documentation](https://docs.zlink.systems/), [C++ server guide](https://docs.zlink.systems/cpp/guide/server/), [API reference](https://docs.zlink.systems/cpp/reference/) and [agent index](https://docs.zlink.systems/llms.txt). Check documentation against the package pinned by `bootstrap.cmake`. Entry, Spot, Actor, Session, Location and relocation operations use public Framework APIs and default typed serialization. Do not add a private API, raw-frame parser, manual JSON conversion or application routing workaround.
 
-The pinned 0.34.0 C++ public headers currently do not match the documented typed `SessionInfoRequest` reply example: STREAM write/reply calls accept `zlink::message_t`, `fx::message_t::from(T)` returns a typed wrapper, and `submit()` returns `void`. Preserve request/reply semantics and record this as a build blocker until the public contract is aligned; do not turn the reply into a push or add a serializer workaround.
+The pinned 0.32.0 C++ public headers currently do not match the documented typed `SessionInfoRequest` reply example: STREAM write/reply calls accept `zlink::message_t`, `fx::message_t::from(T)` returns a typed wrapper, and `submit()` returns `void`. Preserve request/reply semantics and record this as a build blocker until the public contract is aligned; do not turn the reply into a push or add a serializer workaround.
 
 ## Diagnostics and defects
 

@@ -1,10 +1,15 @@
 # MyGame seamless world
 
-This template runs a persistent player Actor across six Zones on two physical nodes. Zone border visibility uses the `border` logical multicast channel. A separate Instance node creates Dungeon User Spots on demand.
+This template runs a persistent player Actor across six Zones on two physical nodes. Zone border visibility uses the `border` logical multicast channel. A separate play node (dungeon) creates Dungeon User Spots on demand.
 
 ```mermaid
 flowchart LR
-  Players -->|STREAM| Session
+  subgraph playNodes["Play nodes"]
+    ZoneA["Play node A (zone)"]
+    ZoneB["Play node B (zone)"]
+    Instance["Play node ×N (dungeon)"]
+  end
+  Players -->|STREAM| Session["Session node"]
   Session -->|Actor relay| ZoneA
   ZoneA -->|Actor relocation| ZoneB
   ZoneB -->|border pub/sub| ZoneA
@@ -148,7 +153,7 @@ The scripts and C++ runner check `zlink.structure.json`, run domain boundary che
 | `reconnect` | A new physical Session binds the same Actor generation and retains the authoritative position and movement sequence. |
 | `update` | Drain Zone A while moving, observe relocation and SafeToShutdown, preserve position, sequence, and remaining movement-budget milliseconds, replace Zone A, and verify fresh Actor creation and movement. |
 
-`./run-e2e.sh --check-structure` checks the actual project files without starting Redis or game nodes. `./run-e2e.sh --check-domain` runs movement, sequence, snapshot, presence, and JSON boundary checks without starting nodes. Domain checks also run before the default scenario nodes start. The structure checker accepts valid added nodes and reordered edges; it rejects inconsistent IDs, owner references, channels, stable types, scenario order, and escaping configuration paths.
+`./run-e2e.sh --check-structure` checks the actual project files without starting Redis or play nodes. `./run-e2e.sh --check-domain` runs movement, sequence, snapshot, presence, and JSON boundary checks without starting nodes. Domain checks also run before the default scenario nodes start. The structure checker accepts valid added nodes and reordered edges; it rejects inconsistent IDs, owner references, channels, stable types, scenario order, and escaping configuration paths.
 
 ## Local debugging
 
@@ -192,9 +197,9 @@ Message Follow is explicitly configured to 30 seconds in shared hosting. The wai
 
 ## Deployment sequence
 
-Start Redis, Zone A, Zone B, Instance nodes, and then the Session node. Zone A bootstraps zone-1 through zone-3; Zone B bootstraps zone-4 through zone-6 and has capacity for all six Zones. Initial actor placement and Dungeon placement remain Framework decisions.
+Start Redis, Zone A, Zone B, play nodes (dungeon), and then the Session node. Zone A bootstraps zone-1 through zone-3; Zone B bootstraps zone-4 through zone-6 and has capacity for all six Zones. Initial actor placement and Dungeon placement remain Framework decisions.
 
-For a planned update, write `drain` to the affected process's standard input. Wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Write `shutdown` and require `STOPPED` plus exit code zero before replacing the process. Use the same node configuration on a Zone replacement. Like every Zone node, it runs `get_or_create` for all configured Zones at startup: Zones already moved to Zone B end as existing and remain under Location Store authority, and only the closed first Zone is created on the replacement. Every listener binds an OS-assigned port. Configure Redis endpoints and a deployment-specific key prefix for your environment.
+For a planned update, write `drain` to the affected process's standard input. Wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Write `shutdown` and require `STOPPED` plus exit code zero before replacing the process. Use the same node configuration on a Zone replacement. Like every play node (zone), it runs `get_or_create` for all configured Zones at startup: Zones already moved to Zone B end as existing and remain under Location Store authority, and only the closed first Zone is created on the replacement. Every listener binds an OS-assigned port. Configure Redis endpoints and a deployment-specific key prefix for your environment.
 
 `SessionInfo` carries Session ID, Actor ID, and object generation from the actual bound Actor. `ZonePositionDomain` in `server/zone/domain.hpp` owns player positions, sequences, movement budgets, and connected-player visibility. Zone transitions use its calculated position and remaining budget milliseconds. Relocation adapters preserve application state only.
 

@@ -1,15 +1,21 @@
-# my-game — HTTP lobby
+# my-game — Matchmaking API node
 
-An action/FPS template with an HTTP matchmaking process, a STREAM Session process, and independently deployable match processes. The HTTP lobby pairs players by mode, prepares a dynamic Room through the public object client, and returns its ID and the Session endpoint. Room User Spots own positions, HP, action sequences, wall intersection, and match results.
+An action/FPS template with an API node, a STREAM Session node, and independently deployable play nodes (match). The API node pairs players by mode, prepares a dynamic Room through the public object client, and returns its ID and the Session endpoint. Room User Spots own positions, HP, action sequences, wall intersection, and match results.
 
 ```mermaid
 flowchart LR
-  players[Players] -->|HTTP| lobby[HTTP lobby]
-  players -->|STREAM| session[Session]
-  session -->|relay| matchA[Match A: Entry / Room]
-  matchA <-->|my-game-arena| matchB[Match B: Entry / Room]
+  subgraph playNodes["Play nodes"]
+    matchA["Play node A (match): Entry / Room"]
+    matchB["Play node B (match): Entry / Room"]
+  end
+  players[Players] -->|STREAM| session["Session node"]
+  session -->|relay| matchA
+  matchA <-->|my-game-arena| matchB
   lobby -->|Find room| location[(Redis)]
   matchA -->|Location / lease| location
+  players -->|HTTP| lobby["API node (matchmaking)"]
+  lobby -->|RouteMesh room preparation| matchA
+  lobby -->|RouteMesh room preparation| matchB
 ```
 
 ## Prerequisites
@@ -36,9 +42,9 @@ The build compiles separate lobby, Session, and match entrypoints and generates 
 
 ### Endpoint and first packet
 
-Start with the Lobby HTTP endpoint in `server/config/lobby.json`: `http://127.0.0.1:0`. Read its actual `endpoint` from Lobby `READY` JSON. Send two concurrent `POST /match` JSON requests with distinct `playerId` values and the same `mode` (`duel` by default). Each HTTP response contains `roomId` and `sessionEndpoint`; the response waits for a pair and room preparation. See `e2e/client.mts` and `server/shared/messages.ts`.
+Start with the API node's HTTP endpoint in `server/config/lobby.json`: `http://127.0.0.1:0`. Read its actual `endpoint` from the API node `READY` JSON. Send two concurrent `POST /match` JSON requests with distinct `playerId` values and the same `mode` (`duel` by default). Each HTTP response contains `roomId` and `sessionEndpoint`; the response waits for a pair and room preparation. See `e2e/client.mts` and `server/shared/messages.ts`.
 
-Connect to that `sessionEndpoint` using STREAM. The Session `players` listener defaults to `ws://127.0.0.1:0` in `server/config/session.json`; Session `READY` JSON publishes its actual `endpoint`. Configure the Lobby's advertised `sessionEndpoint` with that running listener, as the e2e runner does. Both port-zero defaults need runtime addresses. WebSocket uses root path `/`. Match mesh listeners and Redis are internal endpoints.
+Connect to that `sessionEndpoint` using STREAM. The Session `players` listener defaults to `ws://127.0.0.1:0` in `server/config/session.json`; Session `READY` JSON publishes its actual `endpoint`. Configure the API node's advertised `sessionEndpoint` with that running listener, as the e2e runner does. Both port-zero defaults need runtime addresses. WebSocket uses root path `/`. Match mesh listeners and Redis are internal endpoints.
 
 The first STREAM packet is `JoinRoomRequest(playerId, roomId)`, using the assigned player and room. Only assigned members can join; success produces `MatchFound` and `RoomView` pushes. Later `SessionInfoRequest` is request/reply after binding. Room admission is not product authentication; validate identity before binding when adding authentication.
 
@@ -64,7 +70,7 @@ Use the same connector release as `package.json` dependencies `@zlink-systems/fr
 
 ### HTTP assignment and STREAM join example
 
-Save as `e2e/connect-once.mts` in a copy, build with `npm run build`, then run `node dist/e2e/connect-once.mjs <actual-lobby-http-endpoint>` against a separately running Lobby, Session, Match nodes, and Redis. Use fresh player IDs. The e2e command removes its deployment when finished. This example reads only the room ID; received contract int64 values remain decimal strings with the JSON codec.
+Save as `e2e/connect-once.mts` in a copy, build with `npm run build`, then run `node dist/e2e/connect-once.mjs <actual-lobby-http-endpoint>` against a separately running API node, session node, play nodes (match), and Redis. Use fresh player IDs. The e2e command removes its deployment when finished. This example reads only the room ID; received contract int64 values remain decimal strings with the JSON codec.
 
 ```typescript
 import '../.zlink-framework-json-schemas.cjs';
@@ -77,7 +83,7 @@ import { JoinRoomRequest } from '../server/shared/messages.js';
 import type { MatchResponse } from '../server/shared/messages.js';
 
 const lobby = process.argv[2];
-if (!lobby) throw new Error('Pass the Lobby HTTP endpoint from READY');
+if (!lobby) throw new Error('Pass the API node HTTP endpoint from READY');
 const players = ['guide-player-a', 'guide-player-b'];
 const assignments = await Promise.all(
   players.map(async (playerId) => {
@@ -142,14 +148,14 @@ pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
 
 | Scenario | Observed behavior |
 | --- | --- |
-| `lobby` | Omitting `mode` selects `duel`; both players receive the same prepared Room assignment with a `room-` prefix and 32 lowercase UUID hex characters. Before either matched player joins, an outsider is rejected with `admission-rejected` and the first Room view confirms the rejection did not change state. A client `PrepareRoom` packet is rejected with `packet-not-allowed`, and restarting the lobby produces a new Room ID. |
+| `lobby` | Omitting `mode` selects `duel`; both players receive the same prepared Room assignment with a `room-` prefix and 32 lowercase UUID hex characters. Before either matched player joins, an outsider is rejected with `admission-rejected` and the first Room view confirms the rejection did not change state. A client `PrepareRoom` packet is rejected with `packet-not-allowed`, and restarting the API node produces a new Room ID. |
 | `hit` | Accepted shots reduce HP and advance `LastSequence`. If a cooldown rejection occurs, the client waits for its `RetryAfterMs` before retrying the same sequence. Out-of-range and missing-target rejections leave the Room view unchanged. The lethal hit reports `Phase` and `Winner`. Domain checks exercise the cooldown boundary deterministically. |
 | `wall` | Players on opposite sides of the wall cannot shoot through it; each `blocked-by-wall` rejection leaves HP and sequence unchanged. Moving both players below the wall opens a clear shot lane. |
 | `input` | Accepted and rejected movement requests are sent consecutively before waiting for replies, followed by consecutive shot requests. `MoveResult` and `ShotResult` identify accepted actions; `move-budget` and `fire-too-soon` preserve accepted state and sequence. Retrying the same request after the server's `RetryAfterMs` succeeds. Oversized, stale, out-of-map, wall-crossing and over-limit sequences are also rejected without state changes. |
 | `reconnect` | A new Session binds the same Actor generation and restores the finished Room view, including sequence, `Phase`, and `Winner`. |
 | `update` | Planned maintenance relocates the Room and its `{Game, Roster}` snapshot, preserves Session bindings and matched membership, and lets the replacement node accept a new Room. |
 
-The runner validates structure before starting an isolated Compose project. It starts match processes, Session, then lobby; the lobby receives the Session's actual published endpoint. HTTP, mesh, and STREAM listeners bind port zero. Each scenario uses a unique Redis prefix and records node output, message-flow diagnostics, and client observations in `.logs/run-<id>/`. Cleanup failures fail the run.
+The runner validates structure before starting an isolated Compose project. It starts the play nodes (match), the session node, and then the API node. The API node receives the Session's actual published endpoint. HTTP, mesh, and STREAM listeners bind port zero. Each scenario uses a unique Redis prefix and records node output, message-flow diagnostics, and client observations in `.logs/run-<id>/`. Cleanup failures fail the run.
 
 ## Framework behavior to know
 
@@ -169,10 +175,10 @@ Typed push delivery restores the declared DTO class through the packet-name-to-c
 
 ## Deployment sequence
 
-Configure Redis and a unique shared key prefix in `server/config/`. Start `node dist/server/match/main.js server/config/match-a.json`, then the same entrypoint with `server/config/match-b.json`. Start `node dist/server/session/main.js server/config/session.json`. Read its `READY.streamEndpoint`, set the lobby's `sessionEndpoint` to that actual address, and start `node dist/server/lobby/main.js server/config/lobby.json`. The HTTP lobby announces its bound address in `READY.httpEndpoint`.
+Configure Redis and a unique shared key prefix in `server/config/`. Start `node dist/server/match/main.js server/config/match-a.json`, then the same entrypoint with `server/config/match-b.json`. Start `node dist/server/session/main.js server/config/session.json`. Read its `READY.streamEndpoint`, set the API node's `sessionEndpoint` to that actual address, and start `node dist/server/lobby/main.js server/config/lobby.json`. The API node announces its bound address in `READY.httpEndpoint`.
 
-Clients send `POST /match` with `{playerId, mode}`; omitted `mode` defaults to `duel`. The first request waits until another player in the same mode arrives. The lobby generates a Room ID from `room-` and a 32-character lowercase UUID, creates the Room, sends `PrepareRoom(matchId, members)`, and waits for `RoomPrepared` before returning `{roomId, sessionEndpoint}`. `RoomRoster` owns admission and rejects players outside the matched list. Session relays only `JoinRoomRequest`, `RoomViewRequest`, `MoveRequest`, `ShootRequest`, and `SessionInfoRequest`; internal packets receive `ActionRejected("packet-not-allowed", 0)`. Integer contract values use the common maximum `9,007,199,254,740,991`. Domain time uses a monotonic clock, and relocation snapshots store movement and fire timers as remaining milliseconds.
+Clients send `POST /match` with `{playerId, mode}`; omitted `mode` defaults to `duel`. The first request waits until another player in the same mode arrives. The API node generates a Room ID from `room-` and a 32-character lowercase UUID, creates the Room, sends `PrepareRoom(matchId, members)`, and waits for `RoomPrepared` before returning `{roomId, sessionEndpoint}`. `RoomRoster` owns admission and rejects players outside the matched list. Session relays only `JoinRoomRequest`, `RoomViewRequest`, `MoveRequest`, `ShootRequest`, and `SessionInfoRequest`; internal packets receive `ActionRejected("packet-not-allowed", 0)`. Integer contract values use the common maximum `9,007,199,254,740,991`. Domain time uses a monotonic clock, and relocation snapshots store movement and fire timers as remaining milliseconds.
 
-The lobby queue remains in process memory and is not relocated. The e2e runner sets each match host's Room capacity to one so that the replacement must accept the next Room while its peer hosts the relocated Room. Deployment configurations allow multiple Rooms.
+The API node's queue remains in process memory and is not relocated. The e2e runner sets each play node's Room capacity to one so that the replacement must accept the next Room while its peer hosts the relocated Room. Deployment configurations allow multiple Rooms.
 
-Write `drain` to the Room host's standard input and wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Write `shutdown`, verify `STOPPED` with outcome `Stopped` and reason `None`, and wait for process exit. Start a replacement with the same configuration and wait for `READY` before assigning new work. Keep Redis, the lobby, and Session available throughout the update.
+Write `drain` to the play node's standard input and wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Write `shutdown`, verify `STOPPED` with outcome `Stopped` and reason `None`, and wait for process exit. Start a replacement with the same configuration and wait for `READY` before assigning new work. Keep Redis, the API node, and Session available throughout the update.

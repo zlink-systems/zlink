@@ -4,10 +4,15 @@ Players join town channels, form parties of up to four players, and enter a dedi
 
 ```mermaid
 flowchart LR
-    players[Players] -->|STREAM| session[Session]
-    session -->|relay| townA[Town A: town-1]
-    townA -->|relocation| townB[Town B: town-2]
-    townB -->|GetOrCreate| instance[Instance nodes A and B: Dungeon]
+    subgraph playNodes["Play nodes"]
+      townA["Play node A (town): town-1"]
+      townB["Play node B (town): town-2"]
+      instance["Play node ×N (dungeon): Dungeon"]
+    end
+    players[Players] -->|STREAM| session["Session node"]
+    session -->|relay| townA
+    townA -->|relocation| townB
+    townB -->|GetOrCreate| instance
     townB -->|Location / lease| location[Redis]
 ```
 
@@ -57,7 +62,7 @@ Use the same connector release as `package.json` dependencies `@zlink-systems/fr
 
 ### First town example
 
-Save as `e2e/connect-once.mts` in a copy, run `npm run build`, then `node dist/e2e/connect-once.mjs <actual-session-endpoint>`. Keep Session, Town/Instance nodes, and Redis running separately; e2e removes its temporary deployment. Use a fresh player ID for the `TownView` path. The outgoing int64 channel uses `1n`; received int64 values remain decimal strings with the JSON codec. See `e2e/client.mts` for the complete flow.
+Save as `e2e/connect-once.mts` in a copy, run `npm run build`, then `node dist/e2e/connect-once.mjs <actual-session-endpoint>`. Keep Session, Town/play nodes (dungeon), and Redis running separately; e2e removes its temporary deployment. Use a fresh player ID for the `TownView` path. The outgoing int64 channel uses `1n`; received int64 values remain decimal strings with the JSON codec. See `e2e/client.mts` for the complete flow.
 
 ```typescript
 import '../.zlink-framework-json-schemas.cjs';
@@ -144,6 +149,6 @@ Start Redis, then townA and townB in order so each creates its configured fixed 
 
 Write `drain` to a node's stdin to request PlannedMaintenance. Wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Write `shutdown`, verify `STOPPED` with a successful outcome and process exit, then start the replacement using the same configuration. Fixed Town replacements must set `bootstrap` to false because Location Store already owns their logical identity.
 
-All Object Servers that register Player factories also register the shared Entry and first-admission handler, including both Instance nodes. Entry admission joins the requested fixed Town channel. Each Instance declares its dynamic Dungeon factory in `zlink.structure.json`.
+All Object Servers that register Player factories also register the shared Entry and first-admission handler, including both play nodes (dungeon). Entry admission joins the requested fixed Town channel. Each Instance declares its dynamic Dungeon factory in `zlink.structure.json`.
 
 The e2e configuration uses one Dungeon slot per Instance. After drain, the surviving Instance is full, so only the replacement can accept the fresh Dungeon. The structure checker enforces this configuration. Message Follow remains 30 seconds; the SafeToShutdown observation budget is derived from that duration plus the existing relocation operation budget.

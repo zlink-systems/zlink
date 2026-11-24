@@ -1,10 +1,15 @@
 # MyGame seamless world
 
-This Node.js template runs a Session process, two Zone processes and a Dungeon process. `ZonePositionDomain` owns authoritative position, sequence, movement budget, and visibility state. Zone User Spots publish typed appearance, movement, and departure through the `border` channel. Framework relocation moves Actors across Zones while preserving their Session binding.
+This Node.js template runs a Session node, two Zone processes and a Dungeon process. `ZonePositionDomain` owns authoritative position, sequence, movement budget, and visibility state. Zone User Spots publish typed appearance, movement, and departure through the `border` channel. Framework relocation moves Actors across Zones while preserving their Session binding.
 
 ```mermaid
 flowchart LR
-  Players -->|STREAM| Session
+  subgraph playNodes["Play nodes"]
+    ZoneA["Play node A (zone)"]
+    ZoneB["Play node B (zone)"]
+    Instance["Play node ×N (dungeon)"]
+  end
+  Players -->|STREAM| Session["Session node"]
   Session -->|relay| ZoneA
   ZoneA -->|relocation| ZoneB
   ZoneB -->|border pub/sub| ZoneA
@@ -65,7 +70,7 @@ Use the same connector release as `package.json` dependencies `@zlink-systems/fr
 
 ### First world entry example
 
-Save as `e2e/connect-once.mts` in a copy, run `npm run build`, then `node dist/e2e/connect-once.mjs <actual-session-endpoint>`. Keep Session, Zone/Instance nodes, and Redis running separately; e2e removes its temporary deployment. Use a fresh player ID. Received contract int64 values remain decimal strings with the JSON codec; this example prints the payload without numeric conversion. See `e2e/client.mts` for the complete flow.
+Save as `e2e/connect-once.mts` in a copy, run `npm run build`, then `node dist/e2e/connect-once.mjs <actual-session-endpoint>`. Keep Session, Zone/play nodes (dungeon), and Redis running separately; e2e removes its temporary deployment. Use a fresh player ID. Received contract int64 values remain decimal strings with the JSON codec; this example prints the payload without numeric conversion. See `e2e/client.mts` for the complete flow.
 
 ```typescript
 import '../.zlink-framework-json-schemas.cjs';
@@ -146,7 +151,7 @@ Message Follow is explicitly configured to 30 seconds in shared hosting. The wai
 1. Start Redis and configure a deployment-specific key prefix.
 2. Start Zone A with `server/config/zone-a.json` and wait for `READY`. Start Zone B, Instance and Session in that order. Session's `READY` includes the published STREAM endpoint.
 3. To replace Zone A, send `drain` on its stdin. Wait for `RELOCATION_REQUESTED`, `RELOCATED` and `SAFE_TO_SHUTDOWN` in order.
-4. Send `shutdown`, require `STOPPED` with a successful outcome and process exit, and start a replacement using the same configuration. Like every Zone node, it runs `getOrCreate` for all configured Zones at startup: Zones already moved to Zone B end as existing and remain there, and only the closed first Zone is created on the replacement. Replacement placement is available for new Actors.
+4. Send `shutdown`, require `STOPPED` with a successful outcome and process exit, and start a replacement using the same configuration. Like every play node (zone), it runs `getOrCreate` for all configured Zones at startup: Zones already moved to Zone B end as existing and remain there, and only the closed first Zone is created on the replacement. Replacement placement is available for new Actors.
 
 Each process is started with `node dist/server/<role>/main.js server/config/<node>.json`. Use deployment listener endpoints in those configuration files. The e2e runner overrides Redis and listener endpoints for its isolated run.
 

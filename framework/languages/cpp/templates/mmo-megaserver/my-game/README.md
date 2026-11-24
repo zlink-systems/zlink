@@ -1,10 +1,15 @@
 # MyGame megaserver
 
-This template hosts capacity-limited Region User Spots on two physical nodes in one world mesh. Entry selects the first Region instance that accepts a player. A separate Instance node creates Dungeon User Spots on demand.
+This template hosts capacity-limited Region User Spots on two physical nodes in one world mesh. Entry selects the first Region instance that accepts a player. A separate play node (dungeon) creates Dungeon User Spots on demand.
 
 ```mermaid
 flowchart LR
-  Players -->|STREAM| Session
+  subgraph playNodes["Play nodes"]
+    RegionA["Play node A (region)"]
+    RegionB["Play node B (region)"]
+    Instance["Play node (dungeon)"]
+  end
+  Players -->|STREAM| Session["Session node"]
   Session -->|Actor relay| RegionA
   RegionA <-->|Region placement and relocation| RegionB
   RegionA -->|Dungeon GetOrCreate| Instance
@@ -144,11 +149,11 @@ The runner checks `zlink.structure.json` before starting Redis and the four node
 | --- | --- |
 | `region` | Two Region replicas reach capacity; the next player receives `RegionUnavailable(capacity-exhausted)` and stays connected. An unknown region receives `region-unknown`. Internal packets are rejected by Session. |
 | `movement` | Server validates delta and sequence, returns `ActionRejected` without changing state, then accepts after the server-provided retry delay. The requester receives one direct result; other members receive the Region broadcast. |
-| `dungeon` | Dungeon GetOrCreate resolves to the Instance node. |
+| `dungeon` | Dungeon GetOrCreate resolves to the play node (dungeon). |
 | `reconnect` | A new Session binds the same Actor generation and retains Region membership and position. |
 | `update` | Drain the actual Region owner, observe relocation and SafeToShutdown, retain player state and Session identity, stop and replace that owner, and verify movement and new Region work. |
 
-`./run-e2e.sh --check-structure` validates actual files without starting Redis or game nodes. `./run-e2e.sh --check-domain` runs movement boundary checks without Redis or game nodes. The structure checker validates references, configuration paths, stable types and the canonical scenario order.
+`./run-e2e.sh --check-structure` validates actual files without starting Redis or play nodes. `./run-e2e.sh --check-domain` runs movement boundary checks without Redis or play nodes. The structure checker validates references, configuration paths, stable types and the canonical scenario order.
 
 ## Local debugging
 
@@ -190,12 +195,12 @@ This template answers `SessionInfoRequest` with a typed `SessionInfo` push; Fram
 
 ## Deployment sequence
 
-Start Redis, the two Region processes, the Instance process, and the Session process. Each process emits `READY` with its actual mesh endpoint; Session also reports its STREAM endpoint. Configure deployment-specific Redis endpoints and key prefixes.
+Start Redis, the two Region processes, the play node (dungeon), and the Session node. Each process emits `READY` with its actual mesh endpoint; Session also reports its STREAM endpoint. Configure deployment-specific Redis endpoints and key prefixes.
 
-Send `drain` to the Region process being replaced. Require `RELOCATION_REQUESTED`, `RELOCATED`, then `SAFE_TO_SHUTDOWN`. Send `shutdown`, require `STOPPED` and exit code zero, then start the same role with the same configuration. Framework Location Store retains authority for relocated objects. The runner selects the actual owner from RegionView; it does not prescribe placement.
+Send `drain` to the play node (region) being replaced. Require `RELOCATION_REQUESTED`, `RELOCATED`, then `SAFE_TO_SHUTDOWN`. Send `shutdown`, require `STOPPED` and exit code zero, then start the same role with the same configuration. Framework Location Store retains authority for relocated objects. The runner selects the actual owner from RegionView; it does not prescribe placement.
 
 `server/region/domain/positions.hpp` owns capacity, player positions and movement sequence. Entry owns index selection after `region-full`. Region stores player IDs and sends pushes through the public Actor client; its delivery handler forwards to the Actor's bound Session. Request handlers reply through the received Actor's bound Session. Relocation adapters serialize application state only. Player has no application state to duplicate.
 
-The e2e fixture limits each Region node to two Region Spots and keeps forest-1 and forest-2 occupied before drain. After relocation the survivor is full. Once the replacement reports `READY`, a new desert Region must be served by that replacement. Existing Region state and Session identity checks remain required. Only Region nodes register the application Entry and its first admission handler, so only those nodes declare an Entry in `zlink.structure.json`.
+The e2e fixture limits each play node (region) to two Region Spots and keeps forest-1 and forest-2 occupied before drain. After relocation the survivor is full. Once the replacement reports `READY`, a new desert Region must be served by that replacement. Existing Region state and Session identity checks remain required. Only play nodes (region) register the application Entry and its first admission handler, so only those nodes declare an Entry in `zlink.structure.json`.
 
 Message Follow is explicitly set to 30 seconds. The `SAFE_TO_SHUTDOWN` observation budget is the follow duration plus the existing relocation budget; the relocation operation deadline is unchanged.

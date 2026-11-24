@@ -4,10 +4,14 @@ This .NET template serves action and FPS lobbies through Entry Spots, a persiste
 
 ```mermaid
 flowchart LR
-    players[Players] -->|STREAM| session[Session]
-    session -->|relay| matchA[Match A: Entry, Matchmaking, Room, Player]
+    subgraph playNodes["Play nodes"]
+      matchA["Play node A (match): Entry, Matchmaking, Room, Player"]
+      matchB["Play node B (match): Entry, Room, Player"]
+    end
+    players[Players] -->|STREAM| session["Session node"]
+    session -->|relay| matchA
     matchA -->|Location / lease| location[(Redis)]
-    matchB[Match B: Entry, Room, Player] --> location
+    matchB --> location
     matchA <-->|host relocation| matchB
 ```
 
@@ -65,7 +69,7 @@ Use the release pinned in `Directory.Packages.props`, at `PackageVersion Include
 
 ### First match example
 
-Create a .NET 8 console project in a copy of the template, reference `server/MyGame.Shared/MyGame.Shared.csproj`, and add `Zlink.Stream.Connector` using the pinned version described above. Save as `Program.cs` and run `dotnet run --project <client-project> -- <actual-session-endpoint>` against separately running Session, Match nodes, and Redis. The e2e command removes its deployment. Use fresh player IDs; `e2e/MyGame.E2E/GameClient.cs` shows the complete flow.
+Create a .NET 8 console project in a copy of the template, reference `server/MyGame.Shared/MyGame.Shared.csproj`, and add `Zlink.Stream.Connector` using the pinned version described above. Save as `Program.cs` and run `dotnet run --project <client-project> -- <actual-session-endpoint>` against separately running Session, play nodes (match), and Redis. The e2e command removes its deployment. Use fresh player IDs; `e2e/MyGame.E2E/GameClient.cs` shows the complete flow.
 
 ```csharp
 using MyGame.Shared;
@@ -179,8 +183,8 @@ Validated against the published Framework 0.34.0 packages.
 
 ## Deployment sequence
 
-Wait for the bootstrap owner to report `READY` before starting another match host. Its public GetOrCreate completes while it is the only placement candidate, so the fixed Matchmaking Spot starts on its declared owner.
+Wait for the bootstrap owner to report `READY` before starting another play node (match). Its public GetOrCreate completes while it is the only placement candidate, so the fixed Matchmaking Spot starts on its declared owner.
 
-Start Redis, then match A (which bootstraps `matchmaking`), match B, and Session, using each project's `--config server/config/<node>.json` argument. Configure production Redis endpoints, unique key prefixes and listener addresses. Both match processes register relocation adapters and the same stable types.
+Start Redis, then match A (which bootstraps `matchmaking`), match B, and Session, using each project's `--config server/config/<node>.json` argument. Configure production Redis endpoints, unique key prefixes and listener addresses. Both play nodes register relocation adapters and the same stable types.
 
-Send `drain` on the selected match process's standard input. Wait for `RELOCATION_REQUESTED`, `RELOCATED`, then `SAFE_TO_SHUTDOWN`. Send `shutdown`, require successful process termination, and start the same role with the same configuration. Read actual bound endpoints from `READY` JSON. The runner performs this sequence without client reconnection.
+Send `drain` on the selected play node (match)'s standard input. Wait for `RELOCATION_REQUESTED`, `RELOCATED`, then `SAFE_TO_SHUTDOWN`. Send `shutdown`, require successful process termination, and start the same role with the same configuration. Read actual bound endpoints from `READY` JSON. The runner performs this sequence without client reconnection.
