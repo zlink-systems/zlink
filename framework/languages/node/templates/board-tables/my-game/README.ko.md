@@ -2,15 +2,17 @@
 
 [English](README.md)
 
-Session node, Matchmaker node, Table node가 Redis Location Store를 공유한다. 플레이어는 매치메이킹을 요청하거나 테이블 ID로 입장할 수 있다. TypeScript E2E client는 공개 stream connector로 매치메이킹, 게임 진행, 재접속, node 교체를 확인한다. 게임 규칙을 추가할 때는 [개발 가이드](AGENTS.md)의 확장 위치를 따른다.
+Session node, Play 역할의 Table node, Pool Spot을 맡는 Matchmaker node, Actor DB를 맡는 API node로 구성한다. 플레이어는 매치메이킹을 요청하거나 테이블 ID로 입장할 수 있다. TypeScript E2E client는 공개 stream connector로 매치메이킹, 게임 진행, 재접속, node 교체를 확인한다. 게임 규칙을 추가할 때는 [개발 가이드](AGENTS.md)의 확장 위치를 따른다.
 
 ```mermaid
 flowchart LR
     players[플레이어] -->|STREAM| session[Session node]
-    session -->|relay| table[Table node ×N]
-    table -->|MatchRequest와 EnterReport| matchmaker[Matchmaker node]
+    session -->|relay| table[Play / Table node ×N]
+    table -->|MatchRequest와 EnterReport| matchmaker[Matchmaker node / Pool Spot]
     matchmaker -->|PrepareRoom과 CommitRoom| table
-    table -->|Location / lease| location[(Location Store)]
+    table -->|ClientServer Channel| api[API node / Actor DB]
+    api -->|플레이어 기록| location[(Redis)]
+    table -->|Location / lease| location
     matchmaker -->|Location / lease| location
 ```
 
@@ -37,7 +39,7 @@ TypeScript를 컴파일하고 메시지 DTO에서 Framework의 기본 typed JSON
 
 ## 로컬 서버
 
-이 디렉터리에서 다음 명령을 실행한다. 스크립트는 `npm ci`로 패키지를 설치하고 빌드한 뒤 Docker에서 Redis를 시작한다. Session, Table, Matchmaker node는 로컬 Node.js 프로세스로 실행된다.
+이 디렉터리에서 다음 명령을 실행한다. 스크립트는 `npm ci`로 패키지를 설치하고 빌드한 뒤 Docker에서 Redis를 시작한다. Session, Table, Matchmaker, API node는 로컬 Node.js 프로세스로 실행된다.
 
 ```sh
 ./run-server.sh
@@ -66,6 +68,10 @@ TypeScript를 컴파일하고 메시지 DTO에서 Framework의 기본 typed JSON
 `FindMatch{playerId}`를 보내면 `MatchQueued{ticketId}`를 받는다. 두 플레이어는 같은 `roomId`와 서로 다른 좌석을 받는다. 대기열에서 나가려면 `CancelMatch{ticketId}`를 보내고 `MatchCancelled{ticketId, reason}`을 받는다. 매칭으로 입장한 뒤에는 직접 입장과 같은 게임 메시지를 사용한다.
 
 Matchmaker node의 Pool Spot ID는 `pool-board`다. Pool은 Spot-wide turn에서 오래 기다린 두 플레이어를 선택하고 방을 확정하거나 철회한다. Table node는 생성된 방과 Player Actor를 호스트하며, 준비 중인 방에는 배정에 명시된 플레이어만 받아들인다. Pool은 요청이 들어올 때와 500ms마다 대기열을 확인한다. 두 플레이어는 10초 안에 입장 성공을 보고해야 한다. 연결이 끊긴 채 15초가 지나면 `disconnected`, 대기가 120초를 넘기면 `expired`로 티켓을 취소한다.
+
+### 플레이어 기록
+
+Table node는 Player Actor가 처음 착석하기 전에 ClientServer Channel로 `LoadPlayer`를 호출한다. Actor는 읽은 칩을 상태에 보관한다. API node는 Redis의 배포 키 접두사 뒤에 `players:`를 붙인 공간에 플레이어 기록을 저장하고, 기록이 없으면 기본 칩을 생성한다. 판이 끝나면 Table은 모든 좌석의 칩을 `CommitRound` 한 번으로 보낸다. API는 테이블 ID와 판 번호로 중복을 확인하고 한 트랜잭션으로 저장한다. Table은 응답을 받은 뒤 플레이어에게 결과를 전달한다.
 
 ### Connector 설치
 
@@ -128,7 +134,7 @@ try {
 
 ## E2E 시나리오
 
-별도 터미널에서 E2E를 실행한다. `.logs/server.json`이 준비된 서버를 가리키면 스크립트가 `run-server`로 시작한 서버에 연결한다. 기본 연결 실행에서는 `table`, `reconnect`, `match`, `match-cancel`을 실행한다. Table 프로세스를 교체하는 `update`까지 실행하려면 서버를 종료한 뒤 Docker 격리 실행을 사용한다.
+별도 터미널에서 E2E를 실행한다. `.logs/server.json`이 준비된 서버를 가리키면 스크립트가 `run-server`로 시작한 서버에 연결한다. 기본 연결 실행에서는 `table`, `reconnect`, `match`, `match-cancel`을 실행한다. Table 프로세스를 교체하거나 재시작하는 `update`와 `persist`를 실행하려면 서버를 종료한 뒤 Docker 격리 실행을 사용한다.
 
 ```sh
 ./run-e2e.sh
@@ -161,6 +167,7 @@ Docker는 E2E runner와 각 node를 컨테이너로 실행한다. 모든 node는
 | `match`        | 두 플레이어가 같은 방에 배정되어 다른 좌석에 입장하고 한 판을 정산한다.                                                                                                                                                                                                           |
 | `match-cancel` | 대기 중인 플레이어가 재접속해 같은 티켓을 취소한다. 다른 두 플레이어는 매칭을 완료하고 한 판을 정산한다.                                                                                                                                                                          |
 | `update`       | 두 client의 접속과 게임 상태가 relocation 중에도 유지된다. 교체 대상 node에서 판을 정산한 뒤 패가 비어 있고 개인 카드 조회 결과도 비어 있다. 교체 프로세스는 새 테이블을 호스트한다.                                                                                              |
+| `persist`      | 두 플레이어가 한 판을 정산한다. Table 프로세스를 재시작한 뒤 같은 플레이어 ID로 만든 새 Actor가 정산된 칩을 읽는다.                                                                                                                                                               |
 
 runner는 `zlink.structure.json` 순서대로 시나리오를 실행한다.
 
@@ -185,12 +192,13 @@ Node 계약의 `handNumber`, bet `amount`, `chips`, `pot`은 `bigint`다. Framew
 ## 배포 순서
 
 1. Redis를 준비하고 각 node 설정에서 `redisEndpoint`와 배포마다 고유한 `keyPrefix`를 지정한다.
-2. `node dist/server/table/main.js server/config/table-a.json`과 같은 명령에 `table-b.json`도 각각 전달해 Table node를 시작한다. 각 node의 `meshEndpoint`는 다른 node가 접속할 수 있는 주소를 사용한다.
-3. `node dist/server/matchmaker/main.js server/config/matchmaker.json`으로 Matchmaker를 시작한다.
-4. `node dist/server/session/main.js server/config/session.json`으로 Session을 시작한다. 외부 접속에는 `ws://` 주소를 사용한다. 공개 계약에서 지원하는 구성에는 `wss://`를 설정할 수 있다.
-5. 각 프로세스의 `READY`를 확인한다. 제어 명령 `drain`과 `shutdown`은 표준 입력으로 전달한다. Table을 drain한 뒤 종료하기 전에 `RELOCATION_REQUESTED`, `RELOCATED`, `SAFE_TO_SHUTDOWN` 순서로 확인한다.
+2. `node dist/server/api/main.js server/config/api.json`으로 API를 시작한다. `apiBindHost`를 설정하고, 필요한 경우 Table node에서 접근할 주소를 `apiAdvertiseHost`로 지정한다.
+3. `node dist/server/table/main.js server/config/table-a.json`과 같은 명령에 `table-b.json`도 각각 전달해 Table node를 시작한다. 각 node의 `meshEndpoint`는 다른 node가 접속할 수 있는 주소를 사용한다.
+4. `node dist/server/matchmaker/main.js server/config/matchmaker.json`으로 Matchmaker를 시작한다.
+5. `node dist/server/session/main.js server/config/session.json`으로 Session을 시작한다. 외부 접속에는 `ws://` 주소를 사용한다. 공개 계약에서 지원하는 구성에는 `wss://`를 설정할 수 있다.
+6. 각 프로세스의 `READY`를 확인한다. 제어 명령 `drain`과 `shutdown`은 표준 입력으로 전달한다. Table을 drain한 뒤 종료하기 전에 `RELOCATION_REQUESTED`, `RELOCATED`, `SAFE_TO_SHUTDOWN` 순서로 확인한다.
 
-Docker E2E runner는 구조 파일에 선언된 역할을 모두 시작한다. 배포에서 Compose로 Matchmaker를 실행하려면 `docker` profile의 `node-image`를 빌드한다. `MY_GAME_MATCHMAKER_CONFIG`에 접근 가능한 Redis와 mesh 주소가 담긴 설정을 지정하고, 같은 Compose 프로젝트에서 `deployment` profile의 `matchmaker`를 시작한다.
+Docker E2E runner는 구조 파일에 선언된 역할을 모두 시작한다. Compose로 배포할 때는 `docker` profile의 `node-image`를 빌드한다. `MY_GAME_MATCHMAKER_CONFIG`와 `MY_GAME_API_CONFIG`에 접근 가능한 주소가 담긴 설정을 지정하고, 같은 Compose 프로젝트에서 `deployment` profile의 `matchmaker`와 `api`를 시작한다.
 
 기본 설정의 포트는 loopback에서 자동 할당한다. 프로덕션에서는 접근 가능한 주소와 Redis를 명시한다. Table stable type의 배치와 경로 갱신은 Framework가 결정한다.
 
@@ -213,4 +221,4 @@ node --test dist/e2e/domain.test.js
 
 runner는 `windowsHide: true`로 자식 프로세스를 실행한다. Windows에서는 PowerShell 7이나 CMD 래퍼를 사용한다. 프로젝트는 native addon을 사용하므로 설치 전에 Node 버전과 CPU 아키텍처가 지원 범위에 있는지 확인한다. npm 설치는 템플릿 디렉터리에서 공개 registry를 사용한다.
 
-격리 E2E runner는 공개 Table stable-type 제한 `tableCapacity`에 선택한 시나리오 수를 지정한다. `update`에 앞선 시나리오가 각각 테이블을 남기므로 기존 node를 drain하면 남은 프로세스가 용량 한도에 도달한다. 교체 프로세스가 새 테이블을 호스트하고 두 플레이어가 그 node ID를 확인한다. 배포에서 용량 값을 생략하거나 0으로 지정하면 한도를 두지 않는다. Entry Spot은 Table node에, 고정 Pool User Spot은 Matchmaker node에 위치한다.
+격리 E2E runner는 공개 Table stable-type 제한 `tableCapacity`에 선택한 시나리오에서 `persist`를 제외한 수를 지정한다. `update`에 앞선 시나리오가 각각 테이블을 남기므로 기존 node를 drain하면 남은 프로세스가 용량 한도에 도달한다. 교체 프로세스가 새 테이블을 호스트하고 두 플레이어가 그 node ID를 확인한다. 배포에서 용량 값을 생략하거나 0으로 지정하면 한도를 두지 않는다. Entry Spot은 Table node에, 고정 Pool User Spot은 Matchmaker node에 위치한다.

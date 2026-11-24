@@ -1,5 +1,6 @@
 export const Names = {
   mesh: 'my-game-tables',
+  playerRecords: 'my-game-player-records',
   stream: 'players',
   actor: 'Player',
   table: 'Table',
@@ -53,7 +54,14 @@ export const Matchmaking = {
   disconnectGraceMs: 15_000,
   waitMs: 120_000
 } as const;
-export const Scenarios = ['table', 'reconnect', 'match', 'match-cancel', 'update'] as const;
+export const Scenarios = [
+  'table',
+  'reconnect',
+  'match',
+  'match-cancel',
+  'update',
+  'persist'
+] as const;
 export const PacketNames = {
   sessionInfoRequest: 'SessionInfoRequest',
   sessionInfo: 'SessionInfo',
@@ -78,11 +86,14 @@ export const PacketNames = {
   enterReport: 'EnterReport',
   prepareRoom: 'PrepareRoom',
   roomAdmission: 'RoomAdmission',
+  tableAdmission: 'TableAdmission',
   commitRoom: 'CommitRoom',
   withdrawRoom: 'WithdrawRoom',
   matchReleased: 'MatchReleased',
   returnReport: 'ReturnReport',
-  roomWithdrawn: 'RoomWithdrawn'
+  roomWithdrawn: 'RoomWithdrawn',
+  loadPlayer: 'LoadPlayer',
+  commitRound: 'CommitRound'
 } as const;
 
 export const Control = {
@@ -98,6 +109,7 @@ export const Control = {
 export const NodeEntrypoints = {
   session: 'server/session/main.ts',
   table: 'server/table/main.ts',
-  matchmaker: 'server/matchmaker/main.ts'
+  matchmaker: 'server/matchmaker/main.ts',
+  api: 'server/api/main.ts'
 } as const;
 export type NodeRole = keyof typeof NodeEntrypoints;

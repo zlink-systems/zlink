@@ -65,6 +65,10 @@ export function checkStructure(path = 'zlink.structure.json'): void {
     if (node.role !== 'location-store') {
       const cfg = object(JSON.parse(readFileSync(file, 'utf8')));
       assert.equal(cfg.id, node.id, 'Config ID mismatch');
+      if (node.role === 'api') {
+        assert.equal(cfg.meshEndpoint, null);
+        text(cfg.apiBindHost);
+      }
       if (node.role === 'session')
         assert.equal(
           new URL(text(cfg.streamEndpoint)).protocol,
@@ -74,15 +78,17 @@ export function checkStructure(path = 'zlink.structure.json'): void {
     }
   }
   const channels = array(s.channels).map(object);
-  unique(
-    channels.map((c) => `${text(c.name)}:${text(c.owner)}`),
-    'channel'
-  );
-  for (const c of channels) {
-    owner(c.owner);
-    assert.equal(c.mesh, Names.mesh);
-    assert.fail('No application channel registered');
-  }
+  const apiNodes = nodes.filter((node) => node.role === 'api');
+  assert.equal(apiNodes.length, 1);
+  const tableNodes = nodes.filter((node) => node.role === 'table');
+  assert.deepEqual(channels, [
+    {
+      name: Names.playerRecords,
+      kind: 'clientServer',
+      owner: apiNodes[0].id,
+      clients: tableNodes.map((node) => node.id)
+    }
+  ]);
   const spots = array(s.spots).map(object);
   unique(
     spots.map((n) => text(n.id)),
@@ -116,7 +122,7 @@ export function checkStructure(path = 'zlink.structure.json'): void {
   unique(logical, 'logical Spot ID');
   assert.equal(nodes.filter((node) => node.role === 'matchmaker').length, 1);
   assert.equal(spots.filter((spot) => owner(spot.owner).role === 'matchmaker').length, 1);
-  for (const node of nodes.filter((node) => node.role === 'table')) {
+  for (const node of tableNodes) {
     assert(
       spots.filter((spot) => spot.kind === 'entry' && spot.owner === node.id).length === 1,
       `Table node must declare exactly one application Entry Spot: ${node.id}`
@@ -131,7 +137,13 @@ export function checkStructure(path = 'zlink.structure.json'): void {
     { from: 'session', to: 'tableA', label: 'relay' },
     { from: 'tableA', to: 'matchmaker', label: 'MatchRequest' },
     { from: 'matchmaker', to: 'tableA', label: 'PrepareRoom' },
-    { from: 'tableA', to: 'location', label: 'Location / lease', semantic: 'location-authority' }
+    { from: 'tableA', to: 'location', label: 'Location / lease', semantic: 'location-authority' },
+    ...tableNodes.map((node) => ({
+      from: node.id,
+      to: apiNodes[0].id,
+      label: 'LoadPlayer / CommitRound'
+    })),
+    { from: apiNodes[0].id, to: 'location', label: 'Player records' }
   ];
   const edges = array(s.edges).map(object);
   for (const required of requiredEdges)

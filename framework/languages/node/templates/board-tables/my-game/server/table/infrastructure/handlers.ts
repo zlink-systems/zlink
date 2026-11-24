@@ -18,6 +18,7 @@ import {
   HandResult,
   JoinTableRequest,
   StartHandRequest,
+  TableAdmission,
   TableView,
   TableViewRequest
 } from '../../shared/messages';
@@ -51,7 +52,8 @@ export class EntryJoin {
       .inMesh(Names.mesh)
       .submit();
     if (created.state === ZLinkSpotCreateState.Rejected) throw new Error('Table creation rejected');
-    actor.context.joinSpot(request.tableId, request).defer();
+    const chips = await actor.loadPlayer();
+    actor.context.joinSpot(request.tableId, new TableAdmission(request, chips)).defer();
   }
 }
 @Injectable()
@@ -148,6 +150,13 @@ export class Deliver {
   ): Promise<void> {
     const type = deliveryPackets.get(context.packetName);
     if (!type) throw new Error(`Unregistered table push: ${context.packetName}`);
+    if (context.packetName === PacketNames.handResult) {
+      const seat = (message as HandResult).seats.find(
+        (seat) => seat.playerId === actor.context.actorId
+      );
+      if (!seat) throw new Error('Player is missing from round settlement');
+      actor.state.chips = seat.chips;
+    }
     // Preserve the registered public DTO type when forwarding the received fields.
     await actor.context.boundSession.send(Object.assign(new type(), message)).submit();
   }

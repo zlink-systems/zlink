@@ -2,15 +2,17 @@
 
 [한국어](README.ko.md)
 
-This project runs a Session node, a Matchmaker node, and Table nodes that share a Redis Location Store. Players can queue for a match or join a table by ID. A TypeScript e2e client uses the public stream connector to verify matching, the game, reconnection, and node replacement. Add game rules at the extension points described in [AGENTS.md](AGENTS.md).
+This project runs a Session node, Table nodes, a Matchmaker node with the Pool Spot, and an API node with the Actor DB. Players can queue for a match or join a table by ID. A TypeScript e2e client uses the public stream connector to verify matching, the game, reconnection, and node replacement. Add game rules at the extension points described in [AGENTS.md](AGENTS.md).
 
 ```mermaid
 flowchart LR
     players[Players] -->|STREAM| session[Session node]
-    session -->|relay| table[Table node ×N]
-    table -->|MatchRequest and EnterReport| matchmaker[Matchmaker node]
+    session -->|relay| table[Play / Table node ×N]
+    table -->|MatchRequest and EnterReport| matchmaker[Matchmaker node / Pool Spot]
     matchmaker -->|PrepareRoom and CommitRoom| table
-    table -->|Location / lease| location[(Location Store)]
+    table -->|ClientServer Channel| api[API node / Actor DB]
+    api -->|Player records| location[(Redis)]
+    table -->|Location / lease| location
     matchmaker -->|Location / lease| location
 ```
 
@@ -37,7 +39,7 @@ This compiles TypeScript and generates the Framework default typed JSON schema f
 
 ## Local server
 
-Start the server in one terminal from this directory. It builds using `npm ci`, starts Redis in Docker and runs the Session, Table and Matchmaker nodes as local Node.js processes.
+Start the server in one terminal from this directory. It builds using `npm ci`, starts Redis in Docker and runs the Session, Table, Matchmaker and API nodes as local Node.js processes.
 
 ```sh
 ./run-server.sh
@@ -64,6 +66,10 @@ The first application packet is `JoinTableRequest{playerId, tableId}` for direct
 Send `FindMatch{playerId}` and receive `MatchQueued{ticketId}`. Once both players enter the assigned table, each receives `MatchFound{ticketId, roomId, seat}` followed by `TableView`. The two players receive the same `roomId` and different seats. Send `CancelMatch{ticketId}` while waiting to receive `MatchCancelled{ticketId, reason}`. Use the same gameplay messages as for direct join.
 
 The Matchmaker node hosts the Pool Spot `pool-board`. Its Spot-wide turn selects the two longest-waiting players and decides whether to commit or withdraw their assignment. Table nodes host the dynamically created rooms and Player Actors. A prepared room admits only the players named in the assignment. The Pool checks the queue on arrival and every 500 ms. Both players must report successful entry within 10 seconds. The Pool cancels a waiting ticket after 15 seconds disconnected (`disconnected`) or 120 seconds in the queue (`expired`).
+
+### Player records
+
+A Table node calls `LoadPlayer` over the ClientServer Channel before a Player Actor first takes a seat. The Actor keeps the loaded chips. The API node creates missing records with the default chips and stores them in Redis under the deployment prefix followed by `players:`. After a hand settles, the Table sends all seat balances in one `CommitRound` request. The API writes them in one transaction, deduplicated by table ID and hand number. The Table sends the results to the players after the API replies.
 
 ### Connector installation
 
@@ -126,7 +132,7 @@ try {
 
 ## E2E scenarios
 
-Run E2E in a second terminal. The scripts connect to a server started by `run-server` when `.logs/server.json` identifies a live, ready server. The default attached run executes `table`, `reconnect`, `match` and `match-cancel`. Stop the server before running the isolated Docker suite, which also runs `update` and replaces a Table process.
+Run E2E in a second terminal. The scripts connect to a server started by `run-server` when `.logs/server.json` identifies a live, ready server. The default attached run executes `table`, `reconnect`, `match` and `match-cancel`. Stop the server before running the isolated Docker suite, which also runs `update` and `persist`. These scenarios restart or replace Table processes.
 
 ```sh
 ./run-e2e.sh
@@ -159,6 +165,7 @@ Both modes print a heading and a pass or fail line for each scenario, followed b
 | `match`        | Two players receive the same dynamically assigned room, take distinct seats, and settle a hand.                                                                                                                                                                                                                                                           |
 | `match-cancel` | A waiting player reconnects and cancels the same ticket. Two other players then match and settle a hand.                                                                                                                                                                                                                                                  |
 | `update`       | Both clients retain their connection and game state through relocation. The hand settles on the replacement node with every hand cleared; a post-settlement private-hand query is empty. The replacement then hosts a new table.                                                                                                                          |
+| `persist`      | Both players settle a hand. After the Table processes restart, newly created Actors with the same player IDs load the settled chips.                                                                                                                                                                                                                      |
 
 The runner executes these scenarios in the order listed in `zlink.structure.json`.
 
@@ -185,12 +192,13 @@ Message Follow is explicitly configured for 30 seconds. The `SAFE_TO_SHUTDOWN` o
 ## Deployment sequence
 
 1. Prepare Redis and set `redisEndpoint` and a deployment-specific unique `keyPrefix` in each node configuration.
-2. Start Table A and B with `node dist/server/table/main.js server/config/table-a.json` and `table-b.json`. Set mutually reachable `meshEndpoint` values.
-3. Start the Matchmaker with `node dist/server/matchmaker/main.js server/config/matchmaker.json`.
-4. Start Session with `node dist/server/session/main.js server/config/session.json`. The external client `streamEndpoint` is a `ws://` endpoint, or a `wss://` endpoint if the public contract supports it.
-5. Confirm `READY` from each process. Operational control uses the standard input commands `drain` and `shutdown`. For a Table drain, confirm `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN` in that order before shutting down.
+2. Start the API with `node dist/server/api/main.js server/config/api.json`. Set `apiBindHost` and, if needed, the `apiAdvertiseHost` reachable by Table nodes.
+3. Start Table A and B with `node dist/server/table/main.js server/config/table-a.json` and `table-b.json`. Set mutually reachable `meshEndpoint` values.
+4. Start the Matchmaker with `node dist/server/matchmaker/main.js server/config/matchmaker.json`.
+5. Start Session with `node dist/server/session/main.js server/config/session.json`. The external client `streamEndpoint` is a `ws://` endpoint, or a `wss://` endpoint if the public contract supports it.
+6. Confirm `READY` from each process. Operational control uses the standard input commands `drain` and `shutdown`. For a Table drain, confirm `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN` in that order before shutting down.
 
-The Docker E2E runner starts all node roles from the structure descriptor. To run the Matchmaker through Compose in a deployment, build `node-image` using the `docker` profile, set `MY_GAME_MATCHMAKER_CONFIG` to a config with reachable Redis and mesh endpoints, then start `matchmaker` using the `deployment` profile in the same Compose project.
+The Docker E2E runner starts all node roles from the structure descriptor. For Compose deployment, build `node-image` using the `docker` profile. Set `MY_GAME_MATCHMAKER_CONFIG` and `MY_GAME_API_CONFIG` to configurations with reachable endpoints, then start `matchmaker` and `api` using the `deployment` profile in the same Compose project.
 
 The default configuration uses loopback automatic ports. In production, specify reachable endpoints and Redis explicitly. The Framework decides placement and route updates for the Table stable type.
 
@@ -215,4 +223,4 @@ When extending, follow the public API boundaries and state ownership rules in [A
 
 The runner starts child processes with `windowsHide: true`. Run it in PowerShell 7; no Unix shell is required. The project includes a native addon, so check the Node support range and the CPU architecture. The project does not use an npm install at the repository root or a local package feed.
 
-The isolated e2e runner sets each Table node's optional `tableCapacity` to the number of selected scenarios through the public Table stable-type limit. Each scenario before update retains one table. After update drains the source, the surviving node is at capacity, so the replacement hosts the new table. Both new players must observe the replacement node ID. Omitted or zero capacity leaves deployment capacity unlimited. Entry Spots run on the Table nodes, and the fixed Pool User Spot runs on the Matchmaker node.
+The isolated e2e runner sets each Table node's optional `tableCapacity` to the number of selected scenarios excluding `persist` through the public Table stable-type limit. Each scenario before update retains one table. After update drains the source, the surviving node is at capacity, so the replacement hosts the new table. Both new players must observe the replacement node ID. Omitted or zero capacity leaves deployment capacity unlimited. Entry Spots run on the Table nodes, and the fixed Pool User Spot runs on the Matchmaker node.
