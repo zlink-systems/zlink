@@ -970,6 +970,13 @@ internal sealed partial class ZLinkFrameworkRuntime
         ulong committedAuthorityOwnerGeneration
     )
     {
+        var errorSink = ErrorSink;
+        void ReportFailure(Exception error) =>
+            errorSink.ReportRuntimeTaskException(
+                $"actor-source-leave:{request.ActorId}:{request.HandoffId}",
+                error
+            );
+
         IReadOnlyList<Message>? parts = null;
         try
         {
@@ -999,16 +1006,21 @@ internal sealed partial class ZLinkFrameworkRuntime
                 Registration.Codecs
             );
             var submit = GetMeshNodeRuntime(meshName)
-                .Node.SendToNode(RoutingId.From(request.SourceNodeRid), parts, SendFlags.DontWait);
-            ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"source_leave_submit actor={request.ActorId} handoff={request.HandoffId} submit={submit}"
-            );
+                .Node.SendToNode(
+                    RoutingId.From(request.SourceNodeRid),
+                    parts,
+                    SendFlags.DontWait,
+                    metadata: default,
+                    failureObserver: ReportFailure
+                );
+            if (submit != SubmitResult.Ok)
+                ReportFailure(
+                    ZLinkSubmitFailureMapper.CreateException(submit, "Actor source leave")
+                );
         }
         catch (Exception error)
         {
-            ZLinkFrameworkDebugLog.SpotDiscovery(
-                $"source_leave_submit_failed actor={request.ActorId} handoff={request.HandoffId} error={error.GetType().Name}"
-            );
+            ReportFailure(error);
         }
         finally
         {

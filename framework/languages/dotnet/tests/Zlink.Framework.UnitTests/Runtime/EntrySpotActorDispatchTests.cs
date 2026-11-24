@@ -17101,7 +17101,8 @@ public sealed partial class EntrySpotActorDispatchTests
             RoutingId targetNodeRid,
             IReadOnlyList<Message> parts,
             SendFlags flags,
-            ReadOnlyMemory<byte> metadata
+            ReadOnlyMemory<byte> metadata,
+            Action<Exception>? failureObserver = null
         )
         {
             LastNodeSendTarget = targetNodeRid;
