@@ -17,10 +17,6 @@ namespace Zlink.Framework.Runtime.Host;
 internal sealed partial class ZLinkFrameworkRuntime
 {
     private readonly ZLinkActorMessageFollower _actorMessageFollower;
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<
-        Guid,
-        byte
-    > _publishedActorRecoveryWatches = new();
 
     internal ZLinkActorMessageFollower ActorMessageFollower => _actorMessageFollower;
 
@@ -801,12 +797,6 @@ internal sealed partial class ZLinkFrameworkRuntime
             await _actorHandoffAdmissions
                 .RecordJoinOutcomeAsync(request, spotId, reply, Registration.DefaultRequestTimeout)
                 .ConfigureAwait(false);
-            SchedulePublishedActorRelocationRecovery(
-                durableEnvelope,
-                request,
-                spotId,
-                TimeSpan.FromSeconds(1)
-            );
             return reply;
         }
         catch (Exception commitFailure)
@@ -1767,106 +1757,6 @@ internal sealed partial class ZLinkFrameworkRuntime
             .ConfigureAwait(false);
         actorState.CompleteRelocationSessionRoute(handoffId);
         return true;
-    }
-
-    private void SchedulePublishedActorRelocationRecovery(
-        ZLinkRelocationEnvelope envelope,
-        ZLinkRemoteActorJoinRequest request,
-        string targetSpotId,
-        TimeSpan fallbackDelay
-    )
-    {
-        //  Spec 15 requires commit-time recovery to deliver Accepted from the
-        //  target even when the source dies. Both the duplicate-watch skip and
-        //  a detached task that never runs look identical from outside.
-        ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"recovery_scheduled aggregate={envelope.AggregateId} already_watched={_publishedActorRecoveryWatches.ContainsKey(envelope.AggregateId)}"
-        );
-        if (!_publishedActorRecoveryWatches.TryAdd(envelope.AggregateId, 0))
-            return;
-        if (
-            TryRunDetached(
-                "actor-published-relocation-recovery",
-                async token =>
-                {
-                    try
-                    {
-                        using (
-                            var fallbackWait = CancellationTokenSource.CreateLinkedTokenSource(
-                                token
-                            )
-                        )
-                        {
-                            var completed = _actorHandoffAdmissions.WaitForTerminalCompletionAsync(
-                                request,
-                                targetSpotId,
-                                fallbackWait.Token
-                            );
-                            var delayed = Task.Delay(fallbackDelay, fallbackWait.Token);
-                            var winner = await Task.WhenAny(completed, delayed)
-                                .ConfigureAwait(false);
-                            if (ReferenceEquals(winner, completed))
-                            {
-                                await completed.ConfigureAwait(false);
-                                return;
-                            }
-                            fallbackWait.Cancel();
-                        }
-                        await ZLinkReconciliationRunner
-                            .RunAsync(
-                                async retryToken =>
-                                {
-                                    var locationStore =
-                                        Registration.Locations.ResolveStore()
-                                        ?? throw new ZLinkConfigurationException(
-                                            "Actor relocation recovery requires a Location Store."
-                                        );
-                                    var relocationStore =
-                                        Registration.Locations.ResolveRelocationStore()
-                                        ?? throw new ZLinkConfigurationException(
-                                            "Actor relocation recovery requires a Relocation Store."
-                                        );
-                                    var candidate = await new ZLinkRelocationStartupRecovery(
-                                        ErrorSink,
-                                        locationStore,
-                                        relocationStore
-                                    )
-                                        .TryReadExactPublishedAsync(envelope, retryToken)
-                                        .ConfigureAwait(false);
-                                    if (candidate is null)
-                                        return;
-                                    await _standaloneActorRelocationRuntime
-                                        .RecoverPublishedAsync(candidate, retryToken)
-                                        .ConfigureAwait(false);
-                                },
-                                exception =>
-                                    ZLinkFrameworkDebugLog.SpotDiscovery(
-                                        $"published Actor relocation recovery id={envelope.AggregateId:N}: {exception.Message}"
-                                    ),
-                                token,
-                                static exception =>
-                                    exception
-                                        is ZLinkRelocationDataLostException
-                                            or ZLinkFrameworkException
-                                            {
-                                                Kind: ZLinkFrameworkErrorKind.DataLost
-                                            },
-                                Registration.Locations.Options.PollingInterval
-                            )
-                            .ConfigureAwait(false);
-                    }
-                    finally
-                    {
-                        _publishedActorRecoveryWatches.TryRemove(envelope.AggregateId, out _);
-                    }
-                }
-            )
-        )
-            return;
-        _publishedActorRecoveryWatches.TryRemove(envelope.AggregateId, out _);
-        throw new InvalidOperationException(
-            "Published Actor relocation recovery could not be scheduled."
-        );
     }
 
     private async ValueTask RollbackPreparedTransferredActorAsync(

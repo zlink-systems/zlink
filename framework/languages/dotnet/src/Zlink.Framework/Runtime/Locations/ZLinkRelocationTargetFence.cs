@@ -35,30 +35,11 @@ internal sealed class ZLinkRelocationTargetSettledException(
 /// </summary>
 internal static class ZLinkRelocationTargetFence
 {
-    internal static ValueTask<ZLinkRelocationTargetFenceReading> ReadAsync(
-        IZLinkLocationRepository store,
-        ZLinkAuthorityKey key,
-        string expectedStoreVersion,
-        ZLinkLocationOwnerToken targetOwner,
-        CancellationToken cancellationToken
-    ) =>
-        ReadAsync(
-            store,
-            key,
-            current => StringComparer.Ordinal.Equals(current.StoreVersion, expectedStoreVersion),
-            targetOwner,
-            cancellationToken
-        );
-
-    /// <param name="holdsSourceFence">
-    /// Whether a record not owned by the target still is the exact source
-    /// fence the target's NewOwner CAS expects.
-    /// </param>
     internal static async ValueTask<ZLinkRelocationTargetFenceReading> ReadAsync(
         IZLinkLocationRepository store,
         ZLinkAuthorityKey key,
         Func<ZLinkAuthoritySnapshot, bool> holdsSourceFence,
-        ZLinkLocationOwnerToken targetOwner,
+        Func<ZLinkAuthoritySnapshot, bool> confirmsTargetCommit,
         CancellationToken cancellationToken
     )
     {
@@ -76,10 +57,7 @@ internal static class ZLinkRelocationTargetFence
             throw new ZLinkRelocationDataLostException(
                 "The relocation target lost the source authority it expects."
             );
-        if (
-            StringComparer.Ordinal.Equals(found.Snapshot.OwnerId, targetOwner.OwnerId)
-            && found.Snapshot.OwnerLeaseGeneration == targetOwner.LeaseGeneration
-        )
+        if (confirmsTargetCommit(found.Snapshot))
             return ZLinkRelocationTargetFenceReading.TargetCommitted;
         return holdsSourceFence(found.Snapshot)
             ? ZLinkRelocationTargetFenceReading.Pending

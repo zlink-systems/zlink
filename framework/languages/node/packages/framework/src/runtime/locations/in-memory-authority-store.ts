@@ -1,8 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
-import {
-  encodeAuthorityAggregate,
-  initialRelocationCompletion
-} from './authority-relocation-record';
+import { commitAuthorityRelocation, encodeAuthorityAggregate } from './authority-relocation-record';
 import { sameAuthorityIncarnation, type ZLinkDiscardedAuthorityFence } from './lifecycle-runtime';
 import { routingIdsEqual } from '../routing-id';
 import {
@@ -83,7 +80,6 @@ export interface ZLinkInMemoryAuthorityValidation {
     currentReserved: ZLinkCapacityVector,
     currentActive: ZLinkCapacityVector
   ): boolean;
-  identityClaimed?(authorityKey: string): boolean;
 }
 
 interface AuthorityRow {
@@ -584,9 +580,6 @@ export class ZLinkInMemoryAuthorityStore {
     signal?.throwIfAborted();
     validateReserve(request);
     const key = creationKey(request.key);
-    if (this.validation.identityClaimed?.(key) === true) {
-      return { kind: 'conflict', current: { kind: 'missing', storeNow: this.now() } };
-    }
     const current = this.rows.get(key);
     if (current !== undefined) {
       if (
@@ -933,6 +926,7 @@ export class ZLinkInMemoryAuthorityStore {
       readonly participant: ZLinkAggregatePrepareRequest['participants'][number];
       readonly row: AuthorityRow;
       readonly changesOwner: boolean;
+      readonly relocation: StoredSnapshot['relocation'];
     }> = [];
     for (const participant of aggregate.request.participants) {
       const row = this.rows.get(participant.authorityKey.value);
@@ -982,7 +976,17 @@ export class ZLinkInMemoryAuthorityStore {
         return { kind: 'stale' };
       }
       versionsNeeded++;
-      rows.push({ participant, row, changesOwner: participant.ownerTransition === 'newOwner' });
+      rows.push({
+        participant,
+        row,
+        changesOwner: participant.ownerTransition === 'newOwner',
+        relocation:
+          commitAuthorityRelocation(
+            row.snapshot.relocation,
+            fence.aggregateId.value,
+            fence.acceptedRequests?.get(participant.authorityKey.value)
+          ) ?? row.snapshot.relocation
+      });
     }
     if (
       this.storeVersion + versionsNeeded > MAX_GENERATION ||
@@ -990,58 +994,31 @@ export class ZLinkInMemoryAuthorityStore {
     ) {
       return { kind: 'generationExhausted' };
     }
-    for (const entry of rows) {
-      const nextVersion = ++this.storeVersion;
-      if (!entry.changesOwner) {
-        entry.row.snapshot = {
-          ...entry.row.snapshot,
-          storeVersion: version(nextVersion),
-          relocation:
-            entry.participant.relocation === undefined
-              ? entry.row.snapshot.relocation
-              : {
-                  ...structuredClone(entry.participant.relocation),
-                  ...(fence.acceptedRequests?.has(entry.participant.authorityKey.value) === true
-                    ? {
-                        completion: initialRelocationCompletion(
-                          fence.acceptedRequests.get(entry.participant.authorityKey.value)!
-                        )
-                      }
-                    : {})
-                },
-          payload: Buffer.from(entry.participant.authorityPayload)
-        };
-      } else {
-        const owner = aggregate.request.targetOwner;
-        this.adjustCapacity(this.activeCapacity, entry.row.snapshot.allocation, -1);
-        entry.row.snapshot = {
-          storeVersion: version(nextVersion),
-          relocation:
-            entry.participant.relocation === undefined
-              ? entry.row.snapshot.relocation
-              : {
-                  ...structuredClone(entry.participant.relocation),
-                  ...(fence.acceptedRequests?.has(entry.participant.authorityKey.value) === true
-                    ? {
-                        completion: initialRelocationCompletion(
-                          fence.acceptedRequests.get(entry.participant.authorityKey.value)!
-                        )
-                      }
-                    : {})
-                },
-          payload: Buffer.from(entry.participant.authorityPayload),
-          objectGeneration: entry.row.snapshot.objectGeneration,
-          authorityOwnerGeneration: ++this.ownerGeneration,
-          ownerId: owner.ownerId,
-          ownerLeaseGeneration: owner.leaseGeneration,
-          allocation: {
-            ...entry.row.snapshot.allocation,
-            descriptor: { ...aggregate.request.targetDescriptor },
-            descriptorLifecycleGeneration: aggregate.request.targetDescriptorLifecycleGeneration,
-            capacity: cloneCapacity(entry.row.snapshot.allocation.capacity)
-          }
-        };
+    for (const { participant, row, changesOwner, relocation } of rows) {
+      const snapshot = {
+        ...row.snapshot,
+        storeVersion: version(++this.storeVersion),
+        relocation,
+        payload: Buffer.from(participant.authorityPayload)
+      };
+      if (!changesOwner) {
+        row.snapshot = snapshot;
+        continue;
       }
+      const owner = aggregate.request.targetOwner;
+      this.adjustCapacity(this.activeCapacity, snapshot.allocation, -1);
+      row.snapshot = {
+        ...snapshot,
+        authorityOwnerGeneration: ++this.ownerGeneration,
+        ownerId: owner.ownerId,
+        ownerLeaseGeneration: owner.leaseGeneration,
+        allocation: {
+          ...snapshot.allocation,
+          descriptor: { ...aggregate.request.targetDescriptor },
+          descriptorLifecycleGeneration: aggregate.request.targetDescriptorLifecycleGeneration,
+          capacity: cloneCapacity(snapshot.allocation.capacity)
+        }
+      };
     }
     const aggregateTarget = aggregateTargetAllocation(aggregate.request);
     this.adjustCapacity(this.pendingCapacity, aggregateTarget, -1);
