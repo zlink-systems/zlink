@@ -216,7 +216,14 @@ final class ZLinkLocationStoreFormat {
                                                                                 instanceof
                                                                                 ZLinkStoreReadFound))
                                                     return CompletableFuture.completedFuture(null);
-                                                return confirmMove(oldKey, counters);
+                                                // Counters are never deleted, so a missing row with
+                                                // a missing counter cannot become consistent by
+                                                // reading again.
+                                                return CompletableFuture.<Void>failedFuture(
+                                                        new ZLinkConfigurationException(
+                                                                "The migrated Location Store"
+                                                                        + " counter is missing for "
+                                                                        + oldKey.value()));
                                             });
                         });
     }
