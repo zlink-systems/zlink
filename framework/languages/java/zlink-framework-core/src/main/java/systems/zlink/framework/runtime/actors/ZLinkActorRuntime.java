@@ -1172,17 +1172,19 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                     .thenCompose(ignored -> responseStage)
                                     .thenApply(
                                             response -> {
-                                                if (response != null && response.accepted()) {
-                                                    responseSink.accept(response);
-                                                    return actor;
+                                                ZLinkActorCreateResponse effective =
+                                                        response == null
+                                                                ? ZLinkActorCreateResponse.reject()
+                                                                : response;
+                                                responseSink.accept(effective);
+                                                if (!effective.accepted()) {
+                                                    discardLocalActor(
+                                                            actor.context().actorId(),
+                                                            releaseLocationOnReject);
+                                                    throw new ActorCreateRejected(
+                                                            effective.reply());
                                                 }
-                                                discardLocalActor(
-                                                        actor.context().actorId(),
-                                                        releaseLocationOnReject);
-                                                Objects.requireNonNull(
-                                                        response,
-                                                        "Actor create callback returned no response");
-                                                throw new ActorCreateRejected(response.reply());
+                                                return actor;
                                             });
                         })
                 .whenComplete(
