@@ -149,9 +149,9 @@ final class ZLinkUserSpotRetireRuntimePreflightTest {
                         "preflight:spot-b",
                         "preflight:actor-c",
                         "host-state",
+                        "relocate:actor-c",
                         "relocate:spot-a",
-                        "relocate:spot-b",
-                        "relocate:actor-c"),
+                        "relocate:spot-b"),
                 events);
     }
 
@@ -184,7 +184,7 @@ final class ZLinkUserSpotRetireRuntimePreflightTest {
     }
 
     @Test
-    void readyUnitsRelocateWithoutWaitingForAnEarlierUnitToFinish() {
+    void readyUnitsInTheSameBatchRelocateWithoutWaitingForAnEarlierUnitToFinish() {
         var first = new CompletableFuture<Void>();
         var events = new ArrayList<String>();
         var completion =
@@ -206,7 +206,7 @@ final class ZLinkUserSpotRetireRuntimePreflightTest {
                             return CompletableFuture.completedFuture(null);
                         });
 
-        assertEquals(List.of("start:spot-a", "start:spot-b", "start:actor-c"), events);
+        assertEquals(List.of("start:actor-c", "start:spot-a", "start:spot-b"), events);
         assertEquals(false, completion.toCompletableFuture().isDone());
 
         first.complete(null);
