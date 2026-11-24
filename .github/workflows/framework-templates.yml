@@ -33,6 +33,8 @@ on:
     branches: [main]
     paths:
       - 'framework/languages/*/templates/**'
+      - 'framework/templates/connector-examples/**'
+      - 'scripts/local-package/sync-version.py'
       - 'scripts/templates/**'
       - 'scripts/ci/gradle/**'
       - '.github/workflows/framework-templates.yml'
@@ -68,6 +70,7 @@ jobs:
       cpp_matrix: ${{ steps.plan.outputs.cpp_matrix }}
       count: ${{ steps.plan.outputs.count }}
       cpp_count: ${{ steps.plan.outputs.cpp_count }}
+      connector_examples: ${{ steps.plan.outputs.connector_examples }}
       packages: ${{ steps.plan.outputs.packages }}
       source: ${{ steps.plan.outputs.source }}
       framework_version: ${{ steps.plan.outputs.framework_version }}
@@ -122,10 +125,17 @@ jobs:
           echo "source=${SOURCE}" >>"${GITHUB_OUTPUT}"
           echo "framework_version=${FRAMEWORK_VERSION}" >>"${GITHUB_OUTPUT}"
           args=("${LANGUAGES}" "${TEMPLATES}")
+          connector_examples=true
           if [ "${GITHUB_EVENT_NAME}" = pull_request ]; then
             git diff --name-only HEAD^1 HEAD >"${RUNNER_TEMP}/changed-paths.txt"
             args+=("${RUNNER_TEMP}/changed-paths.txt")
+            if ! grep -Eq '^(framework/templates/connector-examples/|scripts/templates/|scripts/local-package/sync-version\.py$|\.github/workflows/framework-templates\.yml$)' "${RUNNER_TEMP}/changed-paths.txt"; then
+              connector_examples=false
+            fi
+          elif [ "${GITHUB_EVENT_NAME}" = workflow_dispatch ] && [ -n "${TEMPLATES}" ]; then
+            connector_examples=false
           fi
+          echo "connector_examples=${connector_examples}" >>"${GITHUB_OUTPUT}"
           plan="$(python3 scripts/templates/plan.py "${args[@]}")"
           for key in matrix cpp_matrix count cpp_count packages; do
             echo "${key}=$(jq -c ".${key}" <<<"${plan}")" >>"${GITHUB_OUTPUT}"
@@ -570,6 +580,50 @@ jobs:
             docker image rm "${project}-node" "${project}-runner" 2>/dev/null || true
           done
           rm -rf "${TEMPLATE_WORK}" "${PACKAGES_DIR}"
+
+  connector-examples:
+    if: needs.plan.outputs.connector_examples == 'true'
+    name: Connector example (${{ matrix.client }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        client: [typescript, csharp, java]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - uses: actions/setup-dotnet@v5
+        if: matrix.client == 'csharp'
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - uses: actions/setup-java@v5
+        if: matrix.client == 'java'
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Check published package pins
+        run: python3 scripts/local-package/sync-version.py --check
+
+      - name: Run the connector against the common server
+        env:
+          CLIENT: ${{ matrix.client }}
+        run: python3 scripts/templates/run-connector-examples.py "${CLIENT}"
+
+      - uses: actions/upload-artifact@v6
+        if: failure()
+        with:
+          name: connector-example-logs-${{ matrix.client }}
+          path: framework/templates/connector-examples/server/.logs/
+          if-no-files-found: ignore
+          include-hidden-files: true
 
   summary:
     if: ${{ !cancelled() && needs.plan.result == 'success' }}

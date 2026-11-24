@@ -60,6 +60,10 @@ class TemplateBindingTests(unittest.TestCase):
                 git(self.root, 'tag', f'framework-{language}/v{framework}')
         for language, pins in OWNERS.items():
             self.owner(language, *pins)
+        write(
+            self.root / check.sync_version.CONNECTOR_EXAMPLE_VERSIONS,
+            'ZLINK_TEMPLATE_FRAMEWORK_VERSION=0.30.3\nZLINK_TEMPLATE_BINDING_VERSION=1.20.0\n',
+        )
         previous = check.sync_version.REPO_ROOT
         check.sync_version.REPO_ROOT = self.root
         self.addCleanup(setattr, check.sync_version, 'REPO_ROOT', previous)

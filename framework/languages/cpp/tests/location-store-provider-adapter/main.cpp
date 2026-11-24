@@ -124,8 +124,9 @@ json result (const store_write_result_t &input)
                 {"storeNowMs", milliseconds (applied->store_now)},
                 {"putVersions", std::move (versions)}};
     }
-    return {{"kind", "conflict"},
-            {"storeNowMs", milliseconds (std::get<store_write_conflict_t> (input).store_now)}};
+    if (const auto *conflict = std::get_if<store_write_conflict_t> (&input))
+        return {{"kind", "conflict"}, {"storeNowMs", milliseconds (conflict->store_now)}};
+    throw std::logic_error ("Unexpected Corrupt result for adapter write");
 }
 
 json result (const store_scan_result_t &input)

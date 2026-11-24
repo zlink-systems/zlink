@@ -62,7 +62,11 @@ export async function stopRuntimeParts(parts: ZLinkRuntimeStopParts): Promise<vo
       ),
     'accepted_work.actor_join_sources'
   );
-  await runShutdownStep(errors, () => parts.streamRuntime?.dispose(), 'transport_cleanup.streams');
+  await runShutdownStep(
+    errors,
+    () => parts.streamRuntime?.dispose(parts.shutdownSignal),
+    'transport_cleanup.streams'
+  );
   await runShutdownStep(
     errors,
     () => parts.spotNodeRuntime?.dispose(parts.shutdownSignal, parts.cleanupDeadline),
