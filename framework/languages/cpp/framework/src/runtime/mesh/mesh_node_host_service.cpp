@@ -3702,7 +3702,8 @@ task_t<bool> mesh_node_host_service_t::publish_requested_descriptors (
         std::lock_guard lock (_descriptor_publish_mutex);
         if (_descriptor_stop.stop_requested () || cancellation.stop_requested ())
             return task_t<bool> (result_t<bool>::success (false));
-        const auto owner = current_location_owner ();
+        const auto owner =
+          _location_runtime ? _location_runtime->descriptor_publication_owner () : std::nullopt;
         if (!_location_store || !owner)
             return task_t<bool> (result_t<bool>::success (_published_mesh_descriptors.empty ()));
         const bool all_claimed =
@@ -3791,7 +3792,8 @@ task_t<bool> mesh_node_host_service_t::write_mesh_descriptors (
   std::stop_token cancellation,
   std::chrono::steady_clock::time_point deadline)
 {
-    const auto owner = current_location_owner ();
+    const auto owner =
+      _location_runtime ? _location_runtime->descriptor_publication_owner () : std::nullopt;
     if (!owner)
         co_return descriptors.empty ();
     std::vector<task_t<bool>> publications;

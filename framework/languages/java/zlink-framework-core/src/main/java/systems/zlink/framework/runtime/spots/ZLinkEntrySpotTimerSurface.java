@@ -5,7 +5,7 @@ import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.messaging.ZLinkMessage;
-import systems.zlink.framework.spots.ZLinkEntrySpotContext;
+import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotActorJoinResult;
 import systems.zlink.framework.spots.ZLinkSpotContext;
@@ -19,10 +19,14 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
 final class ZLinkEntrySpotTimerSurface implements ZLinkSpot<ZLinkActor> {
-    private final ZLinkSpotContext context;
+    private final ZLinkEntrySpotBackedContext context;
 
-    ZLinkEntrySpotTimerSurface(ZLinkEntrySpotContext entryContext) {
+    ZLinkEntrySpotTimerSurface(DefaultEntrySpotContext entryContext) {
         this.context = new ZLinkEntrySpotBackedContext(entryContext);
+    }
+
+    ZLinkEntrySpot<?> entrySpot() {
+        return context.entryContext().entrySpot();
     }
 
     @Override
@@ -52,7 +56,8 @@ final class ZLinkEntrySpotTimerSurface implements ZLinkSpot<ZLinkActor> {
     }
 }
 
-record ZLinkEntrySpotBackedContext(ZLinkEntrySpotContext entryContext) implements ZLinkSpotContext {
+record ZLinkEntrySpotBackedContext(DefaultEntrySpotContext entryContext)
+        implements ZLinkSpotContext {
 
     @Override
     public String spotId() {

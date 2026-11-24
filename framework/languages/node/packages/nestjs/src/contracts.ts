@@ -279,6 +279,11 @@ export interface ZLinkNestClientServerChannelServerBuilder extends ZLinkNestFram
 }
 
 export interface ZLinkNestStreamNodeBuilder extends ZLinkNestFrameworkOptionsBuilder {
+  setAuthenticationAdmission(
+    packetName: string,
+    maxConcurrentAuthentications?: number,
+    authenticationRetryDelayMs?: number
+  ): this;
   setHeartbeat(intervalMs: number, timeoutMs: number): this;
   setIdleTimeout(timeoutMs: number): this;
   bind(endpoint: string | undefined): this;

@@ -26,6 +26,7 @@ export type {
   ZlinkStreamEncodedPayload,
   ZlinkStreamMessage,
   ZlinkStreamRequestSendingContext,
+  ZlinkStreamAdmissionWaitingContext,
   ZlinkStreamReplyReceivedContext,
   ZlinkStreamError,
   ZlinkStreamConnectionStateChanged,

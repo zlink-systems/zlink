@@ -1,13 +1,16 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 
 #include "runtime/streams/stream_host_service.hpp"
+#include "runtime/backend/raw_binding_adapter.hpp"
 #include "runtime/disconnect_rid.hpp"
 #include "runtime/diagnostics/session_binding_diagnostics.hpp"
 #include "runtime/messaging/submit_result_mapper.hpp"
 #include "runtime/streams/session_liveness.hpp"
+#include "runtime/streams/stream_host_ingress.hpp"
 #include "runtime/transport/listener_identity.hpp"
 #include "runtime/configuration/service_scope.hpp"
 #include "runtime/dispatch/receive_batch_budget.hpp"
+#include "runtime/dispatch/host_capacity_runtime.hpp"
 #include "runtime/execution/state_lane.hpp"
 
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
@@ -703,6 +706,26 @@ template <typename TStream> void close_stream (TStream &stream) noexcept
 }
 
 template <typename TStream>
+void read_exact (TStream &socket,
+                 std::span<std::uint8_t> bytes,
+                 asio::io_context &io,
+                 const std::atomic_bool &stop,
+                 const std::atomic_bool *connection_stop)
+{
+    if (bytes.empty ())
+        return;
+    const auto error = run_stream_async_operation (
+      io, socket.get_executor (), stop,
+      [&] (auto completion) {
+          asio::async_read (socket, asio::buffer (bytes.data (), bytes.size ()),
+                            std::move (completion));
+      },
+      [&socket] { cancel_stream (socket); }, connection_stop);
+    if (error)
+        throw boost::system::system_error (error);
+}
+
+template <typename TStream>
 std::vector<std::uint8_t> read_exact (TStream &socket,
                                       std::size_t size,
                                       asio::io_context &io,
@@ -710,19 +733,7 @@ std::vector<std::uint8_t> read_exact (TStream &socket,
                                       const std::atomic_bool *connection_stop)
 {
     std::vector<std::uint8_t> bytes (size);
-    if (bytes.empty ()) {
-        return bytes;
-    }
-    const auto error = run_stream_async_operation (
-      io, socket.get_executor (), stop,
-      [&] (auto completion) {
-          asio::async_read (socket, asio::buffer (bytes), asio::transfer_exactly (size),
-                            std::move (completion));
-      },
-      [&socket] { cancel_stream (socket); }, connection_stop);
-    if (error) {
-        throw boost::system::system_error (error);
-    }
+    read_exact (socket, std::span (bytes), io, stop, connection_stop);
     return bytes;
 }
 
@@ -802,6 +813,7 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                 std::shared_ptr<runtime_failure_collector_t> runtime_failures,
                 std::shared_ptr<detail::mesh_node_runtime_t> mesh_node,
                 std::shared_ptr<application_job_queue_t> application_jobs,
+                stream_host_ingress_t &ingress,
                 std::chrono::milliseconds session_replacement_callback_timeout,
                 asio::io_context &liveness_io) :
         _runtime (std::move (runtime)),
@@ -820,6 +832,7 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
         _runtime_failures (std::move (runtime_failures)),
         _mesh_node (std::move (mesh_node)),
         _application_jobs (std::move (application_jobs)),
+        _ingress (ingress),
         _session_replacement_callback_timeout (session_replacement_callback_timeout),
         _liveness_io (liveness_io),
         _acceptor (_io),
@@ -1413,13 +1426,31 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
         schedule_core_liveness (current);
     }
 
+    static detail::backend::binding_completion_observer_t
+    observe_core_reply_admission (zlink::async_result_t<void> pending,
+                                  std::shared_ptr<detail::stream_reply_submission_t> reply,
+                                  task_completion_source_t<void> completion)
+    {
+        try {
+            co_await std::move (pending);
+            reply->complete ();
+            completion.complete (result_t<void>::success ());
+        }
+        catch (...) {
+            completion.complete (detail::current_exception_result<void> ());
+        }
+    }
+
     /* Coroutine invariant (session-reconnect-and-coroutine-lifetime doc):
      * parameters are taken by value. Callers pass stack locals and
      * temporaries (send_core_error_frame's error_header/payload) that die
      * while this coroutine may still be suspended at the tail await; the
      * message copy is a cheap handle copy, not a buffer copy. */
     task_t<void>
-    send_core_frame (zlink::routing_id_t rid, stream_header_t header, zlink::message_t payload)
+    send_core_frame (zlink::routing_id_t rid,
+                     stream_header_t header,
+                     zlink::message_t payload,
+                     std::shared_ptr<detail::stream_reply_submission_t> admission_reply = {})
     {
         if (header.kind () == stream_message_kind_t::error
             && stream_host_core_test_faults ().fail_core_error_frame_send.load (
@@ -1447,10 +1478,23 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                     throw framework_exception_t (framework_error_kind_t::shutting_down,
                                                  "Core STREAM socket is stopped");
                 }
-                pending.emplace (
-                  _core_socket->send (rid).message (std::move (frame)).async ().admitted);
+                auto submission = _core_socket->send (rid).message (std::move (frame)).async ();
+                pending = detail::backend::take_submission_admission (submission);
             }
-            co_await std::move (*pending);
+            if (!pending) {
+                if (admission_reply)
+                    admission_reply->complete ();
+            } else if (admission_reply) {
+                // The binding reports acceptance without waiting for the
+                // application's execution turn to resume.
+                task_completion_source_t<void> completion;
+                auto accepted = completion.task ();
+                observe_core_reply_admission (std::move (*pending), std::move (admission_reply),
+                                              std::move (completion));
+                co_await accepted;
+            } else {
+                co_await std::move (*pending);
+            }
         }
         catch (const zlink::submit_error_t &error) {
             throw runtime::messaging::map_submit_result_exception (
@@ -1475,7 +1519,8 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                                 const stream_t &stream,
                                 const stream_header_t &request_header,
                                 const result_t<void> &error,
-                                std::function<void ()> completed = {}) noexcept
+                                std::function<void ()> completed = {},
+                                detail::stream_metadata_t admission_metadata = {}) noexcept
     {
         if (request_header.kind () != stream_message_kind_t::request
             || !request_header.request_seq ()) {
@@ -1486,7 +1531,7 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
         }
 
         auto error_header = detail::stream_runtime_t::make_terminal_header (
-          stream_message_kind_t::error, request_header);
+          stream_message_kind_t::error, request_header, std::move (admission_metadata));
         auto send = detail::session_actor_manager_access_t::submit_terminal (
           stream, error_header, stream_error_payload (error),
           [&] (const stream_header_t &header, const zlink::message_t &payload) {
@@ -2166,10 +2211,11 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
         auto stream = _runtime.open_session (_stream.name);
         _runtime.set_session_identity (stream, rid);
         detail::session_actor_manager_access_t::attach (actors, stream);
-        _runtime.attach_transport_writer (
-          stream,
-          [this, rid] (const stream_header_t &header, const zlink::message_t &payload)
-            -> task_t<void> { co_await send_core_frame (rid, header, payload); });
+        _runtime.attach_transport_writer (stream, [this, rid] (const stream_header_t &header,
+                                                               const zlink::message_t &payload,
+                                                               const auto &admission_reply) {
+            return send_core_frame (rid, header, payload, admission_reply);
+        });
         auto created =
           std::make_shared<core_session_t> (std::move (scope), session, actors, std::move (stream),
                                             established, _stream.liveness, _liveness_io);
@@ -2324,11 +2370,12 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
             {
                 const std::lock_guard session_lock (current->gate);
                 if (current->connected) {
-                    _runtime.mark_disconnected (current->stream);
                     current->connected = false;
                     dispatch_disconnected = true;
                 }
             }
+            if (dispatch_disconnected)
+                _runtime.mark_disconnected (current->stream);
 
             const auto session_rid = current->stream.routing_id ().value_or (
               zlink::routing_id_t::from (current->stream.session_id ()));
@@ -2498,12 +2545,11 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
         }
     }
 
-    bool
-    dispatch_core_packet (const zlink::routing_id_t &rid,
-                          zlink::message_t payload,
-                          stream_header_t header,
-                          std::shared_ptr<application_job_queue_t::permit_t> application_permit,
-                          session_liveness_t::clock_t::time_point received_at)
+    bool dispatch_core_packet (const zlink::routing_id_t &rid,
+                               zlink::message_t payload,
+                               stream_header_t header,
+                               application_job_queue_t::permit_t application_permit,
+                               session_liveness_t::clock_t::time_point received_at)
     {
         trace_stream_host ("core-frame", _stream, header,
                            "rid=" + rid.to_hex ()
@@ -2522,9 +2568,8 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
             stream_t stream;
             _runtime.set_session_identity (stream, rid);
             _runtime.attach_transport_writer (
-              stream,
-              [this, rid] (const stream_header_t &control, const zlink::message_t &body)
-                -> task_t<void> { co_await send_core_frame (rid, control, body); });
+              stream, [this, rid] (const stream_header_t &control, const zlink::message_t &body,
+                                   const auto &) { return send_core_frame (rid, control, body); });
             try {
                 _runtime.dispatch_control_frame (stream, header, payload);
                 return true;
@@ -2545,9 +2590,8 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
         }
 
         current->liveness->record_inbound (received_at, true);
-        bool submitted = false;
-        bool protocol_error = false;
         std::optional<result_t<void>> rejected;
+        std::optional<detail::stream_metadata_t> admission_metadata;
         try {
             if (current->replacement
                 && current->replacement->closing.load (std::memory_order_acquire)) {
@@ -2557,10 +2601,9 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
             std::lock_guard session_lock (current->gate);
             if (current->connected && !current->closing) {
                 trace_stream_host ("core-dispatch-submit", _stream, header, "rid=" + rid.to_hex ());
-                detail::session_actor_manager_access_t::set_codec (*current->actors,
-                                                                   header.codec ());
-                auto dispatched = _runtime.dispatch_packet_async (
-                  *current->session, current->stream, header, payload,
+                auto dispatched = _ingress.publish (
+                  _runtime, *current->session, current->stream, header, payload,
+                  std::move (application_permit),
                   [this, current, rid, header] (const result_t<void> &result) {
                       trace_stream_host (
                         "core-dispatch-complete", _stream, header,
@@ -2575,14 +2618,11 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                           send_core_error_frame (rid, current->stream, header, result);
                       }
                   },
-                  [permit = std::move (application_permit)] () mutable {
-                      if (!permit)
-                          return;
-                      permit->release_for_handler_entry ();
-                      permit.reset ();
-                  },
-                  [this] { return _stop->load (std::memory_order_acquire); });
-                submitted = static_cast<bool> (dispatched);
+                  [this] { return _stop->load (std::memory_order_acquire); },
+                  [&] (const result_t<void> &error, detail::stream_metadata_t metadata) {
+                      rejected.emplace (error);
+                      admission_metadata = std::move (metadata);
+                  });
                 if (!dispatched) {
                     /* Session-gate invariant (cpp-internals): no task may be
                      * completed and no close may be entered while
@@ -2590,9 +2630,6 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                      * here; the report, the error-frame write, and the close
                      * all run below, after the gate is released. */
                     rejected.emplace (dispatched);
-                    if (dispatched.error_kind () == framework_error_kind_t::protocol_error) {
-                        protocol_error = true;
-                    }
                 }
             }
         }
@@ -2600,7 +2637,6 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
             disconnect_core_peer (rid, "protocol_error");
             return false;
         }
-        static_cast<void> (submitted);
         if (rejected) {
             trace_stream_host (
               "core-dispatch-rejected", _stream, header,
@@ -2615,13 +2651,15 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
              * continuation only records the close intent; the Core loop
              * executes it outside every session lock, and
              * begin_core_session_close keeps the duplicate a no-op. */
-            if (protocol_error) {
+            if (rejected->error_kind () == framework_error_kind_t::protocol_error) {
                 send_core_error_frame (rid, current->stream, header, *rejected, [this, rid] {
                     request_core_peer_disconnect (rid, "protocol_error");
                 });
                 return false;
             }
-            send_core_error_frame (rid, current->stream, header, *rejected);
+            send_core_error_frame (
+              rid, current->stream, header, *rejected, {},
+              std::move (admission_metadata).value_or (detail::stream_metadata_t{}));
         }
         return true;
     }
@@ -2643,17 +2681,9 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
         }
 
         const auto frame_bytes = 6u + header_bytes.size () + packet.body ().size ();
-        std::shared_ptr<application_job_queue_t::permit_t> application_permit;
-        if (decoded.value ().kind () == stream_message_kind_t::send
-            || decoded.value ().kind () == stream_message_kind_t::request) {
-            permit.mark_queued ();
-            application_permit =
-              std::make_shared<application_job_queue_t::permit_t> (std::move (permit));
-        }
         auto payload = std::move (packet.body ());
-        const bool dispatched =
-          dispatch_core_packet (rid, std::move (payload), std::move (decoded.value ()),
-                                std::move (application_permit), received_at);
+        const bool dispatched = dispatch_core_packet (
+          rid, std::move (payload), std::move (decoded.value ()), std::move (permit), received_at);
         budget.account (frame_bytes);
         return dispatched;
     }
@@ -3073,14 +3103,33 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
 
     void close_connection (tcp::socket &socket) noexcept { close_tcp_socket (socket); }
 
-    template <typename TStream>
-    std::optional<frame_t>
-    read_frame (TStream &socket,
-                const std::function<bool (const stream_header_t &)> &admit_payload,
-                asio::io_context &io,
-                const std::atomic_bool *connection_stop)
+    template <typename TStream, typename Reserve>
+    std::optional<frame_t> read_frame (TStream &socket,
+                                       const Reserve &reserve,
+                                       asio::io_context &io,
+                                       const std::atomic_bool *connection_stop)
     {
-        auto prefix = read_exact (socket, 6, io, *_stop, connection_stop);
+        std::array<std::uint8_t, 6> prefix;
+        std::span<std::uint8_t> unread (prefix);
+        if constexpr (std::is_same_v<TStream, tcp::socket>) {
+            // A peek distinguishes an idle peer's EOF from packet readiness.
+            const auto ready = run_stream_async_operation (
+              io, socket.get_executor (), *_stop,
+              [&] (auto completion) {
+                  socket.async_receive (asio::buffer (prefix.data (), 1),
+                                        asio::socket_base::message_peek, std::move (completion));
+              },
+              [&socket] { cancel_stream (socket); }, connection_stop);
+            if (ready)
+                throw boost::system::system_error (ready);
+        } else {
+            // TLS may already hold decrypted bytes after the last read.
+            read_exact (socket, unread.first (1), io, *_stop, connection_stop);
+            unread = unread.subspan (1);
+        }
+        if (!reserve ())
+            return std::nullopt;
+        read_exact (socket, unread, io, *_stop, connection_stop);
         const auto header_size = static_cast<std::size_t> ((prefix[0] << 8) | prefix[1]);
         const auto payload_size = (static_cast<std::size_t> (prefix[2]) << 24)
                                   | (static_cast<std::size_t> (prefix[3]) << 16)
@@ -3088,6 +3137,7 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                                   | static_cast<std::size_t> (prefix[5]);
         validate_stream_frame_size (header_size, payload_size, _stream.max_message_size);
         auto header_bytes = read_exact (socket, header_size, io, *_stop, connection_stop);
+        auto payload_bytes = read_exact (socket, payload_size, io, *_stop, connection_stop);
         auto header = _runtime.decode_header (header_bytes);
         if (!header) {
             throw framework_exception_t (header.error_kind (), header.error ()
@@ -3095,29 +3145,35 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                                                                  : "STREAM header decode failed");
         }
         auto decoded_header = header.value ();
-        if (decoded_header.kind () != stream_message_kind_t::control && admit_payload
-            && !admit_payload (decoded_header)) {
-            return std::nullopt;
-        }
-        auto payload_bytes = read_exact (socket, payload_size, io, *_stop, connection_stop);
         trace_stream_host ("read-frame", _stream, decoded_header,
                            "payload_bytes=" + std::to_string (payload_bytes.size ()));
         return frame_t{decoded_header, message_from_bytes (payload_bytes)};
     }
 
-    std::optional<frame_t>
-    read_frame (websocket_stream_t &socket,
-                const std::function<bool (const stream_header_t &)> &admit_payload,
-                asio::io_context &io,
-                const std::atomic_bool *connection_stop)
+    template <typename Reserve>
+    std::optional<frame_t> read_frame (websocket_stream_t &socket,
+                                       const Reserve &reserve,
+                                       asio::io_context &io,
+                                       const std::atomic_bool *connection_stop)
     {
         beast::flat_buffer buffer;
-        const auto error = run_stream_async_operation (
+        // Beast can buffer another message in the previous read. Acquire a
+        // permit after one framing byte is ready and before reading the packet.
+        auto error = run_stream_async_operation (
           io, socket.get_executor (), *_stop,
-          [&] (auto completion) { socket.async_read (buffer, std::move (completion)); },
+          [&] (auto completion) { socket.async_read_some (buffer, 1, std::move (completion)); },
           [&socket] { cancel_stream (socket.next_layer ()); }, connection_stop);
-        if (error) {
+        if (error)
             throw boost::system::system_error (error);
+        if (!reserve ())
+            return std::nullopt;
+        if (!socket.is_message_done ()) {
+            error = run_stream_async_operation (
+              io, socket.get_executor (), *_stop,
+              [&] (auto completion) { socket.async_read (buffer, std::move (completion)); },
+              [&socket] { cancel_stream (socket.next_layer ()); }, connection_stop);
+            if (error)
+                throw boost::system::system_error (error);
         }
         if (socket.got_text ()) {
             throw framework_exception_t (framework_error_kind_t::protocol_error,
@@ -3149,10 +3205,6 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                                                                  : "STREAM header decode failed");
         }
         auto decoded_header = header.value ();
-        if (decoded_header.kind () != stream_message_kind_t::control && admit_payload
-            && !admit_payload (decoded_header)) {
-            return std::nullopt;
-        }
         trace_stream_host ("read-frame", _stream, decoded_header,
                            "payload_bytes=" + std::to_string (payload_bytes.size ()));
         return frame_t{decoded_header, message_from_bytes (payload_bytes)};
@@ -3227,13 +3279,16 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
     task_t<void> submit_frame (std::shared_ptr<tcp_connection_t> owner,
                                std::shared_ptr<TStream> connection,
                                stream_header_t header,
-                               zlink::message_t payload)
+                               zlink::message_t payload,
+                               detail::stream_reply_submission_t *admission_reply = nullptr)
     {
         auto operation = queue_frame (owner, connection, header, payload);
         if (!operation)
             throw framework_exception_t (
               framework_error_kind_t::unavailable,
               asio::error::make_error_code (asio::error::operation_aborted).message ());
+        if (admission_reply)
+            admission_reply->complete ();
         const auto error = co_await operation->completion.task ();
         if (error)
             throw framework_exception_t (framework_error_kind_t::unavailable, error.message ());
@@ -3246,13 +3301,14 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                             const std::shared_ptr<TStream> &connection,
                             const stream_t &stream,
                             const stream_header_t &request_header,
-                            const result_t<void> &error)
+                            const result_t<void> &error,
+                            detail::stream_metadata_t admission_metadata = {})
     {
         if (!request_header.request_seq ()) {
             return;
         }
         auto error_header = detail::stream_runtime_t::make_terminal_header (
-          stream_message_kind_t::error, request_header);
+          stream_message_kind_t::error, request_header, std::move (admission_metadata));
         auto send = detail::session_actor_manager_access_t::submit_terminal (
           stream, error_header, stream_error_payload (error),
           [&] (const stream_header_t &header, const zlink::message_t &payload) {
@@ -3363,8 +3419,10 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                                   session_rid);
         _runtime.attach_transport_writer (
           stream,
-          [this, owner, connection] (const stream_header_t &header, const zlink::message_t &payload)
-            -> task_t<void> { return submit_frame (owner, connection, header, payload); });
+          [this, owner, connection] (const stream_header_t &header, const zlink::message_t &payload,
+                                     const auto &admission_reply) {
+              return submit_frame (owner, connection, header, payload, admission_reply.get ());
+          });
         bool connected_session = false;
         std::optional<stream_error_t> session_transport_error;
         auto liveness = std::make_shared<session_liveness_t> (
@@ -3438,9 +3496,28 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                      * while waiting; one partial connection must not block
                      * the other connections. */
                     receive_lease.release_turn ();
-                    auto frame = read_frame (
-                      *connection, [] (const stream_header_t &) { return true; }, io,
-                      &owner->closing);
+                    application_job_queue_t::permit_t application_permit;
+                    const auto reserve = [&] {
+                        application_job_queue_t::supply_request_t supply;
+                        std::optional<std::optional<application_job_queue_t::permit_t>> reserved;
+                        const auto wake = [weak_owner = std::weak_ptr<tcp_connection_t> (owner)] {
+                            if (const auto connection_owner = weak_owner.lock ())
+                                connection_owner->wake_reader ();
+                        };
+                        while (!(reserved = supply.take (*_application_jobs,
+                                                         std::chrono::milliseconds::zero (), wake,
+                                                         application_job_queue_t::origin_t::remote))
+                               && !stream_stop_requested (*_stop, &owner->closing)) {
+                            io.restart ();
+                            const auto running = asio::make_work_guard (io);
+                            io.run_one ();
+                        }
+                        if (!reserved || !*reserved)
+                            return false;
+                        application_permit = std::move (**reserved);
+                        return true;
+                    };
+                    auto frame = read_frame (*connection, reserve, io, &owner->closing);
                     if (!frame) {
                         break;
                     }
@@ -3459,39 +3536,11 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                                                          received_frame.payload);
                         continue;
                     }
-                    std::shared_ptr<application_job_queue_t::permit_t> application_permit;
-                    if (received_frame.header.kind () == stream_message_kind_t::send
-                        || received_frame.header.kind () == stream_message_kind_t::request) {
-                        /* Application job queue §3의 dispatch 전 permit 공급을
-                         * 기다립니다. 공급·종료 알림이 reader io를 깨우며, listener
-                         * io는 송신 completion을 계속 처리합니다(hot path I1). */
-                        application_job_queue_t::supply_request_t supply;
-                        std::optional<std::optional<application_job_queue_t::permit_t>> reserved;
-                        const auto wake = [weak_owner = std::weak_ptr<tcp_connection_t> (owner)] {
-                            if (const auto connection_owner = weak_owner.lock ())
-                                connection_owner->wake_reader ();
-                        };
-                        while (
-                          !(reserved = supply.take (
-                              *_application_jobs, std::chrono::milliseconds::zero (), wake,
-                              zlink::framework::runtime::application_job_queue_t::origin_t::remote))
-                          && !stream_stop_requested (*_stop, &owner->closing)) {
-                            io.restart ();
-                            const auto running = asio::make_work_guard (io);
-                            io.run_one ();
-                        }
-                        if (!reserved || !*reserved)
-                            break;
-                        application_permit = std::make_shared<application_job_queue_t::permit_t> (
-                          std::move (**reserved));
-                        application_permit->mark_queued ();
-                    }
-                    detail::session_actor_manager_access_t::set_codec (
-                      session_actors, received_frame.header.codec ());
                     const auto header = received_frame.header;
                     trace_stream_host ("dispatch-submit", _stream, header);
-                    auto dispatched = _runtime.dispatch_packet_async (
-                      session, stream, header, received_frame.payload,
+                    auto dispatched = _ingress.publish (
+                      _runtime, session, stream, header, received_frame.payload,
+                      std::move (application_permit),
                       [this, owner, connection, connection_state, header, stream,
                        liveness] (const result_t<void> &result) {
                           trace_stream_host ("dispatch-complete", _stream, header,
@@ -3514,13 +3563,12 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                           (void) connection_state;
                           (void) liveness;
                       },
-                      [permit = std::move (application_permit)] () mutable {
-                          if (permit) {
-                              permit->release_for_handler_entry ();
-                              permit.reset ();
-                          }
-                      },
-                      [this] { return _stop->load (std::memory_order_acquire); });
+                      [this] { return _stop->load (std::memory_order_acquire); },
+                      [&] (const result_t<void> &error, detail::stream_metadata_t metadata) {
+                          report_packet_dispatch_error (header, error);
+                          write_error_frame (owner, connection, stream, header, error,
+                                             std::move (metadata));
+                      });
                     if (!dispatched) {
                         report_packet_dispatch_error (header, dispatched);
                         if (header.kind () == stream_message_kind_t::request) {
@@ -3715,6 +3763,7 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
     std::shared_ptr<runtime_failure_collector_t> _runtime_failures;
     std::shared_ptr<detail::mesh_node_runtime_t> _mesh_node;
     std::shared_ptr<application_job_queue_t> _application_jobs;
+    stream_host_ingress_t &_ingress;
     std::chrono::milliseconds _session_replacement_callback_timeout;
 
     runtime::state_lane_t _active_streams_lane;
@@ -3859,7 +3908,8 @@ stream_host_service_t::stream_host_service_t (
   std::shared_ptr<detail::mesh_node_runtime_t> mesh_node,
   std::map<std::string, std::optional<std::string>> advertise_hosts,
   std::shared_ptr<listener_status_registry_t> listener_statuses,
-  std::shared_ptr<application_job_queue_t> application_jobs) :
+  std::shared_ptr<application_job_queue_t> application_jobs,
+  std::shared_ptr<host_capacity_runtime_t> host_capacity) :
     hosted_service_lifecycle_t (std::move (failures)),
     _runtime (std::move (runtime)),
     _streams (std::move (streams)),
@@ -3874,8 +3924,15 @@ stream_host_service_t::stream_host_service_t (
         : std::make_shared<application_job_queue_t> (application_job_queue_configuration_t{
             application_job_queue_profile_t::balanced,
             static_cast<std::uint32_t> (std::numeric_limits<std::int32_t>::max ()), 1,
-            static_cast<std::uint32_t> (std::numeric_limits<std::int32_t>::max ())}))
+            static_cast<std::uint32_t> (std::numeric_limits<std::int32_t>::max ())})),
+    _ingress (std::make_shared<stream_host_ingress_t> (_streams))
 {
+    if (host_capacity) {
+        host_capacity->bind_authentication_admission_reset ([ingress = std::weak_ptr (_ingress)] {
+            if (auto owner = ingress.lock ())
+                owner->reset_metrics ();
+        });
+    }
 }
 
 stream_host_service_t::~stream_host_service_t ()
@@ -3888,6 +3945,8 @@ task_t<void> stream_host_service_t::start (service_provider_t &services)
     _services = &services;
     _stop.store (false, std::memory_order_release);
     try {
+        if (_monitoring)
+            _ingress->connect_metrics (_monitoring->metric_provider);
         for (const auto &stream : _streams) {
             auto factory = _session_factories.find (stream.packet_session_name);
             if (factory == _session_factories.end ()) {
@@ -3901,7 +3960,7 @@ task_t<void> stream_host_service_t::start (service_provider_t &services)
             auto listener = std::make_shared<listener_t> (
               _runtime, stream, advertise_host, factory->second, services, _delay_owner, _stop,
               _drain_flag, _shutdown_cancellation, _monitoring, _runtime_failures, _mesh_node,
-              _application_jobs, _session_replacement_callback_timeout, _liveness_io);
+              _application_jobs, *_ingress, _session_replacement_callback_timeout, _liveness_io);
             auto *raw = listener.get ();
             _listeners.push_back (std::move (listener));
             _threads.emplace_back ([raw] { raw->run_guarded (); });

@@ -195,12 +195,6 @@ internal sealed class ZLinkSpotRuntimeManager(
             var applicationPayloadHash = System.Security.Cryptography.SHA256.HashData(
                 applicationPayload
             );
-            var creationRelocationPolicy = source.Registration.SpotRelocations.TryGetValue(
-                stableType,
-                out var policy
-            )
-                ? (byte?)policy.PolicyKind
-                : null;
             var resolver =
                 services.GetService<ZLinkStoreLocationResolvers>()
                 ?? throw new ZLinkConfigurationException(
@@ -212,6 +206,25 @@ internal sealed class ZLinkSpotRuntimeManager(
             ZLinkObjectReservation snapshot;
             while (true)
             {
+                ZLinkMeshNodeDescriptor? placementTarget = null;
+                async ValueTask<ZLinkMeshNodeDescriptor?> SelectTargetAsync() =>
+                    placementTarget ??= await resolver
+                        .SelectPlacementAsync(
+                            meshName,
+                            ZLinkPlacementObjectKind.UserSpot,
+                            stableType,
+                            candidates =>
+                                ZLinkMeshNodeTargetAvailability.FilterAdmitted(
+                                    source.Node.RoutingId,
+                                    source.Node.LifecycleGeneration,
+                                    candidates,
+                                    source.Node.MeshPeers()
+                                ),
+                            excluded,
+                            deadlineToken.Token
+                        )
+                        .ConfigureAwait(false);
+
                 var authority = await locationStore
                     .ReadAuthorityAsync(key, deadlineToken.Token)
                     .ConfigureAwait(false);
@@ -226,31 +239,15 @@ internal sealed class ZLinkSpotRuntimeManager(
                             requestedSpotId,
                             stableType,
                             observed.Snapshot,
-                            creationRelocationPolicy,
+                            SelectTargetAsync,
                             deadlineAt,
                             deadlineToken.Token
                         )
                         .ConfigureAwait(false);
                     if (joined.HasValue)
                         return joined.Value;
-                    continue;
                 }
-                var selectedTarget = await resolver
-                    .SelectPlacementAsync(
-                        meshName,
-                        ZLinkPlacementObjectKind.UserSpot,
-                        stableType,
-                        candidates =>
-                            ZLinkMeshNodeTargetAvailability.FilterAdmitted(
-                                source.Node.RoutingId,
-                                source.Node.LifecycleGeneration,
-                                candidates,
-                                source.Node.MeshPeers()
-                            ),
-                        excluded,
-                        deadlineToken.Token
-                    )
-                    .ConfigureAwait(false);
+                var selectedTarget = await SelectTargetAsync().ConfigureAwait(false);
                 if (selectedTarget is null)
                 {
                     if (
@@ -300,8 +297,7 @@ internal sealed class ZLinkSpotRuntimeManager(
                                     stableType,
                                     1
                                 )
-                            ),
-                            creationRelocationPolicy
+                            )
                         ),
                         deadlineToken.Token
                     )
@@ -458,7 +454,7 @@ internal sealed class ZLinkSpotRuntimeManager(
         string spotId,
         string stableType,
         ZLinkAuthoritySnapshot current,
-        byte? creationRelocationPolicy,
+        Func<ValueTask<ZLinkMeshNodeDescriptor?>> selectTarget,
         TimeSpan deadline,
         CancellationToken cancellationToken
     )
@@ -488,15 +484,16 @@ internal sealed class ZLinkSpotRuntimeManager(
             )
             {
                 var key = ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(spotId);
-                await _locationStore!
-                    .ReleaseEndedReservationAsync(
+                await ZLinkAuthorityCleanup
+                    .ReleaseEndedAuthorityForCreationAsync(
+                        _locationStore!,
                         key,
-                        current.StoreVersion,
-                        new ZLinkCreationAuthorityRecovery(creationRelocationPolicy),
+                        current,
+                        selectTarget,
                         cancellationToken
                     )
                     .ConfigureAwait(false);
-                var ownerRead = await _locationStore
+                var ownerRead = await _locationStore!
                     .ReadAuthorityAsync(key, cancellationToken)
                     .ConfigureAwait(false);
                 if (ownerRead is not ZLinkAuthorityReadResult.Found reobserved)
@@ -619,7 +616,6 @@ internal sealed class ZLinkSpotRuntimeManager(
                     .ReleaseEndedReservationAsync(
                         ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(spotId),
                         current.StoreVersion,
-                        creationRecovery: null,
                         cancellationToken: cancellationToken
                     )
                     .ConfigureAwait(false)

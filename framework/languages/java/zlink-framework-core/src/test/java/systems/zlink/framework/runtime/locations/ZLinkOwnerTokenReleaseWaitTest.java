@@ -8,7 +8,6 @@ import org.junit.jupiter.params.provider.ValueSource;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.*;
-import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration.RelocationPolicy;
 import systems.zlink.framework.runtime.internal.locations.*;
 
 import java.time.Clock;
@@ -124,8 +123,7 @@ final class ZLinkOwnerTokenReleaseWaitTest {
                                 target.lifecycleGeneration(),
                                 token(target),
                                 new byte[] {1},
-                                ZLinkPlacementCapacityBundle.actor(1),
-                                new RelocationPolicy.Disabled()),
+                                ZLinkPlacementCapacityBundle.actor(1)),
                         () -> false)
                 .toCompletableFuture()
                 .join();

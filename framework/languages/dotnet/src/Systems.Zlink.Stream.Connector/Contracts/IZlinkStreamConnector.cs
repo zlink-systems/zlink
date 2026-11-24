@@ -98,6 +98,10 @@ public interface IZlinkStreamConnector : IAsyncDisposable
 
     IDisposable OnRequestSending(Action<ZlinkStreamRequestSendingContext> handler);
 
+    IDisposable OnAdmissionWaiting(
+        Func<ZlinkStreamAdmissionWaiting, CancellationToken, ValueTask> handler
+    );
+
     IDisposable OnReplyReceived(
         Func<ZlinkStreamReplyReceivedContext, CancellationToken, ValueTask> handler
     );

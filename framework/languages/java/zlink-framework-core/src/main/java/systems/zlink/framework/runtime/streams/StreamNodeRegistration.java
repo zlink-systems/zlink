@@ -6,6 +6,7 @@ import systems.zlink.framework.runtime.internal.transport.ZLinkListenerIdentity;
 import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
 import systems.zlink.framework.streams.ZLinkSession;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -15,6 +16,9 @@ public final class StreamNodeRegistration {
     private Duration heartbeatInterval = Duration.ofSeconds(1);
     private Duration heartbeatTimeout = Duration.ofSeconds(5);
     private Duration idleTimeout = Duration.ZERO;
+    private String authenticationPacketName;
+    private Integer maxConcurrentAuthentications;
+    private Duration authenticationRetryDelay = Duration.ofMillis(500);
     private final List<String> bindEndpoints = new ArrayList<>();
     private String advertiseHost;
     private TlsServerRegistration tlsServer;
@@ -55,6 +59,51 @@ public final class StreamNodeRegistration {
         if (timeout == null || timeout.isNegative())
             throw new ZLinkConfigurationException("STREAM idle timeout must not be negative.");
         idleTimeout = timeout;
+    }
+
+    void authenticationPacketName(String packetName) {
+        authenticationPacketName = packetName;
+    }
+
+    void maxConcurrentAuthentications(int limit) {
+        maxConcurrentAuthentications = limit;
+    }
+
+    void authenticationRetryDelay(Duration delay) {
+        authenticationRetryDelay = delay;
+    }
+
+    ZLinkStreamAuthenticationAdmission.Settings authenticationAdmission(int processors) {
+        if (authenticationPacketName != null
+                && (authenticationPacketName.isBlank()
+                        || authenticationPacketName.getBytes(StandardCharsets.UTF_8).length
+                                > ZLinkStreamHeader.MAX_PACKET_NAME_BYTES)) {
+            throw new ZLinkConfigurationException(
+                    "AuthenticationPacketName must be a valid STREAM packet name.");
+        }
+        int limit =
+                maxConcurrentAuthentications == null
+                        ? (int) Math.min(Integer.MAX_VALUE, (long) processors * 8)
+                        : maxConcurrentAuthentications;
+        if (limit < 1) {
+            throw new ZLinkConfigurationException(
+                    "MaxConcurrentAuthentications must be in 1..2147483647.");
+        }
+        if (authenticationRetryDelay == null
+                || authenticationRetryDelay.compareTo(Duration.ofMillis(1)) < 0
+                || authenticationRetryDelay.compareTo(Duration.ofMillis(Integer.MAX_VALUE)) > 0
+                || authenticationRetryDelay.getNano() % 1_000_000 != 0) {
+            throw new ZLinkConfigurationException(
+                    "AuthenticationRetryDelay must be a whole number of milliseconds in 1..2147483647.");
+        }
+        return new ZLinkStreamAuthenticationAdmission.Settings(
+                authenticationPacketName, limit, (int) authenticationRetryDelay.toMillis());
+    }
+
+    public static void validateAuthenticationAdmission(List<StreamNodeRegistration> registrations) {
+        if (!registrations.isEmpty()) {
+            ZLinkStreamAuthenticationAdmission.settings(registrations);
+        }
     }
 
     public String name() {
