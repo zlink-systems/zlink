@@ -44,7 +44,9 @@ export class Session implements ZLinkSession {
       await this.context.client
         .reply(
           new SessionInfo(
-            String(this.context.sessionId), actor.ref.actorId, actor.ref.objectGeneration
+            String(this.context.sessionId),
+            actor.ref.actorId,
+            actor.ref.objectGeneration
           )
         )
         .submit();

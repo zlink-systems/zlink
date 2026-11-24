@@ -16,9 +16,16 @@ export class Session implements ZLinkSession {
     private readonly actors: ZLinkActorManager
   ) {}
   async onDispatch(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void> {
-    const allowed: readonly string[] = [PacketNames.joinWorldRequest, PacketNames.moveRequest,
-      PacketNames.createPartyRequest, PacketNames.joinPartyRequest, PacketNames.enterDungeonRequest,
-      PacketNames.advanceRequest, PacketNames.viewRequest, PacketNames.sessionInfoRequest];
+    const allowed: readonly string[] = [
+      PacketNames.joinWorldRequest,
+      PacketNames.moveRequest,
+      PacketNames.createPartyRequest,
+      PacketNames.joinPartyRequest,
+      PacketNames.enterDungeonRequest,
+      PacketNames.advanceRequest,
+      PacketNames.viewRequest,
+      PacketNames.sessionInfoRequest
+    ];
     if (!allowed.includes(dispatch.packetName)) {
       await this.context.client.send(new ActionRejected('packet-not-allowed')).submit();
       return;

@@ -57,9 +57,7 @@ export class Session implements ZLinkSession {
     await actor.relay(payload);
   }
   private async rejectPacket(): Promise<void> {
-    await this.context.client
-      .send(new ActionRejected(Rejection.packetNotAllowed))
-      .submit();
+    await this.context.client.send(new ActionRejected(Rejection.packetNotAllowed)).submit();
   }
 }
 @Injectable()

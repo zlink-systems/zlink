@@ -4,7 +4,16 @@ import { Names } from '../shared/constants';
 import { EntryNotifications, Entry, EnterWorld } from '../shared/entry';
 import { PlayerFactory, PlayerRelocation } from '../shared/player';
 import { Dungeon, DungeonRelocation } from './spots';
-import { DungeonNotifications, Reconnect, View, Advance, Prepare, Delivery, EnterAgain, TravelAgain } from './handlers';
+import {
+  DungeonNotifications,
+  Reconnect,
+  View,
+  Advance,
+  Prepare,
+  Delivery,
+  EnterAgain,
+  TravelAgain
+} from './handlers';
 runHost((_builder, config, mesh) => {
   const objects = mesh.objects().server();
   objects.addEntrySpot(Entry, Names.actor);
@@ -17,7 +26,9 @@ runHost((_builder, config, mesh) => {
   return {
     providers: [
       EntryNotifications,
-      DungeonNotifications, EnterAgain, TravelAgain,
+      DungeonNotifications,
+      EnterAgain,
+      TravelAgain,
       Entry,
       EnterWorld,
       Dungeon,

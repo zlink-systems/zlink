@@ -5,7 +5,17 @@ import { PlayerFactory, PlayerRelocation } from '../shared/player';
 import { Entry } from '../shared/entry';
 import { EntryNotifications, Login, CreateParty, JoinParty } from '../shared/entry-handlers';
 import { Dungeon, DungeonRelocation } from './dungeon';
-import { Prepare, Reconnect, View, Advance, Delivery, Enter, Travel, PartyDelivery, RejectDelivery } from './handlers';
+import {
+  Prepare,
+  Reconnect,
+  View,
+  Advance,
+  Delivery,
+  Enter,
+  Travel,
+  PartyDelivery,
+  RejectDelivery
+} from './handlers';
 runHost((_builder, config, mesh) => {
   const objects = mesh.objects().server();
   objects.addEntrySpot(Entry, Names.actor);
@@ -30,7 +40,11 @@ runHost((_builder, config, mesh) => {
       Reconnect,
       View,
       Advance,
-      Delivery, Enter, Travel, PartyDelivery, RejectDelivery
+      Delivery,
+      Enter,
+      Travel,
+      PartyDelivery,
+      RejectDelivery
     ],
     listener: { kind: 'routeMesh', name: Names.mesh },
     ready: (status) => status.placement.isAvailable

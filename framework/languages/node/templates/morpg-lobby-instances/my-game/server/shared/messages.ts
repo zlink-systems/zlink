@@ -46,7 +46,10 @@ export class PrepareDungeon {
   ) {}
 }
 export class DungeonPrepared {
-  constructor(readonly dungeonId: string, readonly runId: string) {}
+  constructor(
+    readonly dungeonId: string,
+    readonly runId: string
+  ) {}
 }
 export class JoinDungeon {
   constructor(
@@ -55,7 +58,10 @@ export class JoinDungeon {
   ) {}
 }
 export class ActionRejected {
-  constructor(readonly reason: string = '', readonly retryAfterMs: number = 0) {}
+  constructor(
+    readonly reason: string = '',
+    readonly retryAfterMs: number = 0
+  ) {}
 }
 export class SessionInfoRequest {}
 export class SessionInfo {
@@ -68,15 +74,36 @@ export class SessionInfo {
 
 export const MaximumInteger = 9007199254740991n;
 export const FinalStage = 3n;
-export enum RunPhase { Forming = 'Forming', Preparing = 'Preparing', Entering = 'Entering', Active = 'Active', Completed = 'Completed' }
-export class RunStarted { constructor(readonly runId: string) {} }
-export class RunCompleted { constructor(readonly runId: string) {} }
-export class EnterPartyRun { constructor(readonly playerId: string) {} }
+export enum RunPhase {
+  Forming = 'Forming',
+  Preparing = 'Preparing',
+  Entering = 'Entering',
+  Active = 'Active',
+  Completed = 'Completed'
+}
+export class RunStarted {
+  constructor(readonly runId: string) {}
+}
+export class RunCompleted {
+  constructor(readonly runId: string) {}
+}
+export class EnterPartyRun {
+  constructor(readonly playerId: string) {}
+}
 
-export class DungeonMemberEntered { constructor(readonly runId: string, readonly playerId: string) {} }
+export class DungeonMemberEntered {
+  constructor(
+    readonly runId: string,
+    readonly playerId: string
+  ) {}
+}
 
-export function newPartyId(): string { return Names.partyPrefix + randomUUID().replaceAll('-', ''); }
-export function newRunId(): string { return 'run-' + randomUUID().replaceAll('-', ''); }
+export function newPartyId(): string {
+  return Names.partyPrefix + randomUUID().replaceAll('-', '');
+}
+export function newRunId(): string {
+  return 'run-' + randomUUID().replaceAll('-', '');
+}
 
 const notificationTypes: ReadonlyMap<string, () => Notification> = new Map<
   string,

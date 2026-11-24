@@ -36,7 +36,7 @@ export async function scenario(
   endpoint: string,
   runId: string,
   logDir: string,
-  control: NodeControl
+  control?: NodeControl
 ): Promise<void> {
   const clients: PlayerClient[] = [];
   const create = (suffix: string, playerId = `${name}-${runId}-${suffix}`): PlayerClient => {
@@ -44,6 +44,16 @@ export async function scenario(
     clients.push(client);
     return client;
   };
+  if (name === 'connect') {
+    const client = create('smoke');
+    try {
+      await client.connector.connect();
+      client.verifyConnected();
+    } finally {
+      await client.close();
+    }
+    return;
+  }
   const enter = async (
     client: PlayerClient,
     region = Test.region as string
@@ -103,17 +113,25 @@ export async function scenario(
     if (name === 'region') {
       assert.equal(before.players.length, 2);
       assert(c);
-      const d = create('p4'), exhausted = create('p5'), unknown = create('p6');
+      const d = create('p4'),
+        exhausted = create('p5'),
+        unknown = create('p6');
       await enter(d);
       const exhaustedMark = exhausted.messages.length;
       await exhausted.enter(Test.region);
-      const unavailable = await exhausted.wait<RegionUnavailable>(PacketNames.regionUnavailable, exhaustedMark);
+      const unavailable = await exhausted.wait<RegionUnavailable>(
+        PacketNames.regionUnavailable,
+        exhaustedMark
+      );
       assert.equal(unavailable.reason, 'capacity-exhausted');
       assert.equal(unavailable.region, Test.region);
       assert.equal((await exhausted.sessionInfo()).actorId, exhausted.playerId);
       const unknownMark = unknown.messages.length;
       await unknown.enter('unknown');
-      const unknownReply = await unknown.wait<RegionUnavailable>(PacketNames.regionUnavailable, unknownMark);
+      const unknownReply = await unknown.wait<RegionUnavailable>(
+        PacketNames.regionUnavailable,
+        unknownMark
+      );
       assert.equal(unknownReply.reason, 'region-unknown');
       const deniedMark = unknown.messages.length;
       await unknown.connector.send(new RegionFull('region-full', Test.region, 1)).submit();
@@ -152,6 +170,7 @@ export async function scenario(
       assert.equal(after.objectGeneration, identity.objectGeneration);
       assert.notEqual(after.sessionId, identity.sessionId);
     } else if (name === 'update') {
+      assert(control, 'update requires an isolated run');
       await control.drain(before.nodeId);
       assert.deepEqual(await a.sessionInfo(), identity);
       assert.deepEqual(await b.sessionInfo(), otherIdentity);

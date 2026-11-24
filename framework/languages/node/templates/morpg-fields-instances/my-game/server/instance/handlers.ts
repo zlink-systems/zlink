@@ -77,7 +77,11 @@ export class Prepare {
   }
 }
 @Injectable()
-@zlinkSpotActorSendHandler({ spot: () => Dungeon, actor: () => Player, packetName: PacketNames.partyView })
+@zlinkSpotActorSendHandler({
+  spot: () => Dungeon,
+  actor: () => Player,
+  packetName: PacketNames.partyView
+})
 @zlinkSpotActorSendHandler({
   spot: () => Dungeon,
   actor: () => Player,
@@ -95,17 +99,36 @@ export class Delivery {
 }
 
 @Injectable()
-@zlinkSpotActorSendHandler({ spot: () => Dungeon, actor: () => Player, packetName: PacketNames.enterDungeonRequest })
+@zlinkSpotActorSendHandler({
+  spot: () => Dungeon,
+  actor: () => Player,
+  packetName: PacketNames.enterDungeonRequest
+})
 export class EnterAgain {
-  async handle(spot: Dungeon, actor: Player, _context: ZLinkMessageContext, _request: EnterDungeonRequest): Promise<void> {
+  async handle(
+    spot: Dungeon,
+    actor: Player,
+    _context: ZLinkMessageContext,
+    _request: EnterDungeonRequest
+  ): Promise<void> {
     await spot.enter(actor);
   }
 }
 @Injectable()
-@zlinkSpotActorSendHandler({ spot: () => Dungeon, actor: () => Player, packetName: PacketNames.joinDungeon })
+@zlinkSpotActorSendHandler({
+  spot: () => Dungeon,
+  actor: () => Player,
+  packetName: PacketNames.joinDungeon
+})
 export class TravelAgain {
-  async handle(spot: Dungeon, actor: Player, _context: ZLinkMessageContext, request: JoinDungeon): Promise<void> {
-    if (request.dungeonId !== String(spot.context.spotId)) actor.context.joinSpot(request.dungeonId, request).defer();
+  async handle(
+    spot: Dungeon,
+    actor: Player,
+    _context: ZLinkMessageContext,
+    request: JoinDungeon
+  ): Promise<void> {
+    if (request.dungeonId !== String(spot.context.spotId))
+      actor.context.joinSpot(request.dungeonId, request).defer();
   }
 }
 

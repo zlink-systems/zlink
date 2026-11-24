@@ -10,9 +10,16 @@ import type {
 } from '@zlink-systems/framework';
 import { Names, PacketNames, Rejection } from '../shared/constants';
 import { JoinLobbyRequest, SessionInfo, ActionRejected } from '../shared/messages';
-const clientPackets: readonly string[] = [PacketNames.joinLobbyRequest, PacketNames.createPartyRequest,
-  PacketNames.joinPartyRequest, PacketNames.readyRequest, PacketNames.enterDungeonRequest,
-  PacketNames.advanceRequest, PacketNames.viewRequest, PacketNames.sessionInfoRequest];
+const clientPackets: readonly string[] = [
+  PacketNames.joinLobbyRequest,
+  PacketNames.createPartyRequest,
+  PacketNames.joinPartyRequest,
+  PacketNames.readyRequest,
+  PacketNames.enterDungeonRequest,
+  PacketNames.advanceRequest,
+  PacketNames.viewRequest,
+  PacketNames.sessionInfoRequest
+];
 export class Session implements ZLinkSession {
   constructor(
     readonly context: ZLinkSessionContext,
@@ -20,7 +27,8 @@ export class Session implements ZLinkSession {
   ) {}
   async onDispatch(dispatch: ZLinkSessionDispatchContext, payload: ZLinkMessage): Promise<void> {
     if (!clientPackets.includes(dispatch.packetName)) {
-      await this.context.client.send(new ActionRejected(Rejection.packetNotAllowed)).submit(); return;
+      await this.context.client.send(new ActionRejected(Rejection.packetNotAllowed)).submit();
+      return;
     }
     if (!this.context.actors.bound.length) {
       if (dispatch.packetName !== PacketNames.joinLobbyRequest)

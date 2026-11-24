@@ -33,17 +33,23 @@ export class Entry implements ZLinkEntrySpot<Player> {
   async onLeaveActor(_actor: Player): Promise<void> {}
   async select(actor: Player, region: string, index: number): Promise<void> {
     if (!(Game.allowedRegions as readonly string[]).includes(region)) {
-      await actor.context.boundSession.send(new RegionUnavailable(region, Rejection.regionUnknown)).submit();
+      await actor.context.boundSession
+        .send(new RegionUnavailable(region, Rejection.regionUnknown))
+        .submit();
       return;
     }
     if (index > Game.maxReplicasPerRegion) {
-      await actor.context.boundSession.send(new RegionUnavailable(region, Rejection.capacityExhausted)).submit();
+      await actor.context.boundSession
+        .send(new RegionUnavailable(region, Rejection.capacityExhausted))
+        .submit();
       return;
     }
     const id = regionId(region, index);
     const result = await this.spots.getOrCreate(id, Names.region).inMesh(Names.mesh).submit();
     if (result.state === ZLinkSpotCreateState.Rejected) {
-      await actor.context.boundSession.send(new RegionUnavailable(region, Rejection.capacityExhausted)).submit();
+      await actor.context.boundSession
+        .send(new RegionUnavailable(region, Rejection.capacityExhausted))
+        .submit();
       return;
     }
     actor.context.joinSpot(id, new JoinRegion(region, index)).defer();
@@ -63,7 +69,10 @@ export class Region implements ZLinkSpot<Player> {
     if (regionId(join.region, join.index) !== String(this.context.spotId))
       throw new Error('Region join identity mismatch');
     if (!this.positions.has(id) && this.positions.size >= this.config.capacity)
-      return { accepted: false, reply: new RegionFull(Rejection.regionFull, join.region, join.index) };
+      return {
+        accepted: false,
+        reply: new RegionFull(Rejection.regionFull, join.region, join.index)
+      };
     this.positions.add(id);
     return { accepted: true };
   }
@@ -85,13 +94,17 @@ export class Region implements ZLinkSpot<Player> {
   private async broadcast(requester?: Player): Promise<void> {
     const view = this.view();
     for (const id of this.positions.ids()) {
-      if (requester?.context.actorId === id) await requester.context.boundSession.send(view).submit();
+      if (requester?.context.actorId === id)
+        await requester.context.boundSession.send(view).submit();
       else await this.actors.sendToActor(id, view).submit();
     }
   }
   async move(actor: Player, request: MoveRequest): Promise<void> {
     const rejected = this.positions.move(actor.context.actorId, request);
-    if (rejected) { await actor.context.boundSession.send(rejected).submit(); return; }
+    if (rejected) {
+      await actor.context.boundSession.send(rejected).submit();
+      return;
+    }
     await this.broadcast(actor);
   }
   async open(actor: Player, dungeonId: string): Promise<void> {

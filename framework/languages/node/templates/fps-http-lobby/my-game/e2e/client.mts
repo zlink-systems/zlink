@@ -637,13 +637,14 @@ export async function scenario(
   lobbyEndpoint: string,
   runId: string,
   logDir: string,
-  control: NodeControl
+  control?: NodeControl
 ): Promise<void> {
   assert(
     LobbyScenarios.includes(name as (typeof LobbyScenarios)[number]),
     `Unknown scenario ${name}`
   );
   if (name === 'lobby') {
+    assert(control, 'lobby requires an isolated run');
     await lobbyAsync(endpoint, lobbyEndpoint, runId, logDir, control);
     return;
   }
@@ -737,6 +738,7 @@ export async function scenario(
         break;
       }
       case 'update': {
+        assert(control, 'update requires an isolated run');
         await moveAsync(p1, new Vec3(0, 0, -1));
         await hitAsync(p1, p2, 75);
         const before = await viewAsync(p1);
