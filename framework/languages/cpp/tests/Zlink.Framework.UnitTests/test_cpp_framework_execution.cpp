@@ -7738,6 +7738,21 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
             delegate (port)
         {
         }
+        task_t<std::optional<std::string>>
+        begin_source_capture (const std::vector<stateful::object_ref_t> &participants,
+                              const stateful::relocation_authority_fence_t &fence,
+                              const std::string &target_node_id,
+                              std::uint64_t target_node_generation,
+                              std::uint64_t application_version) override
+        {
+            return delegate.begin_source_capture (participants, fence, target_node_id,
+                                                  target_node_generation, application_version);
+        }
+        task_t<bool> capture_source (const stateful::object_ref_t &primary,
+                                     const std::string &preparing_version) override
+        {
+            return delegate.capture_source (primary, preparing_version);
+        }
         stateful::source_relocation_settlement_t
         settle_source_relocation (const stateful::relocation_authority_fence_t &fence,
                                   const std::vector<stateful::object_ref_t> &participants,
