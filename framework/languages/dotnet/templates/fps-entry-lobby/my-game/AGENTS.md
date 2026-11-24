@@ -2,6 +2,16 @@
 
 ## Rules for AI
 
+### Reference project
+
+This template is a reference. To build a new game, create a new project and design its nodes, Spots, Actors and messages for that game, using this template's structure and rules as reference; do not rename or edit this template in place into the game.
+
+### Server and e2e commands
+
+Run `./run-server.sh` or `.\run-server.cmd` to start Redis and the nodes in the foreground. Run `./run-e2e.sh` or `.\run-e2e.cmd` in another terminal to attach automatically. With the server stopped, run-e2e uses isolated Docker processes. Read per-node stdout, stderr, message flow, and failure detail under `.logs/run-<id>/`.
+
+### Node and game design
+
 Every server process in this project is a stateful ZLink node. Before writing code, decide which kind you are editing.
 
 - A play node hosts Spots. A session-bound Actor owns the player's state, and a Spot owns shared state. Load it once on connect; do not read the database while handling a request.
@@ -23,7 +33,7 @@ Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/dot
 
 ## Project and development
 
-Extend this template's domain to build an FPS server. This .NET 8 project runs a Session node, play nodes A and B (match), and a Redis Location Store. Entry Spots forward players to a fixed Matchmaking User Spot; same-mode players join dynamic Room User Spots. Public Framework and connector packages are pinned to 0.34.0 in `Directory.Packages.props`. The [README](README.md) owns execution, deployment and known issues; [zlink.structure.json](zlink.structure.json) describes initial topology and ordered scenarios.
+Use this template's domain as a reference when designing an FPS server in a separate project. This .NET 8 project runs a Session node, play nodes A and B (match), and a Redis Location Store. Entry Spots forward players to a fixed Matchmaking User Spot; same-mode players join dynamic Room User Spots. Public Framework and connector packages are pinned to 0.34.0 in `Directory.Packages.props`. The [README](README.md) owns execution, deployment and known issues; [zlink.structure.json](zlink.structure.json) describes initial topology and ordered scenarios.
 
 Run from this project root with Docker Compose v2 and Linux containers:
 

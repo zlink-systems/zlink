@@ -2,6 +2,16 @@
 
 ## Rules for AI
 
+### Reference project
+
+This template is a reference. To build a new game, create a new project and design its nodes, Spots, Actors and messages for that game, using this template's structure and rules as reference; do not rename or edit this template in place into the game.
+
+### Server and e2e commands
+
+Run `./run-server.sh` or `.\run-server.cmd` to start Redis and the nodes in the foreground. Run `./run-e2e.sh` or `.\run-e2e.cmd` in another terminal to attach automatically. With the server stopped, run-e2e uses isolated Docker processes. Read per-node stdout, stderr, message flow, and failure detail under `.logs/run-<id>/`.
+
+### Node and game design
+
 Every server process in this project is a stateful ZLink node. Before writing code, decide which kind you are editing.
 
 - A play node hosts Spots. A session-bound Actor owns the player's state, and a Spot owns shared state. Load it once on connect; do not read the database while handling a request.
@@ -65,7 +75,7 @@ An Actor is a game state object addressed by ID; `PlayerActor` in `server/MyGame
 
 ### Dungeons
 
-`server/MyGame.Instance/Program.cs` registers the Dungeon factory, and `server/MyGame.Instance/DungeonSpot.cs` owns the admitted roster and the stage of one Dungeon, accepts only roster members, and answers the typed preparation request. `server/MyGame.Instance/Handlers.cs` holds the Dungeon handlers, including `Advance` and the delivery handler. `DungeonSpot` is an application-created User Spot, distinct from the Framework Instance Spot with its separate creation and initialization contract. Add encounters, rewards, and Dungeon lifecycle behavior in this project.
+`server/MyGame.Instance/Program.cs` registers the Dungeon factory, and `server/MyGame.Instance/DungeonSpot.cs` owns the admitted roster and the stage of one Dungeon, accepts only roster members, and answers the typed preparation request. `server/MyGame.Instance/Handlers.cs` holds the Dungeon handlers, including `Advance` and the delivery handler. `DungeonSpot` is an application-created User Spot, distinct from the Framework Instance Spot with its separate creation and initialization contract. Add encounters, rewards, and Dungeon lifecycle behavior in your game project.
 
 ### Shared contracts and hosting
 
@@ -112,7 +122,7 @@ Relocation changes an object's execution host; drain moves a host's workload els
 
 ## Extending the MORPG domain
 
-Extend this template's domain to build a MORPG server. Run the build, domain checks and e2e before changing gameplay.
+Use this template's domain as a reference when designing a MORPG server in a separate project. Run the build, domain checks and e2e before changing gameplay.
 
 - Change party rules in `server/MyGame.Lobby/Domain/PartyState.cs` and dungeon rules in `server/MyGame.Instance/DungeonState.cs`. Party Spot owns the roster, readiness, Phase and RunId, including while its Actors are in a dungeon. Dungeon state owns arrivals and Stage. Keep each decision in its domain.
 - Add shared typed messages and constants in `server/MyGame.Shared/Contracts.cs`. Party and run IDs are server-issued GUIDs. Use the default Framework serializer; enum values are names and absent RunId is JSON null. Integer values must remain within `GameNames.MaximumInteger`.

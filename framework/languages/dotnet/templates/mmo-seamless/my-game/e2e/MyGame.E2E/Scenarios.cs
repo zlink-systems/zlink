@@ -37,10 +37,7 @@ internal static class Scenarios
     private static void SameActor(SessionInfo before, SessionInfo after)
     {
         Require(before.ActorId == after.ActorId, "Actor ID changed.");
-        Require(
-            before.ObjectGeneration == after.ObjectGeneration,
-            "Actor generation changed."
-        );
+        Require(before.ObjectGeneration == after.ObjectGeneration, "Actor generation changed.");
     }
 
     private static void SameState(WorldState expected, WorldState actual, string reason)
@@ -58,43 +55,29 @@ internal static class Scenarios
         string endpoint,
         WorldRun run,
         string[] selected,
+        RunLog log,
         CancellationToken ct
     )
     {
-        var passed = 0;
-        var current = string.Empty;
-        try
+        foreach (var scenario in selected)
         {
-            foreach (var scenario in selected)
+            log.Start(scenario);
+            switch (scenario)
             {
-                current = scenario;
-                switch (scenario)
-                {
-                    case "cross":
-                        await CrossAsync(endpoint, run, ct);
-                        break;
-                    case "border":
-                        await BorderAsync(endpoint, run, ct);
-                        break;
-                    case "reconnect":
-                        await ReconnectAsync(endpoint, run, ct);
-                        break;
-                    case "update":
-                        await UpdateAsync(endpoint, run, ct);
-                        break;
-                }
-                Console.WriteLine($"✓ {scenario}");
-                passed++;
+                case "cross":
+                    await CrossAsync(endpoint, run, ct);
+                    break;
+                case "border":
+                    await BorderAsync(endpoint, run, ct);
+                    break;
+                case "reconnect":
+                    await ReconnectAsync(endpoint, run, ct);
+                    break;
+                case "update":
+                    await UpdateAsync(endpoint, run, ct);
+                    break;
             }
-        }
-        catch
-        {
-            Console.WriteLine($"✗ {current}");
-            throw;
-        }
-        finally
-        {
-            Console.WriteLine($"Scenarios: {passed}/{selected.Length} passed");
+            log.Pass(scenario);
         }
     }
 
@@ -114,17 +97,24 @@ internal static class Scenarios
         );
 
         var tooLarge = await client.MoveRejectedAsync(ZonePositionDomain.MaxStep + 1, 1, ct);
-        Require(tooLarge.Reason == "step-too-large" && tooLarge.RetryAfterMs == 0,
-            "MaxStep rejection did not return step-too-large.");
+        Require(
+            tooLarge.Reason == "step-too-large" && tooLarge.RetryAfterMs == 0,
+            "MaxStep rejection did not return step-too-large."
+        );
         var unchanged = await client.StateAsync(ct);
         SameState(before, unchanged, "step-too-large rejection");
 
         var first = await client.MoveWithBudgetRetryAsync(2, 1, ct);
-        Require(first.X == 296 && first.Sequence == 1, "The first server-calculated move was incorrect.");
+        Require(
+            first.X == 296 && first.Sequence == 1,
+            "The first server-calculated move was incorrect."
+        );
         var after = await client.MoveWithBudgetRetryAsync(ZonePositionDomain.MaxStep, 2, ct);
         var stale = await client.MoveRejectedAsync(ZonePositionDomain.MaxStep, 2, ct);
-        Require(stale.Reason == "stale-sequence" && stale.RetryAfterMs == 0,
-            "Accepted movement sequence was not rejected as stale.");
+        Require(
+            stale.Reason == "stale-sequence" && stale.RetryAfterMs == 0,
+            "Accepted movement sequence was not rejected as stale."
+        );
         SameState(after, await client.StateAsync(ct), "stale-sequence rejection");
         SameActor(identity, await client.SessionAsync(ct));
         Require(
@@ -140,8 +130,10 @@ internal static class Scenarios
             new EnterZone(new Position(307), 3, 0),
             ct
         );
-        Require(forbidden.Reason == "packet-not-allowed" && forbidden.RetryAfterMs == 0,
-            "Session relayed an internal packet.");
+        Require(
+            forbidden.Reason == "packet-not-allowed" && forbidden.RetryAfterMs == 0,
+            "Session relayed an internal packet."
+        );
         SameState(continued, await client.StateAsync(ct), "packet-not-allowed rejection");
 
         await using var edge = await GameClient.ConnectAsync(
@@ -152,8 +144,10 @@ internal static class Scenarios
         );
         var atEdge = await edge.JoinAsync(GameNames.WorldWidth - 1, ct);
         var outside = await edge.MoveRejectedAsync(1, 1, ct);
-        Require(outside.Reason == "outside-world" && outside.RetryAfterMs == 0,
-            "World boundary rejection did not return outside-world.");
+        Require(
+            outside.Reason == "outside-world" && outside.RetryAfterMs == 0,
+            "World boundary rejection did not return outside-world."
+        );
         SameState(atEdge, await edge.StateAsync(ct), "outside-world rejection");
 
         var dungeon = await client.DungeonAsync("dungeon-" + Guid.NewGuid().ToString("N"), ct);
@@ -192,15 +186,15 @@ internal static class Scenarios
 
         var movedTask = observer
             .Connector.WaitFor<PlayerMoved>()
-            .Where(message => message.Payload.PlayerId == source.PlayerId && message.Payload.Sequence == 1)
+            .Where(message =>
+                message.Payload.PlayerId == source.PlayerId && message.Payload.Sequence == 1
+            )
             .Timeout(TimeSpan.FromSeconds(10))
             .Async(ct);
         var moved = await source.MoveWithBudgetRetryAsync(-1, 1, ct);
         var border = (await movedTask).Payload;
         Require(
-            moved.X == 298
-                && border.Position.X == moved.X
-                && border.Sequence == moved.Sequence,
+            moved.X == 298 && border.Position.X == moved.X && border.Sequence == moved.Sequence,
             "Adjacent Zone did not observe the authoritative border movement."
         );
 
@@ -221,8 +215,10 @@ internal static class Scenarios
         var left = (await leftTask).Payload;
         var reappeared = (await reappearedTask).Payload;
         Require(left.Reason == PlayerLeftReason.LeftZone, "Zone departure used the wrong reason.");
-        Require(crossed.ZoneId == "zone-4" && reappeared.Position.X == 300,
-            "Zone arrival was not observed by the destination Zone.");
+        Require(
+            crossed.ZoneId == "zone-4" && reappeared.Position.X == 300,
+            "Zone arrival was not observed by the destination Zone."
+        );
 
         var sameZoneMovedTask = observer
             .Connector.WaitFor<PlayerMoved>()
@@ -248,17 +244,23 @@ internal static class Scenarios
             ct
         );
         var adjacentState = await adjacentObserver.JoinAsync(299, ct);
-        Require(adjacentState.NodeId == "zoneA",
-            "The out-of-range observer did not start in the adjacent Zone.");
+        Require(
+            adjacentState.NodeId == "zoneA",
+            "The out-of-range observer did not start in the adjacent Zone."
+        );
         var reenteredBorderTask = adjacentObserver
             .Connector.WaitFor<PlayerMoved>()
-            .Where(message => message.Payload.PlayerId == source.PlayerId && message.Payload.Sequence == 4)
+            .Where(message =>
+                message.Payload.PlayerId == source.PlayerId && message.Payload.Sequence == 4
+            )
             .Timeout(TimeSpan.FromSeconds(10))
             .Async(ct);
         var reenteredBorder = await source.MoveWithBudgetRetryAsync(-1, 4, ct);
         var observedBorder = (await reenteredBorderTask).Payload;
-        Require(reenteredBorder.X == 300 && observedBorder.Position.X == 300,
-            "The adjacent Zone did not observe the player re-entering the border band.");
+        Require(
+            reenteredBorder.X == 300 && observedBorder.Position.X == 300,
+            "The adjacent Zone did not observe the player re-entering the border band."
+        );
 
         var outOfRangeTask = adjacentObserver
             .Connector.WaitFor<PlayerLeft>()
@@ -270,8 +272,10 @@ internal static class Scenarios
             .Async(ct);
         var leftBorder = await source.MoveWithBudgetRetryAsync(10, 5, ct);
         var outOfRange = (await outOfRangeTask).Payload;
-        Require(leftBorder.X == 310 && outOfRange.Reason == PlayerLeftReason.OutOfRange,
-            "The adjacent Zone did not observe PlayerLeft(out-of-range) after inward movement.");
+        Require(
+            leftBorder.X == 310 && outOfRange.Reason == PlayerLeftReason.OutOfRange,
+            "The adjacent Zone did not observe PlayerLeft(out-of-range) after inward movement."
+        );
 
         var disconnectedTask = observer
             .Connector.WaitFor<PlayerLeft>()
@@ -311,8 +315,10 @@ internal static class Scenarios
                 && before.ZoneId == after.ZoneId,
             "Reconnect overwrote authoritative world state."
         );
-        Require(session != (await reconnect.SessionAsync(ct)).SessionId,
-            "Reconnect reused the old physical session.");
+        Require(
+            session != (await reconnect.SessionAsync(ct)).SessionId,
+            "Reconnect reused the old physical session."
+        );
         var moved = await reconnect.MoveWithBudgetRetryAsync(1, 2, ct);
         SameActor(identity, await reconnect.SessionAsync(ct));
         Require(moved.Sequence == 2, "Movement did not continue after reconnect.");
@@ -366,8 +372,7 @@ internal static class Scenarios
         var after = await client.MoveWithBudgetRetryAsync(299 - state.X, sequence + 1, ct);
         SameActor(identity, await client.SessionAsync(ct));
         Require(
-            after.NodeId == "zoneB"
-                && !client.Disconnected,
+            after.NodeId == "zoneB" && !client.Disconnected,
             "Replacement interrupted the relocated player."
         );
         var dungeon = await client.DungeonAsync("after-update-" + Guid.NewGuid().ToString("N"), ct);

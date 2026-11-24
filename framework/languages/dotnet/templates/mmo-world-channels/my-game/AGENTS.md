@@ -2,6 +2,16 @@
 
 ## Rules for AI
 
+### Reference project
+
+This template is a reference. To build a new game, create a new project and design its nodes, Spots, Actors and messages for that game, using this template's structure and rules as reference; do not rename or edit this template in place into the game.
+
+### Server and e2e commands
+
+Run `./run-server.sh` or `.\run-server.cmd` to start Redis and the nodes in the foreground. Run `./run-e2e.sh` or `.\run-e2e.cmd` in another terminal to attach automatically. With the server stopped, run-e2e uses isolated Docker processes. Read per-node stdout, stderr, message flow, and failure detail under `.logs/run-<id>/`.
+
+### Node and game design
+
 Every server process in this project is a stateful ZLink node. Before writing code, decide which kind you are editing.
 
 - A play node hosts Spots. A session-bound Actor owns the player's state, and a Spot owns shared state. Load it once on connect; do not read the database while handling a request.
@@ -111,7 +121,7 @@ Requests in the example game follow this path. Reading the code along this path 
 
 ## Extending the MMORPG domain
 
-Extend this template's domain to build an MMORPG server.
+Use this template's domain as a reference when designing an MMORPG server in a separate project.
 
 1. Add a rule beside the state it changes. `server/MyGame.Channel/Domain/GoldBalance.cs` owns gold limits and earn timing; `server/MyGame.Channel/Infrastructure/ZLink/ZoneSpot.cs` owns the connected player IDs for one channel.
 2. Add shared typed messages and numeric limits in `server/MyGame.Shared/Contracts.cs`.
