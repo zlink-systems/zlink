@@ -581,6 +581,14 @@ bool maintenance_runtime_t::register_terminal_source (
 task_t<stateful_error_t> maintenance_runtime_t::abort_relocation_before_cutover (
   std::shared_ptr<relocation_terminal_state_t> state)
 {
+    if (!_authority->cancel_source_capture (source_fence (*state))) {
+        std::vector<object_ref_t> participants;
+        for (const auto &sealed : state->seal_attempt.seal.participants)
+            participants.push_back (sealed.owner);
+        const auto settlement = co_await settle_relocation (state, std::move (participants), true);
+        if (settlement.outcome != relocation_authority_t::source_preserved)
+            co_return stateful_error_t::generation_stale;
+    }
     const auto aborted =
       co_await _objects.abort_relocation_before_cutover (state->seal_attempt.seal.token);
     if (aborted == stateful_error_t::none) {
@@ -810,27 +818,35 @@ void maintenance_runtime_t::retain_message_follow (
       });
 }
 
+relocation_authority_fence_t
+maintenance_runtime_t::source_fence (const relocation_terminal_state_t &state)
+{
+    const auto &coordinator = state.context.coordinator;
+    return {state.source.kind,
+            state.source.key,
+            coordinator.expected_authority_store_version,
+            {coordinator.owner_id, static_cast<std::int64_t> (coordinator.lease_generation)},
+            state.target_owner,
+            state.context.relocation,
+            coordinator.node_routing_id,
+            coordinator.node_generation,
+            state.context.target_attempt_generation};
+}
+
 task_t<source_relocation_settlement_t>
 maintenance_runtime_t::settle_relocation (std::shared_ptr<relocation_terminal_state_t> state,
-                                          std::vector<object_ref_t> participants)
+                                          std::vector<object_ref_t> participants,
+                                          bool before_cutover)
 {
     /* Source authority settlement (28 §4.4, 01 §6.1/§10), the only place that
      * ends a unit after relay-ready: the cutover submit terminal is neither
      * success nor failure. Before the Restore deadline the source reads the
      * primary authority row; from it on, it runs the Preserve fence. An
      * indeterminate result repeats under the Store-failure policy. */
-    const auto &primary = relocation_primary (participants);
-    const auto &coordinator = state->context.coordinator;
-    const relocation_authority_fence_t fence{
-      primary.kind,
-      primary.key,
-      coordinator.expected_authority_store_version,
-      location_owner_token_t{coordinator.owner_id,
-                             static_cast<std::int64_t> (coordinator.lease_generation)},
-      state->target_owner,
-      state->context.relocation};
+    const auto fence = source_fence (*state);
     for (;;) {
-        const auto preserve = std::chrono::steady_clock::now () >= state->context.restore_deadline;
+        const auto preserve =
+          before_cutover || std::chrono::steady_clock::now () >= state->context.restore_deadline;
         const auto settled = _authority->settle_source_relocation (fence, participants, preserve);
         if (settled.outcome != relocation_authority_t::unsettled)
             co_return settled;
@@ -1102,8 +1118,17 @@ maintenance_runtime_t::relocate_encode (std::shared_ptr<relocation_terminal_stat
         failed.emplace (relocation_terminal_t::blocked,
                         relocation_reason_t::payload_bound_exceeded);
     if (!failed) {
-        state->metric->record_bytes (state->payload.size ());
-        co_return true;
+        std::vector<object_ref_t> participants;
+        for (const auto &sealed : state->seal_attempt.seal.participants)
+            participants.push_back (sealed.owner);
+        if (_authority->capture_source (participants, source_fence (*state), state->target_node_id,
+                                        state->context.target_node_generation,
+                                        state->context.application_version)) {
+            state->metric->record_bytes (state->payload.size ());
+            co_return true;
+        }
+        failed.emplace (relocation_terminal_t::store_failed,
+                        relocation_reason_t::store_write_failed);
     }
     (void) co_await abort_relocation_before_cutover (state);
     state->result.emplace (finish ({failed->first, failed->second, std::nullopt}));
@@ -1325,6 +1350,9 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
     }
     auto state = std::make_shared<relocation_terminal_state_t> ();
     state->source = relocation_primary (sources);
+    state->target_node_id = target_node_id;
+    state->target_owner = target_owner;
+    state->encoded_upper_bound = encoded_upper_bound;
     state->metric.emplace (persisted_context, state->source.kind, state->source.key);
     const auto seal_attempt = co_await _objects.try_seal_relocation_aggregate (
       sources, cancellation, [this, &persisted_context] {
@@ -1347,27 +1375,8 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
     state->seal_attempt = seal_attempt;
     state->sealed_at = std::chrono::steady_clock::now ();
     state->pending_unit_token = begin_pending_relocation_unit ();
-    try {
-        if (persisted_context.augment_frozen
-            && !persisted_context.augment_frozen (state->seal_attempt.seal.participants)) {
-            (void) co_await abort_relocation_before_cutover (state);
-            co_return aggregate_relocation_result_t{
-              relocation_terminal_t::blocked, relocation_reason_t::restore_failed, {}};
-        }
-        state->payload = encode_envelope (
-          state->seal_attempt.seal.participants, persisted_context.relocation,
-          persisted_context.application_version, persisted_context.session_bindings);
-        state->manifest = plan_relocation_payload (state->payload, state->effective_chunk_limit);
-        state->metric->record_bytes (state->payload.size ());
-    }
-    catch (...) {
-    }
-    if (state->payload.empty () || state->payload.size () > encoded_upper_bound
-        || state->manifest.chunk_count > protocol::relocationChunkCount) {
-        (void) co_await abort_relocation_before_cutover (state);
-        co_return aggregate_relocation_result_t{
-          relocation_terminal_t::blocked, relocation_reason_t::payload_bound_exceeded, {}};
-    }
+    if (!co_await relocate_encode (state))
+        co_return aggregate_relocation_result_t{state->result->terminal, state->result->reason, {}};
     state->budget_reserved = std::min (state->effective_chunk_limit, effective_in_flight_budget ());
     co_await acquire_transfer_budget (state->budget_reserved);
     auto prepared = std::make_shared<task_t<relocation_reason_t>> (

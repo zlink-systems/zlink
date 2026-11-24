@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(zlink_framework_cpp VERSION 0.32.0 LANGUAGES C CXX)
+project(zlink_framework_cpp VERSION 0.34.0 LANGUAGES C CXX)
 add_compile_definitions($<$<CONFIG:Debug>:ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD>)
 set(ZLINK_FRAMEWORK_CPP_DIR "${CMAKE_CURRENT_LIST_DIR}")
 include("${ZLINK_FRAMEWORK_CPP_DIR}/cmake/zlink-cpp-project-defaults.cmake")
@@ -36,9 +36,23 @@ if(ZLINK_FRAMEWORK_CPP_TEST_PROBES AND ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
   message(FATAL_ERROR
     "ZLINK_FRAMEWORK_CPP_TEST_PROBES requires ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK=OFF")
 endif()
-find_package(protobuf CONFIG QUIET)
-if(NOT protobuf_FOUND)
-  find_package(Protobuf MODULE REQUIRED)
+if(ZLINK_FRAMEWORK_CPP_CONAN_PROTOBUF)
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${ZLINK_FRAMEWORK_CPP_CONAN_PROTOBUF}")
+  file(READ "${ZLINK_FRAMEWORK_CPP_CONAN_PROTOBUF}" _zlink_conan_protobuf)
+  string(JSON _zlink_protoc GET "${_zlink_conan_protobuf}" protoc)
+  string(JSON _zlink_protobuf_version GET "${_zlink_conan_protobuf}" version)
+  get_filename_component(protobuf_DIR "${ZLINK_FRAMEWORK_CPP_CONAN_PROTOBUF}" DIRECTORY)
+  # The Conan CONFIG uses its PATH search only if protobuf::protoc is undefined.
+  add_executable(protobuf::protoc IMPORTED)
+  set_property(TARGET protobuf::protoc PROPERTY IMPORTED_LOCATION "${_zlink_protoc}")
+  find_package(protobuf "${_zlink_protobuf_version}" EXACT CONFIG REQUIRED
+    PATHS "${protobuf_DIR}" NO_DEFAULT_PATH)
+else()
+  find_package(protobuf CONFIG QUIET)
+  if(NOT protobuf_FOUND)
+    find_package(Protobuf MODULE REQUIRED)
+  endif()
 endif()
 option(ZLINK_FRAMEWORK_CPP_STAGE_STANDALONE_DEPENDENCIES
   "Stage Core and the C++ binding in a standalone Framework install" ON)
@@ -219,6 +233,7 @@ set(ZLINK_FRAMEWORK_CPP_M6A_RUNTIME_SOURCES
   framework/src/runtime/channels/channel_reply_writer.cpp
   framework/src/runtime/messaging/client_call_codec.cpp
   framework/src/runtime/messaging/envelope_codec.cpp
+  framework/src/runtime/messaging/request_completion_reply_status.cpp
   framework/src/runtime/messaging/request_failure_mapper.cpp
   framework/src/runtime/codecs/serializer.cpp
   framework/src/runtime/diagnostics/flow_context.cpp)
@@ -1887,6 +1902,13 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       TIMEOUT 30)
   endfunction()
 
+  add_zlink_framework_test(test_cpp_framework_spot_admission_rejection
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_spot_admission_rejection.cpp
+    "framework-unit;spot" unit)
+  target_use_zlink_gtest_main(test_cpp_framework_spot_admission_rejection)
+  target_include_directories(test_cpp_framework_spot_admission_rejection PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+
   add_zlink_framework_test(test_cpp_framework_actor_late_result
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_late_result.cpp
     "framework-unit;actor")
@@ -2677,6 +2699,18 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_include_directories(test_cpp_framework_shared_serial_turn PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
+    test_cpp_framework_yield_terminal
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_yield_terminal.cpp
+    "framework-unit;framework-contract;framework-regression;execution" contract)
+  target_use_zlink_gtest_main(test_cpp_framework_yield_terminal)
+  add_zlink_framework_test(
+    test_cpp_framework_yield_resume_admission
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_yield_resume_admission.cpp
+    "framework-unit;framework-contract;framework-regression;execution" contract)
+  target_use_zlink_gtest_main(test_cpp_framework_yield_resume_admission)
+  target_include_directories(test_cpp_framework_yield_resume_admission PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
     test_cpp_framework_serializer_registry
     tests/Zlink.Framework.UnitTests/test_cpp_framework_serializer_registry.cpp
     "framework-unit;serializer")
@@ -2730,6 +2764,22 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     TIER unit
     TIMEOUT 30)
 
+  add_executable(test_cpp_framework_authority_aggregate_relocation
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_authority_aggregate_relocation.cpp)
+  target_use_zlink_gtest_main(test_cpp_framework_authority_aggregate_relocation)
+  target_link_libraries(test_cpp_framework_authority_aggregate_relocation PRIVATE zlink::framework)
+  target_include_directories(test_cpp_framework_authority_aggregate_relocation PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+  target_compile_definitions(test_cpp_framework_authority_aggregate_relocation PRIVATE
+    ZLINK_AUTHORITY_AGGREGATE_RELOCATION_GOLDEN_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/golden/authority-aggregate-relocation-v1.json")
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_authority_aggregate_relocation
+    COMMAND test_cpp_framework_authority_aggregate_relocation
+    LABELS "framework-unit;framework-contract;framework-location"
+    TIER unit
+    TIMEOUT 30)
+
   add_executable(test_cpp_framework_opaque_store_providers
     tests/Zlink.Framework.UnitTests/test_cpp_framework_opaque_store_location_records.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_opaque_store_relocation_blobs.cpp
@@ -2773,7 +2823,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     TIMEOUT 30)
 
   add_executable(test_cpp_framework_discarded_authority
-    tests/Zlink.Framework.UnitTests/test_cpp_framework_discarded_authority.cpp)
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_discarded_authority.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_owner_token_release_wait.cpp)
   target_compile_features(test_cpp_framework_discarded_authority PRIVATE cxx_std_20)
   target_link_zlink_test_harness(test_cpp_framework_discarded_authority)
   target_use_zlink_gtest_main(test_cpp_framework_discarded_authority)
@@ -3099,6 +3150,24 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_remote_duplicate_bind_replacement
     COMMAND test_cpp_framework_same_node_duplicate_bind remote
+    LABELS "framework-integration;framework-contract;stream;stream-session"
+    TIER contract
+    TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_bind_missing_authority
+    COMMAND test_cpp_framework_same_node_duplicate_bind missing-authority
+    LABELS "framework-integration;framework-contract;stream;stream-session"
+    TIER contract
+    TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_bind_generation_mismatch
+    COMMAND test_cpp_framework_same_node_duplicate_bind generation-mismatch
+    LABELS "framework-integration;framework-contract;stream;stream-session"
+    TIER contract
+    TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_bind_stale_location
+    COMMAND test_cpp_framework_same_node_duplicate_bind stale-location
     LABELS "framework-integration;framework-contract;stream;stream-session"
     TIER contract
     TIMEOUT 30)

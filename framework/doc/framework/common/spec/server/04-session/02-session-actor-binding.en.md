@@ -1091,6 +1091,7 @@ sessions from sharing the same business result.
 | Condition | Result |
 |---|---|
 | The `ActorRef` location is stale and there's no Message Follow route. | Ends with `Unavailable`. |
+| The Actor the `ActorRef` names has no authority (it was never created, or a destroy removed it). | Ends with `NotFound`. It is distinct from `Unavailable` (no route), and retrying with the same ref doesn't succeed ([Framework API §19](../00-foundation/06-framework-api.en.md#19-error-kinds)). |
 | `ObjectGeneration` differs. | Ends with `InvalidOperation`. |
 | The Actor is in a relocation pre-commit seal state. | Ends with `Unavailable`. |
 | There's no Actor factory. | Ends with `NotFound`. Because the type is not registered, retrying cannot resolve it. |

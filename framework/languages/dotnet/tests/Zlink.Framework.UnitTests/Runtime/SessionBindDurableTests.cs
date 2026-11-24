@@ -322,4 +322,71 @@ public sealed partial class EntrySpotActorDispatchTests
             await runtime.StopAsync(CancellationToken.None);
         }
     }
+
+    [Theory]
+    [InlineData("different-generation", ZLinkFrameworkErrorKind.InvalidOperation)]
+    [InlineData("stale-location", ZLinkFrameworkErrorKind.Unavailable)]
+    [InlineData("missing-authority", ZLinkFrameworkErrorKind.NotFound)]
+    public async Task SessionBind_ClassifiesAuthorityAndRouteFailures(
+        string scenario,
+        ZLinkFrameworkErrorKind expected
+    )
+    {
+        var node = new CapturingSpotNode();
+        var sentCount = 0;
+        node.CanonicalBindHandler = (_, _, _) =>
+        {
+            sentCount++;
+            return ValueTask.FromException<Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.RequestSpecificTailCase2?>(
+                new ZLinkFrameworkException(ZLinkFrameworkErrorKind.Unavailable, "Not expected.")
+            );
+        };
+        var (runtime, actor) = await CreateStartedRuntimeAsync(node);
+        try
+        {
+            var submitted = scenario switch
+            {
+                "missing-authority" => new ActorRef(
+                    "missing-actor",
+                    actor.Generation,
+                    "entry",
+                    actor.NodeRid
+                ),
+                "different-generation" => new ActorRef(
+                    actor.ActorId,
+                    actor.Generation + 1,
+                    "entry",
+                    actor.NodeRid
+                ),
+                _ => new ActorRef(
+                    actor.ActorId,
+                    actor.Generation,
+                    "entry",
+                    RoutingId.From("stale-location-node")
+                ),
+            };
+            var context = new ZLinkSessionContext(
+                runtime,
+                new RetainedOutboundCapturingStream(RoutingId.From("generation-session")),
+                new RelaySessionHandlerRegistry(),
+                static () => ValueTask.CompletedTask,
+                static _ => ValueTask.CompletedTask
+            );
+
+            var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await context.ActorCoordinator.BindActorAsync(
+                    context,
+                    submitted,
+                    CancellationToken.None
+                )
+            );
+
+            Assert.Equal(expected, error.Kind);
+            Assert.Equal(0, sentCount);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
 }

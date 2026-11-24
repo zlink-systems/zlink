@@ -22,7 +22,12 @@ import {
 import { ZLinkConfigurationException } from '../configuration';
 import type { ZLinkRuntimeMetrics } from '../diagnostics';
 import { runWithOutboundFlow } from '../diagnostics/flow-context';
-import { flowIfEnabled, type ZLinkMessageFlowTracer } from '../diagnostics';
+import {
+  flowIfEnabled,
+  isRelocationDebugEnabled,
+  traceNodeRequestDeadline,
+  type ZLinkMessageFlowTracer
+} from '../diagnostics';
 import {
   ZLinkDispatchErrorSurface,
   ZLinkDispatchMessageKind,
@@ -291,6 +296,8 @@ interface ZLinkChannelTransportRuntime {
 }
 
 export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
+  private readonly requestDeadlineDiagnostics = isRelocationDebugEnabled();
+
   constructor(
     private readonly manager: () => ZLinkChannelTransportRuntime | undefined,
     private readonly routeChannelPredicate:
@@ -509,6 +516,8 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
       timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       signal,
       (requestOperation, receiver) => {
+        if (this.requestDeadlineDiagnostics)
+          requestOperation.nodeRequestStartedMs = performance.now();
         requestOperation.mapCaller(
           (value) => {
             this.traceNodeRequest(
@@ -522,6 +531,13 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
             return value;
           },
           (error) => {
+            if (
+              requestOperation.nodeRequestStartedMs !== undefined &&
+              error instanceof ZLinkFrameworkException &&
+              error.kind === ZLinkFrameworkErrorKind.DeadlineExceeded
+            ) {
+              traceNodeRequestDeadline(requestOperation, meshName, targetNodeRid, correlationId);
+            }
             if (!isRemoteChannelErrorReply(error))
               this.traceNodeRequest(
                 ZLinkMessageFlowOutcome.ReplyReceived,

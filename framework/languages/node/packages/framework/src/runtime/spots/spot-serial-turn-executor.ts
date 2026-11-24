@@ -1,4 +1,5 @@
 import {
+  bindLifecycleCallerSpotTurn,
   captureZLinkSpotSerialTurn,
   isCurrentZLinkSpotSerialTurn,
   runZLinkSpotSerialTurn,
@@ -19,6 +20,7 @@ import {
   type ZLinkSerialWorkRecord
 } from '../execution/serial-execution-queue';
 import type { ZLinkSerialLifecycleContext } from '../execution/serial-execution-queue';
+import { bindZLinkActorExecution } from '../actors/actor-execution-context';
 import { ZLinkActorSerialExecutor } from '../actors/actor-mailbox';
 
 export type ZLinkSpotApplicationTurnContext = ZLinkExecutionBarrierClaim & {
@@ -33,7 +35,7 @@ export class ZLinkSpotSerialTurnExecutor {
   static closingAdmissionError(): ZLinkFrameworkException {
     return createInternalFrameworkException(
       ZLinkFrameworkInternalErrorKind.RequestTargetNotFound,
-      'Spot incarnation is closing (committed Close).'
+      'SPOT is closing.'
     );
   }
   private readonly scheduler: ZLinkSerialExecutionQueue;
@@ -51,7 +53,9 @@ export class ZLinkSpotSerialTurnExecutor {
   ) {
     this.scheduler = new ZLinkSerialExecutionQueue(
       (record) => this.runQueuedRecord(record),
-      schedulerOptions
+      schedulerOptions,
+      undefined,
+      bindZLinkActorExecution
     );
   }
 
@@ -111,7 +115,7 @@ export class ZLinkSpotSerialTurnExecutor {
     return instanceIntent
       ? createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.SpotMoving,
-          'The Spot incarnation released its authority before admitting this Instance intent message.'
+          'The Instance Spot incarnation released its authority.'
         )
       : ZLinkSpotSerialTurnExecutor.closingAdmissionError();
   }
@@ -239,10 +243,12 @@ export class ZLinkSpotSerialTurnExecutor {
     }
     const submit = (claim?: ZLinkExecutionBarrierClaim): Promise<T> => {
       try {
-        return this.scheduler.submitLifecycleOperation(() => {
-          requireAdmission();
-          return operation();
-        });
+        return this.scheduler.submitLifecycleOperation(
+          bindLifecycleCallerSpotTurn(() => {
+            requireAdmission();
+            return operation();
+          })
+        );
       } catch (error) {
         return Promise.reject(error);
       } finally {

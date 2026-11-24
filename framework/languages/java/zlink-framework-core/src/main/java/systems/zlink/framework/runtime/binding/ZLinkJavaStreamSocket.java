@@ -23,11 +23,13 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamSocket
 import systems.zlink.framework.runtime.internal.backend.ZLinkSocketMonitorDrainLoop;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
+import systems.zlink.framework.runtime.streams.ZLinkStreamActorControl;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
 import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 import systems.zlink.runtime.framework.FrameworkStreamOperations;
 
+import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -39,16 +41,22 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
 final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJavaSocketBacked {
     private static final Logger LOGGER = Logger.getLogger(ZLinkJavaStreamSocket.class.getName());
     private final StreamSocket socket;
+    private final FrameworkStreamOperations.Access streamAdmission;
     private final ZLinkJavaRawMeshNode meshNode;
     private final BoundSessionSink boundSessionSink;
     private final BoundSessionLifecycle boundSessionLifecycle;
     private final Map<BindingKey, SessionBinding> bindings = new ConcurrentHashMap<>();
+    // Core admission waits belong to the affected Session/Actor binding, not this socket owner.
+    private final Map<BindingEgressKey, ZLinkStateLane> bindingEgressLanes =
+            new ConcurrentHashMap<>();
     private final AtomicLong nextBoundSessionSequence = new AtomicLong(1);
     private final AtomicLong nextBoundSessionRequestSequence = new AtomicLong(1);
     private final AtomicBoolean closed = new AtomicBoolean();
@@ -79,13 +87,37 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
         this(socket, meshNode, null, null, stateLane);
     }
 
+    ZLinkJavaStreamSocket(
+            StreamSocket socket,
+            ZLinkStateLane stateLane,
+            FrameworkStreamOperations.Access streamAdmission) {
+        this(socket, null, null, null, stateLane, streamAdmission);
+    }
+
     private ZLinkJavaStreamSocket(
             StreamSocket socket,
             ZLinkJavaRawMeshNode meshNode,
             BoundSessionSink boundSessionSink,
             BoundSessionLifecycle boundSessionLifecycle,
             ZLinkStateLane stateLane) {
+        this(
+                socket,
+                meshNode,
+                boundSessionSink,
+                boundSessionLifecycle,
+                stateLane,
+                FrameworkStreamOperations::send);
+    }
+
+    private ZLinkJavaStreamSocket(
+            StreamSocket socket,
+            ZLinkJavaRawMeshNode meshNode,
+            BoundSessionSink boundSessionSink,
+            BoundSessionLifecycle boundSessionLifecycle,
+            ZLinkStateLane stateLane,
+            FrameworkStreamOperations.Access streamAdmission) {
         this.socket = socket;
+        this.streamAdmission = Objects.requireNonNull(streamAdmission, "streamAdmission");
         this.socket.options().recvMode(StreamRecvMode.PACKET);
         this.meshNode = meshNode;
         this.boundSessionSink = boundSessionSink;
@@ -174,9 +206,44 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
     public void disconnectPeer(RoutingId routingId) {
         inStateLane(
                 () -> {
+                    retireBindingEgressLanes(routingId);
+                    // Route removal completes this peer's pending sends.
                     socket.disconnectRid(routingId);
                     return null;
                 });
+    }
+
+    @Override
+    public CompletionStage<Void> disconnectBoundSessionPeerAsync(
+            RoutingId routingId, int actorSlot) {
+        return disconnectBoundSessionPeerAsync(routingId, actorSlot, () -> true);
+    }
+
+    @Override
+    public CompletionStage<Void> disconnectBoundSessionPeerAsync(
+            RoutingId routingId, int actorSlot, BooleanSupplier requestPending) {
+        BindingEgressKey key = new BindingEgressKey(routingId, actorSlot);
+        ZLinkStateLane lane =
+                bindingEgressLanes.computeIfAbsent(key, ignored -> newBindingEgressLane());
+        CompletionStage<Void> disconnected =
+                enqueueBindingEgress(
+                        lane,
+                        () -> {
+                            if (!requestPending.getAsBoolean())
+                                return CompletableFuture.completedFuture(null);
+                            return stateLane.runAsync(
+                                    () -> {
+                                        socket.disconnectRid(routingId);
+                                        return null;
+                                    });
+                        },
+                        () -> {});
+        retireBindingEgressLane(key, lane);
+        return disconnected;
+    }
+
+    private ZLinkStateLane newBindingEgressLane() {
+        return stateLane.newSiblingLane();
     }
 
     @Override
@@ -224,6 +291,9 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
             event.routingId()
                     .ifPresent(
                             routingId -> {
+                                if (eventType == MonitorEventType.DISCONNECTED) {
+                                    retireBindingEgressLanes(routingId);
+                                }
                                 try {
                                     handler.handle(
                                             routingId,
@@ -321,11 +391,14 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
     public CompletionStage<Void> sendBoundSessionPushAsync(
             RoutingId routingId, int actorSlot, List<Message> parts) {
         Message frame = ZLinkJavaStreamFraming.withActorSlot(parts, actorSlot);
-        try {
-            return sendBoundSessionPushAsync(routingId, List.of(frame));
-        } finally {
-            frame.close();
+        if (boundSessionSink != null) {
+            try {
+                return sendBoundSessionPushAsync(routingId, List.of(frame));
+            } finally {
+                frame.close();
+            }
         }
+        return submitOwnedStreamFrameAsync(routingId, actorSlot, frame);
     }
 
     @Override
@@ -354,7 +427,13 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
     public CompletionStage<Void> admitSessionControl(
             RoutingId routingId, ZLinkStreamHeader header, List<Message> parts) {
         Message frame;
+        BindingEgressKey binding;
         try {
+            binding =
+                    header.kind() == ZLinkStreamMessageKind.CONTROL
+                                    && ZLinkStreamActorControl.BOUND.equals(header.name())
+                            ? boundEgressKey(routingId, parts.getFirst().dataBuffer())
+                            : null;
             frame = ZLinkJavaStreamFraming.frame(header, parts);
         } catch (RuntimeException failure) {
             return CompletableFuture.failedFuture(failure);
@@ -362,17 +441,52 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
         try {
             return inStateLane(
                     () -> {
-                        try {
-                            return FrameworkStreamOperations.send(
-                                    socket, routingId, List.of(frame), null);
-                        } finally {
-                            frame.close();
+                        if (binding != null) {
+                            ZLinkStateLane previous = previousBindingEgressLane(binding);
+                            ZLinkStateLane lane =
+                                    bindingEgressLanes.computeIfAbsent(
+                                            binding, ignored -> newBindingEgressLane());
+                            if (previous != null) {
+                                CompletionStage<Void> drained = previous.closeAsync();
+                                return enqueueBindingEgress(
+                                        lane,
+                                        () ->
+                                                drained.thenCompose(
+                                                        ignored ->
+                                                                submitOnSocketLane(
+                                                                        routingId, frame)),
+                                        frame::close);
+                            }
                         }
+                        return submitOnSocket(routingId, frame);
                     });
         } catch (RuntimeException | Error failure) {
             frame.close();
             throw failure;
         }
+    }
+
+    private static BindingEgressKey boundEgressKey(RoutingId routingId, ByteBuffer payload) {
+        return new BindingEgressKey(
+                routingId,
+                ZLinkStreamActorControl.actorSlot(payload),
+                ZLinkStreamActorControl.boundActorId(payload));
+    }
+
+    private ZLinkStateLane previousBindingEgressLane(BindingEgressKey binding) {
+        int previousSlot = 0;
+        ZLinkStateLane previousLane = null;
+        for (var entry : bindingEgressLanes.entrySet()) {
+            BindingEgressKey candidate = entry.getKey();
+            if (candidate.actorSlot() > previousSlot
+                    && candidate.actorSlot() < binding.actorSlot()
+                    && candidate.sessionRid().equals(binding.sessionRid())
+                    && binding.actorId().equals(candidate.actorId())) {
+                previousSlot = candidate.actorSlot();
+                previousLane = entry.getValue();
+            }
+        }
+        return previousLane;
     }
 
     @Override
@@ -409,31 +523,124 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
     private CompletionStage<Void> submitStreamFrameAsync(
             RoutingId routingId, ZLinkStreamHeader header, List<Message> parts) {
         Message frame;
+        int actorSlot;
+        boolean unbound =
+                header.kind() == ZLinkStreamMessageKind.CONTROL
+                        && ZLinkStreamActorControl.UNBOUND.equals(header.name());
         try {
+            actorSlot =
+                    unbound
+                            ? ZLinkStreamActorControl.actorSlot(parts.getFirst().dataBuffer())
+                            : header.actorSlot().orElse(0);
             frame = ZLinkJavaStreamFraming.frame(header, parts);
         } catch (RuntimeException failure) {
             return CompletableFuture.failedFuture(failure);
         }
-        return submitOwnedStreamFrameAsync(routingId, frame);
+        BindingEgressKey key = new BindingEgressKey(routingId, actorSlot);
+        return submitOwnedStreamFrameAsync(key, frame, unbound);
     }
 
     private CompletionStage<Void> submitOwnedStreamFrameAsync(RoutingId routingId, Message frame) {
+        return submitOwnedStreamFrameAsync(routingId, 0, frame);
+    }
+
+    private CompletionStage<Void> submitOwnedStreamFrameAsync(
+            RoutingId routingId, int actorSlot, Message frame) {
+        return submitOwnedStreamFrameAsync(
+                new BindingEgressKey(routingId, actorSlot), frame, false);
+    }
+
+    private CompletionStage<Void> submitOwnedStreamFrameAsync(
+            BindingEgressKey key, Message frame, boolean retire) {
         try {
+            stateLane.throwIfReentrant();
+        } catch (RuntimeException | Error failure) {
+            frame.close();
+            throw failure;
+        }
+        ZLinkStateLane lane =
+                bindingEgressLanes.computeIfAbsent(key, ignored -> newBindingEgressLane());
+        CompletionStage<Void> submitted =
+                enqueueBindingEgress(
+                        lane, () -> submitOnSocketLane(key.sessionRid(), frame), frame::close);
+        if (retire) {
+            retireBindingEgressLane(key, lane);
+        }
+        return submitted;
+    }
+
+    private CompletionStage<Void> submitOnSocketLane(RoutingId routingId, Message frame) {
+        try {
+            // Start under socket-state ownership, then await only on this binding lane.
             return stateLane
-                    .<CompletionStage<Void>>runAsync(
-                            () -> {
-                                try {
-                                    return FrameworkStreamOperations.send(
-                                            socket, routingId, List.of(frame), null);
-                                } finally {
-                                    frame.close();
-                                }
-                            })
+                    .runAsync(() -> submitOnSocket(routingId, frame))
                     .thenCompose(submission -> submission);
         } catch (RuntimeException | Error failure) {
             frame.close();
             throw failure;
         }
+    }
+
+    private CompletionStage<Void> submitOnSocket(RoutingId routingId, Message frame) {
+        try {
+            return streamAdmission.send(socket, routingId, List.of(frame), null);
+        } finally {
+            frame.close();
+        }
+    }
+
+    private CompletionStage<Void> enqueueBindingEgress(
+            ZLinkStateLane lane,
+            Supplier<? extends CompletionStage<Void>> operation,
+            Runnable rejected) {
+        CompletableFuture<Void> result = new CompletableFuture<>();
+        try {
+            if (!lane.tryPost(
+                    () -> {
+                        if (result.isDone()) {
+                            return CompletableFuture.completedFuture(null);
+                        }
+                        CompletionStage<Void> submitted;
+                        try {
+                            submitted = Objects.requireNonNull(operation.get(), "egress operation");
+                        } catch (RuntimeException | Error failure) {
+                            ZLinkStateLane.publishOutsideLane(
+                                    CompletableFuture.<Void>failedFuture(failure),
+                                    (ignored, terminalFailure) ->
+                                            result.completeExceptionally(terminalFailure));
+                            return result;
+                        }
+                        ZLinkStateLane.publishOutsideLane(
+                                submitted.toCompletableFuture(),
+                                (ignored, failure) -> {
+                                    if (failure == null) result.complete(null);
+                                    else result.completeExceptionally(failure);
+                                });
+                        // Only this binding's FIFO waits for the Core submission terminal.
+                        return result;
+                    })) {
+                rejected.run();
+                result.completeExceptionally(
+                        new IllegalStateException("bound Session egress lane is closed"));
+            }
+        } catch (RuntimeException | Error failure) {
+            rejected.run();
+            result.completeExceptionally(failure);
+        }
+        return result;
+    }
+
+    private void retireBindingEgressLanes(RoutingId routingId) {
+        bindingEgressLanes.forEach(
+                (key, lane) -> {
+                    if (key.sessionRid().equals(routingId)) {
+                        retireBindingEgressLane(key, lane);
+                    }
+                });
+    }
+
+    private void retireBindingEgressLane(BindingEgressKey key, ZLinkStateLane lane) {
+        lane.closeAsync().whenComplete((ignored, failure) -> bindingEgressLanes.remove(key, lane));
     }
 
     @Override
@@ -679,8 +886,11 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
         if (closed.get()) {
             return;
         }
+        // Binding close completes pending sends while their egress lanes are still draining.
         socket.close();
         closed.set(true);
+        bindingEgressLanes.values().forEach(ZLinkStateLane::closeAsync);
+        bindingEgressLanes.clear();
         receivePoller.close();
         closeMonitor();
     }
@@ -735,6 +945,18 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
                         binding.authorityOwnerGeneration());
     }
 
+    private CompletionStage<Void> publishBoundActorAsync(RoutingId sessionRid, String actorId) {
+        SessionBinding binding = requireBinding(sessionRid, actorId);
+        return rawSpotNode()
+                .publishStreamSessionAsync(
+                        sessionRid,
+                        binding.actor(),
+                        binding.generation(),
+                        binding.actorSlot(),
+                        this,
+                        binding.authorityOwnerGeneration());
+    }
+
     @Override
     public CompletionStage<Void> relocateBoundActor(
             RoutingId sessionRid,
@@ -765,13 +987,13 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
         // may already have retired; only the target route needs preparation.
         return bindExactSessionRoute(
                         sessionRid, targetActor, bindingGeneration, source.actorSlot(), timeout)
-                .thenAccept(
+                .thenCompose(
                         accepted -> {
                             if (!bindings.replace(key, source, accepted)) {
                                 throw new IllegalStateException(
                                         "bound Session route changed during relocation");
                             }
-                            publishBoundActor(sessionRid, actorId);
+                            return publishBoundActorAsync(sessionRid, actorId);
                         });
     }
 
@@ -834,6 +1056,26 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
     }
 
     private record BindingKey(RoutingId sessionRid, String actorId) {}
+
+    private record BindingEgressKey(RoutingId sessionRid, int actorSlot, String actorId) {
+        BindingEgressKey(RoutingId sessionRid, int actorSlot) {
+            this(sessionRid, actorSlot, null);
+        }
+
+        // ActorId identifies the predecessor during control admission. Data addresses the lane by
+        // slot.
+        @Override
+        public boolean equals(Object other) {
+            return other instanceof BindingEgressKey key
+                    && sessionRid.equals(key.sessionRid)
+                    && actorSlot == key.actorSlot;
+        }
+
+        @Override
+        public int hashCode() {
+            return 31 * sessionRid.hashCode() + actorSlot;
+        }
+    }
 
     private record SessionBinding(
             ZLinkBackendActorRef actor,

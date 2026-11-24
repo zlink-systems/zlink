@@ -124,31 +124,30 @@ them, a team picks its genre's pattern and rebuilds that structure from the sock
 And the **four patterns above all become combinations on the same declarative model.**
 There's no need to rebuild from the socket for each one.
 
-- **① Zone-sharding** — set up a zone with `AddRouteMesh` + a node-addressed route mesh. A
-  player crossing a boundary is handed off by **cross-node actor relocation**
-  ([07](22-actor.en.md)) instead. [ZoneWorld](../../../common/sample/zoneworld/README.en.md)
-  is exactly this approach.
-- **② Lobby + room** — entry/matching is the Entry Spot, and a room is a room spot created
-  with `GetOrCreate`. [Bingo](../../../common/sample/bingo/README.en.md) is exactly this
-  approach.
-- **③ Matchmaker + dedicated** — matching is implemented as a channel handler (HTTP, etc.).
-  **Instead of spinning up a new process per match**, the client connects over STREAM to the
-  room spot that was `GetOrCreate`d as the matching result.
-  [TicTacToe](../../../common/sample/tictactoe/README.en.md) is closest to this flow —
-  matching request → room/connection info response → connect to the already-prepared room
-  spot.
-- **④ Actor service** — an **Instance Spot** is cold-activated by entity ID and serially
-  processes the state of an entity that several users access at the same time, with no Redis
-  distributed lock. Continued in the
-  [guild service example](#22-concurrent-access-to-one-entity).
+A session node manages client sessions. A play node hosts Spots for roles such as zones,
+dungeon instances, tables, and matches. An api node receives and handles requests like an
+ordinary HTTP server. Examples include matchmaking and reading or writing Actor data in a database.
+When a play node calls the api node over a ZLink [ClientServer Channel](../../../common/spec/server/02-channel-transport/03-client-server-channel.en.md), the play node acts as the Client and the api node as the Server.
 
-Where the "existing approaches" diagram above split into four, here's how each approach
-assembles with ZLink, in the same spots.
+An example real-time game server deployment is `client → L4 → session node ×N → play node ×N → api node ×N`.
+
+- **① Zone partitioning.** Play nodes host zone Spots. When an Actor crosses a zone boundary,
+  it relocates over RouteMesh. [ZoneWorld](56-zoneworld.en.md) demonstrates this flow.
+- **② Lobby + room.** An Entry Spot on a play node handles entry. `GetOrCreate` obtains or
+  creates a room Spot, and api nodes receive matchmaking requests. See [Bingo](50-bingo.en.md).
+- **③ Matchmaker + dedicated.** The api node handles matchmaking requests, and the session
+  node relays game messages to the prepared room Spot. In [TicTacToe](51-tictactoe.en.md),
+  the same process acts as both the session node and the play node.
+- **④ Actor service.** The api node requests by entity ID, activating an Instance Spot on a
+  play node to process that state in order. See the [guild service example](#22-concurrent-access-to-one-entity).
+
+The four patterns use the same deployment roles. In an HTTP Actor service,
+clients can send requests directly to the api node.
 
 <iframe class="zlink-diagram" src="/common/diagrams/01-arch-zlink-en.html" title="Game backend patterns — ZLink approach" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-arch-zlink-en.html" target="_blank">↗ View larger</a></p>
 
-Green (bold border) is the SPOT-family primitive. This is exactly where it contrasts with
+Green boxes identify play nodes that host Spots. This is where the diagram differs from
 the "existing approaches" diagram above — each approach used to need its own infrastructure
 (a dedicated fleet orchestrator, sticky routing, an actor cluster), but in ZLink, all four
 are implemented with the same RouteMesh/Spot/Instance Spot combination. Switching approaches
@@ -324,10 +323,9 @@ provides node/actor/spot location information.
 <iframe class="zlink-diagram" src="/common/diagrams/01-delivery-zlink-en.html" title="ZLink approach — food-delivery order app" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-delivery-zlink-en.html" target="_blank">↗ View larger</a></p>
 
-Three pieces of infrastructure — the sticky LB, pub/sub broker, and distributed lock —
-disappear. An **Instance Spot** preserves ordering, **Session servers** (STREAM) handle
-real-time connections instead of shell servers, and **direct runtime connections** handle
-inter-server delivery. The **location store is the only new infrastructure.**
+The api node receives orders and read requests over HTTP. The play node hosts the Instance
+Spot that processes order state in sequence. The session node manages WebSocket connections
+and delivers status updates to clients. The Location Store resolves server addresses.
 
 **As code.** Where the distributed lock used to sit, one Instance Spot call remains — the
 blocks below are the tutorial's real code ([06](21-spot.en.md)).
@@ -572,23 +570,49 @@ part of this map.
 <iframe class="zlink-diagram" src="/common/diagrams/01-topology-en.html" title="Overall topology" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-topology-en.html" target="_blank">↗ View larger</a></p>
 
-- **API server** — takes the HTTP request and hands it to the domain server. Which way it
-  goes depends on the client.
-    - **channel client** — calls by name. A request one handler can settle calls a node
-      handler over a **ClientServer channel**; a request a unit of state must take goes to an
-      Instance Spot over a **RouteMesh channel**.
-    - **spot client** — calls a Spot by id.
-    - **actor client** — calls an Actor by id.
-- **Session server** — takes the client's real-time connection. The STREAM node receives the
-  message, the session relay passes it over a **RouteMesh channel**, and the actor in the user
-  spot an entry spot assigned handles it.
-- **Domain server** — spots and actors hold the state and process requests in order; node handlers keep no state.
-- **Location store** — manages server address information. The dotted lines are store lookups
-  that find an endpoint, not a data path.
+- An **api node** receives HTTP requests and calls a play node when needed. A channel client
+  calls a node handler or an Instance Spot by name. Spot and Actor clients call by ID.
+- A **session node** receives client STREAM connections through L4.
+- Spots and Actors on a **play node** own state and process messages in order.
+- The **Location Store** resolves node endpoints. Dotted lines represent address lookups.
 
-**A STREAM node can live in the domain server, but that is not the usual shape.** Connection
-count and state throughput grow separately, so it commonly sits in its own server, the way the
-HTTP entry does.
+### 5.1 Session Node
+
+To use Actor dispatch on a session-only node, register a STREAM listener and an **Object Client
+MeshNode** in the same process. Configure the same `MeshName` and Location Store on the session
+and play processes so the session relay can reach the Actor on the play node. Startup validation
+fails if a process enables Actor dispatch without a MeshNode with the Object Client or Object
+Server role. .NET reports the following error for a STREAM node named `players`.
+
+```text
+STREAM node 'players' requires at least one local Object Client or Server MeshNode.
+```
+
+To deliver a delayed response to the client, [send a message to the target Actor](../../../common/spec/server/03-spot-actor/04-actor-model.en.md#5-actor-messaging)
+and have the Actor [send it to its current bound session](../../../common/spec/server/04-session/02-session-actor-binding.en.md#5-bind-and-relay).
+The Session–Actor binding determines which session receives the message. An Object Client
+[cannot register application Node direct handlers](../../../common/spec/server/02-channel-transport/01-channel-topology.en.md#4-when-a-call-can-start-without-a-local-server).
+A Node direct call targeting an Object Client [ends with `NotFound`](../../../common/spec/server/02-channel-transport/02-channel-messaging.en.md#2-how-to-select-a-target--node-direct).
+
+The example registers `session`, `play`, and `api` in separate processes. All three processes use
+the `game` mesh and the same Location Store. The code shows the mesh roles and STREAM registration.
+Configure the Location Store, the Actor and Spot factories on `play`, and the HTTP handler on `api`
+in the corresponding processes.
+
+```csharp
+// session
+sessionOptions.AddRouteMesh("game").Listen(sessionMeshEndpoint).Objects().Client();
+sessionOptions.AddStreamNode("players")
+    .Bind(streamEndpoint)
+    .EnableActorDispatch()
+    .AddSession<PlayerSession>();
+
+// play
+playOptions.AddRouteMesh("game").Listen(playMeshEndpoint).Objects().Server();
+
+// api
+apiOptions.AddRouteMesh("game").Listen(apiMeshEndpoint).Objects().Client();
+```
 
 ## 6. Who This Guide Is for, and Its Scope
 

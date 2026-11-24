@@ -115,26 +115,29 @@ correlation은 framework가 처리한다.
 그리고 위의 **네 방식이 전부 같은 선언 모델 위의 조합**이 된다. 방식마다 소켓부터
 다시 만들 필요가 없다.
 
-- **① zone 분할** — zone을 `addRouteMesh` + 노드 지목 route mesh로 잡는다. 경계를 넘는
-  플레이어는 **actor 크로스노드 relocation**이 대신 넘겨준다([07](22-actor.ko.md)).
-  [ZoneWorld](../../../common/sample/zoneworld/README.ko.md)가 이 방식 그대로다.
-- **② lobby + room** — 입장·매칭은 Entry Spot, 방은 `getOrCreate`로 만드는 room spot이다.
-  [Bingo](../../../common/sample/bingo/README.ko.md)가 이 방식 그대로다.
-- **③ matchmaker + dedicated** — 매칭은 channel handler(HTTP 등)로 구현한다. **판마다 새
-  프로세스를 띄우는 대신** 매칭 결과로 `getOrCreate`된 room spot에 client가 STREAM으로
-  접속한다. [TicTacToe](../../../common/sample/tictactoe/README.ko.md)가 이 흐름에 가장
-  가깝다 — 매칭 요청 → room·접속 정보 응답 → 이미 준비된 room spot에 접속.
-- **④ actor 서비스** — **Instance Spot**이 엔티티 ID로 cold activation되어, 여러 유저가
-  동시에 건드리는 엔티티 상태를 Redis 분산 락 없이 직렬로 처리한다.
-  [길드 서비스 예시](#22-하나의-엔티티에-대한-동시-접근)에서 이어진다.
+session node는 클라이언트 세션을 관리하는 node입니다. play node는 Spot이 있는 node입니다.
+Spot은 zone, dungeon instance, table, match 등을 맡습니다. api node는 일반 HTTP 서버처럼
+요청을 받아 처리하는 node입니다. 매치메이킹 요청과 Actor 정보 DB 저장·조회가 이에 해당합니다.
+play node가 ZLink [ClientServer Channel](../../../common/spec/server/02-channel-transport/03-client-server-channel.ko.md)로 api node를 호출할 때 play node는 Client, api node는 Server 역할을 맡습니다.
 
-위 "기존 방식" 4분할 그림과 같은 자리에서, ZLink로는 각 방식이 이렇게 구성된다.
+실시간 게임 서버의 배치 예시는 `client → L4 → session node ×N → play node ×N → api node ×N`입니다.
+
+- **① zone 분할.** play node에서 zone Spot을 실행합니다. Actor가 zone 경계를 넘으면
+  RouteMesh를 통해 현재 위치를 옮깁니다. [ZoneWorld](56-zoneworld.ko.md)가 이 흐름을 보여 줍니다.
+- **② lobby + room.** play node의 Entry Spot이 입장을 처리합니다. `getOrCreate`로 방을
+  얻거나 만들고, api node는 매치메이킹 요청을 받습니다. [Bingo](50-bingo.ko.md)를 참고합니다.
+- **③ matchmaker + dedicated.** api node가 매치메이킹 요청을 처리하고, session node가
+  게임 메시지를 준비된 room Spot에 전달합니다. [TicTacToe](51-tictactoe.ko.md)에서는
+  하나의 프로세스가 session node와 play node 역할을 함께 맡습니다.
+- **④ Actor 서비스.** api node가 엔티티 ID로 요청하면 play node의 Instance Spot이
+  활성화되어 해당 상태를 직렬로 처리합니다. [길드 서비스 예시](#22-하나의-엔티티에-대한-동시-접근)에서 이어집니다.
+
+앞의 네 유형은 다음과 같이 session node, play node, api node로 구성할 수 있습니다.
 
 <iframe class="zlink-diagram" src="/common/diagrams/01-arch-zlink.html" title="게임 백엔드 4가지 유형 — ZLink 방식" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-arch-zlink.html" target="_blank">↗ 크게 보기</a></p>
 
-초록(굵은 테두리)이 SPOT 계열 primitive다. 위 "기존 방식" 그림과 대조되는 지점은
-바로 여기다 — 기존에는 방식마다 인프라(전용 fleet orchestrator, sticky routing,
+초록 박스는 Spot을 실행하는 play node를 표시합니다. 기존에는 방식마다 인프라(전용 fleet orchestrator, sticky routing,
 actor 클러스터)가 따로 필요했지만, ZLink에서는 네 방식 전부 같은
 RouteMesh·Spot·Instance Spot 조합으로 구현한다. 방식이 바뀌어도 새로 배워야 할
 런타임이 없다.
@@ -296,9 +299,9 @@ location store 하나가 남는다.
 <iframe class="zlink-diagram" src="/common/diagrams/01-delivery-zlink.html" title="ZLink 방식 — 배달 주문 앱" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-delivery-zlink.html" target="_blank">↗ 크게 보기</a></p>
 
-sticky LB · pub/sub 브로커 · 분산 락 — 이 인프라 세 조각이 사라진다. 순서는
-**Instance Spot**이, 실시간 연결은 shell 서버 대신 **Session 서버**(STREAM)가, 서버 간
-전달은 **runtime 직접 연결**이 맡는다. 새로 두는 인프라는 **location store 하나**뿐이다.
+api node는 HTTP로 주문·조회 요청을 받습니다. play node의 Instance Spot은 주문 상태를
+순서대로 처리합니다. session node는 WebSocket 연결을 관리하고 상태 변경을 클라이언트에게
+전달합니다. Location Store는 서버 주소를 찾는 데 쓰입니다.
 
 **코드로 보면.** 분산 락이 있던 자리는 Instance Spot 호출 하나로 줄어든다 — 아래는
 tutorial의 실제 코드다([06](21-spot.ko.md)).
@@ -523,20 +526,52 @@ connection도 자동으로 새로 연결되거나 정리된다 — 설정 파일
 <iframe class="zlink-diagram" src="/common/diagrams/01-topology.html" title="전체 topology" style="width:100%;border:0"></iframe>
 <p><a href="/common/diagrams/01-topology.html" target="_blank">↗ 크게 보기</a></p>
 
-- **API 서버** - HTTP 요청을 받아 도메인 서버로 넘긴다. 넘기는 길은 client 종류에 따라 달라진다.
-    - **channel client** — 이름으로 호출한다. handler 하나가 처리하면 되는 요청은
-      **ClientServer channel**로 node handler를 부르고, 상태 단위가 받아야 하는 요청은
-      **RouteMesh channel**로 Instance Spot에 보낸다.
-    - **spot client** — id로 Spot을 호출한다.
-    - **actor client** — id로 Actor를 호출한다.
-- **세션 서버** - client의 실시간 연결을 받는다. STREAM node가 받은 메시지를 session relay가
-  **RouteMesh channel**로 넘기면, entry spot이 배정한 user spot의 actor가 처리한다.
-- **도메인 서버** - spot과 actor가 상태를 쥐고 요청을 순서대로 처리한다. node handler는 상태를 갖지 않는다.
-- **Location store** - 서버 주소 정보를 관리한다. 점선은 store 조회로 endpoint를 찾는 연결이며
-  데이터 경로가 아니다.
+- **api node**는 HTTP 요청을 받고 필요하면 play node를 호출합니다. channel client는
+  이름으로 node handler 또는 Instance Spot을 호출합니다. spot client와 actor client는
+  각각 ID로 Spot과 Actor를 호출합니다.
+- **session node**는 L4를 통해 클라이언트의 STREAM 연결을 받습니다.
+- **play node**의 Spot과 Actor는 상태를 소유하고 메시지를 순서대로 처리합니다.
+- **Location store**는 node의 endpoint를 찾는 데 쓰입니다. 점선은 주소 조회를 표시합니다.
 
-**STREAM node를 도메인 서버에 함께 둘 수는 있으나 일반적인 모양은 아니다.** 연결 수와 상태
-처리량이 따로 늘기 때문에, HTTP 입구처럼 별도 서버로 두는 구성이 흔하다.
+### 5.1 세션 노드
+
+STREAM 연결을 전담하는 session node에서 Actor dispatch를 사용하려면, 같은 프로세스에
+STREAM listener와 **Object Client 역할의 MeshNode**를 등록합니다. Session relay가 play
+node의 Actor에 도달하도록 두 프로세스에 같은 `MeshName`과 같은 Location Store를
+설정합니다. Actor dispatch를 활성화한 프로세스에 Object Client나 Object Server 역할의
+MeshNode가 하나도 없으면 시작 검증이 실패합니다. .NET에서 STREAM 이름이 `players`이면
+다음 오류가 표시됩니다.
+
+```text
+STREAM node 'players' requires at least one local Object Client or Server MeshNode.
+```
+
+지연 응답을 클라이언트로 보내려면 [대상 Actor에 메시지를 보내고](../../../common/spec/server/03-spot-actor/04-actor-model.ko.md#5-actor-메시징)
+Actor에서 [현재 bound session으로 전송합니다](../../../common/spec/server/04-session/02-session-actor-binding.ko.md#5-bind와-relay).
+Session–Actor binding이 사용할 세션을 결정합니다. Object Client에는
+[애플리케이션 Node direct handler를 등록할 수 없습니다](../../../common/spec/server/02-channel-transport/01-channel-topology.ko.md#4-local-server-없이도-호출을-시작할-수-있는-경우).
+Object Client를 대상으로 한 Node direct 호출은 [`NotFound`로 끝납니다](../../../common/spec/server/02-channel-transport/02-channel-messaging.ko.md#2-target을-선택하는-방법--node-direct).
+
+다음 예시는 `session`, `play`, `api`를 별도 프로세스에 등록하는 구성을 보여줍니다.
+세 프로세스 모두 `game` mesh와 같은 Location Store를 사용합니다. 예제에는 mesh 역할과
+STREAM 등록을 제시하며, Location Store 설정, play의 Actor·Spot factory, api의 HTTP
+handler는 각 프로세스의 애플리케이션 구성에 추가합니다.
+
+```typescript
+// session
+sessionOptions.addRouteMesh('game').listen(sessionMeshEndpoint).objects().client();
+sessionOptions
+  .addStreamNode('players')
+  .bind(streamEndpoint)
+  .enableActorDispatch()
+  .registerSession(SessionFactory);
+
+// play
+playOptions.addRouteMesh('game').listen(playMeshEndpoint).objects().server();
+
+// api
+apiOptions.addRouteMesh('game').listen(apiMeshEndpoint).objects().client();
+```
 
 ## 6. 가이드의 대상과 범위
 

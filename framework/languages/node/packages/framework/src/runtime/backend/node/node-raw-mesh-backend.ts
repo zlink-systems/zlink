@@ -86,7 +86,11 @@ import {
 } from '../../foundation/service-runtime-contracts';
 
 import { serviceSessionBindingIngressPortIfRegistered } from '../../foundation/service-session-binding-ingress-port';
-import type { ServiceActorRef, ServiceSpotState } from '../../foundation/service-stateful-registry';
+import type {
+  ServiceActorRef,
+  ServiceSessionBinding,
+  ServiceSpotState
+} from '../../foundation/service-stateful-registry';
 import {
   ServiceStatefulRuntime,
   statefulMailboxData,
@@ -592,8 +596,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       ) {
         return id;
       }
-      runtime.disconnectPeerEndpoint(existing.endpoint);
-      this.peerIntents.delete(id);
+      this.removePeerConnection(id);
     }
     if (nodeRoutingId === undefined) {
       runtime.connectPeerEndpoint(options.endpoint);
@@ -652,15 +655,11 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     const intent = this.peerIntents.get(intentId);
     if (intent === undefined) return;
     this.peerIntents.delete(intentId);
-    if (intent.nodeRoutingId === undefined) {
-      this.runtime?.disconnectPeerEndpoint(intent.endpoint);
-    } else {
-      this.runtime?.disconnectPeer(
-        intent.endpoint,
-        intent.nodeRoutingId,
-        intent.lifecycleGeneration
-      );
-    }
+    this.runtime?.disconnectPeerEndpoint(
+      intent.endpoint,
+      intent.nodeRoutingId,
+      intent.lifecycleGeneration
+    );
   }
 
   disconnectPeer(peerRid: unknown, lifecycleGeneration: bigint): void {
@@ -1183,6 +1182,12 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     });
   }
 
+  setActorJoinIngressRouter(
+    route: import('../../foundation/service-stateful-runtime').ZLinkActorJoinIngressRouter
+  ): void {
+    this.requireStateful().setActorJoinIngressRouter(route);
+  }
+
   setActorMessageFollowResolver(
     resolver: (
       fence: import('../../foundation/service-stateful-wire-codec').ServiceActorRouteFence
@@ -1191,11 +1196,23 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     this.requireStateful().setActorMessageFollowResolver(resolver);
   }
 
+  actorSessionBinding(actor: ZLinkBackendActorRef) {
+    return this.requireStateful().actorSessionBinding({
+      nodeRid: String(actor.nodeRid),
+      actorId: actor.actorId,
+      generation: actor.generation
+    });
+  }
+
   restoreActorSessionBinding(
     actor: ZLinkBackendActorRef,
     sessionNodeRid: unknown,
     sessionRid: unknown,
-    bindingGeneration: bigint
+    bindingGeneration: bigint,
+    sessionOwner?: Pick<
+      ServiceSessionBinding,
+      'sessionOwnerNodeGeneration' | 'sessionOwnerId' | 'sessionOwnerLeaseGeneration'
+    >
   ): void {
     this.requireStateful().restoreActorSessionBinding(
       {
@@ -1205,7 +1222,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       },
       String(sessionNodeRid),
       toBackendRoutingId(sessionRid),
-      bindingGeneration
+      bindingGeneration,
+      sessionOwner
     );
   }
 
@@ -1775,9 +1793,11 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     }
     if (this.maintenanceTimer === undefined || dueMs < this.maintenanceDueMs) {
       if (this.maintenanceTimer !== undefined) clearTimeout(this.maintenanceTimer);
+      // A deadline that has already passed runs on the next timer turn. onMaintenance expires
+      // overdue work within a time budget, so the next deadline can already be past (#5357).
       this.maintenanceTimer = setTimeout(
         this.onMaintenance,
-        Math.min(MESH_BACKEND_MAINTENANCE_MAX_DELAY_MS, Math.ceil(dueMs - nowMs))
+        Math.min(MESH_BACKEND_MAINTENANCE_MAX_DELAY_MS, Math.max(0, Math.ceil(dueMs - nowMs)))
       );
       this.maintenanceDueMs = dueMs;
     }

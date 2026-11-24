@@ -3,7 +3,12 @@ import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
 } from '../framework-errors-internal';
-import { ActorRef, ZLinkActor, ZLinkFrameworkException } from '../../contracts';
+import {
+  ActorRef,
+  ZLinkActor,
+  ZLinkFrameworkErrorKind,
+  ZLinkFrameworkException
+} from '../../contracts';
 import { throwIfAborted } from '../abort';
 import { routingIdsEqual } from '../routing-id';
 import type { ZLinkRuntimeMetrics } from '../diagnostics';
@@ -24,7 +29,8 @@ export interface ZLinkSessionActorCoordinatorOptions {
   readonly actorRefResolver?: (actor: ZLinkActor) => ActorRef;
   readonly actorAuthorityFenceResolver?: (
     actorId: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    bindTarget?: ActorRef
   ) => Promise<ZLinkActorSessionAuthorityFence | undefined>;
   readonly nativeActorNodeProvider?: () =>
     | {
@@ -62,18 +68,20 @@ export class ZLinkSessionActorCoordinator {
     actorOrRef: ZLinkActor | ActorRef,
     signal?: AbortSignal
   ): Promise<DefaultZLinkSessionActor> {
-    const actorRef = isActorRefLike(actorOrRef)
+    const bindTarget = isActorRefLike(actorOrRef)
       ? normalizeActorRef(actorOrRef, this.options.nativeActorMeshNameProvider?.())
-      : this.resolveActorRef(actorOrRef as ZLinkActor);
-    return await this.lifecycle.run(actorRef.actorId, async () =>
-      this.replaceBinding(context, actorRef, signal)
+      : undefined;
+    const actorRef = bindTarget ?? this.resolveActorRef(actorOrRef as ZLinkActor);
+    return await this.lifecycle.run(actorRef.actorId, () =>
+      this.replaceBinding(context, actorRef, signal, bindTarget)
     );
   }
 
   private async replaceBinding(
     context: DefaultZLinkSessionContext,
     actorRef: ActorRef,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    bindTarget?: ActorRef
   ): Promise<DefaultZLinkSessionActor> {
     throwIfAborted(signal);
     if (actorRef.actorId.trim().length === 0) {
@@ -105,7 +113,11 @@ export class ZLinkSessionActorCoordinator {
         return reuseActor;
       }
     }
-    const authorityFence = await this.resolveAuthorityFence(actorRef, signal);
+    const authorityFence = await this.resolveAuthorityFence(
+      actorRef,
+      signal,
+      context.stream instanceof ZLinkManagedStream ? bindTarget : undefined
+    );
     await this.bindNativeActor(context, actorRef, authorityFence, signal);
 
     const bindingToken = reuseActor?.bindingToken ?? createBindingToken();
@@ -204,24 +216,27 @@ export class ZLinkSessionActorCoordinator {
 
   private async resolveAuthorityFence(
     actorRef: ActorRef,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    bindTarget?: ActorRef
   ): Promise<ZLinkActorSessionAuthorityFence | undefined> {
     const internal = actorRef as ActorRef & {
       readonly ownershipGeneration?: bigint;
       readonly ownerLeaseGeneration?: bigint;
       readonly ownerNodeGeneration?: bigint;
     };
+    const embeddedFence =
+      internal.ownershipGeneration !== undefined && internal.ownerLeaseGeneration !== undefined;
+    const resolved =
+      bindTarget !== undefined || !embeddedFence || internal.ownerNodeGeneration === undefined
+        ? await this.options.actorAuthorityFenceResolver?.(actorRef.actorId, signal, bindTarget)
+        : undefined;
+    if (bindTarget !== undefined && resolved !== undefined) return resolved;
     if (internal.ownershipGeneration !== undefined && internal.ownerLeaseGeneration !== undefined) {
-      const resolved =
-        internal.ownerNodeGeneration === undefined
-          ? await this.options.actorAuthorityFenceResolver?.(actorRef.actorId, signal)
-          : undefined;
+      const ownerNodeGeneration = internal.ownerNodeGeneration ?? resolved?.ownerNodeGeneration;
       return {
         authorityOwnerGeneration: internal.ownershipGeneration,
         ownerLeaseGeneration: internal.ownerLeaseGeneration,
-        ...((internal.ownerNodeGeneration ?? resolved?.ownerNodeGeneration) === undefined
-          ? {}
-          : { ownerNodeGeneration: internal.ownerNodeGeneration ?? resolved!.ownerNodeGeneration }),
+        ...(ownerNodeGeneration === undefined ? {} : { ownerNodeGeneration }),
         ...(resolved?.ownerId === undefined ? {} : { ownerId: resolved.ownerId }),
         ...(resolved?.authorityStoreVersion === undefined
           ? {}
@@ -229,7 +244,7 @@ export class ZLinkSessionActorCoordinator {
         ...(resolved?.actorType === undefined ? {} : { actorType: resolved.actorType })
       };
     }
-    return await this.options.actorAuthorityFenceResolver?.(actorRef.actorId, signal);
+    return resolved;
   }
 
   async bindOrGet(
@@ -244,16 +259,25 @@ export class ZLinkSessionActorCoordinator {
     return await this.lifecycle.run(normalizedActorRef.actorId, async () => {
       throwIfAborted(signal);
       const existing = await this.routes.find(normalizedActorRef.actorId);
+      const replace = () =>
+        this.replaceBinding(context, normalizedActorRef, signal, normalizedActorRef);
       if (existing !== undefined && sameActorRef(existing.ref, normalizedActorRef)) {
         if (context.findBoundActor(normalizedActorRef.actorId) === existing) {
           return existing;
         }
-        return await this.replaceBinding(context, normalizedActorRef, signal);
+        return await replace();
       }
       if (existing !== undefined) {
         try {
-          return await this.replaceBinding(context, normalizedActorRef, signal);
+          return await replace();
         } catch (error) {
+          if (
+            error instanceof ZLinkFrameworkException &&
+            (error.kind === ZLinkFrameworkErrorKind.NotFound ||
+              error.kind === ZLinkFrameworkErrorKind.InvalidOperation)
+          ) {
+            throw error;
+          }
           throw createInternalFrameworkException(
             ZLinkFrameworkInternalErrorKind.ActorLocationStale,
             `Actor '${normalizedActorRef.actorId}' bound session ref is stale and could not be rebound.`,
@@ -262,7 +286,7 @@ export class ZLinkSessionActorCoordinator {
           );
         }
       }
-      return await this.replaceBinding(context, normalizedActorRef, signal);
+      return await replace();
     });
   }
 

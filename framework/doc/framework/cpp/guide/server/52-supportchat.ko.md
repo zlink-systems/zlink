@@ -29,7 +29,11 @@ title: "SupportChat 따라 읽기 · C++"
 
 ## 1. 이 샘플이 보여 주는 것
 
-고객과 상담원은 각각 Session 서버의 STREAM 연결 하나만 유지한다. 인증은 API가, 대화 상태는
+`Session`은 클라이언트 세션을 관리하는 session node입니다. `Support`는 conversation Spot이 있는 play node입니다.
+`Api`는 일반 HTTP 서버처럼 인증과 대화 개설 요청을 받아 처리하는 api node입니다.
+play node인 `Support`는 `supportchat.api` [ClientServer Channel](../../../common/spec/server/02-channel-transport/03-client-server-channel.ko.md)의 Client로 api node인 `Api`를 호출합니다.
+
+고객과 상담원은 각각 session node의 STREAM 연결 하나만 유지한다. 인증은 API가, 대화 상태는
 Support의 conversation Spot이 소유한다. 상담원 한 명이 여러 대화를 동시에 처리하므로, 상담원의
 연결 하나에 roster Actor와 대화별 conversation Actor가 함께 묶인다. 상담원은 방별 Actor handle로
 packet을 보내고, Session은 packet의 Actor slot으로 relay 대상을 고른다.
@@ -44,9 +48,9 @@ Actor slot으로 relay되는 채팅 → idle timer와 종료 순서다.
 
 | 역할 | process 수 | 소유하는 것 | 코드 위치 |
 | --- | ---: | --- | --- |
-| Session | 1 | STREAM 연결, 인증·join packet, Actor bind와 Actor slot relay | `Server/Session` |
-| API | 1 | token 검증, conversation Spot 생성 요청 | `Server/Api` |
-| Support | 1 | Entry Spot, conversation Spot, identity·roster·conversation Actor, 배정과 push | `Server/Support/Infrastructure` |
+| session node (Session) | 1 | STREAM 연결, 인증·join packet, Actor bind와 Actor slot relay | `Server/Session` |
+| api node (Api) | 1 | token 검증, conversation Spot 생성 요청 | `Server/Api` |
+| play node (Support) | 1 | Entry Spot, conversation Spot, identity·roster·conversation Actor, 배정과 push | `Server/Support/Infrastructure` |
 | Client | 1 | 고객 시나리오와 상담원 시나리오, self-check | `Client` |
 
 참가자, `MessageSeq`, typing과 idle·close 전이는 `Server/Support/Domain`에 있고 framework type을

@@ -344,16 +344,26 @@ export interface ZLinkBackendMeshNode {
     membershipEpoch: bigint
   ): ZLinkBackendActorRef;
   discardRelocatedActor?(actor: ZLinkBackendActorRef): void;
+  setActorJoinIngressRouter?(
+    route: import('../../foundation/service-stateful-runtime').ZLinkActorJoinIngressRouter
+  ): void;
   setActorMessageFollowResolver?(
     resolver: (
       fence: import('../../foundation/service-stateful-wire-codec').ServiceActorRouteFence
     ) => boolean
   ): void;
+  actorSessionBinding?(
+    actor: ZLinkBackendActorRef
+  ): import('../../foundation/service-stateful-registry').ServiceSessionBinding | undefined;
   restoreActorSessionBinding?(
     actor: ZLinkBackendActorRef,
     sessionNodeRid: unknown,
     sessionRid: unknown,
-    bindingGeneration: bigint
+    bindingGeneration: bigint,
+    sessionOwner?: Pick<
+      import('../../foundation/service-stateful-registry').ServiceSessionBinding,
+      'sessionOwnerNodeGeneration' | 'sessionOwnerId' | 'sessionOwnerLeaseGeneration'
+    >
   ): void;
   actorLookup(actorId: string): {
     readonly actor: ZLinkBackendActorRef;

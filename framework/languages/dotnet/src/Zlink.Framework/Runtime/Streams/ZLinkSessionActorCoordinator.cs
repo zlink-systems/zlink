@@ -325,27 +325,14 @@ internal sealed class ZLinkSessionActorCoordinator(
             );
         var sessionOwnerId = sessionOwner.OwnerId;
         var sessionOwnerLeaseGeneration = sessionOwner.LeaseGeneration;
-        // Session-Actor binding §5: every fence value comes from the Store's current row, never
-        // from the route cache: an Actor that returns to the same node keeps its ActorRef while
-        // its authority generation advances. When that row names another ActorRef, this
-        // ActorRef has no route.
         var rows = runtime.Services.GetService<ZLinkStoreLocationResolvers>();
-        var route = rows is null
-            ? null
-            : await rows.ReadActorRowAsync(
-                    new ZLinkActorLocationKey(actor.ActorId),
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-        if (
-            route is null
-            || !ActorRefsEqual(route.ActorRef, actor)
-            || sessionNode is not IZLinkBackendBoundSessionBind sender
-        )
+        if (rows is null || sessionNode is not IZLinkBackendBoundSessionBind sender)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Unavailable,
                 $"Actor '{actor.ActorId}' binding route is unavailable."
             );
+        var route = await rows.ReadActorSessionBindingRowAsync(actor, cancellationToken)
+            .ConfigureAwait(false);
         var request = new ServiceWireCodec.BoundSessionBind38(
             0,
             new(bindingGeneration),

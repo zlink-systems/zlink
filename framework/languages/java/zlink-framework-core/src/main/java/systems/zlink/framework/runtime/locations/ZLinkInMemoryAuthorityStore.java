@@ -23,7 +23,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -117,10 +116,7 @@ final class ZLinkInMemoryAuthorityStore {
         return stateLane.runNowOrQueue(
                 () -> {
                     Instant now = clock.instant();
-                    String waitKey = ZLinkOwnerLeaseWaitTracker.authorityRecordKey(key);
-                    var observedWait = ownerLeaseWait.snapshot(waitKey);
                     Row row = rows.get(key);
-                    if (row == null) ownerLeaseWait.clearIfUnchanged(waitKey, observedWait);
                     return row == null ? new ZLinkAuthorityMissing(now) : snapshot(row, now);
                 });
     }
@@ -137,9 +133,6 @@ final class ZLinkInMemoryAuthorityStore {
                         if (row.allocation.state() == ZLinkPlacementAllocationState.ACTIVE)
                             adjustActive(row.allocation, row.allocation.capacityBundle(), -1);
                         else adjustPending(row.allocation, row.allocation.capacityBundle(), -1);
-                        ownerLeaseWait.clear(
-                                ZLinkOwnerLeaseWaitTracker.authorityRecordKey(entry.getKey()),
-                                row.owner);
                         iterator.remove();
                         removed++;
                     }
@@ -162,10 +155,7 @@ final class ZLinkInMemoryAuthorityStore {
             ZLinkAuthorityMutation mutation,
             ZLinkStoreCancellation cancellation) {
         Instant now = clock.instant();
-        String waitKey = ZLinkOwnerLeaseWaitTracker.authorityRecordKey(key);
-        var observedWait = ownerLeaseWait.snapshot(waitKey);
         Row current = rows.get(key);
-        if (current == null) ownerLeaseWait.clearIfUnchanged(waitKey, observedWait);
         if (!matches(current, expectation) || current == null) {
             return new ZLinkAuthorityConflict(
                     current == null ? new ZLinkAuthorityMissing(now) : snapshot(current, now));
@@ -207,13 +197,11 @@ final class ZLinkInMemoryAuthorityStore {
                             preserve.replacementOwner(),
                             current.allocation);
             rows.put(key, stored);
-            ownerLeaseWait.clear(waitKey, current.owner);
             return stored(stored, now);
         }
         if (mutation instanceof ZLinkAuthorityDelete) {
             adjustActive(current.allocation, current.allocation.capacityBundle(), -1);
             rows.remove(key);
-            ownerLeaseWait.clear(waitKey, current.owner);
             return new ZLinkAuthorityDeleted(nextVersion(), now);
         }
         if (mutation instanceof ZLinkAuthorityRestore restore) {
@@ -364,11 +352,7 @@ final class ZLinkInMemoryAuthorityStore {
                     if (cancellation.isCancellationRequested())
                         throw new java.util.concurrent.CancellationException();
                     Row current = rows.get(key);
-                    if (current == null) {
-                        String waitKey = ZLinkOwnerLeaseWaitTracker.authorityRecordKey(key);
-                        ownerLeaseWait.clearIfUnchanged(waitKey, ownerLeaseWait.snapshot(waitKey));
-                        return true;
-                    }
+                    if (current == null) return true;
                     if (!discarded.sameIncarnation(snapshot(current, clock.instant()))) return true;
                     return releaseEndedReservationOnLane(key, current, null, currentOwner);
                 });
@@ -378,10 +362,7 @@ final class ZLinkInMemoryAuthorityStore {
             String key, String expectedStoreVersion, ZLinkStoreCancellation cancellation) {
         return inStateLane(
                 () -> {
-                    String waitKey = ZLinkOwnerLeaseWaitTracker.authorityRecordKey(key);
-                    var observedWait = ownerLeaseWait.snapshot(waitKey);
                     Row current = rows.get(key);
-                    if (current == null) ownerLeaseWait.clearIfUnchanged(waitKey, observedWait);
                     return completed(
                             current != null
                                     && current.storeVersion.equals(expectedStoreVersion)
@@ -399,11 +380,7 @@ final class ZLinkInMemoryAuthorityStore {
             ZLinkStoreCancellation cancellation) {
         return inStateLane(
                 () -> {
-                    String waitKey =
-                            ZLinkOwnerLeaseWaitTracker.authorityRecordKey(request.authorityKey());
-                    var observedWait = ownerLeaseWait.snapshot(waitKey);
                     Row current = rows.get(request.authorityKey());
-                    if (current == null) ownerLeaseWait.clearIfUnchanged(waitKey, observedWait);
                     return completed(
                             current != null
                                     && current.storeVersion.equals(expectedStoreVersion)
@@ -426,8 +403,6 @@ final class ZLinkInMemoryAuthorityStore {
             ZLinkLocationOwnerToken discardedOwner) {
         boolean discarded = discardedOwner != null;
         boolean active = current.allocation.state() == ZLinkPlacementAllocationState.ACTIVE;
-        String waitKey = ZLinkOwnerLeaseWaitTracker.authorityRecordKey(key);
-        if (!active) ownerLeaseWait.clear(waitKey, current.owner);
         if ((active && request == null && !discarded)
                 || (!active && discarded)
                 || (!active
@@ -440,21 +415,14 @@ final class ZLinkInMemoryAuthorityStore {
             return false;
         boolean ownerLive = ownerLeaseIsLive.test(current.owner);
         boolean authorityOwnerWaiting = false;
-        if (active) {
-            if (ownerLive) {
-                ownerLeaseWait.shouldWait(waitKey, current.owner, false);
-            } else {
-                boolean steadyReady =
-                        !participantIsPrepared(key)
-                                && current.relocation == null
-                                && ZLinkAuthoritySnapshot.steadyReady(
-                                        current.payload, current.allocation);
-                if (discarded || steadyReady) {
-                    authorityOwnerWaiting = ownerLeaseWait.shouldWait(waitKey, current.owner, true);
-                } else {
-                    ownerLeaseWait.clear(waitKey, current.owner);
-                }
-            }
+        if (active && !ownerLive) {
+            boolean steadyReady =
+                    !participantIsPrepared(key)
+                            && current.relocation == null
+                            && ZLinkAuthoritySnapshot.steadyReady(
+                                    current.payload, current.allocation);
+            authorityOwnerWaiting =
+                    (discarded || steadyReady) && ownerLeaseWait.shouldWait(current.owner);
         }
         var descriptor =
                 descriptorLookup.find(
@@ -521,11 +489,8 @@ final class ZLinkInMemoryAuthorityStore {
         var reservation = reservations.remove(key);
         if (reservation != null && !active) reservation.state = State.ABORTED;
         rows.remove(key);
-        ownerLeaseWait.clear(waitKey, current.owner);
         for (String memberKey : members) {
             Row member = rows.remove(memberKey);
-            ownerLeaseWait.clear(
-                    ZLinkOwnerLeaseWaitTracker.authorityRecordKey(memberKey), member.owner);
             adjustActive(member.allocation, member.allocation.capacityBundle(), -1);
             reservations.remove(memberKey);
         }
@@ -564,13 +529,8 @@ final class ZLinkInMemoryAuthorityStore {
                 throw new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.UNAVAILABLE,
                         "User Spot still has a relocating or unactivated member");
-            String waitKey = ZLinkOwnerLeaseWaitTracker.authorityRecordKey(entry.getKey());
-            if (ownerLeaseIsLive.test(row.owner)) {
-                ownerLeaseWait.shouldWait(waitKey, row.owner, false);
-                ownerLeaseReleaseBlocked = true;
-            } else {
-                ownerLeaseReleaseBlocked |= ownerLeaseWait.shouldWait(waitKey, row.owner, true);
-            }
+            ownerLeaseReleaseBlocked |=
+                    ownerLeaseIsLive.test(row.owner) || ownerLeaseWait.shouldWait(row.owner);
             members.add(entry.getKey());
             batchKeys.add("authority:" + entry.getKey());
             batchKeys.add("owner:" + row.owner.ownerId());
@@ -594,11 +554,7 @@ final class ZLinkInMemoryAuthorityStore {
                                         new ZLinkAuthorityMissing(clock.instant())));
                     }
                     Instant now = clock.instant();
-                    String waitKey =
-                            ZLinkOwnerLeaseWaitTracker.authorityRecordKey(request.authorityKey());
-                    var observedWait = ownerLeaseWait.snapshot(waitKey);
                     Row current = rows.get(request.authorityKey());
-                    if (current == null) ownerLeaseWait.clearIfUnchanged(waitKey, observedWait);
                     if (current != null
                             && (current.allocation.objectKind() != request.objectKind()
                                     || !current.allocation
@@ -787,10 +743,6 @@ final class ZLinkInMemoryAuthorityStore {
                         return completed(ZLinkObjectRejectResult.GENERATION_EXHAUSTED);
                     }
                     rows.remove(reservation.authorityKey());
-                    ownerLeaseWait.clear(
-                            ZLinkOwnerLeaseWaitTracker.authorityRecordKey(
-                                    reservation.authorityKey()),
-                            current.owner);
                     adjustPending(current.allocation, current.allocation.capacityBundle(), -1);
                     state.state = State.ABORTED;
                     revision++;
@@ -818,10 +770,6 @@ final class ZLinkInMemoryAuthorityStore {
                         return completed(ZLinkObjectAbortResult.STALE);
                     }
                     rows.remove(reservation.authorityKey());
-                    ownerLeaseWait.clear(
-                            ZLinkOwnerLeaseWaitTracker.authorityRecordKey(
-                                    reservation.authorityKey()),
-                            current.owner);
                     adjustPending(current.allocation, current.allocation.capacityBundle(), -1);
                     state.state = State.ABORTED;
                     return completed(ZLinkObjectAbortResult.ABORTED);
@@ -859,10 +807,6 @@ final class ZLinkInMemoryAuthorityStore {
                         return completed(ZLinkObjectAbortResult.STALE);
                     }
                     rows.remove(reservation.authorityKey());
-                    ownerLeaseWait.clear(
-                            ZLinkOwnerLeaseWaitTracker.authorityRecordKey(
-                                    reservation.authorityKey()),
-                            current.owner);
                     adjustPending(current.allocation, current.allocation.capacityBundle(), -1);
                     state.state = State.ABORTED;
                     creationTerminals.put(terminal.operation(), terminal);
@@ -1710,18 +1654,7 @@ final class ZLinkInMemoryAuthorityStore {
         if (stateLane.isOnLane()) {
             return work.get();
         }
-        try {
-            return stateLane.runAsync(work).toCompletableFuture().join();
-        } catch (CompletionException failure) {
-            Throwable cause = failure.getCause();
-            if (cause instanceof RuntimeException runtimeFailure) {
-                throw runtimeFailure;
-            }
-            if (cause instanceof Error error) {
-                throw error;
-            }
-            throw failure;
-        }
+        return stateLane.awaitResult(work);
     }
 
     private record Row(

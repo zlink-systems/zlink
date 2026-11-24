@@ -2,7 +2,10 @@ package systems.zlink.framework.runtime.locations;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import org.junit.jupiter.api.RepeatedTest;
+import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.errors.*;
@@ -13,12 +16,138 @@ import systems.zlink.framework.runtime.internal.binding.spot.*;
 import systems.zlink.framework.runtime.internal.locations.*;
 
 import java.lang.reflect.Proxy;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 
 final class ZLinkPlacementDiscoveryTest {
+    @Test
+    void sharedDiscoveryTransitions() throws Exception {
+        var cwd = Path.of(System.getProperty("user.dir")).toAbsolutePath();
+        Path fixturePath;
+        for (; ; ) {
+            fixturePath = cwd.resolve("framework/runtime/conformance/route-mesh-placement-v1.json");
+            if (Files.isRegularFile(fixturePath)) break;
+            cwd = Objects.requireNonNull(cwd.getParent(), "Shared placement fixture not found");
+        }
+        var fixture = new ObjectMapper().readTree(fixturePath.toFile());
+        for (var kind :
+                List.of(ZLinkPlacementObjectKind.ACTOR, ZLinkPlacementObjectKind.USER_SPOT)) {
+            for (var scenario : fixture.get("discoveryTransitions")) {
+                var initial = scenario.get("initial").asText();
+                var update = scenario.get("update").asText(null);
+                var result = scenario.get("result").asText();
+                try (var runtime = new Fixture(kind)) {
+                    runtime.deleted = initial.equals("empty");
+                    runtime.weight = initial.equals("zeroWeight") ? 0 : 100;
+                    runtime.refresh();
+                    int discoveryScans = runtime.lists.get();
+                    long deadline =
+                            System.currentTimeMillis()
+                                    + (result.equals("deadlineExceeded") ? 100 : 1000);
+                    var selected =
+                            runtime.resolver
+                                    .selectPlacement(
+                                            "mesh",
+                                            kind,
+                                            initial.equals("incompatible") ? "other" : "type",
+                                            kind == ZLinkPlacementObjectKind.ACTOR,
+                                            runtime.source,
+                                            Set.of(),
+                                            deadline)
+                                    .toCompletableFuture();
+                    if (initial.equals("preparing")) {
+                        assertFalse(selected.isDone());
+                        assertEquals(discoveryScans, runtime.lists.get());
+                        if (update != null) {
+                            switch (update) {
+                                case "serving" ->
+                                        runtime.state = ZLinkFrameworkRuntimeState.SERVING;
+                                case "empty" -> runtime.deleted = true;
+                                case "expiredLease" -> runtime.live = false;
+                                case "zeroWeight" -> runtime.weight = 0;
+                                default -> fail(update);
+                            }
+                            runtime.refresh();
+                            discoveryScans++;
+                        }
+                    }
+                    if (result.equals("placed")) assertEquals(runtime.rid, selected.join().rid());
+                    else {
+                        if (result.equals("unavailable")) assertTrue(selected.isDone(), initial);
+                        assertFailure(
+                                selected,
+                                result.equals("unavailable")
+                                        ? ZLinkFrameworkErrorKind.UNAVAILABLE
+                                        : ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED);
+                    }
+                    assertEquals(
+                            discoveryScans + scenario.get("requestScans").asInt(),
+                            runtime.lists.get());
+                }
+            }
+        }
+    }
+
+    @RepeatedTest(40)
+    void placementRefreshesOnlyAnObservationWithoutEligibleCandidates() {
+        for (var kind :
+                List.of(ZLinkPlacementObjectKind.ACTOR, ZLinkPlacementObjectKind.USER_SPOT)) {
+            try (var fixture = new Fixture(kind)) {
+                fixture.state = ZLinkFrameworkRuntimeState.DRAINING;
+                fixture.refresh();
+                fixture.rid = RoutingId.from("replacement");
+                fixture.state = ZLinkFrameworkRuntimeState.SERVING;
+                fixture.weight = 100;
+                assertEquals(fixture.rid, fixture.select(1000).join().rid());
+                assertEquals(2, fixture.lists.get());
+                assertEquals(fixture.rid, fixture.select(1000).join().rid());
+                assertEquals(2, fixture.lists.get());
+            }
+        }
+        try (var fixture = new Fixture(ZLinkPlacementObjectKind.INSTANCE_SPOT)) {
+            fixture.state = ZLinkFrameworkRuntimeState.DRAINING;
+            fixture.refresh();
+            fixture.rid = RoutingId.from("replacement");
+            fixture.state = ZLinkFrameworkRuntimeState.SERVING;
+            for (String type : Arrays.asList("type", null)) {
+                var selected =
+                        fixture.resolver
+                                .selectInstancePlacement(
+                                        "mesh",
+                                        type,
+                                        Set.of(fixture.rid),
+                                        OptionalLong.of(System.currentTimeMillis() + 1000))
+                                .toCompletableFuture()
+                                .join();
+                assertEquals(fixture.rid, selected.descriptor().rid());
+                assertEquals("type", selected.stableType());
+                assertEquals(2, fixture.lists.get());
+            }
+        }
+    }
+
+    @RepeatedTest(40)
+    void placementRefreshUsesTheRequestDeadline() {
+        try (var fixture = new Fixture(ZLinkPlacementObjectKind.USER_SPOT)) {
+            fixture.deleted = true;
+            fixture.refresh();
+            var page = new CompletableFuture<ZLinkLocationPage<ZLinkMeshNodeDescriptor>>();
+            fixture.heldPage = page;
+            var selected = fixture.select(25);
+            assertFailure(selected, ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED);
+            assertEquals(2, fixture.lists.get());
+
+            fixture.state = ZLinkFrameworkRuntimeState.SERVING;
+            page.complete(new ZLinkLocationPage<>(List.of(fixture.descriptor()), null));
+            assertFailure(fixture.select(1000), ZLinkFrameworkErrorKind.UNAVAILABLE);
+            assertEquals(3, fixture.lists.get());
+        }
+    }
+
     @RepeatedTest(40)
     void unobservedMeshWaitsForFirstDiscoveryPublication() {
         for (var kind :
@@ -75,7 +204,7 @@ final class ZLinkPlacementDiscoveryTest {
                 var selected = fixture.select(1000);
                 assertTrue(selected.isDone(), "observed empty snapshot must not wait");
                 assertFailure(selected, ZLinkFrameworkErrorKind.UNAVAILABLE);
-                assertEquals(1, fixture.lists.get());
+                assertEquals(2, fixture.lists.get());
                 assertEquals(0, fixture.leaseReads.get());
             }
         }
@@ -117,7 +246,7 @@ final class ZLinkPlacementDiscoveryTest {
     }
 
     @RepeatedTest(40)
-    void sharedDiscoveryDrivesBothKindsWithoutRequestReads() {
+    void sharedDiscoveryWaitsWithoutRequestReadsWhileTargetsArePreparing() {
         for (var kind :
                 List.of(ZLinkPlacementObjectKind.ACTOR, ZLinkPlacementObjectKind.USER_SPOT)) {
             for (String transition : List.of("serving", "deleted", "zero", "full", "lease")) {
@@ -146,8 +275,14 @@ final class ZLinkPlacementDiscoveryTest {
                                     assertEquals(fixture.rid, request.join().rid());
                                 else assertFailure(request, ZLinkFrameworkErrorKind.UNAVAILABLE);
                             });
-                    assertEquals(2, fixture.lists.get());
-                    assertEquals(transition.equals("deleted") ? 1 : 2, fixture.leaseReads.get());
+                    assertEquals(
+                            transition.equals("serving") ? 2 : 2 + requests.size(),
+                            fixture.lists.get());
+                    assertEquals(
+                            transition.equals("deleted")
+                                    ? 1
+                                    : transition.equals("lease") ? 2 + requests.size() : 2,
+                            fixture.leaseReads.get());
                 }
             }
         }
@@ -173,8 +308,10 @@ final class ZLinkPlacementDiscoveryTest {
                         case "full" -> fixture.full = true;
                     }
                     fixture.refresh();
-                    if (input.equals("expired"))
+                    if (input.equals("expired")) {
+                        fixture.live = false;
                         fixture.nanos.addAndGet(Duration.ofSeconds(31).toNanos());
+                    }
                     long deadline =
                             System.currentTimeMillis() + (input.equals("deadline") ? 50 : 1000);
                     var selected =
@@ -198,8 +335,10 @@ final class ZLinkPlacementDiscoveryTest {
                             input.equals("deadline")
                                     ? ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED
                                     : ZLinkFrameworkErrorKind.UNAVAILABLE);
-                    assertEquals(1, fixture.lists.get());
-                    assertEquals(input.equals("empty") ? 0 : 1, fixture.leaseReads.get());
+                    assertEquals(input.equals("deadline") ? 1 : 2, fixture.lists.get());
+                    assertEquals(
+                            input.equals("empty") ? 0 : input.equals("expired") ? 2 : 1,
+                            fixture.leaseReads.get());
                 }
             }
         }
@@ -239,7 +378,7 @@ final class ZLinkPlacementDiscoveryTest {
                             fixture.refresh();
                         };
                 assertFailure(fixture.select(1000), ZLinkFrameworkErrorKind.UNAVAILABLE);
-                assertEquals(2, fixture.lists.get());
+                assertEquals(3, fixture.lists.get());
             }
         }
     }
@@ -276,13 +415,13 @@ final class ZLinkPlacementDiscoveryTest {
                         .toCompletableFuture()
                         .join();
                 assertFailure(fixture.select(1000), ZLinkFrameworkErrorKind.UNAVAILABLE);
-                assertEquals(2, fixture.lists.get());
+                assertEquals(3, fixture.lists.get());
             }
         }
     }
 
     @RepeatedTest(40)
-    void capacityChangesRequireDiscoveryPublicationAndNeverTriggerRequestReads() {
+    void exhaustedCapacityCanBecomeAvailableOnTheStoreRefresh() {
         for (var kind :
                 List.of(ZLinkPlacementObjectKind.ACTOR, ZLinkPlacementObjectKind.USER_SPOT)) {
             try (var fixture = new Fixture(kind)) {
@@ -290,9 +429,8 @@ final class ZLinkPlacementDiscoveryTest {
                 fixture.full = true;
                 fixture.refresh();
                 fixture.full = false;
-                assertFailure(fixture.select(1000), ZLinkFrameworkErrorKind.UNAVAILABLE);
-                assertEquals(1, fixture.lists.get());
-                fixture.refresh();
+                assertEquals(fixture.rid, fixture.select(1000).join().rid());
+                assertEquals(2, fixture.lists.get());
                 assertEquals(fixture.rid, fixture.select(1000).join().rid());
                 assertEquals(2, fixture.lists.get());
             }
@@ -318,7 +456,7 @@ final class ZLinkPlacementDiscoveryTest {
                             .toCompletableFuture();
             assertEquals(fixture.rid, existing.join().rid());
             assertFailure(fixture.select(1000), ZLinkFrameworkErrorKind.UNAVAILABLE);
-            assertEquals(1, fixture.lists.get());
+            assertEquals(2, fixture.lists.get());
         }
     }
 
@@ -328,9 +466,10 @@ final class ZLinkPlacementDiscoveryTest {
                 kind, assertInstanceOf(ZLinkFrameworkException.class, error.getCause()).kind());
     }
 
-    private static final class Fixture implements AutoCloseable {
+    static final class Fixture implements AutoCloseable {
         final ZLinkPlacementObjectKind kind;
-        final RoutingId rid = RoutingId.from("local");
+        RoutingId rid = RoutingId.from("local");
+        ZLinkLocationOwnerToken ownerToken = new ZLinkLocationOwnerToken("owner", 1);
         final AtomicInteger lists = new AtomicInteger();
         final AtomicInteger leaseReads = new AtomicInteger();
         final AtomicLong nanos = new AtomicLong();
@@ -373,8 +512,7 @@ final class ZLinkPlacementDiscoveryTest {
                                                     yield CompletableFuture.completedFuture(
                                                             live
                                                                     ? new ZLinkOwnerLeaseFound(
-                                                                            new ZLinkLocationOwnerToken(
-                                                                                    "owner", 1),
+                                                                            ownerToken,
                                                                             Instant.EPOCH
                                                                                     .plusSeconds(
                                                                                             30),
@@ -460,8 +598,8 @@ final class ZLinkPlacementDiscoveryTest {
                     Optional.empty(),
                     state,
                     "security",
-                    "owner",
-                    1,
+                    ownerToken.ownerId(),
+                    ownerToken.leaseGeneration(),
                     Instant.EPOCH);
         }
 

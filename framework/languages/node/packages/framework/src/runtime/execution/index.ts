@@ -35,7 +35,7 @@ const executionAreaStorage = new FrameworkContextField<ZLinkExecutionArea>();
 
 // Capture once through the execution owners, independently of module load scope.
 export const detachedMeshDispatchScope = startOutsideStateLane(() =>
-  executionAreaStorage.exit(() => spotSerialTurnStorage.exit(() => AsyncLocalStorage.snapshot()))
+  executionAreaStorage.exit(() => runOutsideZLinkSpotSerialTurn(() => AsyncLocalStorage.snapshot()))
 );
 
 export function runZLinkExecutionArea<T>(area: ZLinkExecutionArea, operation: () => T): T {
@@ -227,6 +227,21 @@ export function runZLinkSpotSerialTurn<T>(
   return runZLinkExecutionArea('application', () =>
     spotSerialTurnStorage.run({ executor, turn }, async () => operation())
   );
+}
+
+/** Starts work that owns a separate execution gate. */
+export function runOutsideZLinkSpotSerialTurn<T>(operation: () => T): T {
+  return spotSerialTurnStorage.exit(operation);
+}
+
+/** Preserves the lifecycle caller's active Spot turn for re-entry checks. */
+export function bindLifecycleCallerSpotTurn<T>(operation: () => T): () => T {
+  const caller = spotSerialTurnStorage.getStore();
+  if (caller === undefined) return operation;
+  return () =>
+    caller.executor.isActiveTurn(caller.turn)
+      ? spotSerialTurnStorage.run(caller, operation)
+      : operation();
 }
 
 export function captureZLinkSpotSerialTurn(

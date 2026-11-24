@@ -4197,7 +4197,8 @@ class fixed_reconcile_authority_store_t final
              std::vector<std::byte> = {},
              std::string = {},
              zlink::framework::runtime::protocol::relocation_id_t = {},
-             zlink::framework::location_owner_token_t = {}) override
+             zlink::framework::location_owner_token_t = {},
+             const zlink::framework::runtime::protocol::relocation_prepare_t * = nullptr) override
     {
         return {};
     }
@@ -4672,7 +4673,7 @@ int relocation_barrier_fences_late_actor_request_without_deadlock ()
     auto request_record = accepted_actor_fifo_record (source_fence, 1, envelope, "ask");
     const runtime::serial_application_record_t *transferred_record = nullptr;
     spot_inbound_message_t metadata;
-    metadata.values = envelope.metadata;
+    metadata.values = envelope.metadata.values ();
     auto asked = spots.relay_actor_packet (
       actor, gateway.actor_context (actor), stream_message_kind_t::request, "FencedAsk",
       zlink::message_t::from (std::string ("ask")), provider, serializers, std::move (metadata),
@@ -5108,18 +5109,19 @@ int leave_notification_travels_node_level_and_reaches_source_entry_spot_once ()
 
         std::optional<stateful::authority_relocation_reference_t> record;
 
-        stateful::authority_publish_result_t
-        publish (const stateful::object_ref_t &,
-                 const stateful::object_ref_t &,
-                 location_owner_token_t,
-                 object_creation_target_t,
-                 std::string,
-                 std::uint32_t,
-                 stateful::inventory_digest_t,
-                 std::vector<std::byte> = {},
-                 std::string = {},
-                 zlink::framework::runtime::protocol::relocation_id_t = {},
-                 location_owner_token_t = {}) override
+        stateful::authority_publish_result_t publish (
+          const stateful::object_ref_t &,
+          const stateful::object_ref_t &,
+          location_owner_token_t,
+          object_creation_target_t,
+          std::string,
+          std::uint32_t,
+          stateful::inventory_digest_t,
+          std::vector<std::byte> = {},
+          std::string = {},
+          zlink::framework::runtime::protocol::relocation_id_t = {},
+          location_owner_token_t = {},
+          const zlink::framework::runtime::protocol::relocation_prepare_t * = nullptr) override
         {
             return {};
         }
@@ -5576,18 +5578,19 @@ int early_zero_generation_leave_waits_for_source_transfer_completion (bool no_fo
 
         std::optional<stateful::authority_relocation_reference_t> record;
 
-        stateful::authority_publish_result_t
-        publish (const stateful::object_ref_t &,
-                 const stateful::object_ref_t &,
-                 location_owner_token_t,
-                 object_creation_target_t,
-                 std::string,
-                 std::uint32_t,
-                 stateful::inventory_digest_t,
-                 std::vector<std::byte> = {},
-                 std::string = {},
-                 zlink::framework::runtime::protocol::relocation_id_t = {},
-                 location_owner_token_t = {}) override
+        stateful::authority_publish_result_t publish (
+          const stateful::object_ref_t &,
+          const stateful::object_ref_t &,
+          location_owner_token_t,
+          object_creation_target_t,
+          std::string,
+          std::uint32_t,
+          stateful::inventory_digest_t,
+          std::vector<std::byte> = {},
+          std::string = {},
+          zlink::framework::runtime::protocol::relocation_id_t = {},
+          location_owner_token_t = {},
+          const zlink::framework::runtime::protocol::relocation_prepare_t * = nullptr) override
         {
             return {};
         }

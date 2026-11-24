@@ -10,6 +10,9 @@ const {
   ZLinkRequestSourceResolver
 } = require('../../packages/framework/dist/runtime/locations/request-source-resolver');
 const {
+  createObjectCreationDeadline
+} = require('../../packages/framework/dist/runtime/host/object-creation-deadline');
+const {
   ZLinkLocationStoreRepository
 } = require('../../packages/framework/dist/runtime/locations/location-store-repository');
 const {
@@ -40,7 +43,7 @@ function remoteDescriptor(kind) {
 function resolver() {
   return new ZLinkRequestSourceResolver({
     async listLiveMeshNodes() {
-      assert.fail('placement must use discovery publications, not request-scoped Store reads');
+      return [];
     },
     async remainingOwnerTokenLeaseMs() {
       return 30000;
@@ -48,6 +51,147 @@ function resolver() {
   });
 }
 
+const {
+  discoveryTransitions
+} = require('../../../../runtime/conformance/route-mesh-placement-v1.json');
+
+for (const kind of ['actor', 'user_spot']) {
+  for (const { initial, update, result, requestScans } of discoveryTransitions) {
+    test(
+      `${kind} placement: ${initial} -> ${update ?? result}`,
+      {
+        timeout: 2000
+      },
+      async (t) => {
+        const row = remoteDescriptor(kind);
+        let projection = initial;
+        let reads = 0;
+        const rows = () =>
+          projection === 'empty'
+            ? []
+            : [
+                {
+                  ...row,
+                  state: projection === 'serving' ? 1 : 0,
+                  placementWeight: projection === 'zeroWeight' ? 0 : 100,
+                  objectCapabilities: projection === 'incompatible' ? [] : row.objectCapabilities
+                }
+              ];
+        const sources = new ZLinkRequestSourceResolver({
+          async listLiveMeshNodes() {
+            reads++;
+            return rows();
+          },
+          async remainingOwnerTokenLeaseMs() {
+            return projection === 'expiredLease' ? 0 : 30000;
+          }
+        });
+        await sources.observeLiveDescriptors('play', rows());
+        t.mock.timers.enable({ apis: ['setTimeout'] });
+        const timeoutMs = 1000;
+        const deadline = createObjectCreationDeadline(
+          timeoutMs,
+          kind === 'actor' ? 'Actor' : 'User Spot'
+        );
+        t.after(() => deadline.close());
+        let pending = true;
+        const selected = sources
+          .selectPlacement('play', kind, 'room', undefined, deadline.signal)
+          .finally(() => {
+            pending = false;
+          });
+        if (initial === 'preparing') {
+          await boundary();
+          assert.equal(pending, true);
+          assert.equal(reads, 0);
+          if (update === null) {
+            t.mock.timers.tick(timeoutMs);
+            await assert.rejects(
+              selected,
+              (error) => internalFrameworkErrorKind(error) === 'deadlineExceeded'
+            );
+          } else {
+            projection = update;
+            await sources.observeLiveDescriptors('play', rows());
+          }
+        }
+        if (result === 'placed') assert.equal((await selected)?.rid, row.rid);
+        if (result === 'unavailable') {
+          // Flush the Store refresh without publishing anything from the periodic discovery loop.
+          await boundary();
+          assert.equal(pending, false);
+          assert.equal(await selected, undefined);
+        }
+        assert.equal(reads, requestScans);
+      }
+    );
+  }
+}
+
+test('a drained candidate and an empty Store produce Unavailable after one refresh', async () => {
+  let reads = 0;
+  const sources = new ZLinkRequestSourceResolver({
+    async listLiveMeshNodes() {
+      reads++;
+      return [];
+    },
+    async remainingOwnerTokenLeaseMs() {
+      return 30000;
+    }
+  });
+  await sources.observeLiveDescriptors('play', [{ ...remoteDescriptor('user_spot'), state: 4 }]);
+  assert.equal(await sources.selectPlacement('play', 'user_spot', 'room'), undefined);
+  assert.equal(reads, 1);
+});
+for (let iteration = 1; iteration <= 40; iteration++) {
+  for (const kind of ['actor', 'user_spot']) {
+    test(`${iteration}: ${kind} reads a replacement once and publishes it to subsequent creates`, async () => {
+      const replacement = remoteDescriptor(kind);
+      let reads = 0;
+      const sources = new ZLinkRequestSourceResolver({
+        async listLiveMeshNodes(meshName) {
+          assert.equal(meshName, 'play');
+          reads++;
+          return [replacement];
+        },
+        async remainingOwnerTokenLeaseMs() {
+          return 30000;
+        }
+      });
+      await sources.observeLiveDescriptors('play', [
+        { ...replacement, rid: 'old-node', state: 4, placementWeight: 0 }
+      ]);
+      assert.equal(await sources.selectPlacement('play', kind, 'room'), replacement);
+      assert.equal(reads, 1);
+      assert.equal(await sources.selectPlacement('play', kind, 'room'), replacement);
+      assert.equal(reads, 1);
+    });
+  }
+}
+
+for (let iteration = 1; iteration <= 40; iteration++) {
+  test(`${iteration}: cold Instance Spot placement shares the replacement observation`, async () => {
+    const replacement = remoteDescriptor('instance_spot');
+    let reads = 0;
+    const sources = new ZLinkRequestSourceResolver({
+      async listLiveMeshNodes() {
+        reads++;
+        return [replacement];
+      },
+      async remainingOwnerTokenLeaseMs() {
+        return 30000;
+      }
+    });
+    await sources.observeLiveDescriptors('play', [{ ...replacement, rid: 'old-node', state: 4 }]);
+    const node = { status: () => ({ routingId: replacement.rid, lifecycleGeneration: 1n }) };
+    const signal = new AbortController().signal;
+    for (const type of ['room', undefined]) {
+      const result = await sources.selectInstancePlacement('play', type, node, signal);
+      assert.deepEqual(result, { kind: 'selected', descriptor: replacement, stableType: 'room' });
+      assert.equal(reads, 1);
+    }
+  });
+}
 test('placement excludes only the host generation that rejected the reservation', async () => {
   const sources = resolver();
   const remote = remoteDescriptor('user_spot');

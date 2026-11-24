@@ -913,10 +913,26 @@ internal sealed class ZLinkActorRemoteJoiner(
                     targetActor
                 ))
                 .ToArray();
+            var destination = new ZLinkStandaloneActorRelocationDestination(
+                targetSpotId,
+                targetReservation.TargetSpotGeneration,
+                admission.Snapshot.SpotKind,
+                targetNodeRid,
+                targetReservation.TargetNodeGeneration,
+                sourceAuthority.MeshName,
+                new ZLinkLocationOwnerToken(
+                    targetDescriptor.OwnerId,
+                    targetDescriptor.LeaseGeneration
+                )
+            );
             var precommitSnapshot = await precommit
                 .BeginPreparingAsync(
                     currentAuthority.Snapshot,
                     sourceAuthority,
+                    ZLinkStandaloneActorRelocationRuntime.PlanTargetAuthority(
+                        sourceAuthority,
+                        destination
+                    ),
                     relocationId,
                     registration.ApplicationVersion,
                     cancellationToken
@@ -925,18 +941,7 @@ internal sealed class ZLinkActorRemoteJoiner(
             var relocationEnvelope = ZLinkStandaloneActorRelocationRuntime.CreateImmutableRoot(
                 precommitSnapshot,
                 sourceAuthority,
-                new ZLinkStandaloneActorRelocationDestination(
-                    targetSpotId,
-                    targetReservation.TargetSpotGeneration,
-                    admission.Snapshot.SpotKind,
-                    targetNodeRid,
-                    targetReservation.TargetNodeGeneration,
-                    sourceAuthority.MeshName,
-                    new ZLinkLocationOwnerToken(
-                        targetDescriptor.OwnerId,
-                        targetDescriptor.LeaseGeneration
-                    )
-                ),
+                destination,
                 relocationId,
                 relocationState.Payload,
                 acceptedRecords,

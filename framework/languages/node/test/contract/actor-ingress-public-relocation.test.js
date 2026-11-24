@@ -10,7 +10,9 @@ const locations = require('../../packages/framework-locations-redis/dist');
 const connector = require('../../packages/stream-connector/dist');
 const telemetry = require('./helpers/telemetry-log-capture');
 const framework = require('../../packages/framework/dist');
-const { ReceiveKind } = require('../../packages/framework/dist/runtime/foundation/service-runtime-contracts');
+const {
+  ReceiveKind
+} = require('../../packages/framework/dist/runtime/foundation/service-runtime-contracts');
 const { fixedRidHostClock, finishFixedRidHostStartup } = require('../helpers/fixed-rid-host-clock');
 function deferred() {
   let resolve;
@@ -45,6 +47,7 @@ class Ask {
   }
 }
 class Unregistered {}
+class SpotAsk extends Ask {}
 
 const { testRedisUrl: redisUrl, connectTestRedis } = require('./helpers/test-redis');
 
@@ -72,6 +75,10 @@ test(
       observed = [];
     const correlations = new Map();
     let sourceActors;
+    let targetClient;
+    const sourceLeft = deferred();
+    const askDuringClose = deferred();
+    const finishAskDuringClose = deferred();
     class Player {
       constructor(context) {
         this.context = context;
@@ -109,7 +116,9 @@ test(
         return { accepted: true };
       }
       async onJoinedActor() {}
-      async onLeaveActor() {}
+      async onLeaveActor() {
+        if (String(this.context.spotId) === 'source-room') sourceLeft.resolve();
+      }
       async onDisconnectActor() {
         disconnected.push(String(this.context.spotId));
       }
@@ -131,9 +140,18 @@ test(
     }
     class AskHandler {
       async handle(spot, _actor, context, message) {
+        if (message.value === 'during-close') {
+          askDuringClose.resolve();
+          await finishAskDuringClose.promise;
+        }
         correlations.set(message.value, context.correlationId);
         calls.push({ kind: 'ask', spot: String(spot.context.spotId), value: message.value });
         return { spot: String(spot.context.spotId), value: message.value };
+      }
+    }
+    class SpotAskHandler {
+      handle(_spot, message) {
+        return targetClient.requestToActor(actorId, new Ask(message.value)).yield();
       }
     }
     class SessionFactory {
@@ -172,6 +190,7 @@ test(
     n.zlinkSpotActorRequestHandler({ actor: () => Player, spot: () => Room, packetName: 'Ask' })(
       AskHandler
     );
+    n.zlinkSpotPacketHandler({ spot: () => Room, packetName: 'SpotAsk' })(SpotAskHandler);
     const apps = [];
     let client;
     async function start(role, peer) {
@@ -221,6 +240,7 @@ test(
           MoveHandler,
           NoticeHandler,
           AskHandler,
+          SpotAskHandler,
           SessionFactory
         ]
       })(AppModule);
@@ -245,7 +265,10 @@ test(
         .getListenerStatus('stream', 'gateway').endpoint;
       sourceActors = source.get(n.ZLINK_ACTOR_MANAGER);
       const sourceSpots = source.get(n.ZLINK_SPOT_MANAGER);
-      await sourceSpots.getOrCreate('source-room', 'SourceRoom').inMesh(mesh).submit();
+      const sourceRoom = await sourceSpots
+        .getOrCreate('source-room', 'SourceRoom')
+        .inMesh(mesh)
+        .submit();
       const created = await sourceActors.getOrCreate(actorId, 'Player').inMesh(mesh).submit();
       assert.equal(created.status, 'created');
       const sourceClient = source.get(n.ZLINK_ACTOR_CLIENT);
@@ -275,7 +298,15 @@ test(
         .getOrCreate('target-room', 'TargetRoom')
         .inMesh(mesh)
         .submit();
-      const targetClient = target.get(n.ZLINK_ACTOR_CLIENT);
+      await target
+        .get(n.ZLINK_SPOT_MANAGER)
+        .getOrCreate('request-room', 'TargetRoom')
+        .inMesh(mesh)
+        .submit();
+      targetClient = target.get(n.ZLINK_ACTOR_CLIENT);
+      const outbound = target.get(n.ZLINK_SPOT_OUTBOUND);
+      const askFromSpot = (value) =>
+        outbound.requestToSpot('request-room', new SpotAsk(value)).submit();
       assert.deepEqual(await targetClient.requestToActor(actorId, new Ask('prime')).submit(), {
         spot: 'source-room',
         value: 'prime'
@@ -304,8 +335,11 @@ test(
       const enqueue = mailbox.tryEnqueue.bind(mailbox);
       t.mock.method(mailbox, 'tryEnqueue', (record) => {
         const accepted = enqueue(record);
-        if (accepted && record.stateful?.targetActor?.actorId === actorId &&
-            [ReceiveKind.ActorSend, ReceiveKind.ActorRequest].includes(record.stateful?.receiveKind)) {
+        if (
+          accepted &&
+          record.stateful?.targetActor?.actorId === actorId &&
+          [ReceiveKind.ActorSend, ReceiveKind.ActorRequest].includes(record.stateful?.receiveKind)
+        ) {
           directQueued++;
         }
         return accepted;
@@ -339,7 +373,7 @@ test(
         return result;
       });
       await targetClient.sendToActor(actorId, new Notice('boundary')).submit();
-      const asked = targetClient.requestToActor(actorId, new Ask('boundary')).submit();
+      const asked = askFromSpot('boundary');
       const askTerminal = asked.then(
         (value) => ({ value }),
         (error) => ({ error })
@@ -359,6 +393,25 @@ test(
           completions.some((value) => value.status === 'accepted' && value.spot === 'target-room'),
         'public relocation did not complete'
       );
+      await sourceLeft.promise;
+      const closingRequest = askFromSpot('during-close');
+      await Promise.race([
+        askDuringClose.promise,
+        closingRequest.then(() => assert.fail('Actor request replied before source close'))
+      ]);
+      assert.equal(await sourceSpots.close(sourceRoom.spot), true);
+      finishAskDuringClose.resolve();
+      assert.deepEqual(await closingRequest, { spot: 'target-room', value: 'during-close' });
+      assert.deepEqual(await askFromSpot('after-close'), {
+        spot: 'target-room',
+        value: 'after-close'
+      });
+      for (const value of ['during-close', 'after-close']) {
+        assert.deepEqual(
+          calls.filter((call) => call.value === value),
+          [{ kind: 'ask', spot: 'target-room', value }]
+        );
+      }
       assert.deepEqual(await targetClient.requestToActor(actorId, new Ask('drain')).submit(), {
         spot: 'target-room',
         value: 'drain'
@@ -437,6 +490,7 @@ test(
     } finally {
       release.resolve();
       releaseSend.resolve();
+      finishAskDuringClose.resolve();
       if (client) await client.close();
       for (const app of apps.reverse()) await app.close();
       const redis = createClient({

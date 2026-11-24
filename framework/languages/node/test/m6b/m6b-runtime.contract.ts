@@ -1580,7 +1580,7 @@ test('outbound stateful routes use resolved authority generations and never obje
       return () => {};
     },
     setServiceIngress: () => {},
-    sendService: async (target: string, parts: readonly Buffer[]) => {
+    sendApplication: (target: string, parts: readonly Buffer[]) => {
       sent.push({ target, parts });
       return true;
     }
@@ -1696,7 +1696,8 @@ test('a newer authority generation without its route is NotConnected and makes t
       return () => {};
     },
     setServiceIngress: () => {},
-    sendService: async (target: string, parts: readonly Buffer[]) => {
+    sendApplication: (target: string, parts: readonly Buffer[], generation: bigint) => {
+      if (generation !== 7n) return false;
       sent.push({ target, parts });
       return true;
     }
@@ -3274,7 +3275,7 @@ test('Instance activation encoding distinguishes absent metadata from explicit e
     },
     setServiceIngress: () => {},
     isPeerRouteReady: () => true,
-    sendService: async (target: string, parts: readonly Buffer[]) => {
+    sendApplication: (target: string, parts: readonly Buffer[]) => {
       sent.push({ target, parts });
       return false;
     }
@@ -3313,7 +3314,7 @@ test('Instance activation encoding distinguishes absent metadata from explicit e
   runtime.close();
 });
 
-test('retained peer routes may submit while endpoint convergence reports not ready', async () => {
+test('stateful sends use outbound admission without a separate readiness probe', async () => {
   const sent: Array<{ readonly target: string; readonly parts: readonly Buffer[] }> = [];
   const raw = {
     topology: {
@@ -3326,8 +3327,8 @@ test('retained peer routes may submit while endpoint convergence reports not rea
       return () => {};
     },
     setServiceIngress: () => {},
-    isPeerRouteReady: () => false,
-    sendService: async (target: string, parts: readonly Buffer[]) => {
+    isPeerRouteReady: () => assert.fail('outbound admission owns route readiness'),
+    sendApplication: (target: string, parts: readonly Buffer[]) => {
       sent.push({ target, parts });
       return true;
     }
@@ -5733,6 +5734,78 @@ test('bound-session replacement is one-way, does not retry admission, and fences
   }
 });
 
+test('session bind target separates an ObjectGeneration mismatch from a stale location fence', async () => {
+  let ingress: ((record: RawServiceIngressRecord) => string | undefined) | undefined;
+  const replies: Buffer[][] = [];
+  const raw = {
+    topology: {
+      peer: () => ({ descriptor: { lifecycleGeneration: 3n } })
+    },
+    mailbox: { tryEnqueue: () => true },
+    observePeerRoute: () => ({ generation: 1n, ready: true }),
+    observePeerRouteChanged: () => () => {},
+    observePeerConnectionIntentRemoved() {
+      return () => {};
+    },
+    setServiceIngress(handler: typeof ingress) {
+      ingress = (record) =>
+        handler!(
+          withIngressOwner(
+            record,
+            raw.topology.peer(record.sourceRoutingId)?.descriptor.lifecycleGeneration
+          )
+        );
+    },
+    replyService(_record: RawServiceIngressRecord, parts: readonly Buffer[]) {
+      replies.push([...parts]);
+    }
+  } as unknown as RawServiceMeshRuntime;
+  const runtime = withTestSessionOwners(new ServiceStatefulRuntime(raw, 'actor-node', 3n));
+  const actor = runtime.createActor('actor-generation-bind');
+  const bindError = async (
+    correlation: bigint,
+    fence: { readonly generation: bigint; readonly targetNodeGeneration: bigint }
+  ) => {
+    replies.length = 0;
+    await ingress?.({
+      command: M6bServiceWireCommand.boundSessionBind,
+      flags: 0,
+      sourceRoutingId: 'session-node',
+      requestSequence: correlation,
+      parts: [
+        encodeBoundSessionBindHeader(
+          correlation,
+          {
+            actor: { ...actor.ref, generation: fence.generation },
+            targetNodeGeneration: fence.targetNodeGeneration,
+            authorityOwnerGeneration: actor.authorityOwnerGeneration,
+            ownerLeaseGeneration: 3n
+          },
+          'session-a',
+          { state: 'active', generation: 9n }
+        )
+      ]
+    });
+    assert.equal(replies.length, 1);
+    const reply = decodeStatefulReply(replies[0]![0]!, correlation, 'streamBind');
+    return wireReplyFailureException(reply.terminalResult, reply.failureCode, 'bind');
+  };
+
+  // Session-Actor binding §12: another ObjectGeneration of a known ActorId is InvalidOperation.
+  assert.equal(
+    (await bindError(51n, { generation: actor.ref.generation + 1n, targetNodeGeneration: 3n }))
+      .kind,
+    ZLinkFrameworkErrorKind.InvalidOperation
+  );
+  // Every other fence mismatch (here the target node generation) stays Unavailable.
+  assert.equal(
+    (await bindError(52n, { generation: actor.ref.generation, targetNodeGeneration: 4n })).kind,
+    ZLinkFrameworkErrorKind.Unavailable
+  );
+  assert.equal(runtime.registry.binding(actor.ref), undefined);
+  runtime.close();
+});
+
 test('mailbox saturation reports dropped actor binding control records', async () => {
   let ingress: ((record: RawServiceIngressRecord) => string | undefined) | undefined;
   const dropped: Array<{ readonly kind: string; readonly owner: string }> = [];
@@ -6092,7 +6165,7 @@ test('remote Session bind publishes its exact Location fence for the first Actor
         })
       ]);
     },
-    async sendService(_targetNodeRid: string, parts: readonly Buffer[]) {
+    sendApplication(_targetNodeRid: string, parts: readonly Buffer[]) {
       relayHeaders.push(decodeStatefulHeader(parts[0]!));
       return true;
     }

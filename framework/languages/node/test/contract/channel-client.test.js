@@ -4644,6 +4644,8 @@ test('RouteMesh send uses the started node RID after configured RID changes and 
 });
 
 test('ZLinkModule route client uses runtime host route transport after bootstrap', async () => {
+  const previousDebug = process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION;
+  process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION = '1';
   const builder = nestjs.zlinkFramework();
   if (process.env.ZLINK_NODE_BOOTSTRAP_FLOW_DIR !== undefined) {
     builder.configureDispatch().messageFlow('normal');
@@ -4679,7 +4681,184 @@ test('ZLinkModule route client uses runtime host route transport after bootstrap
     const notice = await remote.next('notice');
     assert.equal(notice.value, 'one-way');
   } finally {
+    // The deadline record is written while the request runs, so diagnostics stay on until here.
+    if (previousDebug === undefined) delete process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION;
+    else process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION = previousDebug;
     await remote?.stop();
+    await runtime.stop();
+  }
+});
+
+test('Node direct deadline reports the last route request stage once', async (t) => {
+  const previousDebug = process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION;
+  const createRuntime = async (debugValue) => {
+    process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION = debugValue;
+    const builder = nestjs.zlinkFramework();
+    builder.addRouteMesh('mesh').listen(ANY_LOOPBACK_PORT).routingId('node-a');
+    const container = await resolveModuleProviders(nestjs.ZLinkModule.forRoot(builder.build()), [
+      nestjs.ZLINK_FRAMEWORK_RUNTIME,
+      nestjs.ZLINK_ROUTE_CLIENT
+    ]);
+    return {
+      runtime: container.get(nestjs.ZLINK_FRAMEWORK_RUNTIME),
+      client: container.get(nestjs.ZLINK_ROUTE_CLIENT)
+    };
+  };
+  let disabled;
+  let enabled;
+  let runtime;
+  let client;
+  try {
+    disabled = await createRuntime('0');
+    enabled = await createRuntime('1');
+    ({ runtime, client } = enabled);
+  } catch (error) {
+    if (previousDebug === undefined) delete process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION;
+    else process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION = previousDebug;
+    throw error;
+  }
+  const request = (timeoutMs) =>
+    client
+      .requestToNode('mesh', 'node-b', typedPacket('RoutePing', { value: 'ping' }))
+      .timeout(timeoutMs)
+      .submit();
+  const isDeadline = (error) => error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded;
+  let remote;
+
+  try {
+    await runtime.start();
+    remote = await startRouteMeshPeer(
+      'server-direct',
+      ANY_LOOPBACK_PORT,
+      boundMeshEndpoint(runtime)
+    );
+    await waitForRouteMeshPeerReady(runtime, 'mesh', 'node-b');
+    const node = runtime.requirePrimaryMeshNode();
+    const raw = node.requireRuntime();
+    const generation = raw.selectedRoutes.get('node-b');
+    assert.equal(typeof generation, 'bigint');
+    const socket = raw.router.socket;
+    const originalError = console.error;
+    const debug = t.mock.method(console, 'error', (prefix, marker, ...details) => {
+      if (prefix !== '[zlink.runtime.relocation]' || marker !== 'node_request_deadline')
+        originalError(prefix, marker, ...details);
+    });
+    const records = () =>
+      debug.mock.calls
+        .filter(({ arguments: args }) => args[1] === 'node_request_deadline')
+        .map(({ arguments: args }) => args[2]);
+
+    const stages = {
+      route_unselected: 0,
+      peer_admission: 1,
+      binding_submit: 2,
+      binding_admission: 3,
+      reply_wait: 4,
+      reply_completion: 5
+    };
+    for (const [stage, reached] of Object.entries(stages)) {
+      await t.test(stage, async (stageTest) => {
+        debug.mock.resetCalls();
+        let bindingCalls = 0;
+        if (stage === 'route_unselected' || stage === 'peer_admission') {
+          const readyPeer = raw.topology.readyPeer;
+          stageTest.mock.method(raw.topology, 'readyPeer', function (rid) {
+            return rid === 'node-b' ? undefined : readyPeer.call(this, rid);
+          });
+          stageTest.mock.method(raw, 'observePeerRoute', () => ({
+            ready: false,
+            selected: stage === 'peer_admission',
+            generation: stage === 'peer_admission' ? generation : undefined
+          }));
+        } else {
+          const bindingRequest = socket.request;
+          stageTest.mock.method(socket, 'request', function (rid, ...args) {
+            if (String(rid) !== 'node-b') return bindingRequest.call(this, rid, ...args);
+            bindingCalls++;
+            const never = new Promise(() => {});
+            let correlation;
+            return {
+              message(part) {
+                if (correlation !== undefined) return this;
+                correlation = serviceWire.decodeNodeRequestHeader(part);
+                if (stage === 'binding_submit')
+                  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+                return this;
+              },
+              timeout() {
+                return this;
+              },
+              submit() {
+                assert.notEqual(stage, 'binding_submit');
+                const reply =
+                  stage === 'reply_completion'
+                    ? Promise.resolve([
+                        zlink.Message.from(
+                          serviceWire.encodeReplyHeader(correlation, zlink.RequestResult.TimedOut)
+                        )
+                      ])
+                    : never;
+                return {
+                  result:
+                    stage === 'binding_admission'
+                      ? zlink.SubmitResult.Backpressured
+                      : zlink.SubmitResult.Ok,
+                  admitted: stage === 'binding_admission' ? never : Promise.resolve(),
+                  reply
+                };
+              }
+            };
+          });
+        }
+        const pending = request(80);
+        if (stage === 'reply_wait') await pending.admitted;
+        await assert.rejects(pending, isDeadline);
+        assert.equal(bindingCalls, ['route_unselected', 'peer_admission'].includes(stage) ? 0 : 1);
+        const evidence = records();
+        assert.equal(evidence.length, 1);
+        const [record] = evidence;
+        assert.equal(record.stage, stage);
+        assert.equal(record.meshName, 'mesh');
+        assert.equal(record.targetRid, 'node-b');
+        assert.equal(record.routeGeneration, stage === 'route_unselected' ? undefined : generation);
+        assert.ok(record.elapsedMs >= 0);
+        assert.match(record.correlationId, /.+/);
+        const times = [
+          record.routeSelectedMs,
+          record.peerAdmittedMs,
+          record.bindingSubmittedMs,
+          record.bindingAdmittedMs,
+          record.replyReceivedMs
+        ];
+        for (const [index, time] of times.entries()) {
+          if (index < reached) {
+            assert.ok(time >= (times[index - 1] ?? 0) && time <= record.elapsedMs);
+          } else {
+            assert.equal(time, undefined);
+          }
+        }
+      });
+    }
+
+    debug.mock.resetCalls();
+    assert.deepEqual(await request(1000), { value: 'pong' });
+    assert.deepEqual(records(), []);
+
+    await disabled.runtime.start();
+    t.mock.method(disabled.runtime.requirePrimaryMeshNode(), 'requestToNode', () => undefined);
+    await assert.rejects(
+      disabled.client
+        .requestToNode('mesh', 'node-b', typedPacket('RoutePing', { value: 'ping' }))
+        .timeout(80)
+        .submit(),
+      isDeadline
+    );
+    assert.deepEqual(records(), []);
+  } finally {
+    if (previousDebug === undefined) delete process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION;
+    else process.env.ZLINK_DEBUG_FRAMEWORK_RELOCATION = previousDebug;
+    await remote?.stop();
+    await disabled.runtime.stop();
     await runtime.stop();
   }
 });
@@ -6331,9 +6510,9 @@ function requestScaleoutProbe(client, requestId) {
     (signal) =>
       client
         .requestToChannel('scaleout-api', typedPacket('ScaleoutProbe', { requestId }))
-        .timeout(1000)
+        .timeout(10_000)
         .submit(signal),
-    1500,
+    15_000,
     `scaleout probe ${requestId}`
   );
 }

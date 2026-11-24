@@ -5,6 +5,12 @@ const { spawnSync } = require('node:child_process');
 const path = require('node:path');
 const test = require('node:test');
 const { testRedisUrl, connectTestRedis } = require('./helpers/test-redis');
+const {
+  aggregateDescriptor,
+  aggregateRequest,
+  createReadyUserSpot,
+  userSpotCapacity
+} = require('./helpers/location-aggregate-fixture');
 const framework = require('../../packages/framework/dist');
 const redisLocations = require('../../packages/framework-locations-redis/dist');
 const frameworkInternal = require('../../packages/framework/dist/internal');
@@ -1664,109 +1670,6 @@ test('redis-backed production repository rejects an authority envelope without r
   }
 });
 
-function aggregateDescriptor(target, limit) {
-  return {
-    meshName: target.meshName,
-    rid: target.nodeRid,
-    lifecycleGeneration: target.nodeLifecycleGeneration,
-    descriptorRevision: 1n,
-    endpoint: `tcp://${target.nodeRid}`,
-    objectRole: framework.ZLinkObjectRole.Server,
-    placementWeight: 100,
-    populationCapacity: {
-      actors: { active: 0, reserved: 0, limit: 0 },
-      spots: { active: 0, reserved: 0, limit },
-      spotTypes: [{
-        objectKind: 'user_spot',
-        stableType: 'lobby',
-        active: 0,
-        reserved: 0,
-        limit
-      }]
-    },
-    activationConcurrency: { active: 0, limit },
-    channelWeights: {},
-    applicationVersion: 1n,
-    spotTypes: ['lobby'],
-    objectCapabilities: [{
-      objectKind: 'user_spot',
-      stableType: 'lobby',
-      policy: 'snapshot',
-      hasSnapshotAdapter: true,
-      limit
-    }],
-    state: framework.ZLinkFrameworkRuntimeState.Serving,
-    securityIdentity: String(target.nodeRid),
-    ownerId: target.owner.ownerId,
-    leaseGeneration: target.owner.leaseGeneration,
-    updatedAt: new Date()
-  };
-}
-
-async function createReadyUserSpot(repository, spotId, target) {
-  const capacity = userSpotCapacity(1);
-  const reserved = await repository.reserve({
-    key: { kind: 'user_spot', globalId: spotId },
-    intent: {
-      stableType: 'lobby',
-      requestContentReference: `request:${spotId}`,
-      requestSha256: Buffer.alloc(32, 1),
-      requestEncodedSize: 16n
-    },
-    target,
-    creatingPayload: Buffer.from(`creating-${spotId}`),
-    capacity
-  });
-  assert.equal(reserved.kind, 'reserved');
-  if (reserved.kind !== 'reserved') throw new Error('reservation failed');
-  const committed = await repository.commit({
-    key: { kind: 'user_spot', globalId: spotId },
-    reservationId: reserved.reservationId,
-    expectedStoreVersion: reserved.creating.storeVersion.value,
-    target,
-    readyPayload: Buffer.from(`ready-${spotId}`)
-  });
-  assert.equal(committed.kind, 'committed');
-  if (committed.kind !== 'committed') throw new Error('commit failed');
-  return committed.ready;
-}
-
-function aggregateRequest(
-  aggregateId,
-  generation,
-  snapshots,
-  target,
-  spotIds = snapshots.map((_, index) =>
-    snapshots.length === 1
-      ? 'room-abort'
-      : `room-${index.toString().padStart(2, '0')}`)
-) {
-  const participants = snapshots.map((snapshot, index) => {
-    const spotId = spotIds[index];
-    return {
-      authorityKey: encodeAuthorityKey('user_spot', spotId),
-      expectedStoreVersion: snapshot.storeVersion,
-      ownerTransition: 'newOwner',
-      authorityPayload: Buffer.from(`relocated-${spotId}`),
-      membershipMutation: Buffer.from(`membership-${spotId}`)
-    };
-  }).sort((left, right) =>
-    left.authorityKey.value.localeCompare(right.authorityKey.value));
-  return {
-    aggregateId,
-    aggregateGeneration: generation,
-    participants,
-    inventoryDigest: Buffer.alloc(32, 9),
-    targetDescriptor: {
-      meshName: target.meshName,
-      rid: target.nodeRid
-    },
-    targetDescriptorLifecycleGeneration: target.nodeLifecycleGeneration,
-    capacity: userSpotCapacity(snapshots.length),
-    targetOwner: target.owner
-  };
-}
-
 function aggregateCommitterPlan(aggregateId, snapshot, spotId, target) {
   const key = encodeAuthorityKey('user_spot', spotId);
   return {
@@ -1835,18 +1738,6 @@ function runAggregateCrashProcess(
     timeout: 30_000
   });
   assert.equal(result.status, expectedExitCode, result.stderr);
-}
-
-function userSpotCapacity(count) {
-  return {
-    actors: 0,
-    spots: count,
-    spotType: {
-      objectKind: 'user_spot',
-      stableType: 'lobby',
-      count
-    }
-  };
 }
 
 async function redisFixture(t) {
@@ -2096,97 +1987,6 @@ test('immediately resolved reservation Abort Conflict terminates at the original
   );
   assert.ok(attempts > 0);
 });
-
-for (const backing of ['repository', 'in-memory']) {
-  test(`completion accepted count is installed atomically at target commit/${backing}`, async () => {
-    const provider = new frameworkInternal.ZLinkInMemoryProviderLocationStore();
-    const repository =
-      backing === 'repository'
-        ? testLocationRepository(provider)
-        : new frameworkInternal.ZLinkInMemoryLocationStore();
-    const sourceOwner = await repository.claimOwnerLease(`completion-source-${backing}`, 60000);
-    const targetOwner = await repository.claimOwnerLease(`completion-target-${backing}`, 60000);
-    assert.equal(sourceOwner.kind, 'claimed');
-    assert.equal(targetOwner.kind, 'claimed');
-    const sourceTarget = {
-      meshName: 'completion-mesh',
-      nodeRid: 'completion-source',
-      nodeLifecycleGeneration: 1n,
-      owner: sourceOwner.token
-    };
-    const target = {
-      meshName: 'completion-mesh',
-      nodeRid: 'completion-target',
-      nodeLifecycleGeneration: 1n,
-      owner: targetOwner.token
-    };
-    for (const descriptor of [sourceTarget, target]) {
-      assert.equal(
-        (
-          await repository.updateMeshNode(
-            aggregateDescriptor(descriptor, 16),
-            frameworkInternal.ZLinkLocationWriteIntent.NewClaim
-          )
-        ).status,
-        frameworkInternal.ZLinkLocationWriteStatus.Stored
-      );
-    }
-    const snapshot = await createReadyUserSpot(repository, `completion-${backing}`, sourceTarget);
-    const request = aggregateRequest(
-      { value: 'cccccccc-cccc-4ccc-8ccc-ccccccccccc1' },
-      1n,
-      [snapshot],
-      target,
-      [`completion-${backing}`]
-    );
-    const sourceFence = {
-      nodeRid: sourceTarget.nodeRid,
-      nodeGeneration: 1n,
-      ownerId: sourceOwner.token.ownerId,
-      ownerLeaseGeneration: sourceOwner.token.leaseGeneration
-    };
-    request.participants[0].relocation = {
-      relocationId: request.aggregateId.value,
-      phase: 'prepared',
-      source: sourceFence,
-      target: {
-        nodeRid: target.nodeRid,
-        nodeGeneration: 1n,
-        ownerId: target.owner.ownerId,
-        ownerLeaseGeneration: target.owner.leaseGeneration,
-        attemptGeneration: 1n
-      },
-      coordinator: { ...sourceFence, expectedStoreVersion: snapshot.storeVersion.value },
-      sourceInventorySha256: 'ab'.repeat(32),
-      applicationVersion: 1n
-    };
-    const prepared = await repository.prepareAggregate(request);
-    assert.equal(prepared.kind, 'prepared');
-    const key = request.participants[0].authorityKey;
-    assert.equal((await repository.readAuthority(key)).relocation.completion, undefined);
-    const fence = { ...prepared.fence, acceptedRequests: new Map([[key.value, 9n]]) };
-    assert.equal((await repository.commitAggregate(fence)).kind, 'committed');
-    const moved = await repository.readAuthority(key);
-    assert.equal(moved.ownerId, target.owner.ownerId);
-    assert.deepEqual(moved.relocation.completion, {
-      acceptedRequests: 9n,
-      completedResults: 0n,
-      pendingDeliveries: 0n,
-      reference: null,
-      sha256: null
-    });
-    assert.equal(
-      (
-        await repository.commitAggregate({
-          ...fence,
-          acceptedRequests: new Map([[key.value, 123n]])
-        })
-      ).kind,
-      'alreadyCommitted'
-    );
-    assert.equal((await repository.readAuthority(key)).relocation.completion.acceptedRequests, 9n);
-  });
-}
 
 for (const transition of ['preserve', 'newOwner']) {
   for (const outcome of ['abort', 'commit']) {

@@ -110,7 +110,7 @@ abstract class ChannelHandlerContextBase implements ZLinkMessageContext {
         this.packetName = packetName;
         this.contentType = contentType;
         this.metadata = Map.copyOf(metadata);
-        this.receivedAt = Objects.requireNonNull(receivedAt, "receivedAt");
+        this.receivedAt = receivedAt == null ? Instant.now() : receivedAt;
     }
 
     @Override
@@ -171,8 +171,9 @@ final class DefaultRequestContext extends ChannelHandlerContextBase implements Z
             String channelName,
             String packetName,
             String contentType,
-            Map<String, String> metadata) {
-        super(meshName, channelName, packetName, contentType, metadata);
+            Map<String, String> metadata,
+            Instant receivedAt) {
+        super(meshName, channelName, packetName, contentType, metadata, receivedAt);
     }
 }
 
@@ -194,8 +195,9 @@ final class DefaultSendContext extends ChannelHandlerContextBase implements ZLin
             String channelName,
             String packetName,
             String contentType,
-            Map<String, String> metadata) {
-        super(meshName, channelName, packetName, contentType, metadata);
+            Map<String, String> metadata,
+            Instant receivedAt) {
+        super(meshName, channelName, packetName, contentType, metadata, receivedAt);
     }
 }
 
@@ -254,8 +256,9 @@ abstract class RouteHandlerContextBase extends ChannelHandlerContextBase {
             String packetName,
             RoutingId routingId,
             String contentType,
-            Map<String, String> metadata) {
-        super(meshName, channelName, packetName, contentType, metadata);
+            Map<String, String> metadata,
+            Instant receivedAt) {
+        super(meshName, channelName, packetName, contentType, metadata, receivedAt);
         this.routingId = routingId;
     }
 
@@ -290,8 +293,9 @@ final class DefaultRouteRequestContext extends RouteHandlerContextBase
             String packetName,
             RoutingId routingId,
             String contentType,
-            Map<String, String> metadata) {
-        super(meshName, channelName, packetName, routingId, contentType, metadata);
+            Map<String, String> metadata,
+            Instant receivedAt) {
+        super(meshName, channelName, packetName, routingId, contentType, metadata, receivedAt);
     }
 }
 
@@ -317,7 +321,8 @@ final class DefaultRouteSendContext extends RouteHandlerContextBase
             String packetName,
             RoutingId routingId,
             String contentType,
-            Map<String, String> metadata) {
-        super(meshName, channelName, packetName, routingId, contentType, metadata);
+            Map<String, String> metadata,
+            Instant receivedAt) {
+        super(meshName, channelName, packetName, routingId, contentType, metadata, receivedAt);
     }
 }

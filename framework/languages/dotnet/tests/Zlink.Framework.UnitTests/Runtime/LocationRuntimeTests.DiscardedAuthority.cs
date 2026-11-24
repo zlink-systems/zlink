@@ -89,22 +89,15 @@ public sealed partial class LocationRuntimeTests
         if (expired)
         {
             Assert.IsType<ZLinkAuthorityReadResult.Found>(await store.ReadAuthorityAsync(actorKey));
+            Assert.IsType<ZLinkAuthorityReadResult.Found>(await store.ReadAuthorityAsync(spotKey));
             time.AdvanceMonotonicWithoutTimers(TimeSpan.FromSeconds(15) - TimeSpan.FromTicks(1));
             Assert.True(await locations.RenewOwnerLeaseOnceAsync());
             Assert.IsType<ZLinkAuthorityReadResult.Found>(await store.ReadAuthorityAsync(actorKey));
+            Assert.IsType<ZLinkAuthorityReadResult.Found>(await store.ReadAuthorityAsync(spotKey));
             time.AdvanceMonotonicWithoutTimers(TimeSpan.FromTicks(1));
             Assert.True(await locations.RenewOwnerLeaseOnceAsync());
         }
         Assert.IsType<ZLinkAuthorityReadResult.Missing>(await store.ReadAuthorityAsync(actorKey));
-        if (expired)
-        {
-            Assert.IsType<ZLinkAuthorityReadResult.Found>(await store.ReadAuthorityAsync(spotKey));
-            time.AdvanceMonotonicWithoutTimers(TimeSpan.FromSeconds(15) - TimeSpan.FromTicks(1));
-            Assert.True(await locations.RenewOwnerLeaseOnceAsync());
-            Assert.IsType<ZLinkAuthorityReadResult.Found>(await store.ReadAuthorityAsync(spotKey));
-            time.AdvanceMonotonicWithoutTimers(TimeSpan.FromTicks(1));
-            Assert.True(await locations.RenewOwnerLeaseOnceAsync());
-        }
         Assert.IsType<ZLinkAuthorityReadResult.Missing>(await store.ReadAuthorityAsync(spotKey));
         var capacity = Assert
             .Single(await store.ListAllMeshNodesAsync("discarded-authority"))
@@ -353,7 +346,7 @@ public sealed partial class LocationRuntimeTests
         Assert.True(ZLinkActorAuthorityPayloadCodec.TryDecode(old.Payload.Span, out var payload));
         var preparing = await new ZLinkStandaloneActorRelocationPrecommitCoordinator(
             store
-        ).BeginPreparingAsync(old, payload, Guid.NewGuid(), 1, CancellationToken.None);
+        ).BeginPreparingAsync(old, payload, payload, Guid.NewGuid(), 1, CancellationToken.None);
         var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
             store.CleanupDiscardedAuthorityAsync(key, old, host.Locations.OwnerToken).AsTask()
         );
@@ -375,6 +368,9 @@ public sealed partial class LocationRuntimeTests
                 key,
                 preparing.StoreVersion,
                 new ZLinkAuthorityMutation.Restore(old.Payload, host.Locations.OwnerToken)
+                {
+                    ClearRelocation = true,
+                }
             )
         );
         Assert.True(

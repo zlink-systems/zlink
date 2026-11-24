@@ -5,36 +5,132 @@
     "title": "시스템 구성과 topology — 구조적 연결",
     "subtitle": "Client·Session·Api·Support의 배치와 무방향 구조적 연결 (Location Store는 resource 표에서 설명)",
     "output": "sample-supportchat-topology.html",
-    "legend": { "mode": "hidden" }
+    "legend": {
+      "mode": "hidden"
+    }
   },
-  "layout": { "mode": "grid", "origin": [50, 150], "cols": 3, "gapX": 90, "gapY": 84, "cellW": 120, "cellH": 60 },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 3,
+    "gapX": 90,
+    "gapY": 84,
+    "cellW": 120,
+    "cellH": 60
+  },
   "components": [
-    { "id": "C", "type": "frontend", "label": "Customer Client", "row": 0, "col": 0 },
-    { "id": "A", "type": "frontend", "label": "Agent Client", "row": 0, "col": 1 },
-    { "id": "S", "type": "external", "label": "Session", "sublabel": "client-facing STREAM", "row": 1, "col": 0 },
-    { "id": "API", "type": "frontend", "label": "Api", "sublabel": "token 검증 · Spot 생성", "row": 2, "col": 0 },
-    { "id": "SUP", "type": "backend", "label": "Support", "sublabel": "Entry·Conversation Spot·actor", "row": 2, "col": 1 }
+    {
+      "id": "C",
+      "type": "frontend",
+      "label": "Customer Client",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "A",
+      "type": "frontend",
+      "label": "Agent Client",
+      "row": 0,
+      "col": 1
+    },
+    {
+      "id": "S",
+      "type": "external",
+      "label": "session node ×N",
+      "sublabel": "Session",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "API",
+      "type": "frontend",
+      "label": "api node ×N",
+      "sublabel": "Api",
+      "row": 2,
+      "col": 0
+    },
+    {
+      "id": "SUP",
+      "type": "backend",
+      "label": "play node ×N",
+      "sublabel": "Support",
+      "row": 2,
+      "col": 1
+    }
   ],
   "boundaries": [
-    { "kind": "region", "label": "Clients", "wraps": ["C", "A"] },
-    { "kind": "region", "label": "Servers", "wraps": ["S", "API", "SUP"] }
+    {
+      "kind": "region",
+      "label": "Clients",
+      "wraps": [
+        "C",
+        "A"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "Servers",
+      "wraps": [
+        "S",
+        "API",
+        "SUP"
+      ]
+    }
   ],
   "connections": [
-    { "from": "C", "to": "S", "label": "STREAM", "variant": "default", "labelDy": 24 },
-    { "from": "A", "to": "S", "label": "STREAM", "variant": "default" },
-    { "from": "S", "to": "API", "label": "supportchat.api", "variant": "default", "labelDy": 24 },
-    { "from": "S", "to": "SUP", "label": "RouteMesh", "variant": "default", "fromSide": "right" },
-    { "from": "SUP", "to": "API", "label": "supportchat.api", "variant": "default" },
-    { "from": "API", "to": "SUP", "variant": "default", "fromSide": "bottom", "toSide": "bottom" }
+    {
+      "from": "C",
+      "to": "S",
+      "label": "STREAM",
+      "variant": "default",
+      "labelDy": 24
+    },
+    {
+      "from": "A",
+      "to": "S",
+      "label": "STREAM",
+      "variant": "default"
+    },
+    {
+      "from": "S",
+      "to": "API",
+      "label": "supportchat.api",
+      "variant": "default",
+      "labelDy": 24
+    },
+    {
+      "from": "S",
+      "to": "SUP",
+      "label": "RouteMesh",
+      "variant": "default",
+      "fromSide": "right"
+    },
+    {
+      "from": "SUP",
+      "to": "API",
+      "label": "client/server",
+      "variant": "default"
+    },
+    {
+      "from": "API",
+      "to": "SUP",
+      "variant": "default",
+      "fromSide": "bottom",
+      "toSide": "bottom"
+    }
   ],
   "cards": [
     {
       "dot": "cyan",
       "title": "연결 읽는 법",
       "items": [
-        "모든 선은 원문의 `---` 무방향 구조적 연결이다 — 요청 방향이 아니라 peer·ingress 연결 의도만 나타낸다(화살표 머리는 렌더 제약이며 방향 주장이 아니다).",
+        "client/server 화살표는 Support에서 Api로 요청을 보내는 방향을 표시합니다. RouteMesh 화살표는 peer 연결을 표시합니다.",
         "Customer·Agent Client는 각각 STREAM으로 Session에 연결한다. Session만 client-facing STREAM endpoint를 제공한다.",
-        "S↔API와 SUP↔API 실선은 supportchat.api ClientServer(API request/reply용 독립 채널). API↔SUP 사이에는 supportchat.api ClientServer와 supportchat RouteMesh 두 연결이 모두 있다 — 그림에서는 한 쌍만 라벨을 달고 두 번째(RouteMesh) 연결은 아래로 우회시켰다. S↔SUP도 supportchat RouteMesh다."
+        "S↔API와 SUP↔API 실선은 supportchat.api ClientServer(API request/reply용 독립 채널). API↔SUP 사이에는 supportchat.api ClientServer와 supportchat RouteMesh 두 연결이 모두 있다 — 그림에서는 한 쌍만 라벨을 달고 두 번째(RouteMesh) 연결은 아래로 우회시켰다. S↔SUP도 supportchat RouteMesh다.",
+        "supportchat.api ClientServer Channel에서 play node인 Support가 Client로 호출하고 api node인 Api가 Server로 처리합니다."
       ]
     },
     {

@@ -1,4 +1,5 @@
-import { FrameworkContextField } from '../framework-context';
+import { FrameworkContextField, runOutsideFrameworkContext } from '../framework-context';
+import { bindFlowContext } from '../diagnostics/flow-context';
 import type { ZLinkExecutionPolicy } from '../admission';
 import type { ApplicationJobPermitPort } from '../application-jobs/contracts';
 import {
@@ -8,7 +9,6 @@ import {
 import { macrotaskBoundary } from '../abort';
 import {
   diagnosticWorkName,
-  startOutsideStateLane,
   guardStateLaneCompletion,
   isStructuralGuardEnabled,
   trackDiagnosticCompletion
@@ -116,7 +116,8 @@ export class ZLinkSerialExecutionQueue {
   constructor(
     readonly executeRecord: (record: ZLinkSerialWorkRecord<unknown>) => Promise<void>,
     options: ZLinkSerialSchedulerOptions = {},
-    private readonly sharedOwner?: ZLinkSerialExecutionQueue
+    private readonly sharedOwner?: ZLinkSerialExecutionQueue,
+    private readonly bindApplicationOperation?: <T>(operation: () => T) => () => T
   ) {
     const configured = { ...ZLINK_DEFAULT_SERIAL_SCHEDULER_OPTIONS, ...options };
     validateNonNegative(configured.ownerTimeBudget, 'ownerTimeBudget');
@@ -132,10 +133,11 @@ export class ZLinkSerialExecutionQueue {
     operation: () => Promise<T> | T,
     options?: ZLinkSerialWorkOptions,
     context?: unknown,
-    packetAdmission?: () => Promise<T> | T
+    packetAdmission?: () => Promise<T> | T,
+    preparation?: ZLinkSerialWorkPreparation
   ): Promise<T> {
     try {
-      return this.admit(operation, options, context, undefined, false, packetAdmission);
+      return this.admit(operation, options, context, preparation, false, packetAdmission);
     } catch (error) {
       return Promise.reject(error);
     }
@@ -192,13 +194,14 @@ export class ZLinkSerialExecutionQueue {
     operation: () => Promise<T> | T,
     options?: ZLinkSerialWorkOptions,
     context?: unknown,
-    packetAdmission?: () => Promise<T> | T
+    packetAdmission?: () => Promise<T> | T,
+    preparation?: ZLinkSerialWorkPreparation
   ): Promise<T> {
     return this.admit(
       operation,
       options,
       context,
-      undefined,
+      preparation,
       false,
       packetAdmission,
       currentApplicationJobPermit()
@@ -306,6 +309,9 @@ export class ZLinkSerialExecutionQueue {
       }
     };
     const executionOwner = lane === 'application' ? this.captureExecutionOwner?.() : undefined;
+    const boundOperation = bindFlowContext(
+      lane === 'application' ? (this.bindApplicationOperation?.(operation) ?? operation) : operation
+    );
     const record: SerialWorkRecord<T> = {
       acceptedSequence: 0n,
       lane,
@@ -315,7 +321,7 @@ export class ZLinkSerialExecutionQueue {
         currentLifecycleOperation.getStore() === this.activeLifecycle
           ? this.activeLifecycle
           : undefined),
-      operation,
+      operation: boundOperation,
       executionOwner,
       operationEnvelope,
       context,
@@ -334,7 +340,10 @@ export class ZLinkSerialExecutionQueue {
     const previousLength = target.records.length;
     const preceding = target.records.at(-1);
     if (applicationAdmission !== undefined)
-      record.operation = bindApplicationJobPermit(operation, () => record.applicationAdmission);
+      record.operation = bindApplicationJobPermit(
+        boundOperation,
+        () => record.applicationAdmission
+      );
     try {
       record.acceptedSequence = this.nextAcceptedSequence;
       target.records.push(record as SerialWorkRecord<unknown>);
@@ -388,12 +397,10 @@ export class ZLinkSerialExecutionQueue {
       const queue = this;
       const scheduledConsumer = consumer;
       scheduledConsumer.scheduled = true;
-      startOutsideStateLane(() =>
-        queueMicrotask(() => {
-          scheduledConsumer.scheduled = false;
-          void queue.drain();
-        })
-      );
+      runOutsideFrameworkContext(queueMicrotask, () => {
+        scheduledConsumer.scheduled = false;
+        void queue.drain();
+      });
     }
   }
 

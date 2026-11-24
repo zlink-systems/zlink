@@ -1,5 +1,5 @@
 import {
-  initialRelocationCompletion,
+  commitAuthorityRelocation,
   encodeAuthorityAggregate
 } from '../../packages/framework/src/runtime/locations/authority-relocation-record';
 import { LegacyRelocationAuthorityFixture } from './legacy-relocation-authority-fixture';
@@ -3011,16 +3011,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
         }
       };
 
-  let targetState: Record<string, any> | undefined;
-  let targetNativeAuthority:
-    | {
-        actor: { actorId: string; generation: bigint; nodeRid: string };
-        authorityOwnerGeneration: bigint;
-        spotId: string;
-        spotGeneration: bigint;
-        membershipEpoch: bigint;
-      }
-    | undefined;
+  let targetState: ZLinkActorRuntimeState | undefined;
   let releaseTargetPublication!: () => void;
   const targetPublication = new Promise<void>((resolve) => {
     releaseTargetPublication = resolve;
@@ -3031,7 +3022,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     aborted: 0,
     async prepareRelocationActor(
       restoredActorId: string,
-      _actorType: string,
+      actorType: string,
       objectGeneration: bigint,
       authorityOwnerGeneration: bigint,
       spotId: string | undefined,
@@ -3044,28 +3035,17 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
         'Entry relocation preserves logical membership at the native boundary'
       );
       events.push('restore:hidden');
-      targetNativeAuthority = {
-        actor: { actorId: restoredActorId, generation: objectGeneration, nodeRid: 'target' },
+      const native = targetCanonicalRuntime.restoreActorAuthority(
+        restoredActorId,
+        actorType,
+        objectGeneration,
         authorityOwnerGeneration,
-        spotId: spotId ?? String(targetDescriptor.rid),
-        spotGeneration:
-          spotId === undefined ? targetDescriptor.lifecycleGeneration : spotGeneration,
+        spotId ?? String(targetDescriptor.rid),
+        spotId === undefined ? targetDescriptor.lifecycleGeneration : spotGeneration,
         membershipEpoch
-      };
-      targetState = {
-        actorId,
-        nativeActorRef: { actorId, generation: 5n, nodeRid: 'target' },
-        clearJoinedSpot() {
-          this.spotId = undefined;
-        },
-        setJoinedSpot(spotId: unknown) {
-          this.spotId = spotId;
-        },
-        installBoundSessionBinding(value: unknown) {
-          this.boundSession = value;
-          return true;
-        }
-      };
+      );
+      targetState = new ZLinkActorRuntimeState(restoredActorId);
+      targetState.setNativeActorRef(native.ref);
       return targetActor;
     },
     getState() {
@@ -3322,12 +3302,13 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     peers: () => [{ routingId: 'source', lifecycleGeneration: 2n, state: 3 }],
     actorLookup(lookupActorId: string) {
       assert.equal(lookupActorId, actorId);
-      assert.notEqual(targetNativeAuthority, undefined);
+      const native = targetCanonicalRuntime.actor(lookupActorId);
+      assert.ok(native);
       return {
-        actor: targetNativeAuthority!.actor,
-        spotId: targetNativeAuthority!.spotId,
-        spotGeneration: targetNativeAuthority!.spotGeneration,
-        membershipEpoch: targetNativeAuthority!.membershipEpoch
+        actor: native.ref,
+        spotId: native.spot.spotId,
+        spotGeneration: native.spot.generation,
+        membershipEpoch: native.membershipEpoch
       };
     },
     restoreActorAuthority(
@@ -3340,15 +3321,22 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
       membershipEpoch: bigint
     ) {
       assert.equal(stableType, 'Player');
-      targetNativeAuthority = {
-        actor: { actorId: restoredActorId, generation: objectGeneration, nodeRid: 'target' },
+      const native = targetCanonicalRuntime.restoreActorAuthority(
+        restoredActorId,
+        stableType,
+        objectGeneration,
         authorityOwnerGeneration,
         spotId,
         spotGeneration,
         membershipEpoch
-      };
+      );
       events.push(`raw-authority:${authorityOwnerGeneration}`);
-      return targetNativeAuthority.actor;
+      return native.ref;
+    },
+    restoreActorSessionBinding(
+      ...args: Parameters<ServiceStatefulRuntime['restoreActorSessionBinding']>
+    ) {
+      targetCanonicalRuntime.restoreActorSessionBinding(...args);
     },
     sendInfrastructureControl(_sourceRid: string, bytes: Uint8Array) {
       events.push('sourceLeave:submit');
@@ -3697,8 +3685,17 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     actorTransfer: {
       admitRelocationPrefix: targetTransfer.admitRelocationPrefix.bind(targetTransfer),
       async publishRoutedActorOwnership() {
-        if (options.realSourceCapture) assert.equal(targetState?.boundSession, undefined);
-        else assert.notEqual(targetState?.boundSession, undefined);
+        const actor = targetCanonicalRuntime.actor(actorId);
+        assert.ok(actor);
+        const binding = targetCanonicalRuntime.actorSessionBinding(actor.ref);
+        if (options.realSourceCapture) {
+          assert.equal(binding, undefined);
+        } else {
+          assert.ok(binding);
+          assert.equal(binding.sessionOwnerNodeRid, 'session-owner');
+          assert.equal(binding.sessionRid, 'session-1');
+          assert.equal(binding.bindingGeneration, 5n);
+        }
         events.push('command44');
       }
     }
@@ -3850,7 +3847,8 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
     readyReplies,
     location,
     targetActorManager,
-    targetAuthorityGeneration: () => targetNativeAuthority?.authorityOwnerGeneration,
+    targetAuthorityGeneration: () =>
+      targetCanonicalRuntime.actor(actorId)?.authorityOwnerGeneration,
     canonicalRecoveryIdentity: () => restoredCanonicalRecovery,
     canonicalAdmissionState: () =>
       canonicalHandoffId === undefined ? undefined : admissions.get(canonicalHandoffId)?.state,
@@ -4129,12 +4127,11 @@ function actorJoinLocationStore(initial: ZLinkAuthoritySnapshot, events: string[
         relocation:
           participant.relocation === undefined
             ? undefined
-            : {
-                ...participant.relocation,
-                completion: initialRelocationCompletion(
-                  fence.acceptedRequests?.get(participant.authorityKey.value) ?? 0n
-                )
-              },
+            : commitAuthorityRelocation(
+                participant.relocation,
+                fence.aggregateId.value,
+                fence.acceptedRequests?.get(participant.authorityKey.value)
+              ),
         authorityOwnerGeneration: current.authorityOwnerGeneration + 1n,
         ownerId: prepared.targetOwner.ownerId,
         ownerLeaseGeneration: prepared.targetOwner.leaseGeneration,
@@ -4144,6 +4141,14 @@ function actorJoinLocationStore(initial: ZLinkAuthoritySnapshot, events: string[
           descriptorLifecycleGeneration: prepared.targetDescriptorLifecycleGeneration
         }
       };
+      if (current.relocation !== undefined) {
+        progress.push(
+          encodeAuthorityAggregate(undefined, current.relocation)?.relocation as Record<
+            string,
+            unknown
+          >
+        );
+      }
       return { kind: 'committed' };
     },
     async abortAggregate() {
@@ -4874,7 +4879,10 @@ test('source Preserve keeps membership rejection failed and preserves original r
     await harness.sourceFifoIdle();
     assert.equal(harness.location.preserves, 1);
     assert.equal(harness.membershipFailures.length, 1);
-    assert.match(String(harness.membershipFailures[0]), /committed Close/);
+    const [membershipFailure] = harness.membershipFailures;
+    assert.ok(membershipFailure instanceof ZLinkFrameworkException);
+    assert.equal(membershipFailure.kind, ZLinkFrameworkErrorKind.NotFound);
+    assert.equal(membershipFailure.message, 'SPOT is closing.');
     assert.equal(harness.sourceActivation!.hasDepartedActor('actor-host-profile'), true);
     assert.equal(harness.freshIngress(), 'stale');
     assert.equal(harness.sourceState.isMoving, false);

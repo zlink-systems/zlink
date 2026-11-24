@@ -1,6 +1,6 @@
 {
   "name": "zlink-framework-cpp",
-  "version-string": "0.32.0",
+  "version-string": "0.34.0",
   "builtin-baseline": "2ec0f1747d8186a5c9babe276e2ad57cd2b12d2a",
   "dependencies": [
     "boost-asio",
@@ -36,7 +36,8 @@
   "overrides": [
     {
       "name": "abseil",
-      "version": "20260107.1"
+      "version": "20260107.1",
+      "port-version": 3
     },
     {
       "name": "grpc",

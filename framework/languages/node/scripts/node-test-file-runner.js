@@ -1,8 +1,6 @@
 const childProcess = require('node:child_process');
 
-//  `node --test` runs each file in an isolated child. A file that holds its
-//  event loop (#4052) cannot run its SIGTERM handler, so signalling only the
-//  `node --test` process never ends it and the gate waits until the job limit.
+//  A process that holds its event loop (#4052) cannot run its SIGTERM handler.
 //  The deadline therefore kills the whole process tree and names the test that
 //  was running. Output is forwarded as it arrives so the log keeps the TAP up
 //  to the stall.
@@ -45,18 +43,16 @@ function runTestFileWithDeadline(args, { cwd, env, deadlineMs }) {
     });
     const deadline = setTimeout(() => {
       stalled = true;
-      //  Which processes still hold the group tells whether `node --test` or the
-      //  isolated test child stalled.
+      //  Record which processes still hold the group at the deadline.
       processes = describeProcessGroup(child);
       killProcessTree(child);
     }, deadlineMs);
-    child.once('close', (code, signal) => {
+    child.once('close', (code) => {
       clearTimeout(deadline);
       activeChildren.delete(child);
       track(partialLine);
       resolve({
         status: code ?? 1,
-        signal,
         stdout,
         error,
         stalled,
@@ -78,7 +74,7 @@ function runTestFileWithDeadline(args, { cwd, env, deadlineMs }) {
   });
 }
 
-//  The group is killed even after `node --test` itself exited: an orphaned test
+//  The group is killed even after the test process itself exited: an orphaned
 //  child that still holds the output pipe keeps the file from closing.
 function killProcessTree(child) {
   if (child.pid === undefined) return;
