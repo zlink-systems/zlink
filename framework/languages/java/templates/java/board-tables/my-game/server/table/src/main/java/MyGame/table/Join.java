@@ -21,6 +21,9 @@ public final class Join {
             Entry entry, Player actor, ZLinkMessageContext dispatch, JoinTableRequest request) {
         if (!actor.context().actorId().equals(request.playerId()))
             throw new IllegalArgumentException("Player identity differs from Actor");
+        if (actor.state.joining != null || actor.state.ticketId != null) {
+            return actor.reply(new ActionRejected(Rules.TABLE_FULL, 0));
+        }
         return spots.getOrCreate(request.tableId(), Names.TABLE)
                 .inMesh(Names.MESH)
                 .request(request)
@@ -29,7 +32,7 @@ public final class Join {
                         created -> {
                             if (created.state() == ZLinkSpotCreateState.REJECTED)
                                 throw new IllegalStateException("Table creation rejected");
-                            actor.context().joinSpot(request.tableId(), request).defer();
+                            actor.joinTable(request);
                         });
     }
 }

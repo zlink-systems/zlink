@@ -46,6 +46,9 @@ public final class Client implements AutoCloseable {
         register(HandDealt.class);
         register(HandResult.class);
         register(ActionRejected.class);
+        register(MatchQueued.class);
+        register(MatchFound.class);
+        register(MatchCancelled.class);
         registrations.add(
                 connector.onDisconnected(
                         event -> {
@@ -73,11 +76,21 @@ public final class Client implements AutoCloseable {
     }
 
     TableView connect() throws Exception {
-        connector.connect().submit().toCompletableFuture().join();
+        open();
         send(new JoinTableRequest(playerId, tableId));
         return next(
                 TableView.class,
                 v -> v.yourSeat() >= 0 && v.seats().get(v.yourSeat()).playerId().equals(playerId));
+    }
+
+    MatchQueued findMatch() throws Exception {
+        open();
+        send(new FindMatch());
+        return next(MatchQueued.class);
+    }
+
+    private void open() {
+        connector.connect().submit().toCompletableFuture().join();
     }
 
     SessionInfo sessionInfo() {

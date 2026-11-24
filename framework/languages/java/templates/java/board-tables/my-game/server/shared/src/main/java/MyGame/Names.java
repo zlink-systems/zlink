@@ -9,7 +9,9 @@ public final class Names {
             MESH = "my-game-tables",
             STREAM = "players",
             PLAYER = "Player",
-            TABLE = "Table";
+            TABLE = "Table",
+            POOL = "Pool",
+            POOL_KEY = "pool-board";
     public static final List<String> SCENARIOS =
             java.util.Arrays.stream(Scenario.values()).map(Scenario::id).toList();
 }
