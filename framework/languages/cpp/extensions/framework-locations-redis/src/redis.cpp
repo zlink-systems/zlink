@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 #include <zlink/locations/redis.hpp>
+#include "runtime/locations/location_store_write.hpp"
 
 #include <atomic>
 #include <random>
@@ -222,7 +223,7 @@ class location_store_backend_t final : public location_store_t
 
     task_t<store_write_result_t> write (store_write_request_t request) override
     {
-        validate_write (request);
+        runtime::validate_location_write (request, validate_key);
 #if defined(ZLINK_FRAMEWORK_LOCATIONS_REDIS_HAS_ASYNC_CLIENT)
 
         std::vector<std::string> logical_keys;
@@ -234,7 +235,8 @@ class location_store_backend_t final : public location_store_t
             logical_keys.push_back (key);
         };
         for (const auto &condition : request.conditions)
-            std::visit ([&] (const auto &value) { add_key (value.key.value); }, condition);
+            runtime::for_each_condition_key (condition,
+                                             [&] (const auto &key) { add_key (key.value); });
         for (const auto &mutation : request.mutations)
             std::visit ([&] (const auto &value) { add_key (value.key.value); }, mutation);
 
@@ -249,20 +251,41 @@ class location_store_backend_t final : public location_store_t
         std::vector<std::string> args;
         args.push_back (std::to_string (request.conditions.size ()));
         for (const auto &condition : request.conditions) {
-            const auto &key = std::visit (
-              [] (const auto &value) -> const store_key_t & { return value.key; }, condition);
-            args.push_back (std::to_string (key_indexes.at (key.value)));
+            if (const auto *sum = std::get_if<store_sum_at_most_condition_t> (&condition)) {
+                args.push_back ("sum");
+                args.push_back (std::to_string (sum->delta));
+                args.push_back (std::to_string (sum->limit));
+                args.push_back (std::to_string (sum->keys.size ()));
+                for (const auto &key : sum->keys)
+                    args.push_back (std::to_string (key_indexes.at (key.value)));
+                continue;
+            }
             if (const auto *version = std::get_if<store_version_condition_t> (&condition)) {
                 args.push_back ("version");
+                args.push_back (std::to_string (key_indexes.at (version->key.value)));
                 args.push_back (version->expected.value);
             } else if (const auto *value = std::get_if<store_value_condition_t> (&condition)) {
                 args.push_back ("value");
+                args.push_back (std::to_string (key_indexes.at (value->key.value)));
                 args.push_back (bytes_to_string (value->expected));
             } else {
+                const auto &key = std::get<store_missing_condition_t> (condition).key;
                 args.push_back ("missing");
+                args.push_back (std::to_string (key_indexes.at (key.value)));
                 args.push_back ({});
             }
         }
+        const auto add_count_index = args.size ();
+        args.emplace_back ();
+        std::size_t add_count = 0;
+        for (const auto &mutation : request.mutations) {
+            if (const auto *add = std::get_if<store_add_t> (&mutation)) {
+                args.push_back (std::to_string (key_indexes.at (add->key.value)));
+                args.push_back (std::to_string (add->delta));
+                ++add_count;
+            }
+        }
+        args[add_count_index] = std::to_string (add_count);
         args.push_back (std::to_string (request.mutations.size ()));
         for (const auto &mutation : request.mutations) {
             std::visit (
@@ -276,7 +299,7 @@ class location_store_backend_t final : public location_store_t
                       args.push_back (value.retention ? std::to_string (value.retention->count ())
                                                       : std::string{"-1"});
                   } else {
-                      args.push_back ("delete");
+                      args.push_back (std::is_same_v<value_t, store_add_t> ? "put" : "delete");
                       args.push_back ({});
                       args.push_back ({"-1"});
                   }
@@ -292,6 +315,8 @@ class location_store_backend_t final : public location_store_t
               const auto now = from_unix_ms (std::stoll (result[1]));
               if (result[0] == "conflict")
                   return store_write_result_t{store_write_conflict_t { now }};
+              if (result[0] == "corrupt")
+                  return store_write_result_t{store_write_corrupt_t { now }};
               if (result[0] != "applied" || (result.size () - 2) % 2 != 0)
                   throw sw::redis::Error ("unknown opaque location write result");
               store_write_applied_t applied;
@@ -476,8 +501,9 @@ return {'found', tostring(nowMs), record[2], record[3], tostring(expiresAt)}
 )";
 
     // KEYS = { record_key_1..N, index_key, map_key, sequence_key }
-    // ARGV = conditionCount, {keyIndex, kind, expected}*,
-    //        mutationCount, {keyIndex, originalKey, kind, bytes, retentionMs}*
+    // ARGV = conditionCount, {kind, keyIndex, expected | sum, delta, limit, keyCount, keyIndexes}*,
+    //        addCount, {keyIndex, delta}*, mutationCount,
+    //        {keyIndex, originalKey, kind, bytes, retentionMs}*.
     static constexpr std::string_view write_script = R"(
 if redis.replicate_commands then redis.replicate_commands() end
 local time = redis.call('TIME')
@@ -498,22 +524,103 @@ local function currentRecord(keyIndex)
   return record
 end
 
+-- Redis Lua numbers cannot represent all int64 values. Operate on decimal digits
+-- and keep the exact sum even when it exceeds the size of a single counter.
+local counterMax = '9223372036854775807'
+local function less(a, b)
+  return #a < #b or (#a == #b and a < b)
+end
+
+local function counter(keyIndex)
+  local record = currentRecord(keyIndex)
+  if not record then return '0' end
+  local value = record[2]
+  if type(value) ~= 'string' or #value == 0 or less(counterMax, value) or value:find('[^0-9]')
+    or (#value > 1 and value:sub(1, 1) == '0') then
+    return nil
+  end
+  return value
+end
+
+local function combine(a, b, sign)
+  local digits = {}
+  local carry = 0
+  local j = #b
+  for i = #a, 1, -1 do
+    local digit = a:byte(i) - 48 + carry
+    if j > 0 then digit = digit + sign * (b:byte(j) - 48) end
+    digits[#digits + 1] = string.char(48 + digit % 10)
+    carry = math.floor(digit / 10)
+    j = j - 1
+  end
+  if carry > 0 then digits[#digits + 1] = '1' end
+  local text = table.concat(digits):reverse():gsub('^0+', '')
+  return text == '' and '0' or text
+end
+
+local function addSigned(a, b)
+  local aNegative = a:sub(1, 1) == '-'
+  local bNegative = b:sub(1, 1) == '-'
+  if aNegative then a = a:sub(2) end
+  if bNegative then b = b:sub(2) end
+  if less(a, b) then
+    a, b = b, a
+    aNegative, bNegative = bNegative, aNegative
+  end
+  local result = combine(a, b, aNegative == bNegative and 1 or -1)
+  return aNegative and result ~= '0' and '-' .. result or result
+end
+
 local offset = 1
 local conditionCount = tonumber(ARGV[offset])
 offset = offset + 1
 for i = 1, conditionCount do
-  local keyIndex = tonumber(ARGV[offset])
-  local kind = ARGV[offset + 1]
-  local expected = ARGV[offset + 2]
-  offset = offset + 3
-  local current = currentRecord(keyIndex)
-  if kind == 'missing' then
-    if current ~= nil then return {'conflict', tostring(nowMs)} end
-  elseif current == nil
-    or (kind == 'version' and current[3] ~= expected)
-    or (kind == 'value' and current[2] ~= expected) then
-    return {'conflict', tostring(nowMs)}
+  local kind = ARGV[offset]
+  if kind == 'sum' then
+    local delta = ARGV[offset + 1]
+    local limit = ARGV[offset + 2]
+    local count = tonumber(ARGV[offset + 3])
+    offset = offset + 4
+    local total = delta
+    for j = 1, count do
+      local value = counter(tonumber(ARGV[offset]))
+      if not value then return {'corrupt', tostring(nowMs)} end
+      total = addSigned(total, value)
+      offset = offset + 1
+    end
+    local negatedLimit = limit:sub(1, 1) == '-' and limit:sub(2) or '-' .. limit
+    local difference = addSigned(total, negatedLimit)
+    if difference ~= '0' and difference:sub(1, 1) ~= '-' then
+      return {'conflict', tostring(nowMs)}
+    end
+  else
+    local keyIndex = tonumber(ARGV[offset + 1])
+    local expected = ARGV[offset + 2]
+    offset = offset + 3
+    local current = currentRecord(keyIndex)
+    if kind == 'missing' then
+      if current ~= nil then return {'conflict', tostring(nowMs)} end
+    elseif current == nil
+      or (kind == 'version' and current[3] ~= expected)
+      or (kind == 'value' and current[2] ~= expected) then
+      return {'conflict', tostring(nowMs)}
+    end
   end
+end
+
+local addCount = tonumber(ARGV[offset])
+offset = offset + 1
+local added = {}
+for i = 1, addCount do
+  local keyIndex = tonumber(ARGV[offset])
+  local value = counter(keyIndex)
+  if not value then return {'corrupt', tostring(nowMs)} end
+  local updated = addSigned(value, ARGV[offset + 1])
+  if updated:sub(1, 1) == '-' or less(counterMax, updated) then
+    return {'corrupt', tostring(nowMs)}
+  end
+  added[keyIndex] = updated
+  offset = offset + 2
 end
 
 local mutationCount = tonumber(ARGV[offset])
@@ -526,7 +633,7 @@ for i = 1, mutationCount do
   local keyIndex = tonumber(ARGV[offset])
   local originalKey = ARGV[offset + 1]
   local kind = ARGV[offset + 2]
-  local bytes = ARGV[offset + 3]
+  local bytes = added[keyIndex] or ARGV[offset + 3]
   local retentionMs = tonumber(ARGV[offset + 4])
   offset = offset + 5
   local recordKey = KEYS[keyIndex]
@@ -564,55 +671,6 @@ return result
     {
         if (prefix.size () > 1024)
             throw std::invalid_argument ("location scan prefix exceeds 1024 bytes");
-    }
-
-    static void validate_write (const store_write_request_t &request)
-    {
-        std::set<std::string> conditions;
-        std::set<std::string> mutations;
-        std::set<std::string> keys;
-        std::size_t encoded = 0;
-        for (const auto &condition : request.conditions) {
-            const auto &key = std::visit (
-              [] (const auto &value) -> const store_key_t & { return value.key; }, condition);
-            validate_key (key.value);
-            if (!conditions.insert (key.value).second)
-                throw std::invalid_argument ("location write repeats a condition key");
-            keys.insert (key.value);
-            encoded += key.value.size ();
-            if (const auto *version = std::get_if<store_version_condition_t> (&condition)) {
-                if (version->expected.value.empty () || version->expected.value.size () > 4096)
-                    throw std::invalid_argument ("version condition requires 1..4096 bytes");
-                encoded += version->expected.value.size ();
-            } else if (const auto *value = std::get_if<store_value_condition_t> (&condition)) {
-                if (value->expected.size () > 1024u * 1024u)
-                    throw std::invalid_argument ("value condition exceeds 1 MiB");
-                encoded += value->expected.size ();
-            }
-        }
-        for (const auto &mutation : request.mutations) {
-            std::visit (
-              [&] (const auto &value) {
-                  validate_key (value.key.value);
-                  if (!mutations.insert (value.key.value).second)
-                      throw std::invalid_argument ("location write repeats a mutation key");
-                  keys.insert (value.key.value);
-                  encoded += value.key.value.size ();
-                  using value_t = std::decay_t<decltype (value)>;
-                  if constexpr (std::is_same_v<value_t, store_put_t>) {
-                      if (value.bytes.size () > 1024u * 1024u)
-                          throw std::invalid_argument ("location value exceeds 1 MiB");
-                      if (value.retention && *value.retention <= std::chrono::milliseconds::zero ())
-                          throw std::invalid_argument ("location retention must be positive");
-                      encoded += value.bytes.size ();
-                  }
-              },
-              mutation);
-        }
-        if (keys.size () > 2048)
-            throw std::invalid_argument ("location write exceeds 2048 unique keys");
-        if (encoded > 4u * 1024u * 1024u)
-            throw std::invalid_argument ("location write exceeds 4 MiB");
     }
 
     static std::string bytes_to_string (const std::vector<std::byte> &bytes)
