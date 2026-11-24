@@ -73,6 +73,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.EnumSet;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -198,12 +199,12 @@ final class ZLinkStreamRuntimeIngressTest {
         ZLinkStreamRuntime runtime = startDeterministic(stream, clock);
         stream.errorHandler.handle(PEER_A, MonitorEventType.CONNECTION_READY, 0, "ready");
         clock.set(Duration.ofSeconds(5).toNanos() - 1);
-        runtime.checkSessionLiveness();
+        runLivenessTimers(runtime);
         assertEquals(0, stream.sessionClosingSends.get());
         clock.incrementAndGet();
         List<String> reasons = new ArrayList<>();
         try (AutoCloseable ignored = installClosedMetricSink(reasons)) {
-            runtime.checkSessionLiveness();
+            runLivenessTimers(runtime);
             assertEquals(1, stream.sessionClosingSends.get());
             assertEquals(List.of("heartbeat_timeout"), reasons);
         }
@@ -223,14 +224,61 @@ final class ZLinkStreamRuntimeIngressTest {
                     inbound.equals("pong") ? HEARTBEAT_PONG : "activity",
                     inbound.equals("pong"));
             clock.incrementAndGet();
-            runtime.checkSessionLiveness();
+            runLivenessTimers(runtime);
             assertEquals(0, stream.sessionClosingSends.get());
         }
         clock.addAndGet(Duration.ofSeconds(5).toNanos());
         List<String> reasons = new ArrayList<>();
         try (AutoCloseable ignored = installClosedMetricSink(reasons)) {
-            runtime.checkSessionLiveness();
+            runLivenessTimers(runtime);
             assertEquals(1, stream.sessionClosingSends.get());
+            assertEquals(List.of("heartbeat_timeout"), reasons);
+        }
+    }
+
+    @Test
+    void heartbeatContractStaggeredConnectionsRetainTheirPhaseAfterLateExecution() {
+        var stream = new FakeStream();
+        var clock = new java.util.concurrent.atomic.AtomicLong();
+        var runtime = startDeterministic(stream, clock);
+        var late = RoutingId.fromHex("00000002");
+        stream.errorHandler.handle(PEER_A, MonitorEventType.CONNECTION_READY, 0, "ready");
+        clock.set(Duration.ofMillis(400).toNanos());
+        stream.errorHandler.handle(late, MonitorEventType.CONNECTION_READY, 0, "ready");
+
+        clock.set(Duration.ofMillis(999).toNanos());
+        runLivenessTimers(runtime);
+        assertEquals(List.of(), stream.heartbeatPingPeers);
+        clock.set(Duration.ofSeconds(1).toNanos());
+        runLivenessTimers(runtime);
+        assertEquals(List.of(PEER_A), stream.heartbeatPingPeers);
+        clock.set(Duration.ofMillis(1400).toNanos());
+        runLivenessTimers(runtime);
+        assertEquals(List.of(PEER_A, late), stream.heartbeatPingPeers);
+
+        clock.set(Duration.ofMillis(3250).toNanos());
+        runLivenessTimers(runtime);
+        runLivenessTimers(runtime);
+        assertEquals(2, java.util.Collections.frequency(stream.heartbeatPingPeers, PEER_A));
+        clock.set(Duration.ofSeconds(4).toNanos());
+        runLivenessTimers(runtime);
+        assertEquals(3, java.util.Collections.frequency(stream.heartbeatPingPeers, PEER_A));
+    }
+
+    @Test
+    void heartbeatContractInboundTimeoutWinsWhenIdleDeadlineCoincides() throws Exception {
+        var stream = new FakeStream();
+        var clock = new java.util.concurrent.atomic.AtomicLong();
+        var runtime = startDeterministic(stream, clock, b -> b.idleTimeout(Duration.ofSeconds(5)));
+        stream.errorHandler.handle(PEER_A, MonitorEventType.CONNECTION_READY, 0, "ready");
+        clock.set(Duration.ofMillis(4999).toNanos());
+        runLivenessTimers(runtime);
+        assertEquals(0, stream.sessionClosingSends.get());
+
+        clock.set(Duration.ofSeconds(5).toNanos());
+        List<String> reasons = new ArrayList<>();
+        try (AutoCloseable ignored = installClosedMetricSink(reasons)) {
+            runLivenessTimers(runtime);
             assertEquals(List.of("heartbeat_timeout"), reasons);
         }
     }
@@ -254,7 +302,7 @@ final class ZLinkStreamRuntimeIngressTest {
         stream.errorHandler.handle(PEER_A, MonitorEventType.CONNECTION_READY, 0, "ready");
         for (int second = 1; second <= 2; second++) {
             clock.set(Duration.ofSeconds(second).toNanos());
-            runtime.checkSessionLiveness();
+            runLivenessTimers(runtime);
         }
         assertEquals(0, stream.heartbeatPingAttempted.getCount());
         assertEquals(0, stream.sessionClosingSends.get());
@@ -315,11 +363,11 @@ final class ZLinkStreamRuntimeIngressTest {
         dispatchDeterministic(runtime, "activity", false);
         clock.set(Duration.ofSeconds(8).toNanos());
         stream.errorHandler.handle(PEER_A, MonitorEventType.CONNECTION_READY, 0, "ready");
-        runtime.checkSessionLiveness();
+        runLivenessTimers(runtime);
         assertSame(original, TestSession.lastSession.get());
         assertEquals(0, stream.sessionClosingSends.get());
         clock.set(Duration.ofSeconds(9).toNanos());
-        runtime.checkSessionLiveness();
+        runLivenessTimers(runtime);
         assertEquals(1, stream.sessionClosingSends.get());
     }
 
@@ -428,18 +476,18 @@ final class ZLinkStreamRuntimeIngressTest {
                         b -> b.heartbeat(Duration.ofSeconds(2), Duration.ofSeconds(6)));
         heartbeat.errorHandler.handle(PEER_A, MonitorEventType.CONNECTION_READY, 0, "ready");
         clock.set(Duration.ofSeconds(1).toNanos());
-        runtime.checkSessionLiveness();
+        runLivenessTimers(runtime);
         assertEquals(2, heartbeat.heartbeatPingAttempted.getCount());
         clock.set(Duration.ofSeconds(2).toNanos());
-        runtime.checkSessionLiveness();
+        runLivenessTimers(runtime);
         assertEquals(1, heartbeat.heartbeatPingAttempted.getCount());
         clock.set(Duration.ofMillis(5999).toNanos());
-        runtime.checkSessionLiveness();
+        runLivenessTimers(runtime);
         assertEquals(0, heartbeat.sessionClosingSends.get());
         clock.set(Duration.ofSeconds(6).toNanos());
         List<String> heartbeatReasons = new ArrayList<>();
         try (AutoCloseable ignored = installClosedMetricSink(heartbeatReasons)) {
-            runtime.checkSessionLiveness();
+            runLivenessTimers(runtime);
             assertEquals(List.of("heartbeat_timeout"), heartbeatReasons);
         }
         FakeStream idle = new FakeStream();
@@ -449,12 +497,12 @@ final class ZLinkStreamRuntimeIngressTest {
         idle.errorHandler.handle(PEER_A, MonitorEventType.CONNECTION_READY, 0, "ready");
         clock.set(Duration.ofMillis(2999).toNanos());
         dispatchDeterministic(idleRuntime, HEARTBEAT_PONG, true);
-        idleRuntime.checkSessionLiveness();
+        runLivenessTimers(idleRuntime);
         assertEquals(0, idle.sessionClosingSends.get());
         clock.set(Duration.ofSeconds(3).toNanos());
         List<String> idleReasons = new ArrayList<>();
         try (AutoCloseable ignored = installClosedMetricSink(idleReasons)) {
-            idleRuntime.checkSessionLiveness();
+            runLivenessTimers(idleRuntime);
             assertEquals(List.of("idle_timeout"), idleReasons);
         }
     }
@@ -505,7 +553,7 @@ final class ZLinkStreamRuntimeIngressTest {
                                         .idleTimeout(Duration.ofSeconds(Long.MAX_VALUE)));
         stream.errorHandler.handle(PEER_A, MonitorEventType.CONNECTION_READY, 0, "ready");
         clock.set(Duration.ofSeconds(35).toNanos());
-        runtime.checkSessionLiveness();
+        runLivenessTimers(runtime);
         assertEquals(0, stream.sessionClosingSends.get());
         assertEquals(2, stream.heartbeatPingAttempted.getCount());
     }
@@ -519,7 +567,7 @@ final class ZLinkStreamRuntimeIngressTest {
         for (int second = 1; second <= 35; second++) {
             clock.set(Duration.ofSeconds(second).toNanos());
             dispatchDeterministic(runtime, HEARTBEAT_PONG, true);
-            runtime.checkSessionLiveness();
+            runLivenessTimers(runtime);
             assertEquals(0, stream.sessionClosingSends.get());
         }
     }
@@ -535,17 +583,17 @@ final class ZLinkStreamRuntimeIngressTest {
         for (int second = 4; second <= 28; second += 4) {
             clock.set(Duration.ofSeconds(second).toNanos());
             dispatchDeterministic(runtime, HEARTBEAT_PONG, true);
-            runtime.checkSessionLiveness();
+            runLivenessTimers(runtime);
         }
         clock.set(Duration.ofSeconds(30).toNanos());
         dispatchDeterministic(runtime, HEARTBEAT_PONG, true);
-        runtime.checkSessionLiveness();
+        runLivenessTimers(runtime);
         assertEquals(0, stream.sessionClosingSends.get());
         clock.set(Duration.ofSeconds(34).toNanos());
         dispatchDeterministic(runtime, HEARTBEAT_PONG, true);
         List<String> reasons = new ArrayList<>();
         try (AutoCloseable ignored = installClosedMetricSink(reasons)) {
-            runtime.checkSessionLiveness();
+            runLivenessTimers(runtime);
             assertEquals(List.of("idle_timeout"), reasons);
         }
     }
@@ -564,6 +612,12 @@ final class ZLinkStreamRuntimeIngressTest {
         assertEquals(0, runtime.sessionContextCount());
         stream.errorHandler.handle(PEER_B, MonitorEventType.CONNECTION_READY, 0, "ready");
         assertEquals(1, runtime.sessionContextCount());
+    }
+
+    private final Map<ZLinkStreamRuntime, ManualScheduledExecutor> livenessTimers = new HashMap<>();
+
+    private void runLivenessTimers(ZLinkStreamRuntime runtime) {
+        livenessTimers.get(runtime).runDueCommands();
     }
 
     private ZLinkStreamRuntime startDeterministic(
@@ -610,7 +664,7 @@ final class ZLinkStreamRuntimeIngressTest {
         configure.accept(builder);
         var registration = options.registration();
         lastRegistration = registration;
-        var scheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+        var scheduler = new ManualScheduledExecutor(clock::get);
         var runtime =
                 new ZLinkStreamRuntime(
                                 new FakeProvider(stream),
@@ -633,7 +687,7 @@ final class ZLinkStreamRuntimeIngressTest {
                                 stateLane,
                                 sessions)
                         .start();
-        scheduler.shutdownNow();
+        livenessTimers.put(runtime, scheduler);
         runtimes.add(runtime);
         return runtime;
     }
@@ -3155,21 +3209,52 @@ final class ZLinkStreamRuntimeIngressTest {
         public void shutdown() {}
     }
 
-    private record ScheduledCommand(Runnable command, long delayNanos, ScheduledFuture<?> future) {}
+    private record ScheduledCommand(
+            Runnable command, long delayNanos, long dueNanos, ScheduledFuture<?> future) {}
 
     private static final class ManualScheduledExecutor extends ScheduledThreadPoolExecutor {
         private final LinkedBlockingQueue<ScheduledCommand> scheduledCommands =
                 new LinkedBlockingQueue<>();
 
+        private final java.util.function.LongSupplier clock;
+
         private ManualScheduledExecutor() {
+            this(() -> 0);
+        }
+
+        private ManualScheduledExecutor(java.util.function.LongSupplier clock) {
             super(1);
+            this.clock = clock;
+            setRemoveOnCancelPolicy(true);
         }
 
         @Override
         public ScheduledFuture<?> schedule(Runnable command, long delay, TimeUnit unit) {
             ScheduledFuture<?> future = super.schedule(() -> {}, 1, TimeUnit.DAYS);
-            scheduledCommands.add(new ScheduledCommand(command, unit.toNanos(delay), future));
+            long delayNanos = unit.toNanos(delay);
+            scheduledCommands.add(
+                    new ScheduledCommand(
+                            command, delayNanos, clock.getAsLong() + delayNanos, future));
             return future;
+        }
+
+        private void runDueCommands() {
+            scheduledCommands.removeIf(command -> command.future().isCancelled());
+            for (; ; ) {
+                ScheduledCommand due =
+                        scheduledCommands.stream()
+                                .filter(command -> command.dueNanos() - clock.getAsLong() <= 0)
+                                .min(java.util.Comparator.comparingLong(ScheduledCommand::dueNanos))
+                                .orElse(null);
+                if (due == null) {
+                    return;
+                }
+                scheduledCommands.remove(due);
+                if (!due.future().isCancelled()) {
+                    due.future().cancel(false);
+                    due.command().run();
+                }
+            }
         }
 
         private ScheduledCommand takeScheduledCommand() throws InterruptedException {
@@ -3207,6 +3292,8 @@ final class ZLinkStreamRuntimeIngressTest {
         private volatile boolean failHeartbeatPongSend;
         private volatile boolean failHeartbeatPingSend;
         private volatile boolean deferHeartbeatPongSend;
+        private final List<RoutingId> heartbeatPingPeers =
+                new java.util.concurrent.CopyOnWriteArrayList<>();
         private final CountDownLatch heartbeatPingAttempted = new CountDownLatch(2);
         private final CountDownLatch heartbeatPongAsyncAttempted = new CountDownLatch(1);
         private final AtomicInteger synchronousHeartbeatPongSends = new AtomicInteger();
@@ -3389,6 +3476,7 @@ final class ZLinkStreamRuntimeIngressTest {
                 actorUnboundSubmissions.incrementAndGet();
             }
             if (HEARTBEAT_PING.equals(header.packetName())) {
+                heartbeatPingPeers.add(routingId);
                 heartbeatPingAttempted.countDown();
                 if (failHeartbeatPingSend) {
                     throw new ZlinkSubmitException(SubmitResult.NOT_CONNECTED);
