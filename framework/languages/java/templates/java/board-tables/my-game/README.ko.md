@@ -186,6 +186,8 @@ runner는 `zlink.structure.json`을 검증하고 격리된 배포가 필요하�
 
 ## 알려진 문제
 
+> **주의: `null` 필드가 있는 메시지는 기록 없이 실패합니다([#5454](https://github.com/zlink-systems/zlink/issues/5454)).** Framework 0.33.0에서 typed JSON 직렬화는 스펙대로 non-nullable 메시지 필드의 `null`을 거부합니다. Spot이나 Actor 핸들러가 그런 메시지를 보내면(예: `String` 필드를 `null`로 둔 `sendToActor`) 실패가 핸들러의 `CompletionStage`에만 담깁니다. message-flow 로그와 노드 stdout·stderr에는 남지 않고, 클라이언트는 메시지를 기다리다 시간 초과로 끝납니다. 수정이 나올 때까지 메시지의 모든 필드를 채워 보내세요(빈 문자열은 `""`). 클라이언트가 응답 없이 기다리면 핸들러가 보내는 메시지에 `null` 필드가 있는지 먼저 확인하세요.
+
 Message Follow는 명시적으로 30초로 설정되어 있습니다. `SAFE_TO_SHUTDOWN` 관찰 예산은 이 기간에 기존 relocation 예산을 더한 값입니다. Update는 교체 node의 `READY`를 기다린 다음 교체 node가 새 table을 호스팅하고 한 판을 완료하는지 검증합니다.
 
 ## 배포 순서

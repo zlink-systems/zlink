@@ -185,6 +185,8 @@ Before the scenarios, the runner executes the server table's `--check-domain` mo
 
 ## Known issues
 
+> **Caution: a message with a `null` field fails silently ([#5454](https://github.com/zlink-systems/zlink/issues/5454)).** In Framework 0.33.0, typed JSON serialization rejects `null` in a non-nullable message field, as the specification requires. When a Spot or Actor handler sends such a message (for example `sendToActor` with a `String` field left `null`), the failure is recorded only in the handler's `CompletionStage`. It does not appear in the message-flow log or on the node's stdout or stderr, and the client simply times out waiting for the message. Until the fix ships, fill every message field before sending (send `""` for an empty string), and if a client waits without a reply, check for a `null` field in the messages the handler sends.
+
 Message Follow is explicitly configured for 30 seconds. The `SAFE_TO_SHUTDOWN` observation budget is that period plus the existing relocation budget. Update waits for replacement `READY`, then asserts that the replacement hosts the new table and completes a hand.
 
 ## Deployment sequence
