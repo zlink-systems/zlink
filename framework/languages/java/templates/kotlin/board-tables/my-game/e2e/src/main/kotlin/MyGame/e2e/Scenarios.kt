@@ -46,7 +46,7 @@ suspend fun scenario(
     }
     val suffix = UUID.randomUUID().toString()
     val tableId = "table-$suffix"
-    val p1 = Client(endpoint, "p1-$suffix", tableId)
+    var p1 = Client(endpoint, "p1-$suffix", tableId)
     var p2 = Client(endpoint, "p2-$suffix", tableId)
     var primaryFailure: Exception? = null
     try {
@@ -160,6 +160,23 @@ suspend fun scenario(
                     settled.seats == result1.seats &&
                     emptyHand.cards.isEmpty()
             )
+        }
+        if (id == "persist") {
+            val balances = result1.seats.associate { it.playerId to it.chips }
+            check(balances.getValue(p1.playerId) != Rules.INITIAL_CHIPS)
+            p1.close()
+            requireNotNull(nodes).replace(before1.nodeId)
+
+            p1 = Client(endpoint, p1.playerId, "$tableId-reloaded")
+            val record = p1.connect()
+            val fresh = p1.sessionInfo()
+            check(fresh.actorId == session1.actorId)
+            check(fresh.objectGeneration > session1.objectGeneration) {
+                "Persistence must be tested with a newly created Actor"
+            }
+            check(record.seats.single().chips == balances.getValue(p1.playerId)) {
+                "Fresh Actor did not load its settled balance"
+            }
         }
         if (id == "update") {
             requireNotNull(nodes).replace(before1.nodeId)

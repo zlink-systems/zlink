@@ -2,15 +2,18 @@
 
 # MyGame board tables
 
-This project is a four-player board table server written in Kotlin. The Session node accepts STREAM connections, binds each connection to a Player Actor, and relays messages. The Table User Spot owns seats, chips, cards, and turns. The Player Actor tracks its own matchmaking ticket. The Matchmaker node hosts the Pool Spot and owns matchmaking decisions. Add game rules at the extension points described in [AGENTS.md](AGENTS.md).
+This project is a four-player board table server written in Kotlin. The Session node accepts STREAM connections, binds each connection to a Player Actor, and relays messages. The Table User Spot owns seats, chips, cards, and turns. The Player Actor tracks its own matchmaking ticket. The Matchmaker node hosts the Pool Spot and assigns rooms. The Play nodes call the API node over a ClientServer Channel. A Player Actor loads its chips once before seating, and the Table Spot commits all seat balances to Redis together before sending the round result. Add game rules at the extension points described in [AGENTS.md](AGENTS.md).
 
 ```mermaid
 flowchart LR
   players[Players] -->|STREAM| session[Session node]
   session -->|relay| table[Table node ×N]
   table -->|Queue / entry report| pool[Matchmaker node]
-  pool -->|Room preparation / decision| table
-  table -->|Location / lease| location[Location Store]
+  pool -->|PrepareRoom / CommitRoom| table
+  table -->|RoomPrepared| pool
+  table -->|ClientServer Channel| api[API node · Actor DB]
+  api -->|Player balances| location[Redis]
+  table -->|Location / lease| location
 ```
 
 ## Prerequisites
@@ -43,9 +46,9 @@ Start Docker, then run the server in its own terminal.
 .\run-server.cmd
 ```
 
-The launcher builds the server and starts Redis, both Table nodes, Matchmaker, and Session. Once all nodes are ready, use the Session STREAM address printed on the `Server ready: ws://127.0.0.1:<port>` line. Press Ctrl+C in that terminal to stop its nodes and remove its Redis Compose project.
+The launcher builds the server and starts Redis, the API node, both Table nodes, Matchmaker, and Session. Once all nodes are ready, use the Session STREAM address printed on the `Server ready: ws://127.0.0.1:<port>` line. Press Ctrl+C in that terminal to stop its nodes and remove its Redis Compose project.
 
-From another terminal, run `./run-e2e.sh` or `.\run-e2e.cmd`. The script discovers the running server through `.logs/server.json` and runs `table`, `reconnect`, `match`, and `match-cancel` against it. Select scenarios with `--scenario match` or `-Scenario match`. The `update` scenario drains and replaces a node and runs only in an isolated e2e run. Stop the foreground server before selecting `update`.
+From another terminal, run `./run-e2e.sh` or `.\run-e2e.cmd`. The script discovers the running server through `.logs/server.json` and runs `table`, `reconnect`, `match`, and `match-cancel` against it. Select scenarios with `--scenario match` or `-Scenario match`. The `update` and `persist` scenarios replace a Play node and require an isolated e2e run. Stop the foreground server before selecting either scenario.
 
 ## Client connection
 
@@ -57,7 +60,7 @@ Loopback is reachable only inside the same host/network namespace. Keep a deploy
 
 Send `JoinTableRequest(playerId, tableId)` to join a specific table. Successful seating produces a `TableView` push. `ActionRejected` reports rejection.
 
-Send an empty `FindMatch` to join the matchmaking queue. The Session assigns a player ID when this is the first packet. `MatchQueued` returns a ticket ID, which the client can pass to `CancelMatch`. The Pool pairs the two longest-waiting players, prepares a new Table, and commits their seats after both Actors report successful entry. Each player receives `MatchFound` followed by `TableView` and uses the existing game messages at that table. The Pool allows 10 seconds for both Actors to enter. Waiting tickets expire after 120 seconds, and a disconnected waiting ticket has up to 15 seconds of grace.
+Send an empty `FindMatch` to join the matchmaking queue. The Session assigns a player ID when this is the first packet. `MatchQueued` returns a ticket ID, which the client can pass to `CancelMatch`. The Pool pairs the two longest-waiting players. The Pool records the pair as preparing and sends `PrepareRoom` to the Play nodes’ `room-provisioner-board` Instance Spot. That Spot creates the Table User Spot and forwards `PrepareRoom` to it. The Table sends `RoomPrepared` to the Pool, which handles it in a new turn. The Pool commits the seats after both Actors report successful entry. Each player receives `MatchFound` followed by `TableView` and uses the existing game messages at that table. The Pool allows 10 seconds for both Actors to enter. Waiting tickets expire after 120 seconds, and a disconnected waiting ticket has up to 15 seconds of grace.
 
 After admission, `SessionInfoRequest` uses `connector.kotlin().request<SessionInfo>(SessionInfoRequest()).await()` for a correlated `SessionInfo` reply. The first game operation above uses `send(...).await()` and server pushes. This template does not authenticate player identity; add identity validation before Actor binding for production.
 
@@ -143,17 +146,17 @@ For local process debugging, run `./run-e2e.sh --local` or `.\run-e2e.cmd -Local
 
 ```sh
 ./run-e2e.sh
-./run-e2e.sh --scenario table,reconnect,match,match-cancel,update
+./run-e2e.sh --scenario table,reconnect,match,match-cancel,update,persist
 ./run-e2e.sh --check-structure
 ```
 
 ```powershell
 .\run-e2e.cmd
-.\run-e2e.cmd -Scenario table,reconnect,match,match-cancel,update
+.\run-e2e.cmd -Scenario table,reconnect,match,match-cancel,update,persist
 .\run-e2e.cmd -CheckStructure
 ```
 
-The console prints a header and result for each scenario and a final pass count. The runner checks the structure, then starts Redis in a uniquely named Compose project, two Table nodes, a Matchmaker node, and the Session node. The OS assigns the Redis, mesh, and STREAM ports. Each run keeps its key prefix, configuration, stdout, stderr, and message flow records under `.logs/run-<id>/`. Cleanup stops only the processes and the Compose project that the run created. The exit code is 1 when a scenario or the cleanup fails.
+The console prints a header and result for each scenario and a final pass count. The runner checks the structure, then starts Redis in a uniquely named Compose project, an API node, two Table nodes, a Matchmaker node, and the Session node. The OS assigns the Redis, API channel, mesh, and STREAM ports. Each run keeps its key prefix, configuration, stdout, stderr, and message flow records under `.logs/run-<id>/`. Cleanup stops only the processes and the Compose project that the run created. The exit code is 1 when a scenario or the cleanup fails.
 
 | Scenario | Observable behavior |
 | --- | --- |
@@ -162,14 +165,15 @@ The console prints a header and result for each scenario and a final pass count.
 | `match` | Two queued players receive the same room ID and distinct seats, then settle a hand. |
 | `match-cancel` | A queued player cancels with reason `cancelled`. Two subsequent players match. |
 | `update` | Both clients keep their `SessionInfo` before and after drain. Table state persists through settlement on another node and source replacement; settlement clears every hand, and a later private-hand query returns an empty list. |
+| `persist` | A fresh Actor with the same player ID loads its settled chips after the Play process is replaced while the API node and Redis remain running. |
 
 `SessionInfo` carries the Session ID and the ID and generation of the bound Actor. `TableView` carries only the table state. The Session node answers `SessionInfoRequest`. A request handler sends its response to the requesting Actor's bound session; other state pushes use the public Actor send API.
 
 ## Structure and extension
 
-`server/shared` provides messages, constants, configuration, and the common bootstrap. `server/session` provides STREAM, Actor binding, and relay. `server/table` provides the game, the Entry Spot, and the relocation adapters. `server/matchmaker` hosts the in-memory Pool Spot `pool-board`. Edit `MatchRule.kt` to change how the Pool chooses a pair. `e2e` provides the public stream connector client and the process runner. The project uses the default typed JSON serializer. Spring Boot supplies the public Framework bootstrap and constructor injection and does not run an HTTP server.
+`server/shared` provides messages, constants, configuration, and the common bootstrap. `server/session` provides STREAM, Actor binding, and relay. `server/table` provides the game, the Entry Spot, and the relocation adapters. `server/matchmaker` hosts the in-memory Pool Spot `pool-board`. Edit `MatchRule.kt` to change how the Pool chooses a pair. `server/api` serves `LoadPlayer` and `CommitRound` on `player-data`. Redis stores the balances and the round commit record under the deployment prefix’s `players:` keys. Use a fresh table ID when creating a new table whose hand numbering starts over within the same deployment prefix. `e2e` provides the public stream connector client and the process runner. The project uses the default typed JSON serializer. Spring Boot supplies the public Framework bootstrap and constructor injection and does not run an HTTP server.
 
-The Table Spot uses the default SPOT_WIDE execution gate. State changes are not protected by a separate lock or queue. The Table adapter stores only application state as JSON, and the Player adapter stores the current ticket and assignment. The Framework transfers Actor identity, generation, membership, and session routes.
+The Table Spot uses the default SPOT_WIDE execution gate. State changes are not protected by a separate lock or queue. The Table adapter stores only application state as JSON, and the Player adapter stores the chips and current matchmaking state. The Framework transfers Actor identity, generation, membership, and session routes.
 
 Message Follow is explicitly configured for 30 seconds. The `SAFE_TO_SHUTDOWN` observation budget is that period plus the existing relocation budget. Update waits for replacement `READY`, then asserts that the replacement hosts the new table and completes a hand.
 
@@ -185,11 +189,12 @@ Message Follow is explicitly configured for 30 seconds. The `SAFE_TO_SHUTDOWN` o
 
 ## Deployment sequence
 
-Prepare Redis, then set the endpoints and the shared key prefix in `server/config/*.json` for the target environment. Start Table nodes A and B and the Matchmaker node, wait for `READY` from each, then start the Session node. Node IDs must match between the configuration and the structure file. Starting a replacement process with the same ID still gives it a new routing identity from the Framework.
+Prepare Redis, then set the endpoints and the shared key prefix in `server/config/*.json` for the target environment. Start the API node, Table nodes A and B, and the Matchmaker node, wait for `READY` from each, then start the Session node. Node IDs must match between the configuration and the structure file. Starting a replacement process with the same ID still gives it a new routing identity from the Framework.
 
 Example server commands (JDK 25):
 
 ```sh
+java --enable-native-access=ALL-UNNAMED -cp 'server/api/build/install/api/lib/*' MyGame.api.ProgramKt server/config/api.json
 java --enable-native-access=ALL-UNNAMED -cp 'server/table/build/install/table/lib/*' MyGame.table.ProgramKt server/config/table-a.json
 java --enable-native-access=ALL-UNNAMED -cp 'server/table/build/install/table/lib/*' MyGame.table.ProgramKt server/config/table-b.json
 java --enable-native-access=ALL-UNNAMED -cp 'server/matchmaker/build/install/matchmaker/lib/*' MyGame.matchmaker.ProgramKt server/config/matchmaker.json
@@ -200,6 +205,6 @@ Writing `drain` to a Table process's stdin produces `RELOCATION_REQUESTED`, `REL
 
 The Windows runner starts the JDK 25 that Gradle selected directly. The `lib/*` classpath avoids the cmd classpath length limit. For manual runs, use the JDK 25 `java.exe`, quote the classpath wildcard, and keep the `--enable-native-access=ALL-UNNAMED` argument.
 
-The e2e runner sets each node's optional `tableCapacity` to the number of selected scenarios through the public Table stable-type limit. Each scenario retains one table. After update drains the source, the surviving node is at capacity, so only the replacement can host the new table. Both new players must observe the replacement node ID. Omitted or zero capacity leaves deployment capacity unlimited. Entry Spots belong to the Table nodes. Matchmaker starts the fixed `pool-board` Instance Spot.
+The e2e runner sets each node's optional `tableCapacity` to the number of scenarios in that deployment through the public Table stable-type limit. Each scenario retains one table. After update drains the source, the surviving node is at capacity, so only the replacement can host the new table. Both new players must observe the replacement node ID. Omitted or zero capacity leaves deployment capacity unlimited. Entry Spots belong to the Table nodes. Matchmaker starts the fixed `pool-board` Instance Spot.
 
 Before the scenarios, the runner executes the server table's `--check-domain` mode. It checks seven domain boundaries and reports `Domain checks: 7/7 passed`, then verifies the `ActionRejected` JSON contract. `retryAfterMs` is a signed 32-bit JSON integer with the lower camel case property name; chips, pot, and hand numbers remain 64-bit integers.

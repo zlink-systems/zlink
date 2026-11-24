@@ -14,6 +14,10 @@ class PoolRequests {
     suspend fun cancel(pool: Pool, request: CancelTicket): MatchCancelled = pool.cancel(request)
 }
 
+class PreparedHandler : ZLinkSuspendingSpotPacketHandler<Pool, RoomPrepared> {
+    override suspend fun handle(spot: Pool, message: RoomPrepared) = spot.prepared(message)
+}
+
 class EnterHandler : ZLinkSuspendingSpotPacketHandler<Pool, EnterReport> {
     override suspend fun handle(spot: Pool, message: EnterReport) = spot.entered(message)
 }

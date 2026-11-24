@@ -7,7 +7,7 @@ internal class Ticket(val id: String, val playerId: String, val expiresAt: Long)
 }
 
 internal class Assignment(val id: String, val tickets: List<Ticket>, val deadline: Long) {
-    val entered = mutableSetOf<String>()
+    var entered: MutableSet<String>? = null
 }
 
 internal class MatchQueue {

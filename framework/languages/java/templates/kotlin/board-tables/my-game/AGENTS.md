@@ -5,7 +5,7 @@
 Every server process in this project is a stateful ZLink node. Before writing code, decide which kind you are editing.
 
 - A game node is not a REST server. A player's state is owned by one session-bound Actor (or the Spot that owns a shared value). Load it once on connect; do not read the database while handling a request.
-- Write only results to the database, one transaction per round. Check duplicate requests in Actor or Spot memory.
+- Write only results to the database, one transaction per round. Check duplicate gameplay requests in Actor or Spot memory. The API node deduplicates persisted round results by table ID and hand number in Redis.
 - While a game is running, a Spot handler never awaits a remote request or a database reply: the await holds the Spot's turn and stops every message and timer in it. When a round ends, the Spot writes the results of all its Actors in one transaction, then tells each Actor after the commit.
 - Values many players see live in node memory or one owning Spot; values many requests update are applied by that one owning Spot. A process that does not own a value sends a request to its owner instead of writing it.
 - Spots and Actors already process one message at a time. Do not guard their state with locks, semaphores or process-wide static stores, and do not update memory from database commit hooks; the writer updates its owner's memory after commit, others send a message to the owner.
@@ -23,7 +23,7 @@ Details: [Stateful game nodes and the HTTP lobby](https://docs.zlink.systems/kot
 
 ## Project overview
 
-This Kotlin project (Kotlin 2.3.21 on a Java 25 toolchain, built with Gradle) is a four-player board table server. It runs a Session gateway for connections, two Table hosts (`tableA` and `tableB`), a Matchmaker node, and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework packages to `0.34.0` (`frameworkVersion`) and the ZLink binding to `1.26.0` (`bindingVersion`).
+This Kotlin project (Kotlin 2.3.21 on a Java 25 toolchain, built with Gradle) is a four-player board table server. It runs a Session gateway for connections, two Table hosts (`tableA` and `tableB`), a Matchmaker node, an API node, and Redis for location, relocation, and player data. `build.gradle.kts` pins the ZLink Framework packages to `0.34.0` (`frameworkVersion`) and the ZLink binding to `1.26.0` (`bindingVersion`).
 
 The project layout and feature procedure below describe where to add gameplay. The [README](README.md) covers prerequisites, deployment, and the scenario assertions. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 
@@ -31,13 +31,13 @@ The project layout and feature procedure below describe where to add gameplay. T
 
 ## Development commands
 
-Run these commands from this directory. Install JDK 25 for the foreground server. It prints the Session WebSocket address once Redis and all nodes are ready. Stop it with Ctrl+C. From another terminal, run e2e to attach through `.logs/server.json`. The attached run leaves the server running and exercises all scenarios except `update`. Stop the server before requesting the isolated `update` scenario. The default isolated mode uses Docker without a host JDK.
+Run these commands from this directory. Install JDK 25 for the foreground server. It prints the Session WebSocket address once Redis and all nodes are ready. Stop it with Ctrl+C. From another terminal, run e2e to attach through `.logs/server.json`. The attached run leaves the server running and exercises the scenarios that leave the running deployment intact. Stop the server before running `update` or `persist`. The default isolated mode uses Docker without a host JDK.
 
 ```powershell
 .\run-server.cmd
 .\run-e2e.cmd -BuildOnly
 .\run-e2e.cmd
-.\run-e2e.cmd -Scenario table,reconnect,match,match-cancel,update
+.\run-e2e.cmd -Scenario table,reconnect,match,match-cancel,update,persist
 .\run-e2e.cmd -CheckStructure
 ```
 
@@ -47,7 +47,7 @@ Bash provides the same workflow:
 ./run-server.sh
 ./run-e2e.sh --build-only
 ./run-e2e.sh
-./run-e2e.sh --scenario table,reconnect,match,match-cancel,update
+./run-e2e.sh --scenario table,reconnect,match,match-cancel,update,persist
 ./run-e2e.sh --check-structure
 ```
 
@@ -61,15 +61,19 @@ For host process debugging, install JDK 25 and add `--local` or `-Local`. Add `-
 
 ### Tables and players
 
-An Actor is a game state object addressed by ID; `Player` in `server/table/src/main/kotlin/MyGame/table/Player.kt` keeps its current matchmaking ticket and assignment in relocatable state. A Spot is a state object that accepts Actors and executes shared game rules; `Table` in `server/table/src/main/kotlin/MyGame/table/Table.kt` is the Table User Spot that owns seats (`Seat`), chips, cards, turns, and the pot in `TableState`. Hidden information stays in the Table: `HandDealt` sends a player's cards only to that player, and `TableView` carries only card counts.
+An Actor is a game state object addressed by ID; `Player` in `server/table/src/main/kotlin/MyGame/table/Player.kt` keeps its chips and matchmaking state in relocatable state. A Spot is a state object that accepts Actors and executes shared game rules; `Table` in `server/table/src/main/kotlin/MyGame/table/Table.kt` is the Table User Spot that owns seats (`Seat`), chips, cards, turns, and the pot in `TableState`. Hidden information stays in the Table: `HandDealt` sends a player's cards only to that player, and `TableView` carries only card counts.
 
 `server/table/src/main/kotlin/MyGame/table/Program.kt` registers the handlers, the Entry Spot, the `Table` factory, and the `Player` factory. `Table` uses the default `SPOT_WIDE` execution mode, and the optional `tableCapacity` setting limits Tables per node with `stableTypeLimit` (omitted or zero leaves it unlimited). `Entry` and `Join` in `Player.kt` handle player entry, and the `Actions` class in `Table.kt` holds the handlers that connect player requests to Table rules. `Transfer.kt` defines `ensureActive` for the relocation adapters. When changing node composition, update registrations, `server/config/`, and the descriptor together so the structure check validates the same composition.
 
 ### Matchmaker
 
-`server/matchmaker` registers only the SpotWide Instance Spot factory for `pool-board`. `MatchQueue.kt` stores tickets and reservations in memory. Edit `MatchRule.kt` to change pair selection. `Pool.kt` prepares the Table, commits entry after both Players report success, and withdraws the room on failure or after 10 seconds. The current Spot reports client disconnects to the Pool. A disconnected waiting ticket has up to 15 seconds of grace before cancellation. A reserved ticket follows the entry deadline. Waiting tickets expire after 120 seconds.
+`server/matchmaker` registers only the SpotWide Instance Spot factory for `pool-board`. `MatchQueue.kt` stores tickets and reservations in memory. Edit `MatchRule.kt` to change pair selection. The Pool records the pair as preparing and sends `PrepareRoom` to the Play nodes’ `room-provisioner-board` Instance Spot. That Spot creates the Table User Spot and forwards `PrepareRoom` to it. The Table sends `RoomPrepared` to the Pool, which handles it in a new turn. `Pool.kt` commits entry after both Players report success and withdraws when entry fails or the 10-second deadline expires. The current Spot reports client disconnects to the Pool. A disconnected waiting ticket has up to 15 seconds of grace before cancellation. A reserved ticket follows the entry deadline. Waiting tickets expire after 120 seconds.
 
 `PlayerMatching.kt` handles the typed client requests and assignment notifications. `RoomReservation.kt` connects room preparation, commit, and withdrawal to the Table. Keep ticket decisions in the Pool and seat assignment in the Table.
+
+### API node
+
+`server/api` serves the `player-data` ClientServer Channel. Before taking a seat, a Player Actor loads its chips once through `loadPlayer`. At the end of a hand, the Table computes the final balances and calls `commitRound` once. The API node stores all balances and the round marker in one Redis transaction. The Table notifies Players after the reply.
 
 ### Shared contracts and hosting
 
@@ -83,11 +87,11 @@ An Actor is a game state object addressed by ID; `Player` in `server/table/src/m
 
 ### RouteMesh and channels
 
-A RouteMesh connects nodes that exchange messages between processes; this project uses `Names.MESH` (`my-game-tables`). Channels distinguish messages by purpose and name; this project declares no application channels (`channels` is empty in `zlink.structure.json`). [Channel messaging](https://docs.zlink.systems/kotlin/guide/server/20-channel-messaging/) describes registration and calls.
+A RouteMesh connects nodes that exchange messages between processes; this project uses `Names.MESH` (`my-game-tables`). Channels distinguish messages by purpose and name; Table hosts are clients of the `player-data` ClientServer Channel declared in `zlink.structure.json`. [Channel messaging](https://docs.zlink.systems/kotlin/guide/server/20-channel-messaging/) describes registration and calls.
 
 ### Spots and Actors
 
-`Entry` handles Actor entry and `Table` is a dynamically created User Spot that owns a table's state. The [Spot guide](https://docs.zlink.systems/kotlin/guide/server/21-spot/) describes registration and calls for these objects. `Player` is addressed by player ID and keeps no copy of table state; the [Actor guide](https://docs.zlink.systems/kotlin/guide/server/22-actor/) describes Actor creation and calls.
+`Entry` handles Actor entry and `Table` is a dynamically created User Spot that owns a table's state. The [Spot guide](https://docs.zlink.systems/kotlin/guide/server/21-spot/) describes registration and calls for these objects. `Player` is addressed by player ID and keeps its loaded or last committed chip balance; the [Actor guide](https://docs.zlink.systems/kotlin/guide/server/22-actor/) describes Actor creation and calls.
 
 ### STREAM and Sessions
 
@@ -103,14 +107,14 @@ A membership change moves an Actor from one Spot to another. Admission is the ta
 
 ### Host relocation and drain
 
-Relocation changes an object's execution host; drain moves a host's workload elsewhere so the host can shut down. Application adapters capture and restore game state, while Framework transfers workload and routes. `runNode` in `Hosting.kt` requests host relocation when it reads `drain` and reports `SAFE_TO_SHUTDOWN` after observing it; `TableTransfer` stores `TableState` as JSON and `PlayerTransfer` stores nothing. The [Relocation guide](https://docs.zlink.systems/kotlin/guide/server/37-relocation/) explains the procedure.
+Relocation changes an object's execution host; drain moves a host's workload elsewhere so the host can shut down. Application adapters capture and restore game state, while Framework transfers workload and routes. `runNode` in `Hosting.kt` requests host relocation when it reads `drain` and reports `SAFE_TO_SHUTDOWN` after observing it; `TableTransfer` stores `TableState` as JSON and `PlayerTransfer` stores `PlayerState` as JSON. The [Relocation guide](https://docs.zlink.systems/kotlin/guide/server/37-relocation/) explains the procedure.
 
 ## Request flow
 
 Requests in the example game follow this path. Reading the code along this path before adding or transferring a feature locates the places to change.
 
 1. The client connects to the Session node over STREAM and sends the first packet, `JoinTableRequest`. `GameSession` calls `getOrCreate` for the Player Actor by `playerId`, binds it to the Session with `bindOrGet`, and relays the original packet.
-2. A new Actor starts in the Entry Spot `Entry`. `Join.join` checks the identity, creates the table by `tableId` with `getOrCreate`, and requests `joinSpot(...).defer()`.
+2. A new Actor starts in the Entry Spot `Entry`. `Join.join` checks the identity, loads the Actor’s chips once, creates the table by `tableId` with `getOrCreate`, and requests `joinSpot(...).defer()`.
 3. `Table.onActorJoinSuspending` seats the player or rejects the join when the table is full. After an accepted join, `Table.onJoinedActorSuspending` pushes a `TableView` to every seated player; a rejection reaches the client as `ActionRejected` from `Player.onJoinCompletedSuspending`.
 4. Later packets (`TableViewRequest`, `StartHandRequest`, `BetRequest`) are handled by the `Actions` handlers of the Table that holds the Actor. Replies go through the requester's bound Session; pushes to other seated players use `sendToActor`, and the receiving `Actions` handlers (`tableView`, `dealt`, `result`) forward them through that Actor's bound Session.
 5. A reconnecting client sends `JoinTableRequest` again on a new Session. The same Actor is bound, `Table.admit` accepts the seated player without a new seat, and `Actions.join` resends the current view and the player's cards.
@@ -138,7 +142,7 @@ The server validates actions and decides card distribution, turn order, chip bal
 
 Use the public packages from Maven Central at the versions pinned in `build.gradle.kts`, and keep project dependencies between this project's own Gradle modules. Process typed messages with the default Framework JSON serializer so processes use the same contract. Limit direct serialization in relocation adapters (the `*Transfer` classes) to application state, keeping management of Framework execution state separate from game state. Framework owns routing, leases, membership, completion, queues, and execution gates; do not duplicate those decisions in application state.
 
-Manage each game fact, such as a seat's chips, in the object responsible for changing it (`Table`). Do not copy Table state into the Player Actor. Replies inside an Actor handler go through that Actor's bound Session; other pushes address the Actor by player ID with the public Actor client, and the receiving Actor handler forwards them through its bound Session. A Spot must not retain Actor references for later delivery because host relocation does not repeat `onJoinedActor` on the target. Session binding owns Actor identity, so game messages do not duplicate it (`SessionInfo` reads the current binding). Sessions forward packets after binding; the Actor or Spot responsible for the state makes gameplay decisions.
+Manage each game fact, such as a seat's chips, in the object responsible for changing it (`Table`). The Player Actor keeps the committed balance used to enter a table. The Table owns live seat balances and sends the final balance to each Actor after the round commits. Replies inside an Actor handler go through that Actor's bound Session; other pushes address the Actor by player ID with the public Actor client, and the receiving Actor handler forwards them through its bound Session. A Spot must not retain Actor references for later delivery because host relocation does not repeat `onJoinedActor` on the target. Session binding owns Actor identity, so game messages do not duplicate it (`SessionInfo` reads the current binding). Sessions forward packets after binding; the Actor or Spot responsible for the state makes gameplay decisions.
 
 ### Asynchronous execution and lifecycle
 

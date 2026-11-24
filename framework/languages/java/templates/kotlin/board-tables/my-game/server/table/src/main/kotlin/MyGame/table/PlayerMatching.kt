@@ -13,49 +13,50 @@ internal data class PlayerMatch(
     val withdrawnAssignments: Set<String> = emptySet(),
 )
 
-data class RoomAdmission(val assignmentId: String)
+data class RoomAdmission(val assignmentId: String, val chips: Long)
 
 @ZLinkHandlerGroup(Names.PLAYER)
 class PlayerMatching(private val routes: ZLinkRouteClient) {
     @ZLinkSpotActorSend
     suspend fun find(actor: Player, request: FindMatch) {
         val queued =
-            actor.match?.let { MatchQueued(it.ticketId) }
+            actor.state.match?.let { MatchQueued(it.ticketId) }
                 ?: run {
                     routes
                         .requestPool<MatchQueued>(
                             MatchRequest(UUID.randomUUID().toString(), actor.context.actorId())
                         )
-                        .also { actor.match = PlayerMatch(it.ticketId) }
+                        .also { actor.state.match = PlayerMatch(it.ticketId) }
                 }
         actor.context.boundSession().kotlin().send(queued).await()
     }
 
     @ZLinkSpotActorSend
     suspend fun cancel(actor: Player, request: CancelMatch) {
-        if (actor.match?.ticketId != request.ticketId) return
+        if (actor.state.match?.ticketId != request.ticketId) return
         val result = routes.requestPool<MatchCancelled>(CancelTicket(request.ticketId))
         cancelled(actor, result)
     }
 
     @ZLinkSpotActorSend
     suspend fun assigned(actor: Player, message: MatchAssigned) {
-        val ticket = actor.match ?: return
+        val ticket = actor.state.match ?: return
         if (
             ticket.ticketId != message.ticketId ||
                 ticket.assignmentId != null ||
                 message.assignmentId in ticket.withdrawnAssignments
         )
             return
-        actor.match = ticket.copy(assignmentId = message.assignmentId)
-        actor.context.joinSpot(message.roomId, RoomAdmission(message.assignmentId)).defer()
+        val chips = actor.loadChips()
+        actor.state.match = ticket.copy(assignmentId = message.assignmentId)
+        actor.context.joinSpot(message.roomId, RoomAdmission(message.assignmentId, chips)).defer()
     }
 
     @ZLinkSpotActorSend
     suspend fun cancelled(actor: Player, message: MatchCancelled) {
-        val ticket = actor.match ?: return
+        val ticket = actor.state.match ?: return
         if (ticket.ticketId != message.ticketId) return
-        actor.match = null
+        actor.state.match = null
         if (message.reason != MatchReason.DISCONNECTED) {
             actor.context.boundSession().kotlin().send(message).await()
         }
@@ -69,9 +70,9 @@ class PlayerMatching(private val routes: ZLinkRouteClient) {
 
     @ZLinkSpotActorSend
     suspend fun withdrawn(actor: Player, message: WithdrawRoom) {
-        val ticket = actor.match ?: return
+        val ticket = actor.state.match ?: return
         if (ticket.assignmentId != message.assignmentId) return
-        actor.match =
+        actor.state.match =
             ticket.copy(
                 assignmentId = null,
                 withdrawnAssignments = ticket.withdrawnAssignments + message.assignmentId,
@@ -88,10 +89,10 @@ class PlayerMatching(private val routes: ZLinkRouteClient) {
         dispatch: ZLinkMessageContext,
         message: CommitRoom,
     ) {
-        val ticket = actor.match ?: return
+        val ticket = actor.state.match ?: return
         if (ticket.assignmentId != message.assignmentId) return
         val view = table.committedView(actor.context.actorId(), message.assignmentId) ?: return
-        actor.match = null
+        actor.state.match = null
         val session = actor.context.boundSession().kotlin()
         session.send(MatchFound(ticket.ticketId, view.tableId, view.yourSeat)).await()
         session.send(view).await()

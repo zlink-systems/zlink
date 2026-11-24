@@ -8,10 +8,14 @@ object Names {
     const val STREAM = "players"
     const val PLAYER = "Player"
     const val TABLE = "Table"
+    const val ROOM_PROVISIONER = "RoomProvisioner"
+    const val ROOM_PROVISIONER_KEY = "room-provisioner-board"
     const val POOL = "Pool"
     const val POOL_KEY = "pool-board"
     const val MATCHMAKER = "matchmaker"
-    val SCENARIOS = listOf("table", "reconnect", "match", "match-cancel", "update")
+    const val API = "api"
+    const val PLAYER_DATA = "player-data"
+    val SCENARIOS = listOf("table", "reconnect", "match", "match-cancel", "update", "persist")
 }
 
 object Rules {

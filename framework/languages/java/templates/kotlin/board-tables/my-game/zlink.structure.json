@@ -2,10 +2,10 @@
   "version": 1, "id": "board-tables", "name": "my-game", "language": "kotlin",
   "run": {
     "commands": {
-      "sh": ["./run-server.sh", "./run-e2e.sh --build-only", "./run-e2e.sh", "./run-e2e.sh --scenario table,reconnect,match,match-cancel,update"],
-      "powershell": [".\\run-server.cmd", ".\\run-e2e.cmd -BuildOnly", ".\\run-e2e.cmd", ".\\run-e2e.cmd -Scenario table,reconnect,match,match-cancel,update"]
+      "sh": ["./run-server.sh", "./run-e2e.sh --build-only", "./run-e2e.sh", "./run-e2e.sh --scenario table,reconnect,match,match-cancel,update,persist"],
+      "powershell": [".\\run-server.cmd", ".\\run-e2e.cmd -BuildOnly", ".\\run-e2e.cmd", ".\\run-e2e.cmd -Scenario table,reconnect,match,match-cancel,update,persist"]
     },
-    "scenarios": ["table", "reconnect", "match", "match-cancel", "update"]
+    "scenarios": ["table", "reconnect", "match", "match-cancel", "update", "persist"]
   },
   "nodes": [
     { "id": "players", "role": "external", "title": "Players", "config": null },
@@ -13,13 +13,17 @@
     { "id": "tableA", "role": "table", "title": "Table node A", "config": "server/config/table-a.json" },
     { "id": "tableB", "role": "table", "title": "Table node B", "config": "server/config/table-b.json" },
     { "id": "matchmaker", "role": "matchmaker", "title": "Matchmaker node", "config": "server/config/matchmaker.json" },
+    { "id": "api", "role": "api", "title": "API node (Actor DB)", "config": "server/config/api.json" },
     { "id": "location", "role": "location-store", "title": "Location Store", "config": "docker-compose.yml" }
   ],
-  "channels": [],
+  "channels": [
+    { "name": "player-data", "owner": "api", "kind": "client-server" }
+  ],
   "spots": [
     { "id": "table-entry-a", "kind": "entry", "type": null, "owner": "tableA" },
     { "id": "table-entry-b", "kind": "entry", "type": null, "owner": "tableB" },
     { "id": "table", "kind": "user", "type": "Table", "owner": "tableA", "dynamic": true },
+    { "id": "room-provisioner", "kind": "instance", "type": "RoomProvisioner", "owner": "tableA", "logicalId": "room-provisioner-board" },
     { "id": "pool-board", "kind": "instance", "type": "Pool", "owner": "matchmaker", "logicalId": "pool-board" }
   ],
   "edges": [
@@ -27,6 +31,8 @@
     { "from": "session", "to": "tableA", "label": "relay" },
     { "from": "tableA", "to": "matchmaker", "label": "queue / assignment" },
     { "from": "matchmaker", "to": "tableA", "label": "prepare / commit" },
+    { "from": "tableA", "to": "api", "label": "player-data" },
+    { "from": "tableB", "to": "api", "label": "player-data" },
     { "from": "tableA", "to": "location", "label": "Location / lease", "semantic": "location-authority" }
   ]
 }

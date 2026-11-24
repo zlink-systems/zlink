@@ -19,14 +19,16 @@ fun main(args: Array<String>) = runBlocking {
         "Invalid scenarios: $requested"
     }
     var selected = Names.SCENARIOS.filter { it in requested }
+    val hostScenarios = setOf("update", "persist")
     if (attach && scenarioArgs.isEmpty()) {
-        selected = selected.filter { it != "update" }
-        println("Running against the started server; update runs when no server is running.")
+        selected = selected.filterNot { it in hostScenarios }
+        println("Attached runs leave the server running; update and persist run in isolation.")
     }
     var passed = 0
-    suspend fun runScenarios(endpoint: String, nodes: Nodes? = null) {
-        selected.forEachIndexed { index, id ->
-            println("━━ $id (${index + 1}/${selected.size}) ━━")
+    var started = 0
+    suspend fun runScenarios(scenarios: List<String>, endpoint: String, nodes: Nodes? = null) {
+        for (id in scenarios) {
+            println("━━ $id (${++started}/${selected.size}) ━━")
             try {
                 scenario(id, endpoint, nodes)
                 passed++
@@ -40,20 +42,25 @@ fun main(args: Array<String>) = runBlocking {
     val completed =
         try {
             if (attach) {
-                require("update" !in selected) {
-                    "The update scenario requires an isolated server."
+                require(selected.none { it in hostScenarios }) {
+                    "The update and persist scenarios require an isolated server."
                 }
                 val endpoint =
                     checkNotNull(runningEndpoint(root)) {
                         "Start the server with run-server before attaching."
                     }
                 println("Attached to Session STREAM: $endpoint")
-                runScenarios(endpoint)
+                runScenarios(selected, endpoint)
             } else {
-                Nodes(root, selected.size).use { nodes ->
-                    println("Logs: ${nodes.logs}")
-                    nodes.start()
-                    runScenarios(nodes.endpoint, nodes)
+                // Host replacement in persist must leave the other scenarios' placement intact.
+                val deployments = selected.partition { it != "persist" }
+                for (scenarios in listOf(deployments.first, deployments.second)) {
+                    if (scenarios.isEmpty()) continue
+                    Nodes(root, scenarios.size).use { nodes ->
+                        println("Logs: ${nodes.logs}")
+                        nodes.start()
+                        runScenarios(scenarios, nodes.endpoint, nodes)
+                    }
                 }
             }
             true

@@ -24,6 +24,7 @@ data class NodeConfig(
     val meshEndpoint: String = "tcp://127.0.0.1:0",
     val streamEndpoint: String? = null,
     val tableCapacity: Int = 0,
+    val apiEndpoint: String? = null,
 ) {
     init {
         require(tableCapacity >= 0) { "Table capacity must be nonnegative" }
@@ -147,9 +148,20 @@ fun runNode(application: Class<*>, args: Array<String>) = runBlocking {
                     mapOf(
                         "id" to config.id,
                         "meshEndpoint" to
-                            runtime
-                                .listenerStatus(ZLinkListenerKind.ROUTE_MESH, Names.MESH)
-                                .endpoint(),
+                            if (config.apiEndpoint == null)
+                                runtime
+                                    .listenerStatus(ZLinkListenerKind.ROUTE_MESH, Names.MESH)
+                                    .endpoint()
+                            else null,
+                        "apiEndpoint" to
+                            config.apiEndpoint?.let {
+                                runtime
+                                    .listenerStatus(
+                                        ZLinkListenerKind.CLIENT_SERVER,
+                                        Names.PLAYER_DATA,
+                                    )
+                                    .endpoint()
+                            },
                         "streamEndpoint" to
                             config.streamEndpoint?.let {
                                 runtime

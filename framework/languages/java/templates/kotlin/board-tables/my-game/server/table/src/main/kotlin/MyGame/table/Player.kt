@@ -10,17 +10,27 @@ import systems.zlink.framework.handlers.*
 import systems.zlink.framework.kotlin.*
 import systems.zlink.framework.spots.*
 
-class Player(override val context: ZLinkActorContext, private val routes: ZLinkRouteClient) :
-    ZLinkSuspendingActor() {
-    internal var match: PlayerMatch? = null
+internal data class PlayerState(var chips: Long? = null, var match: PlayerMatch? = null)
+
+data class TableAdmission(val tableId: String, val chips: Long)
+
+class Player(
+    override val context: ZLinkActorContext,
+    private val routes: ZLinkRouteClient,
+    private val playerData: PlayerData,
+) : ZLinkSuspendingActor() {
+    internal var state = PlayerState()
+
+    internal suspend fun loadChips(): Long =
+        state.chips ?: playerData.loadPlayer(context.actorId()).also { state.chips = it }
 
     internal suspend fun disconnected() {
-        val ticket = match ?: return
+        val ticket = state.match ?: return
         routes.sendPool(TicketDisconnected(ticket.ticketId))
     }
 
     override suspend fun onJoinCompletedSuspending(completion: ZLinkActorJoinCompletion) {
-        val ticket = match
+        val ticket = state.match
         val assignmentId = ticket?.assignmentId
         if (ticket != null && assignmentId != null) {
             routes.sendPool(
@@ -41,9 +51,10 @@ class Player(override val context: ZLinkActorContext, private val routes: ZLinkR
     }
 }
 
-class PlayerFactory(private val routes: ZLinkRouteClient) : ZLinkSuspendingActorFactory() {
+class PlayerFactory(private val routes: ZLinkRouteClient, private val playerData: PlayerData) :
+    ZLinkSuspendingActorFactory() {
     override suspend fun createActor(context: ZLinkActorContext): ZLinkActor =
-        Player(context, routes)
+        Player(context, routes, playerData)
 }
 
 class PlayerTransfer : ZLinkActorRelocationAdapter<Player> {
@@ -52,7 +63,7 @@ class PlayerTransfer : ZLinkActorRelocationAdapter<Player> {
         cancellation: ZLinkRelocationCancellation,
     ): CompletionStage<ByteArray> {
         cancellation.ensureActive()
-        return CompletableFuture.completedFuture(Json.mapper.writeValueAsBytes(actor.match))
+        return CompletableFuture.completedFuture(Json.mapper.writeValueAsBytes(actor.state))
     }
 
     override fun restore(
@@ -61,8 +72,14 @@ class PlayerTransfer : ZLinkActorRelocationAdapter<Player> {
         cancellation: ZLinkRelocationCancellation,
     ): CompletionStage<Void> {
         cancellation.ensureActive()
-        actor.match =
-            if (state.isEmpty()) null else Json.mapper.readValue(state, PlayerMatch::class.java)
+        val saved = Json.mapper.readTree(state)
+        actor.state =
+            when {
+                saved == null || saved.isNull -> PlayerState()
+                saved.has("ticketId") ->
+                    PlayerState(match = Json.mapper.treeToValue(saved, PlayerMatch::class.java))
+                else -> Json.mapper.treeToValue(saved, PlayerState::class.java)
+            }
         return CompletableFuture.completedFuture(null)
     }
 }
@@ -85,7 +102,8 @@ class Join(private val spots: ZLinkSpotManager) {
         request: JoinTableRequest,
     ) {
         require(actor.context().actorId() == request.playerId)
-        if (actor.match != null) return
+        if (actor.state.match != null) return
+        val chips = actor.loadChips()
         val created =
             spots
                 .kotlin()
@@ -94,6 +112,6 @@ class Join(private val spots: ZLinkSpotManager) {
                 .request(request)
                 .await()
         check(created.state() != ZLinkSpotCreateState.REJECTED) { "Table creation rejected" }
-        actor.context().joinSpot(request.tableId, request).defer()
+        actor.context().joinSpot(request.tableId, TableAdmission(request.tableId, chips)).defer()
     }
 }

@@ -3,24 +3,19 @@ package MyGame.matchmaker
 import MyGame.*
 import java.time.Duration
 import java.util.UUID
-import java.util.concurrent.TimeoutException
 import org.slf4j.LoggerFactory
 import systems.zlink.framework.actors.ZLinkActorClient
-import systems.zlink.framework.channels.ZLinkRouteClient
 import systems.zlink.framework.errors.ZLinkFrameworkException
 import systems.zlink.framework.errors.ZLinkOperationCanceledException
 import systems.zlink.framework.kotlin.*
 import systems.zlink.framework.spots.*
 
-class Pool(
-    override val context: ZLinkInstanceSpotContext,
-    private val spots: ZLinkSpotManager,
-    private val routes: ZLinkRouteClient,
-    private val actors: ZLinkActorClient,
-) : ZLinkSuspendingInstanceSpot() {
+class Pool(override val context: ZLinkInstanceSpotContext, private val actors: ZLinkActorClient) :
+    ZLinkSuspendingInstanceSpot() {
     private val queue = MatchQueue()
 
     override fun configure() {
+        context.handlers().addPacket(PreparedHandler::class.java)
         context.handlers().addPacket(EnterHandler::class.java)
         context.handlers().addPacket(DisconnectHandler::class.java)
     }
@@ -44,61 +39,67 @@ class Pool(
     suspend fun tick() {
         val now = now()
         for (assignment in queue.overdue(now)) {
-            withdraw(assignment, assignment.entered, reason = MatchReason.EXPIRED)
+            withdraw(assignment, assignment.entered.orEmpty(), reason = MatchReason.EXPIRED)
         }
         for ((ticket, reason) in queue.expired(now)) {
             notify(ticket, MatchCancelled(ticket.id, reason))
         }
-        val assignment = queue.reserve(now + ENTRY_NANOS) { "room-${UUID.randomUUID()}" } ?: return
-        if (!prepare(assignment)) {
-            withdraw(assignment, assignment.tickets.map { it.id }.toSet(), notifyActors = false)
+        val assignment =
+            queue.reserve(now() + ENTRY_NANOS) { "room-${UUID.randomUUID()}" } ?: return
+        val request = PrepareRoom(assignment.id, assignment.tickets.map { it.playerId })
+        try {
+            context
+                .outbound()
+                .kotlin()
+                .sendToSpot(Names.ROOM_PROVISIONER_KEY, request)
+                .instanceSpot(Names.ROOM_PROVISIONER)
+                .inMesh(Names.MESH)
+                .await()
+        } catch (failure: ZLinkOperationCanceledException) {
+            throw failure
+        } catch (failure: ZLinkFrameworkException) {
+            // The reservation still follows its entry deadline.
+            logger.warn("Room preparation send failed for {}", assignment.id, failure)
+        }
+    }
+
+    suspend fun prepared(message: RoomPrepared) {
+        val assignment = queue.assigned(message.assignmentId)
+        if (assignment?.entered != null) return
+        if (assignment == null || now() >= assignment.deadline) {
+            if (assignment != null) withdraw(assignment, emptySet(), reason = MatchReason.EXPIRED)
+            if (message.ok) sendWithdrawal(message.assignmentId)
             return
         }
+        if (!message.ok) {
+            queue.finish(assignment, assignment.tickets.map { it.id }.toSet())
+            return
+        }
+        assignment.entered = mutableSetOf()
         for (ticket in assignment.tickets) {
             notify(ticket, MatchAssigned(ticket.id, assignment.id, assignment.id))
         }
     }
 
-    private suspend fun prepare(assignment: Assignment): Boolean =
-        try {
-            val request = PrepareRoom(assignment.id, assignment.tickets.map { it.playerId })
-            val created =
-                spots.kotlin().getOrCreate(assignment.id, Names.TABLE).inMesh(Names.MESH).await()
-            if (created.state() == ZLinkSpotCreateState.REJECTED) false
-            else {
-                val prepared =
-                    routes
-                        .kotlin()
-                        .requestToSpot<RoomPrepared>(assignment.id, request)
-                        .inMesh(Names.MESH)
-                        .await()
-                prepared.ok && prepared.assignmentId == assignment.id
-            }
-        } catch (failure: ZLinkOperationCanceledException) {
-            throw failure
-        } catch (failure: ZLinkFrameworkException) {
-            logger.warn("Room preparation failed for {}", assignment.id, failure)
-            false
-        } catch (failure: TimeoutException) {
-            logger.warn("Room preparation timed out for {}", assignment.id, failure)
-            false
-        }
-
     suspend fun entered(report: EnterReport) {
         val assignment = queue.assigned(report.assignmentId) ?: return
+        val entered = assignment.entered ?: return
         if (assignment.tickets.none { it.id == report.ticketId }) return
         when {
             now() >= assignment.deadline ->
-                withdraw(assignment, assignment.entered, reason = MatchReason.EXPIRED)
+                withdraw(assignment, entered, reason = MatchReason.EXPIRED)
             !report.ok ->
                 withdraw(
                     assignment,
                     assignment.tickets.filter { it.id != report.ticketId }.map { it.id }.toSet(),
                 )
-            assignment.entered.add(report.ticketId) &&
-                assignment.entered.size == assignment.tickets.size -> {
+            entered.add(report.ticketId) && entered.size == assignment.tickets.size -> {
                 queue.finish(assignment)
-                routes.kotlin().sendToSpot(assignment.id, CommitRoom(assignment.id)).await()
+                context
+                    .outbound()
+                    .kotlin()
+                    .sendToSpot(assignment.id, CommitRoom(assignment.id))
+                    .await()
             }
         }
     }
@@ -124,20 +125,20 @@ class Pool(
         assignment: Assignment,
         requeue: Set<String>,
         replyTicket: String? = null,
-        notifyActors: Boolean = true,
         reason: String = MatchReason.CANCELLED,
     ) {
         queue.finish(assignment, requeue)
-        if (spots.find(assignment.id).await().isPresent) {
-            routes.kotlin().sendToSpot(assignment.id, WithdrawRoom(assignment.id)).await()
-        }
-        if (!notifyActors) return
+        if (assignment.entered != null) sendWithdrawal(assignment.id)
         for (ticket in assignment.tickets) {
             when {
                 ticket.id in requeue -> notify(ticket, WithdrawRoom(assignment.id))
                 ticket.id != replyTicket -> notify(ticket, MatchCancelled(ticket.id, reason))
             }
         }
+    }
+
+    private suspend fun sendWithdrawal(assignmentId: String) {
+        context.outbound().kotlin().sendToSpot(assignmentId, WithdrawRoom(assignmentId)).await()
     }
 
     private suspend fun notify(ticket: Ticket, message: Any) {
