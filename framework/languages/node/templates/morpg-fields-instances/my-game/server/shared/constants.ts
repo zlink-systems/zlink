@@ -77,6 +77,7 @@ export const PacketNames = {
   prepareDungeon: 'PrepareDungeon',
   joinDungeon: 'JoinDungeon',
   actionRejected: 'ActionRejected',
+  leaveDungeonRequest: 'LeaveDungeonRequest',
   sessionInfoRequest: 'SessionInfoRequest',
   sessionInfo: 'SessionInfo'
 } as const;

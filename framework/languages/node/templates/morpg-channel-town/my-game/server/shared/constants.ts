@@ -70,8 +70,7 @@ export const NodeEntrypoints = {
 } as const;
 export type NodeRole = keyof typeof NodeEntrypoints;
 export function townId(channel: bigint): string {
-  if (channel < 1n || channel > BigInt(Game.channelCount))
-    throw new Error('Invalid channel');
+  if (channel < 1n || channel > BigInt(Game.channelCount)) throw new Error('Invalid channel');
   return `town-${channel}`;
 }
 export function dungeonId(runId: string): string {

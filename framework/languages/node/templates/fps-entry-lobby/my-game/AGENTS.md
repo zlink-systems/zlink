@@ -2,6 +2,12 @@
 
 ## Rules for AI
 
+### Use this template as a reference
+
+This template is a reference. To build a new game, create a new project and design its nodes, Spots, Actors and messages for that game, using this template's structure and rules as reference; do not rename or edit this template in place into the game.
+
+### Server design
+
 Every server process in this project is a stateful ZLink node. Before writing code, decide which kind you are editing.
 
 - A play node hosts Spots. A session-bound Actor owns the player's state, and a Spot owns shared state. Load it once on connect; do not read the database while handling a request.
@@ -38,11 +44,11 @@ Run from this project root with Docker Compose v2 and Linux containers:
 PowerShell 7 provides the same commands:
 
 ```powershell
-pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
-pwsh -NoProfile -File ./run-e2e.ps1
-pwsh -NoProfile -File ./run-e2e.ps1 -Scenario matchmaking,hit,wall,input,reconnect,update
-pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
-pwsh -NoProfile -File ./run-e2e.ps1 -CheckDomain
+.\run-e2e.cmd -BuildOnly
+.\run-e2e.cmd
+.\run-e2e.cmd -Scenario matchmaking,hit,wall,input,reconnect,update
+.\run-e2e.cmd -CheckStructure
+.\run-e2e.cmd -CheckDomain
 ```
 
 For host process debugging, install Node.js 22 or later and npm, then add `--local` or `-Local`. After a local build, `--no-build` or `-NoBuild` skips compilation. Keep scenario assertions and inspect the first failure before rerunning.
@@ -85,3 +91,9 @@ The [README client connection section](README.md#client-connection) owns the sha
 Send `QueueRequest(playerId, mode)` first. Two players in the same mode are required for `MatchFound` and `RoomView` pushes. Register push handlers before sending with `send(...).submit()`; do not turn admission into request/reply. Request `SessionInfoRequest` only after Actor binding. Retain the default typed JSON path and validate identity before binding when adding authentication.
 
 Match connector versions to `package.json` dependencies `@zlink-systems/framework` and `@zlink-systems/stream-connector`; check examples against the public connector source and pinned package. Preserve the endpoint, HTTP preconditions, packet names, and push/reply distinction when updating the README.
+
+## Run the server and e2e
+
+Run `./run-server.sh` or `.\run-server.cmd` to build and start the local nodes and Redis. Use the WebSocket endpoint printed by `Server ready` and stop the server with Ctrl+C. In another terminal, `./run-e2e.sh` or `.\run-e2e.cmd` detects that server and runs compatible scenarios. Stop the server for full Docker isolation. On PowerShell 7 the corresponding scripts are `run-server.ps1` and `run-e2e.ps1`.
+
+Node stdout, stderr, Framework message-flow files and failure details are under `.logs/run-<id>/`. Docker build and cleanup logs are under `.logs/docker-<project>/`. Use the log paths printed by each command.

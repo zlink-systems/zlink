@@ -40,7 +40,14 @@ export const Limits = {
   relocationMs,
   shutdownMs: 10_000
 } as const;
-export const Scenarios = ['region', 'movement', 'dungeon', 'reconnect', 'update'] as const;
+export const Scenarios = [
+  'connect',
+  'region',
+  'movement',
+  'dungeon',
+  'reconnect',
+  'update'
+] as const;
 export const PacketNames = {
   enterRegionRequest: 'EnterRegionRequest',
   joinRegion: 'JoinRegion',
@@ -53,6 +60,7 @@ export const PacketNames = {
   openDungeonRequest: 'OpenDungeonRequest',
   dungeonInfoRequest: 'DungeonInfoRequest',
   dungeonOpened: 'DungeonOpened',
+  leaveRegionRequest: 'LeaveRegionRequest',
   sessionInfoRequest: 'SessionInfoRequest',
   sessionInfo: 'SessionInfo'
 } as const;

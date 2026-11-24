@@ -29,7 +29,7 @@ export const Limits = {
   relocationMs,
   shutdownMs: 10_000
 } as const;
-export const Scenarios = ['party', 'reconnect', 'update'] as const;
+export const Scenarios = ['lobby', 'party', 'reconnect', 'update'] as const;
 export const Control = {
   ready: 'READY ',
   drain: 'drain',
@@ -65,6 +65,7 @@ export const PacketNames = {
   runCompleted: 'RunCompleted',
   enterPartyRun: 'EnterPartyRun',
   actionRejected: 'ActionRejected',
+  leaveDungeonRequest: 'LeaveDungeonRequest',
   sessionInfoRequest: 'SessionInfoRequest',
   sessionInfo: 'SessionInfo'
 } as const;

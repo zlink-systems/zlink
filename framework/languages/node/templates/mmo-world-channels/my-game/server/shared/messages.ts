@@ -10,10 +10,16 @@ export class EarnRequest {
 }
 export class ChannelViewRequest {}
 export class ChannelView {
-  constructor(readonly channelId: bigint, readonly playerIds: string[]) {}
+  constructor(
+    readonly channelId: bigint,
+    readonly playerIds: string[]
+  ) {}
 }
 export class ActionRejected {
-  constructor(readonly reason: string, readonly retryAfterMs: number) {}
+  constructor(
+    readonly reason: string,
+    readonly retryAfterMs: number
+  ) {}
 }
 export class ViewRequest {}
 export class PlayerView {

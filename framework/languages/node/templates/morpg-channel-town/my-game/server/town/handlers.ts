@@ -67,11 +67,7 @@ export class ChangeChannel {
   packetName: PacketNames.createPartyRequest
 })
 export class CreateParty {
-  async handle(
-    spot: Town,
-    actor: Player,
-    _context: ZLinkMessageContext
-  ): Promise<void> {
+  async handle(spot: Town, actor: Player, _context: ZLinkMessageContext): Promise<void> {
     await spot.party(actor, null, true);
   }
 }

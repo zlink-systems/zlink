@@ -10,7 +10,15 @@ import {
   ZlinkStreamDispatchMode,
   type ZlinkStreamConnector
 } from '@zlink-systems/stream-connector';
-import { Game, Limits, MatchPhase, PacketNames, Rejection, Scenarios, ShotOutcome } from '../server/shared/constants.js';
+import {
+  Game,
+  Limits,
+  MatchPhase,
+  PacketNames,
+  Rejection,
+  Scenarios,
+  ShotOutcome
+} from '../server/shared/constants.js';
 import { addVec, subtractVec, Vec3 } from '../server/shared/geometry.js';
 import {
   ActionRejected,
@@ -231,14 +239,21 @@ async function moveAsync(client: PlayerClient, delta: Vec3): Promise<void> {
         continue;
       }
     }
-    assert.equal(result.name, PacketNames.moveResult, `Movement was not accepted: ${inspect(result.payload)}.`);
+    assert.equal(
+      result.name,
+      PacketNames.moveResult,
+      `Movement was not accepted: ${inspect(result.payload)}.`
+    );
     const moved = result.payload as MoveResult,
       expected = addVec(player(before, client).position, delta);
     assert.equal(moved.sequence, request.sequence);
     assert(equal(moved.position, expected), 'Movement result position differs.');
     const after = await viewAsync(client);
     assert.equal(player(after, client).lastSequence, request.sequence, 'Movement lost sequence.');
-    assert(after.players.every((candidate) => candidate.position.y === 0), 'Movement changed feet height.');
+    assert(
+      after.players.every((candidate) => candidate.position.y === 0),
+      'Movement changed feet height.'
+    );
     return;
   }
 }
@@ -263,7 +278,11 @@ async function aimAsync(shooter: PlayerClient, target: PlayerClient): Promise<Ve
   return subtractVec(player(current, target).position, player(current, shooter).position);
 }
 
-async function shootAsync(shooter: PlayerClient, aimDirection: Vec3, outcome: string): Promise<void> {
+async function shootAsync(
+  shooter: PlayerClient,
+  aimDirection: Vec3,
+  outcome: string
+): Promise<void> {
   const before = await viewAsync(shooter),
     request = new ShootRequest(aimDirection, next(before, shooter));
   while (true) {
@@ -276,7 +295,11 @@ async function shootAsync(shooter: PlayerClient, aimDirection: Vec3, outcome: st
         continue;
       }
     }
-    assert.equal(result.name, PacketNames.shotResult, `Expected ${outcome}, received ${inspect(result.payload)}.`);
+    assert.equal(
+      result.name,
+      PacketNames.shotResult,
+      `Expected ${outcome}, received ${inspect(result.payload)}.`
+    );
     const shot = result.payload as ShotResult;
     assert.equal(shot.outcome, outcome);
     assert.equal(shot.sequence, request.sequence);
@@ -288,14 +311,28 @@ async function hitAsync(shooter: PlayerClient, target: PlayerClient, hp: number)
   await shootAsync(shooter, await aimAsync(shooter, target), ShotOutcome.hit);
   const shooterView = await viewAsync(shooter),
     targetView = await viewAsync(target);
-  assert(equal(shooterView, targetView) && player(shooterView, target).hp === hp, 'Hit views or damage differ.');
+  assert(
+    equal(shooterView, targetView) && player(shooterView, target).hp === hp,
+    'Hit views or damage differ.'
+  );
 }
 
 async function endedAsync(a: PlayerClient, b: PlayerClient): Promise<void> {
-  assert.equal((await a.wait<MatchEnded>(PacketNames.matchEnded, 0)).winner, a.playerId, 'Wrong winner for first client.');
-  assert.equal((await b.wait<MatchEnded>(PacketNames.matchEnded, 0)).winner, a.playerId, 'Wrong winner for second client.');
+  assert.equal(
+    (await a.wait<MatchEnded>(PacketNames.matchEnded, 0)).winner,
+    a.playerId,
+    'Wrong winner for first client.'
+  );
+  assert.equal(
+    (await b.wait<MatchEnded>(PacketNames.matchEnded, 0)).winner,
+    a.playerId,
+    'Wrong winner for second client.'
+  );
   const view = await viewAsync(a);
-  assert(view.phase === MatchPhase.Finished && view.winner === a.playerId, 'Finished state differs.');
+  assert(
+    view.phase === MatchPhase.Finished && view.winner === a.playerId,
+    'Finished state differs.'
+  );
 }
 
 async function rejectedAsync(
@@ -330,10 +367,22 @@ async function inputAsync(a: PlayerClient, b: PlayerClient): Promise<void> {
   let view = await viewAsync(a),
     sequence = player(view, a).lastSequence;
   await rejectedAsync(a, new MoveRequest(new Vec3(0, 0, 1), sequence), Rejection.staleSequence);
-  await rejectedAsync(a, new ShootRequest(new Vec3(1, 0, 0), sequence - 1n), Rejection.staleSequence);
-  await rejectedAsync(a, new MoveRequest(new Vec3(Game.maxStep + 1, 0, 0), sequence + 1n), Rejection.stepTooLarge);
+  await rejectedAsync(
+    a,
+    new ShootRequest(new Vec3(1, 0, 0), sequence - 1n),
+    Rejection.staleSequence
+  );
+  await rejectedAsync(
+    a,
+    new MoveRequest(new Vec3(Game.maxStep + 1, 0, 0), sequence + 1n),
+    Rejection.stepTooLarge
+  );
   await rejectedAsync(a, new MoveRequest(new Vec3(0, 1, 0), sequence + 1n), Rejection.verticalMove);
-  await rejectedAsync(a, new MoveRequest(new Vec3(0, -1, 0), sequence + 1n), Rejection.verticalMove);
+  await rejectedAsync(
+    a,
+    new MoveRequest(new Vec3(0, -1, 0), sequence + 1n),
+    Rejection.verticalMove
+  );
   await walkAsync(a, new Vec3(player(view, a).position.x, 0, 0));
   sequence = next(await viewAsync(a), a);
   await rejectedAsync(a, new MoveRequest(new Vec3(0, 0, -1), sequence), Rejection.outsideMap);
@@ -344,11 +393,26 @@ async function inputAsync(a: PlayerClient, b: PlayerClient): Promise<void> {
   const beforeFire = await viewAsync(a),
     shotSequence = next(beforeFire, a);
   await shootAsync(a, new Vec3(0, 1, 0), ShotOutcome.miss);
-  await rejectedAsync(a, new ShootRequest(new Vec3(0, 1, 0), shotSequence), Rejection.staleSequence);
+  await rejectedAsync(
+    a,
+    new ShootRequest(new Vec3(0, 1, 0), shotSequence),
+    Rejection.staleSequence
+  );
   const afterFire = await viewAsync(a);
-  assert(equal(player(afterFire, a).position, player(beforeFire, a).position), 'Accepted miss changed player position.');
-  assert.equal(player(afterFire, a).lastSequence, shotSequence, 'Accepted miss used the wrong sequence.');
-  assert.equal(player(afterFire, a).hp, player(beforeFire, a).hp, 'Accepted miss changed player HP.');
+  assert(
+    equal(player(afterFire, a).position, player(beforeFire, a).position),
+    'Accepted miss changed player position.'
+  );
+  assert.equal(
+    player(afterFire, a).lastSequence,
+    shotSequence,
+    'Accepted miss used the wrong sequence.'
+  );
+  assert.equal(
+    player(afterFire, a).hp,
+    player(beforeFire, a).hp,
+    'Accepted miss changed player HP.'
+  );
   assert.equal(player(await viewAsync(b), b).hp, Game.initialHp, 'Input checks damaged target.');
   console.log('input: movement and shot sequence checks passed');
 }
@@ -356,7 +420,11 @@ async function inputAsync(a: PlayerClient, b: PlayerClient): Promise<void> {
 async function matchmakingAsync(endpoint: string, runId: string, logDir: string): Promise<void> {
   const clients: PlayerClient[] = [];
   const create = (id: string): PlayerClient => {
-    const client = new PlayerClient(endpoint, `${logDir}/matchmaking-${id}.jsonl`, `matchmaking-${runId}-${id}`);
+    const client = new PlayerClient(
+      endpoint,
+      `${logDir}/matchmaking-${id}.jsonl`,
+      `matchmaking-${runId}-${id}`
+    );
     clients.push(client);
     return client;
   };
@@ -401,9 +469,9 @@ async function matchmakingAsync(endpoint: string, runId: string, logDir: string)
         casual.players.some((candidate) => candidate.playerId === casualB.playerId) &&
         ranked.phase === MatchPhase.Playing &&
         casual.phase === MatchPhase.Playing &&
-        ranked.players.concat(casual.players).every(
-          (candidate) => candidate.hp === Game.initialHp && candidate.lastSequence === 0n
-        ),
+        ranked.players
+          .concat(casual.players)
+          .every((candidate) => candidate.hp === Game.initialHp && candidate.lastSequence === 0n),
       'Matched Room members or initial state differ.'
     );
     const before = await rankedA.view(),
@@ -450,7 +518,9 @@ async function pairAsync(a: PlayerClient, b: PlayerClient): Promise<RoomView> {
     ]);
   assert(equal(viewA, viewB) && viewA.phase === MatchPhase.Playing, 'Initial Room views differ.');
   assert(
-    viewA.players.every((candidate) => candidate.hp === Game.initialHp && candidate.lastSequence === 0n),
+    viewA.players.every(
+      (candidate) => candidate.hp === Game.initialHp && candidate.lastSequence === 0n
+    ),
     'Initial Room state differs.'
   );
   return viewA;
@@ -461,7 +531,7 @@ export async function scenario(
   endpoint: string,
   runId: string,
   logDir: string,
-  control: NodeControl
+  control?: NodeControl
 ): Promise<void> {
   assert(Scenarios.includes(name as (typeof Scenarios)[number]), `Unknown scenario ${name}`);
   if (name === 'matchmaking') {
@@ -558,12 +628,17 @@ export async function scenario(
         break;
       }
       case 'update': {
+        assert(control, 'update requires an isolated run');
         await moveAsync(p1, new Vec3(0, 0, -1));
         await hitAsync(p1, p2, 75);
         const before = await viewAsync(p1);
         await control.drain(before.nodeId);
         assert.deepEqual(await p1.sessionInfo(), session1, 'Update changed first session binding.');
-        assert.deepEqual(await p2.sessionInfo(), session2, 'Update changed second session binding.');
+        assert.deepEqual(
+          await p2.sessionInfo(),
+          session2,
+          'Update changed second session binding.'
+        );
         const afterA = await viewAsync(p1),
           afterB = await viewAsync(p2);
         assert.notEqual(afterA.nodeId, before.nodeId);
@@ -573,15 +648,24 @@ export async function scenario(
         await control.replace(before.nodeId);
         await newMatchAsync(endpoint, runId, logDir, before.nodeId);
         await hitAsync(p1, p2, 50);
-        assert.deepEqual(await p1.sessionInfo(), session1, 'Replacement changed first session binding.');
-        assert.deepEqual(await p2.sessionInfo(), session2, 'Replacement changed second session binding.');
+        assert.deepEqual(
+          await p1.sessionInfo(),
+          session1,
+          'Replacement changed first session binding.'
+        );
+        assert.deepEqual(
+          await p2.sessionInfo(),
+          session2,
+          'Replacement changed second session binding.'
+        );
         break;
       }
       default:
         throw new Error(`Unknown scenario ${name}; initial Room ${initial.roomId}`);
     }
     assert(!p1.disconnects && p1.connector.isConnected, 'First player disconnected.');
-    if (name !== 'reconnect') assert(!p2.disconnects && p2.connector.isConnected, 'Second player disconnected.');
+    if (name !== 'reconnect')
+      assert(!p2.disconnects && p2.connector.isConnected, 'Second player disconnected.');
   } finally {
     await Promise.all(clients.map((client) => client.close()));
   }
