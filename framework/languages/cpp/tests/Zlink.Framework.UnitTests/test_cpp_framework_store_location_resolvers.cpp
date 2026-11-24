@@ -3510,10 +3510,12 @@ TEST (ZLinkFrameworkStoreLocationResolvers, ObjectLocationPagesFollowSharedFixtu
                           store_location_runtime_query_test_access_t::encoded_object_size (entry);
                         encoded_items.push_back (std::move (encoded_entry));
                     }
+                    const auto encoded_token =
+                      token ? nlohmann::json (*token) : nlohmann::json (nullptr);
                     const auto encoded = nlohmann::json{
                       {"items", std::move (encoded_items)},
                       {"continuationToken",
-                       token}}.dump ();
+                       encoded_token}}.dump ();
                     const auto token_view =
                       token ? std::optional<std::string_view> (*token) : std::nullopt;
                     const auto boundary_items_bytes =
@@ -3646,9 +3648,13 @@ TEST (ZLinkFrameworkStoreLocationResolvers, ObjectPageRechecksCursorForConsumedR
                {"nodeRid", entry.node_rid.to_string ()},
                {"state", entry.state == location_object_state_t::ready ? "ready" : "unavailable"},
                {"stableType", entry.stable_type}});
-        const auto encoded = nlohmann::json{{"items", std::move (items)},
-                                            {"continuationToken", page.continuation_token}}
-                               .dump ();
+        const auto encoded_token = page.continuation_token
+                                     ? nlohmann::json (*page.continuation_token)
+                                     : nlohmann::json (nullptr);
+        const auto encoded = nlohmann::json{
+          {"items", std::move (items)},
+          {"continuationToken",
+           encoded_token}}.dump ();
         ASSERT_LE (encoded.size (), 4u * 1024u * 1024u);
         for (const auto &entry : page.items)
             actual.push_back (entry.global_id);
