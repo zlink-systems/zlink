@@ -892,6 +892,7 @@ session이나 새 binding의 reply로 사용하지 않는다. 서로 다른 sess
 | 조건 | 결과 |
 |---|---|
 | `ActorRef` 위치가 stale하고 Message Follow route도 없다. | `Unavailable`로 끝난다. |
+| ActorRef로 지정한 Actor의 authority가 없다(생성된 적 없거나 destroy로 지워졌다). | `NotFound`로 끝난다. Route가 없는 `Unavailable`과 구분하며, 같은 ref로 다시 시도해도 성공하지 않는다([Framework API §19](../00-foundation/06-framework-api.ko.md#19-오류-kind)). |
 | `ObjectGeneration`이 다르다. | `InvalidOperation`으로 끝난다. |
 | Actor가 relocation pre-commit seal 상태다. | `Unavailable`로 끝난다. |
 | Actor factory가 없다. | `NotFound`로 끝난다. 등록되지 않은 type이므로 재시도로 해결되지 않는다. |
