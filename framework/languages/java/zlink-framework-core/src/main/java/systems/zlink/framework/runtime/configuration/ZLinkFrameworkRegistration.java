@@ -384,6 +384,7 @@ public final class ZLinkFrameworkRegistration {
             throw new ZLinkConfigurationException(
                     "Relocatable factories or Instance Spot factories require a Relocation Store");
         }
+        StreamNodeRegistration.validateAuthenticationAdmission(streamNodes);
         Set<String> streamSessionTypeNames = new LinkedHashSet<>();
         for (StreamNodeRegistration streamNode : streamNodes) {
             streamNode.validate(meshNodes);

@@ -32,8 +32,12 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -43,6 +47,95 @@ import java.util.concurrent.atomic.AtomicReference;
 import javax.net.ssl.SSLHandshakeException;
 
 final class ZLinkStreamConnectorTest {
+    @Test
+    void concurrentRequestsEachCompleteOnceWithTheirOwnResponse() throws Exception {
+        int senders = 8;
+        int requestsPerSender = 8;
+        int requestCount = senders * requestsPerSender;
+        var completions = new ConcurrentHashMap<String, Integer>();
+        var ready = new CyclicBarrier(senders + 1);
+        try (var server = new TcpStreamConnectorTestServer();
+                var executor = Executors.newFixedThreadPool(senders)) {
+            var connector = createConnector(server.options(ZLinkStreamDispatchMode.IMMEDIATE));
+            ConnectorTestAwait.await(connector.connect());
+            connector.onReplyReceived(
+                    context -> {
+                        completions.merge(context.requestPacketName(), 1, Integer::sum);
+                        if (context.reply() != null) {
+                            context.reply().payload().payload().close();
+                        }
+                    });
+
+            List<Future<Void>> workers = new ArrayList<>();
+            for (int sender = 0; sender < senders; sender++) {
+                int first = sender * requestsPerSender;
+                workers.add(
+                        executor.submit(
+                                () -> {
+                                    ready.await(5, TimeUnit.SECONDS);
+                                    List<CompletableFuture<Void>> replies = new ArrayList<>();
+                                    for (int i = first; i < first + requestsPerSender; i++) {
+                                        String name = "Echo" + i;
+                                        try (Message body = Message.from(name)) {
+                                            replies.add(
+                                                    connector
+                                                            .request(
+                                                                    new ZLinkStreamEncodedPayload(
+                                                                            name, body, Map.of()))
+                                                            .timeout(Duration.ofSeconds(10))
+                                                            .submit()
+                                                            .thenAccept(
+                                                                    reply -> {
+                                                                        try (Message result =
+                                                                                reply.payload()) {
+                                                                            assertEquals(
+                                                                                    name,
+                                                                                    reply
+                                                                                            .packetName());
+                                                                            assertArrayEquals(
+                                                                                    TcpStreamConnectorTestServer
+                                                                                            .bytes(
+                                                                                                    name),
+                                                                                    result
+                                                                                            .toByteArray());
+                                                                        }
+                                                                    })
+                                                            .toCompletableFuture());
+                                        }
+                                    }
+                                    CompletableFuture.allOf(
+                                                    replies.toArray(CompletableFuture[]::new))
+                                            .get(10, TimeUnit.SECONDS);
+                                    return null;
+                                }));
+            }
+
+            ready.await(5, TimeUnit.SECONDS);
+            List<TcpStreamConnectorTestServer.ReceivedFrame> frames = new ArrayList<>();
+            for (int i = 0; i < requestCount; i++) {
+                frames.add(server.readFrameAsync().get(5, TimeUnit.SECONDS));
+            }
+            for (int i = frames.size() - 1; i >= 0; i--) {
+                var frame = frames.get(i);
+                assertEquals(ZLinkStreamWireProtocol.KIND_REQUEST, frame.header().kind());
+                var header = TcpStreamConnectorTestServer.responseTo(frame, "", Map.of());
+                server.sendAsync(header, frame.payload()).get(5, TimeUnit.SECONDS);
+                if (i > 0) {
+                    server.sendAsync(header, TcpStreamConnectorTestServer.bytes("duplicate"))
+                            .get(5, TimeUnit.SECONDS);
+                }
+            }
+
+            for (var worker : workers) {
+                worker.get(10, TimeUnit.SECONDS);
+            }
+            TcpStreamConnectorTestServer.awaitCondition(
+                    () -> completions.containsKey(frames.getFirst().header().name()));
+            assertEquals(requestCount, completions.size());
+            assertTrue(completions.values().stream().allMatch(count -> count == 1));
+        }
+    }
+
     @Test
     void transportSurfaceMatchesContract() throws Exception {
         Class<?> transport = Class.forName("systems.zlink.stream.connector.ZLinkStreamTransport");

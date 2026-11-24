@@ -28,49 +28,10 @@ final class ZLinkStreamSendChain {
             Supplier<CompletionStage<Void>> write,
             Consumer<Throwable> writeFailure) {
         Write operation = new Write(owner, write, writeFailure);
-        admit(operation, () -> {});
-        return operation.publication;
-    }
-
-    CompletableFuture<ZLinkStreamEncodedPayload> enqueueRequestDeferred(
-            ZLinkStreamTransportConnection owner,
-            Supplier<CompletionStage<Void>> write,
-            Consumer<Throwable> writeFailure,
-            Consumer<CompletableFuture<ZLinkStreamEncodedPayload>> onAccepted) {
-        Write operation = new Write(owner, write, writeFailure);
-        CompletableFuture<ZLinkStreamEncodedPayload> pending =
-                new CompletableFuture<>() {
-                    @Override
-                    public boolean cancel(boolean mayInterruptIfRunning) {
-                        return cancelWrite(
-                                operation,
-                                () -> {
-                                    boolean completed = super.cancel(mayInterruptIfRunning);
-                                    operation.publication.cancel(false);
-                                    return completed;
-                                });
-                    }
-
-                    @Override
-                    public boolean completeExceptionally(Throwable failure) {
-                        return cancelWrite(
-                                operation,
-                                () -> {
-                                    boolean completed = super.completeExceptionally(failure);
-                                    operation.publication.cancel(false);
-                                    return completed;
-                                });
-                    }
-                };
-        admit(operation, () -> onAccepted.accept(pending));
-        return pending;
-    }
-
-    private void admit(Write operation, Runnable onAccepted) {
         synchronized (lock) {
             queue.addLast(operation);
-            onAccepted.run();
         }
+        return operation.publication;
     }
 
     private boolean cancelWrite(Write operation, BooleanSupplier complete) {
