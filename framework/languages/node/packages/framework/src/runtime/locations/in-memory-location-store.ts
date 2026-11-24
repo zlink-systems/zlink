@@ -125,6 +125,7 @@ export class ZLinkInMemoryLocationStore
     this.authority = new ZLinkInMemoryAuthorityStore(
       {
         isOwnerLive,
+        readMeshNode: (key) => this.meshNodes.rows.get(meshNodeKey(key.meshName, key.rid)),
         isTargetLive: (key, lifecycleGeneration, owner, generationTransition) => {
           const descriptor = this.meshNodes.rows.get(meshNodeKey(key.meshName, key.rid));
           return (

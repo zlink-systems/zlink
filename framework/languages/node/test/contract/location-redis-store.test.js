@@ -1515,8 +1515,7 @@ for (const liveMember of [false, true]) {
         },
         target,
         creatingPayload: Buffer.from('creating'),
-        capacity: userSpotCapacity(1),
-        actorRelocationPolicy: 'disabled'
+        capacity: userSpotCapacity(1)
       });
       const reserved = await repository.reserve(spotRequest(old));
       if (reserved.kind !== 'reserved') throw new Error('Spot reservation failed');
@@ -1548,8 +1547,7 @@ for (const liveMember of [false, true]) {
         },
         target: memberTarget,
         creatingPayload: Buffer.from('creating'),
-        capacity: { actors: 1, spots: 0 },
-        actorRelocationPolicy: 'disabled'
+        capacity: { actors: 1, spots: 0 }
       };
       const member = await repository.reserve(actorRequest);
       if (member.kind !== 'reserved') throw new Error('member reservation failed');
