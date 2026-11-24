@@ -274,7 +274,7 @@ internal sealed partial class ZLinkProviderLocationRepository(
         CancellationToken cancellationToken = default
     )
     {
-        _provider.TrackCapacity(CapacityKey(new(descriptor.MeshName, descriptor.Rid)));
+        _provider.TrackCapacity(CapacityScope(new(descriptor.MeshName, descriptor.Rid)));
         return await UpdateDescriptorAsync(
                 MeshKey(descriptor.MeshName, descriptor.Rid),
                 descriptor.OwnerId,
@@ -319,7 +319,7 @@ internal sealed partial class ZLinkProviderLocationRepository(
             .ConfigureAwait(false);
         if (result is ZLinkStoreWriteResult.Applied)
         {
-            _provider.ForgetCapacity(CapacityKey(key));
+            _provider.ForgetCapacity(CapacityScope(key));
             _ownerLeaseReleaseWait.ForgetIfTokenMatches(rowKey.Value, owner);
         }
         return result is ZLinkStoreWriteResult.Applied
@@ -345,14 +345,13 @@ internal sealed partial class ZLinkProviderLocationRepository(
         for (var index = 0; index < items.Length; index++)
         {
             var descriptor = result.Items[index];
-            var capacity = await ReadCapacityAsync(
-                    new ZLinkMeshNodeDescriptorKey(descriptor.MeshName, descriptor.Rid),
-                    cancellationToken
-                )
+            var scope = CapacityScope(new(descriptor.MeshName, descriptor.Rid));
+            var counts = await _provider
+                .ReadCapacityAsync(scope, cancellationToken)
                 .ConfigureAwait(false);
             items[index] = descriptor with
             {
-                Capacity = ProjectCapacity(capacity.Record, descriptor.Capacity),
+                Capacity = ProjectCapacity(scope, counts, descriptor.Capacity),
             };
         }
         return result with { Items = items };
@@ -1067,9 +1066,9 @@ internal sealed partial class ZLinkProviderLocationRepository(
         CancellationToken cancellationToken = default
     )
     {
-        var key = CapacityKey(descriptor);
-        _provider.TrackCapacity(key);
-        await _provider.ReadAsync(key, cancellationToken).ConfigureAwait(false);
+        var scope = CapacityScope(descriptor);
+        _provider.TrackCapacity(scope);
+        await _provider.ReadCapacityAsync(scope, cancellationToken).ConfigureAwait(false);
     }
 
     internal ZLinkPlacementCapacity? ConfirmedCapacity(
@@ -1077,30 +1076,36 @@ internal sealed partial class ZLinkProviderLocationRepository(
         ZLinkPlacementCapacity limits
     )
     {
-        var record = _provider.ConfirmedCapacity(CapacityKey(descriptor));
-        if (record is null)
-            return null;
-        return ProjectCapacity(record, limits);
+        var scope = CapacityScope(descriptor);
+        var counts = _provider.ConfirmedCapacity(scope);
+        return counts is null ? null : ProjectCapacity(scope, counts, limits);
     }
 
     private static ZLinkPlacementCapacity ProjectCapacity(
-        CapacityRecord record,
+        string scope,
+        IReadOnlyDictionary<ZLinkStoreKey, int> counts,
         ZLinkPlacementCapacity limits
-    ) =>
-        new(
-            new(record.ActorsActive, record.ActorsPending, limits.Actors.Limit),
-            new(record.SpotsActive, record.SpotsPending, limits.Spots.Limit),
+    )
+    {
+        return new(
+            new(Count("actors", false), Count("actors", true), limits.Actors.Limit),
+            new(Count("spots", false), Count("spots", true), limits.Spots.Limit),
             limits
                 .SpotTypes.Select(type =>
                 {
-                    record.SpotTypes.TryGetValue(
-                        CapacityTypeKey(type.ObjectKind, type.StableType),
-                        out var count
-                    );
-                    return type with { Active = count.Active, Reserved = count.Pending };
+                    var dimension = SpotCapacityDimension(type.ObjectKind, type.StableType);
+                    return type with
+                    {
+                        Active = Count(dimension, false),
+                        Reserved = Count(dimension, true),
+                    };
                 })
                 .ToArray()
         );
+
+        int Count(string dimension, bool pending) =>
+            counts.GetValueOrDefault(CapacityCounterKey(scope, dimension, pending));
+    }
 
     // Canonical opaque-record envelope shared by the mesh-node/
     // client-server/fanout-publisher descriptors (21-location-runtime.md
@@ -1115,27 +1120,58 @@ internal sealed partial class ZLinkProviderLocationRepository(
     private sealed class ProviderBoundary(IZLinkLocationStore provider) : IZLinkLocationStore
     {
         private readonly System.Collections.Concurrent.ConcurrentDictionary<
-            ZLinkStoreKey,
+            string,
             CapacityObservation
-        > _capacities = new();
+        > _capacities = new(StringComparer.Ordinal);
 
-        internal void TrackCapacity(ZLinkStoreKey key) =>
-            _capacities.GetOrAdd(key, static _ => new());
+        internal void TrackCapacity(string scope) => _capacities.GetOrAdd(scope, static _ => new());
 
-        internal void ForgetCapacity(ZLinkStoreKey key) => _capacities.TryRemove(key, out _);
+        internal void ForgetCapacity(string scope) => _capacities.TryRemove(scope, out _);
 
-        internal CapacityRecord? ConfirmedCapacity(ZLinkStoreKey key) =>
-            _capacities.TryGetValue(key, out var value) ? Volatile.Read(ref value.Record) : null;
-
-        private void ConfirmCapacity(ZLinkStoreKey key, CapacityRecord record)
-        {
-            if (_capacities.TryGetValue(key, out var value))
-                Volatile.Write(ref value.Record, record);
-        }
+        internal IReadOnlyDictionary<ZLinkStoreKey, int>? ConfirmedCapacity(string scope) =>
+            _capacities.TryGetValue(scope, out var value) ? Volatile.Read(ref value.Counts) : null;
 
         private sealed class CapacityObservation
         {
-            internal CapacityRecord? Record;
+            internal IReadOnlyDictionary<ZLinkStoreKey, int>? Counts;
+        }
+
+        internal async ValueTask<IReadOnlyDictionary<ZLinkStoreKey, int>> ReadCapacityAsync(
+            string scope,
+            CancellationToken cancellationToken
+        )
+        {
+            _capacities.TryGetValue(scope, out var observation);
+            var counts = new Dictionary<ZLinkStoreKey, int>();
+            ZLinkStoreScanCursor? cursor = null;
+            do
+            {
+                var scan = await ScanAsync(
+                        new ZLinkStoreScanRequest(
+                            scope,
+                            cursor,
+                            ZLinkPageRequestPolicy.MaximumPageSize
+                        ),
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
+                if (scan is ZLinkStoreScanResult.Expired)
+                {
+                    counts.Clear();
+                    cursor = null;
+                    continue;
+                }
+                var page = ((ZLinkStoreScanResult.Page)scan).Value;
+                foreach (var (key, value) in page.Items)
+                    counts.Add(key, DecodeCapacityCounter(value.Bytes));
+                cursor = page.NextCursor;
+                if (cursor is null)
+                    break;
+            } while (true);
+
+            if (observation is not null)
+                Volatile.Write(ref observation.Counts, counts);
+            return counts;
         }
 
         public async ValueTask<ZLinkStoreReadResult> ReadAsync(
@@ -1153,13 +1189,6 @@ internal sealed partial class ZLinkProviderLocationRepository(
                 Rethrow(error, cancellationToken);
                 throw;
             }
-            if (_capacities.ContainsKey(key))
-                ConfirmCapacity(
-                    key,
-                    result is ZLinkStoreReadResult.Found found
-                        ? DecodeCapacity(found.Value.Bytes)
-                        : new()
-                );
             return result;
         }
 
@@ -1180,10 +1209,10 @@ internal sealed partial class ZLinkProviderLocationRepository(
                 Rethrow(error, cancellationToken);
                 throw;
             }
-            if (result is ZLinkStoreWriteResult.Applied)
-                foreach (var mutation in request.Mutations)
-                    if (mutation is ZLinkStoreMutation.Put put && _capacities.ContainsKey(put.Key))
-                        ConfirmCapacity(put.Key, DecodeCapacity(put.Bytes));
+            if (result is ZLinkStoreWriteResult.Corrupt)
+                throw new InvalidDataException(
+                    "The Location Store capacity counter is inconsistent."
+                );
             return result;
         }
 

@@ -963,10 +963,11 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
         await repository.UpdateMeshNodeAsync(descriptor, ZLinkLocationWriteIntent.NewClaim);
         Assert.Null(repository.ConfirmedCapacity(key, descriptor.Capacity));
         var reads = 0;
-        provider.BeforeRead = _ =>
+        provider.ScanOverride = scan =>
         {
-            reads++;
-            return Task.CompletedTask;
+            if (scan.Prefix.StartsWith("zlink:v12:capacity\0", StringComparison.Ordinal))
+                reads++;
+            return provider.InnerScanAsync(scan).AsTask();
         };
         Assert.Null(repository.ConfirmedCapacity(key, descriptor.Capacity));
         Assert.Equal(0, reads);
@@ -975,6 +976,7 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
                 Reservation("capacity-one", descriptor, owner, ZLinkPlacementObjectKind.UserSpot)
             )
         );
+        await repository.RefreshCapacityAsync(key);
         var capacity = repository.ConfirmedCapacity(key, descriptor.Capacity)!;
         Assert.Equal(1, capacity.Spots.Reserved);
         Assert.Equal(1, Assert.Single(capacity.SpotTypes).Reserved);
@@ -982,6 +984,7 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
         Assert.IsType<ZLinkObjectCommitResult.Committed>(
             await repository.CommitAsync(reserved.Reservation, new byte[] { 0x94 })
         );
+        await repository.RefreshCapacityAsync(key);
         capacity = repository.ConfirmedCapacity(key, descriptor.Capacity)!;
         Assert.Equal(1, capacity.Spots.Active);
         Assert.Equal(0, capacity.Spots.Reserved);
@@ -1029,14 +1032,14 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
         Assert.Equal(1, capacity.Spots.Active);
         Assert.Equal(1, capacity.Spots.Reserved);
         Assert.Equal(1, Assert.Single(capacity.SpotTypes).Active);
-        provider.BeforeRead = _ => throw new IOException("capacity read failure");
+        provider.ScanOverride = _ => throw new IOException("capacity read failure");
         await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
             repository.RefreshCapacityAsync(key).AsTask()
         );
         var observed = repository.ConfirmedCapacity(key, descriptor.Capacity)!;
         Assert.Equal(capacity.Spots, observed.Spots);
         Assert.Equal(capacity.SpotTypes, observed.SpotTypes);
-        provider.BeforeRead = null;
+        provider.ScanOverride = null;
         Assert.Equal(
             ZLinkLocationWriteStatus.Stored,
             await repository.RemoveMeshNodeAsync(key, owner)
@@ -1549,7 +1552,10 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
                 ZLinkActorAuthorityPayloadCodec.Encode(previous)
             )
         );
-        Assert.NotEqual(spotReady.Snapshot.ObjectGeneration, actorReady.Snapshot.ObjectGeneration);
+        Assert.Equal(
+            !inMemory,
+            spotReady.Snapshot.ObjectGeneration == actorReady.Snapshot.ObjectGeneration
+        );
         if (scenario is "creating" or "closing")
         {
             Assert.True(ZLinkUserSpotAuthorityPayloadCodec.TryDecode(spotPayload, out var decoded));
@@ -1892,12 +1898,12 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
                 break;
             case "batchBound":
             case "batchFits":
-                // Batch keys: Spot authority, owner, descriptor and capacity,
-                // the member node's owner and capacity, and one authority per
-                // member. 2,042 members fill the 2,048-key bound exactly.
+                // Four active counters, two owners, one descriptor, the Spot
+                // authority, and one authority per member fill the batch.
+                var maximumMembers = inMemory ? 2042 : 2040;
                 for (
                     var index = 0;
-                    memberIds.Count < (scenario == "batchFits" ? 2042 : 2043);
+                    memberIds.Count < maximumMembers + (scenario == "batchBound" ? 1 : 0);
                     index++
                 )
                     memberIds.Add(
@@ -1913,12 +1919,17 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
             )
             .Snapshot;
         var membersBefore = new Dictionary<string, string>();
+        var memberGenerationsBefore = new Dictionary<string, ulong>();
         foreach (var id in memberIds)
-            membersBefore[id] = Assert
+        {
+            var member = Assert
                 .IsType<ZLinkAuthorityReadResult.Found>(
                     await repository.ReadAuthorityAsync(new ZLinkAuthorityKey(id))
                 )
-                .Snapshot.StoreVersion;
+                .Snapshot;
+            membersBefore[id] = member.StoreVersion;
+            memberGenerationsBefore[id] = member.ObjectGeneration;
+        }
 
         await repository.ReleaseOwnerLeaseAsync(spotOwner);
         await repository.ReleaseOwnerLeaseAsync(memberOwner);
@@ -1946,19 +1957,11 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
             var capacity = Assert.IsType<ZLinkStoreReadResult.Found>(
                 await provider.ReadAsync(capacityKey)
             );
-            var corrupted = JsonNode.Parse(capacity.Value.Bytes.Span)!;
-            corrupted["active"]!["actors"] = 0;
             Assert.IsType<ZLinkStoreWriteResult.Applied>(
                 await provider.WriteAsync(
                     new ZLinkStoreWriteRequest(
                         [new ZLinkStoreCondition.Version(capacityKey, capacity.Value.Version)],
-                        [
-                            new ZLinkStoreMutation.Put(
-                                capacityKey,
-                                Encoding.UTF8.GetBytes(corrupted.ToJsonString()),
-                                null
-                            ),
-                        ]
+                        [new ZLinkStoreMutation.Put(capacityKey, "0"u8.ToArray(), null)]
                     )
                 )
             );
@@ -1966,7 +1969,7 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
             await Assert.ThrowsAsync<InvalidDataException>(async () =>
                 await repository.ReserveAsync(next)
             );
-            Assert.Equal(0, writes);
+            Assert.Equal(1, writes);
             foreach (var (id, version) in membersBefore)
                 Assert.Equal(
                     version,
@@ -1989,11 +1992,15 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
         if (scenario == "memberReclaimed")
         {
             ZLinkObjectReservation? competingMember = null;
-            provider.BeforeRead = async key =>
+            provider.Inspect = async batch =>
             {
-                if (key != CapacityKey(memberDescriptor))
+                if (
+                    !batch
+                        .Mutations.OfType<ZLinkStoreMutation.Add>()
+                        .Any(add => add.Key == CapacityKey(memberDescriptor) && add.Delta < 0)
+                )
                     return;
-                provider.BeforeRead = null;
+                provider.Inspect = null;
                 competingMember = Assert
                     .IsType<ZLinkObjectReserveResult.Reserved>(
                         await repository.ReserveAsync(
@@ -2035,7 +2042,10 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
             );
             Assert.Equal(
                 0,
-                JsonNode.Parse(capacity.Value.Bytes.Span)!["active"]!["actors"]!.GetValue<int>()
+                int.Parse(
+                    Encoding.UTF8.GetString(capacity.Value.Bytes.Span),
+                    CultureInfo.InvariantCulture
+                )
             );
             return;
         }
@@ -2071,7 +2081,10 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
                     Reservation("member-b", memberNodeAgain, memberOwnerAgain)
                 )
             );
-            Assert.True(again.Reservation.ObjectGeneration > spotGeneration);
+            Assert.True(
+                again.Reservation.ObjectGeneration
+                    > memberGenerationsBefore[again.Reservation.Key.Value]
+            );
             return;
         }
 
@@ -2771,11 +2784,17 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
         else if (scenario == "capacityRace")
         {
             ZLinkObjectReserveResult? winner = null;
-            provider.BeforeRead = async key =>
+            provider.Inspect = async batch =>
             {
-                if (!key.Value.Contains("capacity:"))
+                if (
+                    !batch
+                        .Mutations.OfType<ZLinkStoreMutation.Delete>()
+                        .Any(delete =>
+                            delete.Key == ZLinkProviderLocationRepository.AuthorityMetaKey(next.Key)
+                        )
+                )
                     return;
-                provider.BeforeRead = null;
+                provider.Inspect = null;
                 winner = await repository.ReserveAsync(next);
             };
             var loser = await repository.ReserveAsync(next);
@@ -3050,7 +3069,7 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
             time.Advance(TimeSpan.FromMinutes(3));
         else if (scenario != "live")
             await repository.ReleaseOwnerLeaseAsync(owner);
-        var capacityKey = CapacityKey(descriptor);
+        var capacityKey = CapacityKey(descriptor, pending: true);
         if (scenario == "missingCapacity" || scenario == "underflow")
         {
             var capacity = Assert.IsType<ZLinkStoreReadResult.Found>(
@@ -3059,13 +3078,7 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
             ZLinkStoreMutation mutation =
                 scenario == "missingCapacity"
                     ? new ZLinkStoreMutation.Delete(capacityKey)
-                    : new ZLinkStoreMutation.Put(
-                        capacityKey,
-                        Encoding.UTF8.GetBytes(
-                            "{\"active\":{\"actors\":0,\"spots\":0,\"spotTypes\":{}},\"pending\":{\"actors\":0,\"spots\":0,\"spotTypes\":{}}}"
-                        ),
-                        null
-                    );
+                    : new ZLinkStoreMutation.Put(capacityKey, "0"u8.ToArray(), null);
             await provider.WriteAsync(
                 new ZLinkStoreWriteRequest(
                     [new ZLinkStoreCondition.Version(capacityKey, capacity.Value.Version)],
@@ -3095,6 +3108,21 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
                     .Snapshot.StoreVersion
             );
         }
+        else if (scenario == "missingCapacity")
+        {
+            await Assert.ThrowsAsync<InvalidDataException>(async () =>
+                await repository.ReleaseEndedReservationAsync(request.Key, reservation.StoreVersion)
+            );
+            Assert.IsType<ZLinkStoreReadResult.Missing>(await provider.ReadAsync(capacityKey));
+            Assert.Equal(
+                reservation.StoreVersion,
+                Assert
+                    .IsType<ZLinkAuthorityReadResult.Found>(
+                        await repository.ReadAuthorityAsync(request.Key)
+                    )
+                    .Snapshot.StoreVersion
+            );
+        }
         else
         {
             Assert.Equal(
@@ -3109,8 +3137,6 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
                 Assert.IsType<ZLinkAuthorityReadResult.Missing>(
                     await repository.ReadAuthorityAsync(request.Key)
                 );
-            if (scenario == "missingCapacity")
-                Assert.IsType<ZLinkStoreReadResult.Missing>(await provider.ReadAsync(capacityKey));
         }
     }
 
@@ -3183,6 +3209,14 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
         var writes = new List<ZLinkStoreWriteRequest>();
         provider.Inspect = async write =>
         {
+            if (write.Mutations.Count == 0)
+            {
+                Assert.All(
+                    write.Conditions,
+                    condition => Assert.IsType<ZLinkStoreCondition.SumAtMost>(condition)
+                );
+                return;
+            }
             writes.Add(write);
             if (republish && writes.Count == 1)
                 Assert.IsType<ZLinkStoreWriteResult.Applied>(
@@ -3213,7 +3247,11 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
                 break;
         }
         Assert.Equal(republish ? 2 : 1, writes.Count);
-        Assert.Equal(transition == "Reserve" ? 6 : 4, writes[0].Conditions.Count);
+        Assert.Equal(transition == "Reserve" ? (userSpot ? 7 : 6) : 3, writes[0].Conditions.Count);
+        Assert.Equal(
+            transition == "Reserve" ? (userSpot ? 2 : 1) : 0,
+            writes[0].Conditions.OfType<ZLinkStoreCondition.SumAtMost>().Count()
+        );
         Assert.Contains(
             writes[0].Conditions,
             c =>
@@ -3322,7 +3360,7 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
     [Theory]
     [InlineData(1)]
     [InlineData(10)]
-    public async Task DeleteRebuildsCapacityConditionsAfterProviderConflict(int conflicts)
+    public async Task DeleteRetriesAnAuthorityBatchConflict(int conflicts)
     {
         var inner = new ZLinkInMemoryProviderLocationStore();
         var provider = new DeleteCapacityContentionStore(inner) { RemainingConflicts = conflicts };
@@ -3437,8 +3475,11 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
                 originalCapacity.Value.Bytes.ToArray(),
                 capacityAfter.Value.Bytes.ToArray()
             );
-            Assert.Equal("3", await ReadCounterAsync(provider, ObjectCounterKey));
-            Assert.Equal("3", await ReadCounterAsync(provider, AuthorityOwnerCounterKey));
+            Assert.Equal("3", await ReadCounterAsync(provider, ObjectCounterKey(request.Key)));
+            Assert.Equal(
+                "3",
+                await ReadCounterAsync(provider, AuthorityOwnerCounterKey(request.Key))
+            );
         }
     }
 
@@ -3476,7 +3517,9 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
                 await repository.ReadAuthorityAsync(request.Key)
             )
             .Snapshot;
-        var capacityBefore = await provider.ReadAsync(CapacityKey(descriptor));
+        var capacityBefore = await provider.ReadAsync(
+            CapacityKey(descriptor, pending: !expiredOwner)
+        );
 
         Assert.IsType<ZLinkAuthorityCompareExchangeResult.Conflict>(
             await repository.CompareExchangeAuthorityAsync(
@@ -3501,7 +3544,7 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
         if (opaqueProvider)
         {
             var capacityAfter = Assert.IsType<ZLinkStoreReadResult.Found>(
-                await provider.ReadAsync(CapacityKey(descriptor))
+                await provider.ReadAsync(CapacityKey(descriptor, pending: !expiredOwner))
             );
             var originalCapacity = Assert.IsType<ZLinkStoreReadResult.Found>(capacityBefore);
             Assert.Equal(originalCapacity.Value.Version, capacityAfter.Value.Version);
@@ -3509,8 +3552,11 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
                 originalCapacity.Value.Bytes.ToArray(),
                 capacityAfter.Value.Bytes.ToArray()
             );
-            Assert.Equal("2", await ReadCounterAsync(provider, ObjectCounterKey));
-            Assert.Equal("2", await ReadCounterAsync(provider, AuthorityOwnerCounterKey));
+            Assert.Equal("2", await ReadCounterAsync(provider, ObjectCounterKey(request.Key)));
+            Assert.Equal(
+                "2",
+                await ReadCounterAsync(provider, AuthorityOwnerCounterKey(request.Key))
+            );
         }
     }
 
@@ -3535,8 +3581,12 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
                 await repository.CommitAsync(reserved.Reservation, new byte[] { 2 })
             )
             .Snapshot;
-        var exhaustedKey = ownerCounterExhausted ? AuthorityOwnerCounterKey : ObjectCounterKey;
-        var unchangedKey = ownerCounterExhausted ? ObjectCounterKey : AuthorityOwnerCounterKey;
+        var exhaustedKey = ownerCounterExhausted
+            ? AuthorityOwnerCounterKey(request.Key)
+            : ObjectCounterKey(request.Key);
+        var unchangedKey = ownerCounterExhausted
+            ? ObjectCounterKey(request.Key)
+            : AuthorityOwnerCounterKey(request.Key);
         await SeedCounterAsync(provider, exhaustedKey, long.MaxValue.ToString());
 
         Assert.IsType<ZLinkAuthorityCompareExchangeResult.GenerationExhausted>(
@@ -3585,7 +3635,13 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
         provider.Inspect = async batch =>
         {
             observed++;
-            foreach (var counterKey in new[] { ObjectCounterKey, AuthorityOwnerCounterKey })
+            foreach (
+                var counterKey in new[]
+                {
+                    ObjectCounterKey(request.Key),
+                    AuthorityOwnerCounterKey(request.Key),
+                }
+            )
             {
                 var counterCondition = Assert.Single(
                     batch.Conditions.OfType<ZLinkStoreCondition.Version>(),
@@ -3602,8 +3658,11 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
                     batch.Mutations
                 );
                 Assert.IsType<ZLinkStoreWriteResult.Conflict>(await inner.WriteAsync(invalid));
-                Assert.Equal("2", await ReadCounterAsync(inner, ObjectCounterKey));
-                Assert.Equal("2", await ReadCounterAsync(inner, AuthorityOwnerCounterKey));
+                Assert.Equal("2", await ReadCounterAsync(inner, ObjectCounterKey(request.Key)));
+                Assert.Equal(
+                    "2",
+                    await ReadCounterAsync(inner, AuthorityOwnerCounterKey(request.Key))
+                );
                 AssertAuthorityUnchanged(
                     before,
                     Assert
@@ -3627,8 +3686,8 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
             )
         );
         Assert.Equal(1, observed);
-        Assert.Equal("3", await ReadCounterAsync(inner, ObjectCounterKey));
-        Assert.Equal("3", await ReadCounterAsync(inner, AuthorityOwnerCounterKey));
+        Assert.Equal("3", await ReadCounterAsync(inner, ObjectCounterKey(request.Key)));
+        Assert.Equal("3", await ReadCounterAsync(inner, AuthorityOwnerCounterKey(request.Key)));
     }
 
     [Theory]
@@ -3824,19 +3883,21 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
     }
 
     private static readonly ZLinkStoreKey OwnerCounterKey = new("zlink:v11:owner-counter");
-    private static readonly ZLinkStoreKey ObjectCounterKey = new("zlink:v11:object-counter");
-    private static readonly ZLinkStoreKey AuthorityOwnerCounterKey = new(
-        "zlink:v11:authority-owner-counter"
-    );
 
-    // Capacity-row-canonical-key-json ruling: the capacity row's key and
-    // JSON shape must match Node's capacityKey()/CapacityRecord and Java's
-    // dac9a585d0 byte-for-byte. This mirrors Java's
-    // capacityRowsUseTheNodeCppCanonicalKeyAndJsonShape test exactly (same
-    // mesh/rid/stableType vectors), so the two independently-derived byte
-    // strings act as a cross-language golden vector.
+    private static ZLinkStoreKey ObjectCounterKey(ZLinkAuthorityKey authority) =>
+        CounterKey("object-counter", authority);
+
+    private static ZLinkStoreKey AuthorityOwnerCounterKey(ZLinkAuthorityKey authority) =>
+        CounterKey("authority-owner-counter", authority);
+
+    private static ZLinkStoreKey CounterKey(string counter, ZLinkAuthorityKey authority)
+    {
+        Assert.True(ZLinkAuthorityKeyCodec.TryDecodeActor(authority, out var actorId));
+        return new($"zlink:v12:{counter}\0actor\0{actorId}");
+    }
+
     [Fact]
-    public async Task CapacityRowsUseTheNodeJavaCanonicalKeyAndJsonShape()
+    public async Task CapacityCountersUseCanonicalKeysAndBareDecimals()
     {
         var provider = new ZLinkInMemoryProviderLocationStore();
         var repository = new ZLinkProviderLocationRepository(provider);
@@ -3907,28 +3968,32 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
             )
         );
 
-        const string key = "zlink:v11:capacity:mesh%20%2F%ED%95%9C:node%20%2F%23%3F";
-        await AssertCapacityRowAsync(
+        const string scope = "zlink:v12:capacity\0mesh /한\06e6f6465202f233f\0";
+        await AssertCapacityCounterAsync(provider, scope + "spots\0pending", "1");
+        await AssertCapacityCounterAsync(
             provider,
-            key,
-            "{\"active\":{\"actors\":0,\"spots\":0,\"spotTypes\":{}},"
-                + "\"pending\":{\"actors\":0,\"spots\":1,\"spotTypes\":{"
-                + "\"user_spot\\u0000방&<>\":1}}}"
+            scope + "spot-type\0userSpot\0방&<>\0pending",
+            "1"
         );
 
         Assert.IsType<ZLinkObjectCommitResult.Committed>(
             await repository.CommitAsync(reserved.Reservation, new byte[] { 2 })
         );
-        await AssertCapacityRowAsync(
+        await AssertCapacityCounterAsync(provider, scope + "spots\0active", "1");
+        await AssertCapacityCounterAsync(provider, scope + "spots\0pending", "0");
+        await AssertCapacityCounterAsync(
             provider,
-            key,
-            "{\"active\":{\"actors\":0,\"spots\":1,\"spotTypes\":{"
-                + "\"user_spot\\u0000방&<>\":1}},\"pending\":{\"actors\":0,"
-                + "\"spots\":0,\"spotTypes\":{}}}"
+            scope + "spot-type\0userSpot\0방&<>\0active",
+            "1"
+        );
+        await AssertCapacityCounterAsync(
+            provider,
+            scope + "spot-type\0userSpot\0방&<>\0pending",
+            "0"
         );
     }
 
-    private static async ValueTask AssertCapacityRowAsync(
+    private static async ValueTask AssertCapacityCounterAsync(
         IZLinkLocationStore provider,
         string key,
         string expected
@@ -5835,9 +5900,9 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
         );
 
         provider.ThrowAfterNextWrite = true;
-        // Root claim and the authoritative inventory page add two writes
-        // before participant staging. Lose the final Prepared response.
-        provider.SkipWritesBeforeThrow = 5;
+        // Root claim, inventory, participant staging, and its fence
+        // precede the final Prepared response.
+        provider.SkipWritesBeforeThrow = 4;
         var reconciled = Assert.IsType<ZLinkAggregatePrepareResult.AlreadyPrepared>(
             await repository.PrepareAggregateAsync(request)
         );
@@ -6026,12 +6091,9 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
         var reservations = results
             .Select(static result => Assert.IsType<ZLinkObjectReserveResult.Reserved>(result))
             .ToArray();
-        Assert.Equal(
-            64,
-            reservations
-                .Select(static result => result.Reservation.AuthorityOwnerGeneration)
-                .Distinct()
-                .Count()
+        Assert.All(
+            reservations,
+            reservation => Assert.Equal(1UL, reservation.Reservation.AuthorityOwnerGeneration)
         );
     }
 
@@ -6043,8 +6105,9 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
         var owner = await ClaimAsync(repository, "counter-golden-owner");
         var descriptor = Descriptor("target", owner);
         _ = await repository.UpdateMeshNodeAsync(descriptor, ZLinkLocationWriteIntent.NewClaim);
-        await SeedCounterAsync(provider, ObjectCounterKey, "7");
-        await SeedCounterAsync(provider, AuthorityOwnerCounterKey, "7");
+        var authority = ZLinkAuthorityKeyCodec.EncodeActor("actor:counter-golden");
+        await SeedCounterAsync(provider, ObjectCounterKey(authority), "7");
+        await SeedCounterAsync(provider, AuthorityOwnerCounterKey(authority), "7");
 
         var reserved = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
             await repository.ReserveAsync(Reservation("actor:counter-golden", descriptor, owner))
@@ -6052,8 +6115,8 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
 
         Assert.Equal(7UL, reserved.Reservation.ObjectGeneration);
         Assert.Equal(7UL, reserved.Reservation.AuthorityOwnerGeneration);
-        Assert.Equal("8", await ReadCounterAsync(provider, ObjectCounterKey));
-        Assert.Equal("8", await ReadCounterAsync(provider, AuthorityOwnerCounterKey));
+        Assert.Equal("8", await ReadCounterAsync(provider, ObjectCounterKey(authority)));
+        Assert.Equal("8", await ReadCounterAsync(provider, AuthorityOwnerCounterKey(authority)));
     }
 
     [Fact]
@@ -6071,8 +6134,14 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
 
         Assert.Equal(1UL, reserved.Reservation.ObjectGeneration);
         Assert.Equal(1UL, reserved.Reservation.AuthorityOwnerGeneration);
-        Assert.Equal("2", await ReadCounterAsync(provider, ObjectCounterKey));
-        Assert.Equal("2", await ReadCounterAsync(provider, AuthorityOwnerCounterKey));
+        Assert.Equal(
+            "2",
+            await ReadCounterAsync(provider, ObjectCounterKey(reserved.Reservation.Key))
+        );
+        Assert.Equal(
+            "2",
+            await ReadCounterAsync(provider, AuthorityOwnerCounterKey(reserved.Reservation.Key))
+        );
     }
 
     [Fact]
@@ -6083,22 +6152,29 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
         var owner = await ClaimAsync(repository, "counter-exhausted-owner");
         var descriptor = Descriptor("target", owner);
         _ = await repository.UpdateMeshNodeAsync(descriptor, ZLinkLocationWriteIntent.NewClaim);
-        await SeedCounterAsync(provider, ObjectCounterKey, long.MaxValue.ToString());
         var request = Reservation("actor:counter-exhausted", descriptor, owner);
+        await SeedCounterAsync(provider, ObjectCounterKey(request.Key), long.MaxValue.ToString());
 
         Assert.IsType<ZLinkObjectReserveResult.GenerationExhausted>(
             await repository.ReserveAsync(request)
         );
-        Assert.Equal(long.MaxValue.ToString(), await ReadCounterAsync(provider, ObjectCounterKey));
+        Assert.Equal(
+            long.MaxValue.ToString(),
+            await ReadCounterAsync(provider, ObjectCounterKey(request.Key))
+        );
         Assert.IsType<ZLinkStoreReadResult.Missing>(
             await provider.ReadAsync(ZLinkProviderLocationRepository.AuthorityMetaKey(request.Key))
         );
     }
 
-    [Fact]
-    public async Task AggregateNewOwnerBlockStoresTheNextGenerationAfterItsRange()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AggregateNewOwnerIssuesEachParticipantCounterIndependently(bool exhausted)
     {
-        var provider = new ZLinkInMemoryProviderLocationStore();
+        var provider = new InspectAuthorityBatchLocationStore(
+            new ZLinkInMemoryProviderLocationStore()
+        );
         var repository = new ZLinkProviderLocationRepository(provider);
         var sourceOwner = await ClaimAsync(repository, "counter-block-source");
         var targetOwner = await ClaimAsync(repository, "counter-block-target");
@@ -6128,17 +6204,45 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
                 )
             );
         }
-        await SeedCounterAsync(provider, AuthorityOwnerCounterKey, "7");
+        await SeedCounterAsync(provider, AuthorityOwnerCounterKey(participants[0].Key), "7");
+        var secondNext = exhausted ? long.MaxValue.ToString(CultureInfo.InvariantCulture) : "11";
+        await SeedCounterAsync(provider, AuthorityOwnerCounterKey(participants[1].Key), secondNext);
 
-        var prepared = Assert.IsType<ZLinkAggregatePrepareResult.Prepared>(
-            await repository.PrepareAggregateAsync(
-                AggregateRequest(participants, target, targetOwner)
-            )
+        var writes = 0;
+        provider.Inspect = _ =>
+        {
+            writes++;
+            return Task.CompletedTask;
+        };
+        var result = await repository.PrepareAggregateAsync(
+            AggregateRequest(participants, target, targetOwner)
         );
+        if (exhausted)
+        {
+            Assert.IsType<ZLinkAggregatePrepareResult.GenerationExhausted>(result);
+            Assert.Equal(0, writes);
+            Assert.Equal(
+                "7",
+                await ReadCounterAsync(provider, AuthorityOwnerCounterKey(participants[0].Key))
+            );
+            Assert.Equal(
+                secondNext,
+                await ReadCounterAsync(provider, AuthorityOwnerCounterKey(participants[1].Key))
+            );
+            return;
+        }
+        var prepared = Assert.IsType<ZLinkAggregatePrepareResult.Prepared>(result);
 
         Assert.Equal(7UL, prepared.TargetAuthorityOwnerGenerations[participants[0].Key]);
-        Assert.Equal(8UL, prepared.TargetAuthorityOwnerGenerations[participants[1].Key]);
-        Assert.Equal("9", await ReadCounterAsync(provider, AuthorityOwnerCounterKey));
+        Assert.Equal(11UL, prepared.TargetAuthorityOwnerGenerations[participants[1].Key]);
+        Assert.Equal(
+            "8",
+            await ReadCounterAsync(provider, AuthorityOwnerCounterKey(participants[0].Key))
+        );
+        Assert.Equal(
+            "12",
+            await ReadCounterAsync(provider, AuthorityOwnerCounterKey(participants[1].Key))
+        );
     }
 
     [Fact]
@@ -6575,7 +6679,10 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
         );
 
         Assert.Equal(1024, prepared.TargetAuthorityOwnerGenerations.Count);
-        Assert.Equal(1024, prepared.TargetAuthorityOwnerGenerations.Values.Distinct().Count());
+        Assert.All(
+            prepared.TargetAuthorityOwnerGenerations.Values,
+            generation => Assert.Equal(2UL, generation)
+        );
         Assert.Equal(
             ZLinkAggregateCommitResult.Committed,
             await repository.CommitAggregateAsync(prepared.Fence)
@@ -7806,21 +7913,20 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
             {
                 var index = offset + batchIndex;
                 var actorId = $"actor:ten-thousand:{index}";
-                var ownerGeneration = checked((ulong)index + 1);
                 var metaKey = AuthorityMetaKey(actorId);
                 metaKeys[batchIndex] = metaKey;
-                // The authority record is one opaque row (checklist C-2b):
-                // the payload already lives inside this same meta blob
-                // (inherited from the template's Committed payload, 0x69),
-                // so seeding a participant needs only this one Put -- no
-                // separate payload/generation key.
+                var authority = ZLinkAuthorityKeyCodec.EncodeActor(actorId);
+                mutations.Add(
+                    new ZLinkStoreMutation.Put(ObjectCounterKey(authority), "2"u8.ToArray(), null)
+                );
                 mutations.Add(
                     new ZLinkStoreMutation.Put(
-                        metaKey,
-                        WithAuthorityOwnerGeneration(templateMeta.Value.Bytes, ownerGeneration),
+                        AuthorityOwnerCounterKey(authority),
+                        "2"u8.ToArray(),
                         null
                     )
                 );
+                mutations.Add(new ZLinkStoreMutation.Put(metaKey, templateMeta.Value.Bytes, null));
             }
             var applied = Assert.IsType<ZLinkStoreWriteResult.Applied>(
                 await provider.WriteAsync(new ZLinkStoreWriteRequest([], mutations))
@@ -7840,11 +7946,6 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
         var capacity = Assert.IsType<ZLinkStoreReadResult.Found>(
             await provider.ReadAsync(capacityKey)
         );
-        var capacityJson =
-            JsonNode.Parse(capacity.Value.Bytes.Span) ?? throw new InvalidDataException();
-        // Canonical capacity row shape (capacity-row-canonical-key-json
-        // ruling): active.actors, not a flat actorsActive field.
-        SetJsonNumber(capacityJson["active"]!.AsObject(), "actors", (long)participantCount);
         Assert.IsType<ZLinkStoreWriteResult.Applied>(
             await provider.WriteAsync(
                 new ZLinkStoreWriteRequest(
@@ -7852,7 +7953,9 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
                     [
                         new ZLinkStoreMutation.Put(
                             capacityKey,
-                            Encoding.UTF8.GetBytes(capacityJson.ToJsonString()),
+                            Encoding.UTF8.GetBytes(
+                                participantCount.ToString(CultureInfo.InvariantCulture)
+                            ),
                             null
                         ),
                     ]
@@ -7874,23 +7977,6 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
             Enumerable.Repeat((byte)(index % 251), 32).ToArray(),
             new byte[] { 0x51, (byte)index }
         );
-
-    private static byte[] WithAuthorityOwnerGeneration(
-        ReadOnlyMemory<byte> encoded,
-        ulong generation
-    )
-    {
-        var json = JsonNode.Parse(encoded.Span) ?? throw new InvalidDataException();
-        // authorityOwnerGeneration is a decimal-string field on the
-        // canonical authority envelope (21-location-runtime.md#2.4), not a
-        // JSON number.
-        SetJsonString(
-            json.AsObject(),
-            "authorityOwnerGeneration",
-            generation.ToString(CultureInfo.InvariantCulture)
-        );
-        return Encoding.UTF8.GetBytes(json.ToJsonString());
-    }
 
     private static void SetJsonString(JsonObject json, string propertyName, string value)
     {
@@ -7921,43 +8007,13 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
             ZLinkAuthorityKeyCodec.EncodeActor(actorId)
         );
 
-    private static ZLinkStoreKey CapacityKey(ZLinkMeshNodeDescriptor descriptor) =>
+    private static ZLinkStoreKey CapacityKey(
+        ZLinkMeshNodeDescriptor descriptor,
+        bool pending = false
+    ) =>
         new(
-            $"zlink:v11:capacity:{EncodeUriComponent(descriptor.MeshName)}"
-                + $":{EncodeUriComponent(descriptor.Rid.ToString())}"
+            $"zlink:v12:capacity\0{descriptor.MeshName}\0{descriptor.Rid.ToHex()}\0actors\0{(pending ? "pending" : "active")}"
         );
-
-    // Mirrors the production EncodeUriComponent in
-    // ZLinkProviderLocationRepository.Authority.cs: JavaScript's
-    // encodeURIComponent unreserved set (wider than
-    // Uri.EscapeDataString's RFC 3986 set).
-    private static string EncodeUriComponent(string value)
-    {
-        var bytes = Encoding.UTF8.GetBytes(value);
-        var builder = new StringBuilder(bytes.Length);
-        foreach (var b in bytes)
-        {
-            if (
-                b
-                is (>= (byte)'A' and <= (byte)'Z')
-                    or (>= (byte)'a' and <= (byte)'z')
-                    or (>= (byte)'0' and <= (byte)'9')
-                    or (byte)'-'
-                    or (byte)'_'
-                    or (byte)'.'
-                    or (byte)'!'
-                    or (byte)'~'
-                    or (byte)'*'
-                    or (byte)'\''
-                    or (byte)'('
-                    or (byte)')'
-            )
-                builder.Append((char)b);
-            else
-                builder.Append('%').Append(b.ToString("X2", CultureInfo.InvariantCulture));
-        }
-        return builder.ToString();
-    }
 
     private static async ValueTask<ZLinkLocationOwnerToken> ClaimAsync(
         IZLinkLocationRepository repository,
@@ -8518,6 +8574,8 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
             CancellationToken cancellationToken = default
         )
         {
+            if (!request.Prefix.StartsWith("mesh-node\0", StringComparison.Ordinal))
+                return inner.ScanAsync(request, cancellationToken);
             ScanCalls++;
             if (_firstPageReturned && !_expired && request.Cursor is not null)
             {
@@ -8721,11 +8779,7 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
                             .UTF8.GetString(put.Bytes.Span)
                             .Contains("\"status\":2", StringComparison.Ordinal)
                     )
-                && request
-                    .Mutations.OfType<ZLinkStoreMutation.Put>()
-                    .Any(static put =>
-                        put.Key.Value.StartsWith("zlink:v11:capacity:", StringComparison.Ordinal)
-                    )
+                && request.Mutations.Any(static mutation => mutation is ZLinkStoreMutation.Add)
             )
             {
                 AggregateCommitAttempts++;
@@ -8774,20 +8828,7 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
                 if (RemainingConflicts > 0)
                 {
                     RemainingConflicts--;
-                    var capacityKey = request
-                        .Mutations.OfType<ZLinkStoreMutation.Put>()
-                        .Single()
-                        .Key;
-                    var capacity = Assert.IsType<ZLinkStoreReadResult.Found>(
-                        await inner.ReadAsync(capacityKey, cancellationToken)
-                    );
-                    _ = await inner.WriteAsync(
-                        new ZLinkStoreWriteRequest(
-                            [],
-                            [new ZLinkStoreMutation.Put(capacityKey, capacity.Value.Bytes, null)]
-                        ),
-                        cancellationToken
-                    );
+                    return new ZLinkStoreWriteResult.Conflict(DateTimeOffset.UtcNow);
                 }
             }
             return await inner.WriteAsync(request, cancellationToken);
@@ -8823,12 +8864,10 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
                 .Any(static put =>
                     put.Key.Value.StartsWith("authority\0", StringComparison.Ordinal)
                 );
-            var hasCapacityPut = request
-                .Mutations.OfType<ZLinkStoreMutation.Put>()
-                .Any(static put =>
-                    put.Key.Value.StartsWith("zlink:v11:capacity:", StringComparison.Ordinal)
-                );
-            if (hasAuthorityPut && hasCapacityPut)
+            var hasCapacityAdd = request.Mutations.Any(static mutation =>
+                mutation is ZLinkStoreMutation.Add
+            );
+            if (hasAuthorityPut && hasCapacityAdd)
             {
                 AuthorityMoveAttempts++;
                 if (ConflictNextAuthorityMove)

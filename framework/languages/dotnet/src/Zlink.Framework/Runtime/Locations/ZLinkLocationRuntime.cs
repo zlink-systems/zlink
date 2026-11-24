@@ -779,6 +779,14 @@ internal sealed partial class ZLinkLocationRuntime : IAsyncDisposable
                             return false;
                         }
 
+                        // Store §8.1 applies before the first lease claim, including
+                        // when the initial attempt was deferred by a Store outage.
+                        await _store
+                            .EnsureStoreFormatAsync(operation.Token)
+                            .AsTask()
+                            .WaitAsync(operation.Token)
+                            .ConfigureAwait(false);
+
                         claimStarted = true;
                         pendingClaim = ObserveStoreAsync(
                                 () =>
@@ -939,6 +947,10 @@ internal sealed partial class ZLinkLocationRuntime : IAsyncDisposable
                             )
                             .ConfigureAwait(false);
                     }
+                }
+                catch (ZLinkConfigurationException)
+                {
+                    throw;
                 }
                 catch (ZLinkOwnerLeaseClaimRejectedException)
                 {
@@ -1270,6 +1282,12 @@ internal sealed partial class ZLinkLocationRuntime : IAsyncDisposable
             try
             {
                 await RenewOwnerLeaseOnceAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (ZLinkConfigurationException exception)
+            {
+                RecordLeaseFailure(exception.Message);
+                OwnerLeaseRenewalFailed?.Invoke();
+                return;
             }
             catch (ZLinkOwnerLeaseClaimRejectedException exception)
             {
