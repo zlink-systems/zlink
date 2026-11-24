@@ -39,7 +39,13 @@ final class ZLinkProviderCreationDescriptorTest {
                 (ZLinkStoreReadFound) await(fixture.provider.read(descriptorKey, () -> false));
         apply(fixture, transition);
         var conditions = fixture.provider.writes.getFirst().conditions();
-        assertEquals(transition.equals("Reserve") ? 6 : 4, conditions.size());
+        boolean reserves = transition.equals("Reserve");
+        assertEquals(reserves ? 6 : 3, conditions.size());
+        assertEquals(
+                reserves ? List.of(reservationLimit(fixture)) : List.of(),
+                conditions.stream()
+                        .filter(ZLinkStoreSumAtMostCondition.class::isInstance)
+                        .toList());
         assertTrue(
                 conditions.stream()
                         .anyMatch(
@@ -80,7 +86,17 @@ final class ZLinkProviderCreationDescriptorTest {
         fixture.provider.writes.clear();
         fixture.provider.beforeNextWrite = ignored -> republish(fixture, null, null);
         apply(fixture, transition);
-        assertEquals(2, fixture.provider.writes.size(), "CAS conflict followed by rebuilt write");
+        var writes = fixture.provider.writes;
+        var mutating = writes.stream().filter(write -> !write.mutations().isEmpty()).toList();
+        assertEquals(2, mutating.size(), "CAS conflict followed by rebuilt write");
+        var probes = writes.stream().filter(write -> write.mutations().isEmpty()).toList();
+        if (transition.equals("Reserve")) {
+            assertEquals(3, writes.size());
+            assertEquals(List.of(reservationLimit(fixture)), writes.get(1).conditions());
+            assertEquals(List.of(writes.get(1)), probes);
+        } else {
+            assertTrue(probes.isEmpty());
+        }
     }
 
     @Test
@@ -130,6 +146,12 @@ final class ZLinkProviderCreationDescriptorTest {
                             await(fixture.repository.abort(fixture.reservation, () -> false)));
             default -> throw new AssertionError(transition);
         }
+    }
+
+    private static ZLinkStoreSumAtMostCondition reservationLimit(
+            ZLinkProviderCreationTerminalTest.Fixture fixture) {
+        return new ZLinkStoreSumAtMostCondition(
+                List.of(fixture.capacityKey("active"), fixture.capacityKey("pending")), 1, 1);
     }
 
     private static ZLinkStoreKey descriptorKey(ZLinkProviderCreationTerminalTest.Fixture fixture) {

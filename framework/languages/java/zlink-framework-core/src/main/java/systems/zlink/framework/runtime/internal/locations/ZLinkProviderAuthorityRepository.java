@@ -27,7 +27,6 @@ import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -43,8 +42,6 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ForkJoinPool;
-import java.util.concurrent.ThreadLocalRandom;
-import java.util.concurrent.TimeUnit;
 
 /** Implements Framework-owned authority records over the opaque provider SPI. */
 final class ZLinkProviderAuthorityRepository {
@@ -53,19 +50,14 @@ final class ZLinkProviderAuthorityRepository {
     private static final String OWNER_TRANSITION_PRESERVE = "preserve";
     private static final String OWNER_TRANSITION_NEW_OWNER = "newOwner";
     private static final ObjectMapper CANONICAL_JSON = new ObjectMapper();
-    private static final String CAPACITY_PREFIX = "zlink:v11:capacity:";
-    private static final ZLinkStoreKey OBJECT_COUNTER =
-            new ZLinkStoreKey("zlink:v11:object-counter");
-    private static final ZLinkStoreKey AUTHORITY_OWNER_COUNTER =
-            new ZLinkStoreKey("zlink:v11:authority-owner-counter");
     private static final String AGGREGATE_PREFIX = "zlink:v11:aggregate:";
     private static final byte AGGREGATE_STAGING = 0;
     private static final byte AGGREGATE_PREPARED = 1;
     private static final byte AGGREGATE_COMMITTED = 2;
-    private static final int AGGREGATE_COUNTER_RETRY_LIMIT = 64;
-    private static final Duration AGGREGATE_COUNTER_RETRY_WINDOW = Duration.ofSeconds(5);
-    private final CapacityMetricProvider provider;
-    private final java.util.concurrent.ConcurrentHashMap<ZLinkStoreKey, CapacityMetricSource>
+    private static final Duration AGGREGATE_PREPARE_RETRY_WINDOW = Duration.ofSeconds(5);
+    private final ZLinkLocationStore provider;
+    private final java.util.concurrent.ConcurrentHashMap<
+                    ZLinkMeshNodeDescriptorKey, CapacityMetricSource>
             capacityMetrics = new java.util.concurrent.ConcurrentHashMap<>();
 
     private volatile boolean capacityObservationRegistered;
@@ -81,9 +73,7 @@ final class ZLinkProviderAuthorityRepository {
 
     void registerCapacityMetrics(ZLinkMeshNodeDescriptor descriptor) {
         if (!capacityObservationRegistered) return;
-        ZLinkStoreKey key =
-                capacityKey(
-                        new ZLinkMeshNodeDescriptorKey(descriptor.meshName(), descriptor.rid()));
+        var key = new ZLinkMeshNodeDescriptorKey(descriptor.meshName(), descriptor.rid());
         capacityMetrics.compute(
                 key,
                 (ignored, source) -> {
@@ -94,20 +84,46 @@ final class ZLinkProviderAuthorityRepository {
     }
 
     CompletionStage<Void> refreshCapacityMetrics(ZLinkMeshNodeDescriptorKey descriptor) {
-        ZLinkStoreKey key = capacityKey(descriptor);
-        if (!capacityMetrics.containsKey(key)) return CompletableFuture.completedFuture(null);
-        return provider.read(key, () -> false).thenAccept(ignored -> {});
+        if (!capacityMetrics.containsKey(descriptor)) return completed(null);
+        return readCapacityProjection(descriptor).thenAccept(ignored -> {});
     }
 
     CompletionStage<ZLinkMeshNodeDescriptor> projectCapacity(ZLinkMeshNodeDescriptor descriptor) {
         var key = new ZLinkMeshNodeDescriptorKey(descriptor.meshName(), descriptor.rid());
-        return provider.readAvailable(capacityKey(key))
+        return readCapacityProjection(key)
                 .thenApply(
-                        read -> {
-                            var record =
-                                    read instanceof ZLinkStoreReadFound found
-                                            ? decodeCapacity(found.value().bytes())
-                                            : CapacityRecord.empty();
+                        counts -> {
+                            var configured = descriptor.capacity();
+                            var projected =
+                                    new ZLinkPlacementCapacity(
+                                            capacityUsage(
+                                                    key,
+                                                    counts,
+                                                    "actors",
+                                                    configured.actors().limit()),
+                                            capacityUsage(
+                                                    key,
+                                                    counts,
+                                                    "spots",
+                                                    configured.spots().limit()),
+                                            configured.spotTypes().stream()
+                                                    .map(
+                                                            type ->
+                                                                    new ZLinkSpotTypeCapacity(
+                                                                            type.objectKind(),
+                                                                            type.stableType(),
+                                                                            capacityUsage(
+                                                                                    key,
+                                                                                    counts,
+                                                                                    ZLinkCapacityCounters
+                                                                                            .spotType(
+                                                                                                    type
+                                                                                                            .objectKind(),
+                                                                                                    type
+                                                                                                            .stableType()),
+                                                                                    type.usage()
+                                                                                            .limit())))
+                                                    .toList());
                             return new ZLinkMeshNodeDescriptor(
                                     descriptor.meshName(),
                                     descriptor.rid(),
@@ -120,7 +136,7 @@ final class ZLinkProviderAuthorityRepository {
                                     descriptor.objectRole(),
                                     descriptor.entrySpotId(),
                                     descriptor.placementWeight(),
-                                    record.project(descriptor.capacity()),
+                                    projected,
                                     descriptor.activationConcurrency(),
                                     descriptor.maintenanceWave(),
                                     descriptor.state(),
@@ -131,24 +147,75 @@ final class ZLinkProviderAuthorityRepository {
                         });
     }
 
-    private void updateCapacityMetrics(ZLinkStoreKey key, CapacityRecord confirmed) {
-        capacityMetrics.computeIfPresent(
-                key,
-                (ignored, source) -> {
-                    boolean firstConfirmation = source.current == null;
-                    source.current = confirmed;
-                    if (firstConfirmation) source.register();
-                    return source;
-                });
+    private static ZLinkCapacityUsage capacityUsage(
+            ZLinkMeshNodeDescriptorKey key,
+            Map<ZLinkStoreKey, Long> counts,
+            String dimension,
+            int limit) {
+        return new ZLinkCapacityUsage(
+                Math.toIntExact(
+                        counts.getOrDefault(
+                                ZLinkCapacityCounters.key(key, dimension, "active"), 0L)),
+                Math.toIntExact(
+                        counts.getOrDefault(
+                                ZLinkCapacityCounters.key(key, dimension, "pending"), 0L)),
+                limit);
+    }
+
+    private CompletionStage<Map<ZLinkStoreKey, Long>> readCapacityProjection(
+            ZLinkMeshNodeDescriptorKey key) {
+        return readCapacityPage(ZLinkCapacityCounters.prefix(key), null, new HashMap<>())
+                .thenApply(
+                        counts -> {
+                            capacityMetrics.computeIfPresent(
+                                    key,
+                                    (ignored, source) -> {
+                                        boolean firstConfirmation = source.current == null;
+                                        source.current = counts;
+                                        if (firstConfirmation) source.register(key);
+                                        return source;
+                                    });
+                            return counts;
+                        });
+    }
+
+    private CompletionStage<Map<ZLinkStoreKey, Long>> readCapacityPage(
+            String prefix, ZLinkStoreScanCursor cursor, Map<ZLinkStoreKey, Long> counts) {
+        return provider.scan(new ZLinkStoreScanRequest(prefix, cursor, 1_000), () -> false)
+                .thenCompose(
+                        result -> {
+                            if (result instanceof ZLinkStoreScanExpired) {
+                                return CompletableFuture.completedFuture(null)
+                                        .thenComposeAsync(
+                                                ignored ->
+                                                        readCapacityPage(
+                                                                prefix, null, new HashMap<>()));
+                            }
+                            var page = ((ZLinkStoreScanPageResult) result).value();
+                            page.items()
+                                    .forEach(
+                                            item ->
+                                                    counts.put(
+                                                            item.key(),
+                                                            decodeCapacityCount(
+                                                                    item.value().bytes())));
+                            return page.nextCursor() == null
+                                    ? completed(counts)
+                                    : readCapacityPage(prefix, page.nextCursor(), counts);
+                        });
+    }
+
+    private static long decodeCapacityCount(byte[] bytes) {
+        try {
+            return ZLinkLocationStoreFormat.decodeCounter(bytes);
+        } catch (NumberFormatException failure) {
+            throw new IllegalStateException("Location Store capacity counter is invalid", failure);
+        }
     }
 
     void removeCapacityMetrics(ZLinkMeshNodeDescriptorKey descriptor) {
-        removeCapacityMetrics(capacityKey(descriptor));
-    }
-
-    private void removeCapacityMetrics(ZLinkStoreKey key) {
         capacityMetrics.computeIfPresent(
-                key,
+                descriptor,
                 (ignored, source) -> {
                     source.close();
                     return null;
@@ -157,14 +224,14 @@ final class ZLinkProviderAuthorityRepository {
 
     private final class CapacityMetricSource {
         private volatile ZLinkMeshNodeDescriptor descriptor;
-        private volatile CapacityRecord current;
+        private volatile Map<ZLinkStoreKey, Long> current;
         private final List<ZLinkRuntimeMetrics.Registration> registrations = new ArrayList<>();
 
         CapacityMetricSource(ZLinkMeshNodeDescriptor descriptor) {
             this.descriptor = descriptor;
         }
 
-        private void register() {
+        private void register(ZLinkMeshNodeDescriptorKey key) {
             var actors =
                     Map.of(
                             ZLinkRuntimeMetrics.Tag.MESH_NAME.wire(),
@@ -181,12 +248,12 @@ final class ZLinkProviderAuthorityRepository {
                     systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Metric
                             .OBJECT_CAPACITY_ACTIVE,
                     actors,
-                    () -> current.actorUsage(descriptor.capacity().actors().limit()).active());
+                    counter(key, "actors", "active"));
             observe(
                     systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Metric
                             .OBJECT_CAPACITY_RESERVED,
                     actors,
-                    () -> current.actorUsage(descriptor.capacity().actors().limit()).reserved());
+                    counter(key, "actors", "pending"));
             observe(
                     systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Metric
                             .OBJECT_CAPACITY_LIMIT,
@@ -196,12 +263,12 @@ final class ZLinkProviderAuthorityRepository {
                     systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Metric
                             .OBJECT_CAPACITY_ACTIVE,
                     spots,
-                    () -> current.spotUsage(descriptor.capacity().spots().limit()).active());
+                    counter(key, "spots", "active"));
             observe(
                     systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Metric
                             .OBJECT_CAPACITY_RESERVED,
                     spots,
-                    () -> current.spotUsage(descriptor.capacity().spots().limit()).reserved());
+                    counter(key, "spots", "pending"));
             observe(
                     systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Metric
                             .OBJECT_CAPACITY_LIMIT,
@@ -212,7 +279,8 @@ final class ZLinkProviderAuthorityRepository {
                         type.objectKind() == ZLinkPlacementObjectKind.INSTANCE_SPOT
                                 ? ZLinkRuntimeMetrics.SpotKind.INSTANCE.wire()
                                 : ZLinkRuntimeMetrics.SpotKind.USER.wire();
-                String typeKey = CapacityRecord.typeKey(type.objectKind(), type.stableType());
+                String dimension =
+                        ZLinkCapacityCounters.spotType(type.objectKind(), type.stableType());
                 var tags =
                         Map.of(
                                 ZLinkRuntimeMetrics.Tag.MESH_NAME.wire(),
@@ -225,18 +293,24 @@ final class ZLinkProviderAuthorityRepository {
                         systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Metric
                                 .SPOT_TYPE_CAPACITY_ACTIVE,
                         tags,
-                        () -> current.typeUsage(typeKey, type.usage().limit()).active());
+                        counter(key, dimension, "active"));
                 observe(
                         systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Metric
                                 .SPOT_TYPE_CAPACITY_RESERVED,
                         tags,
-                        () -> current.typeUsage(typeKey, type.usage().limit()).reserved());
+                        counter(key, dimension, "pending"));
                 observe(
                         systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Metric
                                 .SPOT_TYPE_CAPACITY_LIMIT,
                         tags,
                         () -> type.usage().limit());
             }
+        }
+
+        private java.util.function.LongSupplier counter(
+                ZLinkMeshNodeDescriptorKey descriptorKey, String dimension, String state) {
+            ZLinkStoreKey key = ZLinkCapacityCounters.key(descriptorKey, dimension, state);
+            return () -> current.getOrDefault(key, 0L);
         }
 
         private void observe(
@@ -251,69 +325,6 @@ final class ZLinkProviderAuthorityRepository {
         private void close() {
             registrations.forEach(ZLinkRuntimeMetrics.Registration::close);
             registrations.clear();
-        }
-    }
-
-    private final class CapacityMetricProvider implements ZLinkLocationStore {
-        private final ZLinkLocationStore delegate;
-
-        CapacityMetricProvider(ZLinkLocationStore delegate) {
-            this.delegate = delegate;
-        }
-
-        @Override
-        public CompletionStage<ZLinkStoreReadResult> read(
-                ZLinkStoreKey key,
-                systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
-            return delegate.read(key, cancellation).thenApply(result -> confirmRead(key, result));
-        }
-
-        CompletionStage<ZLinkStoreReadResult> readAvailable(ZLinkStoreKey key) {
-            return ZLinkProviderStoreRead.read(delegate, key, () -> false, "capacity")
-                    .thenApply(result -> confirmRead(key, result));
-        }
-
-        private ZLinkStoreReadResult confirmRead(ZLinkStoreKey key, ZLinkStoreReadResult result) {
-            if (capacityMetrics.containsKey(key)) {
-                updateCapacityMetrics(
-                        key,
-                        result instanceof ZLinkStoreReadFound found
-                                ? decodeCapacity(found.value().bytes())
-                                : CapacityRecord.empty());
-            }
-            return result;
-        }
-
-        @Override
-        public CompletionStage<ZLinkStoreWriteResult> write(
-                ZLinkStoreWriteRequest request,
-                systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
-            return delegate.write(request, cancellation)
-                    .thenApply(
-                            result -> {
-                                if (result instanceof ZLinkStoreWriteApplied) {
-                                    for (var mutation : request.mutations()) {
-                                        ZLinkStoreKey key =
-                                                mutation instanceof ZLinkStorePut put
-                                                        ? put.key()
-                                                        : ((ZLinkStoreDelete) mutation).key();
-                                        if (capacityMetrics.containsKey(key))
-                                            updateCapacityMetrics(
-                                                    key,
-                                                    mutation instanceof ZLinkStorePut put
-                                                            ? decodeCapacity(put.bytes())
-                                                            : CapacityRecord.empty());
-                                    }
-                                }
-                                return result;
-                            });
-        }
-
-        @Override
-        public CompletionStage<ZLinkStoreScanResult> scan(
-                ZLinkStoreScanRequest request,
-                systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
-            return delegate.scan(request, cancellation);
         }
     }
 
@@ -340,7 +351,7 @@ final class ZLinkProviderAuthorityRepository {
             ZLinkLocationStore provider,
             ZLinkProviderDescriptorRepository descriptors,
             ZLinkOwnerLeaseWaitTracker ownerLeaseWait) {
-        this.provider = new CapacityMetricProvider(Objects.requireNonNull(provider, "provider"));
+        this.provider = Objects.requireNonNull(provider, "provider");
         this.descriptors = Objects.requireNonNull(descriptors, "descriptors");
         this.aggregateInventory = new ZLinkAggregateInventoryStore(provider);
         this.ownerLeaseWait = Objects.requireNonNull(ownerLeaseWait, "ownerLeaseWait");
@@ -429,64 +440,26 @@ final class ZLinkProviderAuthorityRepository {
                                                                 new ZLinkAuthorityConflict(
                                                                         toRead(read)));
                                                     }
-                                                    return readCapacity(
-                                                                    current.allocation(),
-                                                                    opaqueCancellation)
-                                                            .thenCompose(
-                                                                    capacity -> {
-                                                                        List<ZLinkStoreMutation>
-                                                                                mutations =
-                                                                                        new ArrayList<>();
-                                                                        mutations.add(
-                                                                                new ZLinkStoreDelete(
-                                                                                        rowKey));
-                                                                        if (capacity.isPresent()) {
-                                                                            CapacitySnapshot
-                                                                                    stored =
-                                                                                            capacity
-                                                                                                    .orElseThrow();
-                                                                            CapacityRecord next =
-                                                                                    stored.record()
-                                                                                            .adjustActive(
-                                                                                                    current.allocation()
-                                                                                                            .capacityBundle(),
-                                                                                                    -1);
-                                                                            if (next == null) {
-                                                                                return completed(
-                                                                                        new ZLinkAuthorityConflict(
-                                                                                                toRead(
-                                                                                                        read)));
-                                                                            }
-                                                                            conditions.add(
-                                                                                    new ZLinkStoreVersionCondition(
-                                                                                            stored
-                                                                                                    .key(),
-                                                                                            stored.value()
-                                                                                                    .version()));
-                                                                            mutations.add(
-                                                                                    new ZLinkStorePut(
-                                                                                            stored
-                                                                                                    .key(),
-                                                                                            encodeCapacity(
-                                                                                                    next),
-                                                                                            null));
-                                                                        } else {
-                                                                            conditions.add(
-                                                                                    new ZLinkStoreMissingCondition(
-                                                                                            capacityKey(
-                                                                                                    current.allocation()
-                                                                                                            .descriptor())));
-                                                                        }
-                                                                        return writeAuthority(
-                                                                                rowKey,
-                                                                                found,
-                                                                                null,
-                                                                                conditions,
-                                                                                mutations,
-                                                                                cancellation,
-                                                                                key,
-                                                                                mutation);
-                                                                    });
+                                                    var deltas = new ZLinkCapacityCounters();
+                                                    var allocation = current.allocation();
+                                                    deltas.change(
+                                                            allocation.descriptor(),
+                                                            allocation.capacityBundle(),
+                                                            0,
+                                                            -1);
+                                                    List<ZLinkStoreMutation> mutations =
+                                                            new ArrayList<>();
+                                                    mutations.add(new ZLinkStoreDelete(rowKey));
+                                                    deltas.appendTo(mutations);
+                                                    return writeAuthority(
+                                                            rowKey,
+                                                            found,
+                                                            null,
+                                                            conditions,
+                                                            mutations,
+                                                            cancellation,
+                                                            key,
+                                                            mutation);
                                                 });
                             }
                             if (mutation instanceof ZLinkAuthorityRestore restore) {
@@ -579,7 +552,10 @@ final class ZLinkProviderAuthorityRepository {
                                                                             .UNAVAILABLE));
                                                 }
                                                 if (reincarnatePayload != null) {
-                                                    return nextPair(conditions, opaqueCancellation)
+                                                    return nextPair(
+                                                                    key,
+                                                                    conditions,
+                                                                    opaqueCancellation)
                                                             .thenCompose(
                                                                     counters -> {
                                                                         if (counters.exhausted()) {
@@ -647,80 +623,6 @@ final class ZLinkProviderAuthorityRepository {
                         });
     }
 
-    private CompletionStage<CapacityPlan> reserveCapacity(
-            ZLinkObjectReservationRequest request,
-            List<ZLinkStoreCondition> conditions,
-            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
-        return descriptors
-                .readMeshNode(request.targetDescriptor(), conditions, cancellation)
-                .thenCompose(
-                        descriptor -> {
-                            if (descriptor.isEmpty()
-                                    || !descriptorAdmits(descriptor.orElseThrow(), request)) {
-                                return completed(
-                                        new CapacityPlan(
-                                                CapacityAdmission.UNAVAILABLE, null, null));
-                            }
-                            return reservePendingCapacity(
-                                    descriptor.orElseThrow(),
-                                    request.targetDescriptor(),
-                                    request.capacityBundle(),
-                                    conditions,
-                                    cancellation);
-                        });
-    }
-
-    /**
-     * Location runtime §6.1: the single rule that admits a capacity bundle on a target node and
-     * holds it as pending usage. Object {@code Reserve} and the relocation aggregate prepare (the
-     * capacity a later {@code NewOwner} consumes) both reserve through here.
-     */
-    private CompletionStage<CapacityPlan> reservePendingCapacity(
-            ZLinkMeshNodeDescriptor descriptor,
-            ZLinkMeshNodeDescriptorKey target,
-            ZLinkPlacementCapacityBundle bundle,
-            List<ZLinkStoreCondition> conditions,
-            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
-        ZLinkStoreKey key = capacityKey(target);
-        return provider.read(key, cancellation)
-                .thenApply(
-                        read -> {
-                            CapacityRecord current =
-                                    read instanceof ZLinkStoreReadFound found
-                                            ? decodeCapacity(found.value().bytes())
-                                            : CapacityRecord.empty();
-                            CapacityRecord next =
-                                    capacityFits(current, descriptor, bundle)
-                                            ? current.adjustPending(bundle, 1)
-                                            : null;
-                            if (next == null) {
-                                return new CapacityPlan(CapacityAdmission.EXHAUSTED, null, null);
-                            }
-                            conditions.add(
-                                    read instanceof ZLinkStoreReadFound found
-                                            ? new ZLinkStoreVersionCondition(
-                                                    key, found.value().version())
-                                            : new ZLinkStoreMissingCondition(key));
-                            return new CapacityPlan(CapacityAdmission.ACCEPTED, key, next);
-                        });
-    }
-
-    private CompletionStage<Optional<CapacitySnapshot>> readCapacity(
-            ZLinkPlacementAllocation allocation,
-            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
-        ZLinkStoreKey key = capacityKey(allocation.descriptor());
-        return provider.read(key, cancellation)
-                .thenApply(
-                        read ->
-                                read instanceof ZLinkStoreReadFound found
-                                        ? Optional.of(
-                                                new CapacitySnapshot(
-                                                        key,
-                                                        found.value(),
-                                                        decodeCapacity(found.value().bytes())))
-                                        : Optional.empty());
-    }
-
     private static boolean descriptorMatchesTarget(
             ZLinkMeshNodeDescriptor descriptor,
             ZLinkMeshNodeDescriptorKey key,
@@ -752,47 +654,6 @@ final class ZLinkProviderAuthorityRepository {
                                                         .equals(request.stableType()))
                 && bundleMatchesObject(
                         request.capacityBundle(), request.objectKind(), request.stableType());
-    }
-
-    private static boolean capacityFits(
-            CapacityRecord current,
-            ZLinkMeshNodeDescriptor descriptor,
-            ZLinkPlacementCapacityBundle bundle) {
-        return hasCapacity(
-                        (long) current.actorActive() + current.actorPending(),
-                        descriptor.capacity().actors().limit(),
-                        bundle.actorSlots())
-                && hasCapacity(
-                        (long) current.spotActive() + current.spotPending(),
-                        descriptor.capacity().spots().limit(),
-                        bundle.spotSlots())
-                && bundle.spotType()
-                        .map(
-                                delta ->
-                                        descriptor.objectCapabilities().stream()
-                                                .filter(
-                                                        capability ->
-                                                                capability.objectKind()
-                                                                                == delta
-                                                                                        .objectKind()
-                                                                        && capability
-                                                                                .stableType()
-                                                                                .equals(
-                                                                                        delta
-                                                                                                .stableType()))
-                                                .findFirst()
-                                                .map(
-                                                        capability ->
-                                                                hasCapacity(
-                                                                        current.typeCount(delta),
-                                                                        capability.spotLimit(),
-                                                                        delta.slots()))
-                                                .orElse(false))
-                        .orElse(true);
-    }
-
-    private static boolean hasCapacity(long used, int limit, int requested) {
-        return limit == 0 || (long) used + requested <= limit;
     }
 
     private static boolean bundleMatchesObject(
@@ -955,165 +816,167 @@ final class ZLinkProviderAuthorityRepository {
                             return requireLiveOwner(
                                             request.targetOwner(), conditions, opaqueCancellation)
                                     .thenCompose(
-                                            live -> {
-                                                if (!live) {
+                                            live ->
+                                                    live
+                                                            ? reserveMissing(
+                                                                    request,
+                                                                    cancellation,
+                                                                    key,
+                                                                    reservationVersion,
+                                                                    conditions,
+                                                                    opaqueCancellation)
+                                                            : completed(
+                                                                    new ZLinkObjectConflict(
+                                                                            toRead(read))));
+                        });
+    }
+
+    private CompletionStage<ZLinkObjectReserveResult> reserveMissing(
+            ZLinkObjectReservationRequest request,
+            ZLinkStoreCancellation cancellation,
+            ZLinkStoreKey key,
+            String reservationVersion,
+            List<ZLinkStoreCondition> conditions,
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation opaqueCancellation) {
+        return descriptors
+                .readMeshNode(request.targetDescriptor(), conditions, opaqueCancellation)
+                .thenCompose(
+                        descriptor -> {
+                            if (descriptor.isEmpty()
+                                    || !descriptorAdmits(descriptor.orElseThrow(), request)) {
+                                return completed(
+                                        new ZLinkObjectConflict(
+                                                new ZLinkAuthorityMissing(Instant.now())));
+                            }
+                            List<ZLinkStoreMutation> mutations = new ArrayList<>();
+                            if (!ZLinkCapacityCounters.reserve(
+                                    descriptor.orElseThrow(),
+                                    request.capacityBundle(),
+                                    conditions,
+                                    mutations)) {
+                                return completed(
+                                        new ZLinkObjectConflict(
+                                                new ZLinkAuthorityMissing(Instant.now())));
+                            }
+                            return nextPair(request.authorityKey(), conditions, opaqueCancellation)
+                                    .thenCompose(
+                                            counters -> {
+                                                if (counters.exhausted()) {
                                                     return completed(
-                                                            new ZLinkObjectConflict(toRead(read)));
+                                                            new ZLinkObjectGenerationExhausted());
                                                 }
-                                                return reserveCapacity(
-                                                                request,
-                                                                conditions,
+                                                var allocation =
+                                                        new ZLinkPlacementAllocation(
+                                                                ZLinkPlacementAllocationState
+                                                                        .PENDING,
+                                                                request.objectKind(),
+                                                                request.stableType(),
+                                                                request.targetDescriptor(),
+                                                                request
+                                                                        .targetDescriptorLifecycleGeneration(),
+                                                                request.capacityBundle());
+                                                var creation =
+                                                        new ZLinkPendingObjectCreation(
+                                                                reservationVersion,
+                                                                request.creationIntentReference(),
+                                                                request.creationIntentHash(),
+                                                                request
+                                                                        .creationIntentEncodedSize());
+                                                var record =
+                                                        new AuthorityRecord(
+                                                                request.creatingPayload(),
+                                                                counters.objectGeneration(),
+                                                                counters.ownerGeneration(),
+                                                                request.targetOwner().ownerId(),
+                                                                request.targetOwner()
+                                                                        .leaseGeneration(),
+                                                                allocation,
+                                                                Optional.of(creation));
+                                                mutations.addAll(counters.mutations());
+                                                mutations.add(
+                                                        new ZLinkStorePut(
+                                                                key, encode(record), null));
+                                                return write(
+                                                                new ZLinkStoreWriteRequest(
+                                                                        conditions, mutations),
                                                                 opaqueCancellation)
                                                         .thenCompose(
-                                                                capacity -> {
-                                                                    if (capacity.admission()
-                                                                            == CapacityAdmission
-                                                                                    .UNAVAILABLE) {
+                                                                result -> {
+                                                                    if (result
+                                                                            instanceof
+                                                                            ZLinkStoreWriteApplied
+                                                                                    applied) {
                                                                         return completed(
-                                                                                new ZLinkObjectConflict(
-                                                                                        new ZLinkAuthorityMissing(
-                                                                                                Instant
-                                                                                                        .now())));
+                                                                                new ZLinkObjectReserved(
+                                                                                        new ZLinkObjectReservation(
+                                                                                                request
+                                                                                                        .authorityKey(),
+                                                                                                applied.putVersions()
+                                                                                                        .get(
+                                                                                                                key)
+                                                                                                        .value(),
+                                                                                                counters
+                                                                                                        .objectGeneration(),
+                                                                                                counters
+                                                                                                        .ownerGeneration(),
+                                                                                                reservationVersion,
+                                                                                                request
+                                                                                                        .targetDescriptor(),
+                                                                                                request
+                                                                                                        .targetDescriptorLifecycleGeneration(),
+                                                                                                request
+                                                                                                        .targetOwner())));
                                                                     }
-                                                                    if (capacity.admission()
-                                                                            == CapacityAdmission
-                                                                                    .EXHAUSTED) {
-                                                                        return completed(
-                                                                                new ZLinkPlacementCapacityExhausted());
-                                                                    }
-                                                                    return nextPair(
-                                                                                    conditions,
+                                                                    return canRebuild(
+                                                                                    key,
+                                                                                    null,
+                                                                                    null,
+                                                                                    request
+                                                                                            .targetOwner(),
                                                                                     opaqueCancellation)
-                                                                            .thenCompose(
-                                                                                    counters -> {
-                                                                                        if (counters
-                                                                                                .exhausted()) {
-                                                                                            return completed(
-                                                                                                    new ZLinkObjectGenerationExhausted());
+                                                                            .thenComposeAsync(
+                                                                                    eligible -> {
+                                                                                        if (!eligible) {
+                                                                                            return provider.read(
+                                                                                                            key,
+                                                                                                            opaqueCancellation)
+                                                                                                    .thenCompose(
+                                                                                                            current ->
+                                                                                                                    projectRead(
+                                                                                                                            current,
+                                                                                                                            opaqueCancellation))
+                                                                                                    .thenApply(
+                                                                                                            ZLinkObjectConflict
+                                                                                                                    ::new);
                                                                                         }
-                                                                                        AuthorityRecord
-                                                                                                record =
-                                                                                                        new AuthorityRecord(
-                                                                                                                request
-                                                                                                                        .creatingPayload(),
-                                                                                                                counters
-                                                                                                                        .objectGeneration(),
-                                                                                                                counters
-                                                                                                                        .ownerGeneration(),
-                                                                                                                request.targetOwner()
-                                                                                                                        .ownerId(),
-                                                                                                                request.targetOwner()
-                                                                                                                        .leaseGeneration(),
-                                                                                                                new ZLinkPlacementAllocation(
-                                                                                                                        ZLinkPlacementAllocationState
-                                                                                                                                .PENDING,
-                                                                                                                        request
-                                                                                                                                .objectKind(),
-                                                                                                                        request
-                                                                                                                                .stableType(),
-                                                                                                                        request
-                                                                                                                                .targetDescriptor(),
-                                                                                                                        request
-                                                                                                                                .targetDescriptorLifecycleGeneration(),
-                                                                                                                        request
-                                                                                                                                .capacityBundle()),
-                                                                                                                Optional
-                                                                                                                        .of(
-                                                                                                                                new ZLinkPendingObjectCreation(
-                                                                                                                                        reservationVersion,
-                                                                                                                                        request
-                                                                                                                                                .creationIntentReference(),
-                                                                                                                                        request
-                                                                                                                                                .creationIntentHash(),
-                                                                                                                                        request
-                                                                                                                                                .creationIntentEncodedSize())));
-                                                                                        List<
-                                                                                                        ZLinkStoreMutation>
-                                                                                                mutations =
-                                                                                                        new ArrayList<>(
-                                                                                                                counters
-                                                                                                                        .mutations());
-                                                                                        mutations
-                                                                                                .add(
-                                                                                                        new ZLinkStorePut(
-                                                                                                                capacity
-                                                                                                                        .key(),
-                                                                                                                encodeCapacity(
-                                                                                                                        capacity
-                                                                                                                                .next()),
-                                                                                                                null));
-                                                                                        mutations
-                                                                                                .add(
-                                                                                                        new ZLinkStorePut(
-                                                                                                                key,
-                                                                                                                encode(
-                                                                                                                        record),
-                                                                                                                null));
-                                                                                        return provider.write(
-                                                                                                        new ZLinkStoreWriteRequest(
-                                                                                                                conditions,
-                                                                                                                mutations),
+                                                                                        return capacityAvailable(
+                                                                                                        conditions,
                                                                                                         opaqueCancellation)
                                                                                                 .thenCompose(
-                                                                                                        result -> {
-                                                                                                            if (result
-                                                                                                                    instanceof
-                                                                                                                    ZLinkStoreWriteConflict) {
-                                                                                                                return canRebuild(
-                                                                                                                                key,
-                                                                                                                                null,
-                                                                                                                                null,
-                                                                                                                                request
-                                                                                                                                        .targetOwner(),
-                                                                                                                                opaqueCancellation)
-                                                                                                                        .thenComposeAsync(
-                                                                                                                                eligible ->
-                                                                                                                                        eligible
-                                                                                                                                                ? reserve(
-                                                                                                                                                        request,
-                                                                                                                                                        cancellation,
-                                                                                                                                                        reservationVersion)
-                                                                                                                                                : provider.read(
-                                                                                                                                                                key,
-                                                                                                                                                                opaqueCancellation)
-                                                                                                                                                        .thenCompose(
-                                                                                                                                                                current ->
-                                                                                                                                                                        projectRead(
-                                                                                                                                                                                current,
-                                                                                                                                                                                opaqueCancellation))
-                                                                                                                                                        .thenApply(
-                                                                                                                                                                ZLinkObjectConflict
-                                                                                                                                                                        ::new));
-                                                                                                            }
-                                                                                                            var
-                                                                                                                    applied =
-                                                                                                                            (ZLinkStoreWriteApplied)
-                                                                                                                                    result;
-                                                                                                            return completed(
-                                                                                                                    new ZLinkObjectReserved(
-                                                                                                                            new ZLinkObjectReservation(
-                                                                                                                                    request
-                                                                                                                                            .authorityKey(),
-                                                                                                                                    applied.putVersions()
-                                                                                                                                            .get(
-                                                                                                                                                    key)
-                                                                                                                                            .value(),
-                                                                                                                                    counters
-                                                                                                                                            .objectGeneration(),
-                                                                                                                                    counters
-                                                                                                                                            .ownerGeneration(),
-                                                                                                                                    reservationVersion,
-                                                                                                                                    request
-                                                                                                                                            .targetDescriptor(),
-                                                                                                                                    request
-                                                                                                                                            .targetDescriptorLifecycleGeneration(),
-                                                                                                                                    request
-                                                                                                                                            .targetOwner())));
-                                                                                                        });
+                                                                                                        available ->
+                                                                                                                available
+                                                                                                                        ? reserve(
+                                                                                                                                request,
+                                                                                                                                cancellation,
+                                                                                                                                reservationVersion)
+                                                                                                                        : completed(
+                                                                                                                                new ZLinkPlacementCapacityExhausted()));
                                                                                     });
                                                                 });
                                             });
                         });
+    }
+
+    private CompletionStage<Boolean> capacityAvailable(
+            List<ZLinkStoreCondition> conditions,
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+        var limits =
+                conditions.stream().filter(ZLinkStoreSumAtMostCondition.class::isInstance).toList();
+        if (limits.isEmpty()) return completed(true);
+        // Batch conflicts do not identify which condition failed. Recheck just the limits
+        // atomically, without mutating capacity or any authority.
+        return write(new ZLinkStoreWriteRequest(limits, List.of()), cancellation)
+                .thenApply(ZLinkStoreWriteApplied.class::isInstance);
     }
 
     CompletionStage<Boolean> cleanupDiscarded(
@@ -1295,7 +1158,10 @@ final class ZLinkProviderAuthorityRepository {
                                                                     throw new ZLinkFrameworkException(
                                                                             ZLinkFrameworkErrorKind
                                                                                     .UNAVAILABLE,
-                                                                            "Ended authority requires relocation recovery");
+                                                                            "Ended authority"
+                                                                                    + " requires"
+                                                                                    + " relocation"
+                                                                                    + " recovery");
                                                                 if (!discarded
                                                                         && !(request
                                                                                         .relocationPolicy()
@@ -1305,7 +1171,8 @@ final class ZLinkProviderAuthorityRepository {
                                                                     throw new ZLinkFrameworkException(
                                                                             ZLinkFrameworkErrorKind
                                                                                     .UNAVAILABLE,
-                                                                            "Object owner lease is unavailable");
+                                                                            "Object owner lease is"
+                                                                                    + " unavailable");
                                                             }
                                                             if (descriptor
                                                                     instanceof
@@ -1356,7 +1223,9 @@ final class ZLinkProviderAuthorityRepository {
                                                                     throw new ZLinkFrameworkException(
                                                                             ZLinkFrameworkErrorKind
                                                                                     .UNAVAILABLE,
-                                                                            "Ended Spot authority is not reclaimable");
+                                                                            "Ended Spot authority"
+                                                                                    + " is not"
+                                                                                    + " reclaimable");
                                                                 }
                                                                 if (spot.get().user().isPresent()) {
                                                                     members =
@@ -1479,7 +1348,12 @@ final class ZLinkProviderAuthorityRepository {
                                                                                 throw new ZLinkFrameworkException(
                                                                                         ZLinkFrameworkErrorKind
                                                                                                 .UNAVAILABLE,
-                                                                                        "User Spot still has a relocating or unactivated member");
+                                                                                        "User Spot"
+                                                                                                + " still"
+                                                                                                + " has a"
+                                                                                                + " relocating"
+                                                                                                + " or unactivated"
+                                                                                                + " member");
                                                                             members.add(
                                                                                     new EndedMember(
                                                                                             item
@@ -1577,36 +1451,12 @@ final class ZLinkProviderAuthorityRepository {
                                         });
                             });
         }
-        List<ZLinkMeshNodeDescriptorKey> descriptors = new ArrayList<>();
-        descriptors.add(current.allocation().descriptor());
-        for (var member : members)
-            if (!descriptors.contains(member.record().allocation().descriptor()))
-                descriptors.add(member.record().allocation().descriptor());
-        Map<ZLinkMeshNodeDescriptorKey, ZLinkStoreReadResult> capacities = new HashMap<>();
-        CompletionStage<Void> capacitiesRead =
-                ownersRead.thenCompose(
-                        waiting -> {
-                            if (waiting)
-                                throw new ZLinkFrameworkException(
-                                        ZLinkFrameworkErrorKind.UNAVAILABLE,
-                                        "Owner lease is within its authority release wait");
-                            CompletionStage<Void> reads = completed(null);
-                            for (var descriptor : descriptors)
-                                reads =
-                                        reads.thenCompose(
-                                                ignored ->
-                                                        provider.read(
-                                                                        capacityKey(descriptor),
-                                                                        cancellation)
-                                                                .thenAccept(
-                                                                        read ->
-                                                                                capacities.put(
-                                                                                        descriptor,
-                                                                                        read)));
-                            return reads;
-                        });
-        return capacitiesRead.thenCompose(
-                ignored -> {
+        return ownersRead.thenCompose(
+                waiting -> {
+                    if (waiting)
+                        throw new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                "Owner lease is within its authority release wait");
                     List<ZLinkStoreCondition> conditions = new ArrayList<>();
                     List<ZLinkStoreMutation> mutations = new ArrayList<>();
                     conditions.add(
@@ -1634,85 +1484,25 @@ final class ZLinkProviderAuthorityRepository {
                                                             ownerKey(id), found.value().version())
                                                     : new ZLinkStoreMissingCondition(
                                                             ownerKey(id))));
-                    Map<ZLinkMeshNodeDescriptorKey, CapacityRecord> next = new HashMap<>();
-                    capacities.forEach(
-                            (descriptor, read) -> {
-                                if (read instanceof ZLinkStoreReadFound found) {
-                                    conditions.add(
-                                            new ZLinkStoreVersionCondition(
-                                                    capacityKey(descriptor),
-                                                    found.value().version()));
-                                    next.put(descriptor, decodeCapacity(found.value().bytes()));
-                                } else
-                                    conditions.add(
-                                            new ZLinkStoreMissingCondition(
-                                                    capacityKey(descriptor)));
-                            });
-                    boolean consistent =
-                            adjustCapacity(
-                                    next, current.allocation(), active ? 0 : -1, active ? -1 : 0);
-                    for (var member : members)
-                        consistent &= adjustCapacity(next, member.record().allocation(), 0, -1);
-                    if (!consistent) {
-                        CompletionStage<Boolean> authoritiesUnchanged =
-                                provider.read(authorityKey, cancellation)
-                                        .thenApply(
-                                                observed ->
-                                                        observed
-                                                                        instanceof
-                                                                        ZLinkStoreReadFound
-                                                                                unchanged
-                                                                && unchanged
-                                                                        .value()
-                                                                        .version()
-                                                                        .equals(
-                                                                                authority
-                                                                                        .value()
-                                                                                        .version()));
-                        for (var member : members)
-                            authoritiesUnchanged =
-                                    authoritiesUnchanged.thenCompose(
-                                            unchanged ->
-                                                    !unchanged
-                                                            ? completed(false)
-                                                            : provider.read(
-                                                                            member.key(),
-                                                                            cancellation)
-                                                                    .thenApply(
-                                                                            observed ->
-                                                                                    observed
-                                                                                                    instanceof
-                                                                                                    ZLinkStoreReadFound
-                                                                                                            found
-                                                                                            && found.value()
-                                                                                                    .version()
-                                                                                                    .equals(
-                                                                                                            member
-                                                                                                                    .version())));
-                        return authoritiesUnchanged.thenCompose(
-                                unchanged ->
-                                        !unchanged
-                                                ? completed(StaleAuthorityReclaim.CONFLICT)
-                                                : CompletableFuture.failedFuture(
-                                                        new IllegalStateException(
-                                                                "Location Store capacity record is inconsistent")));
+                    var deltas = new ZLinkCapacityCounters();
+                    deltas.change(
+                            current.allocation().descriptor(),
+                            current.allocation().capacityBundle(),
+                            active ? 0 : -1,
+                            active ? -1 : 0);
+                    for (var member : members) {
+                        var allocation = member.record().allocation();
+                        deltas.change(allocation.descriptor(), allocation.capacityBundle(), 0, -1);
                     }
-                    next.forEach(
-                            (descriptor, record) ->
-                                    mutations.add(
-                                            new ZLinkStorePut(
-                                                    capacityKey(descriptor),
-                                                    encodeCapacity(record),
-                                                    null)));
-                    // Every mutated key is also a condition key, so the condition count is the
-                    // batch's unique key count. The Spot and its members are released in one
-                    // batch or not at all.
-                    if (conditions.size() > ZLinkLocationStoreLimits.MAXIMUM_BATCH_KEYS)
+                    deltas.appendTo(mutations);
+                    var keys = new java.util.HashSet<ZLinkStoreKey>();
+                    conditions.forEach(condition -> keys.addAll(condition.keys()));
+                    mutations.forEach(mutation -> keys.add(mutation.key()));
+                    if (keys.size() > ZLinkLocationStoreLimits.MAXIMUM_BATCH_KEYS)
                         throw new ZLinkFrameworkException(
                                 ZLinkFrameworkErrorKind.UNAVAILABLE,
                                 "User Spot member release exceeds one Location Store batch");
-                    return provider.write(
-                                    new ZLinkStoreWriteRequest(conditions, mutations), cancellation)
+                    return write(new ZLinkStoreWriteRequest(conditions, mutations), cancellation)
                             .thenApply(
                                     result -> {
                                         if (!(result instanceof ZLinkStoreWriteApplied))
@@ -1720,20 +1510,6 @@ final class ZLinkProviderAuthorityRepository {
                                         return StaleAuthorityReclaim.RECLAIMED;
                                     });
                 });
-    }
-
-    /** Applies one allocation's capacity delta; false when a record would become negative. */
-    private static boolean adjustCapacity(
-            Map<ZLinkMeshNodeDescriptorKey, CapacityRecord> records,
-            ZLinkPlacementAllocation allocation,
-            int pendingDelta,
-            int activeDelta) {
-        var record = records.get(allocation.descriptor());
-        if (record == null) return true;
-        var adjusted = record.adjust(allocation.capacityBundle(), pendingDelta, activeDelta);
-        if (adjusted == null) return false;
-        records.put(allocation.descriptor(), adjusted);
-        return true;
     }
 
     CompletionStage<ZLinkObjectCommitResult> commit(
@@ -1889,31 +1665,8 @@ final class ZLinkProviderAuthorityRepository {
                                             current.allocation().descriptor(),
                                             current.allocation().descriptorLifecycleGeneration(),
                                             owner)) {
-                                return completed(Optional.<CapacitySnapshot>empty());
-                            }
-                            return readCapacity(current.allocation(), cancellation);
-                        })
-                .thenCompose(
-                        capacity -> {
-                            if (capacity.isEmpty()) {
                                 return completed(false);
                             }
-                            CapacitySnapshot stored = capacity.orElseThrow();
-                            CapacityRecord nextCapacity =
-                                    readyPayload == null
-                                            ? stored.record()
-                                                    .adjustPending(
-                                                            current.allocation().capacityBundle(),
-                                                            -1)
-                                            : stored.record()
-                                                    .transition(
-                                                            current.allocation().capacityBundle());
-                            if (nextCapacity == null) {
-                                return completed(false);
-                            }
-                            conditions.add(
-                                    new ZLinkStoreVersionCondition(
-                                            stored.key(), stored.value().version()));
                             List<ZLinkStoreMutation> mutations = new ArrayList<>();
                             if (readyPayload == null) {
                                 mutations.add(new ZLinkStoreDelete(key));
@@ -1931,13 +1684,17 @@ final class ZLinkProviderAuthorityRepository {
                                                 Optional.empty());
                                 mutations.add(new ZLinkStorePut(key, encode(next), null));
                             }
-                            mutations.add(
-                                    new ZLinkStorePut(
-                                            stored.key(), encodeCapacity(nextCapacity), null));
+                            var deltas = new ZLinkCapacityCounters();
+                            deltas.change(
+                                    current.allocation().descriptor(),
+                                    current.allocation().capacityBundle(),
+                                    -1,
+                                    readyPayload == null ? 0 : 1);
+                            deltas.appendTo(mutations);
                             if (terminal != null) {
                                 Duration retention =
                                         Duration.between(
-                                                stored.value().storeNow(), terminal.expiresAt());
+                                                authority.storeNow(), terminal.expiresAt());
                                 if (retention.isZero() || retention.isNegative()) {
                                     throw new IllegalArgumentException(
                                             "terminal expiresAt must be later than provider store"
@@ -1971,7 +1728,7 @@ final class ZLinkProviderAuthorityRepository {
                                                 if (!live) {
                                                     return completed(false);
                                                 }
-                                                return provider.write(
+                                                return write(
                                                                 new ZLinkStoreWriteRequest(
                                                                         conditions, mutations),
                                                                 cancellation)
@@ -2070,13 +1827,12 @@ final class ZLinkProviderAuthorityRepository {
     CompletionStage<ZLinkAggregatePrepareResult> prepareAggregate(
             ZLinkAggregatePrepareRequest request, ZLinkStoreCancellation cancellation) {
         return prepareAggregate(
-                request, cancellation, 0, Instant.now().plus(AGGREGATE_COUNTER_RETRY_WINDOW));
+                request, cancellation, Instant.now().plus(AGGREGATE_PREPARE_RETRY_WINDOW));
     }
 
     private CompletionStage<ZLinkAggregatePrepareResult> prepareAggregate(
             ZLinkAggregatePrepareRequest request,
             ZLinkStoreCancellation cancellation,
-            int counterRetry,
             Instant retryDeadline) {
         Objects.requireNonNull(request, "request");
         ZLinkAggregateFence fence =
@@ -2116,10 +1872,9 @@ final class ZLinkProviderAuthorityRepository {
                                         found,
                                         opaqueCancellation,
                                         false,
-                                        counterRetry,
                                         retryDeadline);
                             }
-                            return provider.write(
+                            return write(
                                             new ZLinkStoreWriteRequest(
                                                     List.of(new ZLinkStoreMissingCondition(key)),
                                                     List.of(
@@ -2136,10 +1891,7 @@ final class ZLinkProviderAuthorityRepository {
                                                         instanceof
                                                         ZLinkStoreWriteApplied applied)) {
                                                     return prepareAggregate(
-                                                            request,
-                                                            cancellation,
-                                                            counterRetry,
-                                                            retryDeadline);
+                                                            request, cancellation, retryDeadline);
                                                 }
                                                 ZLinkStoreVersion version =
                                                         applied.putVersions().get(key);
@@ -2164,7 +1916,6 @@ final class ZLinkProviderAuthorityRepository {
                                                                         applied.storeNow())),
                                                         opaqueCancellation,
                                                         true,
-                                                        counterRetry,
                                                         retryDeadline);
                                             });
                         });
@@ -2177,7 +1928,6 @@ final class ZLinkProviderAuthorityRepository {
             ZLinkStoreReadFound staging,
             systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation,
             boolean ownsStaging,
-            int counterRetry,
             Instant retryDeadline) {
         // Decide target admission before any participant marker is written, so a refused
         // relocation leaves every participant authority untouched.
@@ -2195,7 +1945,6 @@ final class ZLinkProviderAuthorityRepository {
                                                                         request,
                                                                         fence,
                                                                         cancellation,
-                                                                        counterRetry,
                                                                         retryDeadline))
                                                 .thenCompose(
                                                         markers ->
@@ -2279,7 +2028,7 @@ final class ZLinkProviderAuthorityRepository {
         List<ZLinkStoreMutation> mutations = new ArrayList<>();
         mutations.add(new ZLinkStorePut(key, encodeAggregate(AGGREGATE_PREPARED, request), null));
         mutations.addAll(reservation.mutations());
-        return provider.write(new ZLinkStoreWriteRequest(conditions, mutations), cancellation)
+        return write(new ZLinkStoreWriteRequest(conditions, mutations), cancellation)
                 .thenCompose(
                         result -> {
                             if (result instanceof ZLinkStoreWriteApplied) {
@@ -2327,8 +2076,6 @@ final class ZLinkProviderAuthorityRepository {
                 || !Instant.now().isBefore(retryDeadline)) {
             return refuseAggregatePrepare(fence, staging, cancellation, ownsStaging);
         }
-        // The staging marker is still this attempt's: another write changed the target
-        // descriptor or capacity record. Decide admission again from the current values.
         return reserveAggregateCapacity(request, cancellation)
                 .thenCompose(
                         reservation ->
@@ -2366,27 +2113,23 @@ final class ZLinkProviderAuthorityRepository {
                                             request.targetOwner())) {
                                 return completed(Optional.empty());
                             }
-                            return reservePendingCapacity(
-                                            descriptor.orElseThrow(),
-                                            request.targetDescriptor(),
-                                            bundle,
-                                            conditions,
-                                            cancellation)
+                            List<ZLinkStoreMutation> mutations = new ArrayList<>();
+                            if (!ZLinkCapacityCounters.reserve(
+                                    descriptor.orElseThrow(), bundle, conditions, mutations)) {
+                                return completed(Optional.empty());
+                            }
+                            // A full target must refuse prepare before installing participant
+                            // markers.
+                            // The PREPARED write evaluates the same conditions and takes the
+                            // reservation.
+                            return capacityAvailable(conditions, cancellation)
                                     .thenApply(
-                                            plan ->
-                                                    plan.admission() != CapacityAdmission.ACCEPTED
-                                                            ? Optional.empty()
-                                                            : Optional.of(
+                                            available ->
+                                                    available
+                                                            ? Optional.of(
                                                                     new AggregateCapacityReservation(
-                                                                            conditions,
-                                                                            List.of(
-                                                                                    new ZLinkStorePut(
-                                                                                            plan
-                                                                                                    .key(),
-                                                                                            encodeCapacity(
-                                                                                                    plan
-                                                                                                            .next()),
-                                                                                            null)))));
+                                                                            conditions, mutations))
+                                                            : Optional.empty());
                         });
     }
 
@@ -2426,7 +2169,7 @@ final class ZLinkProviderAuthorityRepository {
                             if (aggregate.state() != AGGREGATE_STAGING) {
                                 return completed(false);
                             }
-                            return provider.write(
+                            return write(
                                             new ZLinkStoreWriteRequest(
                                                     List.of(
                                                             new ZLinkStoreVersionCondition(
@@ -2582,28 +2325,24 @@ final class ZLinkProviderAuthorityRepository {
                                                                                                                     ZLinkAggregateCommitResult
                                                                                                                             .STALE));
                                                                                         }
-                                                                                        return aggregateCapacityMutations(
-                                                                                                        request,
-                                                                                                        rows,
-                                                                                                        conditions,
+                                                                                        var
+                                                                                                mutations =
+                                                                                                        aggregateCapacityMutations(
+                                                                                                                request,
+                                                                                                                rows);
+                                                                                        mutations
+                                                                                                .add(
+                                                                                                        new ZLinkStorePut(
+                                                                                                                marker,
+                                                                                                                encodeAggregate(
+                                                                                                                        AGGREGATE_COMMITTED,
+                                                                                                                        request),
+                                                                                                                null));
+                                                                                        return write(
+                                                                                                        new ZLinkStoreWriteRequest(
+                                                                                                                conditions,
+                                                                                                                mutations),
                                                                                                         opaqueCancellation)
-                                                                                                .thenCompose(
-                                                                                                        mutations -> {
-                                                                                                            mutations
-                                                                                                                    .add(
-                                                                                                                            new ZLinkStorePut(
-                                                                                                                                    marker,
-                                                                                                                                    encodeAggregate(
-                                                                                                                                            AGGREGATE_COMMITTED,
-                                                                                                                                            request),
-                                                                                                                                    null));
-                                                                                                            return provider
-                                                                                                                    .write(
-                                                                                                                            new ZLinkStoreWriteRequest(
-                                                                                                                                    conditions,
-                                                                                                                                    mutations),
-                                                                                                                            opaqueCancellation);
-                                                                                                        })
                                                                                                 .thenCompose(
                                                                                                         result -> {
                                                                                                             if (!(result
@@ -2633,85 +2372,21 @@ final class ZLinkProviderAuthorityRepository {
                         });
     }
 
-    private CompletionStage<List<ZLinkStoreMutation>> aggregateCapacityMutations(
-            ZLinkAggregatePrepareRequest request,
-            List<LoadedParticipant> rows,
-            List<ZLinkStoreCondition> conditions,
-            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
-        Map<ZLinkStoreKey, CapacityRecord> capacities = new HashMap<>();
-        List<ZLinkPlacementAllocation> allocations = new ArrayList<>();
-        ZLinkStoreKey target = capacityKey(request.targetDescriptor());
-        ZLinkPlacementCapacityBundle reserved = request.capacityBundle();
-        if (!isEmptyBundle(reserved)) {
-            capacities.put(target, CapacityRecord.empty());
-        }
+    private List<ZLinkStoreMutation> aggregateCapacityMutations(
+            ZLinkAggregatePrepareRequest request, List<LoadedParticipant> rows) {
+        var deltas = new ZLinkCapacityCounters();
+        var target = request.targetDescriptor();
+        deltas.change(target, request.capacityBundle(), -1, 0);
         for (int index = 0; index < rows.size(); index++) {
             if (request.participants().get(index).ownerTransition()
                     != ZLinkAuthorityGenerationTransition.NEW_OWNER) continue;
-            AuthorityRecord record = decode(rows.get(index).value().bytes());
-            capacities.put(capacityKey(record.allocation().descriptor()), CapacityRecord.empty());
-            capacities.put(target, CapacityRecord.empty());
-            allocations.add(record.allocation());
+            var allocation = decode(rows.get(index).value().bytes()).allocation();
+            deltas.change(allocation.descriptor(), allocation.capacityBundle(), 0, -1);
+            deltas.change(target, allocation.capacityBundle(), 0, 1);
         }
-        CompletionStage<Void> loaded = completed(null);
-        for (ZLinkStoreKey key : capacities.keySet()) {
-            loaded =
-                    loaded.thenCompose(
-                            ignored ->
-                                    provider.read(key, cancellation)
-                                            .thenAccept(
-                                                    read -> {
-                                                        if (read
-                                                                instanceof
-                                                                ZLinkStoreReadFound found) {
-                                                            capacities.put(
-                                                                    key,
-                                                                    decodeCapacity(
-                                                                            found.value().bytes()));
-                                                            conditions.add(
-                                                                    new ZLinkStoreVersionCondition(
-                                                                            key,
-                                                                            found.value()
-                                                                                    .version()));
-                                                        } else {
-                                                            conditions.add(
-                                                                    new ZLinkStoreMissingCondition(
-                                                                            key));
-                                                        }
-                                                    }));
-        }
-        return loaded.thenApply(
-                ignored -> {
-                    // NewOwner consumes the target capacity that prepare reserved.
-                    if (!isEmptyBundle(reserved)) {
-                        CapacityRecord consumed =
-                                capacities.get(target).adjustPending(reserved, -1);
-                        if (consumed == null)
-                            throw new IllegalStateException(
-                                    "Location Store capacity record is inconsistent");
-                        capacities.put(target, consumed);
-                    }
-                    for (var allocation : allocations) {
-                        ZLinkStoreKey source = capacityKey(allocation.descriptor());
-                        var bundle = allocation.capacityBundle();
-                        CapacityRecord released = capacities.get(source).adjustActive(bundle, -1);
-                        if (released == null)
-                            throw new IllegalStateException(
-                                    "Location Store capacity record is inconsistent");
-                        capacities.put(source, released);
-                        CapacityRecord acquired = capacities.get(target).adjustActive(bundle, 1);
-                        if (acquired == null)
-                            throw new IllegalStateException(
-                                    "Location Store capacity record is inconsistent");
-                        capacities.put(target, acquired);
-                    }
-                    List<ZLinkStoreMutation> mutations = new ArrayList<>();
-                    capacities.forEach(
-                            (key, value) ->
-                                    mutations.add(
-                                            new ZLinkStorePut(key, encodeCapacity(value), null)));
-                    return mutations;
-                });
+        List<ZLinkStoreMutation> mutations = new ArrayList<>();
+        deltas.appendTo(mutations);
+        return mutations;
     }
 
     private CompletionStage<Optional<ZLinkAggregateCommitResult>> retryAggregateCommit(
@@ -2768,19 +2443,6 @@ final class ZLinkProviderAuthorityRepository {
                                                                             ZLinkAggregateCommitResult
                                                                                     .STALE)));
                         });
-    }
-
-    private static CompletionStage<Void> delayAggregateCounterRetry(
-            int retryAttempt, Instant retryDeadline, ZLinkStoreCancellation cancellation) {
-        long remainingMillis = Duration.between(Instant.now(), retryDeadline).toMillis();
-        if (remainingMillis <= 0 || cancellation.isCancellationRequested()) {
-            return completed(null);
-        }
-        long exponentialMillis = Math.min(100L, 2L << Math.min(retryAttempt, 5));
-        long jitterMillis = ThreadLocalRandom.current().nextLong(exponentialMillis + 1L);
-        long delayMillis = Math.min(remainingMillis, exponentialMillis + jitterMillis);
-        return CompletableFuture.runAsync(
-                () -> {}, CompletableFuture.delayedExecutor(delayMillis, TimeUnit.MILLISECONDS));
     }
 
     CompletionStage<Optional<ZLinkAggregateProgressSnapshot>> readAggregateProgress(
@@ -2846,7 +2508,7 @@ final class ZLinkProviderAuthorityRepository {
                                             live ->
                                                     !live
                                                             ? completed(false)
-                                                            : provider.write(
+                                                            : write(
                                                                             new ZLinkStoreWriteRequest(
                                                                                     conditions,
                                                                                     List.of(
@@ -2903,20 +2565,23 @@ final class ZLinkProviderAuthorityRepository {
                                     new ZLinkStoreVersionCondition(key, found.value().version()));
                             List<ZLinkStoreMutation> mutations = new ArrayList<>();
                             mutations.add(new ZLinkStoreDelete(key));
-                            return releaseAggregateCapacity(
-                                            aggregate, conditions, mutations, opaqueCancellation)
-                                    .thenCompose(
-                                            ignored ->
-                                                    provider.write(
-                                                            new ZLinkStoreWriteRequest(
-                                                                    conditions, mutations),
-                                                            opaqueCancellation))
+                            if (aggregate.state() == AGGREGATE_PREPARED) {
+                                var deltas = new ZLinkCapacityCounters();
+                                deltas.change(
+                                        aggregate.targetDescriptor(),
+                                        aggregate.capacityBundle(),
+                                        -1,
+                                        0);
+                                deltas.appendTo(mutations);
+                            }
+                            return write(
+                                            new ZLinkStoreWriteRequest(conditions, mutations),
+                                            opaqueCancellation)
                                     .thenCompose(
                                             result -> {
                                                 if (!(result instanceof ZLinkStoreWriteApplied)) {
-                                                    // The marker or the target capacity record
-                                                    // changed after the read; decide again from
-                                                    // the current marker.
+                                                    // Reconstruct the abort from the current
+                                                    // marker.
                                                     return cancellation.isCancellationRequested()
                                                             ? completed(
                                                                     ZLinkAggregateAbortResult.STALE)
@@ -2939,40 +2604,6 @@ final class ZLinkProviderAuthorityRepository {
                                                                                         ZLinkAggregateAbortResult
                                                                                                 .STALE));
                                             });
-                        });
-    }
-
-    /**
-     * Abort of a PREPARED aggregate returns the target capacity that prepare reserved, in the same
-     * conditional write that deletes the aggregate marker. The marker exists in PREPARED state only
-     * while that reservation is held, so the release happens exactly once.
-     */
-    private CompletionStage<Void> releaseAggregateCapacity(
-            PreparedAggregate aggregate,
-            List<ZLinkStoreCondition> conditions,
-            List<ZLinkStoreMutation> mutations,
-            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
-        ZLinkPlacementCapacityBundle reserved = aggregate.capacityBundle();
-        if (aggregate.state() != AGGREGATE_PREPARED || isEmptyBundle(reserved)) {
-            return completed(null);
-        }
-        ZLinkStoreKey key = capacityKey(aggregate.targetDescriptor());
-        return provider.read(key, cancellation)
-                .thenAccept(
-                        read -> {
-                            CapacityRecord released =
-                                    read instanceof ZLinkStoreReadFound found
-                                            ? decodeCapacity(found.value().bytes())
-                                                    .adjustPending(reserved, -1)
-                                            : null;
-                            if (released == null) {
-                                throw new IllegalStateException(
-                                        "Location Store capacity record is inconsistent");
-                            }
-                            conditions.add(
-                                    new ZLinkStoreVersionCondition(
-                                            key, ((ZLinkStoreReadFound) read).value().version()));
-                            mutations.add(new ZLinkStorePut(key, encodeCapacity(released), null));
                         });
     }
 
@@ -3313,7 +2944,7 @@ final class ZLinkProviderAuthorityRepository {
                                                                         Optional.empty())
                                                                 .withCommittedRelocation(
                                                                         current.relocation());
-                                                return provider.write(
+                                                return write(
                                                                 new ZLinkStoreWriteRequest(
                                                                         List.of(
                                                                                 new ZLinkStoreVersionCondition(
@@ -3378,372 +3009,241 @@ final class ZLinkProviderAuthorityRepository {
             ZLinkAggregatePrepareRequest request,
             ZLinkAggregateFence fence,
             systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation,
-            int counterRetry,
             Instant retryDeadline) {
-        List<ZLinkStoreCondition> counterConditions = new ArrayList<>();
-        int ownerChanges =
-                Math.toIntExact(
-                        request.participants().stream()
-                                .filter(
-                                        participant ->
-                                                participant.ownerTransition()
-                                                        == ZLinkAuthorityGenerationTransition
-                                                                .NEW_OWNER)
-                                .count());
-        return nextCounterRange(
-                        AUTHORITY_OWNER_COUNTER, ownerChanges, counterConditions, cancellation)
+        CompletionStage<AggregateMarkerInstallation> chain =
+                completed(AggregateMarkerInstallation.installedResult());
+        List<ZLinkStoreKey> installed = new ArrayList<>();
+        for (int index = 0; index < request.participants().size(); index++) {
+            int participantIndex = index;
+            chain =
+                    chain.thenCompose(
+                            result ->
+                                    result.installed()
+                                            ? installAggregateMarker(
+                                                    request,
+                                                    fence,
+                                                    participantIndex,
+                                                    installed,
+                                                    cancellation,
+                                                    retryDeadline)
+                                            : completed(result));
+        }
+        return chain.thenCompose(
+                result ->
+                        result.installed()
+                                ? completed(result)
+                                : clearAggregateMarkers(fence, installed, cancellation)
+                                        .thenApply(ignored -> result));
+    }
+
+    private CompletionStage<AggregateMarkerInstallation> installAggregateMarker(
+            ZLinkAggregatePrepareRequest request,
+            ZLinkAggregateFence fence,
+            int index,
+            List<ZLinkStoreKey> installed,
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation,
+            Instant retryDeadline) {
+        var participant = request.participants().get(index);
+        var rowKey = authorityKey(participant.authorityKey());
+        return provider.read(rowKey, cancellation)
                 .thenCompose(
-                        counter -> {
-                            if (counter.exhausted()) {
-                                return completed(AggregateMarkerInstallation.exhaustedResult());
+                        read -> {
+                            if (!(read instanceof ZLinkStoreReadFound found)) {
+                                return completed(AggregateMarkerInstallation.conflictResult());
                             }
-                            CompletionStage<Boolean> chain = completed(true);
-                            List<ZLinkStoreKey> installed = new ArrayList<>();
-                            long[] nextOwnerGeneration = {counter.value()};
-                            boolean[] counterApplied = {false};
-                            ZLinkAggregatePrepareResult[] reenteredResult = {null};
-                            for (int index = 0; index < request.participants().size(); index++) {
-                                int participantIndex = index;
-                                ZLinkAggregateParticipant participant =
-                                        request.participants().get(index);
-                                chain =
-                                        chain.thenCompose(
-                                                ok -> {
-                                                    if (!ok) {
-                                                        return completed(false);
-                                                    }
-                                                    ZLinkStoreKey rowKey =
-                                                            authorityKey(
-                                                                    participant.authorityKey());
-                                                    return provider.read(rowKey, cancellation)
-                                                            .thenCompose(
-                                                                    read -> {
-                                                                        if (!(read
-                                                                                instanceof
-                                                                                ZLinkStoreReadFound
-                                                                                        found)) {
-                                                                            return completed(false);
-                                                                        }
-                                                                        AuthorityRecord current =
-                                                                                decode(
-                                                                                        found.value()
-                                                                                                .bytes());
-                                                                        List<ZLinkStoreCondition>
-                                                                                conditions =
-                                                                                        new ArrayList<>();
-                                                                        List<ZLinkStoreMutation>
-                                                                                mutations =
-                                                                                        new ArrayList<>();
-                                                                        ZLinkLocationOwnerToken
-                                                                                requiredOwner =
-                                                                                        participant
-                                                                                                                .ownerTransition()
-                                                                                                        == ZLinkAuthorityGenerationTransition
-                                                                                                                .PRESERVE
-                                                                                                ? new ZLinkLocationOwnerToken(
-                                                                                                        current
-                                                                                                                .ownerId(),
-                                                                                                        current
-                                                                                                                .ownerLeaseGeneration())
-                                                                                                : request
-                                                                                                        .targetOwner();
-                                                                        return requireLiveOwner(
-                                                                                        requiredOwner,
-                                                                                        conditions,
-                                                                                        cancellation)
-                                                                                .thenCompose(
-                                                                                        live -> {
-                                                                                            if (!live) {
-                                                                                                return completed(
-                                                                                                        false);
-                                                                                            }
-                                                                                            if (current
-                                                                                                            .aggregate()
-                                                                                                    != null) {
-                                                                                                if (!sameAggregateMarker(
-                                                                                                        current
-                                                                                                                .aggregate(),
-                                                                                                        fence,
-                                                                                                        participantIndex,
-                                                                                                        participant)) {
-                                                                                                    return completed(
-                                                                                                            false);
-                                                                                                }
-                                                                                                // This invocation did not write the
-                                                                                                // existing marker.  Keep it out of
-                                                                                                // the rollback set so a later
-                                                                                                // participant conflict cannot erase
-                                                                                                // another attempt's prepared work.
-                                                                                                return completed(
-                                                                                                        true);
-                                                                                            }
-                                                                                            if (!found.value()
-                                                                                                            .version()
-                                                                                                            .value()
-                                                                                                            .equals(
-                                                                                                                    participant
-                                                                                                                            .expectedStoreVersion())
-                                                                                                    || current.allocation()
-                                                                                                                    .state()
-                                                                                                            != ZLinkPlacementAllocationState
-                                                                                                                    .ACTIVE) {
-                                                                                                return completed(
-                                                                                                        false);
-                                                                                            }
-                                                                                            long
-                                                                                                    targetGeneration =
-                                                                                                            participant
-                                                                                                                                    .ownerTransition()
-                                                                                                                            == ZLinkAuthorityGenerationTransition
-                                                                                                                                    .NEW_OWNER
-                                                                                                                    ? nextOwnerGeneration[
-                                                                                                                            0]++
-                                                                                                                    : current
-                                                                                                                            .authorityOwnerGeneration();
-                                                                                            AggregateParticipantMarker
-                                                                                                    marker =
-                                                                                                            new AggregateParticipantMarker(
-                                                                                                                    fence
-                                                                                                                            .aggregateId(),
-                                                                                                                    fence
-                                                                                                                            .aggregateGeneration(),
-                                                                                                                    participantIndex,
-                                                                                                                    participant
-                                                                                                                            .expectedStoreVersion(),
-                                                                                                                    participant
-                                                                                                                            .ownerTransition(),
-                                                                                                                    targetGeneration,
-                                                                                                                    ZLinkAggregateInventoryStore
-                                                                                                                            .sha256(
-                                                                                                                                    participant
-                                                                                                                                            .authorityPayload()),
-                                                                                                                    ZLinkAggregateInventoryStore
-                                                                                                                            .sha256(
-                                                                                                                                    participant
-                                                                                                                                            .membershipMutation()));
-                                                                                            boolean
-                                                                                                    reservesOwnerGeneration =
-                                                                                                            !counterApplied[
-                                                                                                                            0]
-                                                                                                                    && participant
-                                                                                                                                    .ownerTransition()
-                                                                                                                            == ZLinkAuthorityGenerationTransition
-                                                                                                                                    .NEW_OWNER;
-                                                                                            if (reservesOwnerGeneration) {
-                                                                                                conditions
-                                                                                                        .addAll(
-                                                                                                                counterConditions);
-                                                                                                mutations
-                                                                                                        .addAll(
-                                                                                                                counter
-                                                                                                                        .mutations());
-                                                                                                counterApplied[
-                                                                                                                0] =
-                                                                                                        true;
-                                                                                            }
-                                                                                            conditions
-                                                                                                    .add(
-                                                                                                            new ZLinkStoreVersionCondition(
-                                                                                                                    rowKey,
-                                                                                                                    found.value()
-                                                                                                                            .version()));
-                                                                                            mutations
-                                                                                                    .add(
-                                                                                                            new ZLinkStorePut(
-                                                                                                                    rowKey,
-                                                                                                                    encode(
-                                                                                                                            current.withAggregate(
-                                                                                                                                            marker,
-                                                                                                                                            current
-                                                                                                                                                                    .visibleStoreVersion()
-                                                                                                                                                            == null
-                                                                                                                                                    ? found.value()
-                                                                                                                                                            .version()
-                                                                                                                                                            .value()
-                                                                                                                                                    : current
-                                                                                                                                                            .visibleStoreVersion())
-                                                                                                                                    .withRelocation(
-                                                                                                                                            participant
-                                                                                                                                                                    .relocation()
-                                                                                                                                                            == null
-                                                                                                                                                    ? current
-                                                                                                                                                            .relocation()
-                                                                                                                                                    : participant
-                                                                                                                                                            .relocation())),
-                                                                                                                    null));
-                                                                                            return provider.write(
-                                                                                                            new ZLinkStoreWriteRequest(
-                                                                                                                    conditions,
-                                                                                                                    mutations),
-                                                                                                            cancellation)
-                                                                                                    .thenCompose(
-                                                                                                            result -> {
-                                                                                                                if (result
-                                                                                                                        instanceof
-                                                                                                                        ZLinkStoreWriteApplied) {
-                                                                                                                    installed
-                                                                                                                            .add(
-                                                                                                                                    rowKey);
-                                                                                                                    return completed(
-                                                                                                                            true);
-                                                                                                                }
-                                                                                                                return provider.read(
-                                                                                                                                rowKey,
-                                                                                                                                cancellation)
-                                                                                                                        .thenCompose(
-                                                                                                                                raced -> {
-                                                                                                                                    if (!(raced
-                                                                                                                                            instanceof
-                                                                                                                                            ZLinkStoreReadFound
-                                                                                                                                                    racedFound)) {
-                                                                                                                                        return completed(
-                                                                                                                                                false);
-                                                                                                                                    }
-                                                                                                                                    AuthorityRecord
-                                                                                                                                            racedCurrent =
-                                                                                                                                                    decode(
-                                                                                                                                                            racedFound
-                                                                                                                                                                    .value()
-                                                                                                                                                                    .bytes());
-                                                                                                                                    boolean
-                                                                                                                                            sameMarker =
-                                                                                                                                                    sameAggregateMarker(
-                                                                                                                                                            racedCurrent
-                                                                                                                                                                    .aggregate(),
-                                                                                                                                                            fence,
-                                                                                                                                                            participantIndex,
-                                                                                                                                                            participant);
-                                                                                                                                    boolean
-                                                                                                                                            unchangedFence =
-                                                                                                                                                    reservesOwnerGeneration
-                                                                                                                                                            && racedCurrent
-                                                                                                                                                                            .aggregate()
-                                                                                                                                                                    == null
-                                                                                                                                                            && racedFound
-                                                                                                                                                                    .value()
-                                                                                                                                                                    .version()
-                                                                                                                                                                    .value()
-                                                                                                                                                                    .equals(
-                                                                                                                                                                            participant
-                                                                                                                                                                                    .expectedStoreVersion())
-                                                                                                                                                            && racedCurrent
-                                                                                                                                                                            .allocation()
-                                                                                                                                                                            .state()
-                                                                                                                                                                    == ZLinkPlacementAllocationState
-                                                                                                                                                                            .ACTIVE;
-                                                                                                                                    if (!sameMarker
-                                                                                                                                            && !unchangedFence) {
-                                                                                                                                        return completed(
-                                                                                                                                                false);
-                                                                                                                                    }
-                                                                                                                                    return provider.read(
-                                                                                                                                                    aggregateKey(
-                                                                                                                                                            fence),
-                                                                                                                                                    cancellation)
-                                                                                                                                            .thenCompose(
-                                                                                                                                                    aggregateRaced -> {
-                                                                                                                                                        if (!(aggregateRaced
-                                                                                                                                                                instanceof
-                                                                                                                                                                ZLinkStoreReadFound
-                                                                                                                                                                        aggregateFound)) {
-                                                                                                                                                            return completed(
-                                                                                                                                                                    false);
-                                                                                                                                                        }
-                                                                                                                                                        PreparedAggregate
-                                                                                                                                                                aggregate =
-                                                                                                                                                                        decodeAggregate(
-                                                                                                                                                                                aggregateFound
-                                                                                                                                                                                        .value()
-                                                                                                                                                                                        .bytes());
-                                                                                                                                                        if (!sameAggregateRequest(
-                                                                                                                                                                        aggregate,
-                                                                                                                                                                        request)
-                                                                                                                                                                || (aggregate
-                                                                                                                                                                                        .state()
-                                                                                                                                                                                != AGGREGATE_STAGING
-                                                                                                                                                                        && aggregate
-                                                                                                                                                                                        .state()
-                                                                                                                                                                                != AGGREGATE_PREPARED)) {
-                                                                                                                                                            return completed(
-                                                                                                                                                                    false);
-                                                                                                                                                        }
-                                                                                                                                                        if (sameMarker) {
-                                                                                                                                                            return prepareAggregate(
-                                                                                                                                                                            request,
-                                                                                                                                                                            cancellation
-                                                                                                                                                                                    ::isCancellationRequested,
-                                                                                                                                                                            counterRetry,
-                                                                                                                                                                            retryDeadline)
-                                                                                                                                                                    .thenApply(
-                                                                                                                                                                            reentered -> {
-                                                                                                                                                                                reenteredResult[
-                                                                                                                                                                                                0] =
-                                                                                                                                                                                        reentered;
-                                                                                                                                                                                return true;
-                                                                                                                                                                            });
-                                                                                                                                                        }
-                                                                                                                                                        if (counterRetry
-                                                                                                                                                                        >= AGGREGATE_COUNTER_RETRY_LIMIT
-                                                                                                                                                                || !Instant
-                                                                                                                                                                        .now()
-                                                                                                                                                                        .isBefore(
-                                                                                                                                                                                retryDeadline)
-                                                                                                                                                                || cancellation
-                                                                                                                                                                        .isCancellationRequested()) {
-                                                                                                                                                            return completed(
-                                                                                                                                                                    false);
-                                                                                                                                                        }
-                                                                                                                                                        return delayAggregateCounterRetry(
-                                                                                                                                                                        counterRetry,
-                                                                                                                                                                        retryDeadline,
-                                                                                                                                                                        cancellation
-                                                                                                                                                                                ::isCancellationRequested)
-                                                                                                                                                                .thenCompose(
-                                                                                                                                                                        ignored ->
-                                                                                                                                                                                prepareAggregate(
-                                                                                                                                                                                        request,
-                                                                                                                                                                                        cancellation
-                                                                                                                                                                                                ::isCancellationRequested,
-                                                                                                                                                                                        counterRetry
-                                                                                                                                                                                                + 1,
-                                                                                                                                                                                        retryDeadline))
-                                                                                                                                                                .thenApply(
-                                                                                                                                                                        reentered -> {
-                                                                                                                                                                            reenteredResult[
-                                                                                                                                                                                            0] =
-                                                                                                                                                                                    reentered;
-                                                                                                                                                                            return true;
-                                                                                                                                                                        });
-                                                                                                                                                    });
-                                                                                                                                });
-                                                                                                            });
-                                                                                        });
-                                                                    });
-                                                });
-                            }
-                            return chain.thenCompose(
-                                    ok -> {
-                                        if (reenteredResult[0] != null) {
-                                            return clearAggregateMarkers(
-                                                            fence, installed, cancellation)
-                                                    .thenApply(
-                                                            ignored ->
-                                                                    AggregateMarkerInstallation
-                                                                            .reenteredResult(
-                                                                                    reenteredResult[
-                                                                                            0]));
-                                        }
-                                        return ok
-                                                ? completed(
-                                                        AggregateMarkerInstallation
-                                                                .installedResult())
-                                                : clearAggregateMarkers(
-                                                                fence, installed, cancellation)
-                                                        .thenApply(
-                                                                ignored ->
+                            var current = decode(found.value().bytes());
+                            boolean newOwner =
+                                    participant.ownerTransition()
+                                            == ZLinkAuthorityGenerationTransition.NEW_OWNER;
+                            var owner =
+                                    newOwner
+                                            ? request.targetOwner()
+                                            : new ZLinkLocationOwnerToken(
+                                                    current.ownerId(),
+                                                    current.ownerLeaseGeneration());
+                            List<ZLinkStoreCondition> conditions = new ArrayList<>();
+                            return requireLiveOwner(owner, conditions, cancellation)
+                                    .thenCompose(
+                                            live -> {
+                                                if (!live)
+                                                    return completed(
+                                                            AggregateMarkerInstallation
+                                                                    .conflictResult());
+                                                if (current.aggregate() != null) {
+                                                    return completed(
+                                                            sameAggregateMarker(
+                                                                            current.aggregate(),
+                                                                            fence,
+                                                                            index,
+                                                                            participant)
+                                                                    ? AggregateMarkerInstallation
+                                                                            .installedResult()
+                                                                    : AggregateMarkerInstallation
+                                                                            .conflictResult());
+                                                }
+                                                if (!found.value()
+                                                                .version()
+                                                                .value()
+                                                                .equals(
+                                                                        participant
+                                                                                .expectedStoreVersion())
+                                                        || current.allocation().state()
+                                                                != ZLinkPlacementAllocationState
+                                                                        .ACTIVE) {
+                                                    return completed(
+                                                            AggregateMarkerInstallation
+                                                                    .conflictResult());
+                                                }
+                                                CompletionStage<Counter> generation =
+                                                        newOwner
+                                                                ? nextCounter(
+                                                                        generationKey(
+                                                                                "authority-owner-counter",
+                                                                                participant
+                                                                                        .authorityKey()),
+                                                                        conditions,
+                                                                        cancellation)
+                                                                : completed(
+                                                                        new Counter(
+                                                                                current
+                                                                                        .authorityOwnerGeneration(),
+                                                                                List.of(),
+                                                                                false));
+                                                return generation.thenCompose(
+                                                        counter -> {
+                                                            if (counter.exhausted())
+                                                                return completed(
                                                                         AggregateMarkerInstallation
-                                                                                .conflictResult());
-                                    });
+                                                                                .exhaustedResult());
+                                                            var marker =
+                                                                    new AggregateParticipantMarker(
+                                                                            fence.aggregateId(),
+                                                                            fence
+                                                                                    .aggregateGeneration(),
+                                                                            index,
+                                                                            participant
+                                                                                    .expectedStoreVersion(),
+                                                                            participant
+                                                                                    .ownerTransition(),
+                                                                            counter.value(),
+                                                                            ZLinkAggregateInventoryStore
+                                                                                    .sha256(
+                                                                                            participant
+                                                                                                    .authorityPayload()),
+                                                                            ZLinkAggregateInventoryStore
+                                                                                    .sha256(
+                                                                                            participant
+                                                                                                    .membershipMutation()));
+                                                            var visibleVersion =
+                                                                    current.visibleStoreVersion()
+                                                                                    == null
+                                                                            ? found.value()
+                                                                                    .version()
+                                                                                    .value()
+                                                                            : current
+                                                                                    .visibleStoreVersion();
+                                                            var marked =
+                                                                    current.withAggregate(
+                                                                                    marker,
+                                                                                    visibleVersion)
+                                                                            .withRelocation(
+                                                                                    participant
+                                                                                                            .relocation()
+                                                                                                    == null
+                                                                                            ? current
+                                                                                                    .relocation()
+                                                                                            : participant
+                                                                                                    .relocation());
+                                                            conditions.add(
+                                                                    new ZLinkStoreVersionCondition(
+                                                                            rowKey,
+                                                                            found.value()
+                                                                                    .version()));
+                                                            List<ZLinkStoreMutation> mutations =
+                                                                    new ArrayList<>(
+                                                                            counter.mutations());
+                                                            mutations.add(
+                                                                    new ZLinkStorePut(
+                                                                            rowKey,
+                                                                            encode(marked),
+                                                                            null));
+                                                            return write(
+                                                                            new ZLinkStoreWriteRequest(
+                                                                                    conditions,
+                                                                                    mutations),
+                                                                            cancellation)
+                                                                    .thenCompose(
+                                                                            result -> {
+                                                                                if (result
+                                                                                        instanceof
+                                                                                        ZLinkStoreWriteApplied) {
+                                                                                    installed.add(
+                                                                                            rowKey);
+                                                                                    return completed(
+                                                                                            AggregateMarkerInstallation
+                                                                                                    .installedResult());
+                                                                                }
+                                                                                return resolveAggregateMarkerRace(
+                                                                                        request,
+                                                                                        fence,
+                                                                                        index,
+                                                                                        rowKey,
+                                                                                        cancellation,
+                                                                                        retryDeadline);
+                                                                            });
+                                                        });
+                                            });
+                        });
+    }
+
+    private CompletionStage<AggregateMarkerInstallation> resolveAggregateMarkerRace(
+            ZLinkAggregatePrepareRequest request,
+            ZLinkAggregateFence fence,
+            int index,
+            ZLinkStoreKey rowKey,
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation,
+            Instant retryDeadline) {
+        return provider.read(rowKey, cancellation)
+                .thenCompose(
+                        raced -> {
+                            if (!(raced instanceof ZLinkStoreReadFound found)
+                                    || !sameAggregateMarker(
+                                            decode(found.value().bytes()).aggregate(),
+                                            fence,
+                                            index,
+                                            request.participants().get(index))) {
+                                return completed(AggregateMarkerInstallation.conflictResult());
+                            }
+                            return provider.read(aggregateKey(fence), cancellation)
+                                    .thenCompose(
+                                            aggregateRead -> {
+                                                if (!(aggregateRead
+                                                        instanceof
+                                                        ZLinkStoreReadFound aggregateFound)) {
+                                                    return completed(
+                                                            AggregateMarkerInstallation
+                                                                    .conflictResult());
+                                                }
+                                                var aggregate =
+                                                        decodeAggregate(
+                                                                aggregateFound.value().bytes());
+                                                if (!sameAggregateRequest(aggregate, request)
+                                                        || (aggregate.state() != AGGREGATE_STAGING
+                                                                && aggregate.state()
+                                                                        != AGGREGATE_PREPARED)) {
+                                                    return completed(
+                                                            AggregateMarkerInstallation
+                                                                    .conflictResult());
+                                                }
+                                                return prepareAggregate(
+                                                                request,
+                                                                cancellation
+                                                                        ::isCancellationRequested,
+                                                                retryDeadline)
+                                                        .thenApply(
+                                                                AggregateMarkerInstallation
+                                                                        ::reenteredResult);
+                                            });
                         });
     }
 
@@ -3863,7 +3363,7 @@ final class ZLinkProviderAuthorityRepository {
                 || marker.aggregateGeneration() != fence.aggregateGeneration()) {
             return completed(true);
         }
-        return provider.write(
+        return write(
                         new ZLinkStoreWriteRequest(
                                 List.of(
                                         new ZLinkStoreVersionCondition(
@@ -4124,7 +3624,7 @@ final class ZLinkProviderAuthorityRepository {
             String authorityKey,
             ZLinkAuthorityMutation mutation) {
         var opaqueCancellation = adapt(cancellation);
-        return provider.write(new ZLinkStoreWriteRequest(conditions, mutations), opaqueCancellation)
+        return write(new ZLinkStoreWriteRequest(conditions, mutations), opaqueCancellation)
                 .thenCompose(
                         result -> {
                             if (!(result instanceof ZLinkStoreWriteApplied applied)) {
@@ -4225,28 +3725,75 @@ final class ZLinkProviderAuthorityRepository {
                         });
     }
 
+    private CompletionStage<ZLinkStoreWriteResult> write(
+            ZLinkStoreWriteRequest request,
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+        return provider.write(request, cancellation)
+                .thenApply(
+                        result -> {
+                            if (result instanceof ZLinkStoreWriteCorrupt) {
+                                throw new IllegalStateException(
+                                        "Location Store capacity record is inconsistent");
+                            }
+                            return result;
+                        });
+    }
+
+    private static ZLinkStoreKey generationKey(String counter, String authorityKey) {
+        var identity = ZLinkAuthorityKeyCodec.decode(authorityKey);
+        return ZLinkOpaqueRecordKey.of("zlink:v12:" + counter, identity.kind(), identity.id());
+    }
+
     private CompletionStage<Counters> nextPair(
+            String authorityKey,
             List<ZLinkStoreCondition> conditions,
             systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
-        return nextCounter(OBJECT_COUNTER, conditions, cancellation)
+        var objectKey = generationKey("object-counter", authorityKey);
+        var ownerKey = generationKey("authority-owner-counter", authorityKey);
+        return provider.read(objectKey, cancellation)
                 .thenCompose(
-                        object -> {
-                            if (object.exhausted()) {
-                                return completed(Counters.exhaustedResult());
-                            }
-                            return nextCounter(AUTHORITY_OWNER_COUNTER, conditions, cancellation)
-                                    .thenApply(
-                                            owner ->
-                                                    owner.exhausted()
-                                                            ? Counters.exhaustedResult()
-                                                            : new Counters(
-                                                                    object.value(),
-                                                                    owner.value(),
-                                                                    concat(
-                                                                            object.mutations(),
-                                                                            owner.mutations()),
-                                                                    false));
-                        });
+                        object ->
+                                provider.read(ownerKey, cancellation)
+                                        .thenCompose(
+                                                owner -> {
+                                                    CompletionStage<Long> floor =
+                                                            object instanceof ZLinkStoreReadFound
+                                                                            && owner
+                                                                                    instanceof
+                                                                                    ZLinkStoreReadFound
+                                                                    ? completed(1L)
+                                                                    : generationFloor(cancellation);
+                                                    return floor.thenApply(
+                                                            initial -> {
+                                                                var nextObject =
+                                                                        issue(
+                                                                                objectKey,
+                                                                                object,
+                                                                                initial,
+                                                                                conditions);
+                                                                if (nextObject.exhausted()) {
+                                                                    return Counters
+                                                                            .exhaustedResult();
+                                                                }
+                                                                var nextOwner =
+                                                                        issue(
+                                                                                ownerKey,
+                                                                                owner,
+                                                                                initial,
+                                                                                conditions);
+                                                                return nextOwner.exhausted()
+                                                                        ? Counters.exhaustedResult()
+                                                                        : new Counters(
+                                                                                nextObject.value(),
+                                                                                nextOwner.value(),
+                                                                                concat(
+                                                                                        nextObject
+                                                                                                .mutations(),
+                                                                                        nextOwner
+                                                                                                .mutations()),
+                                                                                false);
+                                                            });
+                                                }));
     }
 
     private CompletionStage<Counter> nextCounter(
@@ -4254,58 +3801,50 @@ final class ZLinkProviderAuthorityRepository {
             List<ZLinkStoreCondition> conditions,
             systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
         return provider.read(key, cancellation)
-                .thenApply(
+                .thenCompose(
                         read -> {
-                            long value =
-                                    read instanceof ZLinkStoreReadFound found
-                                            ? decodeLong(found.value().bytes())
-                                            : 1L;
-                            if (value == Long.MAX_VALUE) {
-                                return Counter.exhaustedResult();
+                            if (read instanceof ZLinkStoreReadFound) {
+                                return completed(issue(key, read, 1L, conditions));
                             }
-                            conditions.add(
-                                    read instanceof ZLinkStoreReadFound found
-                                            ? new ZLinkStoreVersionCondition(
-                                                    key, found.value().version())
-                                            : new ZLinkStoreMissingCondition(key));
-                            return new Counter(
-                                    value,
-                                    List.of(new ZLinkStorePut(key, encodeLong(value + 1), null)),
-                                    false);
+                            return generationFloor(cancellation)
+                                    .thenApply(initial -> issue(key, read, initial, conditions));
                         });
     }
 
-    private CompletionStage<Counter> nextCounterRange(
-            ZLinkStoreKey key,
-            int count,
-            List<ZLinkStoreCondition> conditions,
+    private CompletionStage<Long> generationFloor(
             systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
-        if (count == 0) {
-            return completed(new Counter(0, List.of(), false));
-        }
-        return provider.read(key, cancellation)
+        return provider.read(ZLinkLocationStoreFormat.FLOOR, cancellation)
                 .thenApply(
-                        read -> {
-                            long value =
-                                    read instanceof ZLinkStoreReadFound found
-                                            ? decodeLong(found.value().bytes())
-                                            : 1L;
-                            // Spec 22 §7: the stored value is next-to-issue.  A block of n
-                            // is valid only when value + n is at most Long.MAX_VALUE.
-                            if (value > Long.MAX_VALUE - count) {
-                                return Counter.exhaustedResult();
-                            }
-                            long next = value + count;
-                            conditions.add(
-                                    read instanceof ZLinkStoreReadFound found
-                                            ? new ZLinkStoreVersionCondition(
-                                                    key, found.value().version())
-                                            : new ZLinkStoreMissingCondition(key));
-                            return new Counter(
-                                    value,
-                                    List.of(new ZLinkStorePut(key, encodeLong(next), null)),
-                                    false);
-                        });
+                        floor ->
+                                floor instanceof ZLinkStoreReadFound found
+                                        ? ZLinkLocationStoreFormat.decodeGeneration(
+                                                found.value().bytes())
+                                        : 1L);
+    }
+
+    private static Counter issue(
+            ZLinkStoreKey key,
+            ZLinkStoreReadResult read,
+            long initial,
+            List<ZLinkStoreCondition> conditions) {
+        long value;
+        if (read instanceof ZLinkStoreReadFound found) {
+            conditions.add(new ZLinkStoreVersionCondition(key, found.value().version()));
+            value = ZLinkLocationStoreFormat.decodeGeneration(found.value().bytes());
+        } else {
+            conditions.add(new ZLinkStoreMissingCondition(key));
+            value = initial;
+        }
+        return value == Long.MAX_VALUE
+                ? Counter.exhaustedResult()
+                : new Counter(
+                        value,
+                        List.of(
+                                new ZLinkStorePut(
+                                        key,
+                                        ZLinkLocationStoreFormat.encodeCounter(value + 1),
+                                        null)),
+                        false);
     }
 
     private static ZLinkAuthorityReadResult toRead(ZLinkStoreReadResult result) {
@@ -4609,98 +4148,6 @@ final class ZLinkProviderAuthorityRepository {
         };
     }
 
-    private static byte[] encodeCapacity(CapacityRecord value) {
-        try {
-            ObjectNode root = CANONICAL_JSON.createObjectNode();
-            root.set("active", encodeCapacityUsage(value, true));
-            root.set("pending", encodeCapacityUsage(value, false));
-            return CANONICAL_JSON.writeValueAsBytes(root);
-        } catch (JsonProcessingException failure) {
-            throw new IllegalStateException(
-                    "Failed to encode Location Store capacity record", failure);
-        }
-    }
-
-    private static CapacityRecord decodeCapacity(byte[] bytes) {
-        try {
-            JsonNode root = CANONICAL_JSON.readTree(bytes);
-            if (root == null || !root.isObject()) {
-                throw new IllegalStateException(
-                        "Location Store capacity record must be a JSON object");
-            }
-            DecodedCapacityUsage active = decodeCapacityUsage(root, "active");
-            DecodedCapacityUsage pending = decodeCapacityUsage(root, "pending");
-            Map<String, TypeCounter> types = new HashMap<>();
-            for (Map.Entry<String, Integer> entry : active.spotTypes().entrySet()) {
-                types.put(
-                        entry.getKey(),
-                        new TypeCounter(
-                                entry.getValue(),
-                                pending.spotTypes().getOrDefault(entry.getKey(), 0)));
-            }
-            for (Map.Entry<String, Integer> entry : pending.spotTypes().entrySet()) {
-                types.putIfAbsent(entry.getKey(), new TypeCounter(0, entry.getValue()));
-            }
-            return new CapacityRecord(
-                    active.actors(), pending.actors(), active.spots(), pending.spots(), types);
-        } catch (IOException | RuntimeException failure) {
-            throw new IllegalStateException("Location Store capacity record is invalid", failure);
-        }
-    }
-
-    private static ObjectNode encodeCapacityUsage(CapacityRecord value, boolean active) {
-        ObjectNode usage = CANONICAL_JSON.createObjectNode();
-        usage.put("actors", active ? value.actorActive() : value.actorPending());
-        usage.put("spots", active ? value.spotActive() : value.spotPending());
-        ObjectNode types = usage.putObject("spotTypes");
-        value.types().entrySet().stream()
-                .sorted(Map.Entry.comparingByKey())
-                .forEach(
-                        entry -> {
-                            int count =
-                                    active ? entry.getValue().active() : entry.getValue().pending();
-                            if (count != 0) {
-                                types.put(entry.getKey(), count);
-                            }
-                        });
-        return usage;
-    }
-
-    private static DecodedCapacityUsage decodeCapacityUsage(JsonNode root, String name) {
-        JsonNode usage = root.get(name);
-        if (usage == null || !usage.isObject()) {
-            throw new IllegalStateException("Location Store capacity record is missing " + name);
-        }
-        JsonNode types = usage.get("spotTypes");
-        if (types == null || !types.isObject()) {
-            throw new IllegalStateException(
-                    "Location Store capacity record has invalid " + name + ".spotTypes");
-        }
-        Map<String, Integer> decodedTypes = new HashMap<>();
-        types.fields()
-                .forEachRemaining(
-                        entry ->
-                                decodedTypes.put(
-                                        entry.getKey(),
-                                        decodeCapacityCount(
-                                                entry.getValue(),
-                                                name + ".spotTypes." + entry.getKey())));
-        return new DecodedCapacityUsage(
-                decodeCapacityCount(usage.get("actors"), name + ".actors"),
-                decodeCapacityCount(usage.get("spots"), name + ".spots"),
-                Map.copyOf(decodedTypes));
-    }
-
-    private static int decodeCapacityCount(JsonNode value, String field) {
-        if (value == null
-                || !value.isIntegralNumber()
-                || !value.canConvertToInt()
-                || value.intValue() < 0) {
-            throw new IllegalStateException("Location Store capacity record has invalid " + field);
-        }
-        return value.intValue();
-    }
-
     static AuthorityRecord decode(byte[] bytes) {
         try {
             JsonNode root = CANONICAL_JSON.readTree(bytes);
@@ -4956,41 +4403,6 @@ final class ZLinkProviderAuthorityRepository {
         return ZLinkOpaqueRecordKey.of("authority", identity.kind(), identity.id());
     }
 
-    private static ZLinkStoreKey capacityKey(ZLinkMeshNodeDescriptorKey descriptor) {
-        return new ZLinkStoreKey(
-                CAPACITY_PREFIX
-                        + encodeUriComponent(descriptor.meshName())
-                        + ":"
-                        + encodeUriComponent(descriptor.rid().toString()));
-    }
-
-    private static String encodeUriComponent(String value) {
-        byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
-        StringBuilder encoded = new StringBuilder(bytes.length);
-        for (byte valueByte : bytes) {
-            int current = valueByte & 0xff;
-            if ((current >= 'A' && current <= 'Z')
-                    || (current >= 'a' && current <= 'z')
-                    || (current >= '0' && current <= '9')
-                    || current == '-'
-                    || current == '_'
-                    || current == '.'
-                    || current == '!'
-                    || current == '~'
-                    || current == '*'
-                    || current == '\''
-                    || current == '('
-                    || current == ')') {
-                encoded.append((char) current);
-            } else {
-                encoded.append('%')
-                        .append(Character.toUpperCase(Character.forDigit(current >>> 4, 16)))
-                        .append(Character.toUpperCase(Character.forDigit(current & 0xf, 16)));
-            }
-        }
-        return encoded.toString();
-    }
-
     // Reverses authorityKey(): recovers the "zla1:..." authority-key
     // contract value from a scanned opaque record's logical key preimage.
     private static String decodeAuthorityKey(ZLinkStoreKey key) {
@@ -5031,23 +4443,6 @@ final class ZLinkProviderAuthorityRepository {
     // cross-language owner-counter convention (dotnet/cpp/node parse
     // counters with a decimal-string reader; raw big-endian bytes are
     // unreadable to them).
-    private static byte[] encodeLong(long value) {
-        return Long.toString(value).getBytes(StandardCharsets.UTF_8);
-    }
-
-    private static long decodeLong(byte[] bytes) {
-        try {
-            String text = new String(bytes, StandardCharsets.UTF_8);
-            long value = Long.parseUnsignedLong(text);
-            if (value <= 0 || !Long.toString(value).equals(text)) {
-                throw new NumberFormatException("outside generation range");
-            }
-            return value;
-        } catch (NumberFormatException failure) {
-            throw new IllegalStateException("Location Store counter is invalid", failure);
-        }
-    }
-
     private static systems.zlink.framework.locationprovider.ZLinkStoreCancellation adapt(
             ZLinkStoreCancellation cancellation) {
         Objects.requireNonNull(cancellation, "cancellation");
@@ -5236,12 +4631,6 @@ final class ZLinkProviderAuthorityRepository {
         }
     }
 
-    private enum CapacityAdmission {
-        UNAVAILABLE,
-        EXHAUSTED,
-        ACCEPTED
-    }
-
     private enum StaleAuthorityReclaim {
         OWNER_LIVE,
         RECLAIMED,
@@ -5250,150 +4639,11 @@ final class ZLinkProviderAuthorityRepository {
         NOT_RECLAIMABLE
     }
 
-    private record CapacityPlan(
-            CapacityAdmission admission, ZLinkStoreKey key, CapacityRecord next) {}
-
     private record AggregateCapacityReservation(
             List<ZLinkStoreCondition> conditions, List<ZLinkStoreMutation> mutations) {
         AggregateCapacityReservation {
             conditions = List.copyOf(conditions);
             mutations = List.copyOf(mutations);
-        }
-    }
-
-    private record CapacitySnapshot(
-            ZLinkStoreKey key, ZLinkStoreValue value, CapacityRecord record) {}
-
-    private record DecodedCapacityUsage(int actors, int spots, Map<String, Integer> spotTypes) {}
-
-    private record TypeCounter(int active, int pending) {
-        private static final TypeCounter ZERO = new TypeCounter(0, 0);
-
-        TypeCounter {
-            if (active < 0 || pending < 0) {
-                throw new IllegalArgumentException("capacity type counters must be non-negative");
-            }
-        }
-    }
-
-    private record CapacityRecord(
-            int actorActive,
-            int actorPending,
-            int spotActive,
-            int spotPending,
-            Map<String, TypeCounter> types) {
-        CapacityRecord {
-            if (actorActive < 0 || actorPending < 0 || spotActive < 0 || spotPending < 0) {
-                throw new IllegalArgumentException("capacity counters must be non-negative");
-            }
-            types = Map.copyOf(Objects.requireNonNull(types, "types"));
-        }
-
-        static CapacityRecord empty() {
-            return new CapacityRecord(0, 0, 0, 0, Map.of());
-        }
-
-        ZLinkCapacityUsage actorUsage(int limit) {
-            return new ZLinkCapacityUsage(actorActive, actorPending, limit);
-        }
-
-        ZLinkCapacityUsage spotUsage(int limit) {
-            return new ZLinkCapacityUsage(spotActive, spotPending, limit);
-        }
-
-        ZLinkCapacityUsage typeUsage(String key, int limit) {
-            var counter = types.getOrDefault(key, TypeCounter.ZERO);
-            return new ZLinkCapacityUsage(counter.active(), counter.pending(), limit);
-        }
-
-        ZLinkPlacementCapacity project(ZLinkPlacementCapacity configured) {
-            return new ZLinkPlacementCapacity(
-                    actorUsage(configured.actors().limit()),
-                    spotUsage(configured.spots().limit()),
-                    configured.spotTypes().stream()
-                            .map(
-                                    type ->
-                                            new ZLinkSpotTypeCapacity(
-                                                    type.objectKind(),
-                                                    type.stableType(),
-                                                    typeUsage(
-                                                            typeKey(
-                                                                    type.objectKind(),
-                                                                    type.stableType()),
-                                                            type.usage().limit())))
-                            .toList());
-        }
-
-        int typeCount(ZLinkSpotTypeCapacityDelta delta) {
-            TypeCounter counter = types.get(typeKey(delta));
-            return counter == null ? 0 : counter.active() + counter.pending();
-        }
-
-        CapacityRecord adjustPending(ZLinkPlacementCapacityBundle bundle, int delta) {
-            return adjust(bundle, delta, 0);
-        }
-
-        CapacityRecord adjustActive(ZLinkPlacementCapacityBundle bundle, int delta) {
-            return adjust(bundle, 0, delta);
-        }
-
-        CapacityRecord transition(ZLinkPlacementCapacityBundle bundle) {
-            CapacityRecord pending = adjustPending(bundle, -1);
-            return pending == null ? null : pending.adjustActive(bundle, 1);
-        }
-
-        private CapacityRecord adjust(
-                ZLinkPlacementCapacityBundle bundle, int pendingDelta, int activeDelta) {
-            int nextActorActive = add(actorActive, bundle.actorSlots() * activeDelta);
-            int nextActorPending = add(actorPending, bundle.actorSlots() * pendingDelta);
-            int nextSpotActive = add(spotActive, bundle.spotSlots() * activeDelta);
-            int nextSpotPending = add(spotPending, bundle.spotSlots() * pendingDelta);
-            if (nextActorActive < 0
-                    || nextActorPending < 0
-                    || nextSpotActive < 0
-                    || nextSpotPending < 0) {
-                return null;
-            }
-            Map<String, TypeCounter> nextTypes = new HashMap<>(types);
-            if (bundle.spotType().isPresent()) {
-                ZLinkSpotTypeCapacityDelta delta = bundle.spotType().orElseThrow();
-                String key = typeKey(delta);
-                TypeCounter current = nextTypes.getOrDefault(key, new TypeCounter(0, 0));
-                int nextActive = add(current.active(), delta.slots() * activeDelta);
-                int nextPending = add(current.pending(), delta.slots() * pendingDelta);
-                if (nextActive < 0 || nextPending < 0) {
-                    return null;
-                }
-                if (nextActive == 0 && nextPending == 0) {
-                    nextTypes.remove(key);
-                } else {
-                    nextTypes.put(key, new TypeCounter(nextActive, nextPending));
-                }
-            }
-            return new CapacityRecord(
-                    nextActorActive, nextActorPending, nextSpotActive, nextSpotPending, nextTypes);
-        }
-
-        private static int add(int value, int delta) {
-            try {
-                return Math.addExact(value, delta);
-            } catch (ArithmeticException overflow) {
-                return -1;
-            }
-        }
-
-        private static String typeKey(ZLinkSpotTypeCapacityDelta delta) {
-            return typeKey(delta.objectKind(), delta.stableType());
-        }
-
-        private static String typeKey(ZLinkPlacementObjectKind kind, String stableType) {
-            String objectKind =
-                    switch (kind) {
-                        case ACTOR -> "actor";
-                        case USER_SPOT -> "user_spot";
-                        case INSTANCE_SPOT -> "instance_spot";
-                    };
-            return objectKind + "\0" + stableType;
         }
     }
 

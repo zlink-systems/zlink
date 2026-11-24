@@ -17,6 +17,7 @@ import systems.zlink.framework.actors.ZLinkActorFactory;
 import systems.zlink.framework.locationprovider.ZLinkLocationStore;
 import systems.zlink.framework.locationprovider.ZLinkStoreCancellation;
 import systems.zlink.framework.locationprovider.ZLinkStoreKey;
+import systems.zlink.framework.locationprovider.ZLinkStorePut;
 import systems.zlink.framework.locationprovider.ZLinkStoreReadResult;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanRequest;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanResult;
@@ -290,12 +291,11 @@ final class ZLinkLocationRuntimeHostStartupTest {
         @Override
         public CompletionStage<ZLinkStoreWriteResult> write(
                 ZLinkStoreWriteRequest request, ZLinkStoreCancellation cancellation) {
-            if (claimRequest == null) {
+            if (claimRequest == null
+                    && request.mutations().getFirst() instanceof ZLinkStorePut put
+                    && put.key().value().startsWith("owner-lease\0")) {
                 claimRequest = request;
-                ownerKey =
-                        ((systems.zlink.framework.locationprovider.ZLinkStorePut)
-                                        request.mutations().getFirst())
-                                .key();
+                ownerKey = put.key();
                 claimStarted.countDown();
                 return claim;
             }
@@ -308,8 +308,7 @@ final class ZLinkLocationRuntimeHostStartupTest {
                                     return result;
                                 });
             }
-            if (request.mutations().getFirst()
-                            instanceof systems.zlink.framework.locationprovider.ZLinkStorePut put
+            if (request.mutations().getFirst() instanceof ZLinkStorePut put
                     && put.key().equals(ownerKey)) renewals.incrementAndGet();
             return inner.write(request, cancellation);
         }

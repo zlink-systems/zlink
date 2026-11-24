@@ -45,6 +45,12 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
                         this.provider, this.descriptors, this.ownerLeaseWait);
     }
 
+    @Override
+    public CompletionStage<Void> convertStoreFormat(ZLinkStoreCancellation cancellation) {
+        return new ZLinkLocationStoreFormat(provider, cancellation::isCancellationRequested)
+                .convert();
+    }
+
     public systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Registration
             registerCapacityObservation() {
         return authority.registerCapacityObservation();
