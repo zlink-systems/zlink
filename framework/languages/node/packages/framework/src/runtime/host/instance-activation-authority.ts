@@ -58,9 +58,6 @@ interface PendingReservation {
 }
 
 export interface ZLinkInstanceActivationAuthorityOptions {
-  readonly relocationPolicy?: (
-    stableType: string
-  ) => import('../locations/internal-location-contracts').ZLinkObjectReserveRequest['actorRelocationPolicy'];
   readonly store: ZLinkObjectCreationStore & ZLinkAuthorityStore;
   readonly relocationStore?: ZLinkRelocationStore;
   readonly meshName: string;
@@ -162,7 +159,11 @@ export class ZLinkInstanceActivationAuthority implements ServiceAsyncInstanceAct
         {
           key: { kind: 'instance_spot', globalId: target.targetSpotId },
           intent: { stableType: target.stableType },
-          actorRelocationPolicy: this.options.relocationPolicy?.(target.stableType)
+          target: {
+            meshName: this.options.meshName,
+            nodeRid: target.targetNodeRid,
+            nodeLifecycleGeneration: target.targetNodeGeneration
+          }
         }
       );
       if (released === true) return { kind: 'missing' };
@@ -213,7 +214,6 @@ export class ZLinkInstanceActivationAuthority implements ServiceAsyncInstanceAct
       reserved = await this.options.store.reserve(
         {
           key: { kind: 'instance_spot', globalId: target.targetSpotId },
-          actorRelocationPolicy: this.options.relocationPolicy?.(target.stableType),
           intent: {
             stableType: target.stableType,
             requestContentReference: stored.reference.value,

@@ -2027,10 +2027,6 @@ export class ZLinkFrameworkRuntimeHost
       activationNode.registerAsyncInstanceActivationAuthority?.(
         new ZLinkInstanceActivationAuthority({
           store: locationStore,
-          relocationPolicy: (stableType) =>
-            this.options.registration.spotNodes.get(meshName)?.instanceSpotFactoryRegistrations?.[
-              stableType
-            ]?.relocation.kind,
           relocationStore: this.relocationStore,
           meshName,
           owner: () => this.locationOwner.currentRuntime?.currentOwnerToken,
@@ -2477,9 +2473,6 @@ export class ZLinkFrameworkRuntimeHost
     this.actorPlacement ??= new ZLinkActorPlacementCoordinator({
       store: locationStore,
       leaseTracker,
-      actorRelocationPolicy: (meshName, stableType) =>
-        this.options.registration.spotNodes.get(meshName)?.actorFactoryRegistrations?.[stableType]
-          ?.relocation.kind,
       remoteCreate: (meshName, targetNodeRid, request, timeoutMs) => {
         const node = this.spotNodeRuntime?.meshNode(meshName);
         if (node === undefined) {
@@ -2595,10 +2588,6 @@ export class ZLinkFrameworkRuntimeHost
     const coordinator = (this.userSpotCoordinator = new ZLinkUserSpotCreationCoordinator({
       store: locationStore,
       leaseTracker,
-      relocationPolicy: (meshName, stableType) => {
-        const node = this.options.registration.spotNodes.get(selectUserSpotMesh(meshName));
-        return node?.spotFactoryRegistrations?.[stableType]?.relocation.kind;
-      },
       publishReadyRoute: (meshName, route, authority) => {
         this.locationOwner.currentLifecycle?.confirmAuthority(
           encodeAuthorityKey('user_spot', String(route.spot.spotId)),
