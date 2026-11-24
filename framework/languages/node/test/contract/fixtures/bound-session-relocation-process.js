@@ -185,17 +185,19 @@ async function startTarget() {
         throw new Error('The two-process completion must use node-direct infrastructure transport.');
       }
     },
-    actorRefProvider: () => ({
-      actorId,
-      objectGeneration: 5n,
-      meshName: 'play.route',
-      nodeRid: 'target',
-      ownershipGeneration: 12n,
-      bindingGeneration: 6n
+    targetProvider: () => ({
+      actorRef: {
+        actorId,
+        objectGeneration: 5n,
+        meshName: 'play.route',
+        nodeRid: 'target',
+        ownershipGeneration: 12n,
+        bindingGeneration: 6n
+      },
+      remoteTarget: transferState.remoteBoundSessionTarget
     }),
     nativeActorNodeProvider: () => undefined,
     localActorProvider: () => false,
-    remoteBoundSessionTargetProvider: () => transferState.remoteBoundSessionTarget,
     remoteActorPacketTargetProvider: () => undefined,
     actorId,
     reportError: error => send({ type: 'send-error', message: String(error) })
