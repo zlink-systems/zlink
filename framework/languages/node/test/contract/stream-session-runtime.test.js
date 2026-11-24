@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const { once } = require('node:events');
 const net = require('node:net');
 const test = require('node:test');
+const deferred = require('./helpers/deferred.cjs');
 const { logs, SeverityNumber } = require('@opentelemetry/api-logs');
 const { LoggerProvider } = require('@opentelemetry/sdk-logs');
 const observation = require('./fixtures/message-flow-observation.cjs')(
@@ -3521,4 +3522,357 @@ test('stream session runtime records a shutdown drop for frames the closed seria
     streamHeader({ kind: connector.ZlinkStreamMessageKind.Send, name: 'LatePacket' })
   );
   assert.equal(reporter.flow.tracedCount, 1);
+});
+
+const loginAdmission = require('../../../../runtime/conformance/login-admission-v1.json');
+const {
+  normalizeStreamAuthenticationAdmission,
+  toStreamNodeMap
+} = require('../../packages/framework/dist/contracts/Configuration/RegistrationNormalizers');
+const {
+  ZLinkAuthenticationAdmission
+} = require('../../packages/framework/dist/runtime/streams/authentication-admission');
+const processorCount = require('../../packages/framework/dist/contracts/Configuration/InternalDefaults');
+
+function admissionMetrics(enabled) {
+  const observations = new Map();
+  const prefix = 'zlink.host.authentication_admission.';
+  const observeWith = (name, { unit }) => ({
+    addCallback(callback) { observations.set(name, { callback, unit }); }
+  });
+  const metrics = new framework.ZLinkRuntimeMetrics({
+    getMeter() {
+      return {
+        createCounter() { return { add() {} }; },
+        createUpDownCounter() { return { add() {} }; },
+        createHistogram() { return { record() {} }; },
+        createObservableGauge: observeWith,
+        createObservableCounter: observeWith
+      };
+    }
+  });
+  const read = (name) => {
+    const observation = observations.get(prefix + name);
+    assert.equal(observation.unit, '{request}');
+    const values = [];
+    observation.callback({ observe(value, attributes) {
+      assert.equal(attributes, undefined);
+      values.push(value);
+    } });
+    assert.equal(values.length, enabled ? 1 : 0);
+    return values[0] ?? 0;
+  };
+  return {
+    metrics,
+    inFlight: () => read('in_flight'),
+    rejections: () => read('rejections')
+  };
+}
+
+function instrumentAdmissionPermits(queue, socket, counts, onQueued) {
+  const acquire = queue.acquire.bind(queue);
+  queue.acquire = async (...args) => {
+    const permit = await acquire(...args);
+    const release = permit.releaseAfterInternalProcessing.bind(permit);
+    const markQueued = permit.markApplicationQueued.bind(permit);
+    // The receive loop may reserve before a readiness check that finds no packet.
+    // Attribute the real permit operations only to the packet pulled with this permit.
+    const received = socket.received[0];
+    if (received !== undefined && received.admissionRequestId !== undefined) {
+      const stats = counts.get(received.admissionRequestId);
+      stats.reservations += 1;
+      permit.releaseAfterInternalProcessing = () => {
+        stats.returns += 1;
+        release();
+      };
+      permit.markApplicationQueued = () => {
+        stats.posts += 1;
+        markQueued();
+        onQueued(received.admissionRequestId);
+      };
+    }
+    return permit;
+  };
+}
+
+// The v1 fixture covers stage 1. Instance Spot, ticket and queue scenarios
+// belong to stage 2 and are outside this runtime driver.
+for (const { name, given, steps, expectedEffectiveLimit } of loginAdmission.serverScenarios) {
+  test(`login admission server fixture: ${name}`, async (t) => {
+    t.mock.method(processorCount, 'nodeEffectiveProcessorCount', () => BigInt(given.effectiveCpuCores));
+    const settings = normalizeStreamAuthenticationAdmission({
+      authenticationPacketName: given.authenticationPacketName ?? undefined,
+      maxConcurrentAuthentications: given.maxConcurrentAuthentications ?? undefined,
+      authenticationRetryDelayMs: given.authenticationRetryDelayMs
+    });
+    assert.equal(settings.maxConcurrentAuthentications, expectedEffectiveLimit);
+    const observations = admissionMetrics(given.authenticationPacketName !== null);
+    const admission = given.authenticationPacketName === null
+      ? undefined : new ZLinkAuthenticationAdmission(settings, observations.metrics);
+    const requests = new Map();
+    const counts = new Map();
+    const actorCreates = [];
+    const storeReads = [];
+    const storeWrites = [];
+    const handlerCalls = [];
+    const sessions = [];
+    const socket = new FakeStreamSocket();
+    const clock = new FakeLivenessClock();
+    const gate = new framework.ZLinkRuntimeAdmissionGate();
+    gate.register('authentication');
+    const enqueueRejected = steps.some(({ reason }) => reason === 'enqueueRejected');
+    if (enqueueRejected) gate.seal('authentication');
+    let rejectNext = enqueueRejected;
+    let beforeEnqueueRejected;
+    const listeners = [];
+    let shutdown;
+    let client;
+    let clientResult;
+    const timeoutRequest = steps.find(({ action }) => action === 'clientTimeout');
+    const applicationJobQueue = new ApplicationJobQueue(resolveApplicationJobQueueConfiguration());
+    instrumentAdmissionPermits(applicationJobQueue, socket, counts, () => {
+      if (rejectNext) {
+        beforeEnqueueRejected = [observations.inFlight(), Number(applicationJobQueue.snapshot().queuedApplicationJobs)];
+      }
+    });
+    const startListener = () => {
+      const listener = createStreamRuntime({
+        socket,
+        authenticationAdmission: admission,
+        applicationJobQueue,
+        livenessClock: clock,
+        claimApplicationWork() {
+          if (!rejectNext) return;
+          rejectNext = false;
+          return gate.claim('authentication', 'STREAM dispatch');
+        },
+        async sessionFactory(context) {
+          sessions.push(context.routingId);
+          const request = [...requests.values()].find(({ step }) => step.sessionId === context.routingId);
+          if (request === undefined) return { context };
+          await request.start.promise;
+          return {
+            context,
+            async onDispatch() {
+              const { requestId } = request.step;
+              handlerCalls.push(requestId);
+              actorCreates.push(requestId);
+              storeReads.push(requestId);
+              await request.startWork.promise;
+              storeWrites.push(requestId);
+              try {
+                const reason = await request.end.promise;
+                if (reason === 'handlerException') throw new Error('Login handler failed.');
+                if (reason === 'replySuccess') await context.client.reply('ok').submit();
+                if (reason === 'replyFailure') {
+                  context.claimReply(context.dispatchHeader);
+                  const result = await context.submitReply(
+                    context.dispatchHeader,
+                    connector.ZlinkStreamMessageKind.Error,
+                    new Map(), false, loginAdmission.contract.errorBody
+                  );
+                  assert.equal(result.status, 'submitted');
+                }
+                request.replied.resolve();
+                if (reason === 'replySuccess' || reason === 'replyFailure') {
+                  await request.releaseCallback.promise;
+                  if (reason === 'replySuccess') {
+                    await assert.rejects(context.client.reply('duplicate').submit(), /already has a reply submission/);
+                  }
+                }
+              } finally {
+                request.finished.resolve();
+              }
+            }
+          };
+        }
+      });
+      listeners.push(listener);
+      listener.start();
+      return listener;
+    };
+    let runtime = startListener();
+
+    try {
+      for (const step of steps) {
+        const { action, expect, requestId } = step;
+        const heldPermits = () => Number(applicationJobQueue.snapshot().queuedApplicationJobs);
+        if (action === 'receive') {
+          const request = {
+            step,
+            start: deferred(),
+            startWork: deferred(),
+            end: deferred(),
+            replied: deferred(),
+            releaseCallback: deferred(),
+            finished: deferred()
+          };
+          requests.set(requestId, request);
+          counts.set(requestId, { reservations: 0, returns: 0, posts: 0 });
+          if (timeoutRequest?.requestId === requestId) {
+            client = connector.zlinkStreamConnectorFactory.create({
+              endpoint: 'ws://127.0.0.1:19000',
+              heartbeat: { enabled: false },
+              transportFactory: {
+                async connect() {
+                  return {
+                    async write(frame) {
+                      socket.emitRaw(step.sessionId, [frame]);
+                      socket.received.at(-1).admissionRequestId = requestId;
+                    },
+                    async close() {}
+                  };
+                }
+              }
+            });
+            await client.connect();
+            clientResult = client.request({ requestId }).packetName(step.packetName)
+              .timeout(1).submitEncoded().catch((error) => error.error.code);
+          } else {
+            const heartbeat = step.kind === 'Heartbeat';
+            socket.emitPacket(step.sessionId, fakeHeader({
+              name: heartbeat ? '$zlink.heartbeat.ping' : step.packetName,
+              kind: connector.ZlinkStreamMessageKind[heartbeat ? 'Control' : step.kind],
+              codec: heartbeat ? connector.ZlinkStreamCodec.Raw : connector.ZlinkStreamCodec.Json,
+              requestSeq: step.requestSeq === null ? undefined : BigInt(step.requestSeq)
+            }), heartbeat ? fakeMessage('') : fakeJsonMessage(requestId));
+            socket.received.at(-1).admissionRequestId = requestId;
+          }
+          await waitForReceive(socket);
+
+          if (expect.decision === 'rejected') {
+            const expected = expect.error;
+            const sent = socket.sent.find(({ routingId }) => routingId === step.sessionId);
+            assert.ok(sent, 'ingress sends an Error frame');
+            const { header, payload } = decodeServerSentFrame(sent);
+            assert.equal(header.kind, connector.ZlinkStreamMessageKind[expected.kind]);
+            assert.equal(header.name, expected.packetName);
+            assert.equal(String(header.requestSeq), expected.requestSeq);
+            assert.deepEqual(Object.fromEntries(header.metadata), expected.metadata);
+            assert.deepEqual(JSON.parse(Buffer.from(payload).toString()), expected.body);
+            assert.equal(socket.disconnects.includes(step.sessionId), expected.connectionClosed);
+            assert.equal(sessions.includes(step.sessionId), false);
+            assert.deepEqual(counts.get(requestId), {
+              reservations: expect.permitReservations,
+              returns: expect.permitReturns,
+              posts: expect.applicationQueuedJobs
+            });
+            assert.equal(actorCreates.filter((id) => id === requestId).length, expect.actorCreates);
+            assert.equal(storeReads.filter((id) => id === requestId).length, 0);
+            assert.equal(storeWrites.filter((id) => id === requestId).length, expect.storeWrites);
+            assert.equal(handlerCalls.filter((id) => id === requestId).length, expect.handlerCallsForRequest);
+            assert.equal(observations.rejections(), 1);
+            admission.resetMetrics();
+            assert.equal(observations.rejections(), 0);
+            assert.equal(observations.inFlight(), expect.inFlight);
+          } else if (expect.decision === 'accepted') {
+            assert.equal(sessions.includes(step.sessionId), true);
+            assert.equal(counts.get(requestId).posts, 1);
+          }
+          if (enqueueRejected && requestId === 'a') {
+            // Posting fails synchronously in Node. The real permit records
+            // the accepted ingress state immediately before that failure.
+            assert.deepEqual(beforeEnqueueRejected, [expect.inFlight, expect.heldPermits]);
+            assert.equal(handlerCalls.length, expect.handlerCalls);
+            continue;
+          }
+        } else {
+          const request = requests.get(requestId);
+          if (action === 'handlerStart') {
+            request.start.resolve();
+            await waitForCondition(() => handlerCalls.includes(requestId), 'authentication handler start');
+          } else if (action === 'clientTimeout') {
+            assert.equal(await clientResult, connector.ZlinkStreamErrorCode.RequestTimeout);
+          } else if (action === 'await') {
+            request.startWork.resolve();
+            await clock.flush();
+          } else if (action === 'terminal') {
+            const { reason } = step;
+            if (reason === 'cancellation') {
+              runtime.markDisconnected(request.step.sessionId);
+            } else if (reason === 'shutdown') {
+              // Shut down the owning listener with its callback still blocked.
+              // The second registered listener uses the same node admission.
+              shutdown ??= runtime.dispose();
+            } else if (reason !== 'enqueueRejected') {
+              request.end.resolve(reason);
+              if (reason === 'replySuccess' || reason === 'replyFailure') {
+                await request.replied.promise;
+              } else {
+                await request.finished.promise;
+              }
+            }
+            await clock.flush();
+            assert.equal(expect.leaseReturns, 1);
+            assert.equal(observations.inFlight(), 0, 'the terminal returned exactly one slot');
+            if (reason === 'replySuccess' || reason === 'replyFailure') {
+              const sent = socket.sent.find(({ routingId }) => routingId === request.step.sessionId);
+              const { header } = decodeServerSentFrame(sent);
+              assert.equal(header.kind, connector.ZlinkStreamMessageKind[
+                reason === 'replySuccess' ? 'Response' : 'Error']);
+              assert.equal(header.metadata.has(loginAdmission.contract.retryMetadataKey), false);
+              assert.equal(runtime.findSession(request.step.sessionId).context.dispatchHeader.name,
+                request.step.packetName);
+            }
+          }
+        }
+        assert.equal(observations.inFlight(), expect.inFlight, `${action} ${requestId} in-flight`);
+        assert.equal(heldPermits(), expect.heldPermits, `${action} ${requestId} held permits`);
+        assert.equal(handlerCalls.length, expect.handlerCalls, `${action} ${requestId} handlers`);
+        if (action === 'terminal' && step.reason === 'shutdown' &&
+          steps[steps.indexOf(step) + 1]?.action === 'receive') {
+          runtime = startListener();
+        }
+      }
+    } finally {
+      for (const request of requests.values()) {
+        request.start.resolve();
+        request.startWork.resolve();
+        request.end.resolve();
+        request.releaseCallback.resolve();
+      }
+      await client?.close();
+      await Promise.all([shutdown, ...listeners.map((listener) => listener.dispose())]);
+      assert.equal(observations.inFlight(), 0, 'callback and cancellation overlap returns each slot once');
+      admission?.dispose();
+    }
+  });
+}
+
+test('login admission validates STREAM settings before startup', (t) => {
+  let effectiveProcessors = 2n;
+  t.mock.method(processorCount, 'nodeEffectiveProcessorCount', () => effectiveProcessors);
+  const options = { authenticationPacketName: 'Login' };
+  const network = { bindHost: '127.0.0.1' };
+  const registration = toStreamNodeMap({
+    a: options,
+    b: { ...options, maxConcurrentAuthentications: 16, authenticationRetryDelayMs: 500 }
+  }, network);
+  assert.equal(registration.get('a').maxConcurrentAuthentications, 16);
+  assert.equal(registration.get('a').authenticationRetryDelayMs, 500);
+  for (const key of ['maxConcurrentAuthentications', 'authenticationRetryDelayMs']) {
+    for (const value of [0, -1, 1.5, 2_147_483_648, Infinity, null]) {
+      assert.throws(() => toStreamNodeMap({ a: { ...options, [key]: value } }, network), /1\.\.2147483647/);
+    }
+    assert.throws(() => toStreamNodeMap({ a: options, b: { ...options, [key]: 1 } }, network), /must match/);
+    assert.equal(toStreamNodeMap({ a: { [key]: 2_147_483_647 } }, network).get('a')[key], 2_147_483_647);
+  }
+  assert.throws(() => toStreamNodeMap({ a: options, b: {} }, network), /must match/);
+  assert.throws(() => toStreamNodeMap({ a: options, b: { authenticationPacketName: 'Other' } }, network), /must match/);
+  assert.throws(() => toStreamNodeMap({ a: { maxConcurrentAuthentications: 0 } }, network), /1\.\.2147483647/);
+  effectiveProcessors = 2_147_483_647n;
+  assert.equal(normalizeStreamAuthenticationAdmission(options).maxConcurrentAuthentications, 2_147_483_647);
+});
+
+test('login admission default uses the runtime affinity and cgroup quota', (t) => {
+  t.mock.method(require('node:os'), 'availableParallelism', () => 4);
+  const fs = require('node:fs');
+  const original = fs.readFileSync.bind(fs);
+  let quota = '200000 100000';
+  t.mock.method(fs, 'readFileSync', (path, ...args) =>
+    path === '/sys/fs/cgroup/cpu.max' ? quota : original(path, ...args));
+  const options = { authenticationPacketName: 'Login' };
+  assert.equal(normalizeStreamAuthenticationAdmission(options).maxConcurrentAuthentications, 16);
+  quota = '800000 100000';
+  assert.equal(normalizeStreamAuthenticationAdmission(options).maxConcurrentAuthentications, 32);
 });

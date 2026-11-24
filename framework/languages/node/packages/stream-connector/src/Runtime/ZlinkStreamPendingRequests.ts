@@ -6,115 +6,182 @@ import {
   ZlinkStreamMessage,
   ZlinkStreamMetadata
 } from '../Contracts';
+import type { ZlinkStreamWriteOptions } from './ZlinkStreamFrameSender';
 import { connectorError } from './ZlinkStreamSupport';
 
-export interface PendingZlinkStreamRequest {
-  readonly requestSeq: bigint;
-  readonly promise: Promise<ZlinkStreamMessage<ZlinkStreamEncodedPayload>>;
-  startTimeout(): void;
+type Reply = ZlinkStreamMessage<ZlinkStreamEncodedPayload>;
+
+interface PendingRequestOptions {
+  readonly packetName: string;
+  readonly timeoutMs: number;
+  readonly maxAdmissionWaitMs?: number;
+  readonly signal?: AbortSignal;
+  send(requestSeq: bigint, writeOptions: ZlinkStreamWriteOptions): Promise<void>;
+  onAdmissionWaiting(retryAfterMs: number): void;
 }
 
-interface TrackedPendingRequest {
-  readonly packetName: string;
-  readonly promise: Promise<ZlinkStreamMessage<ZlinkStreamEncodedPayload>>;
-  resolve(value: ZlinkStreamMessage<ZlinkStreamEncodedPayload>): void;
-  reject(error: ZlinkStreamError): void;
-  cancel(): void;
-  startTimeout(): void;
+interface PendingRequest {
+  resolve(value: () => ZlinkStreamEncodedPayload, metadata: ZlinkStreamMetadata): void;
+  reject(error: unknown): void;
+  waitForAdmission(retryAfterMs: number, receivedAt: number): void;
+  expireIfDue(now: number): boolean;
 }
+
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 export class ZlinkStreamPendingRequests {
   private nextRequestSeq = 1n;
-  private readonly active = new Map<bigint, TrackedPendingRequest>();
+  private readonly active = new Set<PendingRequest>();
+  private readonly attempts = new Map<bigint, PendingRequest>();
 
-  create(packetName: string, timeoutMs: number): PendingZlinkStreamRequest {
-    if (this.nextRequestSeq > UINT64_MAX) {
-      throw connectorError(ZlinkStreamErrorCode.SendFailed, 'Request sequence is exhausted.');
-    }
-    const requestSeq = this.nextRequestSeq++;
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    let resolvePending!: (value: ZlinkStreamMessage<ZlinkStreamEncodedPayload>) => void;
-    let rejectPending!: (error: ZlinkStreamError) => void;
-    const promise = new Promise<ZlinkStreamMessage<ZlinkStreamEncodedPayload>>(
-      (resolve, reject) => {
-        resolvePending = resolve;
-        rejectPending = (error) => reject(connectorError(error.code, error.message, error.cause));
+  submit(options: PendingRequestOptions): Promise<Reply> {
+    const { packetName, signal } = options;
+    const timeoutMs = Number.isFinite(options.timeoutMs) ? Math.max(1, options.timeoutMs) : 1;
+    const writeLifetime = new AbortController();
+    let requestSeq: bigint | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let deadline = Infinity;
+    let firstRejectionAt: number | undefined;
+    let resolve!: (value: Reply) => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<Reply>((accept, fail) => {
+      resolve = accept;
+      reject = fail;
+    });
+
+    const timeoutError = () =>
+      connectorError(ZlinkStreamErrorCode.RequestTimeout, `Request '${packetName}' timed out.`);
+    const removeAttempt = (): void => {
+      if (requestSeq === undefined) return;
+      this.attempts.delete(requestSeq);
+      requestSeq = undefined;
+    };
+    const finish = (): boolean => {
+      if (!this.active.delete(pending)) return false;
+      removeAttempt();
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', cancel);
+      writeLifetime.abort();
+      return true;
+    };
+    const cancel = (): void =>
+      pending.reject(connectorError(ZlinkStreamErrorCode.Disconnected, 'Operation canceled.'));
+
+    const schedule = (retryAt = Infinity): void => {
+      clearTimeout(timer);
+      const wakeAt = Math.min(deadline, retryAt);
+      timer = setTimeout(
+        () => {
+          const now = performance.now();
+          if (pending.expireIfDue(now)) return;
+          if (now >= retryAt) sendAttempt(true);
+          else schedule(retryAt);
+        },
+        Math.min(Math.ceil(wakeAt - performance.now()), MAX_TIMER_DELAY_MS)
+      );
+    };
+    const sendAttempt = (retry: boolean): void => {
+      if (this.nextRequestSeq > UINT64_MAX) {
+        pending.reject(
+          connectorError(ZlinkStreamErrorCode.SendFailed, 'Request sequence is exhausted.')
+        );
+        return;
       }
-    );
-    const tracked: TrackedPendingRequest = {
-      packetName,
-      promise,
-      startTimeout: () => {
-        if (timeout !== undefined || this.active.get(requestSeq) !== tracked) return;
-        timeout = setTimeout(() => {
-          this.active.delete(requestSeq);
-          rejectPending({
-            code: ZlinkStreamErrorCode.RequestTimeout,
-            message: `Request '${packetName}' timed out.`
-          });
-        }, timeoutMs);
-      },
-      resolve: (value) => {
-        if (timeout !== undefined) {
-          clearTimeout(timeout);
-        }
-        resolvePending(value);
+      requestSeq = this.nextRequestSeq++;
+      this.attempts.set(requestSeq, pending);
+      if (retry) schedule();
+      void options
+        .send(requestSeq, {
+          signal: writeLifetime.signal,
+          onAccepted: retry
+            ? undefined
+            : () => {
+                deadline = performance.now() + timeoutMs;
+                schedule();
+              },
+          beforeWrite: retry
+            ? () => {
+                if (performance.now() >= deadline) throw timeoutError();
+              }
+            : undefined,
+          onFailure: pending.reject
+        })
+        .catch(pending.reject);
+    };
+    const pending: PendingRequest = {
+      resolve: (value, metadata) => {
+        if (pending.expireIfDue(performance.now())) return;
+        const payload = value();
+        if (finish()) resolve({ name: packetName, metadata, payload });
       },
       reject: (error) => {
-        if (timeout !== undefined) {
-          clearTimeout(timeout);
-        }
-        rejectPending(error);
+        if (finish()) reject(error);
       },
-      cancel: () => {
-        if (timeout !== undefined) {
-          clearTimeout(timeout);
-        }
+      expireIfDue: (now) => {
+        if (now < deadline) return false;
+        pending.reject(timeoutError());
+        return true;
+      },
+      waitForAdmission: (retryAfterMs, receivedAt) => {
+        removeAttempt();
+        firstRejectionAt ??= receivedAt;
+        deadline = Math.min(deadline, firstRejectionAt + (options.maxAdmissionWaitMs ?? timeoutMs));
+        schedule(receivedAt + retryAfterMs + Math.floor(Math.random() * 51));
+        options.onAdmissionWaiting(retryAfterMs);
       }
     };
-    this.active.set(requestSeq, tracked);
-    return { requestSeq, promise, startTimeout: tracked.startTimeout };
+    this.active.add(pending);
+    signal?.addEventListener('abort', cancel, { once: true });
+    if (signal?.aborted === true) cancel();
+    else sendAttempt(false);
+    return promise;
   }
 
-  /* stream connector spec §5.2: a pending request is matched by request_seq alone. */
+  /* Stream connector spec §5.2 matches replies by the current request sequence. */
   resolve(
     requestSeq: bigint,
     value: () => ZlinkStreamEncodedPayload,
     metadata: ZlinkStreamMetadata
+  ): void {
+    this.attempts.get(requestSeq)?.resolve(value, metadata);
+  }
+
+  reject(
+    requestSeq: bigint,
+    error: ZlinkStreamError,
+    retryAfter?: string,
+    receivedAt = performance.now()
   ): boolean {
-    const pending = this.active.get(requestSeq);
-    if (pending === undefined) {
-      return false;
-    }
-    const payload = value();
-    this.active.delete(requestSeq);
-    pending.resolve({ name: pending.packetName, metadata, payload });
-    return true;
-  }
+    const pending = this.attempts.get(requestSeq);
+    if (pending === undefined) return false;
+    if (pending.expireIfDue(receivedAt)) return true;
 
-  reject(requestSeq: bigint, error: ZlinkStreamError): boolean {
-    const pending = this.active.get(requestSeq);
-    if (pending === undefined) {
-      return false;
+    if (retryAfter === undefined) {
+      pending.reject(connectorError(error.code, error.message, error.cause));
+    } else {
+      const retryAfterMs = Number(retryAfter);
+      if (
+        !Number.isInteger(retryAfterMs) ||
+        retryAfterMs < 0 ||
+        retryAfterMs > MAX_TIMER_DELAY_MS ||
+        String(retryAfterMs) !== retryAfter
+      ) {
+        pending.reject(
+          connectorError(
+            ZlinkStreamErrorCode.FrameDecodeFailed,
+            'Invalid authentication admission retry delay.'
+          )
+        );
+      } else {
+        pending.waitForAdmission(retryAfterMs, receivedAt);
+      }
     }
-    this.active.delete(requestSeq);
-    pending.reject(error);
     return true;
-  }
-
-  cancel(requestSeq: bigint): void {
-    const pending = this.active.get(requestSeq);
-    if (pending === undefined) {
-      return;
-    }
-    this.active.delete(requestSeq);
-    pending.cancel();
   }
 
   failAll(error: ZlinkStreamError): void {
-    for (const [requestSeq, pending] of this.active) {
-      this.active.delete(requestSeq);
-      pending.reject(error);
+    for (const pending of this.active) {
+      pending.reject(connectorError(error.code, error.message, error.cause));
     }
   }
 }

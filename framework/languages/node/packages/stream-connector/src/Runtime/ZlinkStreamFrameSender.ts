@@ -2,15 +2,22 @@ import type {
   ZlinkStreamConnection,
   ZlinkStreamEncodedPayload,
   ZlinkStreamError,
-  ZlinkStreamMetadata,
-  ZlinkStreamMessageKind
+  ZlinkStreamMetadata
 } from '../Contracts';
-import { ZlinkStreamErrorCode, ZlinkStreamException } from '../Contracts';
+import { ZlinkStreamErrorCode, ZlinkStreamException, ZlinkStreamMessageKind } from '../Contracts';
 import type { ZlinkStreamFrameProtocol } from './Protocol/ZlinkStreamFrameProtocol';
 import { connectorError, throwIfAborted } from './ZlinkStreamSupport';
 
+export interface ZlinkStreamWriteOptions {
+  readonly signal?: AbortSignal;
+  readonly onAccepted?: () => void;
+  readonly beforeWrite?: () => void;
+  readonly onFailure?: (error: unknown) => void;
+}
+
 interface QueuedWrite {
   readonly frame: Uint8Array;
+  readonly beforeWrite?: () => void;
   readonly complete: () => void;
   readonly fail: (error: unknown) => void;
 }
@@ -56,9 +63,20 @@ class ZlinkStreamConnectionWriteQueue {
 
   private advance(): void {
     if (this.active !== undefined) return;
-    const next = this.queue.values().next().value;
-    if (next === undefined) return;
-    this.queue.delete(next);
+    for (const next of this.queue) {
+      this.queue.delete(next);
+      try {
+        next.beforeWrite?.();
+      } catch (error) {
+        next.fail(error);
+        continue;
+      }
+      this.start(next);
+      return;
+    }
+  }
+
+  private start(next: QueuedWrite): void {
     this.active = next;
     let write: Promise<void>;
     try {
@@ -111,13 +129,11 @@ export class ZlinkStreamFrameSender {
     metadata: ZlinkStreamMetadata,
     compress: boolean,
     requestSeq: bigint | undefined,
-    signal?: AbortSignal,
     correlationId?: string,
     actorSlot?: number,
-    expiry?: Promise<unknown>,
-    onAccepted?: () => void
+    options?: ZlinkStreamWriteOptions
   ): Promise<void> {
-    throwIfAborted(signal);
+    throwIfAborted(options?.signal);
     await this.write(
       connection,
       this.protocol.encode(
@@ -130,10 +146,37 @@ export class ZlinkStreamFrameSender {
         correlationId,
         actorSlot
       ),
-      signal,
-      expiry,
-      onAccepted
+      options
     );
+  }
+
+  createRequestSender(
+    connection: ZlinkStreamConnection,
+    name: string,
+    payload: ZlinkStreamEncodedPayload,
+    metadata: ZlinkStreamMetadata,
+    compress: boolean,
+    correlationId: string,
+    actorSlot?: number
+  ): (requestSeq: bigint, options: ZlinkStreamWriteOptions) => Promise<void> {
+    let firstFrame: Uint8Array | undefined;
+    return async (requestSeq, options) => {
+      throwIfAborted(options.signal);
+      const frame =
+        firstFrame === undefined
+          ? (firstFrame = this.protocol.encode(
+              ZlinkStreamMessageKind.Request,
+              name,
+              payload,
+              metadata,
+              compress,
+              requestSeq,
+              correlationId,
+              actorSlot
+            ))
+          : this.protocol.reencodeRequest(firstFrame, requestSeq);
+      await this.write(connection, frame, options);
+    };
   }
 
   /**
@@ -174,10 +217,9 @@ export class ZlinkStreamFrameSender {
   private write(
     connection: ZlinkStreamConnection,
     frame: Uint8Array,
-    signal?: AbortSignal,
-    expiry?: Promise<unknown>,
-    onAccepted?: () => void
+    options: ZlinkStreamWriteOptions = {}
   ): Promise<void> {
+    const { signal, beforeWrite, onAccepted, onFailure } = options;
     throwIfAborted(signal);
     const queue = this.queues.get(connection);
     if (queue === undefined) {
@@ -194,6 +236,7 @@ export class ZlinkStreamFrameSender {
         );
       operation = {
         frame,
+        beforeWrite,
         complete: () => {
           if (settled) return;
           settled = true;
@@ -205,11 +248,11 @@ export class ZlinkStreamFrameSender {
           settled = true;
           cleanup();
           reject(error);
+          onFailure?.(error);
         }
       };
       signal?.addEventListener('abort', onAbort, { once: true });
       onAccepted?.();
-      expiry?.then(undefined, (error) => queue.cancel(operation, error));
       queue.enqueue(operation);
     });
     return promise;

@@ -1031,6 +1031,7 @@ export class ZLinkFrameworkRuntimeHost
       throw new Error('Capacity metrics reset requires a started Framework runtime.');
     }
     this.capacityStatus.reset(() => context.resetCoreHwmBudgetMetrics());
+    this.streamRuntime?.resetAuthenticationAdmissionMetrics();
   }
 
   relocate(options: ZLinkFrameworkRelocationOptions): Promise<ZLinkFrameworkRelocationResult> {
