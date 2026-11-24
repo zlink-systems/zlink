@@ -34,25 +34,25 @@
     {
       "id": "session",
       "role": "session",
-      "title": "Session",
+      "title": "Session node",
       "config": "server/config/session.json"
     },
     {
       "id": "regionA",
       "role": "region",
-      "title": "Region A",
+      "title": "Play node A (region)",
       "config": "server/config/regionA.json"
     },
     {
       "id": "regionB",
       "role": "region",
-      "title": "Region B",
+      "title": "Play node B (region)",
       "config": "server/config/regionB.json"
     },
     {
       "id": "instance",
       "role": "instance",
-      "title": "Dungeon",
+      "title": "Play node (dungeon)",
       "config": "server/config/instance.json"
     },
     {

@@ -2734,7 +2734,7 @@ void verify_public_host_send_uses_authority_generation ()
     target->close ();
 }
 
-void verify_entry_spot_identity_claim_is_global_and_fenced ()
+void verify_entry_spot_descriptor_mapping_survives_node_removal ()
 {
     using namespace zlink::framework;
     runtime::in_memory_location_repository_t store;
@@ -2777,26 +2777,10 @@ void verify_entry_spot_identity_claim_is_global_and_fenced ()
     assert (first_route->node_rid.to_string () == first.rid.to_string ());
     assert (
       store.update_mesh_node (second, location_write_intent_t::new_claim).result ().value ().status
-      == location_write_status_t::rejected_conflict);
-
-    object_reserve_request_t reserved_entry{
-      .key = {placement_object_kind_t::user_spot, entry_id},
-      .intent = {.stable_type = "room"},
-      .target = {.mesh_name = first.mesh_name,
-                 .node_rid = node_rid_t::from_string (first.rid.to_string ()),
-                 .node_lifecycle_generation = first.lifecycle_generation,
-                 .owner = first_owner},
-      .capacity_bundle = {
-        .spot_slots = 1,
-        .spot_type = spot_type_capacity_delta_t{placement_object_kind_t::user_spot, "room", 1}}};
-    assert (std::holds_alternative<object_reserve_conflict_t> (
-      store.reserve (reserved_entry).result ().value ()));
+      == location_write_status_t::stored);
 
     assert (store.remove_mesh_node ({first.mesh_name, first.rid}, first_owner).result ().value ()
             == location_write_status_t::stored);
-    assert (
-      store.update_mesh_node (second, location_write_intent_t::new_claim).result ().value ().status
-      == location_write_status_t::stored);
     resolver.invalidate_spot_address (entry_id);
     const auto replacement_route =
       resolver.resolve_spot_address (second.mesh_name, entry_id).result ().value ();
@@ -2804,6 +2788,19 @@ void verify_entry_spot_identity_claim_is_global_and_fenced ()
     assert (replacement_route->node_rid.to_string () == second.rid.to_string ());
     assert (store.remove_mesh_node ({first.mesh_name, first.rid}, first_owner).result ().value ()
             == location_write_status_t::ignored_stale);
+
+    object_reserve_request_t reserved_entry{
+      .key = {placement_object_kind_t::user_spot, entry_id},
+      .intent = {.stable_type = "room"},
+      .target = {.mesh_name = second.mesh_name,
+                 .node_rid = node_rid_t::from_string (second.rid.to_string ()),
+                 .node_lifecycle_generation = second.lifecycle_generation,
+                 .owner = second_owner},
+      .capacity_bundle = {
+        .spot_slots = 1,
+        .spot_type = spot_type_capacity_delta_t{placement_object_kind_t::user_spot, "room", 1}}};
+    assert (std::holds_alternative<object_reserved_t> (
+      store.reserve (reserved_entry).result ().value ()));
 
     const auto occupied_id = detail::new_user_spot_id ();
     auto occupied_target = descriptor ("occupied-target", 43, first_owner,
@@ -2825,12 +2822,12 @@ void verify_entry_spot_identity_claim_is_global_and_fenced ()
         .spot_type = spot_type_capacity_delta_t{placement_object_kind_t::user_spot, "room", 1}}};
     assert (std::holds_alternative<object_reserved_t> (
       store.reserve (occupied_request).result ().value ()));
-    auto conflicting_descriptor = descriptor ("occupied-entry", 44, second_owner, occupied_id);
-    assert (store.update_mesh_node (conflicting_descriptor, location_write_intent_t::new_claim)
+    auto descriptor_with_occupied_id = descriptor ("occupied-entry", 44, second_owner, occupied_id);
+    assert (store.update_mesh_node (descriptor_with_occupied_id, location_write_intent_t::new_claim)
               .result ()
               .value ()
               .status
-            == location_write_status_t::rejected_conflict);
+            == location_write_status_t::stored);
 }
 
 void verify_user_spot_execution_mode_registration ()
@@ -10142,7 +10139,7 @@ int main (int argc, char **argv)
     verify_public_host_route_fence_reads_store_without_second_cache (false);
     verify_public_host_route_fence_reads_store_without_second_cache (true);
     verify_public_host_send_uses_authority_generation ();
-    verify_entry_spot_identity_claim_is_global_and_fenced ();
+    verify_entry_spot_descriptor_mapping_survives_node_removal ();
     verify_user_spot_execution_mode_registration ();
     verify_self_actor_request_rejected_before_submission ();
     verify_actor_context_survives_coroutine_await ();

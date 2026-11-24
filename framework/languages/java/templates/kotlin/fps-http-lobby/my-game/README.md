@@ -1,16 +1,20 @@
-# MyGame FPS HTTP lobby
+# MyGame FPS API node
 
-This Kotlin FPS template pairs players by mode through an HTTP lobby. `POST /match` returns the same UUID-based Room ID and Session endpoint to both matched players. The lobby creates a dynamic Room User Spot, sends its member list in `PrepareRoom`, and waits for `RoomPrepared` before returning. `RoomRoster` admits only those members. Players connect to Session over STREAM and join the assigned Room. The RouteMesh name is `my-game-arena` (`Names.MESH`). `RoomState` owns movement budgets, ray hit decisions, health, shared input sequences, and match completion. Disconnected players resume the same Actor and Room; draining a Match host relocates ongoing matches without reconnecting clients.
+This Kotlin FPS template pairs players by mode through an API node. `POST /match` returns the same UUID-based Room ID and Session endpoint to both matched players. The API node creates a dynamic Room User Spot, sends its member list in `PrepareRoom`, and waits for `RoomPrepared` before returning. `RoomRoster` admits only those members. Players connect to Session over STREAM and join the assigned Room. The RouteMesh name is `my-game-arena` (`Names.MESH`). `RoomState` owns movement budgets, ray hit decisions, health, shared input sequences, and match completion. Disconnected players resume the same Actor and Room; draining a play node (match) relocates ongoing matches without reconnecting clients.
 
 ```mermaid
 flowchart LR
-  players[Players] -->|HTTP| lobby[HTTP lobby]
-  players -->|STREAM| session[Session node]
-  session -->|relay| matchA[Match node A]
-  matchA <--> matchB[Match node B]
+  subgraph playNodes["Play nodes"]
+    matchA["Play node A (match)"]
+    matchB["Play node B (match)"]
+  end
+  players[Players] -->|STREAM| session["Session node"]
+  session -->|relay| matchA
+  matchA <--> matchB
   lobby -->|Get or prepare Room| matchA
   lobby -->|Get or prepare Room| matchB
   matchA -->|Location / lease| location[(Redis Location Store)]
+  players -->|HTTP| lobby["API node (matchmaking)"]
 ```
 
 ## Prerequisites
@@ -35,11 +39,11 @@ pwsh -NoProfile -File ./run-e2e.ps1 -BuildOnly
 
 ### Endpoint and first packet
 
-The Session client STREAM listener defaults to `tcp://127.0.0.1:0` in `server/config/session.json`. Port `0` asks the OS for a free port; use the actual `streamEndpoint` in the process line `READY <json>`, which also contains `id` and `meshEndpoint`. TCP has no URL path. Web browsers, Unity WebGL, and Cocos Creator web cannot connect to this default TCP listener; they require a separately configured WebSocket deployment. The Lobby defaults to `http://127.0.0.1:0` in `server/config/lobby.json`; its READY JSON provides `httpEndpoint`. Replace `sessionEndpoint` ending in `CHANGE_ME` with the actual Session endpoint before starting Lobby; `e2e/src/main/kotlin/MyGame/e2e/Nodes.kt` performs that wiring for its temporary deployment.
+The Session client STREAM listener defaults to `tcp://127.0.0.1:0` in `server/config/session.json`. Port `0` asks the OS for a free port; use the actual `streamEndpoint` in the process line `READY <json>`, which also contains `id` and `meshEndpoint`. TCP has no URL path. Web browsers, Unity WebGL, and Cocos Creator web cannot connect to this default TCP listener; they require a separately configured WebSocket deployment. The API node defaults to `http://127.0.0.1:0` in `server/config/lobby.json`; its READY JSON provides `httpEndpoint`. Replace `sessionEndpoint` ending in `CHANGE_ME` with the actual Session endpoint before starting Lobby; `e2e/src/main/kotlin/MyGame/e2e/Nodes.kt` performs that wiring for its temporary deployment.
 
 Loopback is reachable only inside the same host/network namespace. Keep a deployment running for external clients, bind to a reachable interface and port, and expose that port from containers. The Docker e2e deployment is temporary and is removed after the run. Mesh listeners and Redis are not game-client endpoints.
 
-First submit `POST /match` to the Lobby HTTP endpoint with JSON `playerId` and optional `mode` (`duel`). Submit both players concurrently: matchmaking waits for a pair. The `MatchResponse` contains `roomId` and `sessionEndpoint`. Connect to that endpoint, then send `JoinRoomRequest(playerId, roomId)`. Only assigned players may join. Admission first pushes `MatchFound(roomId)` and publishes `RoomView`; `ActionRejected` reports rejection. The example waits for `RoomView`; the e2e client also registers `MatchFound` for the complete flow.
+First submit `POST /match` to the API node's HTTP endpoint with JSON `playerId` and optional `mode` (`duel`). Submit both players concurrently: matchmaking waits for a pair. The `MatchResponse` contains `roomId` and `sessionEndpoint`. Connect to that endpoint, then send `JoinRoomRequest(playerId, roomId)`. Only assigned players may join. Admission first pushes `MatchFound(roomId)` and publishes `RoomView`; `ActionRejected` reports rejection. The example waits for `RoomView`; the e2e client also registers `MatchFound` for the complete flow.
 
 After admission, `SessionInfoRequest` uses `connector.kotlin().request<SessionInfo>(SessionInfoRequest()).await()` for a correlated `SessionInfo` reply. The first game operation above uses `send(...).await()` and server pushes. This template does not authenticate player identity; add identity validation before Actor binding for production.
 
@@ -144,13 +148,13 @@ For host-process debugging, install JDK 25 and add `--local` or `-Local`. After 
 | reconnect | A new client retains Actor, Room, position, HP, and last sequence; reconnecting after match completion retains the winner. |
 | update | An unlisted player is rejected; relocation completes, the old host shuts down safely, the connection and Room state remain unchanged, and the replacement accepts a new Room. |
 
-`RoomStateTest.kt` contains the 46 game-domain boundary checks. `LobbyDomainTest.kt` contains the 19 HTTP lobby boundary checks. They run with the `server:match` and `server:lobby` Gradle test tasks.
+`RoomStateTest.kt` contains the 46 game-domain boundary checks. `LobbyDomainTest.kt` contains the 19 API node boundary checks. They run with the `server:match` and `server:lobby` Gradle test tasks.
 
 ## FPS rules and extension points
 
 `POST /match` accepts `MatchRequest(playerId, mode)` and pairs two requests for the same mode. An omitted mode defaults to `duel`. This example accepts a claimed player ID; replace this boundary with authenticated identity before deployment. The response contains `roomId` and `sessionEndpoint`; the first STREAM packet is `JoinRoomRequest`. Session relays only `JoinRoomRequest`, `RoomViewRequest`, `MoveRequest`, `ShootRequest`, and `SessionInfoRequest`. `PrepareRoom`, `RoomPrepared`, `HttpNodeReady`, internal assignment, and result packets are rejected as `packet-not-allowed`. Messages use the default typed Framework serializer.
 
-The lobby creates each Room ID at matching time from `RoomPrefix` and a UUID rendered as 32 hexadecimal characters without hyphens. It sends `PrepareRoom(matchId, members)` to the Room and completes the HTTP response only after receiving `RoomPrepared(matchId)`. `RoomRoster` owns the membership list and admission decision. Repeating preparation with the same roster is idempotent; a different roster is rejected. A player absent from the prepared roster is rejected from admission as `admission-rejected`. A client cannot prepare a Room.
+The API node creates each Room ID at matching time from `RoomPrefix` and a UUID rendered as 32 hexadecimal characters without hyphens. It sends `PrepareRoom(matchId, members)` to the Room and completes the HTTP response only after receiving `RoomPrepared(matchId)`. `RoomRoster` owns the membership list and admission decision. Repeating preparation with the same roster is idempotent; a different roster is rejected. A player absent from the prepared roster is rejected from admission as `admission-rejected`. A client cannot prepare a Room.
 
 Coordinates use `Vec3(x, y, z)` with Y up. `ArenaMap` defines X/Z bounds 0 through 100 and Y bounds 0 through 10, two static AABBs, and two ordered spawn points. A player hit box is 1 wide, 2 high, and 1 deep from the feet, with eye height 1.6. Feet remain at Y=0. Vertical movement is rejected as `vertical-move`; jumping and gravity are not implemented. Movement tests the feet-position segment against closed wall boxes, including contact at the endpoint. It does not implement swept player-volume collision.
 
@@ -174,8 +178,8 @@ Message Follow is configured explicitly to 30 seconds. After `RELOCATED`, the sa
 
 ## Deployment sequence
 
-Start Redis, then both Match processes using `server/config/match-a.json` and `match-b.json`. Start Session using `session.json`. Read the actual Session endpoint from its `READY` output, put it in the lobby configuration's `sessionEndpoint`, and start the lobby using `lobby.json`. Each installed application accepts its configuration path as its only argument. Configuration IDs match the structure node IDs; endpoint port zero requests an OS-assigned port.
+Start Redis, then both play nodes (match) using `server/config/match-a.json` and `match-b.json`. Start the session node using `session.json`. Read the actual Session endpoint from its `READY` output, put it in the API node configuration's `sessionEndpoint`, and start the API node using `lobby.json`. Each installed application accepts its configuration path as its only argument. Configuration IDs match the structure node IDs; endpoint port zero requests an OS-assigned port.
 
 The Match configuration `roomCapacity` sets the positive per-node Room stable-type limit. Deployment configurations allow multiple Rooms. The e2e runner uses a capacity of two for `lobby`, which keeps the duel and ranked Rooms in place while the restarted Lobby provisions a new Room. Other scenarios use a capacity of one so the surviving host is full after relocation and the replacement must handle the next Room.
 
-For a Match host update, send `drain` to stdin and require `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Send `shutdown`, require `STOPPED` and exit zero, then start the replacement with the same configuration. The lobby remains outside host relocation. HTTP matchmaking holds the first POST response until another player requests the same mode; shutdown fails pending requests. The HTTP adapter removes an unpaired request when its client disconnects, allowing the same player ID to request again. Cancellation does not change paired requests.
+For a play node (match) update, send `drain` to stdin and require `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Send `shutdown`, require `STOPPED` and exit zero, then start the replacement with the same configuration. The API node remains outside host relocation. HTTP matchmaking holds the first POST response until another player requests the same mode; shutdown fails pending requests. The HTTP adapter removes an unpaired request when its client disconnects, allowing the same player ID to request again. Cancellation does not change paired requests.

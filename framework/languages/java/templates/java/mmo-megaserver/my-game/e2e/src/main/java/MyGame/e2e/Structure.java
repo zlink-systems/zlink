@@ -109,7 +109,7 @@ public final class Structure {
         for (var spot : spots) {
             require(
                     objectServerRoles.contains(roles.get(owner(spot, roles))),
-                    "Spot owner must be a Region or Instance node");
+                    "Spot owner must be a play node (region or dungeon)");
             switch (text(spot, "kind")) {
                 case "entry" ->
                         require(

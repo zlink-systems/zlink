@@ -10,8 +10,8 @@
   "nodes": [
     { "id": "players", "role": "external", "title": "Players", "config": null },
     { "id": "session", "role": "session", "title": "Session node", "config": "server/config/session.json" },
-    { "id": "tableA", "role": "table", "title": "Table node A", "config": "server/config/table-a.json" },
-    { "id": "tableB", "role": "table", "title": "Table node B", "config": "server/config/table-b.json" },
+    { "id": "tableA", "role": "table", "title": "Play node A (table)", "config": "server/config/table-a.json" },
+    { "id": "tableB", "role": "table", "title": "Play node B (table)", "config": "server/config/table-b.json" },
     { "id": "location", "role": "location-store", "title": "Location Store", "config": "docker-compose.yml" }
   ],
   "channels": [],

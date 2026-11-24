@@ -1,15 +1,21 @@
-# my-game: HTTP lobby and arena matches
+# my-game: API node and arena matches
 
-A two-player arena template. The HTTP lobby pairs players by mode, prepares a Room through the public object client, and returns its ID and the published Session endpoint. The RoomRoster approves the listed players before admission. The Session binds a Player Actor and relays only the client packet allowlist. RoomState owns positions, HP, accepted action sequence, phase, winner and monotonic cooldown state. Player carries no application state.
+A two-player arena template. The API node pairs players by mode, prepares a Room through the public object client, and returns its ID and the published Session endpoint. The RoomRoster approves the listed players before admission. The Session binds a Player Actor and relays only the client packet allowlist. RoomState owns positions, HP, accepted action sequence, phase, winner and monotonic cooldown state. Player carries no application state.
 
 ```mermaid
 flowchart LR
-  players -->|HTTP| lobby
-  players -->|STREAM| session
+  subgraph playNodes["Play nodes"]
+    matchA["Play node A (match)"]
+    matchB["Play node B (match)"]
+  end
+  players -->|STREAM| session["Session node"]
   session -->|relay| matchA
   lobby -->|Find room| location[(Redis)]
   matchA -->|Location / lease| location
   matchB -->|Location / lease| location
+  players -->|HTTP| lobby["API node (matchmaking)"]
+  lobby -->|RouteMesh room preparation| matchA
+  lobby -->|RouteMesh room preparation| matchB
 ```
 
 ## Prerequisites
@@ -26,9 +32,9 @@ Connect to the Session `players` STREAM listener. `server/config/session.json` p
 
 The listener is reachable from its host/network namespace. Keep a deployment running separately from e2e, which owns and removes its nodes; configure a reachable `StreamEndpoint` interface and port and expose it from containers for external clients. This is a TCP endpoint with no HTTP/WebSocket path. Browsers, Unity WebGL and Cocos Creator web cannot connect to this default listener; those clients require a deployed WebSocket listener.
 
-`server/config/lobby.json` configures `HttpEndpoint` as `http://127.0.0.1:0`; use the Lobby `READY` JSON `httpEndpoint` plus `/match`. Configure `SessionEndpoint` with the actual bound Session endpoint before starting the Lobby, as `e2e/world.hpp` does.
+`server/config/lobby.json` configures `HttpEndpoint` as `http://127.0.0.1:0`; use the API node `READY` JSON `httpEndpoint` plus `/match`. Configure `SessionEndpoint` with the actual bound Session endpoint before starting the API node, as `e2e/world.hpp` does.
 
-First POST JSON `{"playerId":"player-a","mode":"duel"}` to the Lobby HTTP endpoint plus `/match`. Submit a second distinct player in the same mode concurrently: the first HTTP request remains pending until paired. The HTTP response has `roomId` and `sessionEndpoint`. Connect to that returned Session endpoint and send `JoinRoomRequest` (`playerId`, returned `roomId`) first. Successful admission pushes `RoomView`; the HTTP assignment is a prerequisite, and `ActionRejected` reports rejected actions. These operations use `send(...).submit()` and server pushes, not a correlated connector `request` reply. This template does not authenticate player identity; validate it before binding in a production game.
+First POST JSON `{"playerId":"player-a","mode":"duel"}` to the API node's HTTP endpoint plus `/match`. Submit a second distinct player in the same mode concurrently: the first HTTP request remains pending until paired. The HTTP response has `roomId` and `sessionEndpoint`. Connect to that returned Session endpoint and send `JoinRoomRequest` (`playerId`, returned `roomId`) first. Successful admission pushes `RoomView`; the HTTP assignment is a prerequisite, and `ActionRejected` reports rejected actions. These operations use `send(...).submit()` and server pushes, not a correlated connector `request` reply. This template does not authenticate player identity; validate it before binding in a production game.
 
 ### Connector installation
 
@@ -142,9 +148,9 @@ The runner removes its node containers. The script removes remaining containers 
 
 Domain tests cover map edges, step length, wall crossings, movement budget, shot range, fire cooldown, over-limit sequence values, winner transitions, roster preparation and snapshot validation.
 
-Each run checks `zlink.structure.json` before starting Redis, uses a unique Compose project and Redis key prefix, and stores configuration and node stdout/stderr (including Normal message-flow diagnostics) under `.logs/run-<id>/`. Cleanup failures make the run fail. `./run-e2e.sh --check-structure` validates the actual structure without starting Redis or game nodes (PowerShell: `pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure`).
+Each run checks `zlink.structure.json` before starting Redis, uses a unique Compose project and Redis key prefix, and stores configuration and node stdout/stderr (including Normal message-flow diagnostics) under `.logs/run-<id>/`. Cleanup failures make the run fail. `./run-e2e.sh --check-structure` validates the actual structure without starting Redis or play nodes (PowerShell: `pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure`).
 
-`POST /match {"playerId":"p1"}` defaults to `duel`; clients may also provide `mode`. The lobby pairs the same mode, creates `room-<UUID-without-hyphens>`, sends `PrepareRoom(matchId, members)` to the Room, and returns `{roomId, sessionEndpoint}` only after `RoomPrepared(matchId)`. Repeating the same preparation is idempotent; a different roster is rejected. The lobby is process-local and is not a relocation participant. Configure `HttpEndpoint` with port 0; READY reports the actual bound port. Set its `SessionEndpoint` to the Session node's published endpoint. A waiting client disconnect removes its request from the queue and releases its player ID. Production authentication and durable matchmaking are extension points.
+`POST /match {"playerId":"p1"}` defaults to `duel`; clients may also provide `mode`. The API node pairs the same mode, creates `room-<UUID-without-hyphens>`, sends `PrepareRoom(matchId, members)` to the Room, and returns `{roomId, sessionEndpoint}` only after `RoomPrepared(matchId)`. Repeating the same preparation is idempotent; a different roster is rejected. The API node is process-local and is not a relocation participant. Configure `HttpEndpoint` with port 0; READY reports the actual bound port. Set its `SessionEndpoint` to the Session node's published endpoint. A waiting client disconnect removes its request from the queue and releases its player ID. Production authentication and durable matchmaking are extension points.
 
 `MoveRequest` contains `dx`, `dy` and `sequence`. The server applies map `[0,100]²`, `MaxStep=2`, and a movement budget of `min(2, 10/s × elapsed)`; the first move has a budget of 2. `ShootRequest` retains `targetId` and uses a 250 ms fire interval. The shared integer maximum is `9,007,199,254,740,991`. Rejections use `ActionRejected(reason, retryAfterMs)`; only time-budget rejections set a positive `retryAfterMs`. The Room snapshot stores remaining milliseconds, not process timestamps. `RoomView` exposes each player's `lastSequence` and the Room `phase` and `winner`.
 
@@ -190,6 +196,6 @@ This template answers `SessionInfoRequest` with a typed `SessionInfo` push; Fram
 
 ## Deployment sequence
 
-Start Redis, then the match nodes, Session, and HTTP lobby. Each process has its own executable and JSON configuration in `server/config/`. Mesh and STREAM listeners bind port 0 and publish their endpoints in `READY`. The runner supplies the Session endpoint to the lobby. Clients first match over HTTP and then join over STREAM using `JoinRoomRequest`.
+Start Redis, then the play nodes (match), Session, and API node. Each process has its own executable and JSON configuration in `server/config/`. Mesh and STREAM listeners bind port 0 and publish their endpoints in `READY`. The runner supplies the Session endpoint to the API node. Clients first match over HTTP and then join over STREAM using `JoinRoomRequest`.
 
 For a match-node update, write `drain` to stdin and wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Write `shutdown`, verify `STOPPED` and exit code 0, then start a replacement with the same configuration. Do not stop a draining host before its public safety observation. Lobby updates require a separate application policy for pending HTTP matches.

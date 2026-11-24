@@ -363,7 +363,7 @@ still the same logical incarnation continuing.
 | Shape | An increasing generation value |
 | .NET notation | `ulong` |
 | Public composition | A single integer in the range `1..long.MaxValue`. Represented as a decimal string in JSON. |
-| Creation/management | Issued by the Location Store provider's transaction-domain global counter. |
+| Creation/management | Issued by the Location Store provider from that Actor or Spot ID's counter ([Location Store §8](../05-location-relocation/02-location-store-redis.en.md)). Values of different IDs are not compared. |
 | Lifetime | Kept for the duration of the same logical incarnation. Unchanged across same-node Join, cross-node relocation, and `RecreateOnRelocation`. A new value is issued when a new object is created after ending the logical incarnation. Doesn't wrap past the maximum value — fails with `GenerationExhausted` instead. |
 
 <a id="owner"></a>
@@ -2370,16 +2370,17 @@ condition, so a new UUID isn't generated and retried.
 <a id="spot-id-conflict"></a>
 ### SpotIdConflict
 
-The result of confirming that an Entry/User/Instance Spot identity claim is already
-in use within the global Spot ID namespace. The framework doesn't overwrite the
+The result of confirming that a User/Instance Spot identity claim is already
+in use within the global Spot ID namespace. The Entry Spot ID isn't judged here, because the
+Framework issues it as a new UUID v4 for each lifecycle. The framework doesn't overwrite the
 existing claim or retry the same operation with a new UUID.
 
 | Item | Content |
 |---|---|
-| Shape | Startup or create failure |
-| .NET notation | Startup uses `ZLinkConfigurationException`; exclusive create uses `ZLinkFrameworkErrorKind.AlreadyExists` |
+| Shape | Create failure |
+| .NET notation | Exclusive create uses `ZLinkFrameworkErrorKind.AlreadyExists` |
 | Public composition | Describes that a global Spot ID claim conflicted. Doesn't include the conflicting owner token. |
-| Lifetime | Ends that startup or create operation with a terminal failure. |
+| Lifetime | Ends that create operation with a terminal failure. |
 
 ## 10. STREAM Session and Actor Binding
 

@@ -111,7 +111,7 @@ public final class Structure {
         for (var spot : spots) {
             require(
                     roles.get(owner(spot, roles)).equals("match"),
-                    "Match Spot owner must be a match node");
+                    "Match Spot owner must be a play node (match)");
             switch (text(spot, "kind")) {
                 case "entry" ->
                         require(
@@ -168,7 +168,7 @@ public final class Structure {
                                                                         .equals("entry"))
                                         .count()
                                 == 1,
-                        "Match node lacks Entry Spot");
+                        "play node (match) lacks Entry Spot");
         var declaredEdges = new HashSet<Edge>();
         for (var edge : array(s, "edges")) {
             require(

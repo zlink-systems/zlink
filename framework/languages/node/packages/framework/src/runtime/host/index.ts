@@ -1274,7 +1274,9 @@ export class ZLinkFrameworkRuntimeHost
               const unscopedStreamDrain =
                 streams === undefined
                   ? undefined
-                  : step('host.unscoped_stream_drain', () => streams.notifyUnscopedServerDrain());
+                  : step('host.unscoped_stream_drain', () =>
+                      streams.notifyUnscopedServerDrain(shutdownSignal)
+                    );
               drain = await step('host.route_mesh_drain', () =>
                 this.routeMeshCoordinator.shutdownHost(this.runtimeDeadline!, shutdownSignal)
               );

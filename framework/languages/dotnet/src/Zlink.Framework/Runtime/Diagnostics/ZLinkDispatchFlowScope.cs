@@ -206,12 +206,21 @@ internal readonly struct ZLinkDispatchFlowScope(
         ZLinkDispatchErrorReporter dispatchErrors,
         ZLinkDispatchErrorAction action,
         Exception exception
+    ) => Report(dispatchErrors, ZLinkDispatchErrorReason.HandlerException, action, exception);
+
+    public void DispatchFailure(
+        ZLinkDispatchErrorReporter dispatchErrors,
+        ZLinkDispatchErrorAction action,
+        Exception exception
     )
     {
-        if (!dispatchErrors.Enabled)
-            return;
-
-        Report(dispatchErrors, ZLinkDispatchErrorReporter.ReasonFrom(exception), action, exception);
+        if (dispatchErrors.Enabled)
+            Report(
+                dispatchErrors,
+                ZLinkDispatchErrorReporter.ReasonFrom(exception),
+                action,
+                exception
+            );
     }
 
     public void ReplyPathMissing(ZLinkDispatchErrorReporter dispatchErrors, Exception exception)

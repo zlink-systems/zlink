@@ -1,17 +1,21 @@
-# MyGame FPS HTTP lobby
+# MyGame FPS API node
 
-This C++20 FPS template pairs players through `POST /match`. The lobby matches requests by mode, assigns one Room ID made from the configured prefix and a generated UUID, prepares the Room roster, then returns the same Room ID and Session endpoint to both players. Clients join over STREAM with `JoinRoomRequest`. `RoomRoster` owns the admission list; `RoomState` owns movement budgets, hit decisions, HP, shared input sequences and match completion. Reconnected players resume the same Actor and Room, and draining a Match host relocates active matches without reconnecting clients.
+This C++20 FPS template pairs players through `POST /match`. The API node matches requests by mode, assigns one Room ID made from the configured prefix and a generated UUID, prepares the Room roster, then returns the same Room ID and Session endpoint to both players. Clients join over STREAM with `JoinRoomRequest`. `RoomRoster` owns the admission list; `RoomState` owns movement budgets, hit decisions, HP, shared input sequences and match completion. Reconnected players resume the same Actor and Room, and draining a play node (match) relocates active matches without reconnecting clients.
 
 ```mermaid
 flowchart LR
-    players[Players] -->|HTTP POST /match| lobby[HTTP Lobby]
-    players -->|STREAM| session[Session]
-    lobby -->|RouteMesh: PrepareRoom| matchA[Match A: Rooms, Players]
-    lobby -->|RouteMesh: PrepareRoom| matchB[Match B: Rooms, Players]
+    subgraph playNodes["Play nodes"]
+      matchA["Play node A (match): Rooms, Players"]
+      matchB["Play node B (match): Rooms, Players"]
+    end
+    players[Players] -->|STREAM| session["Session node"]
+    lobby -->|RouteMesh: PrepareRoom| matchA
+    lobby -->|RouteMesh: PrepareRoom| matchB
     session -->|relay| matchA
     matchA -->|Location / lease| location[(Redis)]
     matchB -->|Location / lease| location
     matchA <-->|host relocation| matchB
+    players -->|HTTP POST /match| lobby["API node (matchmaking)"]
 ```
 
 ## Prerequisites
@@ -28,9 +32,9 @@ Connect to the Session `players` STREAM listener. `server/config/session.json` p
 
 The listener is reachable from its host/network namespace. Keep a deployment running separately from e2e, which owns and removes its nodes; configure a reachable `StreamEndpoint` interface and port and expose it from containers for external clients. This is a TCP endpoint with no HTTP/WebSocket path. Browsers, Unity WebGL and Cocos Creator web cannot connect to this default listener; those clients require a deployed WebSocket listener.
 
-`server/config/lobby.json` configures `HttpEndpoint` as `http://127.0.0.1:0`; use the Lobby `READY` JSON `httpEndpoint` plus `/match`. Configure `SessionEndpoint` with the actual bound Session endpoint before starting the Lobby, as `e2e/world.hpp` does.
+`server/config/lobby.json` configures `HttpEndpoint` as `http://127.0.0.1:0`; use the API node `READY` JSON `httpEndpoint` plus `/match`. Configure `SessionEndpoint` with the actual bound Session endpoint before starting the API node, as `e2e/world.hpp` does.
 
-First POST JSON `{"playerId":"player-a","mode":"duel"}` to the Lobby HTTP endpoint plus `/match`. Submit a second distinct player in the same mode concurrently: the first HTTP request remains pending until paired. The HTTP response has `roomId` and `sessionEndpoint`. Connect to that returned Session endpoint and send `JoinRoomRequest` (`playerId`, returned `roomId`) first. Successful admission pushes `RoomView`; the HTTP assignment is a prerequisite, and `ActionRejected` reports rejected actions. These operations use `send(...).submit()` and server pushes, not a correlated connector `request` reply. This template does not authenticate player identity; validate it before binding in a production game.
+First POST JSON `{"playerId":"player-a","mode":"duel"}` to the API node's HTTP endpoint plus `/match`. Submit a second distinct player in the same mode concurrently: the first HTTP request remains pending until paired. The HTTP response has `roomId` and `sessionEndpoint`. Connect to that returned Session endpoint and send `JoinRoomRequest` (`playerId`, returned `roomId`) first. Successful admission pushes `RoomView`; the HTTP assignment is a prerequisite, and `ActionRejected` reports rejected actions. These operations use `send(...).submit()` and server pushes, not a correlated connector `request` reply. This template does not authenticate player identity; validate it before binding in a production game.
 
 ### Connector installation
 
@@ -136,7 +140,7 @@ The runner executes 46 game-domain checks and 19 HTTP-lobby checks before scenar
 
 ## FPS rules and extension points
 
-`POST /match` accepts `MatchRequest(PlayerId, Mode)`; an omitted mode defaults to `duel`. The first request waits for another player in the same mode. At pairing, `Matchmaker` generates `RoomPrefix + UUID` with 32 lowercase hexadecimal UUID characters and no counter. The lobby creates the Room and sends `PrepareRoom(MatchId, Members)` over the RouteMesh. It returns `MatchResponse(RoomId, SessionEndpoint)` only after the Room replies with `RoomPrepared(MatchId)`. Repeating the same preparation is idempotent; a different member list is rejected. A waiting request is process-local and is not transferred during lobby restart.
+`POST /match` accepts `MatchRequest(PlayerId, Mode)`; an omitted mode defaults to `duel`. The first request waits for another player in the same mode. At pairing, `Matchmaker` generates `RoomPrefix + UUID` with 32 lowercase hexadecimal UUID characters and no counter. The API node creates the Room and sends `PrepareRoom(MatchId, Members)` over the RouteMesh. It returns `MatchResponse(RoomId, SessionEndpoint)` only after the Room replies with `RoomPrepared(MatchId)`. Repeating the same preparation is idempotent; a different member list is rejected. A waiting request is process-local and is not transferred during lobby restart.
 
 The first STREAM packet is `JoinRoomRequest(PlayerId, RoomId)`. Session relays only JoinRoomRequest, RoomViewRequest, MoveRequest, ShootRequest and SessionInfoRequest. Client `PrepareRoom`, `RoomPrepared`, `HttpNodeReady`, internal assignment and result packets receive `packet-not-allowed`. RoomRoster admits only its prepared members; an outsider receives `admission-rejected`. It is included with game state in the relocation snapshot `{Game, Roster}`. Production deployments should authenticate player identity before binding.
 
@@ -164,7 +168,7 @@ pwsh -NoProfile -File ./run-e2e.ps1 -Local
 
 The script runs `cmake -P bootstrap.cmake`, `cmake --preset default` and `cmake --build --preset default` before starting `build/bin/my-game-e2e`. Redis remains in an isolated Compose project. Use `--no-build` or `-NoBuild` to reuse a local debugger build. Local build-only uses `--local --build-only` or `-Local -BuildOnly`.
 
-Start Redis, Match A, Match B, Session, then the Lobby. Each role has its own executable and JSON file in `server/config/`. Listeners bind port 0 and publish their endpoints in `READY`; the runner supplies the Session endpoint to the Lobby. For a Match host update, send `drain`, wait for `RELOCATION_REQUESTED`, `RELOCATED` and `SAFE_TO_SHUTDOWN`, then send `shutdown` and require exit code zero before starting its replacement. The Lobby keeps pending HTTP requests in process memory, so lobby restart preserves already prepared Rooms but drops requests that have not paired.
+Start Redis, play node A (match), play node B (match), Session, then the API node. Each role has its own executable and JSON file in `server/config/`. Listeners bind port 0 and publish their endpoints in `READY`; the runner supplies the Session endpoint to the API node. For a play node (match) update, send `drain`, wait for `RELOCATION_REQUESTED`, `RELOCATED` and `SAFE_TO_SHUTDOWN`, then send `shutdown` and require exit code zero before starting its replacement. The API node keeps pending HTTP requests in process memory, so lobby restart preserves already prepared Rooms but drops requests that have not paired.
 
 ## Framework behavior to know
 

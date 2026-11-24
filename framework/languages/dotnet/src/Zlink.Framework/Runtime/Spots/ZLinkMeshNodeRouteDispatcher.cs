@@ -83,21 +83,8 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
     )
     {
         var descriptors = BuildRouteDescriptors(spotNode);
-        // Router-capable nodes always host the framework's internal
-        // remote-session push relay consumer (spec 31 §6): an actor that moved
-        // to another node pushes to its bound session through this packet.
         if (spotNode.Router is not null)
             descriptors = descriptors
-                .Append(
-                    ToRouteDescriptor(
-                        ZLinkHandlerScanner.CreateExplicitRouteInterfaceDescriptor(
-                            typeof(ZLinkRemoteSessionPushRelayHandler),
-                            typeof(IZLinkRouteSendHandler<ZLinkRemoteSessionPushRelay>),
-                            ZLinkMessageKind.Command,
-                            ZLinkRemoteSessionPushProtocol.PacketName
-                        )
-                    )
-                )
                 .Append(
                     ToRouteDescriptor(
                         ZLinkHandlerScanner.CreateExplicitRouteInterfaceDescriptor(
@@ -244,10 +231,9 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                 }
             }
 
-            var invocation =
-                header is not null && TryGetOrderedActorRelayKey(received, header, out var actorId)
-                    ? DispatchOrderedActorRelayAsync(actorId, received, header, cancellationToken)
-                    : DispatchAsync(received, header, cancellationToken);
+            var invocation = header is not null
+                ? DispatchOrderedNodeRelayAsync(received, header, cancellationToken)
+                : DispatchAsync(received, null, cancellationToken);
             if (invocation.IsCompletedSuccessfully)
                 invocation.GetAwaiter().GetResult();
             else
@@ -264,29 +250,42 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
             ct => DispatchBatchAsync([received], ct)
         );
 
-    private bool TryGetOrderedActorRelayKey(
+    internal ValueTask DispatchOrderedNodeRelayAsync(
         ZLinkBackendRouteReceived received,
         ZLinkEnvelopeHeader header,
-        out ZLinkActorId actorId
+        CancellationToken cancellationToken
+    )
+    {
+        if (
+            received.ChannelName is null
+            && ZLinkRemoteActorFrameProtocol.IsFrameRelay(header)
+            && TryDecodeActorRelay(received, header, out var actorId, out var relay)
+        )
+            return DispatchOrderedActorRelayAsync(
+                actorId,
+                received,
+                header,
+                relay,
+                cancellationToken
+            );
+        return DispatchAsync(received, header, cancellationToken);
+    }
+
+    private bool TryDecodeActorRelay(
+        ZLinkBackendRouteReceived received,
+        ZLinkEnvelopeHeader header,
+        out ZLinkActorId actorId,
+        out ZLinkRemoteActorFrameRelay relay
     )
     {
         actorId = default;
-        if (received.ChannelName is not null || received.PartCount < 2)
+        relay = null!;
+        if (received.PartCount < 2)
             return false;
 
         try
         {
-            if (
-                header.Kind != ZLinkMessageKind.Command
-                || !string.Equals(
-                    header.MessageName,
-                    ZLinkRemoteActorFrameProtocol.PacketName,
-                    StringComparison.Ordinal
-                )
-            )
-                return false;
-
-            var relay =
+            var decoded =
                 (
                     received.ApplicationPayloadView is { } view
                         ? ZLinkEnvelopeCodec.DecodeBody(
@@ -302,10 +301,11 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                             _codecs
                         )
                 ) as ZLinkRemoteActorFrameRelay;
-            if (string.IsNullOrWhiteSpace(relay?.ActorId))
+            if (string.IsNullOrWhiteSpace(decoded?.ActorId))
                 return false;
 
-            actorId = ZLinkActorId.FromBoundary(relay.ActorId, nameof(relay.ActorId));
+            actorId = ZLinkActorId.FromBoundary(decoded.ActorId, nameof(decoded.ActorId));
+            relay = decoded;
             return true;
         }
         catch
@@ -319,6 +319,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         ZLinkActorId actorId,
         ZLinkBackendRouteReceived received,
         ZLinkEnvelopeHeader header,
+        ZLinkRemoteActorFrameRelay relay,
         CancellationToken cancellationToken
     )
     {
@@ -340,6 +341,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
             actorId,
             received,
             header,
+            relay,
             prior,
             completion,
             cancellationToken
@@ -350,6 +352,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         ZLinkActorId actorId,
         ZLinkBackendRouteReceived received,
         ZLinkEnvelopeHeader header,
+        ZLinkRemoteActorFrameRelay relay,
         Task prior,
         TaskCompletionSource completion,
         CancellationToken cancellationToken
@@ -358,7 +361,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         try
         {
             await prior.ConfigureAwait(false);
-            await DispatchAsync(received, header, cancellationToken).ConfigureAwait(false);
+            await DispatchAsync(received, header, cancellationToken, relay).ConfigureAwait(false);
         }
         finally
         {
@@ -384,7 +387,8 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
     private async ValueTask DispatchAsync(
         ZLinkBackendRouteReceived received,
         ZLinkEnvelopeHeader? decodedHeader,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ZLinkRemoteActorFrameRelay? actorRelay = null
     )
     {
         using var applicationAdmission = received.ApplicationJobAdmission is { } queuedAdmission
@@ -428,6 +432,13 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                 _dispatchErrors.Flow.CaptureEnabled,
                 ZLinkFlowOrigin.Inbound
             );
+
+            if (received.ChannelName is null && ZLinkRemoteSessionPushProtocol.IsPush(header))
+            {
+                await DispatchRemoteSessionPushAsync(received, header, cancellationToken)
+                    .ConfigureAwait(false);
+                return;
+            }
 
             if (
                 received.ChannelName is not null
@@ -508,7 +519,8 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                             header,
                             received.Parts,
                             cancellationToken,
-                            payloadView
+                            payloadView,
+                            actorRelay
                         )
                         .ConfigureAwait(false);
                 else
@@ -516,7 +528,8 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                             received,
                             header,
                             received.Parts,
-                            cancellationToken
+                            cancellationToken,
+                            actorRelay: actorRelay
                         )
                         .ConfigureAwait(false);
             }
@@ -530,17 +543,58 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         received.ChannelName is null
         && header.Kind == ZLinkMessageKind.Command
         && header.MessageName
-            is ZLinkRemoteSessionPushProtocol.PacketName
-                or ZLinkRemoteActorFrameProtocol.PacketName
+            is ZLinkRemoteActorFrameProtocol.PacketName
                 or ZLinkRemoteActorReplyProtocol.PacketName
                 or ZLinkRemoteActorSourceLeaveProtocol.PacketName;
+
+    private async ValueTask DispatchRemoteSessionPushAsync(
+        ZLinkBackendRouteReceived received,
+        ZLinkEnvelopeHeader header,
+        CancellationToken cancellationToken
+    )
+    {
+        var scope = CreateScope(header, isRequest: false);
+        scope.Trace(_dispatchErrors, ZLinkMessageFlowOutcome.Received);
+        try
+        {
+            var relay = (ZLinkRemoteSessionPushRelay)
+                (
+                    received.ApplicationPayloadView is { } view
+                        ? ZLinkEnvelopeCodec.DecodeBody(
+                            view,
+                            typeof(ZLinkRemoteSessionPushRelay),
+                            header.ContentType,
+                            _codecs
+                        )
+                        : ZLinkEnvelopeCodec.DecodeBody(
+                            received.Parts,
+                            typeof(ZLinkRemoteSessionPushRelay),
+                            header.ContentType,
+                            _codecs
+                        )
+                )!;
+            await _runtime
+                .AdmitRemoteSessionPushOneWayAsync(
+                    relay,
+                    received.SourceNodeRid ?? default,
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+            scope.Trace(_dispatchErrors, ZLinkMessageFlowOutcome.Dispatched);
+        }
+        catch (Exception error)
+        {
+            scope.DispatchFailure(_dispatchErrors, ZLinkDispatchErrorAction.Drop, error);
+        }
+    }
 
     private async ValueTask DispatchNodeRouteAsync(
         ZLinkBackendRouteReceived received,
         ZLinkEnvelopeHeader header,
         IReadOnlyList<Message> parts,
         CancellationToken cancellationToken,
-        ZLinkMultipartPayloadView? payloadView = null
+        ZLinkMultipartPayloadView? payloadView = null,
+        ZLinkRemoteActorFrameRelay? actorRelay = null
     )
     {
         var isRequest = header.Kind == ZLinkMessageKind.Request;
@@ -595,6 +649,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                         header,
                         parts,
                         payloadView,
+                        actorRelay,
                         received,
                         cancellationToken
                     ),
@@ -606,6 +661,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                             state.header,
                             state.parts,
                             state.payloadView,
+                            state.actorRelay,
                             state.cancellationToken,
                             state.received.Metadata,
                             state.received.ReceivedAt,
@@ -614,6 +670,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
                         )
                 )
                 .ConfigureAwait(false);
+
             return;
         }
 
@@ -649,7 +706,7 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
         catch (Exception ex)
         {
             await ReplyErrorAsync(received, header, ex, cancellationToken).ConfigureAwait(false);
-            scope.HandlerException(_dispatchErrors, ZLinkDispatchErrorAction.ReplyError, ex);
+            scope.DispatchFailure(_dispatchErrors, ZLinkDispatchErrorAction.ReplyError, ex);
             return;
         }
 

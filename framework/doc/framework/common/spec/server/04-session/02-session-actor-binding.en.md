@@ -682,6 +682,19 @@ once. The automatic notification waits for the callback terminal within the
 lifecycle deadline before proceeding with tombstone and local cleanup. Even
 on a deadline or callback failure, the remaining binding cleanup continues.
 
+**Accepted relays before the notification.** For each binding, the session
+owner delays submitting that binding's automatic notification until every
+packet callback accepted before the disconnect was observed, and that can
+choose to relay to that binding's Actor, has submitted its relay or reached
+its terminal. A `Send` sent just before the client closes is therefore
+processed on the same Actor queue before the disconnect notification, as long
+as it was accepted. This wait doesn't exceed the lifecycle deadline above.
+After the deadline the notification is submitted without waiting for the
+remaining callbacks; a relay submitted after that ends with `Unavailable`
+and is recorded in message-flow with `outcome=dropped`. The wait delays only
+that binding's notification submission and doesn't block other bindings,
+other sessions' handlers, or infrastructure tasks ([§10](#10-execution-and-lifetime)).
+
 A public logical notification also waits for that callback terminal, then
 removes that binding with a tombstone. Callback failure is recorded in
 diagnostics but doesn't restore the binding, and the callback isn't run
@@ -1011,7 +1024,9 @@ shared lock or callback stack.
 Request and binding-operation completion, binding update, relocation
 barrier, and disconnect cleanup proceed on an infrastructure task. This
 must proceed even while a session or Actor application callback is
-awaiting an async operation.
+awaiting an async operation. The only exception is the accepted-relay wait in
+§7, which delays just that binding's disconnect notification submission up
+to the lifecycle deadline.
 
 The Actor owner host's Relocate uses the §8 barrier. The session owner
 host's Relocate and Shutdown reject new sessions/bindings and process
@@ -1091,6 +1106,7 @@ sessions from sharing the same business result.
 | Condition | Result |
 |---|---|
 | The `ActorRef` location is stale and there's no Message Follow route. | Ends with `Unavailable`. |
+| The Actor the `ActorRef` names has no authority (it was never created, or a destroy removed it). | Ends with `NotFound`. It is distinct from `Unavailable` (no route), and retrying with the same ref doesn't succeed ([Framework API §19](../00-foundation/06-framework-api.en.md#19-error-kinds)). |
 | `ObjectGeneration` differs. | Ends with `InvalidOperation`. |
 | The Actor is in a relocation pre-commit seal state. | Ends with `Unavailable`. |
 | There's no Actor factory. | Ends with `NotFound`. Because the type is not registered, retrying cannot resolve it. |

@@ -12,6 +12,7 @@ internal sealed class ZLinkRouteHandlerInvoker(
         ZLinkEnvelopeHeader header,
         IReadOnlyList<Message> parts,
         ZLinkMultipartPayloadView? payloadView,
+        object? decodedMessage,
         CancellationToken cancellationToken,
         ZLinkMessageMetadata? metadata,
         DateTimeOffset? receivedAt,
@@ -19,20 +20,26 @@ internal sealed class ZLinkRouteHandlerInvoker(
         ZLinkDispatchErrorReporter dispatchErrors
     )
     {
-        var message = payloadView is { } view
-            ? ZLinkEnvelopeCodec.DecodeBody(
-                view,
-                descriptor.MessageType,
-                header.ContentType,
-                codecs
-            )
-            : ZLinkEnvelopeCodec.DecodeBody(
-                parts,
-                descriptor.MessageType,
-                header.ContentType,
-                codecs
+        // A relayed Actor frame arrives already decoded; it is not owned here.
+        var message =
+            decodedMessage
+            ?? (
+                payloadView is { } view
+                    ? ZLinkEnvelopeCodec.DecodeBody(
+                        view,
+                        descriptor.MessageType,
+                        header.ContentType,
+                        codecs
+                    )
+                    : ZLinkEnvelopeCodec.DecodeBody(
+                        parts,
+                        descriptor.MessageType,
+                        header.ContentType,
+                        codecs
+                    )
             );
-        var ownedMessage = payloadView is not null ? message as Message : null;
+        var ownedMessage =
+            decodedMessage is null && payloadView is not null ? message as Message : null;
         try
         {
             var context = new ZLinkRouteMessageContext(

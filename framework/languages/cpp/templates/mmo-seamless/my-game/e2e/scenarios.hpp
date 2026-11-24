@@ -23,7 +23,7 @@ inline void cross (const std::string &endpoint)
     const auto before = client.join (294);
     const auto identity = client.info ();
     require (before.zoneId == "zone-3" && before.nodeId == "zoneA",
-             "Cross must start on Zone node A");
+             "Cross must start on play node A (zone)");
     const auto oversized = client.move_rejected (ZonePositionDomain::MaxStep + 1, 1);
     require (oversized.reason == "step-too-large" && oversized.retryAfterMs == 0,
              "MaxStep rejection did not return step-too-large");
@@ -39,7 +39,7 @@ inline void cross (const std::string &endpoint)
     same_actor (identity, client.info ());
     require (after.zoneId == "zone-4" && after.nodeId == "zoneB" && after.x == 306
                && after.sequence == 2,
-             "Cross did not relocate to Zone node B after multiple accepted moves");
+             "Cross did not relocate to play node B (zone) after multiple accepted moves");
     require (client.connected (), "Cross disconnected the Session");
 
     const auto continued = client.move (1, 3);
@@ -59,7 +59,7 @@ inline void cross (const std::string &endpoint)
     same_state (at_edge, edge.state (), "outside-world rejection");
 
     require (client.dungeon ("dungeon-" + unique_id ()).nodeId == "instance",
-             "Dungeon placed outside Instance node");
+             "Dungeon placed outside play node (dungeon)");
     edge.close ();
     client.close ();
 }
@@ -171,7 +171,7 @@ inline void update (const std::string &endpoint, World &world)
     Client client (endpoint, "update-" + unique_id ());
     const auto before = client.join (299);
     const auto identity = client.info ();
-    require (before.nodeId == "zoneA", "Update must start on Zone node A");
+    require (before.nodeId == "zoneA", "Update must start on play node A (zone)");
     auto state = client.move (-1, 1);
     world.zone_a ().command (Control::vacate_zone);
     world.zone_a ().wait_line (Control::zone_vacated, Limits::packet);

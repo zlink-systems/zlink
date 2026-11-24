@@ -562,6 +562,15 @@ all-settled 규칙을 사용한다. Automatic 통지와 public `NotifyDisconnect
 기다린 뒤 tombstone과 local cleanup을 진행하며, deadline 또는 callback failure가
 발생해도 나머지 binding cleanup을 계속한다.
 
+**수락한 relay가 통지보다 먼저.** Session owner는 binding마다, 연결 종료를 관찰하기 전에 수락한
+packet callback 중 그 binding의 Actor로 relay를 고를 수 있는 callback이 relay 제출 또는 terminal에
+이를 때까지 그 binding의 automatic 통지 제출을 미룬다. 따라서 연결을 닫기 직전에 보낸 `Send`도
+수락됐다면 같은 Actor queue에서 disconnect 통지보다 먼저 처리된다. 이 대기는 위 lifecycle deadline을
+넘지 않는다. Deadline이 지나면 남은 callback을 기다리지 않고 통지를 제출하며, 그 뒤에 제출되는
+relay는 `Unavailable`로 끝나고 message-flow에 `outcome=dropped`로 기록한다. 이 대기는 그 binding의
+통지 제출만 미루며 다른 binding·다른 Session의 handler와 infrastructure task는 막지 않는다
+([§10](#10-실행과-수명)).
+
 Public logical notification도 해당 callback terminal을 기다린 뒤 그 binding을
 tombstone으로 제거한다. Callback failure는 diagnostics에 기록하지만 binding을
 복원하지 않으며, 같은 identity에 callback을 다시 실행하지 않는다. Physical connection과
@@ -830,7 +839,8 @@ turn과 Actor turn을 shared lock이나 callback stack으로 합치지 않는다
 
 Request와 binding operation completion, binding update, relocation barrier와
 disconnect cleanup은 infrastructure task에서 진행한다. Session 또는 Actor application
-callback이 비동기 작업을 기다리는 동안에도 진행해야 한다.
+callback이 비동기 작업을 기다리는 동안에도 진행해야 한다. 예외는 §7의 수락한 relay 대기 하나이며,
+그 대기도 해당 binding의 disconnect 통지 제출만 lifecycle deadline까지 미룬다.
 
 Actor owner host의 Relocate는 §8의 barrier를 사용한다. Session owner host의 Relocate와
 Shutdown은 신규 session·binding을 거부하고 accepted callback·reply·cleanup을
@@ -892,6 +902,7 @@ session이나 새 binding의 reply로 사용하지 않는다. 서로 다른 sess
 | 조건 | 결과 |
 |---|---|
 | `ActorRef` 위치가 stale하고 Message Follow route도 없다. | `Unavailable`로 끝난다. |
+| ActorRef로 지정한 Actor의 authority가 없다(생성된 적 없거나 destroy로 지워졌다). | `NotFound`로 끝난다. Route가 없는 `Unavailable`과 구분하며, 같은 ref로 다시 시도해도 성공하지 않는다([Framework API §19](../00-foundation/06-framework-api.ko.md#19-오류-kind)). |
 | `ObjectGeneration`이 다르다. | `InvalidOperation`으로 끝난다. |
 | Actor가 relocation pre-commit seal 상태다. | `Unavailable`로 끝난다. |
 | Actor factory가 없다. | `NotFound`로 끝난다. 등록되지 않은 type이므로 재시도로 해결되지 않는다. |

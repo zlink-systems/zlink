@@ -50,6 +50,7 @@
         <Compile Include="Transport/ReviewRegressionTests.cs"/>
         <Compile Include="Transport/RequestHookTests.cs"/>
         <Compile Include="Transport/RuntimeMetricsTests.cs"/>
+        <Compile Include="Transport/StaleDisconnectTests.cs"/>
         <Compile Include="Transport/TestHelperTests.cs"/>
         <Compile Include="Transport/TransportTests.cs"/>
         <Compile Include="Typed/CodecAndCallbackTests.cs"/>

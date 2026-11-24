@@ -14,6 +14,7 @@ using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Messaging;
+using Zlink.Framework.Runtime.Streams;
 using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 using MailboxKey = Zlink.Framework.Runtime.Service.MeshMailboxKey;
 using OwnedMailbox = Zlink.Framework.Runtime.Service.ZLinkMeshNodeOwnedMailbox;
@@ -25,6 +26,12 @@ namespace Zlink.Framework.Runtime.Service;
 internal sealed class ZLinkManagedMeshNode : IMeshNode
 {
     internal ZLinkMeshCompletionTable Completions { get; } = new();
+    private Func<
+        ZLinkBackendRouteReceived,
+        ZLinkEnvelopeHeader,
+        CancellationToken,
+        ValueTask
+    >? _dispatchOrderedNodeRelay;
     private const int ReceiveBatchSize = 64;
     private const int MaxInfrastructureControlParts = 64;
     private const long MaxInfrastructureControlBytes = 256 * 1024;
@@ -3493,6 +3500,14 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         IReadOnlyList<Message> parts,
         SendFlags flags = SendFlags.None,
         ReadOnlyMemory<byte> metadata = default
+    ) => SendToNode(targetRid, parts, flags, metadata, null);
+
+    internal SubmitResult SendToNode(
+        RoutingId targetRid,
+        IReadOnlyList<Message> parts,
+        SendFlags flags,
+        ReadOnlyMemory<byte> metadata,
+        Action<Exception>? failureObserver
     ) =>
         SubmitApplication(
             targetRid,
@@ -3501,7 +3516,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             null,
             parts,
             flags,
-            metadata
+            metadata,
+            failureObserver
         );
 
     public SubmitResult RequestToNode(
@@ -7242,6 +7258,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         return true;
     }
 
+    internal void SetOrderedNodeRelayDispatch(
+        Func<ZLinkBackendRouteReceived, ZLinkEnvelopeHeader, CancellationToken, ValueTask> handler
+    ) => Volatile.Write(ref _dispatchOrderedNodeRelay, handler);
+
     private bool ProcessReceived(ref RawIngressOwnership ownership)
     {
         var received = ownership.Receipt;
@@ -7556,6 +7576,22 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             return false;
         }
         var metadata = application.HasMetadata ? received.Parts[1].ToArray() : null;
+        if (
+            application.Command == ServiceWireConstants.Command.NodeSend
+            && Volatile.Read(ref _dispatchOrderedNodeRelay) is { } dispatchRelay
+            && ZLinkOrderedNodeRelayProtocol.DecodeHeader(parts, _flow?.CaptureEnabled == true)
+                is { } relayHeader
+        )
+            return DispatchOrderedNodeRelay(
+                ref ownership,
+                sourceRid,
+                sourceGeneration,
+                parts,
+                metadata,
+                relayHeader,
+                dispatchRelay
+            );
+
         var request =
             application.Command
             is ServiceWireConstants.Command.NodeRequest
@@ -7614,6 +7650,52 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             true,
             ownership.TakeApplicationOwner()
         );
+    }
+
+    private bool DispatchOrderedNodeRelay(
+        ref RawIngressOwnership ownership,
+        RoutingId sourceRid,
+        ulong sourceGeneration,
+        ZLinkMultipartPayloadView parts,
+        byte[]? metadata,
+        ZLinkEnvelopeHeader header,
+        Func<ZLinkBackendRouteReceived, ZLinkEnvelopeHeader, CancellationToken, ValueTask> dispatch
+    )
+    {
+        if (!ZLinkMeshMetadataCodec.TryDecode(metadata ?? [], out var relayMetadata))
+            return false;
+
+        // The receive loop submits to the existing ordered scheduler before
+        // a Node mailbox can publish a second claim for this source.
+        // Push has no application turn on this node. Actor relays transfer
+        // the inbound permit to their existing Actor admission path.
+        var pushPermit = ZLinkRemoteSessionPushProtocol.IsPush(header)
+            ? ownership.TakeAdmission()
+            : null;
+        var relay = new ZLinkBackendRouteReceived(
+            [],
+            sourceRid,
+            string.Empty,
+            null,
+            null,
+            metadata: relayMetadata,
+            sourceNodeGeneration: sourceGeneration,
+            payloadOwner: ownership.TakeApplicationOwner(),
+            applicationPayloadView: parts
+        );
+        relay.ApplicationJobAdmission?.MarkQueued();
+        if (
+            !RunRoutedOperation(() =>
+            {
+                pushPermit?.Dispose();
+                return dispatch(relay, header, _stop?.Token ?? CancellationToken.None).AsTask();
+            })
+        )
+        {
+            pushPermit?.Dispose();
+            relay.Dispose();
+        }
+        return true;
     }
 
     internal sealed class NativeApplicationReply(
@@ -12458,7 +12540,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         string? channelName,
         IReadOnlyList<Message> parts,
         SendFlags flags,
-        ReadOnlyMemory<byte> metadata
+        ReadOnlyMemory<byte> metadata,
+        Action<Exception>? failureObserver = null
     )
     {
         ArgumentNullException.ThrowIfNull(parts);
@@ -12532,7 +12615,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         if (!metadata.IsEmpty)
             wireParts.Add(metadata);
         wireParts.Add(ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipart(parts));
-        var sent = TryScheduleRoutedSend(peer.PhysicalRoutingId, wireParts);
+        var sent = TryScheduleRoutedSend(peer.PhysicalRoutingId, wireParts, failureObserver);
         if (!sent)
         {
             Publish(MeshMonitorEventKind.Backpressured, peerRid: targetRid);

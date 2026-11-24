@@ -138,6 +138,20 @@ int main ()
     if (raw_data_idle.evaluate (established + 30s) == decision::idle_timeout
         || raw_data_idle.last_application_inbound != established + 30s)
         return 1;
+    session_liveness_t early (established);
+    session_liveness_t late (established + 400ms);
+    if (early.next_due () != established + 1s || late.next_due () != established + 1400ms
+        || early.evaluate (established + 999ms) != decision::none
+        || early.evaluate (established + 1s) != decision::send_heartbeat
+        || late.evaluate (established + 1s) != decision::none
+        || late.evaluate (established + 1400ms) != decision::send_heartbeat
+        || early.evaluate (established + 3250ms) != decision::send_heartbeat
+        || early.evaluate (established + 3250ms) != decision::none
+        || early.next_due () != established + 4s
+        || early.evaluate (established + 4s) != decision::send_heartbeat) {
+        std::cerr << "FAIL: delayed heartbeat must retain the connection phase\n";
+        return 1;
+    }
     session_liveness_t periodic (established);
     for (int tick = 1; tick < 5; ++tick) {
         if (periodic.evaluate (established + tick * 1s) != decision::send_heartbeat) {
@@ -151,8 +165,9 @@ int main ()
     controls.record_inbound (established + 30s);
     if (controls.evaluate (established + 30s) != decision::idle_timeout)
         return 1;
-    session_liveness_t both_expired (established);
-    if (both_expired.evaluate (established + 30s) != decision::heartbeat_timeout)
+    session_liveness_t both_expired (established, {.idle_timeout = 5s});
+    if (both_expired.evaluate (established + 4999ms) == decision::heartbeat_timeout
+        || both_expired.evaluate (established + 5s) != decision::heartbeat_timeout)
         return 1;
     // Producers submit timestamps; the connection execution owner alone
     // mutates and evaluates the policy, including reordered handler entries.
