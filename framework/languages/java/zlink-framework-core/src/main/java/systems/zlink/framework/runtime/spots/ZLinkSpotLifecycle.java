@@ -10,6 +10,7 @@ import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 import systems.zlink.framework.runtime.internal.spots.ZLinkSpotIdValidator;
+import systems.zlink.framework.runtime.locations.ZLinkLocationRuntime;
 import systems.zlink.framework.spots.ZLinkActorCreateResponse;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotCloseReason;
@@ -106,6 +107,18 @@ final class ZLinkSpotLifecycle {
         activation.metricMeshName = meshName;
         entrySpots.add(activation);
         recordSpotCount(meshName, ZLinkRuntimeMetrics.SpotKind.ENTRY, 1);
+    }
+
+    CompletionStage<Void> registerEntryExecutions(ZLinkLocationRuntime locations) {
+        if (locations == null) return CompletableFuture.completedFuture(null);
+        return CompletableFuture.allOf(
+                entrySpots.stream()
+                        .map(
+                                entry ->
+                                        entry.context
+                                                .registerExecution(locations)
+                                                .toCompletableFuture())
+                        .toArray(CompletableFuture[]::new));
     }
 
     List<String> userSpotIds() {
