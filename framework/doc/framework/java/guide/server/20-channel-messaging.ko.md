@@ -59,17 +59,15 @@ record의 참조 타입 component에서 `null`을 허용하려면 런타임에 �
 `@ZLinkJsonOptional @Nullable String nickname`으로 선언한다. 기본형 component에는
 `null`을 넣을 수 없다.
 
+예를 들어 직렬화에 실패하면 `failed to serialize message as JSON: Omok.GameSnapshot`과
+함께 원인으로 `Property 'winner' does not allow null.`을 보고한다. 64비트 필드에
+JSON 숫자를 받으면 원인은 `64-bit integers must be decimal JSON strings`다.
+
 브라우저에서 TypeScript stream connector로 보낼 JSON을 직접 구성할 때는
 `{ "score": "9223372036854775807" }`처럼 64비트 정수를 문자열로 넣는다. connector의 JSON
 codec은 `bigint`도 문자열로 바꾼다. Java와 .NET connector는 타입이 지정된 64비트 정수를
 자동으로 변환하므로, 이 connector로 실행하는 서버 E2E에서는 브라우저가 JSON 숫자를 보내는
 경우를 검증할 수 없다.
-
-예를 들어 Java는 직렬화에 실패하면 `failed to serialize message as JSON: Omok.GameSnapshot`과
-함께 원인으로 `Property 'winner' does not allow null.`을 보고한다. Java 서버가 64비트
-필드에 JSON 숫자를 받으면 원인은 `64-bit integers must be decimal JSON strings`다.
-Java 직렬화 실패의 원인이 message-flow 로그에 남지 않는 문제는
-[#5454](https://github.com/zlink-systems/zlink/issues/5454)에서 추적한다.
 
 전체 `framework-json-v1` 규칙은
 [메시지 모델 §5](../../../common/spec/server/00-foundation/05-message-model.ko.md#5-framework-json-v1-typed-payload-profile)에 있다.

@@ -61,17 +61,16 @@ such as JSR 305 or Jakarta `@Nullable`. Use `@ZLinkJsonOptional` to allow omissi
 To allow both, declare `@ZLinkJsonOptional @Nullable String nickname`.
 Primitive components cannot accept `null`.
 
+For example, a serialization failure reports
+`failed to serialize message as JSON: Omok.GameSnapshot` with the cause
+`Property 'winner' does not allow null.` A JSON number received for a 64-bit field
+reports the cause `64-bit integers must be decimal JSON strings`.
+
 When constructing JSON in a browser for the TypeScript stream connector, put 64-bit values
 in strings, for example `{ "score": "9223372036854775807" }`. The connector's JSON codec also
 converts `bigint` to a string. Java and .NET connectors convert typed 64-bit integers
 automatically, so server E2E tests using those connectors do not exercise the browser case
 that sends a JSON number.
-
-For example, Java reports `failed to serialize message as JSON: Omok.GameSnapshot`
-with the cause `Property 'winner' does not allow null.` A Java server receiving a JSON
-number for a 64-bit field reports the cause `64-bit integers must be decimal JSON strings`.
-The missing message-flow log entry for the Java serialization failure is tracked in
-[#5454](https://github.com/zlink-systems/zlink/issues/5454).
 
 See [Message Model §5](../../../common/spec/server/00-foundation/05-message-model.en.md#5-the-framework-json-v1-typed-payload-profile)
 for the full `framework-json-v1` rules.
