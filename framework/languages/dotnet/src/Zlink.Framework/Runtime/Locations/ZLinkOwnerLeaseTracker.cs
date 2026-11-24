@@ -94,6 +94,10 @@ internal sealed class ZLinkOwnerLeaseTracker
         return remaining > TimeSpan.Zero ? (snapshot.FetchedAt, lifetime, remaining) : null;
     }
 
+    internal bool HasObservedAdmissionLease(ZLinkLocationOwnerToken token) =>
+        _cache.TryGetValue(token.OwnerId, out var snapshot)
+        && GetAdmissionLifetime(snapshot, token) is not null;
+
     private async ValueTask<(Snapshot Snapshot, bool FromCache)> GetSnapshotAsync(
         string ownerId,
         CancellationToken cancellationToken

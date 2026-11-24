@@ -147,8 +147,9 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
               })
               .get ();
         });
+        auto snapshot_read = co_await _store->read_authority (spot_authority_key (spot_id));
         if (const auto authority =
-              co_await read_ready_authority (false, spot_id, instance_intent)) {
+              co_await admit_ready_authority (std::move (snapshot_read), false, instance_intent)) {
             const auto &snapshot = authority->snapshot;
             const auto projected_id = decode_spot_id (snapshot.payload);
             if (!projected_id || *projected_id != spot_id)
@@ -275,7 +276,8 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
         if (auto cached = cached_route (_actor_routes, actor_id)) {
             co_return std::optional<spot_address_t>{std::move (*cached)};
         }
-        auto resolved = co_await read_actor_address (actor_id);
+        auto read = co_await _store->read_authority (actor_authority_key (actor_id));
+        auto resolved = co_await project_actor_address (actor_id, std::move (read));
         if (!resolved)
             co_return std::optional<spot_address_t>{};
         co_await cache_ready_route (_actor_routes, actor_id, resolved->address,
@@ -294,9 +296,12 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
                    && address.owner.lease_generation > 0;
         };
         const auto actor_id = std::string (actor.actor_id ().value ());
-        auto resolved = co_await read_actor_address (actor_id);
-        // Session-Actor binding §12: a row of this ActorId with another ObjectGeneration is
-        // InvalidOperation; every other mismatch has no route and the caller reports Unavailable.
+        auto read = co_await _store->read_authority (actor_authority_key (actor_id));
+        if (std::holds_alternative<authority_missing_t> (read)) {
+            throw framework_exception_t (framework_error_kind_t::not_found,
+                                         "Actor session binding authority was not found");
+        }
+        auto resolved = co_await project_actor_address (actor_id, std::move (read));
         if (resolved && resolved->address.object_generation != actor.object_generation ()) {
             throw framework_exception_t (
               framework_error_kind_t::invalid_operation,
@@ -378,9 +383,10 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
         std::optional<std::chrono::steady_clock::time_point> owner_admission_deadline;
     };
 
-    task_t<std::optional<resolved_actor_address_t>> read_actor_address (std::string actor_id)
+    task_t<std::optional<resolved_actor_address_t>>
+    project_actor_address (std::string actor_id, authority_read_result_t read)
     {
-        const auto authority = co_await read_ready_authority (true, actor_id);
+        const auto authority = co_await admit_ready_authority (std::move (read), true);
         if (!authority) {
             co_return std::optional<resolved_actor_address_t>{};
         }
@@ -474,10 +480,8 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
     }
 
     task_t<std::optional<ready_authority_t>>
-    read_ready_authority (bool actor, std::string object_id, bool instance_intent = false)
+    admit_ready_authority (authority_read_result_t read, bool actor, bool instance_intent = false)
     {
-        const auto key = actor ? actor_authority_key (object_id) : spot_authority_key (object_id);
-        auto read = co_await _store->read_authority (key);
         auto *snapshot = std::get_if<authority_snapshot_t> (&read);
         if (snapshot == nullptr)
             co_return std::nullopt;

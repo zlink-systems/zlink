@@ -217,7 +217,8 @@ export interface ZLinkSpotManagerOptions {
   readonly dispatchEntryActorJoin?: (
     meshName: string,
     actor: ZLinkActor,
-    handoffBacklog?: readonly ZLinkActorHandoffPacket[]
+    handoffBacklog?: readonly ZLinkActorHandoffPacket[],
+    onCallbackFailure?: (error: unknown) => void
   ) => Promise<void>;
   readonly admitEntryActorPacketPrefix?: (
     meshName: string,
@@ -227,7 +228,8 @@ export interface ZLinkSpotManagerOptions {
   readonly executeEntryActor?: <T>(
     meshName: string,
     actorId: string,
-    operation: () => Promise<T>
+    operation: () => Promise<T>,
+    onFailure?: (error: unknown) => T
   ) => Promise<T>;
   readonly actorCountProvider?: (spotId: RoutingId) => number;
   readonly releaseActorMembers?: (meshName: string, spotId: RoutingId) => Promise<void>;
@@ -1794,7 +1796,8 @@ export class DefaultZLinkSpotManager {
     meshName: string,
     spotId: RoutingId | undefined,
     actorId: string,
-    operation: () => Promise<T>
+    operation: () => Promise<T>,
+    onFailure?: (error: unknown) => T
   ): Promise<T> {
     if (spotId === undefined) {
       if (this.options.executeEntryActor === undefined) {
@@ -1802,7 +1805,7 @@ export class DefaultZLinkSpotManager {
           `Entry Spot Actor '${actorId}' has no execution gate for MeshNode '${meshName}'.`
         );
       }
-      return this.options.executeEntryActor(meshName, actorId, operation);
+      return this.options.executeEntryActor(meshName, actorId, operation, onFailure);
     }
     const activation = this.resolveApplicationActivation(spotId, meshName);
     if (activation === undefined) {
@@ -1810,7 +1813,7 @@ export class DefaultZLinkSpotManager {
         `Actor '${actorId}' has no active Spot execution gate for '${String(spotId)}'.`
       );
     }
-    return activation.serialExecutor.executeActorLifecycle(actorId, operation);
+    return activation.serialExecutor.executeActorLifecycle(actorId, operation, onFailure);
   }
 
   async dispatchRoutedSpotSend(
@@ -3347,66 +3350,46 @@ export class DefaultZLinkSpotManager {
     const activation = targetsEntry
       ? undefined
       : this.activations.resolve(meshName, admission.admission.spotId);
-    let lifecycleFailure: { readonly error: unknown } | undefined;
-    try {
-      if (targetsEntry) {
-        await this.options.dispatchEntryActorJoin?.(meshName, actor, []);
-      } else {
-        if (activation === undefined) {
-          throw new Error(`Actor Join relocation '${relocationId}' target Spot is not active.`);
+    if (!targetsEntry && activation === undefined) {
+      throw new Error(`Actor Join relocation '${relocationId}' target Spot is not active.`);
+    }
+    const actorId = actor.context.actorId;
+    const onJoinedFailure = (error: unknown) =>
+      reportActorJoinCallbackFailure(this.options, meshName, actorId, 'OnJoinedActor', error);
+    if (activation === undefined) {
+      await this.options.dispatchEntryActorJoin?.(meshName, actor, [], onJoinedFailure);
+    } else {
+      await activation.serial.execute(async () => {
+        try {
+          await activation.spot.onJoinedActor(actor);
+        } catch (error) {
+          onJoinedFailure(error);
         }
-        await activation.serial.execute(() => activation.spot.onJoinedActor(actor));
-      }
-    } catch (error) {
-      lifecycleFailure = { error };
-      const reporter = this.options.dispatchErrors;
-      if (reporter?.captureEnabled() === true) {
-        reporter.report({
-          surface: ZLinkDispatchErrorSurface.ActorRelocation,
-          messageKind: ZLinkDispatchMessageKind.Control,
-          reason: dispatchReasonFromError(error),
-          action: ZLinkDispatchErrorAction.FailCaller,
-          packetName: 'OnJoinedActor',
-          meshName,
-          actorId: actor.context.actorId,
-          error
-        });
-      }
+      });
     }
-    if (lifecycleFailure === undefined) {
-      const sourceLeave = submitSourceLeave(admission.admission.actorRef.nodeRid);
-      this.options.detachedTaskRunner.runDetached(
-        `actor Join source leave ${actor.context.actorId}`,
-        () => sourceLeave
-      );
-    }
-    if (
-      outcome.deferredJoinCompletion !== undefined &&
-      this.options.actorTransferRuntime !== undefined
-    ) {
-      const submitMailbox = targetsEntry
-        ? <T>(operation: () => Promise<T>): Promise<T> => operation()
-        : <T>(operation: () => Promise<T>): Promise<T> => {
-            if (activation === undefined) {
-              throw new Error(`Actor Join relocation '${relocationId}' target mailbox is missing.`);
-            }
-            return activation.executeActor(actor.context.actorId, operation, { lane: 'lifecycle' });
-          };
-      await this.options.actorTransferRuntime.deliverDeferredJoinCompletion(
-        lifecycleFailure === undefined
-          ? outcome.deferredJoinCompletion
-          : {
-              ...outcome.deferredJoinCompletion,
-              status: 'failed',
-              kind: spotActorFailureKind(lifecycleFailure.error)
-            },
+    const sourceLeave = submitSourceLeave(admission.admission.actorRef.nodeRid);
+    this.options.detachedTaskRunner.runDetached(
+      `actor Join source leave ${actorId}`,
+      () => sourceLeave
+    );
+    if (outcome.deferredJoinCompletion !== undefined) {
+      await this.options.actorTransferRuntime?.deliverDeferredJoinCompletion(
+        outcome.deferredJoinCompletion,
         actor,
         actorRef,
-        submitMailbox,
+        (operation) =>
+          this.executeActorTurn(meshName, actor.context.spotId, actorId, operation, (error) =>
+            reportActorJoinCallbackFailure(
+              this.options,
+              meshName,
+              actorId,
+              'OnJoinCompleted',
+              error
+            )
+          ),
         signal
       );
     }
-    if (lifecycleFailure !== undefined) throw lifecycleFailure.error;
     this.formalRemoteActorAdmissions.markCommitted(relocationId, actor);
     return true;
   }
@@ -3718,6 +3701,29 @@ export class DefaultZLinkSpotManager {
       requestTerminal,
       messageFollowOrigin
     );
+  }
+}
+
+function reportActorJoinCallbackFailure(
+  options: ZLinkSpotManagerOptions,
+  meshName: string,
+  actorId: string,
+  packetName: 'OnJoinedActor' | 'OnJoinCompleted',
+  error: unknown
+): void {
+  options.closeErrorSink?.reportRuntimeTaskException(`${packetName} ${actorId}`, error);
+  const reporter = options.dispatchErrors;
+  if (reporter?.captureEnabled() === true) {
+    reporter.report({
+      surface: ZLinkDispatchErrorSurface.ActorRelocation,
+      messageKind: ZLinkDispatchMessageKind.Control,
+      reason: dispatchReasonFromError(error),
+      action: ZLinkDispatchErrorAction.Drop,
+      packetName,
+      meshName,
+      actorId,
+      error
+    });
   }
 }
 

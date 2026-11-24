@@ -100,6 +100,19 @@ class live_location_reader_t final
     };
     using mesh_sources_t = std::vector<mesh_source_t>;
 
+    struct mesh_observation_t
+    {
+        mesh_sources_t sources;
+        mutable task_completion_source_t<void> changed;
+    };
+
+    std::shared_ptr<const mesh_observation_t> mesh_observation (const std::string &mesh_name) const
+    {
+        const auto catalog = std::atomic_load_explicit (&_mesh_sources, std::memory_order_acquire);
+        const auto mesh = catalog->find (mesh_name);
+        return mesh == catalog->end () ? nullptr : mesh->second;
+    }
+
     // Auto-connect and request acceptance share these descriptor originals and lease deadlines.
     task_t<std::shared_ptr<const mesh_sources_t>>
     poll_mesh_sources (std::string mesh_name,
@@ -107,7 +120,9 @@ class live_location_reader_t final
                          std::chrono::steady_clock::time_point::max (),
                        std::stop_token cancellation = {})
     {
-        auto sources = std::make_shared<mesh_sources_t> ();
+        const auto observed = mesh_observation (mesh_name);
+        auto observation = std::make_shared<mesh_observation_t> ();
+        auto &sources = observation->sources;
         std::map<std::string,
                  std::pair<owner_lease_read_result_t, std::chrono::steady_clock::time_point>>
           leases;
@@ -125,30 +140,36 @@ class live_location_reader_t final
                     leases.emplace (descriptor.owner_id,
                                     std::make_pair (std::move (lease), started));
                 }
-                const auto &observation = leases.at (descriptor.owner_id);
-                const auto *lease = std::get_if<owner_lease_found_t> (&observation.first);
+                const auto &lease_observation = leases.at (descriptor.owner_id);
+                const auto *lease = std::get_if<owner_lease_found_t> (&lease_observation.first);
                 const auto lifetime =
                   admission_lifetime ({descriptor.owner_id, descriptor.lease_generation}, lease);
-                const auto deadline = lifetime ? observation.second + *lifetime
+                const auto deadline = lifetime ? lease_observation.second + *lifetime
                                                : std::chrono::steady_clock::time_point{};
-                sources->push_back ({std::move (descriptor), deadline});
+                sources.push_back ({std::move (descriptor), deadline});
             }
             page.continuation_token = std::move (listed.continuation_token);
         } while (page.continuation_token);
-        std::sort (sources->begin (), sources->end (), [] (const auto &left, const auto &right) {
+        std::sort (sources.begin (), sources.end (), [] (const auto &left, const auto &right) {
             return rid_less (left.descriptor.rid, right.descriptor.rid);
         });
         auto previous = std::atomic_load_explicit (&_mesh_sources, std::memory_order_acquire);
         do {
+            const auto current = previous->find (mesh_name);
+            if ((current == previous->end () ? nullptr : current->second) != observed)
+                break;
             auto next = std::make_shared<mesh_source_catalog_t> (*previous);
-            next->insert_or_assign (mesh_name, sources);
+            next->insert_or_assign (mesh_name, observation);
             std::shared_ptr<const mesh_source_catalog_t> published = std::move (next);
             if (std::atomic_compare_exchange_weak_explicit (&_mesh_sources, &previous, published,
                                                             std::memory_order_release,
-                                                            std::memory_order_acquire))
+                                                            std::memory_order_acquire)) {
+                if (observed)
+                    observed->changed.complete (result_t<void>::success ());
                 break;
+            }
         } while (true);
-        co_return sources;
+        co_return std::shared_ptr<const mesh_sources_t>{observation, &sources};
     }
 
     std::optional<std::shared_ptr<const mesh_node_descriptor_t>>
@@ -156,11 +177,10 @@ class live_location_reader_t final
                            const std::vector<std::uint8_t> &rid,
                            std::uint64_t generation) const
     {
-        const auto catalog = std::atomic_load_explicit (&_mesh_sources, std::memory_order_acquire);
-        const auto mesh = catalog->find (mesh_name);
-        if (mesh != catalog->end ())
-            if (const auto *source = find_mesh_source (*mesh->second, rid, generation))
-                return source_original (mesh->second, source);
+        if (const auto mesh = mesh_observation (mesh_name)) {
+            if (const auto *source = find_mesh_source (mesh->sources, rid, generation))
+                return source_original ({mesh, &mesh->sources}, source);
+        }
         return std::nullopt;
     }
 
@@ -262,7 +282,7 @@ class live_location_reader_t final
         });
     }
 
-    using mesh_source_catalog_t = std::map<std::string, std::shared_ptr<const mesh_sources_t>>;
+    using mesh_source_catalog_t = std::map<std::string, std::shared_ptr<const mesh_observation_t>>;
     std::shared_ptr<const mesh_source_catalog_t> _mesh_sources{
       std::make_shared<const mesh_source_catalog_t> ()};
     location_repository_t *_store;

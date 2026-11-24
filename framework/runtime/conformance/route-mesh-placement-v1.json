@@ -27,6 +27,16 @@
     "ttlMs": 1000,
     "fencingMarginMs": 200
   },
+  "discoveryTransitions": [
+    { "initial": "preparing", "update": "serving", "result": "placed", "requestScans": 0 },
+    { "initial": "preparing", "update": "empty", "result": "unavailable", "requestScans": 1 },
+    { "initial": "preparing", "update": "expiredLease", "result": "unavailable", "requestScans": 1 },
+    { "initial": "preparing", "update": "zeroWeight", "result": "unavailable", "requestScans": 1 },
+    { "initial": "preparing", "update": null, "result": "deadlineExceeded", "requestScans": 0 },
+    { "initial": "empty", "update": null, "result": "unavailable", "requestScans": 1 },
+    { "initial": "incompatible", "update": null, "result": "unavailable", "requestScans": 1 },
+    { "initial": "zeroWeight", "update": null, "result": "unavailable", "requestScans": 1 }
+  ],
   "scenarios": [
     {
       "name": "user-spot-on-first-mesh-node",

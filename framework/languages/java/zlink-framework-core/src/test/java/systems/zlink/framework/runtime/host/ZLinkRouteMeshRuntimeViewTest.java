@@ -647,15 +647,6 @@ final class ZLinkRouteMeshRuntimeViewTest {
             assertEquals(0, initial.activeSpotCount());
             assertTrue(initial.unavailableReason().isEmpty());
 
-            var placementOptions = ((ZLinkRouteMeshRuntimeOptions) runtime.routeMeshRuntime());
-            placementOptions.mesh(MESH).setPlacementWeight(0);
-            var zeroWeight = runtime.routeMeshRuntime().snapshot(MESH).placement();
-            assertFalse(zeroWeight.isAvailable());
-            assertEquals(
-                    ZLinkTopologyReason.CAPACITY_EXCEEDED,
-                    zeroWeight.unavailableReason().orElseThrow());
-            placementOptions.mesh(MESH).setPlacementWeight(100);
-
             CountDownLatch initialized = new CountDownLatch(1);
             CountDownLatch changed = new CountDownLatch(1);
             CountDownLatch removed = new CountDownLatch(1);
@@ -716,6 +707,14 @@ final class ZLinkRouteMeshRuntimeViewTest {
                             .toCompletableFuture()
                             .get(5, TimeUnit.SECONDS));
             assertTrue(removed.await(5, TimeUnit.SECONDS));
+
+            // Check local weight changes after creation, which uses the Store descriptor.
+            var placementOptions = ((ZLinkRouteMeshRuntimeOptions) runtime.routeMeshRuntime());
+            var mesh = placementOptions.mesh(MESH);
+            mesh.setPlacementWeight(0);
+            assertLocalPlacement(runtime.routeMeshRuntime().snapshot(MESH), 0);
+            mesh.setPlacementWeight(100);
+            assertLocalPlacement(runtime.routeMeshRuntime().snapshot(MESH), 100);
         }
     }
 

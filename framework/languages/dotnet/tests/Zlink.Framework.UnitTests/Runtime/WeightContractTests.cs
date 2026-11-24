@@ -299,7 +299,12 @@ public sealed class WeightContractTests
         };
 
         var filtered = ZLinkMeshNodeTargetAvailability
-            .FilterAdmitted(local.Rid, new[] { local, current, stale }, peers)
+            .FilterAdmitted(
+                local.Rid,
+                local.LifecycleGeneration,
+                new[] { local, current, stale },
+                peers
+            )
             .Select(static candidate => candidate.Rid)
             .ToArray();
 
@@ -337,7 +342,13 @@ public sealed class WeightContractTests
         };
 
         var filtered = ZLinkMeshNodeTargetAvailability
-            .FilterAdmitted(local.Rid, new[] { local, remote }, [admitted], unavailable)
+            .FilterAdmitted(
+                local.Rid,
+                local.LifecycleGeneration,
+                new[] { local, remote },
+                [admitted],
+                unavailable
+            )
             .Select(static candidate => candidate.Rid)
             .ToArray();
 
@@ -345,7 +356,13 @@ public sealed class WeightContractTests
 
         var refreshed = admitted with { LastChangedMs = admitted.LastChangedMs + 1 };
         var reselected = ZLinkMeshNodeTargetAvailability
-            .FilterAdmitted(local.Rid, new[] { local, remote }, [refreshed], unavailable)
+            .FilterAdmitted(
+                local.Rid,
+                local.LifecycleGeneration,
+                new[] { local, remote },
+                [refreshed],
+                unavailable
+            )
             .Select(static candidate => candidate.Rid)
             .ToArray();
 

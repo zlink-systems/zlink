@@ -244,9 +244,10 @@ void verify_actor_join_durable_terminals ()
     admit_pair (source, target, target_descriptor);
     const auto admitted_request =
       actor_join_request (local, target_descriptor, 95, "join-actor", "join-spot");
-    const auto admitted_at = std::chrono::steady_clock::now ();
+    const auto completion_deadline = std::chrono::steady_clock::now () + 500ms;
+    // Keep request expiry outside the window that checks for transport loss.
     auto admitted = source.request_actor_join (target_descriptor.node_routing_id, admitted_request,
-                                               std::nullopt, 200ms);
+                                               std::nullopt, 2s);
     const auto claim = claim_actor_join (target);
     assert (claim && claim->records.front ()->reply_token ());
     assert (target.mailbox ().release (*claim));
@@ -254,13 +255,8 @@ void verify_actor_join_durable_terminals ()
     // Local disconnect_rid instead retires issued wait tokens with a typed
     // non-replayable ENOENT (covered by the raw port contract test).
     target.close ();
-    const auto completion_deadline = admitted_at + 500ms;
-    while (!admitted.await_ready () && std::chrono::steady_clock::now () < completion_deadline) {
-        const auto now = std::chrono::steady_clock::now ();
-        (void) source.expire_requests (now).result ().value ();
-        (void) source.observe_routes ();
-        (void) await_task (source.pump_one (now));
-    }
+    while (!admitted.await_ready () && std::chrono::steady_clock::now () < completion_deadline)
+        (void) await_task (source.pump_one (std::chrono::steady_clock::now ()));
     assert (admitted.await_ready ());
     const auto lost_reply = await_task (std::move (admitted));
     // Submit §5 delivers binding connection loss without waiting for the

@@ -516,21 +516,25 @@ export class ZLinkFrameworkRuntimeHost
       errorSink: () => this.errorSink ?? this.preStartErrorSink,
       nativeActorNodeProvider: () => this.spotNodeRuntime?.primaryMeshNode,
       nativeActorMeshNameProvider: () => this.meshRouters.primaryMeshName(),
-      actorAuthorityFenceResolver: async (actorId, signal) => {
-        const resolution = await this.createActorLocationResolver()?.resolveDirectActorRoute(
-          actorId,
-          signal
-        );
-        return resolution === undefined || resolution.kind !== 'ready'
-          ? undefined
-          : {
-              authorityOwnerGeneration: resolution.route.authorityOwnerGeneration,
-              ownerLeaseGeneration: resolution.route.ownerLeaseGeneration,
-              ownerId: resolution.route.ownerId,
-              ownerNodeGeneration: resolution.route.ownerNodeGeneration,
-              authorityStoreVersion: resolution.route.authorityStoreVersion,
-              actorType: resolution.route.actorType
-            };
+      actorAuthorityFenceResolver: async (actorId, signal, bindTarget) => {
+        const resolver = this.createActorLocationResolver();
+        if (resolver === undefined) return undefined;
+        let route;
+        if (bindTarget !== undefined) {
+          route = await resolver.readActorSessionBindingRoute(bindTarget, signal);
+        } else {
+          const resolution = await resolver.resolveDirectActorRoute(actorId, signal);
+          if (resolution.kind !== 'ready') return undefined;
+          route = resolution.route;
+        }
+        return {
+          authorityOwnerGeneration: route.authorityOwnerGeneration,
+          ownerLeaseGeneration: route.ownerLeaseGeneration,
+          ownerId: route.ownerId,
+          ownerNodeGeneration: route.ownerNodeGeneration,
+          authorityStoreVersion: route.authorityStoreVersion,
+          actorType: route.actorType
+        };
       },
       confirmRemoteActorSessionBinding: (actor, sessionRid, signal, options) => {
         const sessionNode = this.spotNodeRuntime?.primaryMeshNode;
@@ -2939,6 +2943,8 @@ export class ZLinkFrameworkRuntimeHost
       primaryMeshNodeOrUndefined: () => this.spotNodeRuntime?.primaryMeshNode,
       primaryMeshCompletions: () => this.spotNodeRuntime?.primaryMeshCompletions,
       meshNode: (meshName) => this.spotNodeRuntime?.meshNode(meshName),
+      boundSessionRoute: (sessionNodeRid) =>
+        this.meshRouters.remoteBoundSessionTargetForSource(sessionNodeRid),
       meshCompletions: (meshName) => this.spotNodeRuntime?.meshCompletionTable(meshName),
       notifyEntrySpotActorCreated: (nodeRid, actor, createRequest, signal) =>
         this.spotNodeRuntime?.notifyEntrySpotActorCreated(nodeRid, actor, createRequest, signal) ??
@@ -3048,6 +3054,7 @@ export class ZLinkFrameworkRuntimeHost
       context,
       channelTransport: this.channelTransport,
       routeTransport: this.routeTransport,
+      addressTransport: this.spotAddressTransport,
       spotPublisherTransport: this.spotPublisherTransport,
       meshRouters: this.meshRouters,
       providerResolver: this.options.providerResolver,

@@ -10,6 +10,9 @@ const {
   ZLinkRequestSourceResolver
 } = require('../../packages/framework/dist/runtime/locations/request-source-resolver');
 const {
+  createObjectCreationDeadline
+} = require('../../packages/framework/dist/runtime/host/object-creation-deadline');
+const {
   ZLinkLocationStoreRepository
 } = require('../../packages/framework/dist/runtime/locations/location-store-repository');
 const {
@@ -46,6 +49,83 @@ function resolver() {
       return 30000;
     }
   });
+}
+
+const {
+  discoveryTransitions
+} = require('../../../../runtime/conformance/route-mesh-placement-v1.json');
+
+for (const kind of ['actor', 'user_spot']) {
+  for (const { initial, update, result, requestScans } of discoveryTransitions) {
+    test(
+      `${kind} placement: ${initial} -> ${update ?? result}`,
+      {
+        timeout: 2000
+      },
+      async (t) => {
+        const row = remoteDescriptor(kind);
+        let projection = initial;
+        let reads = 0;
+        const rows = () =>
+          projection === 'empty'
+            ? []
+            : [
+                {
+                  ...row,
+                  state: projection === 'serving' ? 1 : 0,
+                  placementWeight: projection === 'zeroWeight' ? 0 : 100,
+                  objectCapabilities: projection === 'incompatible' ? [] : row.objectCapabilities
+                }
+              ];
+        const sources = new ZLinkRequestSourceResolver({
+          async listLiveMeshNodes() {
+            reads++;
+            return rows();
+          },
+          async remainingOwnerTokenLeaseMs() {
+            return projection === 'expiredLease' ? 0 : 30000;
+          }
+        });
+        await sources.observeLiveDescriptors('play', rows());
+        t.mock.timers.enable({ apis: ['setTimeout'] });
+        const timeoutMs = 1000;
+        const deadline = createObjectCreationDeadline(
+          timeoutMs,
+          kind === 'actor' ? 'Actor' : 'User Spot'
+        );
+        t.after(() => deadline.close());
+        let pending = true;
+        const selected = sources
+          .selectPlacement('play', kind, 'room', undefined, deadline.signal)
+          .finally(() => {
+            pending = false;
+          });
+        if (initial === 'preparing') {
+          await boundary();
+          assert.equal(pending, true);
+          assert.equal(reads, 0);
+          if (update === null) {
+            t.mock.timers.tick(timeoutMs);
+            await assert.rejects(
+              selected,
+              (error) => internalFrameworkErrorKind(error) === 'deadlineExceeded'
+            );
+          } else {
+            projection = update;
+            await sources.observeLiveDescriptors('play', rows());
+          }
+        }
+        if (result === 'placed') assert.equal((await selected)?.rid, row.rid);
+        if (result === 'unavailable') {
+          // Flush the Store refresh without publishing anything from the periodic discovery loop.
+          await boundary();
+          assert.equal(pending, false);
+          assert.equal(await selected, undefined);
+        }
+        assert.equal(reads, requestScans);
+      }
+    );
+  }
 }
 
 test('a drained candidate and an empty Store produce Unavailable after one refresh', async () => {
