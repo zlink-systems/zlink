@@ -2261,15 +2261,16 @@ Framework가 자동 발급한 RID를 claim할 때 이미 active identity가 사�
 <a id="spot-id-conflict"></a>
 ### SpotIdConflict
 
-Global Spot ID namespace에서 Entry·User·Instance Spot identity claim이 이미 사용 중임을 확인한 결과다.
+Global Spot ID namespace에서 User·Instance Spot identity claim이 이미 사용 중임을 확인한 결과다. Entry Spot ID는
+Framework가 lifecycle마다 새 UUID v4로 발급하므로 이 판정 대상이 아니다.
 Framework는 기존 claim을 덮어쓰거나 새 UUID를 만들어 같은 operation을 다시 시도하지 않는다.
 
 | 항목 | 내용 |
 |---|---|
-| 형태 | Startup 또는 create failure |
-| .NET 표기 | Startup은 `ZLinkConfigurationException`, exclusive create는 `ZLinkFrameworkErrorKind.AlreadyExists` |
+| 형태 | Create failure |
+| .NET 표기 | Exclusive create는 `ZLinkFrameworkErrorKind.AlreadyExists` |
 | 공개 구성 | Global Spot ID claim이 충돌했음을 설명한다. 충돌한 owner token은 포함하지 않는다. |
-| 수명 | 해당 startup 또는 create operation을 terminal failure로 끝낸다. |
+| 수명 | 해당 create operation을 terminal failure로 끝낸다. |
 
 ## 10. STREAM session과 Actor binding
 
