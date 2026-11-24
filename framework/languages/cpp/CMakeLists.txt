@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(zlink_framework_cpp VERSION 0.34.0 LANGUAGES C CXX)
+project(zlink_framework_cpp VERSION 0.34.1 LANGUAGES C CXX)
 add_compile_definitions($<$<CONFIG:Debug>:ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD>)
 set(ZLINK_FRAMEWORK_CPP_DIR "${CMAKE_CURRENT_LIST_DIR}")
 include("${ZLINK_FRAMEWORK_CPP_DIR}/cmake/zlink-cpp-project-defaults.cmake")
@@ -3250,6 +3250,17 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     COMMAND test_cpp_framework_stream_framework --write-terminal-shutdown
     LABELS "framework-unit;stream;stream-session"
     TIMEOUT 30)
+  add_executable(test_cpp_framework_ws_shutdown
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_ws_shutdown.cpp)
+  target_link_libraries(test_cpp_framework_ws_shutdown PRIVATE zlink::framework zlink::stream_connector)
+  foreach(shutdown_case IN ITEMS force drain)
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_framework_ws_shutdown_${shutdown_case}
+      COMMAND test_cpp_framework_ws_shutdown --ws-shutdown-${shutdown_case}
+      LABELS "framework-unit;framework-contract;stream;stream-session"
+      TIER contract
+      TIMEOUT 30)
+  endforeach()
   zlink_framework_cpp_add_boost_headers(
     test_cpp_framework_stream_framework)
   target_include_directories(test_cpp_framework_stream_framework PRIVATE
