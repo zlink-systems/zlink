@@ -142,7 +142,7 @@ For local process debugging, run `./run-e2e.sh --local` or `pwsh -NoProfile -Fil
 
 Validated against the published Framework 0.34.0 packages.
 
-Node typed handlers receive fields without the declared DTO class (#1731, scheduled for 0.32.0); the template reconstructs declared packet classes before forwarding through typed APIs.
+Node typed handlers receive fields without the declared DTO class (#1731, scheduled for 0.34.0); the template reconstructs declared packet classes before forwarding through typed APIs.
 
 Message Follow is explicitly configured to 30 seconds in shared hosting. The wait for `SAFE_TO_SHUTDOWN` is derived from that period plus the existing host relocation budget. Packet deadlines and the relocation operation budget remain unchanged.
 

@@ -136,7 +136,7 @@ pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 
 Validated against the published Framework 0.34.0 packages.
 
-Node typed handler payloads require the packet-name-to-class restoration table before forwarding (#1731, planned for 0.32.0). Keep this table until the published Framework preserves declared DTO classes.
+Node typed handler payloads require the packet-name-to-class restoration table before forwarding (#1731, planned for 0.34.0). Keep this table until the published Framework preserves declared DTO classes.
 
 ## Deployment sequence
 

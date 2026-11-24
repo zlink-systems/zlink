@@ -145,7 +145,7 @@ Each scenario uses an isolated Compose project, Redis prefix and `.logs/run-<id>
 
 Validated against the published Framework 0.34.0 packages.
 
-Node typed handler forwarding requires the packet-name-to-class table in `server/region/infrastructure/zlink/handlers.ts` until #1731 is fixed in 0.32.0. No Framework state is included in application relocation snapshots.
+Node typed handler forwarding requires the packet-name-to-class table in `server/region/infrastructure/zlink/handlers.ts` until #1731 is fixed in 0.34.0. No Framework state is included in application relocation snapshots.
 
 ## Deployment sequence
 

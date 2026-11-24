@@ -27,7 +27,7 @@ Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/jav
 
 ## Project overview
 
-This Java 25 project is an MMO server example in which players move across Zone boundaries. It runs a Session node for connections, play nodes A and B (zone) (six Zones, three per host), a play node (dungeon) for Dungeons, and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework to `0.32.0` and the binding to `1.23.0`.
+This Java 25 project is an MMO server example in which players move across Zone boundaries. It runs a Session node for connections, play nodes A and B (zone) (six Zones, three per host), a play node (dungeon) for Dungeons, and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework to `0.34.0` and the binding to `1.26.0`.
 
 The project layout below describes where to extend this template's domain. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 

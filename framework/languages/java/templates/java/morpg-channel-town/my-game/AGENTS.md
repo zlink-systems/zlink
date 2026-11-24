@@ -27,7 +27,7 @@ Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/jav
 
 ## Project overview
 
-This Java 25 project is a MORPG example in which players gather in town channels, form parties, and enter a private dungeon per party. It runs a Session node for connections, play nodes A and B (town) that hold the fixed town channels, play nodes A and B (dungeon) that create Dungeons on demand, and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework to `0.32.0` and the binding to `1.23.0`.
+This Java 25 project is a MORPG example in which players gather in town channels, form parties, and enter a private dungeon per party. It runs a Session node for connections, play nodes A and B (town) that hold the fixed town channels, play nodes A and B (dungeon) that create Dungeons on demand, and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework to `0.34.0` and the binding to `1.26.0`.
 
 The project layout below describes the domain extension points. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 
