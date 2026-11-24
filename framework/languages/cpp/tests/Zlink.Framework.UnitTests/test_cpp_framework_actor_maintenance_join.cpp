@@ -12,6 +12,7 @@
 #include "runtime/locations/in_memory_store_providers.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime/locations/live_location_reader.hpp"
+#include "runtime/locations/location_runtime.hpp"
 #include "runtime/locations/store_location_resolvers.hpp"
 #include "../support/owner_lease_time_store.hpp"
 #include "../support/location_reclaim_clock.hpp"
@@ -1832,25 +1833,45 @@ bool peer_ready (fw::route_mesh_runtime_t &routes,
     return ready ();
 }
 
-// A runtime weight change is recorded at once and published by the renew schedule. Placement
-// reads the published descriptors, so wait until one more Store row carries the new weight.
-bool set_published_placement_weight (fw::service_provider_t &services, int weight)
+// Placement uses the requesting host's discovery observation of the published weight.
+bool set_published_placement_weight (fw::service_provider_t &services,
+                                     int weight,
+                                     fw::service_provider_t *requester = nullptr)
 {
-    auto &store = services.get_required<fw::location_repository_t> ();
-    const auto rows_with_weight = [&] {
-        const auto page = store.list_mesh_nodes (mesh_name).result ().value ();
-        return std::count_if (page.items.begin (), page.items.end (),
-                              [&] (const auto &row) { return row.placement_weight == weight; });
+    const auto owner =
+      services.get_required<fw::runtime::location_runtime_t> ().current_owner_token ();
+    if (!owner)
+        return false;
+    const auto owns_descriptor = [&] (const fw::mesh_node_descriptor_t &descriptor) {
+        return descriptor.owner_id == owner->owner_id
+               && descriptor.lease_generation == owner->lease_generation;
     };
+    const auto page = services.get_required<fw::location_repository_t> ()
+                        .list_mesh_nodes (mesh_name)
+                        .result ()
+                        .value ();
+    const auto published = std::find_if (page.items.begin (), page.items.end (), owns_descriptor);
     auto &options = services.get_required<fw::route_mesh_runtime_options_t> ().mesh (mesh_name);
-    if (options.placement_weight () == weight)
-        return true;
-    const auto before = rows_with_weight ();
-    options.placement_weight (weight);
+    if (options.placement_weight () != weight)
+        options.placement_weight (weight);
+    const auto &discovery =
+      (requester ? *requester : services).get_required<fw::runtime::live_location_reader_t> ();
+    const auto observed_weight = [&] {
+        const auto observation = discovery.mesh_observation (mesh_name);
+        return observation
+               && std::any_of (
+                 observation->sources.begin (), observation->sources.end (), [&] (const auto &row) {
+                     const auto &descriptor = row.descriptor;
+                     return owns_descriptor (descriptor) && descriptor.placement_weight == weight
+                            && (published == page.items.end ()
+                                || descriptor.descriptor_revision
+                                     >= published->descriptor_revision);
+                 });
+    };
     const auto deadline = std::chrono::steady_clock::now () + wait_budget;
-    while (rows_with_weight () <= before && std::chrono::steady_clock::now () < deadline)
+    while (!observed_weight () && std::chrono::steady_clock::now () < deadline)
         std::this_thread::sleep_for (std::chrono::milliseconds (1));
-    return rows_with_weight () > before;
+    return observed_weight ();
 }
 
 // Exercises the same raw admission boundary without a discovery scheduling race.
@@ -3075,7 +3096,7 @@ void joined_first_view_reaches_client (bool remote)
         ASSERT_TRUE (peer_ready (services.get_required<fw::route_mesh_runtime_t> (), second_rid));
         ASSERT_TRUE (
           peer_ready (target_services->get_required<fw::route_mesh_runtime_t> (), first_rid));
-        ASSERT_TRUE (set_published_placement_weight (services, 0));
+        ASSERT_TRUE (set_published_placement_weight (services, 0, &*target_services));
         destination = &*target_services;
     }
     ASSERT_TRUE (destination->get_required<fw::spot_manager_t> ()
@@ -3441,8 +3462,8 @@ void next_join_suffix (bool remote,
         target.start ();
         ASSERT_TRUE (ready (target));
         ASSERT_TRUE (peer_ready (services.get_required<fw::route_mesh_runtime_t> (), second_rid));
-        ASSERT_TRUE (set_published_placement_weight (services, 0));
         auto target_services = target.app.advanced ().services ().build_provider ();
+        ASSERT_TRUE (set_published_placement_weight (services, 0, &target_services));
         ASSERT_TRUE (target_services.get_required<fw::spot_manager_t> ()
                        .get_or_create (fw::spot_id_t (suffix_spot), room_type)
                        .async ()
@@ -6199,7 +6220,7 @@ TEST (ActorMaintenanceJoin, RemoteClosedSpotJoinInvalidatesWarmRoute)
     ASSERT_TRUE (ready (target));
     ASSERT_TRUE (peer_ready (services.get_required<fw::route_mesh_runtime_t> (), second_rid));
     auto target_services = target.app.advanced ().services ().build_provider ();
-    ASSERT_TRUE (set_published_placement_weight (services, 0));
+    ASSERT_TRUE (set_published_placement_weight (services, 0, &target_services));
     auto &spots = target_services.get_required<fw::spot_manager_t> ();
     const auto created = spots.get_or_create (fw::spot_id_t (local_spot), room_type)
                            .timeout (wait_budget)
@@ -7185,8 +7206,8 @@ TEST (ActorMaintenanceJoin, RejectsWhilePreviousSourceLeaveIsPending)
     auto &routes = services.get_required<fw::route_mesh_runtime_t> ();
     ASSERT_TRUE (peer_ready (routes));
     // First node cannot place this new room; placement is selected by the public weight API.
-    ASSERT_TRUE (set_published_placement_weight (services, 0));
     auto second_services = second.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (set_published_placement_weight (services, 0, &second_services));
     const auto created = second_services.get_required<fw::spot_manager_t> ()
                            .get_or_create (fw::spot_id_t (current_spot), room_type)
                            .timeout (wait_budget)
@@ -7327,8 +7348,8 @@ TEST_P (ActorRestoreCommitFailure, DiscardsPublishedIdentity)
           evidence.changed.notify_all ();
       });
     ASSERT_TRUE (peer_ready (services.get_required<fw::route_mesh_runtime_t> ()));
-    ASSERT_TRUE (set_published_placement_weight (services, 0));
     auto second_services = second.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (set_published_placement_weight (services, 0, &second_services));
     ASSERT_TRUE (second_services.get_required<fw::spot_manager_t> ()
                    .get_or_create (fw::spot_id_t (current_spot), room_type)
                    .timeout (wait_budget)
@@ -7392,8 +7413,8 @@ TEST (ActorMaintenanceJoin, PreservesEarlierIdentityWhenRestoreIsRejected)
     auto previous_actor =
       target->create_reserved_actor_async (actor_type, previous).result ().value ();
     ASSERT_TRUE (peer_ready (services.get_required<fw::route_mesh_runtime_t> ()));
-    ASSERT_TRUE (set_published_placement_weight (services, 0));
     auto second_services = second.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (set_published_placement_weight (services, 0, &second_services));
     ASSERT_TRUE (second_services.get_required<fw::spot_manager_t> ()
                    .get_or_create (fw::spot_id_t (current_spot), room_type)
                    .timeout (wait_budget)
@@ -7437,8 +7458,8 @@ TEST (ActorMaintenanceJoin, RemoteJoinReturnsToPreviousSourceNode)
     second.start ();
     ASSERT_TRUE (ready (second));
     ASSERT_TRUE (peer_ready (services.get_required<fw::route_mesh_runtime_t> ()));
-    ASSERT_TRUE (set_published_placement_weight (services, 0));
     auto second_services = second.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (set_published_placement_weight (services, 0, &second_services));
     ASSERT_TRUE (second_services.get_required<fw::spot_manager_t> ()
                    .get_or_create (fw::spot_id_t (current_spot), room_type)
                    .async ()
@@ -7786,7 +7807,7 @@ TEST_P (ActorDeferredJoinFailure, FailureAndRejectionPreserveSourceActor)
     const auto [remote, target] = GetParam ();
     auto &target_services = remote ? second_services : services;
     auto &other_services = remote ? services : second_services;
-    ASSERT_TRUE (set_published_placement_weight (other_services, 0));
+    ASSERT_TRUE (set_published_placement_weight (other_services, 0, &target_services));
     auto &spots = target_services.get_required<fw::spot_manager_t> ();
     ASSERT_TRUE (spots.get_or_create (fw::spot_id_t (target), room_type)
                    .timeout (wait_budget)

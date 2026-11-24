@@ -640,21 +640,24 @@ TEST (SpotWideHostRelocation, AbortRunsAcceptedSpotPrefixWithoutNewIngress)
         }
     } release_capture{release};
     configure (source, "abort-source");
-    configure (target, "abort-target");
     source.start ();
-    target.start ();
-    ASSERT_TRUE (observe ([&] { return source.app.is_ready () && target.app.is_ready (); }));
+    ASSERT_TRUE (observe ([&] { return source.app.is_ready (); }));
     auto services = source.app.advanced ().services ().build_provider ();
+    const auto created = services.get_required<fw::spot_manager_t> ()
+                           .get_or_create (fw::spot_id_t (room_id), room_type)
+                           .async ()
+                           .result ();
+    ASSERT_TRUE (created);
+    ASSERT_EQ (created.value ().spot.node_rid ().value (), "abort-source");
+    configure (target, "abort-target");
+    target.start ();
+    ASSERT_TRUE (observe ([&] { return target.app.is_ready (); }));
     ASSERT_TRUE (observe ([&] {
         return services.get_required<fw::route_mesh_runtime_t> ()
                  .snapshot (mesh_name)
                  .ready_peer_count
                == 1;
     }));
-    ASSERT_TRUE (services.get_required<fw::spot_manager_t> ()
-                   .get_or_create (fw::spot_id_t (room_id), room_type)
-                   .async ()
-                   .result ());
     const auto registration =
       fw::detail::mesh_node_runtime_t::registrations (source.app.advanced ().zlink ()).front ();
     const auto gate = fw::detail::spot_node_runtime_t (registration->spot_state)

@@ -529,6 +529,18 @@ public sealed partial class EntrySpotActorDispatchTests
             );
             Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, waiting.Kind);
             fixture.Time.Advance(TimeSpan.FromSeconds(15));
+            var wrongType = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await manager
+                    .GetOrCreate(fixture.ObjectId, fixture.StableType + "-other")
+                    .InMesh("entry")
+                    .Timeout(JoinDecisionRequestTimeout)
+                    .Async()
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.TypeMismatch, wrongType.Kind);
+            Assert.Equal(
+                previous.StoreVersion,
+                (await ReadAuthorityAsync(fixture.Store, fixture.AuthorityKey)).StoreVersion
+            );
             // Location runtime §6.1 permits explicit creation after conditional release.
             var result = await manager
                 .GetOrCreate(fixture.ObjectId, fixture.StableType)

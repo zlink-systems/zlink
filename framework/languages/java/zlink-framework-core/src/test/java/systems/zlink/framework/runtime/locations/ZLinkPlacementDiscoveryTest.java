@@ -2,7 +2,10 @@ package systems.zlink.framework.runtime.locations;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import org.junit.jupiter.api.RepeatedTest;
+import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.errors.*;
@@ -13,12 +16,82 @@ import systems.zlink.framework.runtime.internal.binding.spot.*;
 import systems.zlink.framework.runtime.internal.locations.*;
 
 import java.lang.reflect.Proxy;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 
 final class ZLinkPlacementDiscoveryTest {
+    @Test
+    void sharedDiscoveryTransitions() throws Exception {
+        var cwd = Path.of(System.getProperty("user.dir")).toAbsolutePath();
+        Path fixturePath;
+        for (; ; ) {
+            fixturePath = cwd.resolve("framework/runtime/conformance/route-mesh-placement-v1.json");
+            if (Files.isRegularFile(fixturePath)) break;
+            cwd = Objects.requireNonNull(cwd.getParent(), "Shared placement fixture not found");
+        }
+        var fixture = new ObjectMapper().readTree(fixturePath.toFile());
+        for (var kind :
+                List.of(ZLinkPlacementObjectKind.ACTOR, ZLinkPlacementObjectKind.USER_SPOT)) {
+            for (var scenario : fixture.get("discoveryTransitions")) {
+                var initial = scenario.get("initial").asText();
+                var update = scenario.get("update").asText(null);
+                var result = scenario.get("result").asText();
+                try (var runtime = new Fixture(kind)) {
+                    runtime.deleted = initial.equals("empty");
+                    runtime.weight = initial.equals("zeroWeight") ? 0 : 100;
+                    runtime.refresh();
+                    int discoveryScans = runtime.lists.get();
+                    long deadline =
+                            System.currentTimeMillis()
+                                    + (result.equals("deadlineExceeded") ? 100 : 1000);
+                    var selected =
+                            runtime.resolver
+                                    .selectPlacement(
+                                            "mesh",
+                                            kind,
+                                            initial.equals("incompatible") ? "other" : "type",
+                                            kind == ZLinkPlacementObjectKind.ACTOR,
+                                            runtime.source,
+                                            Set.of(),
+                                            deadline)
+                                    .toCompletableFuture();
+                    if (initial.equals("preparing")) {
+                        assertFalse(selected.isDone());
+                        assertEquals(discoveryScans, runtime.lists.get());
+                        if (update != null) {
+                            switch (update) {
+                                case "serving" ->
+                                        runtime.state = ZLinkFrameworkRuntimeState.SERVING;
+                                case "empty" -> runtime.deleted = true;
+                                case "expiredLease" -> runtime.live = false;
+                                case "zeroWeight" -> runtime.weight = 0;
+                                default -> fail(update);
+                            }
+                            runtime.refresh();
+                            discoveryScans++;
+                        }
+                    }
+                    if (result.equals("placed")) assertEquals(runtime.rid, selected.join().rid());
+                    else {
+                        if (result.equals("unavailable")) assertTrue(selected.isDone(), initial);
+                        assertFailure(
+                                selected,
+                                result.equals("unavailable")
+                                        ? ZLinkFrameworkErrorKind.UNAVAILABLE
+                                        : ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED);
+                    }
+                    assertEquals(
+                            discoveryScans + scenario.get("requestScans").asInt(),
+                            runtime.lists.get());
+                }
+            }
+        }
+    }
+
     @RepeatedTest(40)
     void placementRefreshesOnlyAnObservationWithoutEligibleCandidates() {
         for (var kind :
