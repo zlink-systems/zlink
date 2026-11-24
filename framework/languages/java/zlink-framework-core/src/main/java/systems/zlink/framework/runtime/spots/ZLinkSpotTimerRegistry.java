@@ -334,7 +334,12 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
             ZLinkTimerTick tick) {
         try {
             Object handler = handlers.instance(handlerType);
-            return invocation.invoke(handler, handlerSpot, tick).thenApply(ignored -> null);
+            var result =
+                    handlerSpot instanceof ZLinkEntrySpotTimerSurface entrySurface
+                            ? invocation.invoke(
+                                    handler, handlerSpot, tick, entrySurface.entrySpot())
+                            : invocation.invoke(handler, handlerSpot, tick);
+            return result.thenApply(ignored -> null);
         } catch (RuntimeException ex) {
             return CompletableFuture.failedFuture(
                     new ZLinkConfigurationException(
@@ -383,7 +388,13 @@ final class ZLinkSpotTimerRegistry implements AutoCloseable {
                         ZLinkHandlerMethodInvoker.HANDLER_METHOD_NAME,
                         null,
                         ZLinkTimerTick.class);
-        return ZLinkHandlerMethodInvoker.prepare(method, suspendHandlerInvokers, 0, 1);
+        // Entry Spot timers can also declare the application Entry Spot as their first parameter.
+        int spotArgument =
+                spot instanceof ZLinkEntrySpotTimerSurface
+                                && !method.getParameterTypes()[0].isInstance(spot)
+                        ? 2
+                        : 0;
+        return ZLinkHandlerMethodInvoker.prepare(method, suspendHandlerInvokers, spotArgument, 1);
     }
 
     private final class ManagedTimer implements ZLinkTimer {

@@ -160,6 +160,10 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
         this.entrySpot = entrySpot;
     }
 
+    ZLinkEntrySpot<?> entrySpot() {
+        return entrySpot;
+    }
+
     @Override
     public CompletionStage<Void> destroyActor(ZLinkActor actor) {
         return host.destroyActorFromEntry(nodeRid, actor);
