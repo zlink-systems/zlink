@@ -1518,6 +1518,7 @@ internal sealed class ZLinkBackendSpotNodeWrapper
     )
     {
         _pump.SetNodeRouteHandler(handler, taskRunner);
+        _node.SetRemoteSessionPushDispatch(_pump.DispatchNodeRoutes);
     }
 
     public ValueTask DisposeAsync() =>

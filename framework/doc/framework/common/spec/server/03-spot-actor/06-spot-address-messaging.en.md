@@ -97,22 +97,19 @@ replacement lifecycle at the same endpoint, a new Entry Spot ID is issued, and w
 RID a new MeshNode RID is issued as well. The framework doesn't build the Entry Spot
 ID by concatenating the full MeshNode RID.
 
-The Object Server descriptor's `NewClaim` creates, in one Location Store
-transaction, the `(MeshName, NodeRid)` descriptor identity and the
-`EntrySpotId`'s global Spot identity claim, linked to the owner lease
-and lifecycle. If either conflicts with an active claim, it changes neither
-descriptor, Entry claim, nor index at all, and returns a startup
-configuration error at the first claim. It doesn't create a second Entry
-UUID or claim.
+The Object Server descriptor's `NewClaim` creates the `(MeshName, NodeRid)` descriptor identity in
+the Location Store, linked to the owner lease and lifecycle. `EntrySpotId` has no Store claim — its
+uniqueness comes from the UUID v4 issued anew for each lifecycle and from rejecting caller-chosen User
+and Instance Spot IDs in the reserved format (the paragraph above). If the descriptor identity conflicts
+with an active claim, it changes neither the descriptor nor the index, returns a startup configuration
+error, and doesn't create a second Entry UUID.
 
 [Descriptor](../00-foundation/02-glossary.en.md#descriptor) remove and owner cleanup — a
 descriptor being the registration record a remote runtime publishes so its endpoint, identity,
-and status can be discovered — release the linked Entry claim in the
-same transaction only if the stored descriptor's owner lease and
-lifecycle match the request. Stale cleanup from a previous lifecycle can't
-delete a replacement lifecycle's descriptor or Entry claim. `EntrySpotId` is
-included in the descriptor's immutable fields and immutable digest, and
-can't be changed by `Renew` or a mutable descriptor update.
+and status can be discovered — release the descriptor only if the stored descriptor's owner lease and
+lifecycle match the request. Stale cleanup from a previous lifecycle can't delete a replacement
+lifecycle's descriptor. `EntrySpotId` is included in the descriptor's immutable fields and immutable
+digest, and can't be changed by `Renew` or a mutable descriptor update.
 
 ### 2.2 SpotRef
 
