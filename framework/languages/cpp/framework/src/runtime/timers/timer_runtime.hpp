@@ -20,6 +20,7 @@ namespace zlink::framework::detail
 {
 
 class channel_runtime_state_t;
+class spot_context_state_t;
 
 class timer_resource_t
 {
@@ -57,6 +58,7 @@ class timer_state_t
     std::type_index handler_type{typeid (void)};
     std::weak_ptr<void> handler_instance;
     handler_invoker_t handler_invoker;
+    std::weak_ptr<spot_context_state_t> spot_context;
     std::unique_ptr<timer_resource_t> native_timer;
     std::shared_ptr<runtime::serial_execution_queue_t> serial_queue;
     std::uint64_t delivery_index = 0;

@@ -1197,11 +1197,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   }
 
   actorSessionBinding(actor: ZLinkBackendActorRef) {
-    return this.requireStateful().actorSessionBinding({
-      nodeRid: String(actor.nodeRid),
-      actorId: actor.actorId,
-      generation: actor.generation
-    });
+    return this.requireStateful().actorSessionBinding(actor);
   }
 
   restoreActorSessionBinding(

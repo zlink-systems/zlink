@@ -763,10 +763,8 @@ int zlink::socket_base_t::getsockopt (int option_, void *optval_, size_t *optval
     if (!admission.acquired ())
         return -1;
 
-    //  A poller must keep watching the mailbox after stop() publishes context
-    //  termination: process_stop() and an in-flight claimed send can still
-    //  publish the final completion there. All user-visible options retain
-    //  their ordinary ETERM boundary.
+    //  The mailbox FD remains available after context termination. Other
+    //  options retain their ETERM boundary.
     if (unlikely (_ctx_terminated) && option_ != ZLINK_INTERNAL_OPT_FD) {
         errno = ETERM;
         return -1;
@@ -877,105 +875,93 @@ int zlink::socket_base_t::get_events (int events_, uint32_t *out_)
     return 0;
 }
 
-int zlink::socket_base_t::get_events_internal (
-  int events_, uint32_t *out_, bool consume_primary_signaler_)
+int zlink::socket_base_t::get_events_internal (int events_,
+                                               uint32_t *out_,
+                                               bool consume_primary_signaler_,
+                                               bool transport_output_,
+                                               bool drain_primary_signaler_)
 {
     if (!out_) {
         errno = EINVAL;
         return -1;
     }
 
-    if (lifecycle_coordinator ().public_close_requested ()) {
-        *out_ = ZLINK_POLLERR;
-        return 0;
-    }
+    socket_lifecycle_coordinator_t &lifecycle = lifecycle_coordinator ();
+    const bool acquire_turn = !lifecycle.public_api_sync_owned_by_current_thread ();
+    bool first_turn = true;
+    while (true) {
+        socket_reqrep_internal::completion_discard_t discard;
+        int drained_completions = 0;
+        bool discard_pending = false;
+        {
+            // The registration pins the socket. Close waits for this turn
+            // before teardown, and subsequent turns only report POLLERR.
+            const socket_public_api_lock_scope_t turn (lifecycle, acquire_turn);
+            if (lifecycle.public_close_requested ()) {
+                *out_ = ZLINK_POLLERR;
+                return 0;
+            }
 
-    const int rc = process_commands (0, false, false, NULL,
-                                     consume_primary_signaler_);
-    // Context termination ends every poll of this socket without events
-    // (Core Polling §5); unread completions follow the completion close rule.
-    if (unlikely (rc != 0) && (errno == EINTR || errno == ETERM))
-        return -1;
-    errno_assert (rc == 0);
+            if (first_turn) {
+                // Drain the previous mailbox notification before sampling.
+                // An async command drain signals after applying its commands.
+                if (drain_primary_signaler_)
+                    static_cast<mailbox_t *> (_mailbox)->drain_primary_signaler ();
+                // Taking the observation turn does not take command ownership
+                // away from the async executor.
+                const int rc =
+                  process_commands (0, false, false, NULL, consume_primary_signaler_, acquire_turn);
+                // Core Polling §5: context termination ends the wait without
+                // events. Unread completions follow the completion close rule.
+                if (unlikely (rc != 0) && (errno == EINTR || errno == ETERM))
+                    return -1;
+                errno_assert (rc == 0);
+                first_turn = false;
+            }
 
-    int drained_completions = 0;
-    if (events_ & ZLINK_POLLCOMPLETION) {
-        zlink_assert (_completion_poller_refs.load (std::memory_order_acquire)
-                      != 0);
-        while (true) {
-            socket_reqrep_internal::completion_discard_t discard;
-            {
-                socket_public_api_lock_scope_t command_owner (
-                  lifecycle_coordinator (),
-                  !lifecycle_coordinator ().public_api_sync_owned_by_current_thread ());
+            if (events_ & ZLINK_POLLCOMPLETION) {
+                zlink_assert (_completion_poller_refs.load (std::memory_order_acquire) != 0);
                 const completion_drain_scope_t drain_scope (this, &discard);
                 (void) _request_completion_pending.exchange (
                   false, std::memory_order_acq_rel);
-                const bool yielded_for_discard =
-                  process_ready_completion_pipes ();
-                if (!yielded_for_discard)
+                if (!process_ready_completion_pipes ())
                     drained_completions = drain_request_completions ();
+                discard_pending = socket_reqrep_internal::completion_discard_has_payload (&discard);
             }
-            const bool yielded_for_discard =
-              socket_reqrep_internal::completion_discard_has_payload (
-                &discard);
-            socket_reqrep_internal::release_completion_discard (&discard);
-            if (drained_completions < 0)
-                return -1;
-            if (!yielded_for_discard)
-                break;
+
+            if (drained_completions >= 0 && !discard_pending) {
+                uint32_t events = 0;
+                if ((events_ & ZLINK_POLLCOMPLETION)
+                    && socket_completion::has_ready (&completion_runtime ()))
+                    events |= ZLINK_POLLCOMPLETION;
+                if ((events_ & ZLINK_POLLIN) && has_in ())
+                    events |= ZLINK_POLLIN;
+                // Queued command processing precedes physical route sampling.
+                if ((events_ & ZLINK_POLLOUT)
+                    && (transport_output_ ? transport_has_out () : has_out ()))
+                    events |= ZLINK_POLLOUT;
+                if ((events_ & ZLINK_POLLROUTE) && has_route_change ())
+                    events |= ZLINK_POLLROUTE;
+                if ((events_ & ZLINK_POLLCONNECT) && has_connection_attempt_change ())
+                    events |= ZLINK_POLLCONNECT;
+                *out_ = events;
+                return 0;
+            }
         }
+
+        // Payload release can enter application code. Do it after the turn.
+        socket_reqrep_internal::release_completion_discard (&discard);
+        if (drained_completions < 0)
+            return -1;
     }
-
-    uint32_t events = 0;
-    if ((events_ & ZLINK_POLLCOMPLETION)
-        && socket_completion::has_ready (&completion_runtime ()))
-        events |= ZLINK_POLLCOMPLETION;
-    if ((events_ & ZLINK_POLLIN) && has_in ())
-        events |= ZLINK_POLLIN;
-    if ((events_ & ZLINK_POLLOUT) && has_out ())
-        events |= ZLINK_POLLOUT;
-    if ((events_ & ZLINK_POLLROUTE) && has_route_change ())
-        events |= ZLINK_POLLROUTE;
-    if ((events_ & ZLINK_POLLCONNECT) && has_connection_attempt_change ())
-        events |= ZLINK_POLLCONNECT;
-
-    *out_ = events;
-    return 0;
 }
 
 int zlink::socket_base_t::get_events_for_poller (int events_, uint32_t *out_,
                                                  bool transport_output_,
                                                  bool consume_primary_signaler_)
 {
-    socket_public_api_scope_t admission (lifecycle_coordinator ());
-    if (!admission.acquired ()) {
-        if (out_)
-            *out_ = ZLINK_POLLERR;
-        return 0;
-    }
-
-    const int public_events =
-      transport_output_ ? events_ & ~ZLINK_POLLOUT : events_;
-
-    //  Retire the poller's previous edge before sampling logical readiness.
-    //  A concurrent off-poller command drain publishes a new edge after it
-    //  applies the command.
-    if (consume_primary_signaler_)
-        static_cast<mailbox_t *> (_mailbox)->drain_primary_signaler ();
-
-    const int rc = get_events_internal (public_events, out_,
-                                        consume_primary_signaler_);
-    if (rc != 0)
-        return rc;
-    // Apply queued activate-write/flow-resume commands before sampling the
-    // physical route. Their mailbox notification is the transport poller's
-    // wake edge on every supported platform.
-    if (transport_output_ && (events_ & ZLINK_POLLOUT)
-        && transport_has_out ())
-        *out_ |= ZLINK_POLLOUT;
-
-    return 0;
+    return get_events_internal (events_, out_, consume_primary_signaler_, transport_output_,
+                                consume_primary_signaler_);
 }
 
 int zlink::socket_base_t::drain_request_completions ()

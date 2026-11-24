@@ -16,6 +16,7 @@ final class ZLinkStreamPendingRequests {
 
     void add(
             long requestSeq,
+            ZLinkStreamTransportConnection owner,
             String packetName,
             CompletableFuture<ZLinkStreamEncodedPayload> pending,
             BiFunction<ZLinkStreamEncodedPayload, BooleanSupplier, Boolean> onReply,
@@ -23,6 +24,7 @@ final class ZLinkStreamPendingRequests {
         requests.put(
                 requestSeq,
                 new PendingRequest(
+                        owner,
                         (payload, failure) -> {
                             if (failure != null)
                                 return onFailure.apply(
@@ -105,11 +107,11 @@ final class ZLinkStreamPendingRequests {
     }
 
     /**
-     * Fails every pending request because the connection ended. Spec 32 9: they fail with {@code
-     * Disconnected} whatever ended the connection; the cause stays in the close reason and in the
-     * exception's cause.
+     * Fails requests owned by the ended transport. A null owner means the connector is closing and
+     * all outstanding requests must fail. Spec 32 9 gives these requests {@code Disconnected} and
+     * preserves the ending cause.
      */
-    void failAll(Throwable ex) {
+    void failAll(Throwable ex, ZLinkStreamTransportConnection owner) {
         ZLinkStreamException failure =
                 ex instanceof ZLinkStreamException coded
                                 && coded.errorCode() == ZLinkStreamErrorCode.DISCONNECTED
@@ -119,8 +121,10 @@ final class ZLinkStreamPendingRequests {
                                 "connection ended: " + coded(ex).getMessage(),
                                 ex);
         for (Map.Entry<Long, PendingRequest> entry : requests.entrySet()) {
-            if (requests.remove(entry.getKey()) != null) {
-                entry.getValue().complete().apply(null, failure);
+            PendingRequest request = entry.getValue();
+            if ((owner == null || request.owner() == owner)
+                    && requests.remove(entry.getKey(), request)) {
+                request.complete().apply(null, failure);
             }
         }
     }
@@ -137,6 +141,7 @@ final class ZLinkStreamPendingRequests {
     }
 
     private record PendingRequest(
+            ZLinkStreamTransportConnection owner,
             BiFunction<ZLinkStreamEncodedPayload, Throwable, Boolean> complete,
             CompletableFuture<ZLinkStreamEncodedPayload> future) {}
 }

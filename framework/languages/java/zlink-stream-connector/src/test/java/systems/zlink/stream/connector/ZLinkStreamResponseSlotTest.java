@@ -25,6 +25,7 @@ final class ZLinkStreamResponseSlotTest {
         if (hasPending)
             pending.add(
                     1,
+                    null,
                     "Reply",
                     result,
                     (payload, complete) -> complete.getAsBoolean(),

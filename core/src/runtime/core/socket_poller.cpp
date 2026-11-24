@@ -352,21 +352,9 @@ int zlink::socket_poller_t::rebuild ()
                     continue;
                 if (!it->primary_notification)
                     continue;
-                size_t fd_size = sizeof (zlink::fd_t);
-                const int rc =
-                  it->socket->getsockopt (ZLINK_INTERNAL_OPT_FD, &_pollfds[item_nbr].fd, &fd_size);
-                if (rc != 0) {
-                    //  A socket whose close won the race against this rebuild
-                    //  rejects the descriptor query. That is not a poller
-                    //  failure: the registered source still owes its caller a
-                    //  one-time POLLERR, which check_socket_events() reports
-                    //  from get_events_for_poller(). Leave it out of the
-                    //  descriptor set and keep the rest of the pollset.
-                    unregister_socket_notification (*it);
-                    errno = 0;
-                    continue;
-                }
-
+                // The registration pin keeps the mailbox and its FD alive.
+                _pollfds[item_nbr].fd =
+                  static_cast<mailbox_t *> (it->socket->get_mailbox ())->get_fd ();
                 _pollfds[item_nbr].events = POLLIN;
                 _pollfds[item_nbr].revents = 0;
                 item_nbr++;
@@ -382,7 +370,7 @@ int zlink::socket_poller_t::rebuild ()
         }
     }
 
-    //  Items skipped above (terminal sockets) leave no descriptor behind.
+    // Secondary socket registrations share a single descriptor.
     _pollset_size = static_cast<int> (item_nbr);
 
 #elif defined ZLINK_POLL_BASED_ON_SELECT
@@ -411,24 +399,13 @@ int zlink::socket_poller_t::rebuild ()
     //  Build the fd_sets for passing to select ().
     for (items_t::iterator it = _items.begin (), end = _items.end (); it != end; ++it) {
         if (waits_on (*it)) {
-            //  If the poll item is a 0MQ socket we are interested in input on the
-            //  notification file descriptor retrieved by the ZLINK_INTERNAL_OPT_FD socket option.
             if (it->socket) {
                 if (it->secondary_notification)
                     continue;
                 if (!it->primary_notification)
                     continue;
-                zlink::fd_t notify_fd;
-                size_t fd_size = sizeof (zlink::fd_t);
-                int rc = it->socket->getsockopt (ZLINK_INTERNAL_OPT_FD, &notify_fd, &fd_size);
-                if (rc != 0) {
-                    //  See the poll() path: a closed registered source still
-                    //  owes a one-time POLLERR, so skip it instead of failing.
-                    unregister_socket_notification (*it);
-                    errno = 0;
-                    continue;
-                }
-
+                const zlink::fd_t notify_fd =
+                  static_cast<mailbox_t *> (it->socket->get_mailbox ())->get_fd ();
                 FD_SET (notify_fd, _pollset_in.get ());
                 if (_max_fd < notify_fd)
                     _max_fd = notify_fd;
