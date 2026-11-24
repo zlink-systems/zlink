@@ -166,6 +166,42 @@ commit's intermediate state. If even one condition is false, it returns
 `Conflict`, and mutation and version increments are zero. `Conflict` doesn't
 return the failed condition or the current value.
 
+### 4.1 Capacity counters
+
+Aggregates that many callers add to and subtract from at once, such as capacity, are not gated with a
+`Version` condition, because a `Version` condition makes creates of different objects conflict with
+each other. Such values are stored as **bare decimal counter keys** (the §8 counter format: `0..2^63-1`
+without sign or leading zero) and use only these two operations.
+
+- `SumAtMost(keys, delta, limit)` condition: true only when the sum of the listed keys' current values
+  (absent counts as `0`) plus `delta` is at most `limit`.
+- `Add(key, delta)` mutation: adds `delta` (may be negative) to the key's value and puts it. If a result
+  is below `0`, the whole batch ends as `Corrupt` with zero mutations. `Corrupt` differs from `Conflict`
+  and means Store data corruption (the negative-release rule of
+  [Location runtime §6.1](01-location-runtime.en.md)).
+
+A dimension whose limit is `0` (no limit, [Location runtime §3.3](01-location-runtime.en.md)) gets no
+`SumAtMost`. The provider interprets only the keys these two operations name as numbers; every other key stays
+opaque. `SumAtMost` and `Add` in one batch are evaluated and applied in one commit. A batch with `Add`
+and no condition does not conflict with other callers' `Add`. A Store that only offers value-comparing
+compares (the official etcd provider) reads, computes, and commits with a revision compare, and retries
+inside the provider if another caller changed the same key in between — the retry is not visible to
+the Framework as `Conflict`. Only a false `SumAtMost` is a `Conflict`.
+
+The Framework keeps MeshNode capacity as one counter key per Mesh name, RID, dimension (Actor total,
+Spot total, per Spot kind and type) and state (`active`, `pending`). A reservation puts, per dimension,
+`SumAtMost([active, pending], n, limit)` and `Add(pending, n)`; a commit puts `Add(pending, -n)` and
+`Add(active, n)`; a release puts `Add(..., -n)` — each in the same batch as its authority change.
+**Only the reservation checks the limit.** A commit or a relocation move transfers space already
+reserved, so it does not fail if the limit was lowered in between.
+
+The logical key of a capacity counter is `zlink:v12:capacity <mesh> <rid> <dimension> <state>`.
+`<mesh>` is the MeshName's UTF-8 bytes, `<rid>` is the lowercase `routingIdHex` used by the descriptor key,
+and `<state>` is `active` or `pending`. `<dimension>` is `actors`, `spots`, or
+`spot-type <objectKind> <stableType>`, where `<objectKind>` is the allocation's `userSpot` or
+`instanceSpot` ([Location runtime §3.3](01-location-runtime.en.md)) and `<stableType>` is its UTF-8 bytes.
+All four languages and the [§8.1](#81-converting-from-v11-to-v12) conversion use this one key.
+
 The following bounds apply to a batch.
 
 - The total unique keys appearing across conditions and mutations is at most
@@ -280,17 +316,36 @@ the same object incarnation.
 | Logical key | Issued value |
 |---|---|
 | `zlink:v11:owner-counter` | `OwnerLeaseGeneration` (unchanged) |
-| `zlink:v11:object-counter` | `ObjectGeneration` |
-| `zlink:v11:authority-owner-counter` | `AuthorityOwnerGeneration` |
+| `zlink:v12:object-counter\0<kind>\0<id>` | `ObjectGeneration` of that Actor or Spot ID |
+| `zlink:v12:authority-owner-counter\0<kind>\0<id>` | `AuthorityOwnerGeneration` of that Actor or Spot ID |
+
+`<kind>` is `actor` or `spot`, and `<id>` is the UTF-8 bytes of the public ActorId or SpotId.
+**There is one `ObjectGeneration` counter and one `AuthorityOwnerGeneration` counter per ID.** The two
+values only order incarnations and owners within one ID; no rule compares values of different IDs to
+decide execution. Creates and commits of different objects therefore do not conflict on a counter
+condition.
+
+- **Retention:** a per-ID counter row is not removed on object deletion, authority cleanup, or retention
+  expiry. A caller's ActorRef or SpotRef has no lifetime bound ([Location runtime §7.1](01-location-runtime.en.md)),
+  so if the row disappeared and the same ID received a lower value again, an old ref's control could
+  reach the new incarnation. Storage grows with the number of IDs issued.
+- **Transition floor:** when the row is absent, the next value is not `1` but the value of
+  `zlink:v12:generation-floor` (a bare decimal). The key is written once and never changed, so no value
+  issued before the transition is issued again for the same ID. A new Store writes `1`; [§8.1](#81-converting-from-v11-to-v12)
+  owns initializing it from a v11 Store.
+- **Relocation:** an aggregate relocation issues one value per participant from that ID's
+  `authority-owner-counter`. It does not hand out a global contiguous range.
 
 Each value is bare UTF-8 canonical decimal: no sign, leading zero, JSON
-envelope, or `recordVersion`. A missing row means the next value is `1`;
-issuing `v` CAS-puts `v + 1`. A block of `n` issues `v..v+n-1` and puts
-`v+n`. The valid stored counter range is `1..2^63-1`; `0` is never stored or
+envelope, or `recordVersion`. A missing row means the next value is `1`
+for `owner-counter` and the transition floor below for a per-ID counter;
+issuing `v` CAS-puts `v + 1`. Block issue of `n` is used only for
+`owner-counter`: it issues `v..v+n-1` and puts `v+n`. The valid stored counter range is `1..2^63-1`; `0` is never stored or
 issued. A row storing `2^63-1` is exhausted and returns the typed
 `GenerationExhausted` result without changing either record or counter.
 Therefore, the maximum issued value is `2^63-2`.
 
+Per-ID counters follow the same rule: they are issued in the same batch as that ID's record.
 **The counter mutation must be in the same conditional write batch as the
 record it gates (one `EVAL`).** The provider mapping
 `{prefix}:{zlink-location-v3}:opaque:{sha256hex(logicalKey)}` gives every
@@ -306,6 +361,36 @@ computed as SHA-256 of these retired logical literals:
 `zlink:v11:authority-generations`. Recompute each physical key from its
 literal with the mapping above; do not guess it from a record or scan
 prefix.
+
+### 8.1 Converting from v11 to v12
+
+Per-ID counters (§8) and capacity counter keys ([§4.1](#41-capacity-counters)) can't coexist with the
+v11 Store format. Every node sharing one Location Store uses the same format — stop all v11 nodes
+before starting v12 nodes; nodes of the two formats never write the same Store at the same time.
+
+The conversion is complete when the `zlink:v12:format` key (value `converted`) exists. Without that
+key, a v12 node runs the following procedure in step 2 of
+[MeshNode §6](../03-spot-actor/03-mesh-node.en.md#6-registration-and-startup-order), before any
+initialization or recovery that uses the Location Store (Entry Spot issuance, startup release,
+reservation, commit, or release). Every write in the procedure is a [§4](#4-conditional-atomic-batch)
+conditional batch; if any condition is false, none of the batch applies. Running it from several
+nodes at once, or rerunning it after an interruption, gives the same result.
+
+1. If `zlink:v12:generation-floor` is absent, Put the larger of `zlink:v11:object-counter` and
+   `zlink:v11:authority-owner-counter` (or `1` when both are absent) under a `Missing` condition.
+2. For each remaining v11 MeshNode capacity record, one batch Puts its active and pending values into
+   the §4.1 counter keys and Deletes the old record. Its conditions are `Value` on the old record (the
+   bytes read) and `Missing` on every target counter key. On `Conflict` or a lost response, read that
+   record and its counter keys again: if the old record is gone and the counter keys exist, it is done;
+   otherwise retry. A counter whose value is `0` isn't Put (an absent key is `0`). The RID string in the old
+   record's key maps to that RID's `routingIdHex` when exactly one current descriptor's RID renders as that
+   string, or, when none does, to the `routingIdHex` of the string parsed as a RoutingId. If two or more do, or
+   one batch would exceed the §4 key bound, the record isn't moved and startup stops with a configuration error.
+3. When a scan finds no old capacity record left, Put `zlink:v12:format` under a `Missing` condition.
+
+Until `zlink:v12:format` exists, no v12 node reserves, commits, or releases, so ordinary capacity changes
+never touch a record that is being converted. The conversion isn't rolled back; going back to v11 uses a
+new Store.
 
 ## 9. The Official Redis Provider — Opaque Storage Format
 
