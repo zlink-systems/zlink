@@ -33,6 +33,9 @@ interface HostComposition {
   providers: Type[];
   listener: { kind: 'stream' | 'routeMesh'; name: string };
   ready: (status: ZLinkRouteMeshStatus) => boolean;
+  initialize?: (
+    app: Awaited<ReturnType<typeof NestFactory.createApplicationContext>>
+  ) => Promise<void>;
 }
 export async function runHost(
   configure: (
@@ -127,6 +130,7 @@ export async function runHost(
   try {
     await waitServing();
     await waitReady();
+    await composition.initialize?.(app);
     const listener = runtime.getListenerStatus(
       composition.listener.kind,
       composition.listener.name

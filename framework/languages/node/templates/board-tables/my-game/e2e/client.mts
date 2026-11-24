@@ -11,6 +11,11 @@ import { Game, Limits, PacketNames, Reasons } from '../server/shared/constants.j
 import {
   HandResult,
   BetRequest,
+  CancelMatch,
+  FindMatch,
+  type MatchCancelled,
+  type MatchFound,
+  type MatchQueued,
   JoinTableRequest,
   MaxContractInteger,
   SessionInfoRequest,
@@ -96,16 +101,18 @@ class PlayerClient {
       PacketNames.tableView,
       PacketNames.handDealt,
       PacketNames.handResult,
-      PacketNames.actionRejected
+      PacketNames.actionRejected,
+      PacketNames.matchQueued,
+      PacketNames.matchCancelled,
+      PacketNames.matchFound
     ])
       this.connector.on(name, (message) => {
         const payload = decodeWirePayload(name, message.payload);
         this.messages.push({ name, payload });
         appendFileSync(
           log,
-          JSON.stringify({ name, payload }, (_, v) =>
-            typeof v === 'bigint' ? v.toString() : v
-          ) + '\n'
+          JSON.stringify({ name, payload }, (_, v) => (typeof v === 'bigint' ? v.toString() : v)) +
+            '\n'
         );
         this.changed.emit('change');
       });
@@ -168,10 +175,29 @@ class PlayerClient {
     assert.equal((await this.sessionInfo()).actorId, playerId);
     return view;
   }
+  async queue(playerId: string): Promise<MatchQueued> {
+    await this.connector.connect();
+    const from = this.messages.length;
+    await this.connector.send(new FindMatch(playerId)).submit();
+    const reply = await this.wait<MatchQueued>(PacketNames.matchQueued, from);
+    assert(reply.ticketId);
+    assert.equal((await this.sessionInfo()).actorId, playerId);
+    return reply;
+  }
+  async assigned(ticketId: string): Promise<TableView> {
+    const found = await this.wait<MatchFound>(PacketNames.matchFound, 0);
+    const view = await this.wait<TableView>(PacketNames.tableView, 0);
+    const index = (name: string): number => this.messages.findIndex((event) => event.name === name);
+    assert(index(PacketNames.matchQueued) < index(PacketNames.matchFound));
+    assert(index(PacketNames.matchFound) < index(PacketNames.tableView));
+    assert.equal(found.ticketId, ticketId);
+    assert.match(found.roomId, /^room-[0-9a-f-]+$/);
+    assert.equal(view.tableId, found.roomId);
+    assert.equal(view.yourSeat, found.seat);
+    return view;
+  }
   async sessionInfo(): Promise<SessionInfo> {
-    const response = await this.connector
-      .request(new SessionInfoRequest())
-      .submit<SessionInfo>();
+    const response = await this.connector.request(new SessionInfoRequest()).submit<SessionInfo>();
     const fields = response as unknown as Record<string, unknown>;
     return {
       ...response,
@@ -251,10 +277,7 @@ function settlement(
 }
 function sendBet(client: PlayerClient, handNumber: bigint, amount: bigint): Promise<void> {
   return client.connector
-    .send(
-      { handNumber: handNumber.toString(10), amount: amount.toString(10) },
-      BetRequest
-    )
+    .send({ handNumber: handNumber.toString(10), amount: amount.toString(10) }, BetRequest)
     .submit();
 }
 export async function scenario(
@@ -262,7 +285,7 @@ export async function scenario(
   endpoint: string,
   runId: string,
   logDir: string,
-  control: NodeControl,
+  control?: NodeControl,
   expectedNode?: string
 ): Promise<void> {
   const tableId = `table-${name}-${runId}`,
@@ -273,12 +296,52 @@ export async function scenario(
     clients.push(client);
     return client;
   };
-  const p1 = create('p1');
+  let p1 = create('p1');
   let p2 = create('p2');
   const failures: unknown[] = [];
   try {
-    const first = await p1.join(ids[0], tableId),
+    const matching = name === 'match' || name === 'match-cancel';
+    if (name === 'match-cancel') {
+      const playerId = `p0-${name}-${runId}`;
+      const original = create('cancelled-original');
+      const ticket = await original.queue(playerId);
+      await original.close();
+      const cancelled = create('cancelled-reconnected');
+      assert.equal((await cancelled.queue(playerId)).ticketId, ticket.ticketId);
+      const duplicate = cancelled.messages.length;
+      await cancelled.connector.send(new FindMatch(playerId)).submit();
+      const queuedAgain = await cancelled.wait<MatchQueued>(PacketNames.matchQueued, duplicate);
+      assert.equal(queuedAgain.ticketId, ticket.ticketId);
+      const wrong = cancelled.messages.length;
+      await cancelled.connector.send(new CancelMatch(ticket.ticketId + '-wrong')).submit();
+      const rejected = await cancelled.wait<ActionRejected>(PacketNames.actionRejected, wrong);
+      assert.equal(rejected.reason, Reasons.matchNotWaiting);
+      const pending = cancelled.messages.length;
+      await cancelled.connector.send(new CancelMatch(ticket.ticketId)).submit();
+      const reply = await cancelled.wait<MatchCancelled>(PacketNames.matchCancelled, pending);
+      assert.equal(reply.ticketId, ticket.ticketId);
+      assert.equal(reply.reason, 'cancelled');
+    }
+    let first: TableView;
+    let second: TableView;
+    if (matching) {
+      const ticket1 = await p1.queue(ids[0]);
+      const ticket2 = await p2.queue(ids[1]);
+      assert.notEqual(ticket1.ticketId, ticket2.ticketId);
+      [first, second] = await Promise.all([
+        p1.assigned(ticket1.ticketId),
+        p2.assigned(ticket2.ticketId)
+      ]);
+      assert.equal(first.tableId, second.tableId);
+      assert.deepEqual(first.seats.map((seat) => seat.playerId).sort(), [...ids].sort());
+      if (first.yourSeat !== 0) {
+        [p1, p2] = [p2, p1];
+        [first, second] = [second, first];
+      }
+    } else {
+      first = await p1.join(ids[0], tableId);
       second = await p2.join(ids[1], tableId);
+    }
     if (expectedNode !== undefined) {
       assert.equal(first.nodeId, expectedNode, 'Replacement node did not host new work');
       assert.equal(second.nodeId, expectedNode, 'Replacement node did not host new work');
@@ -295,15 +358,9 @@ export async function scenario(
     if (name === 'table') {
       const rejectedAt = p2.messages.length;
       await p2.connector
-        .send(
-          { handNumber: '0', pot: '0', winners: [], hands: [], seats: [] },
-          HandResult
-        )
+        .send({ handNumber: '0', pot: '0', winners: [], hands: [], seats: [] }, HandResult)
         .submit();
-      const rejected = await p2.wait<ActionRejected>(
-        PacketNames.actionRejected,
-        rejectedAt
-      );
+      const rejected = await p2.wait<ActionRejected>(PacketNames.actionRejected, rejectedAt);
       assert.equal(rejected.reason, Reasons.packetNotAllowed);
       assert.equal(rejected.retryAfterMs, 0);
       const idleViewAt = p2.messages.length;
@@ -315,9 +372,9 @@ export async function scenario(
       );
       assert.deepEqual(emptyBeforeHand.cards, []);
     }
-    const start1 = p1.messages.length,
-      start2 = p2.messages.length;
-    await p1.connector.send(new StartHandRequest()).submit();
+    const start1 = matching ? 0 : p1.messages.length,
+      start2 = matching ? 0 : p2.messages.length;
+    if (!matching) await p1.connector.send(new StartHandRequest()).submit();
     const [v1, v2, h1, h2] = await Promise.all([
       p1.wait<TableView>(PacketNames.tableView, start1, (v) => v.inHand),
       p2.wait<TableView>(PacketNames.tableView, start2, (v) => v.inHand),
@@ -343,10 +400,7 @@ export async function scenario(
 
       const overLimitAt = p1.messages.length;
       await sendBet(p1, v1.handNumber, MaxContractInteger + 1n);
-      const overLimit = await p1.wait<ActionRejected>(
-        PacketNames.actionRejected,
-        overLimitAt
-      );
+      const overLimit = await p1.wait<ActionRejected>(PacketNames.actionRejected, overLimitAt);
       assert.equal(overLimit.reason, Reasons.integerOutOfRange);
       assert.equal(overLimit.retryAfterMs, 0);
       assert.deepEqual(await p1.view(), v1);
@@ -382,6 +436,7 @@ export async function scenario(
       assert.equal(rebound.objectGeneration, session2.objectGeneration);
       assert.deepEqual((await p2.wait<HandDealt>(PacketNames.handDealt, mark)).cards, h2.cards);
     } else if (name === 'update') {
+      assert(control, 'The update scenario requires an isolated run.');
       await control.drain(b1.nodeId);
       const mark1 = p1.messages.length,
         mark2 = p2.messages.length;
@@ -396,7 +451,10 @@ export async function scenario(
       assert.deepEqual(await p2.sessionInfo(), session2);
     }
     privacy(p1, h1.cards);
-    for (const client of clients) if (client !== p1) privacy(client, h2.cards);
+    for (const client of clients) {
+      if (client !== p1 && client.messages.some((m) => m.name === PacketNames.tableView))
+        privacy(client, h2.cards);
+    }
     const end1 = p1.messages.length,
       end2 = p2.messages.length;
     await sendBet(p2, v2.handNumber, 50n);
@@ -419,6 +477,11 @@ export async function scenario(
       assert.deepEqual(emptyHand.cards, []);
     }
     for (const client of clients) {
+      if (name === 'match-cancel' && client !== p1 && client !== p2) {
+        assert(!client.messages.some((m) => m.name === PacketNames.matchFound));
+        assert(!client.messages.some((m) => m.name === PacketNames.handDealt));
+        continue;
+      }
       let expectedDeals = (name === 'table' && client === p2) || name === 'update' ? 2 : 1;
       if (client === p1 || client === p2) expectedDeals++;
       if (name === 'table') expectedDeals += client === p1 ? 2 : client === p2 ? 1 : 0;
@@ -431,6 +494,7 @@ export async function scenario(
     assert.equal(p1.disconnects, 0);
     assert.equal(p2.disconnects, 0);
     if (name === 'update') {
+      assert(control, 'The update scenario requires an isolated run.');
       await control.replace(b1.nodeId);
       await scenario('table', endpoint, `${runId}-replacement`, logDir, control, b1.nodeId);
     }

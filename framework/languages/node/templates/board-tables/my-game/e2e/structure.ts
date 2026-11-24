@@ -1,7 +1,10 @@
 import { readFileSync, realpathSync } from 'node:fs';
 import { isAbsolute, relative, resolve, sep, win32 } from 'node:path';
 import assert from 'node:assert/strict';
-import { Names, Scenarios, NodeEntrypoints } from '../server/shared/constants';
+import { Names, Scenarios, NodeEntrypoints, type NodeRole } from '../server/shared/constants';
+export function isNodeRole(role: unknown): role is NodeRole {
+  return typeof role === 'string' && Object.hasOwn(NodeEntrypoints, role);
+}
 function object(value: unknown): Record<string, unknown> {
   assert(value !== null && typeof value === 'object' && !Array.isArray(value), 'Expected object');
   return value as Record<string, unknown>;
@@ -41,9 +44,8 @@ export function checkStructure(path = 'zlink.structure.json'): void {
     return node;
   }
   for (const node of nodes) {
-    text(node.role);
-    if (node.role === 'session' || node.role === 'table')
-      realpathSync(resolve(root, NodeEntrypoints[node.role]));
+    assert(isNodeRole(node.role) || node.role === 'external' || node.role === 'location-store');
+    if (isNodeRole(node.role)) realpathSync(resolve(root, NodeEntrypoints[node.role]));
     text(node.title);
     if (node.config === null) {
       assert.equal(node.role, 'external');
@@ -63,6 +65,12 @@ export function checkStructure(path = 'zlink.structure.json'): void {
     if (node.role !== 'location-store') {
       const cfg = object(JSON.parse(readFileSync(file, 'utf8')));
       assert.equal(cfg.id, node.id, 'Config ID mismatch');
+      if (node.role === 'session')
+        assert.equal(
+          new URL(text(cfg.streamEndpoint)).protocol,
+          'ws:',
+          'Session STREAM must use WebSocket'
+        );
     }
   }
   const channels = array(s.channels).map(object);
@@ -82,8 +90,16 @@ export function checkStructure(path = 'zlink.structure.json'): void {
   );
   const logical: string[] = [];
   for (const spot of spots) {
-    assert.equal(owner(spot.owner).role, 'table', 'Spot owner must host table runtime');
-    assert(['entry', 'user', 'instance'].includes(text(spot.kind)), 'Unknown Spot kind');
+    const role = owner(spot.owner).role;
+    if (role === 'matchmaker') {
+      assert.equal(spot.kind, 'user');
+      assert.equal(spot.type, Names.pool);
+      assert.equal(spot.logicalId, Names.poolKey);
+      assert(!('dynamic' in spot) || spot.dynamic === false);
+      logical.push(Names.poolKey);
+      continue;
+    }
+    assert.equal(role, 'table', 'Entry and Table Spots must be owned by a Table node');
     if (spot.kind === 'entry') {
       assert.equal(spot.type, null);
       assert(!('dynamic' in spot) && !('logicalId' in spot));
@@ -98,6 +114,8 @@ export function checkStructure(path = 'zlink.structure.json'): void {
     }
   }
   unique(logical, 'logical Spot ID');
+  assert.equal(nodes.filter((node) => node.role === 'matchmaker').length, 1);
+  assert.equal(spots.filter((spot) => owner(spot.owner).role === 'matchmaker').length, 1);
   for (const node of nodes.filter((node) => node.role === 'table')) {
     assert(
       spots.filter((spot) => spot.kind === 'entry' && spot.owner === node.id).length === 1,
@@ -111,6 +129,8 @@ export function checkStructure(path = 'zlink.structure.json'): void {
   const requiredEdges = [
     { from: 'players', to: 'session', label: 'STREAM' },
     { from: 'session', to: 'tableA', label: 'relay' },
+    { from: 'tableA', to: 'matchmaker', label: 'MatchRequest' },
+    { from: 'matchmaker', to: 'tableA', label: 'PrepareRoom' },
     { from: 'tableA', to: 'location', label: 'Location / lease', semantic: 'location-authority' }
   ];
   const edges = array(s.edges).map(object);

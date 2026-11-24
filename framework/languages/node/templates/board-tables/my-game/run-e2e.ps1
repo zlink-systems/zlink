@@ -1,6 +1,7 @@
 [CmdletBinding(PositionalBinding = $false)]
 param(
     [switch]$Local,
+    [switch]$Attach,
     [switch]$NoBuild,
     [switch]$BuildOnly,
     [switch]$CheckStructure,
@@ -9,21 +10,26 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'PowerShell 7 or later is required.' }
+. (Join-Path $PSScriptRoot 'scripts/run-helpers.ps1')
+Initialize-Console
 $root = $PSScriptRoot
 Set-Location $root
 New-Item -ItemType Directory -Force (Join-Path $root '.logs') | Out-Null
 if ($CheckStructure) { $RunnerArguments = @('--check-structure') + $RunnerArguments }
 elseif ($Scenario) { $RunnerArguments = @('--scenario', $Scenario) + $RunnerArguments }
+if (-not ($Attach -or $Local -or $BuildOnly -or $CheckStructure) -and (Test-ServerStatus '--server-running')) {
+    Write-Host 'Using the running server (.logs/server.json)'
+    $Attach = $true
+}
+if ($Attach) {
+    if ($BuildOnly -or $CheckStructure) { throw '-Attach requires a scenario run.' }
+    & node dist/e2e/runner.js --attach @RunnerArguments
+    exit $LASTEXITCODE
+}
 if ($Local) {
     if (-not $NoBuild) {
-        & npm ci *> (Join-Path $root '.logs/build.log')
-        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-        & npm run build *>> (Join-Path $root '.logs/build.log')
-        if ($LASTEXITCODE -ne 0) {
-            Get-Content (Join-Path $root '.logs/build.log') -Tail 20 | Write-Host
-            exit 1
-        }
+        Assert-NoRunningServer
+        Build-Local
     }
     if ($BuildOnly) {
         & node dist/e2e/runner.js --domain-checks-only

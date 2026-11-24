@@ -5,23 +5,37 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 local_mode=false
 no_build=false
 build_only=false
+attach=false
+check_structure=false
 arguments=()
 for argument in "$@"; do
   case "$argument" in
     --local) local_mode=true ;;
     --no-build) no_build=true ;;
     --build-only) build_only=true ;;
+    --attach) attach=true ;;
+    --check-structure) check_structure=true; arguments+=("$argument") ;;
     *) arguments+=("$argument") ;;
   esac
 done
 cd "$ROOT"
 mkdir -p "$ROOT/.logs"
+. "$ROOT/scripts/run-helpers.sh"
+if ! $attach && ! $local_mode && ! $build_only && ! $check_structure && server_status --server-running; then
+  echo 'Using the running server (.logs/server.json)'
+  attach=true
+fi
+if $attach; then
+  if $build_only || $check_structure; then
+    echo '--attach requires a scenario run.' >&2
+    exit 1
+  fi
+  exec node dist/e2e/runner.js --attach "${arguments[@]}"
+fi
 if $local_mode; then
   if ! $no_build; then
-    if ! (npm ci && npm run build) >"$ROOT/.logs/build.log" 2>&1; then
-      tail -n 20 "$ROOT/.logs/build.log" >&2
-      exit 1
-    fi
+    assert_no_running_server
+    build_local
   fi
   if $build_only; then
     exec node dist/e2e/runner.js --domain-checks-only

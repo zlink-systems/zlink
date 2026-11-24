@@ -63,11 +63,17 @@ test('b: the constructor test RNG produces a deterministic deal order', () => {
     bounds,
     Array.from({ length: Game.deckSize - 1 }, (_, index) => Game.deckSize - index)
   );
-  assert.deepEqual(table.snapshot.seats.map((seat) => seat.cards), [
-    [50, 51],
-    [48, 49]
-  ]);
-  assert.deepEqual(table.snapshot.deck, Array.from({ length: 48 }, (_, card) => card));
+  assert.deepEqual(
+    table.snapshot.seats.map((seat) => seat.cards),
+    [
+      [50, 51],
+      [48, 49]
+    ]
+  );
+  assert.deepEqual(
+    table.snapshot.deck,
+    Array.from({ length: 48 }, (_, card) => card)
+  );
   completeCheck();
 });
 
@@ -96,7 +102,10 @@ test('c: relocation restores a live hand and settlement clears every private han
     3000n
   );
   assert(result.seats.every((seat) => seat.cardCount === 0));
-  assert.deepEqual(restored.snapshot.seats.map((seat) => seat.cards), [[], [], []]);
+  assert.deepEqual(
+    restored.snapshot.seats.map((seat) => seat.cards),
+    [[], [], []]
+  );
   assert.deepEqual(restored.cards('p1'), []);
   assert.equal(restored.snapshot.turnSeat, Game.noSeat);
   assert.equal(restored.snapshot.pot, 0n);
