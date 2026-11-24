@@ -1,9 +1,3 @@
-import {
-  ZLinkSpotCreateState,
-  ZLinkUserSpotExecutionMode,
-  type ZLinkSpotManager
-} from '@zlink-systems/framework';
-import { ZLINK_SPOT_MANAGER } from '@zlink-systems/nestjs';
 import { Names } from '../shared/constants';
 import { addGameMesh, failHost, runHost } from '../shared/hosting';
 import {
@@ -11,6 +5,8 @@ import {
   ConfirmWithdrawal,
   QueuePlayer,
   ReportEntry,
+  ReportPreparation,
+  ReportRoomClosure,
   ReportReturn,
   UpdatePresence
 } from './handlers';
@@ -21,8 +17,8 @@ runHost((builder, config) => {
   mesh
     .objects()
     .server()
-    .addSpotFactory(Names.pool, Pool, (factory) => {
-      factory.executionMode(ZLinkUserSpotExecutionMode.SpotWide);
+    .addInstanceSpotFactory(Names.pool, Pool, (factory) => {
+      factory.stableTypeLimit(1);
       factory.preserveStateWith(PoolRelocation);
     });
   return {
@@ -34,18 +30,11 @@ runHost((builder, config) => {
       UpdatePresence,
       ConfirmWithdrawal,
       ReportEntry,
+      ReportPreparation,
+      ReportRoomClosure,
       ReportReturn
     ],
     listener: { kind: 'routeMesh', name: Names.mesh },
-    ready: (status) => status.placement.isAvailable,
-    async initialize(app) {
-      const created = await app
-        .get<ZLinkSpotManager>(ZLINK_SPOT_MANAGER)
-        .getOrCreate(Names.poolKey, Names.pool)
-        .inMesh(Names.mesh)
-        .submit();
-      if (created.state === ZLinkSpotCreateState.Rejected)
-        throw new Error('Pool creation rejected');
-    }
+    ready: (status) => status.placement.isAvailable
   };
 }).catch(failHost);

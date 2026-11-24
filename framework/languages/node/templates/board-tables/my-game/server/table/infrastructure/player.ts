@@ -73,6 +73,7 @@ export class Player implements ZLinkActor {
     this.match ??= { requestKey: randomUUID() };
     const reply = await outbound
       .requestToSpot(Names.poolKey, new MatchRequest(this.match.requestKey, this.context.actorId))
+      .instanceSpot(Names.pool)
       .submit<MatchQueued>();
     this.match.ticketId = reply.ticketId;
     await this.context.boundSession.send(new MatchQueued(reply.ticketId)).submit();
@@ -92,6 +93,7 @@ export class Player implements ZLinkActor {
     if (this.match?.ticketId)
       await outbound
         .sendToSpot(Names.poolKey, new MatchPresence(this.match.ticketId, false))
+        .instanceSpot(Names.pool)
         .submit();
   }
 
@@ -99,6 +101,7 @@ export class Player implements ZLinkActor {
     if (this.match?.ticketId)
       await this.outbound
         .sendToSpot(Names.poolKey, new MatchPresence(this.match.ticketId, true))
+        .instanceSpot(Names.pool)
         .submit();
   }
 
@@ -108,6 +111,7 @@ export class Player implements ZLinkActor {
   ): Promise<MatchCancelled | undefined> {
     const reply = await outbound
       .requestToSpot(Names.poolKey, new CancelTicket(ticketId))
+      .instanceSpot(Names.pool)
       .submit<MatchCancelled>();
     if (reply.reason === Reasons.matchNotWaiting || reply.ticketId !== this.match?.ticketId)
       return undefined;
@@ -176,6 +180,7 @@ export class Player implements ZLinkActor {
     assignment.phase = ok ? 'entered' : 'failed';
     await this.outbound
       .sendToSpot(Names.poolKey, new EnterReport(match.ticketId!, assignment.id, ok))
+      .instanceSpot(Names.pool)
       .submit();
     await this.returnToEntry(match, assignment);
   }
@@ -204,6 +209,7 @@ export class Player implements ZLinkActor {
   ): Promise<void> {
     await this.outbound
       .sendToSpot(Names.poolKey, new ReturnReport(match.ticketId!, assignment.id))
+      .instanceSpot(Names.pool)
       .submit();
     if (assignment.requeue) {
       delete match.assignment;

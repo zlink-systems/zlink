@@ -115,7 +115,10 @@ export class Table implements ZLinkSpot<Player> {
     const assignment = this.assignment;
     if (!assignment || assignment.id !== assignmentId || assignment.phase === 'committed') return;
     assignment.phase = 'withdrawn';
-    await this.context.outbound.sendToSpot(Names.poolKey, new RoomWithdrawn(assignmentId)).submit();
+    await this.context.outbound
+      .sendToSpot(Names.poolKey, new RoomWithdrawn(assignmentId))
+      .instanceSpot(Names.pool)
+      .submit();
   }
   async onLeaveActor(_actor: Player): Promise<void> {}
   async onDisconnectActor(actor: Player): Promise<void> {

@@ -98,17 +98,22 @@ export function checkStructure(path = 'zlink.structure.json'): void {
   for (const spot of spots) {
     const role = owner(spot.owner).role;
     if (role === 'matchmaker') {
-      assert.equal(spot.kind, 'user');
+      assert.equal(spot.kind, 'instance');
       assert.equal(spot.type, Names.pool);
       assert.equal(spot.logicalId, Names.poolKey);
       assert(!('dynamic' in spot) || spot.dynamic === false);
       logical.push(Names.poolKey);
       continue;
     }
-    assert.equal(role, 'table', 'Entry and Table Spots must be owned by a Table node');
+    assert.equal(role, 'table', 'Spot must be owned by a Table node');
     if (spot.kind === 'entry') {
       assert.equal(spot.type, null);
       assert(!('dynamic' in spot) && !('logicalId' in spot));
+    } else if (spot.kind === 'instance') {
+      assert.equal(spot.type, Names.roomProvisioner);
+      assert.equal(spot.logicalId, Names.roomProvisionerKey);
+      assert(!('dynamic' in spot));
+      logical.push(Names.roomProvisionerKey);
     } else {
       assert.equal(spot.kind, 'user');
       assert.equal(spot.type, Names.table);
@@ -120,6 +125,10 @@ export function checkStructure(path = 'zlink.structure.json'): void {
     }
   }
   unique(logical, 'logical Spot ID');
+  assert(
+    spots.some((spot) => spot.kind === 'instance' && spot.type === Names.roomProvisioner),
+    'Missing RoomProvisioner Spot'
+  );
   assert.equal(nodes.filter((node) => node.role === 'matchmaker').length, 1);
   assert.equal(spots.filter((spot) => owner(spot.owner).role === 'matchmaker').length, 1);
   for (const node of tableNodes) {

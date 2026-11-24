@@ -4,6 +4,8 @@ export const Names = {
   stream: 'players',
   actor: 'Player',
   table: 'Table',
+  roomProvisioner: 'RoomProvisioner',
+  roomProvisionerKey: 'room-provisioner-board',
   pool: 'Pool',
   poolKey: 'pool-board',
   matchRoomPrefix: 'room-'
@@ -85,6 +87,8 @@ export const PacketNames = {
   matchAssigned: 'MatchAssigned',
   enterReport: 'EnterReport',
   prepareRoom: 'PrepareRoom',
+  roomPrepared: 'RoomPrepared',
+  roomClosed: 'RoomClosed',
   roomAdmission: 'RoomAdmission',
   tableAdmission: 'TableAdmission',
   commitRoom: 'CommitRoom',

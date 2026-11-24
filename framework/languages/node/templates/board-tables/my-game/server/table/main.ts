@@ -8,6 +8,7 @@ import {
   type ZLinkClientServerRuntime
 } from '@zlink-systems/framework';
 import { Entry, Table, TableRelocation } from './infrastructure/table';
+import { RoomProvisioner, ProvisionRoom, CloseRoom } from './infrastructure/room-provisioner';
 import { PlayerFactory, PlayerRelocation } from './infrastructure/player';
 import { EntryJoin, Rejoin, View, Start, Bet, Deliver } from './infrastructure/handlers';
 import {
@@ -27,6 +28,9 @@ runHost((builder, config) => {
   const objects = mesh.objects().server();
   objects.addEntrySpot(Entry, Names.actor);
   objects.addActorFactory(Names.actor, PlayerFactory, (f) => f.preserveStateWith(PlayerRelocation));
+  objects.addInstanceSpotFactory(Names.roomProvisioner, RoomProvisioner, (f) =>
+    f.recreateOnRelocation()
+  );
   objects.addSpotFactory(Names.table, Table, (f) => {
     if (config.tableCapacity) f.stableTypeLimit(config.tableCapacity);
     f.executionMode(ZLinkUserSpotExecutionMode.SpotWide);
@@ -51,6 +55,9 @@ runHost((builder, config) => {
       AssignMatchHandler,
       MatchCancelledHandler,
       ReleaseMatchHandler,
+      RoomProvisioner,
+      ProvisionRoom,
+      CloseRoom,
       PrepareRoomHandler,
       CommitRoomHandler,
       MatchCommittedHandler,
