@@ -539,6 +539,8 @@ that request again on the same connection automatically. Applications don't buil
   nothing is sent after that point. `MaxAdmissionWait` defaults to the request's effective request timeout. When set, it must be positive; zero or less is a configuration error.
 - If the connection drops, a waiting request ends by the existing connection lifecycle rules (§6). Reconnecting
   doesn't restore a waiting request.
+- The stage 2 queue (`$zlink.admission.queueRequired`) enqueue, position and ticket handling, re-registration, and
+  callback order are defined in [authentication admission §3.4–§3.5](../server/04-session/03-authentication-admission.en.md#34-wire).
 
 ## 6. Connection Lifecycle
 
