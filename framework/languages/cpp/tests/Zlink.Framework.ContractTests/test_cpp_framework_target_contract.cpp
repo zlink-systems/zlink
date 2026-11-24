@@ -182,8 +182,10 @@ int main ()
       read_text_file (root / "framework/src/runtime/stateful/raw_stateful_dispatch.hpp");
     const auto monitoring_unit =
       read_text_file (root / "tests/Zlink.Framework.UnitTests/test_cpp_framework_monitoring.cpp");
-    const auto actor_gateway_unit = read_text_file (
-      root / "tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway.cpp");
+    const auto unit_tests = root / "tests/Zlink.Framework.UnitTests";
+    const auto actor_gateway_unit =
+      read_text_file (unit_tests / "test_cpp_framework_actor_gateway_session_binding.cpp")
+      + read_text_file (unit_tests / "test_cpp_framework_actor_gateway_relay_dispatch.cpp");
     const auto actor_gateway_runtime =
       read_text_file (root / "framework/src/runtime/actors/actor_gateway_runtime.cpp");
     const auto message_flow_unit =

@@ -437,7 +437,7 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task GetOrCreate_releases_expired_Ready_or_ended_Creating_before_capacity_selection(
+    public async Task GetOrCreate_retains_expired_Ready_and_releases_ended_Creating_without_target(
         bool ready
     )
     {
@@ -519,8 +519,7 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
                                 SpotCloseHost.SpotType,
                                 1
                             )
-                        ),
-                        ZLinkObjectRelocationRegistration.DisabledPolicy
+                        )
                     )
                 )
             )
@@ -579,17 +578,21 @@ public sealed partial class SpotCloseConformanceTests(Xunit.Abstractions.ITestOu
             );
             Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, afterWait.Kind);
         }
-        Assert.IsType<ZLinkAuthorityReadResult.Missing>(await repository.ReadAuthorityAsync(key));
+        var authority = await repository.ReadAuthorityAsync(key);
         var expired = (
             await repository.ListMeshNodesAsync(SpotCloseHost.MeshName, default)
         ).Items.SingleOrDefault(item => item.Rid == expiredDescriptor.Rid);
         if (ready)
         {
+            Assert.IsType<ZLinkAuthorityReadResult.Found>(authority);
             Assert.NotNull(expired);
-            Assert.Equal(0, expired.Capacity.Spots.Active);
+            Assert.Equal(1, expired.Capacity.Spots.Active);
         }
         else
+        {
+            Assert.IsType<ZLinkAuthorityReadResult.Missing>(authority);
             Assert.Null(expired);
+        }
         Assert.Equal(1, host.State.FactoryCalls);
     }
 

@@ -2284,8 +2284,35 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     RESOURCE_LOCK "zlink_cpp_heavy_runtime")
   add_zlink_framework_test(
     test_cpp_framework_actor_gateway
-    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_main.cpp
     "framework-unit;framework-regression;framework-actor;stream")
+  target_sources(test_cpp_framework_actor_gateway PRIVATE
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_actor_identity.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_actor_join_completion.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_actor_join_resolution.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_actor_join_store_wait.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_binding_policy.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_disconnect_dispatch.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_disconnect_wire.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_native_relay.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_parked_requests.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_relay_admission.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_relay_dispatch.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_relocation_binding.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_relocation_fifo.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_relocation_follow.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_relocation_leave.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_relocation_reconcile.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_session_binding.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_session_close.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_session_protobuf.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_session_push.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_session_reconnect.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_session_routes.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_terminal_metrics.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_terminal_sdk.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_gateway_wire_contract.cpp
+    tests/support/actor_gateway_fixture.cpp)
   add_zlink_framework_test(
     test_cpp_framework_bound_session_egress
     tests/Zlink.Framework.UnitTests/test_cpp_framework_bound_session_egress.cpp
