@@ -22,7 +22,7 @@ public record ZLinkStreamHeader(
         Optional<String> flowId,
         Optional<ZLinkFlowOrigin> flowOrigin,
         Optional<Integer> actorSlot) {
-    private static final int MAX_PACKET_NAME_BYTES = 255;
+    static final int MAX_PACKET_NAME_BYTES = 255;
 
     public static final ZLinkStreamHeader HEARTBEAT_PING = control("$zlink.heartbeat.ping");
     public static final ZLinkStreamHeader HEARTBEAT_PONG = control("$zlink.heartbeat.pong");
@@ -232,6 +232,11 @@ public record ZLinkStreamHeader(
 
     public static ZLinkStreamHeader createErrorResponse(
             ZLinkStreamHeader requestHeader, String packetName) {
+        return errorResponse(requestHeader, Map.of());
+    }
+
+    static ZLinkStreamHeader errorResponse(
+            ZLinkStreamHeader requestHeader, Map<String, String> metadata) {
         if (requestHeader == null) {
             throw new IllegalArgumentException("requestHeader is required");
         }
@@ -241,7 +246,7 @@ public record ZLinkStreamHeader(
                 EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
                 requestHeader.requestSequence(),
                 "",
-                Map.of(),
+                metadata,
                 requestHeader.correlationId(),
                 Optional.empty(),
                 Optional.empty(),

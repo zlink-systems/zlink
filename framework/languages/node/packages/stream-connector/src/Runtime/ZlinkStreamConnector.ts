@@ -15,6 +15,7 @@ import {
   ZlinkStreamMessage,
   ZlinkStreamRequestSendingContext,
   ZlinkStreamReplyReceivedContext,
+  ZlinkStreamAdmissionWaitingContext,
   ZlinkStreamMessageKind,
   ZlinkStreamMetadata,
   ZlinkStreamRequestCall,
@@ -179,6 +180,15 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
 
   onRequestSending(handler: (context: ZlinkStreamRequestSendingContext) => void): Disposable {
     return registerHandler(this.requestSendingHandlers, handler);
+  }
+
+  onAdmissionWaiting(
+    handler: (
+      context: ZlinkStreamAdmissionWaitingContext,
+      signal?: AbortSignal
+    ) => Promise<void> | void
+  ): Disposable {
+    return this.events.onAdmissionWaiting(handler);
   }
 
   onReplyReceived(
@@ -455,9 +465,7 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
     requestSeq: bigint | undefined,
     signal?: AbortSignal,
     correlationId?: string,
-    actorSlot?: number,
-    expiry?: Promise<unknown>,
-    onAccepted?: () => void
+    actorSlot?: number
   ): Promise<void> {
     await this.frameSender.send(
       this.lifecycle.connectionForSend(),
@@ -467,11 +475,9 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
       metadata,
       compress,
       requestSeq,
-      signal,
       correlationId,
       actorSlot,
-      expiry,
-      onAccepted
+      { signal }
     );
   }
 
@@ -493,7 +499,7 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
     signal?: AbortSignal,
     actorSlot?: number
   ): Promise<ZlinkStreamEncodedPayload> {
-    const startedAt = Date.now();
+    const startedAt = performance.now();
     const actorId =
       actorSlot === undefined ? undefined : this.boundActors.resolve(actorSlot).actorId;
     let requestMetadata = metadata;
@@ -504,8 +510,6 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
         requestMetadata = requestMetadata.with(key, value);
       }
     };
-    let pending: ReturnType<ZlinkStreamPendingRequests['create']> | undefined;
-    let stopCancellation: (() => void) | undefined;
     try {
       throwIfAborted(signal);
       for (const { handler } of currentRegistrations(this.requestSendingHandlers)) {
@@ -522,48 +526,42 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
           );
         }
       }
-      pending = this.pendingRequests.create(name, timeoutMs);
-      const accepted = pending;
-      const write = this.sendEncoded(
-        ZlinkStreamMessageKind.Request,
-        name,
-        payload,
-        requestMetadata,
-        compress,
-        accepted.requestSeq,
+      const connection = this.lifecycle.connectionForSend();
+      const correlationId = this.nextCorrelationId();
+      const reply = await this.pendingRequests.submit({
+        packetName: name,
+        timeoutMs,
+        maxAdmissionWaitMs: this.options.maxAdmissionWaitMs,
         signal,
-        this.nextCorrelationId(),
-        actorSlot,
-        accepted.promise,
-        accepted.startTimeout
-      );
-      // Spec stream-connector 32 §5.2: a cancellation after the frame write
-      // started does not stop the write; the request ends with whichever comes
-      // first, its connector result or the cancellation.
-      const canceled = new Promise<never>((_, reject) => {
-        const onAbort = (): void =>
-          reject(connectorError(ZlinkStreamErrorCode.Disconnected, 'Operation canceled.'));
-        signal?.addEventListener('abort', onAbort, { once: true });
-        stopCancellation = () => signal?.removeEventListener('abort', onAbort);
+        send: this.frameSender.createRequestSender(
+          connection,
+          name,
+          payload,
+          requestMetadata,
+          compress,
+          correlationId,
+          actorSlot
+        ),
+        onAdmissionWaiting: (retryAfterMs) =>
+          this.events.publishAdmissionWaiting(
+            actorId === undefined
+              ? { requestPacketName: name, retryAfterMs }
+              : { requestPacketName: name, actorId, retryAfterMs },
+            signal
+          )
       });
-      const reply = await Promise.race([
-        write.then(() => accepted.promise),
-        accepted.promise,
-        canceled
-      ]);
       this.publishReplyReceived(
         {
           requestPacketName: name,
           actorId,
           succeeded: true,
           reply: { ...reply, actorId },
-          elapsed: Date.now() - startedAt
+          elapsed: performance.now() - startedAt
         },
         signal
       );
       return reply.payload;
     } catch (error) {
-      if (pending !== undefined) this.pendingRequests.cancel(pending.requestSeq);
       // Spec stream-connector 32 §5.7: the reply received hook reports the
       // result the connector decided, so a request the caller canceled skips it.
       if (signal?.aborted === true) throw error;
@@ -573,13 +571,11 @@ export class DefaultZlinkStreamConnector implements ZlinkStreamConnector {
           actorId,
           succeeded: false,
           error: unwrapStreamError(error),
-          elapsed: Date.now() - startedAt
+          elapsed: performance.now() - startedAt
         },
         signal
       );
       throw error;
-    } finally {
-      stopCancellation?.();
     }
   }
 

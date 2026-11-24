@@ -112,5 +112,7 @@ internal sealed class ZlinkStreamPendingRequests
 internal sealed record ZlinkStreamPendingCompletion(
     ZlinkStreamHeader Header,
     ZlinkStreamFrame Frame,
-    ZlinkStreamError? Error
+    ZlinkStreamError? Error,
+    TimeSpan ReceivedAt = default,
+    int? RetryAfterMs = null
 );

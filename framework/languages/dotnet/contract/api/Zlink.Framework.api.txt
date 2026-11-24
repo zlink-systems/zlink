@@ -498,6 +498,9 @@ assembly Zlink.Framework
     method abstract Zlink.Framework.Contracts.Configuration.IZLinkStreamCompressionBuilder UseLz4() [return=read:not-null,write:not-null]
     method abstract Zlink.Framework.Contracts.Configuration.IZLinkStreamCompressionBuilder Use(Systems.Zlink.Stream.Connector.Contracts.IZlinkStreamCompressionCodec codec [nullability=read:not-null,write:not-null]) [return=read:not-null,write:not-null]
   type interface Zlink.Framework.Contracts.Configuration.IZLinkStreamNodeBuilder
+    property System.String? AuthenticationPacketName { get; set; } [nullability=read:nullable,write:nullable]
+    property System.TimeSpan AuthenticationRetryDelay { get; set; } [nullability=read:not-null,write:not-null]
+    property System.Int32 MaxConcurrentAuthentications { get; set; } [nullability=read:not-null,write:not-null]
     method abstract Zlink.Framework.Contracts.Configuration.IZLinkStreamNodeBuilder AddSession<TSession>() [return=read:not-null,write:not-null]
       generic TSession variance=invariant nullable=unspecified
       where TSession : class, Zlink.Framework.Contracts.Streams.IZLinkSession

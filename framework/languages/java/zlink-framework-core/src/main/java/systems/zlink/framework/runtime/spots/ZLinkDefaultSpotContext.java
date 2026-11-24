@@ -15,9 +15,11 @@ import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
+import systems.zlink.framework.runtime.internal.execution.ZLinkExecutionAvailability;
 import systems.zlink.framework.runtime.internal.execution.ZLinkSpotCloseCallAccess;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
+import systems.zlink.framework.runtime.locations.ZLinkLocationRuntime;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkEntrySpotContext;
@@ -58,6 +60,7 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
     private final ZLinkHandlerInstanceOwner handlerInstances;
     private final ZLinkEntrySpotTimerSurface timerSurface;
     private final ZLinkSpotTimerRegistry timers;
+    private volatile ZLinkLocationRuntime.Execution execution;
     final Map<String, ZLinkSpotTimerRegistry> actorTimers = new ConcurrentHashMap<>();
     private final ZLinkSpotHandlerCatalog handlerCatalog =
             new ZLinkSpotHandlerCatalog(
@@ -95,13 +98,16 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
                 host.createTimerRegistry(
                         spotId(),
                         handlerInstances,
-                        (timerName, operation) ->
-                                ZLinkHandlerStages.fromStageSupplier(
-                                        () ->
-                                                enqueueDispatch(
-                                                        () ->
-                                                                host.runWithOutbound(
-                                                                        outbound, operation))));
+                        ZLinkSpotTimerRegistry.Dispatch.withExecution(
+                                () -> execution,
+                                (timerName, operation) ->
+                                        ZLinkHandlerStages.fromStageSupplier(
+                                                () ->
+                                                        enqueueDispatch(
+                                                                () ->
+                                                                        host.runWithOutbound(
+                                                                                outbound,
+                                                                                operation)))));
         timers.setSpot(timerSurface);
     }
 
@@ -154,6 +160,10 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
         this.entrySpot = entrySpot;
     }
 
+    ZLinkEntrySpot<?> entrySpot() {
+        return entrySpot;
+    }
+
     @Override
     public CompletionStage<Void> destroyActor(ZLinkActor actor) {
         return host.destroyActorFromEntry(nodeRid, actor);
@@ -169,6 +179,36 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
             return actorTimer(actorId).add(name, period, handlerType, options);
         }
         return timers.add(name, period, handlerType, options);
+    }
+
+    CompletionStage<Void> registerExecution(ZLinkLocationRuntime locations) {
+        execution = locations.execution(() -> false, () -> {});
+        ZLinkSpotCloseCallAccess.executionPolicy(dispatchQueue, new EntryExecution(execution));
+        execution.onResume(
+                () -> {
+                    serials.resumeExecution();
+                    timers.resumePending();
+                    actorTimers.values().forEach(ZLinkSpotTimerRegistry::resumePending);
+                });
+        return execution.ready();
+    }
+
+    private record EntryExecution(ZLinkLocationRuntime.Execution location)
+            implements ZLinkSpotCloseCallAccess.ExecutionPolicy, ZLinkExecutionAvailability {
+        @Override
+        public void check(boolean application) {
+            if (application) location.check(true);
+        }
+
+        @Override
+        public boolean paused() {
+            return location.paused();
+        }
+
+        @Override
+        public void onResume(Runnable action) {
+            location.onResume(action);
+        }
     }
 
     CompletionStage<Void> closeTimersAsync() {
@@ -195,6 +235,7 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
     }
 
     CompletionStage<Void> closeResourcesAsync() {
+        if (execution != null) execution.close();
         return closeTimersAsync()
                 .whenComplete(
                         (ignored, failure) -> {
@@ -230,34 +271,21 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
             CompletableFuture<Void> admission) {
-        host.ensureOwnerAdmissionOpen();
-        return enqueueAccepted(payloadBytes, operation, admission);
-    }
-
-    /**
-     * Runs a lifecycle callback of this Entry Spot, such as {@code onClosing}. Cleanup of accepted
-     * work runs even after the owner admission deadline (Location runtime §5).
-     */
-    @Override
-    public CompletionStage<Void> enqueueLifecycle(Supplier<CompletionStage<Void>> operation) {
-        return enqueueAccepted(0, operation);
-    }
-
-    private CompletionStage<Void> enqueueAccepted(
-            long payloadBytes, Supplier<CompletionStage<Void>> operation) {
-        return enqueueAccepted(payloadBytes, operation, null);
-    }
-
-    private CompletionStage<Void> enqueueAccepted(
-            long payloadBytes,
-            Supplier<CompletionStage<Void>> operation,
-            CompletableFuture<Void> admission) {
         return dispatchQueue.enqueueWithPayloadBytes(
                 payloadBytes,
                 () ->
                         runApplicationExecution(
                                 null, false, () -> host.runEntryDispatch(this, operation)),
                 admission);
+    }
+
+    /** Runs Entry Spot lifecycle callbacks on the owning Spot gate (Handler turn §2). */
+    @Override
+    public CompletionStage<Void> enqueueLifecycle(Supplier<CompletionStage<Void>> operation) {
+        return dispatchQueue.enqueueLifecycleBarrier(
+                () ->
+                        runApplicationExecution(
+                                null, false, () -> host.runEntryDispatch(this, operation)));
     }
 
     @Override
@@ -386,19 +414,22 @@ final class DefaultEntrySpotContext implements ZLinkEntrySpotContext, SpotDispat
                             host.createTimerRegistry(
                                     spotId(),
                                     handlerInstances,
-                                    (timerName, operation) ->
-                                            host.runActorTimerDispatch(
-                                                    serials,
-                                                    key,
-                                                    () ->
-                                                            runApplicationExecution(
-                                                                    key,
-                                                                    serials
-                                                                            .usesSharedExecutionGate(),
-                                                                    () ->
-                                                                            host.runWithOutbound(
-                                                                                    outbound,
-                                                                                    operation))));
+                                    ZLinkSpotTimerRegistry.Dispatch.withExecution(
+                                            () -> execution,
+                                            (timerName, operation) ->
+                                                    host.runActorTimerDispatch(
+                                                            serials,
+                                                            key,
+                                                            () ->
+                                                                    runApplicationExecution(
+                                                                            key,
+                                                                            serials
+                                                                                    .usesSharedExecutionGate(),
+                                                                            () ->
+                                                                                    host
+                                                                                            .runWithOutbound(
+                                                                                                    outbound,
+                                                                                                    operation)))));
                     timer.setSpot(timerSurface);
                     return timer;
                 });
@@ -546,16 +577,17 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                         instanceSpot);
         this.handlerInstances = host.createHandlerInstances();
         this.outbound = host.createContextOutbound(backendSpot, nodeRid);
+        execution = instanceSpot ? null : host.execution(this);
         this.timers =
                 host.createTimerRegistry(
                         backendSpot.spotId(),
                         handlerInstances,
-                        timerDispatch(
+                        ZLinkSpotTimerRegistry.Dispatch.withExecution(
+                                () -> execution,
                                 (timerName, operation) ->
                                         enqueueTimerDispatch(
                                                 timerName,
                                                 () -> host.runWithOutbound(outbound, operation))));
-        execution = instanceSpot ? null : host.execution(this);
         ZLinkSpotCloseCallAccess.executionPolicy(serials.spotQueue, execution);
         if (execution != null)
             execution.onResume(
@@ -1165,22 +1197,6 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                 });
     }
 
-    private ZLinkSpotTimerRegistry.Dispatch timerDispatch(
-            ZLinkSpotTimerRegistry.Dispatch dispatch) {
-        return new ZLinkSpotTimerRegistry.Dispatch() {
-            @Override
-            public boolean paused() {
-                return execution != null && execution.paused();
-            }
-
-            @Override
-            public CompletionStage<Void> enqueue(
-                    String timerName, Supplier<CompletionStage<Void>> operation) {
-                return dispatch.enqueue(timerName, operation);
-            }
-        };
-    }
-
     private CompletionStage<Void> enqueueTimerDispatch(
             String timerName, Supplier<CompletionStage<Void>> operation) {
         return serials.executeTimer(
@@ -1195,7 +1211,8 @@ final class DefaultSpotContext implements ZLinkSpotContext, SpotDispatchLine {
                             host.createTimerRegistry(
                                     spotId(),
                                     handlerInstances,
-                                    timerDispatch(
+                                    ZLinkSpotTimerRegistry.Dispatch.withExecution(
+                                            () -> execution,
                                             (timerName, operation) ->
                                                     host.runActorTimerDispatch(
                                                             serials,

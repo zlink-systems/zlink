@@ -137,6 +137,18 @@
       "labels": []
     },
     {
+      "name": "zlink.host.authentication_admission.in_flight",
+      "kind": "observable",
+      "unit": "{request}",
+      "labels": []
+    },
+    {
+      "name": "zlink.host.authentication_admission.rejections",
+      "kind": "counter",
+      "unit": "{request}",
+      "labels": []
+    },
+    {
       "name": "zlink.mesh_node.peers.configured",
       "kind": "observable",
       "unit": "{peer}",

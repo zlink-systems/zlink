@@ -73,6 +73,23 @@ export declare enum ZLinkDisconnectReason {
     ContextTerminated = 5
 }
 
+export interface ZLinkStreamNodeOptions {
+    readonly authenticationPacketName?: string;
+    readonly maxConcurrentAuthentications?: number;
+    readonly authenticationRetryDelayMs?: number;
+    readonly heartbeatIntervalMs?: number;
+    readonly heartbeatTimeoutMs?: number;
+    readonly idleTimeoutMs?: number;
+    readonly bind?: string;
+    readonly bindHost?: string;
+    readonly advertiseHost?: string;
+    readonly port?: number;
+    readonly maxMessageSize?: number;
+    readonly actorDispatchEnabled?: boolean;
+    readonly tlsServer?: ZLinkStreamTlsServerOptions;
+    readonly session?: Type;
+}
+
 export interface ZLinkStreamNodeBuilder {
     bind(endpoint: string): this;
     bind(port?: number): this;
@@ -82,6 +99,7 @@ export interface ZLinkStreamNodeBuilder {
     enableActorDispatch(): this;
     setHeartbeat(intervalMs: number, timeoutMs: number): this;
     setIdleTimeout(timeoutMs: number): this;
+    setAuthenticationAdmission(packetName: string, maxConcurrentAuthentications?: number, authenticationRetryDelayMs?: number): this;
     setTlsServer(certificatePath: string, keyPath: string, requireClientCertificate?: boolean): this;
     registerSession<TSession extends ZLinkSession>(sessionType: Type<TSession> | Type<ZLinkSessionFactory<TSession>>): this;
 }
@@ -182,3 +200,5 @@ Worker call의 `submit()`도 Worker 결과가 나올 때까지 현재 turn을 �
 또는 Instance Spot의 shared turn에서만 그 turn을
 반환한다. 다른 실행 문맥에서는 worker를 제출하거나 turn을 반환하지 않고 `invalidConfiguration`으로
 완료한다.
+
+인증 입장 설정의 기본값과 검증은 [인증 입장 제한](../../../04-session/03-authentication-admission.ko.md)이 정한다.

@@ -161,6 +161,8 @@ test('RMETRIC-006 server runtime exposes the exact 59-instrument spec25 catalog'
     ['zlink.host.core_hwm.accounted', ['gauge', 'By']],
     ['zlink.host.core_hwm.completion_accounted', ['gauge', 'By']],
     ['zlink.host.core_hwm.blocked_ratio', ['gauge', '{ppm}']],
+    ['zlink.host.authentication_admission.in_flight', ['gauge', '{request}']],
+    ['zlink.host.authentication_admission.rejections', ['observable_counter', '{request}']],
     ['zlink.host.application_job_queue.limit', ['gauge', '{job}']],
     ['zlink.host.application_job_queue.jobs', ['gauge', '{job}']],
     ['zlink.host.application_job_queue.capacity_waiters', ['gauge', '{waiter}']],
@@ -171,7 +173,7 @@ test('RMETRIC-006 server runtime exposes the exact 59-instrument spec25 catalog'
     ['zlink.host.application_job_queue.pause_duration', ['gauge', 's']],
     ['zlink.host.application_job_queue.flow_state_config_failures', ['observable_counter', '{failure}']]
   ]);
-  assert.equal(instruments.length, 59);
+  assert.equal(instruments.length, 61);
   assert.deepEqual(
     new Map(instruments.map(({ name, kind, unit }) => [name, [kind, unit]])),
     expected

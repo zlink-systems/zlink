@@ -18,21 +18,7 @@ internal sealed partial class ZLinkEntrySpotActivation
             typeof(THandler),
             EntrySpot.GetType(),
             _stopSource.Token,
-            async (descriptor, tick, ct) =>
-            {
-                await ExecuteQueuedAsync(
-                        static (activation, state, innerCt) =>
-                            activation._invoker.InvokeTimerAsync(
-                                state.Descriptor,
-                                state.Tick,
-                                innerCt
-                            ),
-                        (Descriptor: descriptor, Tick: tick),
-                        ct
-                    )
-                    .ConfigureAwait(false);
-                return true;
-            },
+            DispatchTimerAsync,
             PublishTimerFailureAsync,
             cancellationToken
         );
@@ -89,25 +75,40 @@ internal sealed partial class ZLinkEntrySpotActivation
             .ConfigureAwait(false);
     }
 
-    private async ValueTask ExecuteQueuedAsync<TState>(
-        Func<ZLinkEntrySpotActivation, TState, CancellationToken, ValueTask> operation,
-        TState state,
+    private async ValueTask<bool> DispatchTimerAsync(
+        ZLinkSpotTimerDescriptor descriptor,
+        ZLinkTimerTick tick,
         CancellationToken cancellationToken
     )
     {
-        var capturedOperation = operation;
-        var capturedState = state;
-        await _serial
-            .RunAsync(
+        var admission = (
+            await _runtime
+                .TryAdmitInboundOperationAsync(countAsRequest: false)
+                .ConfigureAwait(false)
+        ).EnterInbound();
+        if (!admission.Accepted)
+            return false;
+        using (admission.Lease)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var queued = _serial.TryPostApplicationWithAdmission(
                 ct =>
                     RunOnLineAsync(
                         (activation, innerCt) =>
-                            capturedOperation(activation, capturedState, innerCt),
+                            activation._invoker.InvokeTimerAsync(descriptor, tick, innerCt),
                         ct
                     ),
-                cancellationToken
-            )
-            .ConfigureAwait(false);
+                payloadBytes: 0,
+                metadataBytes: 0,
+                transferred: false,
+                out var item,
+                executionState: this
+            );
+            if (queued != ZLinkSerialPostAdmission.Accepted)
+                return false;
+            await item.Completion.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        return true;
     }
 
     private async ValueTask ExecuteLifecycleAsync(

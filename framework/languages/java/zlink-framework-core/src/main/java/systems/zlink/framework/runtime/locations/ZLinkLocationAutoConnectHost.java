@@ -231,7 +231,7 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
     }
 
     public CompletionStage<Void> recoverOwnerLease() {
-        var owner = runtime.ownerTokenSnapshot();
+        var owner = runtime.descriptorPublicationOwnerToken();
         if (clientServers != null && clientServers.store() != null) {
             clientServers.setOwner(owner);
         }

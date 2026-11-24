@@ -602,6 +602,7 @@ class KotlinPublicSurfaceContractTest {
                 "on" to 3,
                 "onErrorReceived" to 1,
                 "onRequestSending" to 1,
+                "onAdmissionWaiting" to 1,
                 "onDisconnected" to 1,
                 "onConnectionStateChanged" to 1,
                 "connect" to 1,
@@ -718,7 +719,7 @@ class KotlinPublicSurfaceContractTest {
                 //  Stream Connector wrapper public descriptors are pinned separately from
                 //  the framework extensions because their contract changes together.
                 "ZLinkKotlinStreamConnector" to
-                    "4c461ac885bce5d6ea3f2af5aa591ec0edd0d1b741fc959198ac5d6525aaa09a",
+                    "d6fb41e005d358e1f6c9d135a04cb6fc3390506cf4e196f097c98d526c2fd78a",
                 "ZLinkKotlinStreamActor" to
                     "7484a864e32d1776e58ac49b20c5abdcab11fb02e5d32047077f68149c03d630",
                 "ZLinkKotlinRawRequestCall" to

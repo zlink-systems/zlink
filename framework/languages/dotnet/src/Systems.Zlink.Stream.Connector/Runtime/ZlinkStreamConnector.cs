@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Diagnostics;
 using System.Text;
 
@@ -19,6 +20,7 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
     private readonly IZlinkStreamPacketNameResolver _nameResolver;
 
     private readonly ZlinkStreamPendingRequests _pending = new();
+    private readonly ZlinkStreamRequestClock _requestClock;
     private readonly ZlinkStreamReceiveDispatcher _receiveDispatcher;
     private readonly ZlinkStreamReceivedMessages _receivedMessages;
     private readonly ZlinkStreamReceiveLoop _receiveLoop;
@@ -34,9 +36,11 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
 
     internal ZlinkStreamConnector(
         ZlinkStreamConnectorOptions options,
-        Func<CancellationToken, ValueTask<IZlinkStreamConnection>> connectTransport
+        Func<CancellationToken, ValueTask<IZlinkStreamConnection>> connectTransport,
+        ZlinkStreamRequestClock? requestClock = null
     )
     {
+        _requestClock = requestClock ?? ZlinkStreamRequestClock.System;
         Options = options ?? throw new ArgumentNullException(nameof(options));
         ZlinkStreamConnectorOptionsValidator.Validate(options);
         _taskRunner = new ZlinkStreamTaskRunner(_lifetimeCts.Token);
@@ -89,7 +93,8 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
             _frameSender,
             _callbacks,
             _actors,
-            _lifecycle.HandleServerCloseAsync
+            _lifecycle.HandleServerCloseAsync,
+            _requestClock
         );
         _receiveLoop = new ZlinkStreamReceiveLoop(
             _receiveDispatcher,
@@ -128,6 +133,16 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
             throw new ArgumentNullException(nameof(handler));
         ThrowIfDisposed();
         return _callbacks.AddConnectionStateChanged(handler);
+    }
+
+    public IDisposable OnAdmissionWaiting(
+        Func<ZlinkStreamAdmissionWaiting, CancellationToken, ValueTask> handler
+    )
+    {
+        if (handler is null)
+            throw new ArgumentNullException(nameof(handler));
+        ThrowIfDisposed();
+        return _callbacks.AddAdmissionWaiting(handler);
     }
 
     public IDisposable OnRequestSending(Action<ZlinkStreamRequestSendingContext> handler)
@@ -285,11 +300,13 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
                     connection,
                     frame.HeaderBytes,
                     frame.PayloadBytes,
-                    cancellationToken
+                    cancellationToken,
+                    frame.EncodedBytes,
+                    frame.ValidateWrite
                 )
                 .ConfigureAwait(false);
         }
-        catch (ZlinkStreamException ex)
+        catch (ZlinkStreamException ex) when (ex.Error.Code != ZlinkStreamErrorCode.RequestTimeout)
         {
             if (
                 !await _lifecycle
@@ -501,6 +518,7 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
                     compress,
                     timeout,
                     actorSlot,
+                    actorId,
                     cancellationToken
                 )
                 .ConfigureAwait(false);
@@ -569,49 +587,139 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
         bool compress,
         TimeSpan timeout,
         ushort? actorSlot,
+        string? actorId,
         CancellationToken cancellationToken
     )
     {
-        var pending = _pending.Create(name);
+        var connection = default((IZlinkStreamConnection Transport, Task<ZlinkStreamError> Ended));
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var requestToken = timeoutCts.Token;
+        byte[]? requestBuffer = null;
+        Task? written = null;
         try
         {
-            var frame = _frameSender.BuildOutboundFrame(
-                ZlinkStreamMessageKind.Request,
-                name,
-                payload,
-                metadata,
-                compress,
-                pending.RequestSeq,
-                actorSlot
-            );
-            _frameSender.ValidateSendReady(frame.HeaderBytes, frame.PayloadBytes);
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(
-                cancellationToken
-            );
-            timeoutCts.Token.ThrowIfCancellationRequested();
-            var connection = _lifecycle.RegisterRequest(pending);
-            await _oneWaySubmits
-                .SubmitRequestAsync(
-                    connection,
-                    frame,
-                    timeoutCts.Token,
-                    () => timeoutCts.CancelAfter(timeout)
-                )
-                .ConfigureAwait(false);
+            TimeSpan deadline = default;
+            TimeSpan? admissionDeadline = null;
+            var frame = default(ZlinkStreamOutboundFrame);
+            var initial = true;
+            while (true)
+            {
+                var attempt = _pending.Create(name);
+                ZlinkStreamPendingCompletion completion;
+                try
+                {
+                    if (initial)
+                    {
+                        frame = _frameSender.BuildOutboundFrame(
+                            ZlinkStreamMessageKind.Request,
+                            name,
+                            payload,
+                            metadata,
+                            compress,
+                            attempt.RequestSeq,
+                            actorSlot
+                        );
+                        var encoded = ZlinkStreamFrameSender.RentEncodedFrame(
+                            frame.HeaderBytes,
+                            frame.PayloadBytes,
+                            out requestBuffer
+                        );
+                        frame = frame with
+                        {
+                            EncodedBytes = encoded,
+                            PayloadBytes = encoded[
+                                (ZlinkStreamFrameCodec.PrefixSize + frame.HeaderBytes.Length)..
+                            ],
+                        };
+                    }
+                    else
+                    {
+                        frame = _frameSender.WithRequestSequence(frame, attempt.RequestSeq) with
+                        {
+                            ValidateWrite = ValidateAdmissionWrite,
+                        };
+                    }
+                    requestToken.ThrowIfCancellationRequested();
+                    connection = _lifecycle.RegisterRequest(attempt, connection.Ended);
+                    written = _oneWaySubmits.SubmitRequestAsync(
+                        connection.Transport,
+                        frame,
+                        requestToken,
+                        initial
+                            ? () =>
+                            {
+                                deadline = _requestClock.Now + timeout;
+                                timeoutCts.CancelAfter(timeout);
+                            }
+                            : null
+                    );
+                    await written.WaitAsync(requestToken).ConfigureAwait(false);
+                    completion = await _pending
+                        .WaitAsync(attempt, requestToken)
+                        .ConfigureAwait(false);
+                }
+                finally
+                {
+                    _pending.Remove(attempt.RequestSeq);
+                }
 
-            var pendingCompletion = await _pending
-                .WaitAsync(pending, timeoutCts.Token)
-                .ConfigureAwait(false);
-            var replyHeader = pendingCompletion.Header;
-            if (pendingCompletion.Error is { } remoteError)
-                return new ZlinkStreamRequestCompletion(null, remoteError, replyHeader.Metadata);
+                if (admissionDeadline is { } limit)
+                    EnsureBeforeDeadline(completion.ReceivedAt, limit);
 
-            // The receive path already decompressed the reply.
-            return new ZlinkStreamRequestCompletion(
-                new ZlinkStreamEncodedPayload(replyHeader.Codec, pendingCompletion.Frame.Payload),
-                null,
-                replyHeader.Metadata
-            );
+                if (completion.RetryAfterMs is not { } delay)
+                {
+                    var replyHeader = completion.Header;
+                    return completion.Error is { } error
+                        ? new ZlinkStreamRequestCompletion(null, error, replyHeader.Metadata)
+                        : new ZlinkStreamRequestCompletion(
+                            new ZlinkStreamEncodedPayload(
+                                replyHeader.Codec,
+                                completion.Frame.Payload
+                            ),
+                            null,
+                            replyHeader.Metadata
+                        );
+                }
+
+                if (admissionDeadline is null)
+                {
+                    var maximumWait = Options.MaxAdmissionWait ?? timeout;
+                    admissionDeadline =
+                        deadline - completion.ReceivedAt <= maximumWait
+                            ? deadline
+                            : completion.ReceivedAt + maximumWait;
+                    var remaining = admissionDeadline.Value - _requestClock.Now;
+                    if (admissionDeadline < deadline && remaining > TimeSpan.Zero)
+                        timeoutCts.CancelAfter(remaining);
+                }
+
+                var retryAfter = TimeSpan.FromMilliseconds(delay);
+                var retryAt =
+                    completion.ReceivedAt
+                    + retryAfter
+                    + TimeSpan.FromMilliseconds(_requestClock.NextJitterMs());
+                await _callbacks
+                    .NotifyAdmissionWaitingAsync(
+                        new ZlinkStreamAdmissionWaiting(name, actorId, retryAfter)
+                    )
+                    .ConfigureAwait(false);
+                await WaitForAdmissionRetryAsync(
+                        retryAt,
+                        admissionDeadline.Value,
+                        connection.Ended,
+                        requestToken
+                    )
+                    .ConfigureAwait(false);
+                initial = false;
+            }
+
+            void ValidateAdmissionWrite()
+            {
+                requestToken.ThrowIfCancellationRequested();
+                if (connection.Ended.IsCompleted)
+                    throw new ZlinkStreamException(connection.Ended.GetAwaiter().GetResult());
+                EnsureBeforeDeadline(_requestClock.Now, admissionDeadline!.Value);
+            }
         }
         catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
         {
@@ -619,8 +727,54 @@ internal sealed class ZlinkStreamConnector : IZlinkStreamConnectorInternal
         }
         finally
         {
-            _pending.Remove(pending.RequestSeq);
+            if (requestBuffer is not null)
+                _ = ReturnRequestBufferAsync(requestBuffer, written);
         }
+
+        static async ValueTask ReturnRequestBufferAsync(byte[] buffer, Task? written)
+        {
+            // Cancellation or timeout can complete the request while the queue still
+            // holds the frame. Keep the buffer until that attempt reaches write completion.
+            if (written is { IsCompleted: false })
+                await Task.WhenAny(written).ConfigureAwait(false);
+            _ = written?.Exception;
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    private async Task WaitForAdmissionRetryAsync(
+        TimeSpan retryAt,
+        TimeSpan deadline,
+        Task<ZlinkStreamError> connectionEnded,
+        CancellationToken cancellationToken
+    )
+    {
+        var wakeAt = retryAt < deadline ? retryAt : deadline;
+        using var wait = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        while (
+            !connectionEnded.IsCompleted
+            && wakeAt - _requestClock.Now is var remaining
+            && remaining > TimeSpan.Zero
+        )
+        {
+            var delay = _requestClock.DelayAsync(remaining, wait.Token);
+            if (await Task.WhenAny(delay, connectionEnded).ConfigureAwait(false) == connectionEnded)
+            {
+                wait.Cancel();
+                break;
+            }
+            await delay.ConfigureAwait(false);
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+        if (connectionEnded.IsCompleted)
+            throw new ZlinkStreamException(await connectionEnded.ConfigureAwait(false));
+        EnsureBeforeDeadline(_requestClock.Now, deadline);
+    }
+
+    private static void EnsureBeforeDeadline(TimeSpan now, TimeSpan deadline)
+    {
+        if (now >= deadline)
+            throw Error(ZlinkStreamErrorCode.RequestTimeout, "Request timed out.");
     }
 
     private string ResolveName(Type payloadType)

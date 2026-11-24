@@ -296,16 +296,21 @@ record ZLinkStreamSessionReplyCall(
             CompletionStage<Void> result;
             try {
                 result = context.replyAsync(replyHeader, parts);
-                result.whenComplete(
-                        (ignored, failure) -> {
-                            try {
-                                if (failure == null) {
-                                    context.traceStreamReplied(current);
-                                }
-                            } finally {
-                                ZLinkStreamSessionCallResources.close(parts, payload);
-                            }
-                        });
+                var observed =
+                        result.whenComplete(
+                                (ignored, failure) -> {
+                                    try {
+                                        if (failure == null) {
+                                            context.replyAccepted(current);
+                                            context.traceStreamReplied(current);
+                                        }
+                                    } finally {
+                                        ZLinkStreamSessionCallResources.close(parts, payload);
+                                    }
+                                });
+                if (!ZLinkOneWayCalls.isImmediateAdmission(result)) {
+                    result = observed;
+                }
             } catch (RuntimeException | Error failure) {
                 ZLinkStreamSessionCallResources.close(parts, payload);
                 throw failure;
