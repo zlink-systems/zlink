@@ -8,12 +8,12 @@
 
 Every server process in this project is a stateful ZLink node. Before writing code, decide which kind you are editing.
 
-- A game node is not a REST server. A player's state is owned by one session-bound Actor (or the Spot that owns a shared value). Load it once on connect; do not read the database while handling a request.
+- A play node hosts Spots. A session-bound Actor owns the player's state, and a Spot owns shared state. Load it once on connect; do not read the database while handling a request.
 - Write only results to the database, one transaction per round. Check duplicate requests in Actor or Spot memory.
 - While a game is running, a Spot handler never awaits a remote request or a database reply: the await holds the Spot's turn and stops every message and timer in it. When a round ends, the Spot writes the results of all its Actors in one transaction, then tells each Actor after the commit.
 - Values many players see live in node memory or one owning Spot; values many requests update are applied by that one owning Spot. A process that does not own a value sends a request to its owner instead of writing it.
 - Spots and Actors already process one message at a time. Do not guard their state with locks, semaphores or process-wide static stores, and do not update memory from database commit hooks; the writer updates its owner's memory after commit, others send a message to the owner.
-- Split roles so the game can scale out from day one: game nodes host lobby and room Spots and player Actors and are the only processes you add; a shared node hosts only game-wide Instance Spots (matchmaking, game-wide values), and game nodes do not register those factories. Send and request by Spot ID only; placement is configuration. Keep shared-Spot values recoverable from room resends or a database read at startup.
+- Split roles so the game can scale out from day one: play nodes host lobby and room Spots and player Actors and are the only processes you add; a dedicated play node hosts only game-wide Instance Spots (matchmaking, game-wide values), and the lobby and room hosts omit those factories. Send and request by Spot ID only; placement is configuration. Keep shared-Spot values recoverable from room resends or a database read at startup.
 - Never have two Actors or Spots wait on requests to each other inside a turn; notify with send and let the state owner decide.
 - Actors move between nodes when they join a Spot or relocate. Keep all mutable Actor fields in one state record, register stateful Actors with the state-preserving relocation policy, and test that save and restore preserve every field.
 - Player data reaches a Spot with the Actor that joins it; do not request it per player at Spot entry. If a Spot truly needs extra data, fetch it for all players in one request before the game starts.
@@ -23,11 +23,11 @@ Every server process in this project is a stateful ZLink node. Before writing co
 - Send money or reward results only after the database commit.
 - One decision has one owner; find the existing one before adding another. Take test expectations from the spec, not from the implementation.
 
-Details: [Stateful game nodes and the HTTP lobby](https://docs.zlink.systems/cpp/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
+Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/cpp/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
 
 ## Project overview
 
-This C++20 project is a megaserver example in which persistent player Actors live in capacity-limited Region Spots. It runs a Session gateway for connections, Region nodes A and B, an Instance node for Dungeons, and Redis for location and relocation state. When a Region instance is full, new players enter the next instance of the same Region. `bootstrap.cmake` installs the ZLink Framework prebuilt of the version named by its `ZLINK_FRAMEWORK_CPP_VERSION`, the only place that names the Framework version; no package manager runs.
+This C++20 project is a megaserver example in which persistent player Actors live in capacity-limited Region Spots. It runs a Session node for connections, play nodes A and B (region), a play node (dungeon) for Dungeons, and Redis for location and relocation state. When a Region instance is full, new players enter the next instance of the same Region. `bootstrap.cmake` installs the ZLink Framework prebuilt of the version named by its `ZLINK_FRAMEWORK_CPP_VERSION`, the only place that names the Framework version; no package manager runs.
 
 The project layout and feature procedure below describe where to add gameplay. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 
@@ -57,7 +57,7 @@ For host process debugging, install a C++20 compiler (GCC 13 or later, or Visual
 
 ## Project layout and extension points
 
-### Session gateway
+### Session node
 
 `server/session/main.cpp` registers the STREAM listener and `Session`, and `server/session/session.hpp` handles connection callbacks and forwards incoming packets in `Session::on_packet`. A Session is a communication object for a connection; Framework provides binding to associate it with a player state object. Add authentication before binding and retain the existing typed packet relay so Framework can identify the connection for replies to that player. `Session` answers `SessionInfoRequest` with a `SessionInfo` push built from the bound Actor, because a C++ Session cannot yet send a typed reply that it creates (see Known issues in the README).
 
@@ -113,7 +113,7 @@ Requests in the example game follow this path. Reading the code along this path 
 2. A new Actor starts in the Entry Spot `Entry`. `Entry::enter` checks the identity and `Entry::select` calls `get_or_create` for the first instance of the Region (`Names::region_id`, index 1), then requests `join_spot(...).defer()` with `JoinRegion`.
 3. `Region::on_actor_join` admits the player through `Positions::admit`, or rejects with `RegionFull` when the instance holds `Capacity` players. A rejection reaches `Player::on_join_completed`, which sends `RegionFull` to the Actor itself; `Entry::next` receives it and selects the next instance index.
 4. After admission, `Region::on_actor_joined` broadcasts `RegionView` to the members through the Actor client, and `Region::deliver` forwards it to the bound Session. `Region::move` applies `Positions::move` and broadcasts the new view; the requester receives it directly through its bound Session. `Region::show` answers `ViewRequest`, and `Region::enter` answers the first packet replayed on reconnect.
-5. `OpenDungeonRequest` is handled by `Region::dungeon`, which calls `get_or_create` for the Dungeon on the Instance node, asks it with `request_to_spot` and `DungeonInfoRequest`, and sends the `DungeonOpened` reply to the bound Session.
+5. `OpenDungeonRequest` is handled by `Region::dungeon`, which calls `get_or_create` for the Dungeon on the play node (dungeon), asks it with `request_to_spot` and `DungeonInfoRequest`, and sends the `DungeonOpened` reply to the bound Session.
 6. To replace a node, `drain` in `NodeControl` requests relocation. Framework takes the game state from `capture` in `RegionRelocation` and calls `restore` on another node. `PlayerRelocation` carries no state.
 
 ## Extending this MMO domain
@@ -159,7 +159,7 @@ Investigate Framework failures using actual replies, events, and lifecycle resul
 
 Preserve the first failing run and read its logs before deciding whether to run it again. An intermittent failure is an observed defect; a subsequent pass does not invalidate it. `.logs/run-<id>/` contains the effective settings that `e2e/world.hpp` writes at node startup and the logs for each node. Each selected scenario starts its own nodes and writes to its own `.logs/run-<id>/` directory.
 
-Settings files are `regionA.json`, `regionB.json`, `instance.json`, and `session.json`; a replaced Region node uses its file name with the suffix `-replacement`. `e2e/process.hpp` records diagnostic stderr in `<node>.err.log` and readiness/control stdout in `<node>.out.log`, where `<node>` is the settings file name without `.json`. Helper commands (Compose and Docker CLI calls) write `command-<n>.out.log` and `command-<n>.err.log`. Local build output is in `.logs/build.log`. Docker build and outer cleanup logs are in `.logs/docker-<project>/`: `build.log`, `redis-start.log`, `redis.log`, `cleanup.log`, and `containers-stop.log` from the PowerShell runner.
+Settings files are `regionA.json`, `regionB.json`, `instance.json`, and `session.json`; a replaced play node (region) uses its file name with the suffix `-replacement`. `e2e/process.hpp` records diagnostic stderr in `<node>.err.log` and readiness/control stdout in `<node>.out.log`, where `<node>` is the settings file name without `.json`. Helper commands (Compose and Docker CLI calls) write `command-<n>.out.log` and `command-<n>.err.log`. Local build output is in `.logs/build.log`. Docker build and outer cleanup logs are in `.logs/docker-<project>/`: `build.log`, `redis-start.log`, `redis.log`, `cleanup.log`, and `containers-stop.log` from the PowerShell runner.
 
 ### Diagnostic levels
 

@@ -4,10 +4,15 @@ Players meet in a town channel, create parties of up to four, and enter a dedica
 
 ```mermaid
 flowchart LR
-    players[Players] -->|STREAM| session[Session]
-    session -->|relay| townA[Town A: town-1]
-    townA -->|relocation| townB[Town B: town-2]
-    townB -->|GetOrCreate| instances[Instance node ×N: instanceA / instanceB]
+    subgraph playNodes["Play nodes"]
+      townA["Play node A (town): town-1"]
+      townB["Play node B (town): town-2"]
+      instances["Play node ×N (dungeon): instanceA / instanceB"]
+    end
+    players[Players] -->|STREAM| session["Session node"]
+    session -->|relay| townA
+    townA -->|relocation| townB
+    townB -->|GetOrCreate| instances
     townB -->|Location / lease| location[Redis]
 ```
 
@@ -65,7 +70,7 @@ Use the release pinned in `Directory.Packages.props`, at `PackageVersion Include
 
 ### First town example
 
-Create a .NET 8 console project in a copy, reference `server/MyGame.Shared/MyGame.Shared.csproj`, and add `Zlink.Stream.Connector` using the pinned version described above. Save as `Program.cs`, then run `dotnet run --project <client-project> -- <actual-session-endpoint>` against separately running Session, Town/Instance nodes, and Redis. Use a fresh player ID for the `TownView` path. E2E removes its temporary deployment; its `GameClient.cs` shows the complete flow.
+Create a .NET 8 console project in a copy, reference `server/MyGame.Shared/MyGame.Shared.csproj`, and add `Zlink.Stream.Connector` using the pinned version described above. Save as `Program.cs`, then run `dotnet run --project <client-project> -- <actual-session-endpoint>` against separately running Session, Town/play nodes (dungeon), and Redis. Use a fresh player ID for the `TownView` path. E2E removes its temporary deployment; its `GameClient.cs` shows the complete flow.
 
 ```csharp
 using MyGame.Shared;
@@ -177,6 +182,6 @@ Start Redis, then townA, townB, instanceA, instanceB, and session. Each role has
 
 Wait for `READY` before connecting clients. Send `drain` through node stdin and wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Send `shutdown` and wait for `STOPPED` before restarting the same instance configuration. Application snapshots contain only game state. Framework owns placement, Actor identity, bindings, membership, routes, leases, queues, and relocation completion.
 
-All Object Servers that register Player factories also register the shared Entry and first-admission handler, including both Instance nodes. Entry admission joins the requested fixed Town channel. Each Instance declares its dynamic Dungeon factory in `zlink.structure.json`.
+All Object Servers that register Player factories also register the shared Entry and first-admission handler, including both play nodes (dungeon). Entry admission joins the requested fixed Town channel. Each Instance declares its dynamic Dungeon factory in `zlink.structure.json`.
 
 The e2e configuration uses one Dungeon slot per Instance. After drain, the surviving Instance is full, so only the replacement can accept the fresh Dungeon. The structure checker enforces this configuration. Message Follow remains 30 seconds; the SafeToShutdown observation budget is derived from that duration plus the existing relocation operation budget.

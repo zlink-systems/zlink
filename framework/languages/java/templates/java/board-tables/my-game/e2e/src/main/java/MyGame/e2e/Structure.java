@@ -109,7 +109,7 @@ public final class Structure {
         for (var spot : spots) {
             require(
                     roles.get(owner(spot, roles)).equals("table"),
-                    "Table Spot owner must be a table node");
+                    "Table Spot owner must be a play node (table)");
             switch (text(spot, "kind")) {
                 case "entry" ->
                         require(
@@ -145,7 +145,7 @@ public final class Structure {
                                                                         .equals("entry"))
                                         .count()
                                 == 1,
-                        "Table node must declare exactly one application Entry Spot");
+                        "play node (table) must declare exactly one application Entry Spot");
         var declaredEdges = new HashSet<Edge>();
         for (var edge : array(s, "edges")) {
             require(

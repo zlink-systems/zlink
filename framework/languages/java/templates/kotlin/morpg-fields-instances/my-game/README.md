@@ -1,10 +1,16 @@
 # my-game
 
-A Kotlin MORPG template using public ZLink Framework 0.32.0 packages. Field nodes host four fixed Field User Spots; each server-issued Party ID identifies a dynamic Party User Spot, and each Run ID identifies a dynamic Dungeon User Spot. `FieldPositionDomain` owns movement authority, `PartySpot` owns party membership and run phases, and `DungeonRun` owns the active run and stage.
+A Kotlin MORPG template using public ZLink Framework 0.32.0 packages. Play nodes (field) host four fixed Field User Spots; each server-issued Party ID identifies a dynamic Party User Spot, and each Run ID identifies a dynamic Dungeon User Spot. `FieldPositionDomain` owns movement authority, `PartySpot` owns party membership and run phases, and `DungeonRun` owns the active run and stage.
 
 ```mermaid
 flowchart LR
-  players -->|STREAM|session
+  subgraph playNodes["Play nodes"]
+    fieldA["Play node A (field)"]
+    fieldB["Play node B (field)"]
+    instanceA["Play node A (dungeon)"]
+    instanceB["Play node B (dungeon)"]
+  end
+  players -->|STREAM|session["Session node"]
   session -->|relay|fieldA
   fieldA -->|relocation|fieldB
   fieldB -->|border pub/sub|fieldA
@@ -159,12 +165,12 @@ Border subscriptions use Framework 0.32.0 `addSubscribe(handlerType, channelName
 
 ## Deployment sequence
 
-Configure Redis and a unique key prefix in `server/config`. Start fieldA and bootstrap field-1..2, then fieldB and bootstrap field-3..4. Each Field node has capacity 2 and an Entry Spot. Start instanceA and instanceB, each with Dungeon capacity 1, then session. Every role has a separate `MyGame.<role>.ProgramKt` entrypoint in its installed distribution and accepts a configuration path. READY reports the actual Framework endpoints.
+Configure Redis and a unique key prefix in `server/config`. Start fieldA and bootstrap field-1..2, then fieldB and bootstrap field-3..4. Each play node (field) has capacity 2 and an Entry Spot. Start instanceA and instanceB, each with Dungeon capacity 1, then session. Every role has a separate `MyGame.<role>.ProgramKt` entrypoint in its installed distribution and accepts a configuration path. READY reports the actual Framework endpoints.
 
-Send `drain` to the instance hosting the party. Wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Verify Session identity and Dungeon state, send `shutdown`, and verify `STOPPED` and successful process exit. Start the replacement with the same configuration. The other instance retains the relocated Dungeon; its capacity is occupied, so the new party is allocated to the replacement instance.
+Send `drain` to the play node (dungeon)ing the party. Wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Verify Session identity and Dungeon state, send `shutdown`, and verify `STOPPED` and successful process exit. Start the replacement with the same configuration. The other instance retains the relocated Dungeon; its capacity is occupied, so the new party is allocated to the replacement instance.
 
-Player Actor factories and the shared Entry implementation are registered on both Field and Instance nodes. Declare one Entry in `zlink.structure.json` for each Field or Instance node, where the application registers Entry and its first-entry handler. Do not declare Framework default Entries on other roles. The update scenario uses Dungeon capacity 1: after relocation, the occupied peer cannot create the new Dungeon, so the replacement must accept it.
+Player Actor factories and the shared Entry implementation are registered on both play nodes (field and dungeon). Declare one Entry in `zlink.structure.json` for each play node (field or dungeon), where the application registers Entry and its first-entry handler. Do not declare Framework default Entries on other roles. The update scenario uses Dungeon capacity 1: after relocation, the occupied peer cannot create the new Dungeon, so the replacement must accept it.
 
 Control owns the explicit 30-second Message Follow duration. Safe-shutdown observation adds the host relocation budget to that duration.
 
-Initial Field placement uses public stable-type capacity and sequential startup. Set each Field node capacity to exactly its configured Field ID count. Start one Field node and wait for its READY, which follows creation of all its Fields, before starting the next Field node. Earlier nodes are full, so the newly started node is the only eligible Field host. Do not start initial Field hosts concurrently.
+Initial Field placement uses public stable-type capacity and sequential startup. Set each play node (field) capacity to exactly its configured Field ID count. Start one play node (field) and wait for its READY, which follows creation of all its Fields, before starting the next play node (field). Earlier nodes are full, so the newly started node is the only eligible play node (field). Do not start initial play nodes (field) concurrently.

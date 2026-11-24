@@ -516,7 +516,7 @@ inline void update (const std::string &endpoint, World &world)
     Pair fresh (endpoint, world);
     require (fresh.room != pair.room, "Matchmaker reused a Room ID");
     require (fresh.a.view ().nodeId == before.nodeId,
-             "New Room is not on the replacement match node");
+             "New Room is not on the replacement play node (match)");
     const auto updated = hit (pair, 3, Game::initial_hp - Game::shot_damage * 2);
     require (updated.phase == Game::playing_phase && !updated.winner,
              "Replacement changed match phase or winner");
