@@ -19,11 +19,20 @@ final class ZLinkLocationDescriptorFixture {
             String rid,
             ZLinkPlacementObjectKind kind,
             int actorLimit) {
+        return descriptor(owner, rid, kind, actorLimit, 1);
+    }
+
+    static ZLinkMeshNodeDescriptor descriptor(
+            ZLinkLocationOwnerToken owner,
+            String rid,
+            ZLinkPlacementObjectKind kind,
+            int actorLimit,
+            long revision) {
         return new ZLinkMeshNodeDescriptor(
                 "mesh",
                 RoutingId.from(rid),
                 1,
-                1,
+                revision,
                 "tcp://127.0.0.1:7100",
                 Map.of(),
                 1,

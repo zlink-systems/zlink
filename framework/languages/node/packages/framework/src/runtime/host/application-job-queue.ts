@@ -10,8 +10,7 @@ import {
   validateApplicationJobQueueMaximum,
   validateApplicationJobQueuePressureThresholds
 } from '../../contracts/Configuration/Registration';
-import { readFileSync } from 'node:fs';
-import { availableParallelism } from 'node:os';
+import { nodeEffectiveProcessorCount } from '../../contracts/Configuration/InternalDefaults';
 import type {
   ApplicationJobOrigin,
   ApplicationJobPermitPort,
@@ -22,6 +21,8 @@ import {
   ApplicationJobReceiveFlowController,
   type ApplicationJobReceiveFlowTarget
 } from '../application-jobs/receive-flow-controller';
+
+export { nodeEffectiveProcessorCount };
 
 const telemetryLogger = logs.getLogger(TELEMETRY_INSTRUMENTATION_NAME);
 
@@ -68,9 +69,6 @@ export interface ApplicationJobQueueSnapshot extends ApplicationJobQueueConfigur
   readonly flowStateConfigFailureCount: bigint;
 }
 
-const CGROUP_V2_CPU_MAX = '/sys/fs/cgroup/cpu.max';
-const CGROUP_V1_CPU_QUOTA = '/sys/fs/cgroup/cpu/cpu.cfs_quota_us';
-const CGROUP_V1_CPU_PERIOD = '/sys/fs/cgroup/cpu/cpu.cfs_period_us';
 const JOBS_PER_PROCESSOR: Readonly<Record<ApplicationJobQueueProfileValue, bigint>> = {
   compact: 32n,
   low_latency: 64n,
@@ -650,59 +648,6 @@ export class ApplicationJobQueue implements ApplicationJobQueuePort {
   private cumulativePauseDurationAt(nowMs: number): number {
     if (this.cumulativePauseStartedAtMs === undefined) return 0;
     return Math.max(0, nowMs - this.cumulativePauseStartedAtMs) / MILLISECONDS_PER_SECOND;
-  }
-}
-
-export function nodeEffectiveProcessorCount(
-  explicitExecutorMaximum?: number,
-  runtimeConstrainedLogicalCount: number = availableParallelism(),
-  readSystemText: (path: string) => string | undefined = readSystemFile
-): bigint {
-  const candidates = [
-    positiveSafeInteger(runtimeConstrainedLogicalCount),
-    cgroupQuotaProcessorCount(readSystemText),
-    positiveSafeInteger(explicitExecutorMaximum)
-  ].filter((candidate): candidate is number => candidate !== undefined);
-  return BigInt(candidates.length === 0 ? 1 : Math.min(...candidates));
-}
-
-function cgroupQuotaProcessorCount(
-  readSystemText: (path: string) => string | undefined
-): number | undefined {
-  const cpuMax = readSystemText(CGROUP_V2_CPU_MAX)?.trim().split(/\s+/u);
-  if (cpuMax !== undefined && cpuMax.length >= 2 && cpuMax[0] !== 'max') {
-    const count = quotaProcessorCount(cpuMax[0]!, cpuMax[1]!);
-    if (count !== undefined) return count;
-  }
-  const quota = readSystemText(CGROUP_V1_CPU_QUOTA)?.trim();
-  const period = readSystemText(CGROUP_V1_CPU_PERIOD)?.trim();
-  return quota === undefined || period === undefined
-    ? undefined
-    : quotaProcessorCount(quota, period);
-}
-
-function quotaProcessorCount(quotaText: string, periodText: string): number | undefined {
-  try {
-    const quota = BigInt(quotaText);
-    const period = BigInt(periodText);
-    if (quota <= 0n || period <= 0n) return undefined;
-    const floored = quota / period;
-    const count = floored < 1n ? 1n : floored;
-    return count > BigInt(Number.MAX_SAFE_INTEGER) ? Number.MAX_SAFE_INTEGER : Number(count);
-  } catch {
-    return undefined;
-  }
-}
-
-function positiveSafeInteger(value: number | undefined): number | undefined {
-  return value !== undefined && Number.isSafeInteger(value) && value > 0 ? value : undefined;
-}
-
-function readSystemFile(path: string): string | undefined {
-  try {
-    return readFileSync(path, 'utf8');
-  } catch {
-    return undefined;
   }
 }
 

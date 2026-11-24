@@ -37,6 +37,7 @@ import type {
 } from '../backend/contracts';
 import type { ZLinkDispatchErrorReporter } from '../channels';
 import { ZLinkConfigurationException } from '../configuration';
+import { ZLinkExecutionBarrier } from '../execution';
 import { ZLinkWorkerRuntime } from '../workers';
 import { disposeLifecycleHandlers } from '../handlers/handler-instance-scope';
 import {
@@ -150,6 +151,12 @@ export class ZLinkEntrySpotActivation {
       () => executionAllowed,
       (actorId) => options.entryActorRuntime?.resolveActor(actorId)
     );
+    const executionBarrier = new ZLinkExecutionBarrier();
+    executionBarrier.setExecutionPolicy(
+      () => executionAllowed,
+      () => this.entrySpot
+    );
+    this.spotSerialExecutor.setExecutionBarrier(executionBarrier);
     // Entry Spot lifecycle, timers and detached continuations use this serial
     // executor. Actor packets use the target actor mailbox.
     this.outbound = new DefaultZLinkSpotOutbound({
@@ -165,6 +172,7 @@ export class ZLinkEntrySpotActivation {
       options.metrics,
       () => options.dispatchErrors?.flow.flowCreationEnabled() ?? true
     );
+    this.timers.setExecutionBarrier(executionBarrier);
     this.workerRuntime = options.workerRuntime ?? new ZLinkWorkerRuntime();
     this.context = createEntrySpotContext({
       spotId: String(options.nativeSpot.routingId),
@@ -309,7 +317,7 @@ export class ZLinkEntrySpotActivation {
   }
 
   async initialize(): Promise<void> {
-    await this.serial.execute(() => this.entrySpot.onInitialize?.());
+    await this.serial.executeLifecycleOperation(() => this.entrySpot.onInitialize?.());
     this.attachActorJoinDispatch();
     this.initialized = true;
     this.options.metrics?.recordSpotCount(this.options.spotNodeName, 'entry', 1);
@@ -328,7 +336,7 @@ export class ZLinkEntrySpotActivation {
     };
     if (this.initialized) {
       await cleanup(() =>
-        this.serial.execute(() =>
+        this.serial.executeLifecycleOperation(() =>
           invokeSpotClosing(
             this.entrySpot.onClosing?.bind(this.entrySpot),
             ZLinkSpotCloseReason.HostShutdown,

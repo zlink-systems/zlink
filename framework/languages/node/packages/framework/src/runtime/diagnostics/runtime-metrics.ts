@@ -134,6 +134,8 @@ export const METRIC_NAMES = Object.freeze({
   HostCoreHwmAccounted: 'zlink.host.core_hwm.accounted',
   HostCoreHwmCompletionAccounted: 'zlink.host.core_hwm.completion_accounted',
   HostCoreHwmBlockedRatio: 'zlink.host.core_hwm.blocked_ratio',
+  HostAuthenticationAdmissionInFlight: 'zlink.host.authentication_admission.in_flight',
+  HostAuthenticationAdmissionRejections: 'zlink.host.authentication_admission.rejections',
   HostApplicationJobQueueLimit: 'zlink.host.application_job_queue.limit',
   HostApplicationJobQueueJobs: 'zlink.host.application_job_queue.jobs',
   HostApplicationJobQueueCapacityWaiters: 'zlink.host.application_job_queue.capacity_waiters',
@@ -188,6 +190,7 @@ const HISTOGRAMS = Object.freeze({
 } as const);
 
 const OBSERVABLE_GAUGES = Object.freeze({
+  [METRIC_NAMES.HostAuthenticationAdmissionInFlight]: '{request}',
   [METRIC_NAMES.MeshNodePeersConfigured]: '{peer}',
   [METRIC_NAMES.MeshNodePeersConnected]: '{peer}',
   [METRIC_NAMES.MeshNodePeersReady]: '{peer}',
@@ -216,6 +219,7 @@ const OBSERVABLE_GAUGES = Object.freeze({
 } as const);
 
 const OBSERVABLE_COUNTERS = Object.freeze({
+  [METRIC_NAMES.HostAuthenticationAdmissionRejections]: '{request}',
   [METRIC_NAMES.HostApplicationJobQueueCapacityWaits]: '{wait}',
   [METRIC_NAMES.HostApplicationJobQueueCapacityWaitDuration]: 's',
   [METRIC_NAMES.HostApplicationJobQueuePressureTransitions]: '{transition}',
@@ -233,6 +237,9 @@ class MetricRegistry {
   readonly meshSnapshots = new Set<() => ReadonlyArray<ZLinkRuntimeMetricMeshSnapshot>>();
   readonly hostStates = new Set<() => string>();
   readonly hostCapacities = new Set<() => ZLinkHostCapacityStatus>();
+  readonly authenticationAdmissions = new Set<
+    () => { readonly inFlight: number; readonly rejections: number }
+  >();
   readonly applicationJobQueuePressures = new Set<
     () => ZLinkApplicationJobQueuePressureMetricSnapshot
   >();
@@ -258,6 +265,19 @@ class MetricRegistry {
   }
 
   private observe(name: string, result: ZLinkObservableResult): void {
+    if (
+      name === METRIC_NAMES.HostAuthenticationAdmissionInFlight ||
+      name === METRIC_NAMES.HostAuthenticationAdmissionRejections
+    ) {
+      if (this.authenticationAdmissions.size === 0) return;
+      let value = 0;
+      for (const current of this.authenticationAdmissions) {
+        const { inFlight, rejections } = current();
+        value += name === METRIC_NAMES.HostAuthenticationAdmissionInFlight ? inFlight : rejections;
+      }
+      result.observe(value);
+      return;
+    }
     if (
       name === METRIC_NAMES.HostApplicationJobQueuePressureState ||
       name === METRIC_NAMES.HostApplicationJobQueuePressureTransitions ||
@@ -486,6 +506,13 @@ export class ZLinkRuntimeMetrics {
   registerHostCapacity(provider: () => ZLinkHostCapacityStatus): ZLinkRuntimeMetricRegistration {
     this.registry.hostCapacities.add(provider);
     return registration(() => this.registry.hostCapacities.delete(provider));
+  }
+
+  registerAuthenticationAdmission(
+    current: () => { readonly inFlight: number; readonly rejections: number }
+  ): ZLinkRuntimeMetricRegistration {
+    this.registry.authenticationAdmissions.add(current);
+    return registration(() => this.registry.authenticationAdmissions.delete(current));
   }
 
   registerApplicationJobQueuePressure(

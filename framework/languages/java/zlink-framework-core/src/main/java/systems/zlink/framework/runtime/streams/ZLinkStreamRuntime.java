@@ -20,6 +20,7 @@ import systems.zlink.framework.runtime.internal.backend.*;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
+import systems.zlink.framework.runtime.internal.completion.ZLinkTerminalWinner;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAction;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
@@ -149,6 +150,8 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     private final ScheduledExecutorService replyRetryExecutor;
     private final ExecutorService receiveExecutor;
     private final List<StreamReceiveLoop> receiveLoops = new ArrayList<>();
+    private final ZLinkStreamAuthenticationAdmission authenticationAdmission;
+    private ZLinkRuntimeMetrics.Registration authenticationAdmissionMetric;
     private volatile boolean draining;
     private volatile CompletableFuture<Void> sessionShutdown;
     private CompletableFuture<Void> forcedStop = new CompletableFuture<>();
@@ -484,6 +487,9 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         this.sessions = Objects.requireNonNull(sessions, "sessions");
         this.stateLane = Objects.requireNonNull(stateLane, "stateLane");
         this.registration = Objects.requireNonNull(registration, "registration");
+        this.authenticationAdmission =
+                new ZLinkStreamAuthenticationAdmission(
+                        ZLinkStreamAuthenticationAdmission.settings(registration.streamNodes()));
         this.sessionRelocationSealTimeout =
                 registration.locations().options().sessionRelocationSealTimeout();
         this.sessionReplacementCallbackTimeout = registration.sessionReplacementCallbackTimeout();
@@ -586,6 +592,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             stream.startSessionService();
             receiveLoops.add(new StreamReceiveLoop(streamNode, stream));
         }
+        authenticationAdmissionMetric = authenticationAdmission.registerMetric();
         receiveLoops.forEach(StreamReceiveLoop::start);
         return this;
     }
@@ -1490,68 +1497,115 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                             }
                             return current;
                         });
-        if (receivedState == null
-                && dispatchHeader.kind() != ZLinkStreamMessageKind.CONTROL
-                && !draining) {
-            receivedState = getOrCreateSessionState(streamNode, stream, routingId, dispatchHeader);
-            SessionState created = receivedState;
-            if (created != null)
-                inStateLane(
-                        () -> {
-                            created.markInboundReceived(nanoTime.getAsLong());
-                            created.markApplicationReceived();
-                            return null;
-                        });
-        }
-        final SessionState state = receivedState;
-        final ZLinkFlowContext.State incomingFlow = capturedFlow;
-        if (streamHeader.kind() == ZLinkStreamMessageKind.CONTROL) {
-            dispatchControl(streamNode, stream, routingId, streamHeader, payload);
+        if (dispatchHeader.kind() == ZLinkStreamMessageKind.CONTROL) {
+            dispatchControl(streamNode, stream, routingId, dispatchHeader, payload);
             return CompletableFuture.completedFuture(null);
         }
         if (draining) {
             // Registered sessions are notified by the session drain.
-            if (state == null && sessionShutdown == null && !forcedStop.isDone()) {
+            if (receivedState == null && sessionShutdown == null && !forcedStop.isDone()) {
                 sendSessionClosing(stream, routingId);
             }
             return CompletableFuture.completedFuture(null);
         }
-        if (state == null) {
-            return CompletableFuture.completedFuture(null);
-        }
-        if (state.replacementClosing()) {
+        if (receivedState != null && receivedState.replacementClosing()) {
             sendSessionClosing(stream, routingId);
             return CompletableFuture.completedFuture(null);
         }
-        ZLinkMessageFlowTracer.TracePoint received = flow.begin(ZLinkMessageFlowOutcome.RECEIVED);
-        if (received != null) {
-            String corr = ZLinkStreamCorrelations.forTrace(dispatchHeader);
-            received.trace(
-                    new ZLinkMessageFlowEvent(
-                                    ZLinkMessageFlowOutcome.RECEIVED,
-                                    ZLinkDispatchErrorSurface.STREAM_SESSION,
-                                    dispatchHeader.requestSequence().isPresent()
-                                            ? ZLinkDispatchMessageKind.REQUEST
-                                            : ZLinkDispatchMessageKind.SEND,
-                                    dispatchHeader.packetName(),
-                                    null,
-                                    null,
-                                    corr,
-                                    null,
-                                    null,
-                                    null,
-                                    null,
-                                    null,
-                                    null,
-                                    null,
-                                    null,
-                                    incomingFlow == null ? null : incomingFlow.flowId(),
-                                    incomingFlow == null ? null : incomingFlow.origin())
-                            .withStreamSessionId(
-                                    incomingFlow == null
-                                            ? routingId.toHex()
-                                            : incomingFlow.streamSessionId()));
+        traceStreamPhase(dispatchHeader, capturedFlow, routingId, ZLinkMessageFlowOutcome.RECEIVED);
+
+        ZLinkStreamAuthenticationAdmission.Lease lease = null;
+        if (authenticationAdmission.appliesTo(dispatchHeader)) {
+            lease = authenticationAdmission.tryAdmit();
+            if (lease == null) {
+                return rejectAuthenticationAdmission(
+                        stream, routingId, dispatchHeader, capturedFlow);
+            }
         }
+        ZLinkStreamSessionContextState authenticationContext = null;
+        try {
+            SessionState state =
+                    receivedState != null
+                            ? receivedState
+                            : getOrCreateSessionState(
+                                    streamNode, stream, routingId, dispatchHeader);
+            if (state == null) {
+                if (lease != null) {
+                    lease.finish(ZLinkTerminalWinner.Cause.CANCELLATION);
+                }
+                return CompletableFuture.completedFuture(null);
+            }
+            var context = state.context();
+            if (lease != null) {
+                context.trackAuthenticationRequest(dispatchHeader, lease);
+                authenticationContext = context;
+            }
+            if (receivedState == null) {
+                inStateLane(
+                        () -> {
+                            state.markInboundReceived(nanoTime.getAsLong());
+                            state.markApplicationReceived();
+                            return null;
+                        });
+            }
+            var completion =
+                    enqueueSessionPacket(state, dispatchHeader, capturedFlow, payload, lease);
+            if (lease == null) {
+                return completion;
+            }
+            return completion.whenComplete(
+                    (ignored, error) ->
+                            context.finishAuthenticationRequest(
+                                    dispatchHeader,
+                                    error == null
+                                            ? ZLinkTerminalWinner.Cause.RESPONSE
+                                            : ZLinkTerminalWinner.Cause.FAILURE));
+        } catch (RuntimeException | Error failure) {
+            if (lease != null) {
+                if (authenticationContext == null) {
+                    lease.finish(ZLinkTerminalWinner.Cause.FAILURE);
+                } else {
+                    authenticationContext.finishAuthenticationRequest(
+                            dispatchHeader, ZLinkTerminalWinner.Cause.FAILURE);
+                }
+            }
+            throw failure;
+        }
+    }
+
+    private CompletionStage<Void> rejectAuthenticationAdmission(
+            ZLinkBackendStreamSocket stream,
+            RoutingId routingId,
+            ZLinkStreamHeader header,
+            ZLinkFlowContext.State incomingFlow) {
+        var error =
+                new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.UNAVAILABLE, "Authentication admission is full.");
+        ZLinkStreamSessionContextState.traceDispatchError(
+                flow, routingId, header, error, ZLinkDispatchErrorReason.BACKPRESSURE);
+        ZLinkStreamHeader reply =
+                ZLinkStreamHeader.errorResponse(header, authenticationAdmission.retryMetadata());
+        Message errorBody = Message.from(ZLinkStreamErrorPayload.encode(error));
+        try (ZLinkFlowContext.Scope ignored =
+                incomingFlow == null ? () -> {} : ZLinkFlowContext.enter(incomingFlow)) {
+            return stream.replyAsync(routingId, reply, List.of(errorBody))
+                    .whenComplete((result, failure) -> errorBody.close());
+        } catch (RuntimeException failure) {
+            errorBody.close();
+            return CompletableFuture.failedFuture(failure);
+        } catch (Error failure) {
+            errorBody.close();
+            throw failure;
+        }
+    }
+
+    private CompletionStage<Void> enqueueSessionPacket(
+            SessionState state,
+            ZLinkStreamHeader dispatchHeader,
+            ZLinkFlowContext.State incomingFlow,
+            Message payload,
+            ZLinkStreamAuthenticationAdmission.Lease lease) {
+        RoutingId routingId = state.routingId();
         Message payloadCopy =
                 Message.from(
                         ZLinkStreamPayloadCodec.decode(dispatchHeader, payload, compressionCodec));
@@ -1577,6 +1631,10 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                                                     : ZLinkFlowContext.enter(incomingFlow)) {
                                         return executeHandler(
                                                 () -> {
+                                                    if (lease != null && lease.isTerminal()) {
+                                                        return CompletableFuture.completedFuture(
+                                                                null);
+                                                    }
                                                     traceStreamPhase(
                                                             dispatchHeader,
                                                             incomingFlow,
@@ -2219,6 +2277,9 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     }
 
     private void finishClose() {
+        if (authenticationAdmissionMetric != null) {
+            authenticationAdmissionMetric.close();
+        }
         replyRetryExecutor.shutdownNow();
         boolean replyRetriesStopped =
                 awaitExecutorTermination(replyRetryExecutor, "STREAM error reply retry executor");
