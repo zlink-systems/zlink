@@ -35,7 +35,10 @@ internal sealed record ZLinkAuthorityRelocation(
             typeof(ZLinkJsonSerializerOptions.FrameworkUnsigned64JsonConverter)
         )]
             ulong OwnerLeaseGeneration
-    );
+    )
+    {
+        internal Fence Identity => new(NodeRid, NodeGeneration, OwnerId, OwnerLeaseGeneration);
+    }
 
     internal sealed record TargetFence(
         string NodeRid,
@@ -56,6 +59,25 @@ internal sealed record ZLinkAuthorityRelocation(
         ulong OwnerLeaseGeneration,
         [property: JsonPropertyOrder(4)] string ExpectedStoreVersion
     ) : Fence(NodeRid, NodeGeneration, OwnerId, OwnerLeaseGeneration);
+
+    internal static bool MatchesCommittedTarget(
+        ZLinkAuthoritySnapshot authority,
+        Guid relocationId,
+        ulong attemptGeneration
+    ) =>
+        authority.Relocation
+            is {
+                Phase: >= ServiceWireCodec.RelocationPhase.Committed
+                    and <= ServiceWireCodec.RelocationPhase.Completed,
+                Target: { } target,
+            } relocation
+        && relocation.RelocationId == relocationId
+        && target.AttemptGeneration == attemptGeneration
+        && target.NodeRid == authority.Allocation.Descriptor.Rid.ToHex()
+        && target.NodeGeneration == authority.Allocation.DescriptorLifecycleGeneration
+        && target.OwnerId == authority.OwnerId
+        && authority.OwnerLeaseGeneration > 0
+        && target.OwnerLeaseGeneration == (ulong)authority.OwnerLeaseGeneration;
 
     internal bool HoldsCapturedSource(
         Guid relocationId,

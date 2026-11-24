@@ -1251,8 +1251,8 @@ public sealed class StandaloneActorRelocationPrecommitTests
             await ZLinkRelocationTargetFence.ReadAsync(
                 store,
                 new ZLinkAuthorityKey(string.Empty),
-                "expected",
-                new ZLinkLocationOwnerToken("target", 1),
+                static _ => false,
+                static _ => false,
                 CancellationToken.None
             )
         );
@@ -1269,11 +1269,8 @@ public sealed class StandaloneActorRelocationPrecommitTests
             await ZLinkRelocationTargetFence.ReadAsync(
                 store,
                 source.Key,
-                source.Captured.StoreVersion,
-                new ZLinkLocationOwnerToken(
-                    source.TargetAuthority.OwnerId,
-                    checked((long)source.TargetAuthority.OwnerLeaseGeneration)
-                ),
+                current => current.StoreVersion == source.Captured.StoreVersion,
+                static _ => false,
                 CancellationToken.None
             )
         );
@@ -1289,7 +1286,10 @@ public sealed class StandaloneActorRelocationPrecommitTests
         var preserved = await PrepareCapturedSourceAsync(inner);
         var committed = await PrepareCapturedSourceAsync(inner);
 
-        ValueTask<ZLinkRelocationTargetFenceReading> ReadAsync(CapturedSource source) =>
+        ValueTask<ZLinkRelocationTargetFenceReading> ReadAsync(
+            CapturedSource source,
+            Guid? relocationId = null
+        ) =>
             ZLinkRelocationTargetFence.ReadAsync(
                 store,
                 source.Key,
@@ -1299,10 +1299,12 @@ public sealed class StandaloneActorRelocationPrecommitTests
                         source.Envelope,
                         source.Prepare
                     ),
-                new ZLinkLocationOwnerToken(
-                    source.TargetAuthority.OwnerId,
-                    checked((long)source.TargetAuthority.OwnerLeaseGeneration)
-                ),
+                current =>
+                    ZLinkAuthorityRelocation.MatchesCommittedTarget(
+                        current,
+                        relocationId ?? source.RelocationId,
+                        source.Prepare.TargetAttemptGeneration
+                    ),
                 CancellationToken.None
             );
 
@@ -1334,6 +1336,10 @@ public sealed class StandaloneActorRelocationPrecommitTests
             CancellationToken.None
         );
         Assert.Equal(ZLinkRelocationTargetFenceReading.TargetCommitted, await ReadAsync(committed));
+        Assert.Equal(
+            ZLinkRelocationTargetFenceReading.FenceChanged,
+            await ReadAsync(committed, Guid.NewGuid())
+        );
     }
 
     private sealed record CapturedSource(

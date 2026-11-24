@@ -159,9 +159,14 @@ internal interface IZLinkBackendSpotNode : IAsyncDisposable
         RoutingId targetNodeRid,
         IReadOnlyList<Message> parts,
         SendFlags flags,
-        ReadOnlyMemory<byte> metadata
+        ReadOnlyMemory<byte> metadata,
+        Action<Exception>? failureObserver = null
     )
     {
+        if (failureObserver is not null)
+            throw new NotSupportedException(
+                "This MeshNode backend does not support node send failure observation."
+            );
         if (!metadata.IsEmpty)
             throw new NotSupportedException(
                 "This MeshNode backend does not support node metadata."

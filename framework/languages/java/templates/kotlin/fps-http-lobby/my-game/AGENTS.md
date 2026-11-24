@@ -2,14 +2,14 @@
 
 ## Rules for AI
 
-`server/lobby` is an HTTP lobby that holds no game state; every other server process is a stateful ZLink node. Before writing code, decide which kind you are editing.
+`server/lobby` is an API node that holds no game state; the session node manages client connections, and the play nodes host the game Spots. Before writing code, decide which kind you are editing.
 
-- A game node is not a REST server. A player's state is owned by one session-bound Actor (or the Spot that owns a shared value). Load it once on connect; do not read the database while handling a request.
+- A play node hosts Spots. A session-bound Actor owns the player's state, and a Spot owns shared state. Load it once on connect; do not read the database while handling a request.
 - Write only results to the database, one transaction per round. Check duplicate requests in Actor or Spot memory.
 - While a game is running, a Spot handler never awaits a remote request or a database reply: the await holds the Spot's turn and stops every message and timer in it. When a round ends, the Spot writes the results of all its Actors in one transaction, then tells each Actor after the commit.
 - Values many players see live in node memory or one owning Spot; values many requests update are applied by that one owning Spot. A process that does not own a value sends a request to its owner instead of writing it.
 - Spots and Actors already process one message at a time. Do not guard their state with locks, semaphores or process-wide static stores, and do not update memory from database commit hooks; the writer updates its owner's memory after commit, others send a message to the owner.
-- Split roles so the game can scale out from day one: game nodes host lobby and room Spots and player Actors and are the only processes you add; a shared node hosts only game-wide Instance Spots (matchmaking, game-wide values), and game nodes do not register those factories. Send and request by Spot ID only; placement is configuration. Keep shared-Spot values recoverable from room resends or a database read at startup.
+- Split roles so the game can scale out from day one: play nodes host lobby and room Spots and player Actors and are the only processes you add; a dedicated play node hosts only game-wide Instance Spots (matchmaking, game-wide values), and the API node and room hosts omit those factories. Send and request by Spot ID only; placement is configuration. Keep shared-Spot values recoverable from room resends or a database read at startup.
 - Never have two Actors or Spots wait on requests to each other inside a turn; notify with send and let the state owner decide.
 - Actors move between nodes when they join a Spot or relocate. Keep all mutable Actor fields in one state record, register stateful Actors with the state-preserving relocation policy, and test that save and restore preserve every field.
 - Player data reaches a Spot with the Actor that joins it; do not request it per player at Spot entry. If a Spot truly needs extra data, fetch it for all players in one request before the game starts.
@@ -19,13 +19,13 @@
 - Send money or reward results only after the database commit.
 - One decision has one owner; find the existing one before adding another. Take test expectations from the spec, not from the implementation.
 
-The HTTP lobby may read and write the database per request, but it holds no game state and changes game state only by sending requests to game nodes.
+The API node may read and write the database per request, but it holds no game state and changes game state only by sending requests to play nodes.
 
-Details: [Stateful game nodes and the HTTP lobby](https://docs.zlink.systems/kotlin/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
+Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/kotlin/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
 
 ## Project and development
 
-This Kotlin project runs an HTTP Lobby, a Session gateway, Match hosts A and B, and a Redis Location Store. The Lobby pairs `POST /match` requests by mode, assigns a UUID Room ID, and prepares the member list of a dynamic Room User Spot before returning the assignment. Players connect to Session over STREAM and join the assigned Room. `build.gradle.kts` pins the public Framework and connector packages. The [README](README.md) owns execution, deployment, FPS rules, and known issues; [zlink.structure.json](zlink.structure.json) describes initial topology and ordered scenarios.
+This Kotlin project runs an API node, a Session node, play nodes A and B (match), and a Redis Location Store. The API node pairs `POST /match` requests by mode, assigns a UUID Room ID, and prepares the member list of a dynamic Room User Spot before returning the assignment. Players connect to Session over STREAM and join the assigned Room. `build.gradle.kts` pins the public Framework and connector packages. The [README](README.md) owns execution, deployment, FPS rules, and known issues; [zlink.structure.json](zlink.structure.json) describes initial topology and ordered scenarios.
 
 Run from this project root with Docker Compose v2 and Linux containers:
 
@@ -49,12 +49,12 @@ For host-process debugging, install JDK 25 and add `--local` or `-Local`. After 
 
 ## Modules and extension points
 
-- `server/shared/src/main/kotlin/MyGame/Contracts.kt`: typed game contracts, action limits, and protocol names. `HttpLobbyContracts.kt`: HTTP lobby and server-only preparation contracts. `Geometry.kt`: `Vec3`, closed slab ray/AABB intersection, static map, spawn points, and player boxes.
+- `server/shared/src/main/kotlin/MyGame/Contracts.kt`: typed game contracts, action limits, and protocol names. `HttpLobbyContracts.kt`: API node and server-only preparation contracts. `Geometry.kt`: `Vec3`, closed slab ray/AABB intersection, static map, spawn points, and player boxes.
 - `server/match/src/main/kotlin/MyGame/match/domain/RoomState.kt`: authoritative positions, HP, phase, winner, shared sequences, movement budgets, cooldowns, and hit selection. Production time is monotonic; only the domain constructor accepts a test clock. Snapshot DTOs store remaining milliseconds rather than process clock readings.
 - `server/lobby/src/main/kotlin/MyGame/lobby/application/Matchmaker.kt`: mode queues, pairing, and the single Room ID issuance point. `server/lobby/src/main/kotlin/MyGame/lobby/infrastructure/HttpLobby.kt` creates the Room and waits for its preparation acknowledgement before returning the HTTP assignment. `server/match/src/main/kotlin/MyGame/match/domain/RoomRoster.kt` owns membership and admission. Keep Framework callbacks out of the domain.
 - `server/session/src/main/kotlin/MyGame/session/Program.kt`: connection callbacks, Actor binding, and client packet allowlist. Authenticate the claimed player identity before binding. Relay only `JoinRoomRequest`, `RoomViewRequest`, `MoveRequest`, `ShootRequest`, and `SessionInfoRequest`; reject preparation, assignment, and result packets from clients.
 - `server/shared/src/main/kotlin/MyGame/Hosting.kt`, `NodeConfig` and `Control.kt`: shared setup, diagnostics, configuration, drain, and shutdown observation. Retain public Framework ownership of routing, membership, binding, and relocation.
-- `e2e/src/main/kotlin/MyGame/e2e/Scenarios.kt`: received client results for lobby, hit, wall, input, reconnect, and update. `server/match/src/test/.../RoomStateTest.kt` and `server/lobby/src/test/.../LobbyDomainTest.kt` cover game and HTTP lobby boundaries. `Structure.kt` checks descriptor, configuration, and contracts before infrastructure starts. `Nodes.kt` and `DockerRuntime.kt` manage the runner-owned process lifecycle.
+- `e2e/src/main/kotlin/MyGame/e2e/Scenarios.kt`: received client results for lobby, hit, wall, input, reconnect, and update. `server/match/src/test/.../RoomStateTest.kt` and `server/lobby/src/test/.../LobbyDomainTest.kt` cover game and API node boundaries. `Structure.kt` checks descriptor, configuration, and contracts before infrastructure starts. `Nodes.kt` and `DockerRuntime.kt` manage the runner-owned process lifecycle.
 
 ## Domain ownership and asynchronous execution
 

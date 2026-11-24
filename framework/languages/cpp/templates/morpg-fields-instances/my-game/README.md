@@ -1,10 +1,16 @@
 # MyGame MORPG fields and instances
 
-This template runs a persistent player Actor across four Fields on two physical nodes. Field border visibility uses the `border` logical multicast channel. Party membership and run progress live in independent Party Spots; two Instance nodes host the party Dungeon User Spots and preserve their state on relocation.
+This template runs a persistent player Actor across four Fields on two physical nodes. Field border visibility uses the `border` logical multicast channel. Party membership and run progress live in independent Party Spots; two play nodes (dungeon) host the party Dungeon User Spots and preserve their state on relocation.
 
 ```mermaid
 flowchart LR
-  Players -->|STREAM| Session
+  subgraph playNodes["Play nodes"]
+    FieldA["Play node A (field)"]
+    FieldB["Play node B (field)"]
+    InstanceA["Play node A (dungeon)"]
+    InstanceB["Play node B (dungeon)"]
+  end
+  Players -->|STREAM| Session["Session node"]
   Session -->|Actor relay| FieldA
   FieldA -->|Actor relocation| FieldB
   FieldB -->|border pub/sub| FieldA
@@ -152,7 +158,7 @@ The scripts and C++ runner check `zlink.structure.json`, start Redis and the fiv
 | `reconnect` | Reconnect a Dungeon member, retaining Actor generation, Dungeon and stage. |
 | `update` | Drain the Dungeon host, preserve both Sessions and Dungeon run state, replace the host and verify that it accepts a new Dungeon. |
 
-`./run-e2e.sh --check-structure` checks the actual project files without starting Redis or game nodes. The structure checker accepts valid added nodes and reordered edges; it rejects inconsistent IDs, owner references, channels, Spot types, scenario order, and escaping configuration paths. `./run-e2e.sh --check-domain` runs the same domain checks as the `game-domain` CTest target without starting Redis or game nodes.
+`./run-e2e.sh --check-structure` checks the actual project files without starting Redis or play nodes. The structure checker accepts valid added nodes and reordered edges; it rejects inconsistent IDs, owner references, channels, Spot types, scenario order, and escaping configuration paths. `./run-e2e.sh --check-domain` runs the same domain checks as the `game-domain` CTest target without starting Redis or play nodes.
 
 ## Local debugging
 
@@ -194,14 +200,14 @@ Each selected scenario uses a fresh world. Instance capacity is one Dungeon per 
 
 ## Deployment sequence
 
-Start Redis, fieldA, fieldB, instanceA, instanceB, and then session. fieldA bootstraps field-1 and field-2; fieldB bootstraps field-3 and field-4. Each Field node registers an Entry Spot and a Player factory. Instance nodes register Player factories and Dungeon User Spots without Entry Spots. Initial actor placement and Dungeon placement remain Framework decisions.
+Start Redis, fieldA, fieldB, instanceA, instanceB, and then session. fieldA bootstraps field-1 and field-2; fieldB bootstraps field-3 and field-4. Each play node (field) registers an Entry Spot and a Player factory. Play nodes (dungeon) register Player factories and Dungeon User Spots without Entry Spots. Initial actor placement and Dungeon placement remain Framework decisions.
 
-For a planned update, write `drain` to the affected process's standard input. Wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Write `shutdown` and require `STOPPED` plus exit code zero before replacing the process. Start the replacement with the same node configuration; a Field node creates its configured Fields only when they do not exist, and existing logical Fields remain under Location Store authority. Every listener binds an OS-assigned port. Configure Redis endpoints and a deployment-specific key prefix for your environment.
+For a planned update, write `drain` to the affected process's standard input. Wait for `RELOCATION_REQUESTED`, `RELOCATED`, and `SAFE_TO_SHUTDOWN`. Write `shutdown` and require `STOPPED` plus exit code zero before replacing the process. Start the replacement with the same node configuration; a play node (field) creates its configured Fields only when they do not exist, and existing logical Fields remain under Location Store authority. Every listener binds an OS-assigned port. Configure Redis endpoints and a deployment-specific key prefix for your environment.
 
 Game messages use camelCase JSON fields, string `RunPhase` values, nullable `runId` values, and 64-bit movement sequences. Party and run IDs are issued by the server as a prefix followed by 32 lowercase hexadecimal characters. A Party ID is also its independent Party Spot ID. `FieldPositionDomain` owns movement decisions and cooldown snapshots; `PlayerState` retains accepted coordinates, sequence, and Party ID. `PartyRun` owns party membership and run phases, while `DungeonRun` owns the roster, stage, and owning Party Spot ID. Field departure removes visibility and movement projection only. Field and Dungeon Spots request party state through the public `RequestToSpot` API and send pushes by Actor ID. Relocation adapters preserve application state only.
 
-Player Actor factories and the shared Entry implementation are registered on both Field and Instance nodes. Field nodes also register the dynamic Party Spot factory; Instance nodes register dynamic Dungeon Spots. Declare one Entry in `zlink.structure.json` for each Field or Instance node, where the application registers Entry and its first-entry handler. Do not declare Framework default Entries on other roles. The update scenario uses Dungeon capacity 1: after relocation, the occupied peer cannot create the new Dungeon, so the replacement must accept it.
+Player Actor factories and the shared Entry implementation are registered on both play nodes (field and dungeon). Play nodes (field) also register the dynamic Party Spot factory; play nodes (dungeon) register dynamic Dungeon Spots. Declare one Entry in `zlink.structure.json` for each play node (field or dungeon), where the application registers Entry and its first-entry handler. Do not declare Framework default Entries on other roles. The update scenario uses Dungeon capacity 1: after relocation, the occupied peer cannot create the new Dungeon, so the replacement must accept it.
 
 Message Follow is explicitly 30 seconds, matching the Framework default. Safe-shutdown observation is derived as Message Follow plus the relocation observation budget. Shared lifecycle constants own both values.
 
-Initial Field placement uses public stable-type capacity and sequential startup. Set each Field node capacity to exactly its configured Field ID count. Start one Field node and wait for its READY, which follows creation of all its Fields, before starting the next Field node. Earlier nodes are full, so the newly started node is the only eligible Field host. Do not start initial Field hosts concurrently.
+Initial Field placement uses public stable-type capacity and sequential startup. Set each play node (field) capacity to exactly its configured Field ID count. Start one play node (field) and wait for its READY, which follows creation of all its Fields, before starting the next play node (field). Earlier nodes are full, so the newly started node is the only eligible play node (field). Do not start initial play nodes (field) concurrently.

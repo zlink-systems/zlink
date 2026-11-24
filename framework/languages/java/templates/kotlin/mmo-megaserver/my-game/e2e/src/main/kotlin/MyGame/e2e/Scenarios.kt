@@ -137,7 +137,7 @@ suspend fun scenarios(selected: List<String>, nodes: Nodes): Int {
                         admitted.nodeId == moved.nodeId &&
                             admitted.players == listOf(PlayerPosition(PLAYER_FOUR, 0.0, 0))
                     ) {
-                        "New Region was not accepted by the replacement Region node"
+                        "New Region was not accepted by the replacement play node (region)"
                     }
                 }
             }

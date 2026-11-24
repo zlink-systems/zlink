@@ -101,7 +101,7 @@ export function checkStructure(path = 'zlink.structure.json'): void {
   for (const node of nodes.filter((node) => node.role === 'table')) {
     assert(
       spots.filter((spot) => spot.kind === 'entry' && spot.owner === node.id).length === 1,
-      `Table node must declare exactly one application Entry Spot: ${node.id}`
+      `play node (table) must declare exactly one application Entry Spot: ${node.id}`
     );
   }
   assert(
@@ -110,8 +110,8 @@ export function checkStructure(path = 'zlink.structure.json'): void {
   );
   const requiredEdges = [
     { from: 'players', to: 'session', label: 'STREAM' },
-    { from: 'session', to: 'tableA', label: 'relay' },
-    { from: 'tableA', to: 'location', label: 'Location / lease', semantic: 'location-authority' }
+    { from: 'session', to: 'playA', label: 'relay' },
+    { from: 'playA', to: 'location', label: 'Location / lease', semantic: 'location-authority' }
   ];
   const edges = array(s.edges).map(object);
   for (const required of requiredEdges)

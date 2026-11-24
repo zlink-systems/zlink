@@ -4,10 +4,15 @@ Players gather in Town channels, form parties of up to four members, and enter a
 
 ```mermaid
 flowchart LR
-    players[Players] -->|STREAM| session[Session]
-    session -->|relay| townA[Town A: town-1]
-    townA -->|relocation| townB[Town B: town-2]
-    townB -->|GetOrCreate| instances[Instance nodes A and B: Dungeon]
+    subgraph playNodes["Play nodes"]
+      townA["Play node A (town): town-1"]
+      townB["Play node B (town): town-2"]
+      instances["Play node ×N (dungeon): Dungeon"]
+    end
+    players[Players] -->|STREAM| session["Session node"]
+    session -->|relay| townA
+    townA -->|relocation| townB
+    townB -->|GetOrCreate| instances
     townB -->|Location / lease| location[Redis]
 ```
 
@@ -169,6 +174,6 @@ Bootstrap Town providers sequentially and wait for each READY before starting th
 
 Application distributions are under `server/<role>/build/install/<role>/`. The e2e scripts build them before starting nodes. Deployment must supply durable Redis storage and reachable listener addresses appropriate to the network.
 
-All Object Servers that register Player factories also register the shared Entry and first-admission handler, including both Instance nodes. Entry admission joins the requested fixed Town channel. Each Instance declares its dynamic Dungeon factory in `zlink.structure.json`.
+All Object Servers that register Player factories also register the shared Entry and first-admission handler, including both play nodes (dungeon). Entry admission joins the requested fixed Town channel. Each Instance declares its dynamic Dungeon factory in `zlink.structure.json`.
 
 The e2e configuration uses one Dungeon slot per Instance. After drain, the surviving Instance is full, so only the replacement can accept the fresh Dungeon. The structure checker enforces this configuration. Message Follow remains 30 seconds; the SafeToShutdown observation budget is derived from that duration plus the existing relocation operation budget. Party members can leave a Forming party when changing towns; run rosters remain recorded after departure.
