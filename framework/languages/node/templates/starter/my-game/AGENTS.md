@@ -4,12 +4,12 @@
 
 Every server process in this project is a stateful ZLink node. Before writing code, decide which kind you are editing.
 
-- A game node is not a REST server. A player's state is owned by one session-bound Actor (or the Spot that owns a shared value). Load it once on connect; do not read the database while handling a request.
+- A play node hosts Spots. A session-bound Actor owns the player's state, and a Spot owns shared state. Load it once on connect; do not read the database while handling a request.
 - Write only results to the database, one transaction per round. Check duplicate requests in Actor or Spot memory.
 - While a game is running, a Spot handler never awaits a remote request or a database reply: the await holds the Spot's turn and stops every message and timer in it. When a round ends, the Spot writes the results of all its Actors in one transaction, then tells each Actor after the commit.
 - Values many players see live in node memory or one owning Spot; values many requests update are applied by that one owning Spot. A process that does not own a value sends a request to its owner instead of writing it.
 - Spots and Actors already process one message at a time. Do not guard their state with locks, semaphores or process-wide static stores, and do not update memory from database commit hooks; the writer updates its owner's memory after commit, others send a message to the owner.
-- Split roles so the game can scale out from day one: game nodes host lobby and room Spots and player Actors and are the only processes you add; a shared node hosts only game-wide Instance Spots (matchmaking, game-wide values), and game nodes do not register those factories. Send and request by Spot ID only; placement is configuration. Keep shared-Spot values recoverable from room resends or a database read at startup.
+- Split roles so the game can scale out from day one: play nodes host lobby and room Spots and player Actors and are the only processes you add; a dedicated play node hosts only game-wide Instance Spots (matchmaking, game-wide values), and the lobby and room hosts omit those factories. Send and request by Spot ID only; placement is configuration. Keep shared-Spot values recoverable from room resends or a database read at startup.
 - Never have two Actors or Spots wait on requests to each other inside a turn; notify with send and let the state owner decide.
 - Actors move between nodes when they join a Spot or relocate. Keep all mutable Actor fields in one state record, register stateful Actors with the state-preserving relocation policy, and test that save and restore preserve every field.
 - Player data reaches a Spot with the Actor that joins it; do not request it per player at Spot entry. If a Spot truly needs extra data, fetch it for all players in one request before the game starts.
@@ -19,7 +19,7 @@ Every server process in this project is a stateful ZLink node. Before writing co
 - Send money or reward results only after the database commit.
 - One decision has one owner; find the existing one before adding another. Take test expectations from the spec, not from the implementation.
 
-Details: [Stateful game nodes and the HTTP lobby](https://docs.zlink.systems/node/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
+Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/node/guide/server/03-concepts/#10-stateful-game-nodes-and-the-http-lobby)
 
 This Node.js 22 starter provides one Session node, Redis hosting, diagnostics, stdin control, and a connection e2e runner. It has no game state or game packets. [README](README.md) owns build, run, and deployment instructions.
 
@@ -66,7 +66,7 @@ The feature paths below are relative to the ZLink repository's `framework/langua
 | Dynamic dungeon                       | `morpg-lobby-instances/my-game/server/lobby/spots.ts`: getOrCreate and preparation; pair with `server/instance/dungeon.ts` and `server/instance/main.ts`             |
 | World/channel selection               | `mmo-world-channels/my-game/server/channel/handlers.ts`: ChangeChannel handler uses deferred membership changes; inspect `server/accounts/main.ts` for world listing |
 | Channel pub/sub and seamless movement | `mmo-seamless/my-game/server/zone/zone.ts`: border subscription/publication; pair with `handlers.ts` for delivery and `player.ts` for movement                       |
-| HTTP lobby                            | `match-http-lobby/my-game/server/lobby/http.ts`: HTTP endpoint; pair with `matchmaker.ts` for matching; room creation is in `http.ts`                                |
+| API node (matchmaking)                 | `match-http-lobby/my-game/server/lobby/http.ts`: HTTP endpoint; pair with `matchmaker.ts` for matching; room creation is in `http.ts`                                |
 | Typed messages                        | `board-tables/my-game/server/shared/messages.ts`: shared packet classes                                                                                              |
 
 The channels in `mmo-world-channels` are player-selected game spaces within a world. They differ from messaging subscription channels, and that sample registers no pub/sub subscriptions. Use the actual registrations and handlers in `mmo-seamless` for border messaging subscriptions.

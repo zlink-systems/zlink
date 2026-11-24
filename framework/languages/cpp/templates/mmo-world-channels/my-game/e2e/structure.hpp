@@ -122,7 +122,7 @@ inline void check_structure (const std::filesystem::path &root)
         const auto owner = nonempty (spot, "owner"), kind = nonempty (spot, "kind");
         require (configurations.contains (owner), "Unknown Spot owner");
         const auto &config = configurations.at (owner);
-        require (channels.contains (owner), "Spot owner must be a channel node");
+        require (channels.contains (owner), "Spot owner must be a play node (channel)");
         if (kind == "entry") {
             require (spot.at ("type").is_null () && !spot.contains ("logicalId")
                        && !spot.contains ("dynamic"),
@@ -141,7 +141,7 @@ inline void check_structure (const std::filesystem::path &root)
     for (const auto &[id, config] : configurations) {
         if (!channels.contains (id))
             continue;
-        require (entries[id] == 1, "Channel node requires one Entry Spot");
+        require (entries[id] == 1, "play node (channel) requires one Entry Spot");
         const auto ids = config.at ("ZoneIds").get<std::vector<std::string>> ();
         const std::set<std::string> configured (ids.begin (), ids.end ());
         require (configured.size () == ids.size () && configured == zones[id],

@@ -1,17 +1,21 @@
-# MyGame FPS HTTP lobby
+# MyGame FPS API node
 
-This .NET FPS template pairs players by mode through an HTTP lobby. `POST /match` returns the same GUID-based Room ID and Session endpoint to both matched players. The lobby creates a dynamic Room User Spot and sends its member list in `PrepareRoom`; the Room returns `RoomPrepared` before the lobby responds. `RoomRoster` admits only those members. Players connect to Session over STREAM and join the assigned Room. The RouteMesh name is `my-game-arena` (`GameNames.WorldMesh`). RoomState owns movement budgets, ray hit decisions, health, shared input sequences, and match completion. Disconnected players resume the same Actor and Room; draining a Match host relocates ongoing matches without reconnecting clients.
+This .NET FPS template pairs players by mode through an API node. `POST /match` returns the same GUID-based Room ID and Session endpoint to both matched players. The API node creates a dynamic Room User Spot and sends its member list in `PrepareRoom`; the Room returns `RoomPrepared` before the API node responds. `RoomRoster` admits only those members. Players connect to Session over STREAM and join the assigned Room. The RouteMesh name is `my-game-arena` (`GameNames.WorldMesh`). RoomState owns movement budgets, ray hit decisions, health, shared input sequences, and match completion. Disconnected players resume the same Actor and Room; draining a play node (match) relocates ongoing matches without reconnecting clients.
 
 ```mermaid
 flowchart LR
-    players[Players] -->|HTTP POST /match| lobby[HTTP Lobby]
-    players -->|STREAM| session[Session]
-    lobby -->|GetOrCreate / PrepareRoom| matchA[Match A: Room, Player]
-    lobby -->|GetOrCreate / PrepareRoom| matchB[Match B: Room, Player]
+    subgraph playNodes["Play nodes"]
+      matchA["Play node A (match): Room, Player"]
+      matchB["Play node B (match): Room, Player"]
+    end
+    players[Players] -->|STREAM| session["Session node"]
+    lobby -->|GetOrCreate / PrepareRoom| matchA
+    lobby -->|GetOrCreate / PrepareRoom| matchB
     session -->|relay| matchA
     matchA -->|Location / lease| location[(Redis)]
     matchB -->|Location / lease| location
     matchA <-->|host relocation| matchB
+    players -->|HTTP POST /match| lobby["API node (matchmaking)"]
 ```
 
 ## Prerequisites
@@ -42,9 +46,9 @@ Scripts remove unique image tags after each invocation. Docker retains build lay
 
 ### Endpoint and first packet
 
-Start with Lobby HTTP: `server/config/lobby.json` defaults `HttpEndpoint` to `http://127.0.0.1:0`. Read `httpEndpoint` from Lobby `READY` JSON. Two concurrent `POST /match` JSON requests with distinct `PlayerId` values and the same `Mode` (`duel` by default) wait for pairing and room preparation, then return `RoomId` and `SessionEndpoint`. See `e2e/MyGame.E2E/Scenarios.cs` and `server/MyGame.Shared/HttpLobbyContracts.cs`.
+Start with the API node's HTTP endpoint. `server/config/lobby.json` defaults `HttpEndpoint` to `http://127.0.0.1:0`. Read `httpEndpoint` from the API node `READY` JSON. Two concurrent `POST /match` JSON requests with distinct `PlayerId` values and the same `Mode` (`duel` by default) wait for pairing and room preparation, then return `RoomId` and `SessionEndpoint`. See `e2e/MyGame.E2E/Scenarios.cs` and `server/MyGame.Shared/HttpLobbyContracts.cs`.
 
-Session's `players` STREAM listener defaults to `ws://127.0.0.1:0` in `server/config/session.json`, root path `/`. Use its `streamEndpoint` from `READY`. Lobby's default advertised `SessionEndpoint` is `ws://127.0.0.1:8080`; it must be set to the actual running Session address, as `MatchRun.cs` does. Port-zero listeners need runtime addresses. Match mesh listeners and Redis are internal endpoints.
+Session's `players` STREAM listener defaults to `ws://127.0.0.1:0` in `server/config/session.json`, root path `/`. Use its `streamEndpoint` from `READY`. The API node's default advertised `SessionEndpoint` is `ws://127.0.0.1:8080`; it must be set to the actual running Session address, as `MatchRun.cs` does. Port-zero listeners need runtime addresses. Match mesh listeners and Redis are internal endpoints.
 
 Connect to the assigned Session and send `JoinRoomRequest(PlayerId, RoomId)` first. Only assigned members can enter. Success produces `MatchFound` and `RoomView` pushes; later `SessionInfoRequest` is request/reply after binding. Admission does not authenticate identity; validate identity before binding when adding authentication.
 
@@ -70,7 +74,7 @@ Use the release pinned in `Directory.Packages.props`, at `PackageVersion Include
 
 ### HTTP assignment and STREAM join example
 
-Create a .NET 8 console project in a copy, reference `server/MyGame.Shared/MyGame.Shared.csproj`, and add `Zlink.Stream.Connector` using the pinned version described above. Save as `Program.cs`, then run `dotnet run --project <client-project> -- <actual-lobby-http-endpoint>` against separately running Lobby, Session, Match nodes, and Redis. Use fresh player IDs. E2E removes its temporary deployment; its `GameClient.cs` shows the complete flow.
+Create a .NET 8 console project in a copy, reference `server/MyGame.Shared/MyGame.Shared.csproj`, and add `Zlink.Stream.Connector` using the pinned version described above. Save as `Program.cs`, then run `dotnet run --project <client-project> -- <actual-lobby-http-endpoint>` against separately running Lobby, Session, play nodes (match), and Redis. Use fresh player IDs. E2E removes its temporary deployment; its `GameClient.cs` shows the complete flow.
 
 ```csharp
 using System.Net.Http.Json;
@@ -188,7 +192,7 @@ Hit detection uses the current server state. There is no lag compensation, proje
 
 Message Follow is configured explicitly to 30 seconds. After `RELOCATED`, the safe shutdown observation budget is the follow duration plus the existing relocation observation budget; the relocation operation deadline is unchanged.
 
-`--check-domain` (`-CheckDomain` in PowerShell) runs 46 game domain checks and one separate wire golden check for four samples. The wire check briefly starts one local typed Session host and observes its public connector payloads; Redis and game scenario nodes are not started.
+`--check-domain` (`-CheckDomain` in PowerShell) runs 46 game domain checks and one separate wire golden check for four samples. The wire check briefly starts one local typed Session node and observes its public connector payloads; Redis and game scenario nodes are not started.
 
 ## Framework behavior to know
 
@@ -206,6 +210,6 @@ Validated against the published Framework 0.32.0 packages.
 
 ## Deployment sequence
 
-Start Redis, then Match A, Match B, Session and the HTTP Lobby. Wait for each process to report `READY` before starting the next dependent process. Use each project's `--config server/config/<node>.json` argument. Configure production Redis endpoints, unique key prefixes and listener addresses. The Lobby requires the Session endpoint; both Match processes register the same stable Room type and relocation adapter.
+Start Redis, then play node A (match), play node B (match), the session node, and the API node. Wait for each process to report `READY` before starting the next dependent process. Use each project's `--config server/config/<node>.json` argument. Configure production Redis endpoints, unique key prefixes and listener addresses. The API node requires the Session endpoint; both Match processes register the same stable Room type and relocation adapter.
 
-The Lobby pairs HTTP requests by mode, provisions a GUID-based Room through the RouteMesh, and waits for `RoomPrepared` before returning the Room ID and Session endpoint. Send `drain` on the selected Match process's standard input. Wait for `RELOCATION_REQUESTED`, `RELOCATED`, then `SAFE_TO_SHUTDOWN`. Send `shutdown`, require successful process termination, and start the same role with the same configuration. Read actual bound endpoints from `READY` JSON. The runner performs this sequence without client reconnection.
+The API node pairs HTTP requests by mode, provisions a GUID-based Room through the RouteMesh, and waits for `RoomPrepared` before returning the Room ID and Session endpoint. Send `drain` on the selected play node (match)'s standard input. Wait for `RELOCATION_REQUESTED`, `RELOCATED`, then `SAFE_TO_SHUTDOWN`. Send `shutdown`, require successful process termination, and start the same role with the same configuration. Read actual bound endpoints from `READY` JSON. The runner performs this sequence without client reconnection.

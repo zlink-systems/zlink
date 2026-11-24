@@ -284,6 +284,9 @@ The framework starts a MeshNode in the following order.
    The Entry Spot isn't published to the descriptor and resolver before
    initialization finishes. The wait required for Fixed RID reclaim follows
    [§3.3](#33-fixed-rid).
+   On a Store whose format conversion hasn't finished, it runs
+   [Location Store §8.1](../05-location-relocation/02-location-store-redis.en.md#81-converting-from-v11-to-v12)
+   before any other Store work in this step.
 3. Binds the ROUTER, then fixes the actual endpoint to publish to other
    peers.
 4. Publishes the MeshNode descriptor containing all necessary information
@@ -551,8 +554,8 @@ runtime snapshot and event).
 - The Entry Spot ID uses the same diagnostic prefix as the MeshNode and a
   separately generated UUID v4, and the descriptor publishes the
   lifecycle mapping.
-- A replacement lifecycle issues a new Entry Spot ID and fails immediately on
-  an Entry Spot authority conflict.
+- A replacement lifecycle issues a new Entry Spot ID, and the in-memory and Redis
+  providers treat Entry Spot ID conflicts on descriptor writes the same way (not judged).
 - Duplicate stable type and an omitted relocation policy fail at startup.
 - Placement weight allows `0`, default `100`, and the upper bound `10000`,
   and rejects `-1` and `10001` in both startup config and runtime change.

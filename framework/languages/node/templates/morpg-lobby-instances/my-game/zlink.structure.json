@@ -28,25 +28,25 @@
     {
       "id": "session",
       "role": "session",
-      "title": "session",
+      "title": "Session node",
       "config": "server/config/session.json"
     },
     {
       "id": "lobby",
       "role": "lobby",
-      "title": "Lobby",
+      "title": "Play node (party lobby)",
       "config": "server/config/lobby.json"
     },
     {
       "id": "instanceA",
       "role": "instance",
-      "title": "instanceA",
+      "title": "Play node A (dungeon)",
       "config": "server/config/instanceA.json"
     },
     {
       "id": "instanceB",
       "role": "instance",
-      "title": "instanceB",
+      "title": "Play node B (dungeon)",
       "config": "server/config/instanceB.json"
     },
     {

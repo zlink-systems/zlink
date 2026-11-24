@@ -111,7 +111,7 @@ export function checkStructure(path = 'zlink.structure.json'): void {
     assert.equal(
       spots.filter((s) => s.kind === 'entry' && s.owner === node.id).length,
       1,
-      'Match node must declare one Entry'
+      'play node (match) must declare one Entry'
     );
     const cfg = object(JSON.parse(readFileSync(text(node.config), 'utf8')));
     assert(

@@ -1156,88 +1156,6 @@ public sealed partial class RelocationRuntimeTests
     }
 
     [Fact]
-    public void TargetStagingAcceptsOnlyAnExactJournalPrefixOfFinalManifest()
-    {
-        var staging = CreateEnvelope();
-        var stagedSpot = staging.Participants.Single(static participant =>
-            participant.ObjectKind == ZLinkPlacementObjectKind.UserSpot
-        );
-        var final = staging with
-        {
-            Participants = staging
-                .Participants.Select(participant =>
-                    participant == stagedSpot
-                        ? participant with
-                        {
-                            AcceptedJobs = participant
-                                .AcceptedJobs.Append(
-                                    new ZLinkRelocationQueuedJob(43, new byte[] { 4, 3 })
-                                )
-                                .ToArray(),
-                        }
-                        : participant
-                )
-                .ToArray(),
-        };
-
-        Assert.True(ZLinkSpotRetireTargetRuntime.IsStagingPrefix(staging, final));
-        var changedState = final with
-        {
-            Participants = final
-                .Participants.Select(participant =>
-                    participant == final.Participants[0]
-                        ? participant with
-                        {
-                            ApplicationState = new byte[] { 9 },
-                        }
-                        : participant
-                )
-                .ToArray(),
-        };
-        Assert.False(ZLinkSpotRetireTargetRuntime.IsStagingPrefix(staging, changedState));
-        var changedPrefix = final with
-        {
-            Participants = final
-                .Participants.Select(participant =>
-                    participant == final.Participants[0]
-                        ? participant with
-                        {
-                            AcceptedJobs = participant
-                                .AcceptedJobs.Select(
-                                    (job, index) =>
-                                        index == 0 ? job with { Payload = new byte[] { 0 } } : job
-                                )
-                                .ToArray(),
-                        }
-                        : participant
-                )
-                .ToArray(),
-        };
-        Assert.False(ZLinkSpotRetireTargetRuntime.IsStagingPrefix(staging, changedPrefix));
-    }
-
-    [Fact]
-    public async Task PublishedTargetBindsFinalRootWithoutSourceCompletion()
-    {
-        var (stage, candidate) = CreateCanonicalPublishedReconciliationFixture();
-        using var services = new ServiceCollection().BuildServiceProvider();
-        var target = new ZLinkSpotRetireTargetRuntime(
-            services,
-            null!,
-            new ZLinkFrameworkRegistration()
-        );
-        using var cancellation = new CancellationTokenSource();
-        cancellation.Cancel();
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            target.ReconcilePublishedStageAsync(stage, candidate, cancellation.Token).AsTask()
-        );
-
-        Assert.Equal(1, Volatile.Read(ref stage.AuthorityPublished));
-        Assert.Equal(("published-root", 37U), stage.GetFinalRoot());
-    }
-
-    [Fact]
     public async Task CanonicalTargetStagingKeepsSourceCasRecoveryOutsideThePublishedRoot()
     {
         var (stage, candidate) = CreateCanonicalPublishedReconciliationFixture();
@@ -1283,28 +1201,15 @@ public sealed partial class RelocationRuntimeTests
         Assert.Equal(source.StoreVersion, recovery.ExpectedStoreVersion);
         Assert.Equal(source.AuthorityOwnerGeneration, recovery.AuthorityOwnerGeneration);
         Assert.Equal(source.Payload.ToArray(), recovery.AuthorityPayload.ToArray());
-        stage = stage with { Envelope = envelope, SourceRecoveries = recoveries };
-        using var services = new ServiceCollection().BuildServiceProvider();
-        var target = new ZLinkSpotRetireTargetRuntime(
-            services,
-            null!,
-            new ZLinkFrameworkRegistration()
-        );
-        using var cancellation = new CancellationTokenSource();
-        cancellation.Cancel();
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            target.ReconcilePublishedStageAsync(stage, candidate, cancellation.Token).AsTask()
-        );
-        Assert.Equal(1, Volatile.Read(ref stage.AuthorityPublished));
-        Assert.Equal(("published-root", 37U), stage.GetFinalRoot());
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task SourceObservesTargetAuthorityWithItsOwnRootOrAfterNormalization(
-        bool normalized
+    [InlineData(false, 1UL)]
+    [InlineData(false, 2UL)]
+    [InlineData(true, 1UL)]
+    public async Task SourceObservesTargetRelocationOrNormalizedAuthority(
+        bool normalized,
+        ulong targetAttemptGeneration
     )
     {
         var (stage, candidate) = CreateCanonicalPublishedReconciliationFixture();
@@ -1313,11 +1218,22 @@ public sealed partial class RelocationRuntimeTests
             RecoveryPayload = CanonicalFixtureRecovery(),
         };
         var snapshot = candidate.Authorities[0].Snapshot;
+        snapshot = snapshot with
+        {
+            Relocation = snapshot.Relocation! with
+            {
+                Target = snapshot.Relocation.Target! with
+                {
+                    AttemptGeneration = targetAttemptGeneration,
+                },
+            },
+        };
         var descriptor = snapshot.Allocation.Descriptor;
         var owner = new ZLinkLocationOwnerToken(snapshot.OwnerId, snapshot.OwnerLeaseGeneration);
         if (normalized)
             snapshot = snapshot with
             {
+                Relocation = null,
                 Payload = ZLinkSpotRetireTargetRuntime.BuildTargetReadyPayload(
                     participant.ObjectKind,
                     CanonicalFixtureAuthorityPayload(),
@@ -1350,13 +1266,27 @@ public sealed partial class RelocationRuntimeTests
             await target.ReconcilePublishedAuthorityAsync(
                 store,
                 new ZLinkSpotRetireReservation(
-                    null!,
+                    new ZLinkSpotRetireInventory(
+                        stage.SourceMeshName,
+                        stage.SourceNodeRid,
+                        stage.SourceNodeLifecycleGeneration,
+                        stage.SourceOwner,
+                        "room",
+                        stage.StableType,
+                        typeof(object),
+                        false,
+                        false,
+                        participant.ObjectGeneration,
+                        [],
+                        []
+                    ),
                     descriptor,
                     1,
                     new ZLinkCapacityVector(0, 0, null),
                     owner
                 ),
                 sourcePublication,
+                targetAttemptGeneration,
                 DateTimeOffset.UtcNow.AddMinutes(1),
                 cancellation.Token
             )
@@ -1397,43 +1327,12 @@ public sealed partial class RelocationRuntimeTests
                     owner
                 ),
                 sourcePublication,
+                stage.TargetAttemptGeneration,
                 DateTimeOffset.UtcNow.AddMinutes(1),
                 CancellationToken.None
             )
         );
         Assert.Equal(2, store.Events.Count);
-    }
-
-    [Fact]
-    public void CanonicalStagingRejectsAuthorityGenerationOtherThanPreparedTarget()
-    {
-        var (stage, _) = CreateCanonicalPublishedReconciliationFixture();
-        var participant = Assert.Single(stage.Envelope.Participants);
-        Assert.False(
-            ZLinkSpotRetireTargetRuntime.IsStagingPrefix(
-                stage.Envelope,
-                stage.Envelope,
-                stage.TargetAuthorityOwnerGenerationFor
-            )
-        );
-        var wrong = stage.Envelope with
-        {
-            Participants =
-            [
-                participant with
-                {
-                    AuthorityOwnerGeneration = checked(stage.TargetAuthorityOwnerGeneration + 1),
-                },
-            ],
-        };
-
-        Assert.False(
-            ZLinkSpotRetireTargetRuntime.IsStagingPrefix(
-                stage.Envelope,
-                wrong,
-                stage.TargetAuthorityOwnerGenerationFor
-            )
-        );
     }
 
     [Fact]
@@ -1517,7 +1416,7 @@ public sealed partial class RelocationRuntimeTests
         Assert.False(removed);
         Assert.False(aborted);
 
-        static async ValueTask<ZLinkRelocationRecoveryCandidate?> FailAuthorityRead()
+        static async ValueTask<bool> FailAuthorityRead()
         {
             await Task.Yield();
             throw new IOException("authority read failed");
@@ -1531,25 +1430,9 @@ public sealed partial class RelocationRuntimeTests
         var removed = false;
         var aborted = false;
         var reads = 0;
-        var envelope = stage.Envelope;
-        var publication = new ZLinkRelocationRecoveryCandidate(
-            new ZLinkRelocationManifestReference(
-                "final-root",
-                7,
-                envelope.AggregateId,
-                envelope.AggregateGeneration,
-                envelope.InventoryDigest
-            ),
-            envelope,
-            []
-        );
-
         var cleaned = await ZLinkSpotRetireTargetRuntime.TryCleanupExpiredStageAsync(
             stage,
-            () =>
-                ValueTask.FromResult<ZLinkRelocationRecoveryCandidate?>(
-                    Interlocked.Increment(ref reads) == 1 ? null : publication
-                ),
+            () => ValueTask.FromResult(Interlocked.Increment(ref reads) > 1),
             static () => ValueTask.FromResult(ZLinkAggregateAbortResult.Stale),
             () => removed = true,
             () =>
@@ -1665,7 +1548,7 @@ public sealed partial class RelocationRuntimeTests
 
         var cleaned = await ZLinkSpotRetireTargetRuntime.TryCleanupExpiredStageAsync(
             stage,
-            static () => ValueTask.FromResult<ZLinkRelocationRecoveryCandidate?>(null),
+            static () => ValueTask.FromResult(false),
             static () => ValueTask.FromResult(ZLinkAggregateAbortResult.Aborted),
             () => removed = true,
             () =>
@@ -1690,7 +1573,7 @@ public sealed partial class RelocationRuntimeTests
             ZLinkSpotRetireTargetRuntime
                 .TryCleanupExpiredStageAsync(
                     stage,
-                    static () => ValueTask.FromResult<ZLinkRelocationRecoveryCandidate?>(null),
+                    static () => ValueTask.FromResult(false),
                     static () => ValueTask.FromResult(ZLinkAggregateAbortResult.Aborted),
                     () => removed = true,
                     static () => ValueTask.FromException(new IOException("child cleanup failed"))
@@ -2452,24 +2335,6 @@ public sealed partial class RelocationRuntimeTests
                 .AsTask()
         );
         Assert.False(routesUnsealed);
-    }
-
-    [Fact]
-    public void RecoveredCanonicalInventoryBindsTakeoverBumpedRootGenerations()
-    {
-        var (_, candidate) = CreateCanonicalPublishedReconciliationFixture();
-        // Durable roots written by earlier builds may carry takeover-bumped
-        // aggregate generations. The read side must keep binding them to the
-        // authority publication (the generation of record) instead of failing
-        // an in-flight relocation with RelocationDataLost across the upgrade.
-        var bumped = candidate with
-        {
-            Envelope = candidate.Envelope with { AggregateGeneration = 3 },
-        };
-
-        var bound = ZLinkSpotRetireTargetRuntime.BindRecoveredCanonicalInventory(bumped);
-
-        Assert.Equal(candidate.Envelope.AggregateGeneration, bound.Envelope.AggregateGeneration);
     }
 
     [Fact]
@@ -3948,153 +3813,6 @@ public sealed partial class RelocationRuntimeTests
     }
 
     [Fact]
-    public async Task ImmutableRootIsVerifiedBeforeAuthorityCasAndRecoverableAfterPublish()
-    {
-        var relocation = new RecordingRelocationStore();
-        var authority = new RecordingAuthorityStore();
-        var coordinator = new ZLinkRelocationPublicationCoordinator(
-            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
-            authority,
-            relocation
-        );
-        var request = CreateRequest(CreateEnvelope());
-
-        var published = await coordinator.PublishAsync(request);
-        var recovered = await coordinator.RecoverAsync(request.AuthorityKey);
-
-        Assert.NotNull(recovered);
-        var orderedEvents = relocation
-            .Events.Concat(authority.Events)
-            .OrderBy(static item => item.Sequence)
-            .ToArray();
-        var casSequence = Assert
-            .Single(orderedEvents.Where(static item => item.Name == "cas"))
-            .Sequence;
-        Assert.All(
-            orderedEvents.Where(static item => item.Name == "put"),
-            item => Assert.True(item.Sequence < casSequence)
-        );
-        Assert.Contains(orderedEvents, item => item.Name == "get" && item.Sequence < casSequence);
-        Assert.Equal("target-owner", published.Authority.OwnerId);
-        Assert.Equal(9, published.Authority.OwnerLeaseGeneration);
-        Assert.Equal(1UL, published.Authority.ObjectGeneration);
-        Assert.Equal(1UL, published.Authority.AuthorityOwnerGeneration);
-        Assert.Equal(
-            request.Envelope.InventoryDigest.ToArray(),
-            recovered!.Envelope.InventoryDigest.ToArray()
-        );
-    }
-
-    [Fact]
-    public async Task CasConflictDeletesUnpublishedRoot()
-    {
-        var relocation = new RecordingRelocationStore();
-        var authority = new RecordingAuthorityStore { Conflict = true };
-        var coordinator = new ZLinkRelocationPublicationCoordinator(
-            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
-            authority,
-            relocation
-        );
-
-        await Assert.ThrowsAsync<ZLinkRelocationPublicationConflictException>(async () =>
-            await coordinator.PublishAsync(CreateRequest(CreateEnvelope()))
-        );
-
-        Assert.DoesNotContain(
-            relocation.Payloads.Values,
-            static payload => payload.Take(4).SequenceEqual("ZLTM"u8.ToArray())
-        );
-        Assert.Contains(relocation.Events, static item => item.Name == "delete");
-    }
-
-    [Fact]
-    public async Task UnpublishedOrphanCleanupFailurePreservesConflictAndReportsCause()
-    {
-        var expected = new IOException("orphan cleanup failed");
-        var failures = new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter();
-        var relocation = new RecordingRelocationStore { DeleteFailure = expected };
-        var authority = new RecordingAuthorityStore { Conflict = true };
-        var coordinator = new ZLinkRelocationPublicationCoordinator(
-            failures,
-            authority,
-            relocation
-        );
-
-        await Assert.ThrowsAsync<ZLinkRelocationPublicationConflictException>(async () =>
-            await coordinator.PublishAsync(CreateRequest(CreateEnvelope()))
-        );
-
-        Assert.Contains(expected, failures.Failures);
-        Assert.Contains(relocation.Events, static item => item.Name == "delete");
-        Assert.NotEmpty(relocation.Payloads);
-    }
-
-    [Fact]
-    public async Task ExceptionAfterCommittedCasReconcilesWithoutDeletingPublishedRoot()
-    {
-        var relocation = new RecordingRelocationStore();
-        var authority = new RecordingAuthorityStore { ThrowAfterCommit = true };
-        var coordinator = new ZLinkRelocationPublicationCoordinator(
-            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
-            authority,
-            relocation
-        );
-
-        var published = await coordinator.PublishAsync(CreateRequest(CreateEnvelope()));
-
-        Assert.NotNull(published.Authority);
-        Assert.NotEmpty(relocation.Payloads);
-        Assert.DoesNotContain(relocation.Events, static item => item.Name == "delete");
-    }
-
-    [Fact]
-    public async Task IndeterminateAuthorityReadAfterCommittedCasPreservesPublishedRootAndFailures()
-    {
-        var relocation = new RecordingRelocationStore();
-        var authority = new RecordingAuthorityStore
-        {
-            ThrowAfterCommit = true,
-            ReadFailuresRemaining = 1,
-        };
-        var coordinator = new ZLinkRelocationPublicationCoordinator(
-            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
-            authority,
-            relocation
-        );
-
-        var failure = await Assert.ThrowsAsync<AggregateException>(async () =>
-            await coordinator.PublishAsync(CreateRequest(CreateEnvelope()))
-        );
-
-        Assert.Collection(
-            failure.InnerExceptions,
-            error => Assert.Equal("commit outcome unknown", error.Message),
-            error => Assert.Equal("The authority read result is indeterminate.", error.Message)
-        );
-        Assert.NotEmpty(relocation.Payloads);
-        Assert.DoesNotContain(relocation.Events, static item => item.Name == "delete");
-    }
-
-    [Fact]
-    public async Task MissingPublishedRootIsNonRetriableDataLoss()
-    {
-        var relocation = new RecordingRelocationStore();
-        var authority = new RecordingAuthorityStore();
-        var coordinator = new ZLinkRelocationPublicationCoordinator(
-            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
-            authority,
-            relocation
-        );
-        var request = CreateRequest(CreateEnvelope());
-        var published = await coordinator.PublishAsync(request);
-        relocation.Payloads.Remove(published.Relocation.Reference);
-
-        await Assert.ThrowsAsync<ZLinkRelocationDataLostException>(async () =>
-            await coordinator.RecoverAsync(request.AuthorityKey)
-        );
-    }
-
-    [Fact]
     public async Task AggregateRelocationPublishesWholeSpotParticipantsWithOneCommit()
     {
         var relocation = new RecordingRelocationStore();
@@ -4125,13 +3843,25 @@ public sealed partial class RelocationRuntimeTests
                 1,
                 new ZLinkSpotTypeCapacityDelta(ZLinkPlacementObjectKind.UserSpot, "room", 1)
             ),
-            new ZLinkLocationOwnerToken("aggregate-target", 17)
+            new ZLinkLocationOwnerToken("aggregate-target", 17),
+            AggregateSourceFence()
         );
 
         var published = await coordinator.PublishAsync(request);
 
         Assert.Equal(envelope.AggregateId, published.Fence.AggregateId);
         Assert.Equal(2, authority.PublishedCount);
+        foreach (var participant in request.Participants)
+        {
+            var read = Assert.IsType<ZLinkAuthorityReadResult.Found>(
+                await authority.ReadAuthorityAsync(participant.Envelope.AuthorityKey)
+            );
+            Assert.Equal(envelope.AggregateId, read.Snapshot.Relocation?.RelocationId);
+            Assert.Equal(
+                participant.ApplicationAuthorityPayload.ToArray(),
+                read.Snapshot.Payload.ToArray()
+            );
+        }
         var ordered = relocation
             .Events.Concat(authority.Events)
             .OrderBy(static item => item.Sequence)
@@ -4177,7 +3907,8 @@ public sealed partial class RelocationRuntimeTests
             new ZLinkMeshNodeDescriptorKey("mesh", RoutingId.From("aggregate-target")),
             1,
             new ZLinkCapacityVector(10_000, 0, null),
-            new ZLinkLocationOwnerToken("aggregate-target", 17)
+            new ZLinkLocationOwnerToken("aggregate-target", 17),
+            AggregateSourceFence()
         );
 
         var published = await coordinator.PublishAsync(request);
@@ -4187,68 +3918,6 @@ public sealed partial class RelocationRuntimeTests
         Assert.Equal(
             ZLinkAggregateInventoryDigest.Compute(request.Participants),
             published.Envelope.InventoryDigest.ToArray()
-        );
-    }
-
-    [Fact]
-    public async Task AggregateTargetPublishReusesAcceptedOpaqueRoot()
-    {
-        var relocation = new RecordingRelocationStore();
-        var authority = new RecordingAuthorityStore();
-        var coordinator = new ZLinkAggregateRelocationCoordinator(
-            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
-            authority,
-            relocation
-        );
-        var envelope = CreateEnvelope();
-        var participants = envelope
-            .Participants.Select(participant => new ZLinkAggregateRelocationParticipant(
-                participant,
-                $"v-{participant.AuthorityKey.Value}",
-                ZLinkAuthorityGenerationTransition.NewOwner,
-                new byte[] { 6 },
-                new byte[] { 7 }
-            ))
-            .ToArray();
-        var canonical = envelope with
-        {
-            InventoryDigest = ZLinkAggregateInventoryDigest.Compute(participants),
-        };
-        var source = await ZLinkRelocationTreeStore.PutAsync(
-            relocation,
-            canonical,
-            TimeSpan.FromHours(24),
-            CancellationToken.None
-        );
-        var putsBeforeTargetPrepare = relocation.Events.Count(static item => item.Name == "put");
-        var accepted = source.Root with
-        {
-            ExpiresAt = DateTimeOffset.UtcNow + TimeSpan.FromHours(24),
-            StoreNow = DateTimeOffset.UtcNow,
-        };
-        var request = new ZLinkAggregateRelocationRequest(
-            canonical.AggregateId,
-            canonical.AggregateGeneration,
-            1,
-            participants,
-            new ZLinkMeshNodeDescriptorKey("mesh", RoutingId.From("aggregate-target")),
-            1,
-            new ZLinkCapacityVector(
-                1,
-                1,
-                new ZLinkSpotTypeCapacityDelta(ZLinkPlacementObjectKind.UserSpot, "room", 1)
-            ),
-            new ZLinkLocationOwnerToken("aggregate-target", 17),
-            canonical
-        );
-
-        var published = await coordinator.PublishAsync(request, CancellationToken.None, accepted);
-
-        Assert.Equal(accepted.Reference, published.Relocation.Reference);
-        Assert.Equal(accepted.ChecksumCrc32c, published.Relocation.ChecksumCrc32c);
-        Assert.Equal(
-            putsBeforeTargetPrepare,
-            relocation.Events.Count(static item => item.Name == "put")
         );
     }
 
@@ -4522,12 +4191,12 @@ public sealed partial class RelocationRuntimeTests
         ZLinkRelocationEnvelope envelope
     ) =>
         new(
-            new ZLinkAuthorityKey("spot:mesh:room"),
+            ZLinkActorAuthorityPayloadCodec.AuthorityKey("room"),
             "v0",
-            "target-owner",
-            9,
             new byte[] { 8, 8 },
-            envelope
+            envelope,
+            new(TestAllocation().Descriptor.Rid.ToHex(), 1, "target-owner", 9, "v0"),
+            new(TestAllocation().Descriptor.Rid.ToHex(), 1, "target-owner", 9, 1)
         );
 
     private static ZLinkPlacementAllocation TestAllocation() =>
@@ -4927,7 +4596,7 @@ public sealed partial class RelocationRuntimeTests
         );
         private ZLinkAggregatePrepareRequest? _prepared;
 
-        internal bool Conflict { get; init; }
+        internal bool Conflict { get; set; }
 
         internal bool ThrowAfterCommit { get; init; }
 
@@ -4955,7 +4624,26 @@ public sealed partial class RelocationRuntimeTests
 
         internal int MaximumConcurrentReads => Volatile.Read(ref _maximumConcurrentReads);
 
+        internal ConcurrentQueue<ZLinkAuthorityKey>? AuthorityReads { get; init; }
+
         internal List<(long Sequence, string Name)> Events { get; } = [];
+
+        internal long ReplacementLeaseGeneration { get; init; }
+
+        public override ValueTask<ZLinkOwnerLeaseReadResult> ReadOwnerLeaseAsync(
+            string ownerId,
+            CancellationToken cancellationToken = default
+        )
+        {
+            var now = DateTimeOffset.UtcNow;
+            return ValueTask.FromResult<ZLinkOwnerLeaseReadResult>(
+                new ZLinkOwnerLeaseReadResult.Found(
+                    new ZLinkLocationOwnerToken(ownerId, ReplacementLeaseGeneration),
+                    now.AddMinutes(1),
+                    now
+                )
+            );
+        }
 
         public override async ValueTask<ZLinkAuthorityReadResult> ReadAuthorityAsync(
             ZLinkAuthorityKey key,
@@ -4987,6 +4675,7 @@ public sealed partial class RelocationRuntimeTests
                     break;
                 maximum = previous;
             }
+            AuthorityReads?.Enqueue(key);
             lock (Events)
                 Events.Add((EventClock.Next(), "read"));
             try
@@ -5019,7 +4708,9 @@ public sealed partial class RelocationRuntimeTests
             if (Conflict)
                 return ValueTask.FromResult<ZLinkAuthorityCompareExchangeResult>(
                     new ZLinkAuthorityCompareExchangeResult.Conflict(
-                        new ZLinkAuthorityReadResult.Missing(DateTimeOffset.UtcNow)
+                        _snapshots.TryGetValue(key.Value, out var current)
+                            ? new ZLinkAuthorityReadResult.Found(current)
+                            : new ZLinkAuthorityReadResult.Missing(DateTimeOffset.UtcNow)
                     )
                 );
             var put = Assert.IsType<ZLinkAuthorityMutation.Put>(mutation);
@@ -5034,7 +4725,10 @@ public sealed partial class RelocationRuntimeTests
                 TestAllocation(),
                 null,
                 DateTimeOffset.UtcNow
-            );
+            )
+            {
+                Relocation = put.Relocation,
+            };
             _snapshots[key.Value] = snapshot;
             if (ThrowAfterCommit)
                 throw new IOException("commit outcome unknown");
@@ -5054,23 +4748,7 @@ public sealed partial class RelocationRuntimeTests
                 if (PublishFirstParticipantBeforePrepareConflict)
                 {
                     var participant = request.Participants[0];
-                    Assert.True(
-                        ZLinkRelocationAuthorityPayloadCodec.TryDecode(
-                            participant.AuthorityPayload.Span,
-                            out var publication
-                        )
-                    );
-                    _snapshots[participant.Key.Value] = new ZLinkAuthoritySnapshot(
-                        $"v-{participant.Key.Value}-partial",
-                        participant.AuthorityPayload,
-                        1,
-                        1,
-                        publication.TargetOwnerId,
-                        publication.TargetOwnerLeaseGeneration,
-                        TestAllocation(),
-                        null,
-                        DateTimeOffset.UtcNow
-                    );
+                    PublishParticipant(request, participant, 100);
                 }
                 return ValueTask.FromResult(configured);
             }
@@ -5110,52 +4788,44 @@ public sealed partial class RelocationRuntimeTests
             Assert.NotNull(_prepared);
             if (AggregateCommitResult is { } configured)
                 return ValueTask.FromResult(configured);
-            foreach (var participant in _prepared!.Participants)
-            {
-                Assert.True(
-                    ZLinkRelocationAuthorityPayloadCodec.TryDecode(
-                        participant.AuthorityPayload.Span,
-                        out var publication
-                    )
-                );
-                _snapshots[participant.Key.Value] = new ZLinkAuthoritySnapshot(
-                    $"v-{participant.Key.Value}-next",
-                    participant.AuthorityPayload,
-                    1,
-                    1,
-                    publication.TargetOwnerId,
-                    publication.TargetOwnerLeaseGeneration,
-                    TestAllocation(),
-                    null,
-                    DateTimeOffset.UtcNow
-                );
-            }
+            PublishAggregate(_prepared!);
             return ValueTask.FromResult(ZLinkAggregateCommitResult.Committed);
         }
 
         private void PublishAggregate(ZLinkAggregatePrepareRequest request)
         {
             for (var index = 0; index < request.Participants.Count; index++)
+                PublishParticipant(
+                    request,
+                    request.Participants[index],
+                    checked((ulong)(100 + index))
+                );
+        }
+
+        private void PublishParticipant(
+            ZLinkAggregatePrepareRequest request,
+            ZLinkAggregateParticipant participant,
+            ulong ownerGeneration
+        )
+        {
+            _snapshots[participant.Key.Value] = new ZLinkAuthoritySnapshot(
+                $"v-{participant.Key.Value}-published",
+                participant.AuthorityPayload,
+                1,
+                ownerGeneration,
+                request.TargetOwner.OwnerId,
+                request.TargetOwner.LeaseGeneration,
+                TestAllocation() with
+                {
+                    Descriptor = request.TargetDescriptor,
+                    DescriptorLifecycleGeneration = request.TargetDescriptorLifecycleGeneration,
+                },
+                null,
+                DateTimeOffset.UtcNow
+            )
             {
-                var participant = request.Participants[index];
-                Assert.True(
-                    ZLinkRelocationAuthorityPayloadCodec.TryDecode(
-                        participant.AuthorityPayload.Span,
-                        out var publication
-                    )
-                );
-                _snapshots[participant.Key.Value] = new ZLinkAuthoritySnapshot(
-                    $"v-{participant.Key.Value}-published",
-                    participant.AuthorityPayload,
-                    1,
-                    checked((ulong)(100 + index)),
-                    publication.TargetOwnerId,
-                    publication.TargetOwnerLeaseGeneration,
-                    TestAllocation(),
-                    null,
-                    DateTimeOffset.UtcNow
-                );
-            }
+                Relocation = request.Relocation,
+            };
         }
 
         public override ValueTask<ZLinkAggregateAbortResult> AbortAggregateAsync(
@@ -5253,6 +4923,9 @@ public sealed partial class RelocationRuntimeTests
         }
     }
 
+    private static ZLinkAuthorityRelocation.CoordinatorFence AggregateSourceFence() =>
+        new(RoutingId.From("source").ToHex(), 1, "source-owner", 1, "v-source");
+
     private static ZLinkAggregateRelocationRequest CreateAggregateRelocationRequest(
         ZLinkRelocationEnvelope envelope
     ) =>
@@ -5272,7 +4945,8 @@ public sealed partial class RelocationRuntimeTests
             new ZLinkMeshNodeDescriptorKey("mesh", RoutingId.From("aggregate-target")),
             1,
             new ZLinkCapacityVector(1, 1, null),
-            new ZLinkLocationOwnerToken("aggregate-target", 17)
+            new ZLinkLocationOwnerToken("aggregate-target", 17),
+            AggregateSourceFence()
         );
 
     private static TargetStage CreateTargetStageForHeldJournal() =>
@@ -5303,7 +4977,7 @@ public sealed partial class RelocationRuntimeTests
 
     private static (
         TargetStage Stage,
-        ZLinkRelocationRecoveryCandidate Candidate
+        (ZLinkRelocationEnvelope Envelope, ZLinkAuthorityEntry[] Authorities) Candidate
     ) CreateCanonicalPublishedReconciliationFixture()
     {
         var sourceRid = RoutingId.From("source");
@@ -5357,34 +5031,6 @@ public sealed partial class RelocationRuntimeTests
                 },
             ],
         };
-        var publishedAuthority = ZLinkCanonicalRelocationAuthorityStateCodec.ReplaceRelocationState(
-            authorityPayload,
-            new ZLinkCanonicalRelocationAuthorityState(
-                canonical.CanonicalRelocationHigh,
-                canonical.CanonicalRelocationLow,
-                1,
-                sourceRid.ToHex(),
-                1,
-                "source-owner",
-                1,
-                targetRid.ToHex(),
-                1,
-                "target-owner",
-                1,
-                "target-owner",
-                1,
-                targetRid.ToHex(),
-                1,
-                5,
-                "published-root",
-                37,
-                canonical.CanonicalApplicationVersion
-            )
-            {
-                AggregateGeneration = decoded.AggregateGeneration,
-            },
-            decoded
-        );
         var allocation = new ZLinkPlacementAllocation(
             ZLinkPlacementAllocationState.Active,
             ZLinkPlacementObjectKind.UserSpot,
@@ -5401,7 +5047,7 @@ public sealed partial class RelocationRuntimeTests
             key,
             new ZLinkAuthoritySnapshot(
                 "v-published",
-                publishedAuthority,
+                authorityPayload,
                 5,
                 12,
                 "target-owner",
@@ -5410,6 +5056,24 @@ public sealed partial class RelocationRuntimeTests
                 null,
                 DateTimeOffset.UtcNow
             )
+            {
+                Relocation = new ZLinkAuthorityRelocation(
+                    decoded.AggregateId,
+                    Systems
+                        .Zlink
+                        .Framework
+                        .Runtime
+                        .Protocol
+                        .ServiceWireCodec
+                        .RelocationPhase
+                        .Committed,
+                    AggregateSourceFence().Identity,
+                    new(targetRid.ToHex(), 1, "target-owner", 1, 1),
+                    AggregateSourceFence(),
+                    Convert.ToHexString(decoded.InventoryDigest.Span).ToLowerInvariant(),
+                    1
+                ),
+            }
         );
         var stage = CreateTargetStageForHeldJournal() with
         {
@@ -5421,18 +5085,7 @@ public sealed partial class RelocationRuntimeTests
             SourceAuthorityOwnerGeneration = 11,
             TargetAuthorityOwnerGeneration = 12,
         };
-        var candidate = new ZLinkRelocationRecoveryCandidate(
-            new ZLinkRelocationManifestReference(
-                "published-root",
-                37,
-                decoded.AggregateId,
-                decoded.AggregateGeneration,
-                decoded.InventoryDigest
-            ),
-            decoded,
-            [authority]
-        );
-        return (stage, candidate);
+        return (stage, (decoded, [authority]));
     }
 
     private static byte[] CanonicalFixtureAuthorityPayload() =>

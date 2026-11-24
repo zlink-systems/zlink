@@ -586,7 +586,7 @@ await connector.Close.Async(cancellationToken);    // callback 밖에서는 공�
 | `HeartbeatTimeout` | heartbeat가 응답하지 않아 끊겼다 |
 | `ServerDrain` | 서버가 **우아한 종료(graceful drain)** 로 세션을 닫았다 |
 | `ProtocolError` | 프로토콜 위반으로 끊겼다 |
-| `TransportError` | transport 수준 실패로 끊겼다 |
+| `TransportError` | transport 수준 실패, 또는 서버가 그 연결의 session 객체를 만들지 못해 끊겼다 |
 
 `ServerDrain`을 받은 client는 이 값을 보고 **재접속과 백오프를 결정한다**
 ([Host relocation 전체 흐름 §9](../server/05-location-relocation/05-host-relocation-flow.ko.md#12-대기-중인-message-timer와-session을-옮긴다)). **서버가 대체 endpoint를

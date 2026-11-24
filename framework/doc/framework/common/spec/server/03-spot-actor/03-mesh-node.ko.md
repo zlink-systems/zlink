@@ -263,6 +263,8 @@ Framework는 MeshNode를 다음 순서로 시작한다.
    ID를 발급하고 instance를 초기화한다. Initialization이 끝나기 전에는 descriptor와
    resolver에 Entry Spot을 공개하지 않는다. 이 단계의 Fixed RID 재claim 대기는
    [§3.3](#33-fixed-rid)을 따른다.
+   Location Store 형식 전환이 끝나지 않은 Store면 이 단계의 다른 Store 작업보다 먼저
+   [Location Store §8.1](../05-location-relocation/02-location-store-redis.ko.md#81-v11에서-v12로-전환)을 실행한다.
 3. ROUTER를 bind한 뒤 다른 peer에 알릴 실제 endpoint를 확정한다.
 4. 필요한 정보를 모두 포함한 MeshNode descriptor를 공개하고 어떤 peer와 연결해야
    하는지 계산한다.
@@ -492,7 +494,7 @@ runtime snapshot과 event)만으로 다음을 확인한다.
   `Server`가 아닌 node의 descriptor에는 없다.
 - Entry Spot ID가 MeshNode와 같은 diagnostic prefix, 별도로 생성한 UUID v4를 사용하며 descriptor가
   lifecycle mapping을 공개한다.
-- Replacement lifecycle이 새 Entry Spot ID를 발급하고 Entry Spot authority 충돌에서 즉시 실패한다.
+- Replacement lifecycle이 새 Entry Spot ID를 발급하고, in-memory와 Redis provider가 descriptor 쓰기에서 Entry Spot ID 충돌을 같은 방식으로(판정하지 않음) 다룬다.
 - Stable type 중복과 relocation policy 생략이 startup에서 실패한다.
 - Placement weight는 `0`, 기본값 `100`과 상한 `10000`을 허용하고 `-1`과 `10001`은
   startup 설정과 runtime 변경에서 거부한다.

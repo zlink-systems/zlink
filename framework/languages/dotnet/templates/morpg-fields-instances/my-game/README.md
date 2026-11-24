@@ -4,11 +4,16 @@ Players cross fixed fields while retaining their STREAM connection, observe near
 
 ```mermaid
 flowchart LR
-    players[Players] -->|STREAM| session[Session]
-    session -->|relay| fieldA[Field A: field-1..2]
-    fieldA -->|relocation| fieldB[Field B: field-3..4]
+    subgraph playNodes["Play nodes"]
+      fieldA["Play node A (field): field-1..2"]
+      fieldB["Play node B (field): field-3..4"]
+      instances["Play node ×N (dungeon): A and B"]
+    end
+    players[Players] -->|STREAM| session["Session node"]
+    session -->|relay| fieldA
+    fieldA -->|relocation| fieldB
     fieldB -->|border pub/sub| fieldA
-    fieldB -->|GetOrCreate| instances[Instance A / Instance B]
+    fieldB -->|GetOrCreate| instances
     fieldB -->|Location / lease| location[Redis]
 ```
 
@@ -66,7 +71,7 @@ Use the release pinned in `Directory.Packages.props`, at `PackageVersion Include
 
 ### First field example
 
-Create a .NET 8 console project in a copy, reference `server/MyGame.Shared/MyGame.Shared.csproj`, and add `Zlink.Stream.Connector` using the pinned version described above. Save as `Program.cs`, then run `dotnet run --project <client-project> -- <actual-session-endpoint>` against separately running Session, Field/Instance nodes, and Redis. Use a fresh player ID. E2E removes its temporary deployment; its `GameClient.cs` shows the complete flow.
+Create a .NET 8 console project in a copy, reference `server/MyGame.Shared/MyGame.Shared.csproj`, and add `Zlink.Stream.Connector` using the pinned version described above. Save as `Program.cs`, then run `dotnet run --project <client-project> -- <actual-session-endpoint>` against separately running Session, Field/play nodes (dungeon), and Redis. Use a fresh player ID. E2E removes its temporary deployment; its `GameClient.cs` shows the complete flow.
 
 ```csharp
 using MyGame.Shared;
@@ -152,7 +157,7 @@ pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 | `reconnect` | Same Actor, Dungeon, RunId, Phase, roster and stage after reconnection. |
 | `update` | Instance drain, relocated RunId/Phase/stage and Session continuity, replacement accepting a distinct party run. |
 
-Selecting reconnect or update includes party setup. `./run-e2e.sh --check-domain` (PowerShell `-CheckDomain`) runs 95 domain checks before starting game nodes.
+Selecting reconnect or update includes party setup. `./run-e2e.sh --check-domain` (PowerShell `-CheckDomain`) runs 95 domain checks before starting play nodes.
 
 Each run owns a unique Compose project, Redis key prefix and `.logs/run-<id>/` directory. Redis, mesh and STREAM listeners use OS-assigned ports. The structure checker runs before Redis or node startup. Cleanup failures fail the run.
 
@@ -176,8 +181,8 @@ Start Redis, then fieldA, fieldB, instanceA, instanceB and session. Each role ha
 
 Wait for `READY` before connecting clients. Send `drain` through node stdin and wait for `RELOCATION_REQUESTED`, `RELOCATED` and `SAFE_TO_SHUTDOWN`. Send `shutdown` and wait for `STOPPED` before restarting the same instance configuration. Application snapshots contain game state only. Framework owns placement, identity, bindings, membership, routes, leases, queues and relocation completion. Production Session code must authenticate the player ID before creating or binding an Actor.
 
-Player Actor factories and the shared Entry implementation are registered on both Field and Instance nodes. Declare one Entry in `zlink.structure.json` for each Field or Instance node, where the application registers Entry and its first-entry handler. Do not declare Framework default Entries on other roles. The update scenario uses Dungeon capacity 1: after relocation, the occupied peer cannot create the new Dungeon, so the replacement must accept it.
+Player Actor factories and the shared Entry implementation are registered on both play nodes (field and dungeon). Declare one Entry in `zlink.structure.json` for each play node (field or dungeon), where the application registers Entry and its first-entry handler. Do not declare Framework default Entries on other roles. The update scenario uses Dungeon capacity 1: after relocation, the occupied peer cannot create the new Dungeon, so the replacement must accept it.
 
 GameTiming owns the 30-second Message Follow duration and the 30-second relocation observation budget. Safe-shutdown observation is derived as Message Follow plus that relocation budget.
 
-Initial Field placement uses public stable-type capacity and sequential startup. Set each Field node capacity to exactly its configured Field ID count. Start one Field node and wait for its READY, which follows creation of all its Fields, before starting the next Field node. Earlier nodes are full, so the newly started node is the only eligible Field host. Do not start initial Field hosts concurrently.
+Initial Field placement uses public stable-type capacity and sequential startup. Set each play node (field) capacity to exactly its configured Field ID count. Start one play node (field) and wait for its READY, which follows creation of all its Fields, before starting the next play node (field). Earlier nodes are full, so the newly started node is the only eligible play node (field). Do not start initial play nodes (field) concurrently.

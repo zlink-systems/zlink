@@ -188,7 +188,7 @@ public final class Structure {
                                                                         .equals("entry"))
                                         .count()
                                 == 1,
-                        "Town node lacks Entry Spot");
+                        "play node (town) lacks Entry Spot");
         for (var node : nodes) {
             if (roles.get(text(node, "id")) != NodeRole.INSTANCE) continue;
             require(

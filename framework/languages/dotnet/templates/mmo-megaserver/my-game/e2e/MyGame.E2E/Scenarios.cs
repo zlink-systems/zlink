@@ -321,7 +321,7 @@ internal static class Scenarios
                     Require(
                         created.NodeId == expectedState.NodeId
                             && created.Players.Any(p => p.PlayerId == "fresh-p7"),
-                        "New region was not accepted by the replacement Region node."
+                        "New region was not accepted by the replacement play node (region)."
                     );
                     Console.WriteLine("✓ update");
                     passed++;
