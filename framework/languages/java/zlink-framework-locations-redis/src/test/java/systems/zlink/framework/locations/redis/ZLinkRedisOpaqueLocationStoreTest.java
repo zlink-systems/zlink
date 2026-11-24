@@ -109,7 +109,8 @@ class ZLinkRedisOpaqueLocationStoreTest {
                 ZLinkStoreWriteApplied.class,
                 store.write(write, () -> false).toCompletableFuture().get());
         assertInstanceOf(
-                ZLinkStoreReadFound.class, store.read(key, () -> false).toCompletableFuture().get());
+                ZLinkStoreReadFound.class,
+                store.read(key, () -> false).toCompletableFuture().get());
         assertInstanceOf(
                 ZLinkStoreScanPageResult.class,
                 store.scan(new ZLinkStoreScanRequest("descriptor/", null, 1), () -> false)
@@ -119,8 +120,7 @@ class ZLinkRedisOpaqueLocationStoreTest {
 
     private static long scriptCalls(String commandStats, String command) {
         var matcher =
-                Pattern.compile("(?m)^cmdstat_" + command + ":calls=(\\d+),")
-                        .matcher(commandStats);
+                Pattern.compile("(?m)^cmdstat_" + command + ":calls=(\\d+),").matcher(commandStats);
         return matcher.find() ? Long.parseLong(matcher.group(1)) : 0;
     }
 

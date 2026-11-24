@@ -908,28 +908,36 @@ final class ZLinkRedisOpaqueLocationStore implements ZLinkLocationStore {
     }
 
     private static RedisScript script(String template) {
-        String body = ZLinkRedisLocationConnection.script(template, ScriptToken.BY_WIRE)
-                .replace(
-                        "${VERSION_CLEANUP_GRACE_MILLIS}",
-                        Long.toString(VERSION_CLEANUP_GRACE_MILLIS))
-                .replace("${SNAPSHOT_RETENTION_MILLIS}", Long.toString(SNAPSHOT_RETENTION_MILLIS))
-                .replace("${CLEANUP_DELAY_MILLIS}", Long.toString(CLEANUP_DELAY_MILLIS))
-                .replace(
-                        "${EXPIRED_SNAPSHOT_CLEANUP_BATCH}",
-                        Long.toString(EXPIRED_SNAPSHOT_CLEANUP_BATCH))
-                .replace("${VERSION_CLEANUP_BATCH}", Long.toString(VERSION_CLEANUP_BATCH))
-                .replace("${MAXIMUM_VERSION_HISTORY}", Long.toString(MAXIMUM_VERSION_HISTORY))
-                .replace("${MAXIMUM_ACTIVE_SNAPSHOTS}", Long.toString(MAXIMUM_ACTIVE_SNAPSHOTS))
-                .replace("${SCAN_WORK_MULTIPLIER}", Long.toString(SCAN_WORK_MULTIPLIER))
-                .replace("${MINIMUM_SCAN_WORK}", Long.toString(MINIMUM_SCAN_WORK))
-                .replace(
-                        "${UTF8_PREFIX_UPPER_BOUND_BYTE}",
-                        Integer.toString(UTF8_PREFIX_UPPER_BOUND_BYTE))
-                .replace(
-                        "${ENCODED_ITEM_OVERHEAD_BYTES}",
-                        Long.toString(ENCODED_ITEM_OVERHEAD_BYTES))
-                .replace(
-                        "${MAXIMUM_ENCODED_PAGE_BYTES}", Long.toString(MAXIMUM_ENCODED_PAGE_BYTES));
+        String body =
+                ZLinkRedisLocationConnection.script(template, ScriptToken.BY_WIRE)
+                        .replace(
+                                "${VERSION_CLEANUP_GRACE_MILLIS}",
+                                Long.toString(VERSION_CLEANUP_GRACE_MILLIS))
+                        .replace(
+                                "${SNAPSHOT_RETENTION_MILLIS}",
+                                Long.toString(SNAPSHOT_RETENTION_MILLIS))
+                        .replace("${CLEANUP_DELAY_MILLIS}", Long.toString(CLEANUP_DELAY_MILLIS))
+                        .replace(
+                                "${EXPIRED_SNAPSHOT_CLEANUP_BATCH}",
+                                Long.toString(EXPIRED_SNAPSHOT_CLEANUP_BATCH))
+                        .replace("${VERSION_CLEANUP_BATCH}", Long.toString(VERSION_CLEANUP_BATCH))
+                        .replace(
+                                "${MAXIMUM_VERSION_HISTORY}",
+                                Long.toString(MAXIMUM_VERSION_HISTORY))
+                        .replace(
+                                "${MAXIMUM_ACTIVE_SNAPSHOTS}",
+                                Long.toString(MAXIMUM_ACTIVE_SNAPSHOTS))
+                        .replace("${SCAN_WORK_MULTIPLIER}", Long.toString(SCAN_WORK_MULTIPLIER))
+                        .replace("${MINIMUM_SCAN_WORK}", Long.toString(MINIMUM_SCAN_WORK))
+                        .replace(
+                                "${UTF8_PREFIX_UPPER_BOUND_BYTE}",
+                                Integer.toString(UTF8_PREFIX_UPPER_BOUND_BYTE))
+                        .replace(
+                                "${ENCODED_ITEM_OVERHEAD_BYTES}",
+                                Long.toString(ENCODED_ITEM_OVERHEAD_BYTES))
+                        .replace(
+                                "${MAXIMUM_ENCODED_PAGE_BYTES}",
+                                Long.toString(MAXIMUM_ENCODED_PAGE_BYTES));
         byte[] encoded = bytes(body);
         try {
             String sha1 =

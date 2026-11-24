@@ -17,6 +17,11 @@ namespace sw::redis
 
 using Error = std::runtime_error;
 
+struct ReplyError : Error
+{
+    using Error::Error;
+};
+
 struct ConnectionOptions
 {
     std::chrono::milliseconds connect_timeout{};
@@ -54,6 +59,18 @@ class Redis
         if (!on_eval)
             throw Error ("unexpected Redis EVAL");
         return on_eval (script, {keys_begin, keys_end}, {args_begin, args_end});
+    }
+
+    // The substitute behaves as a warm script cache: EVALSHA runs the same handler as EVAL.
+    // Live Redis tests cover the NOSCRIPT fallback.
+    template <typename T, typename KeyIterator, typename ArgIterator>
+    T evalsha (const std::string &sha1,
+               KeyIterator keys_begin,
+               KeyIterator keys_end,
+               ArgIterator args_begin,
+               ArgIterator args_end)
+    {
+        return eval<T> (sha1, keys_begin, keys_end, args_begin, args_end);
     }
 
     template <typename T, typename... Args> T command (Args &&...)
