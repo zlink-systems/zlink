@@ -1,4 +1,8 @@
-import { ZLINK_PROVIDER_MAX_ENCODED_PAGE_BYTES } from './framework-internal';
+import {
+  STORE_COUNTER_MAX,
+  STORE_COUNTER_MAX_BYTES,
+  ZLINK_PROVIDER_MAX_ENCODED_PAGE_BYTES
+} from './framework-internal';
 const REDIS_MILLISECONDS_PER_SECOND = 1000;
 const REDIS_MICROSECONDS_PER_MILLISECOND = 1000;
 const REDIS_CLEANUP_RETRY_DELAY_MS = 1000;
@@ -15,6 +19,7 @@ const REDIS_UTF8_PREFIX_UPPER_BOUND_BYTE = 0xff;
 
 export const REDIS_STORE_TOKEN = Object.freeze({
   Conflict: 'conflict',
+  Corrupt: 'corrupt',
   Backlog: 'backlog',
   Applied: 'applied',
   Expired: 'expired',
@@ -25,7 +30,9 @@ export const REDIS_STORE_TOKEN = Object.freeze({
   Missing: 'missing',
   Value: 'value',
   Version: 'version',
+  SumAtMost: 'sumAtMost',
   Put: 'put',
+  Add: 'add',
   Delete: 'delete'
 } as const);
 
@@ -86,9 +93,11 @@ return {1, nowMs, record[1], record[2], record[3], tostring(tonumber(record[4]))
 // ARGV[1] = JSON conditions: ['missing', keyIndex, originalKey]
 //           | ['version', keyIndex, originalKey, expectedVersion]
 //           | ['value', keyIndex, originalKey, expectedBytesArgIndex]
+//           | ['sumAtMost', keyIndexes, decimalLimitMinusDelta]
 // ARGV[2] = JSON mutation metadata (no raw bytes, JSON must stay text-safe):
 //           ['put', keyIndex, originalKey, retentionMsOrFalse]
 //           | ['delete', keyIndex, originalKey]
+//           | ['add', keyIndex, originalKey, decimalDelta]
 // ARGV[3..] = raw expected bytes for 'value' conditions, then raw bytes for
 //             'put' mutations, each in request order.
 const PRUNE_HISTORY_HELPER = `
@@ -151,9 +160,71 @@ end
 
 `;
 
+// With base 10^9, both limbs of the sum of up to 2,048 counters remain
+// exact integers in Redis Lua's doubles. The encoder bounds the operands
+// by the attainable results so the same representation covers comparisons.
+const COUNTER_HELPERS = `
+local base = 1000000000
+local maximum = '${STORE_COUNTER_MAX}'
+
+local function limbs(decimal)
+    local sign = 1
+    if string.sub(decimal, 1, 1) == '-' then
+        sign = -1
+        decimal = string.sub(decimal, 2)
+    end
+    return sign * (tonumber(string.sub(decimal, 1, -10)) or 0),
+           sign * tonumber(string.sub(decimal, -9))
+end
+
+local function counterAt(index)
+    local record = liveRecordAt(KEYS[index + 6], nowMs)
+    if not record then return 0, 0 end
+    local bytes = record[2]
+    local length = #bytes
+    if length == 0 or length > ${STORE_COUNTER_MAX_BYTES} or
+       (length == ${STORE_COUNTER_MAX_BYTES} and bytes > maximum) or
+       (length > 1 and string.sub(bytes, 1, 1) == '0') or
+       string.find(bytes, '[^0-9]') then
+        return nil
+    end
+    return limbs(bytes)
+end
+
+local function normalize(hi, lo)
+    local carry = math.floor(lo / base)
+    return hi + carry, lo - carry * base
+end
+
+local function sumAtMost(indices, threshold)
+    local hi, lo = 0, 0
+    for _, index in ipairs(indices) do
+        local currentHi, currentLo = counterAt(index)
+        if not currentHi then return nil end
+        hi = hi + currentHi
+        lo = lo + currentLo
+    end
+    hi, lo = normalize(hi, lo)
+    local limitHi, limitLo = normalize(limbs(threshold))
+    return hi < limitHi or (hi == limitHi and lo <= limitLo)
+end
+
+local function addCounter(index, delta)
+    local hi, lo = counterAt(index)
+    if not hi then return nil end
+    local deltaHi, deltaLo = limbs(delta)
+    hi, lo = normalize(hi + deltaHi, lo + deltaLo)
+    local maxHi, maxLo = limbs(maximum)
+    if hi < 0 or hi > maxHi or (hi == maxHi and lo > maxLo) then return nil end
+    if hi == 0 then return string.format('%.0f', lo) end
+    return string.format('%.0f%09d', hi, lo)
+end
+`;
+
 export const OPAQUE_WRITE_SCRIPT = Buffer.from(
   PROLOGUE +
     DECODE_HELPERS +
+    COUNTER_HELPERS +
     `
 local indexKey = KEYS[1]
 local mapKey = KEYS[2]
@@ -162,26 +233,42 @@ local sequenceKey = KEYS[4]
 local snapshotExpiryKey = KEYS[5]
 local snapshotBoundaryKey = KEYS[6]
 
-` +
-    CLEANUP_AND_BOUNDARY +
-    `
 local conditions = cjson.decode(ARGV[1])
 local mutations = cjson.decode(ARGV[2])
 
 for _, condition in ipairs(conditions) do
-    local record = liveRecordAt(KEYS[condition[2] + 6], nowMs)
-    local currentVersion = record and record[3] or nil
-    if condition[1] == '${REDIS_STORE_TOKEN.Missing}' then
-        if currentVersion ~= nil then return {'${REDIS_STORE_TOKEN.Conflict}', nowMs} end
-    elseif condition[1] == '${REDIS_STORE_TOKEN.Value}' then
-        if not record or record[2] ~= ARGV[condition[4]] then
+    if condition[1] == '${REDIS_STORE_TOKEN.SumAtMost}' then
+        local matched = sumAtMost(condition[2], condition[3])
+        if matched == nil then return {'${REDIS_STORE_TOKEN.Corrupt}', nowMs} end
+        if not matched then return {'${REDIS_STORE_TOKEN.Conflict}', nowMs} end
+    else
+        local record = liveRecordAt(KEYS[condition[2] + 6], nowMs)
+        local currentVersion = record and record[3] or nil
+        if condition[1] == '${REDIS_STORE_TOKEN.Missing}' then
+            if currentVersion ~= nil then return {'${REDIS_STORE_TOKEN.Conflict}', nowMs} end
+        elseif condition[1] == '${REDIS_STORE_TOKEN.Value}' then
+            if not record or record[2] ~= ARGV[condition[4]] then
+                return {'${REDIS_STORE_TOKEN.Conflict}', nowMs}
+            end
+        elseif currentVersion ~= condition[4] then
             return {'${REDIS_STORE_TOKEN.Conflict}', nowMs}
         end
-    elseif currentVersion ~= condition[4] then
-        return {'${REDIS_STORE_TOKEN.Conflict}', nowMs}
     end
 end
 
+local added
+for i, mutation in ipairs(mutations) do
+    if mutation[1] == '${REDIS_STORE_TOKEN.Add}' then
+        local bytes = addCounter(mutation[2], mutation[4])
+        if not bytes then return {'${REDIS_STORE_TOKEN.Corrupt}', nowMs} end
+        if not added then added = {} end
+        added[i] = bytes
+    end
+end
+
+` +
+    CLEANUP_AND_BOUNDARY +
+    `
 for _, mutation in ipairs(mutations) do
     local rowKey = KEYS[mutation[2] + 6]
     pruneHistory(rowKey, minimumBoundary)
@@ -196,15 +283,20 @@ for _, condition in ipairs(conditions) do
     if condition[1] == '${REDIS_STORE_TOKEN.Value}' then byteArg = byteArg + 1 end
 end
 local result = {'${REDIS_STORE_TOKEN.Applied}', nowMs}
-for _, mutation in ipairs(mutations) do
+for i, mutation in ipairs(mutations) do
     local rowKey = KEYS[mutation[2] + 6]
     local originalKey = mutation[3]
-    if mutation[1] == '${REDIS_STORE_TOKEN.Put}' then
-        local bytes = ARGV[byteArg]
-        byteArg = byteArg + 1
-        local retention = mutation[4]
+    if mutation[1] ~= '${REDIS_STORE_TOKEN.Delete}' then
+        local bytes
         local expiresAtMs = 0
-        if retention ~= false then expiresAtMs = nowMs + tonumber(retention) end
+        if mutation[1] == '${REDIS_STORE_TOKEN.Put}' then
+            bytes = ARGV[byteArg]
+            byteArg = byteArg + 1
+            local retention = mutation[4]
+            if retention ~= false then expiresAtMs = nowMs + tonumber(retention) end
+        else
+            bytes = added[i]
+        end
         redis.call('ZADD', rowKey, sequence, encodeMember(originalKey, bytes, sequence, expiresAtMs, false))
         redis.call('ZADD', indexKey, 0, originalKey)
         redis.call('HSET', mapKey, originalKey, rowKey)

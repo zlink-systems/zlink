@@ -145,6 +145,8 @@ const MAX_U64 = UINT64_MAX;
 const CREATION_TERMINAL_RETENTION_MS = 5 * 60 * 1000;
 const MAX_DESCRIPTOR_WRITE_RETRIES = 3;
 
+type SingleKeyCondition = Exclude<ZLinkStoreCondition, { kind: 'sumAtMost' }>;
+
 type StoredAuthoritySnapshot = Omit<ZLinkAuthoritySnapshot, 'kind' | 'storeVersion' | 'storeNow'>;
 
 interface AuthorityRecord {
@@ -1218,7 +1220,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
           bytes: encodeJson(capacity)
         });
       }
-      const membershipConditions: ZLinkStoreCondition[] = [];
+      const membershipConditions: SingleKeyCondition[] = [];
       for (const row of authorityRows) {
         if (row.record.snapshot.allocation.objectKind !== 'actor') continue;
         const actor = decodeActorAuthorityPayload(
@@ -3404,7 +3406,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     signal?: AbortSignal,
     conditionedOwner?: ZLinkLocationOwnerToken
   ): Promise<
-    | ZLinkStoreCondition[]
+    | SingleKeyCondition[]
     | {
         readonly failureKind:
           ZLinkFrameworkErrorKind.NotFound | ZLinkFrameworkErrorKind.Unavailable;
@@ -4844,7 +4846,7 @@ function versionCondition(key: ZLinkStoreKey, read: ZLinkStoreReadResult): ZLink
 function leaseValueCondition(
   key: ZLinkStoreKey,
   owner: ZLinkLocationOwnerToken
-): ZLinkStoreCondition {
+): SingleKeyCondition {
   return { kind: 'value', key, expected: encodeOwnerRecord(owner.ownerId, owner.leaseGeneration) };
 }
 

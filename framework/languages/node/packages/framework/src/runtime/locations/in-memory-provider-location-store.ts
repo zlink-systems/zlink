@@ -13,12 +13,15 @@ import {
   ZLINK_PROVIDER_MAX_KEY_BYTES,
   ZLINK_PROVIDER_MAX_ENCODED_PAGE_BYTES,
   ZLINK_PROVIDER_MAX_PAGE_SIZE,
-  ZLINK_PROVIDER_MAX_SCAN_CURSOR_BYTES,
-  ZLINK_PROVIDER_MAX_VALUE_BYTES,
-  ZLINK_PROVIDER_MAX_VERSION_BYTES,
-  ZLINK_PROVIDER_MAX_WRITE_BYTES,
-  ZLINK_PROVIDER_MAX_WRITE_KEYS
+  ZLINK_PROVIDER_MAX_SCAN_CURSOR_BYTES
 } from '../../contracts/Locations/Stores';
+import {
+  addStoreCounter,
+  readStoreCounter,
+  sumStoreCounters,
+  validateStoreWriteRequest
+} from './provider-write-request';
+
 export const PROVIDER_STORAGE_NAMESPACE_PREFIX = 'zlink:v11:';
 
 interface StoredValue {
@@ -64,10 +67,17 @@ export class ZLinkInMemoryProviderLocationStore implements ZLinkLocationStore {
     signal?: AbortSignal
   ): Promise<ZLinkStoreWriteResult> {
     signal?.throwIfAborted();
-    requireWriteRequest(request);
+    validateStoreWriteRequest(request);
     const storeNow = this.now();
+    const counter = (key: string) => readStoreCounter(this.liveValue(key, storeNow, false)?.bytes);
     for (const condition of request.conditions) {
-      const current = this.liveValue(condition.key.value, storeNow);
+      if (condition.kind === 'sumAtMost') {
+        const matched = sumStoreCounters(condition, counter);
+        if (matched === undefined) return { kind: 'corrupt', storeNow, putVersions: [] };
+        if (!matched) return { kind: 'conflict', storeNow };
+        continue;
+      }
+      const current = this.liveValue(condition.key.value, storeNow, false);
       if (condition.kind === 'missing') {
         if (current !== undefined) return { kind: 'conflict', storeNow };
       } else if (condition.kind === 'value') {
@@ -82,6 +92,15 @@ export class ZLinkInMemoryProviderLocationStore implements ZLinkLocationStore {
       }
     }
 
+    let added: Map<string, Uint8Array> | undefined;
+    for (const mutation of request.mutations) {
+      if (mutation.kind !== 'add') continue;
+      const bytes = addStoreCounter(counter(mutation.key.value), mutation.delta);
+      if (bytes === undefined) return { kind: 'corrupt', storeNow, putVersions: [] };
+      added ??= new Map();
+      added.set(mutation.key.value, bytes);
+    }
+
     const putVersions = [];
     for (const mutation of request.mutations) {
       if (mutation.kind === 'delete') {
@@ -89,12 +108,14 @@ export class ZLinkInMemoryProviderLocationStore implements ZLinkLocationStore {
         continue;
       }
       const retentionMs =
-        mutation.retentionMs === undefined ? undefined : Math.ceil(mutation.retentionMs);
+        mutation.kind === 'put' && mutation.retentionMs !== undefined
+          ? Math.ceil(mutation.retentionMs)
+          : undefined;
       const version = storeVersion((++this.nextVersion).toString());
       const expiresAt =
         retentionMs === undefined ? undefined : new Date(storeNow.getTime() + retentionMs);
       this.values.set(mutation.key.value, {
-        bytes: mutation.bytes.slice(),
+        bytes: mutation.kind === 'put' ? mutation.bytes.slice() : added!.get(mutation.key.value)!,
         version,
         expiresAt
       });
@@ -163,10 +184,10 @@ export class ZLinkInMemoryProviderLocationStore implements ZLinkLocationStore {
     };
   }
 
-  private liveValue(key: string, storeNow: Date): StoredValue | undefined {
+  private liveValue(key: string, storeNow: Date, pruneExpired = true): StoredValue | undefined {
     const value = this.values.get(key);
     if (value?.expiresAt !== undefined && value.expiresAt.getTime() <= storeNow.getTime()) {
-      this.values.delete(key);
+      if (pruneExpired) this.values.delete(key);
       return undefined;
     }
     return value;
@@ -196,49 +217,6 @@ function parseCursor(cursor: ZLinkStoreScanCursor): [string, number] | undefined
   return [snapshotId, offset];
 }
 
-function requireWriteRequest(request: ZLinkStoreWriteRequest): void {
-  const conditionKeys = request.conditions.map((condition) => condition.key.value);
-  const mutationKeys = request.mutations.map((mutation) => mutation.key.value);
-  const keys = [...new Set([...conditionKeys, ...mutationKeys])];
-  if (
-    new Set(conditionKeys).size !== conditionKeys.length ||
-    new Set(mutationKeys).size !== mutationKeys.length ||
-    keys.length > ZLINK_PROVIDER_MAX_WRITE_KEYS
-  ) {
-    throw new RangeError(
-      `Location Store write keys must be unique and bounded to ${ZLINK_PROVIDER_MAX_WRITE_KEYS.toLocaleString('en-US')}.`
-    );
-  }
-  for (const key of keys) requireKey(key);
-  const encodedSize =
-    request.conditions.reduce((sum, condition) => {
-      const keyBytes = Buffer.byteLength(condition.key.value, 'utf8');
-      if (condition.kind === 'missing') return sum + keyBytes;
-      if (condition.kind === 'value') {
-        requireValue(condition.expected, undefined);
-        return sum + keyBytes + condition.expected.byteLength;
-      }
-      const versionBytes = Buffer.byteLength(condition.expected.value, 'utf8');
-      if (versionBytes < 1 || versionBytes > ZLINK_PROVIDER_MAX_VERSION_BYTES) {
-        throw new RangeError(
-          `Location Store version must contain 1..${ZLINK_PROVIDER_MAX_VERSION_BYTES.toLocaleString('en-US')} UTF-8 bytes.`
-        );
-      }
-      return sum + keyBytes + versionBytes;
-    }, 0) +
-    request.mutations.reduce((sum, mutation) => {
-      const keyBytes = Buffer.byteLength(mutation.key.value, 'utf8');
-      if (mutation.kind !== 'put') return sum + keyBytes;
-      requireValue(mutation.bytes, mutation.retentionMs);
-      return sum + keyBytes + mutation.bytes.byteLength;
-    }, 0);
-  if (encodedSize > ZLINK_PROVIDER_MAX_WRITE_BYTES) {
-    throw new RangeError(
-      `Location Store write exceeds ${ZLINK_PROVIDER_MAX_WRITE_BYTES / (1024 * 1024)} MiB.`
-    );
-  }
-}
-
 function requireScanRequest(request: ZLinkStoreScanRequest): void {
   if (request.cursor !== undefined) {
     const bytes = Buffer.byteLength(request.cursor.value, 'utf8');
@@ -260,32 +238,6 @@ function requireScanRequest(request: ZLinkStoreScanRequest): void {
   ) {
     throw new RangeError(
       `Location Store scan limit must be in 1..${ZLINK_PROVIDER_MAX_PAGE_SIZE}.`
-    );
-  }
-}
-
-function requireValue(bytes: Uint8Array, retentionMs: number | undefined): number | undefined {
-  if (bytes.byteLength > ZLINK_PROVIDER_MAX_VALUE_BYTES) {
-    throw new RangeError(
-      `Location Store value exceeds ${ZLINK_PROVIDER_MAX_VALUE_BYTES / (1024 * 1024)} MiB.`
-    );
-  }
-  if (
-    retentionMs !== undefined &&
-    (!Number.isFinite(retentionMs) ||
-      retentionMs <= 0 ||
-      !Number.isSafeInteger(Math.ceil(retentionMs)))
-  ) {
-    throw new RangeError('Location Store retention must round to a positive safe integer.');
-  }
-  return retentionMs === undefined ? undefined : Math.ceil(retentionMs);
-}
-
-function requireKey(value: string): void {
-  const bytes = Buffer.byteLength(value, 'utf8');
-  if (bytes < 1 || bytes > ZLINK_PROVIDER_MAX_KEY_BYTES) {
-    throw new RangeError(
-      `Location Store key must contain 1..${ZLINK_PROVIDER_MAX_KEY_BYTES.toLocaleString('en-US')} UTF-8 bytes.`
     );
   }
 }

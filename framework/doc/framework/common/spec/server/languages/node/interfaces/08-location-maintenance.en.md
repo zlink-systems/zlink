@@ -60,6 +60,12 @@ export type ZLinkStoreCondition =
  readonly kind: 'value';
  readonly key: ZLinkStoreKey;
  readonly expected: Uint8Array;
+ }
+ | {
+ readonly kind: 'sumAtMost';
+ readonly keys: readonly ZLinkStoreKey[];
+ readonly delta: bigint;
+ readonly limit: bigint;
  };
 
 export type ZLinkStoreMutation =
@@ -69,7 +75,8 @@ export type ZLinkStoreMutation =
  readonly bytes: Uint8Array;
  readonly retentionMs?: number;
  }
- | { readonly kind: 'delete'; readonly key: ZLinkStoreKey };
+ | { readonly kind: 'delete'; readonly key: ZLinkStoreKey }
+ | { readonly kind: 'add'; readonly key: ZLinkStoreKey; readonly delta: bigint };
 
 export interface ZLinkStoreWriteRequest {
  readonly conditions: readonly ZLinkStoreCondition[];
@@ -87,7 +94,8 @@ export type ZLinkStoreWriteResult =
  readonly putVersions: readonly ZLinkStorePutVersion[];
  readonly storeNow: Date;
  }
- | { readonly kind: 'conflict'; readonly storeNow: Date };
+ | { readonly kind: 'conflict'; readonly storeNow: Date }
+ | { readonly kind: 'corrupt'; readonly storeNow: Date; readonly putVersions: readonly [] };
 
 export interface ZLinkStoreScanRequest {
  readonly prefix: string;
@@ -148,8 +156,9 @@ a different result, after the Promise settles.
 `write(...)` first checks every condition, and only if all are true
 does it apply every mutation as one atomic commit. If even one condition
 is false, both mutation and version increase are 0, and it returns
-`conflict`. Condition only provides Missing or Version
-comparison. The conflict result doesn't carry domain state or the
+`conflict`. The condition kinds, the capacity counter operations (`sumAtMost`,
+`add`), and the `corrupt` result follow [Location Store §4](../../../05-location-relocation/02-location-store-redis.en.md#4-conditional-atomic-batch)
+and [§4.1](../../../05-location-relocation/02-location-store-redis.en.md#41-capacity-counters). The conflict result doesn't carry domain state or the
 current value — the framework does a direct read of the needed key.
 
 One write request allows at most 2,048 unique keys combining conditions
