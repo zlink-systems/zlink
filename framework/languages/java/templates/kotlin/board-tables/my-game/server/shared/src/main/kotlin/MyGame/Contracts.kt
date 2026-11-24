@@ -8,7 +8,10 @@ object Names {
     const val STREAM = "players"
     const val PLAYER = "Player"
     const val TABLE = "Table"
-    val SCENARIOS = listOf("table", "reconnect", "update")
+    const val POOL = "Pool"
+    const val POOL_KEY = "pool-board"
+    const val MATCHMAKER = "matchmaker"
+    val SCENARIOS = listOf("table", "reconnect", "match", "match-cancel", "update")
 }
 
 object Rules {
@@ -21,6 +24,9 @@ object Rules {
     const val MIN_PLAYERS = 2
     const val NO_SEAT = -1
     const val TABLE_FULL = "table-full"
+    const val POOL = "Pool"
+    const val POOL_KEY = "pool-board"
+    const val MATCHMAKER = "matchmaker"
     const val NO_HAND = "no-hand"
     const val HAND_IN_PROGRESS = "hand-in-progress"
     const val NOT_ENOUGH_PLAYERS = "not-enough-players"
@@ -39,7 +45,8 @@ object Rules {
             !isContractInteger(left) ||
                 !isContractInteger(right) ||
                 right > MAX_CONTRACT_INTEGER - left
-        ) return null
+        )
+            return null
         return left + right
     }
 }

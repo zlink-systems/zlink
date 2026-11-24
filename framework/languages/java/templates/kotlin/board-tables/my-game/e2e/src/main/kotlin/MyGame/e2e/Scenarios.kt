@@ -10,7 +10,7 @@ private fun same(before: TableView, after: TableView) {
     check(after.copy(nodeId = before.nodeId) == before) { "State changed: $before -> $after" }
 }
 
-private fun result(result: HandResult, cards: List<List<Int>>, bets: List<Long>) {
+internal fun result(result: HandResult, cards: List<List<Int>>, bets: List<Long>) {
     check(result.hands.map { it.cards } == cards)
     val scores = cards.map { it.sumOf { card -> card % Rules.RANKS + Rules.MIN_RANK } }
     val winners = scores.indices.filter { scores[it] == scores.max() }
@@ -34,11 +34,20 @@ private suspend fun view(client: Client): TableView {
     return client.next<TableView>()
 }
 
-suspend fun scenario(id: String, nodes: Nodes, expectedNode: String? = null) {
+suspend fun scenario(
+    id: String,
+    endpoint: String,
+    nodes: Nodes? = null,
+    expectedNode: String? = null,
+) {
+    if (id == "match" || id == "match-cancel") {
+        matchScenario(endpoint, cancelFirst = id == "match-cancel")
+        return
+    }
     val suffix = UUID.randomUUID().toString()
     val tableId = "table-$suffix"
-    val p1 = Client(nodes.endpoint, "p1-$suffix", tableId)
-    var p2 = Client(nodes.endpoint, "p2-$suffix", tableId)
+    val p1 = Client(endpoint, "p1-$suffix", tableId)
+    var p2 = Client(endpoint, "p2-$suffix", tableId)
     var primaryFailure: Exception? = null
     try {
         val first = p1.connect()
@@ -98,7 +107,7 @@ suspend fun scenario(id: String, nodes: Nodes, expectedNode: String? = null) {
         when (id) {
             "reconnect" -> {
                 p2.close()
-                p2 = Client(nodes.endpoint, p2.playerId, tableId)
+                p2 = Client(endpoint, p2.playerId, tableId)
                 val rejoined = p2.connect()
                 val rejoinedSession = p2.sessionInfo()
                 check(rejoinedSession.sessionId != session2.sessionId)
@@ -109,7 +118,7 @@ suspend fun scenario(id: String, nodes: Nodes, expectedNode: String? = null) {
                 check(p1.sessionInfo() == session1 && p1.disconnects == 0 && p2.disconnects == 0)
             }
             "update" -> {
-                nodes.drain(before1.nodeId)
+                requireNotNull(nodes).drain(before1.nodeId)
                 val after1 = view(p1)
                 val after2 = view(p2)
                 check(after1.nodeId != before1.nodeId && after2.nodeId == after1.nodeId)
@@ -125,8 +134,7 @@ suspend fun scenario(id: String, nodes: Nodes, expectedNode: String? = null) {
             synchronized(player.history) {
                 player.history.forEach { message ->
                     when (message) {
-                        is HandDealt ->
-                            if (message.cards.isNotEmpty()) check(message == dealt)
+                        is HandDealt -> if (message.cards.isNotEmpty()) check(message == dealt)
                         is TableView -> check(message.seats.all { it.cardCount in 0..Rules.CARDS })
                         is ActionRejected -> Unit
                         else -> error("Unexpected pre-settlement message: $message")
@@ -154,8 +162,8 @@ suspend fun scenario(id: String, nodes: Nodes, expectedNode: String? = null) {
             )
         }
         if (id == "update") {
-            nodes.replace(before1.nodeId)
-            scenario("table", nodes, before1.nodeId)
+            requireNotNull(nodes).replace(before1.nodeId)
+            scenario("table", endpoint, expectedNode = before1.nodeId)
         }
     } catch (failure: Exception) {
         primaryFailure = failure

@@ -1,12 +1,12 @@
 package MyGame.table
 
 import MyGame.*
+import kotlin.system.exitProcess
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.context.annotation.Bean
 import systems.zlink.framework.kotlin.*
 import systems.zlink.framework.locations.redis.*
 import systems.zlink.framework.spring.*
-import kotlin.system.exitProcess
 
 @EnableZLinkFramework
 @SpringBootApplication(proxyBeanMethods = false)

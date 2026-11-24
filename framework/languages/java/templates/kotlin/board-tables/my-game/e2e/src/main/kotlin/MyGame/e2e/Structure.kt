@@ -78,22 +78,33 @@ fun checkStructure(root: Path) {
     unique(spots.map { text(it, "id") })
     val logicalIds = mutableListOf<String>()
     for (spot in spots) {
-        check(roles[owner(spot)] == "table")
+        val role = roles[owner(spot)]
         when (text(spot, "kind")) {
             "entry" ->
                 check(
-                    spot["type"]?.isNull == true && !spot.has("logicalId") && !spot.has("dynamic")
+                    role == "table" &&
+                        spot["type"]?.isNull == true &&
+                        !spot.has("logicalId") &&
+                        !spot.has("dynamic")
                 )
             "user" -> {
-                check(text(spot, "type") == Names.TABLE)
+                check(role == "table" && text(spot, "type") == Names.TABLE)
                 if (spot["dynamic"]?.asBoolean() == true) check(!spot.has("logicalId"))
                 else logicalIds += text(spot, "logicalId")
                 if (spot.has("dynamic")) check(spot["dynamic"].isBoolean)
+            }
+            "instance" -> {
+                check(role == Names.MATCHMAKER && text(spot, "type") == Names.POOL)
+                val logicalId = text(spot, "logicalId")
+                check(logicalId == Names.POOL_KEY && !spot.has("dynamic"))
+                logicalIds += logicalId
             }
             else -> error("Unregistered Spot kind")
         }
     }
     unique(logicalIds)
+    check(roles.filterValues { it == Names.MATCHMAKER }.keys == setOf(Names.MATCHMAKER))
+    check(spots.count { it["kind"].asText() == "instance" } == 1)
     check(spots.any { it["kind"].asText() == "user" && it["dynamic"]?.asBoolean() == true })
     for (node in nodes.filter { roles[it["id"].asText()] == "table" }) check(
         spots.count {
@@ -104,6 +115,8 @@ fun checkStructure(root: Path) {
         setOf(
             listOf("players", "session", "STREAM", ""),
             listOf("session", "tableA", "relay", ""),
+            listOf("tableA", Names.MATCHMAKER, "queue / assignment", ""),
+            listOf(Names.MATCHMAKER, "tableA", "prepare / commit", ""),
             listOf("tableA", "location", "Location / lease", "location-authority"),
         )
     val declaredEdges =
