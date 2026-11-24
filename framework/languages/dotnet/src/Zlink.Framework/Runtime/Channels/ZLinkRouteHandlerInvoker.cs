@@ -5,63 +5,34 @@ internal sealed class ZLinkRouteHandlerInvoker(
     ZLinkCodecRegistryBuilder codecs
 )
 {
-    public async ValueTask InvokeSendAsync(
+    public async ValueTask<ZLinkHandlerDispatchResult> InvokeSendAsync(
         ZLinkRouteHandlerDescriptor descriptor,
         string routerChannelId,
         RoutingId sourceRid,
         ZLinkEnvelopeHeader header,
         IReadOnlyList<Message> parts,
+        ZLinkMultipartPayloadView? payloadView,
         CancellationToken cancellationToken,
-        ZLinkMessageMetadata? metadata = null,
-        DateTimeOffset? receivedAt = null
+        ZLinkMessageMetadata? metadata,
+        DateTimeOffset? receivedAt,
+        ZLinkDispatchFlowScope scope,
+        ZLinkDispatchErrorReporter dispatchErrors
     )
     {
-        var message = ZLinkEnvelopeCodec.DecodeBody(
-            parts,
-            descriptor.MessageType,
-            header.ContentType,
-            codecs
-        );
-
-        var context = new ZLinkRouteMessageContext(
-            routerChannelId,
-            null,
-            sourceRid,
-            header.MessageName!,
-            header.ContentType,
-            metadata,
-            header.CorrelationId,
-            receivedAt
-        );
-        await dispatcher
-            .DispatchRouteAsync(
-                descriptor,
-                message,
-                context,
-                ZLinkHandlerDispatchKind.NodeDirectSend,
-                cancellationToken
+        var message = payloadView is { } view
+            ? ZLinkEnvelopeCodec.DecodeBody(
+                view,
+                descriptor.MessageType,
+                header.ContentType,
+                codecs
             )
-            .ConfigureAwait(false);
-    }
-
-    internal async ValueTask InvokeSendAsync(
-        ZLinkRouteHandlerDescriptor descriptor,
-        string routerChannelId,
-        RoutingId sourceRid,
-        ZLinkEnvelopeHeader header,
-        ZLinkMultipartPayloadView parts,
-        CancellationToken cancellationToken,
-        ZLinkMessageMetadata? metadata = null,
-        DateTimeOffset? receivedAt = null
-    )
-    {
-        var message = ZLinkEnvelopeCodec.DecodeBody(
-            parts,
-            descriptor.MessageType,
-            header.ContentType,
-            codecs
-        );
-        var ownedMessage = message as Message;
+            : ZLinkEnvelopeCodec.DecodeBody(
+                parts,
+                descriptor.MessageType,
+                header.ContentType,
+                codecs
+            );
+        var ownedMessage = payloadView is not null ? message as Message : null;
         try
         {
             var context = new ZLinkRouteMessageContext(
@@ -74,13 +45,16 @@ internal sealed class ZLinkRouteHandlerInvoker(
                 header.CorrelationId,
                 receivedAt
             );
-            await dispatcher
+            return await dispatcher
                 .DispatchRouteAsync(
                     descriptor,
                     message,
                     context,
                     ZLinkHandlerDispatchKind.NodeDirectSend,
-                    cancellationToken
+                    cancellationToken,
+                    handlerStarted: dispatchErrors.Flow.Enabled(ZLinkMessageFlowOutcome.Dispatched)
+                        ? scope.CreateHandlerStartTrace(dispatchErrors)
+                        : null
                 )
                 .ConfigureAwait(false);
         }

@@ -582,41 +582,38 @@ internal sealed class ZLinkMeshNodeRouteDispatcher
 
         if (!isRequest)
         {
-            try
-            {
-                if (payloadView is { } sendView)
-                    await _routeInvoker
-                        .InvokeSendAsync(
-                            descriptor,
-                            _meshName.Value,
-                            sourceRid,
-                            header,
-                            sendView,
-                            cancellationToken,
-                            received.Metadata,
-                            received.ReceivedAt
+            await scope
+                .RunOneWayHandlerAsync(
+                    _dispatchErrors,
+                    (
+                        invoker: _routeInvoker,
+                        meshName: _meshName.Value,
+                        dispatchErrors: _dispatchErrors,
+                        scope,
+                        descriptor,
+                        sourceRid,
+                        header,
+                        parts,
+                        payloadView,
+                        received,
+                        cancellationToken
+                    ),
+                    static state =>
+                        state.invoker.InvokeSendAsync(
+                            state.descriptor,
+                            state.meshName,
+                            state.sourceRid,
+                            state.header,
+                            state.parts,
+                            state.payloadView,
+                            state.cancellationToken,
+                            state.received.Metadata,
+                            state.received.ReceivedAt,
+                            state.scope,
+                            state.dispatchErrors
                         )
-                        .ConfigureAwait(false);
-                else
-                    await _routeInvoker
-                        .InvokeSendAsync(
-                            descriptor,
-                            _meshName.Value,
-                            sourceRid,
-                            header,
-                            parts,
-                            cancellationToken,
-                            received.Metadata,
-                            received.ReceivedAt
-                        )
-                        .ConfigureAwait(false);
-                scope.Trace(_dispatchErrors, ZLinkMessageFlowOutcome.Dispatched);
-            }
-            catch (Exception ex)
-            {
-                scope.HandlerException(_dispatchErrors, ZLinkDispatchErrorAction.Drop, ex);
-            }
-
+                )
+                .ConfigureAwait(false);
             return;
         }
 

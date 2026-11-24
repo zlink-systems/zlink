@@ -180,6 +180,28 @@ internal readonly struct ZLinkDispatchFlowScope(
         );
     }
 
+    public Action CreateHandlerStartTrace(ZLinkDispatchErrorReporter dispatchErrors)
+    {
+        var scope = this;
+        return () => scope.Trace(dispatchErrors, ZLinkMessageFlowOutcome.Dispatched);
+    }
+
+    public async ValueTask RunOneWayHandlerAsync<TState, TResult>(
+        ZLinkDispatchErrorReporter dispatchErrors,
+        TState state,
+        Func<TState, ValueTask<TResult>> invoke
+    )
+    {
+        try
+        {
+            await invoke(state).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            HandlerException(dispatchErrors, ZLinkDispatchErrorAction.Drop, ex);
+        }
+    }
+
     public void HandlerException(
         ZLinkDispatchErrorReporter dispatchErrors,
         ZLinkDispatchErrorAction action,
