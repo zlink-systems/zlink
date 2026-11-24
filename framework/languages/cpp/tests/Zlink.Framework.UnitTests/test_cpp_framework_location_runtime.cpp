@@ -40,6 +40,11 @@
 #include <stop_token>
 #include <thread>
 
+namespace zlink::framework::test
+{
+void close_test_completion_owner ();
+}
+
 namespace zlink::framework::detail
 {
 struct spot_node_runtime_test_access_t
@@ -710,6 +715,49 @@ constexpr auto admission_observation_timeout = std::chrono::milliseconds (100);
 const location_options_t asynchronous_heartbeat_options{
   .owner_lease_renew_interval = std::chrono::milliseconds (5),
   .owner_lease_ttl = std::chrono::seconds (15)};
+
+void destroy_location_with_busy_lane (bool start)
+{
+    using zlink::framework::runtime::location_runtime_test_access_t;
+    in_memory_location_repository_t store;
+    auto runtime = std::make_unique<location_runtime_t> (store);
+    if (start) {
+        runtime->start (zlink::routing_id_t::from ("location-stop-once"));
+        runtime->stop ();
+    }
+    zlink::framework::test::close_test_completion_owner ();
+    ASSERT_TRUE (zlink::framework::detail::observe_completion_dispatcher ().expired ());
+
+    auto &lane = location_runtime_test_access_t::lane (*runtime);
+    std::latch entered (1);
+    ASSERT_TRUE (lane.try_post ([&] {
+        entered.count_down ();
+        while (!lane.closed ())
+            std::this_thread::yield ();
+    }));
+    entered.wait ();
+    runtime.reset ();
+}
+
+TEST (LocationRuntimeDeathTest, DestroysStoppedRuntimeWithoutCompletionOwner)
+{
+    ASSERT_EXIT (
+      {
+          destroy_location_with_busy_lane (true);
+          std::_Exit (::testing::Test::HasFailure () ? 1 : 0);
+      },
+      ::testing::ExitedWithCode (0), "");
+}
+
+TEST (LocationRuntimeDeathTest, DestroysUnstartedRuntimeWithoutCompletionOwner)
+{
+    ASSERT_EXIT (
+      {
+          destroy_location_with_busy_lane (false);
+          std::_Exit (::testing::Test::HasFailure () ? 1 : 0);
+      },
+      ::testing::ExitedWithCode (0), "");
+}
 
 class requested_peer_store_t final : public in_memory_location_repository_t
 {
