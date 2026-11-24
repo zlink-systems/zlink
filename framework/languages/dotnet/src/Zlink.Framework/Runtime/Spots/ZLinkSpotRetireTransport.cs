@@ -283,6 +283,12 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                 checked((ulong)registration.ApplicationVersion),
                 checked((ulong)deadline.ToUnixTimeMilliseconds())
             );
+            var sourceFence = new ZLinkAggregateFence(
+                relocation.Envelope.AggregateId,
+                relocation.Envelope.AggregateGeneration
+            );
+            // Source settlement also runs when the PREPARE reply is indeterminate.
+            _sourceAttempts[sourceFence] = prepare;
             _ = await canonical
                 .PrepareCanonicalRelocationAsync(
                     reservation.TargetDescriptor.Rid,
@@ -292,11 +298,6 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                     cancellationToken
                 )
                 .ConfigureAwait(false);
-            var sourceFence = new ZLinkAggregateFence(
-                relocation.Envelope.AggregateId,
-                relocation.Envelope.AggregateGeneration
-            );
-            _sourceAttempts[sourceFence] = prepare;
             try
             {
                 //  The spot aggregate relays no post-capture ingress via
@@ -338,11 +339,13 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         CancellationToken cancellationToken
     )
     {
+        _sourceAttempts.TryGetValue(relocation.Fence, out var prepare);
         return await ReconcilePublishedAuthorityAsync(
                 registration.Locations.ResolveStore()
                     ?? throw new ZLinkConfigurationException("Location Store is not registered."),
                 reservation,
                 relocation,
+                prepare?.TargetAttemptGeneration,
                 restoreDeadline,
                 cancellationToken
             )
@@ -366,6 +369,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         IZLinkLocationRepository store,
         ZLinkSpotRetireReservation reservation,
         ZLinkAggregateRelocationPublished relocation,
+        ulong? targetAttemptGeneration,
         DateTimeOffset restoreDeadline,
         CancellationToken cancellationToken
     )
@@ -403,11 +407,12 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                 && found.Snapshot.OwnerId == reservation.TargetOwner.OwnerId
                 && found.Snapshot.OwnerLeaseGeneration == reservation.TargetOwner.LeaseGeneration
                 && (
-                    ZLinkAuthorityRelocation.MatchesCommittedTarget(
-                        found.Snapshot,
-                        relocation.Fence.AggregateId,
-                        relocation.Fence.AggregateGeneration
-                    )
+                    targetAttemptGeneration is { } attemptGeneration
+                        && ZLinkAuthorityRelocation.MatchesCommittedTarget(
+                            found.Snapshot,
+                            relocation.Fence.AggregateId,
+                            attemptGeneration
+                        )
                     || ZLinkAggregateRelocationCoordinator.IsExactNormalizedTargetAuthority(
                         found.Snapshot,
                         spot,

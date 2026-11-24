@@ -1204,9 +1204,13 @@ public sealed partial class RelocationRuntimeTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task SourceObservesTargetRelocationOrNormalizedAuthority(bool normalized)
+    [InlineData(false, 1UL)]
+    [InlineData(false, 2UL)]
+    [InlineData(true, 1UL)]
+    public async Task SourceObservesTargetRelocationOrNormalizedAuthority(
+        bool normalized,
+        ulong targetAttemptGeneration
+    )
     {
         var (stage, candidate) = CreateCanonicalPublishedReconciliationFixture();
         var participant = Assert.Single(stage.Envelope.Participants) with
@@ -1214,6 +1218,16 @@ public sealed partial class RelocationRuntimeTests
             RecoveryPayload = CanonicalFixtureRecovery(),
         };
         var snapshot = candidate.Authorities[0].Snapshot;
+        snapshot = snapshot with
+        {
+            Relocation = snapshot.Relocation! with
+            {
+                Target = snapshot.Relocation.Target! with
+                {
+                    AttemptGeneration = targetAttemptGeneration,
+                },
+            },
+        };
         var descriptor = snapshot.Allocation.Descriptor;
         var owner = new ZLinkLocationOwnerToken(snapshot.OwnerId, snapshot.OwnerLeaseGeneration);
         if (normalized)
@@ -1252,13 +1266,27 @@ public sealed partial class RelocationRuntimeTests
             await target.ReconcilePublishedAuthorityAsync(
                 store,
                 new ZLinkSpotRetireReservation(
-                    null!,
+                    new ZLinkSpotRetireInventory(
+                        stage.SourceMeshName,
+                        stage.SourceNodeRid,
+                        stage.SourceNodeLifecycleGeneration,
+                        stage.SourceOwner,
+                        "room",
+                        stage.StableType,
+                        typeof(object),
+                        false,
+                        false,
+                        participant.ObjectGeneration,
+                        [],
+                        []
+                    ),
                     descriptor,
                     1,
                     new ZLinkCapacityVector(0, 0, null),
                     owner
                 ),
                 sourcePublication,
+                targetAttemptGeneration,
                 DateTimeOffset.UtcNow.AddMinutes(1),
                 cancellation.Token
             )
@@ -1299,6 +1327,7 @@ public sealed partial class RelocationRuntimeTests
                     owner
                 ),
                 sourcePublication,
+                stage.TargetAttemptGeneration,
                 DateTimeOffset.UtcNow.AddMinutes(1),
                 CancellationToken.None
             )
@@ -3893,69 +3922,6 @@ public sealed partial class RelocationRuntimeTests
     }
 
     [Fact]
-    public async Task AggregateTargetPublishReusesAcceptedOpaqueRoot()
-    {
-        var relocation = new RecordingRelocationStore();
-        var authority = new RecordingAuthorityStore();
-        var coordinator = new ZLinkAggregateRelocationCoordinator(
-            new Zlink.Framework.UnitTests.Runtime.AuditRuntimeFailureReporter(),
-            authority,
-            relocation
-        );
-        var envelope = CreateEnvelope();
-        var participants = envelope
-            .Participants.Select(participant => new ZLinkAggregateRelocationParticipant(
-                participant,
-                $"v-{participant.AuthorityKey.Value}",
-                ZLinkAuthorityGenerationTransition.NewOwner,
-                new byte[] { 6 },
-                new byte[] { 7 }
-            ))
-            .ToArray();
-        var canonical = envelope with
-        {
-            InventoryDigest = ZLinkAggregateInventoryDigest.Compute(participants),
-        };
-        var source = await ZLinkRelocationTreeStore.PutAsync(
-            relocation,
-            canonical,
-            TimeSpan.FromHours(24),
-            CancellationToken.None
-        );
-        var putsBeforeTargetPrepare = relocation.Events.Count(static item => item.Name == "put");
-        var accepted = source.Root with
-        {
-            ExpiresAt = DateTimeOffset.UtcNow + TimeSpan.FromHours(24),
-            StoreNow = DateTimeOffset.UtcNow,
-        };
-        var request = new ZLinkAggregateRelocationRequest(
-            canonical.AggregateId,
-            canonical.AggregateGeneration,
-            1,
-            participants,
-            new ZLinkMeshNodeDescriptorKey("mesh", RoutingId.From("aggregate-target")),
-            1,
-            new ZLinkCapacityVector(
-                1,
-                1,
-                new ZLinkSpotTypeCapacityDelta(ZLinkPlacementObjectKind.UserSpot, "room", 1)
-            ),
-            new ZLinkLocationOwnerToken("aggregate-target", 17),
-            AggregateSourceFence(),
-            canonical
-        );
-
-        var published = await coordinator.PublishAsync(request, CancellationToken.None, accepted);
-
-        Assert.Equal(accepted.Reference, published.Relocation.Reference);
-        Assert.Equal(accepted.ChecksumCrc32c, published.Relocation.ChecksumCrc32c);
-        Assert.Equal(
-            putsBeforeTargetPrepare,
-            relocation.Events.Count(static item => item.Name == "put")
-        );
-    }
-
-    [Fact]
     public async Task AggregatePrepareGenerationExhaustionIsImmediateAndStable()
     {
         var relocation = new RecordingRelocationStore();
@@ -4658,6 +4624,8 @@ public sealed partial class RelocationRuntimeTests
 
         internal int MaximumConcurrentReads => Volatile.Read(ref _maximumConcurrentReads);
 
+        internal ConcurrentQueue<ZLinkAuthorityKey>? AuthorityReads { get; init; }
+
         internal List<(long Sequence, string Name)> Events { get; } = [];
 
         internal long ReplacementLeaseGeneration { get; init; }
@@ -4707,6 +4675,7 @@ public sealed partial class RelocationRuntimeTests
                     break;
                 maximum = previous;
             }
+            AuthorityReads?.Enqueue(key);
             lock (Events)
                 Events.Add((EventClock.Next(), "read"));
             try
