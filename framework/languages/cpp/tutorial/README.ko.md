@@ -82,8 +82,9 @@ Core `zlink.dll`과 서드파티 DLL이 실행 파일 옆에 함께 복사된다
 ## 실행
 
 Redis가 `127.0.0.1:6379`에서 실행 중이어야 한다. Spot·Actor·Location 단계는 이를 Location Store로 사용한다.
-아래 블록은 Redis를 Docker로 실행하고 Server, Client를 차례로 시작한 뒤 첫 요청으로 두 process의
-mesh 연결을 확인한다. handler와 filter의 로그는 **stderr**로 기록된다.
+아래 블록은 Redis를 Docker로 실행하고 Server와 Client를 시작한 뒤 두 process의 `/ops/ready`가
+HTTP 200을 반환할 때까지 기다린다. Actor 요청은 두 host가 `Serving` 상태에 도달한 뒤 보낸다.
+handler와 filter의 로그는 **stderr**로 기록된다.
 
 **Linux · macOS · WSL — bash**
 
@@ -93,7 +94,19 @@ docker run -d --rm --name zlink-tutorial-redis -p 127.0.0.1:6379:6379 redis:7-al
 echo $! > server.pid
 ./build/tutorial_client > client.log 2>&1 &
 echo $! > client.pid
-for i in $(seq 1 60); do curl -sf http://127.0.0.1:5180/players/p1/profile > /dev/null && break; sleep 1; done
+ready=0
+for i in $(seq 1 60); do
+  if curl -sf http://127.0.0.1:5180/ops/ready > /dev/null &&
+     curl -sf http://127.0.0.1:5181/ops/ready > /dev/null; then
+    ready=1
+    break
+  fi
+  sleep 1
+done
+if [ "$ready" -ne 1 ]; then
+  echo 'Tutorial Server and Client did not become ready' >&2
+  exit 1
+fi
 ```
 
 **Windows — PowerShell 7**
@@ -104,8 +117,19 @@ $server = Start-Process -NoNewWindow .\build\Release\tutorial_server.exe -Redire
 $server.Id | Set-Content server.pid
 $client = Start-Process -NoNewWindow .\build\Release\tutorial_client.exe -RedirectStandardOutput client.out -RedirectStandardError client.log -PassThru
 $client.Id | Set-Content client.pid
-foreach ($i in 1..60) { $answer = curl.exe -s http://127.0.0.1:5180/players/p1/profile; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep -Seconds 1 }
-if ($LASTEXITCODE -ne 0) { throw 'tutorial-http did not come up' }
+$ready = $false
+foreach ($i in 1..60) {
+  curl.exe -sf http://127.0.0.1:5180/ops/ready | Out-Null
+  if ($LASTEXITCODE -eq 0) {
+    curl.exe -sf http://127.0.0.1:5181/ops/ready | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+      $ready = $true
+      break
+    }
+  }
+  Start-Sleep -Seconds 1
+}
+if (-not $ready) { throw 'Tutorial Server and Client did not become ready' }
 ```
 
 PowerShell의 `curl`은 `Invoke-WebRequest`의 별칭이므로 `curl.exe`를 쓴다.

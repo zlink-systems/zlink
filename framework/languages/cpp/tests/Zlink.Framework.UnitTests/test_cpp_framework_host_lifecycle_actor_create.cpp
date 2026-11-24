@@ -179,6 +179,7 @@ bool verify_remote_actor_create_target_owns_completion ()
         : nullptr;
     const bool node_schema_decoded =
       node_created && node_created->actor.actor_id ().value () == "actor-canonical"
+      && node_created->actor.node_rid ().value () == "host-remote-create-target"
       && node_created->actor.object_generation () == 1;
 
     source_location_store->terminal_override.reset ();

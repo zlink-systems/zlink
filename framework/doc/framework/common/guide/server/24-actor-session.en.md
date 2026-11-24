@@ -64,7 +64,11 @@ An authentication request, its answer, and the notification the Actor pushes. Th
 
     The code in this section goes into the process that registered the stream node in
     [STREAM](23-stream.en.md). **Actor dispatch has to be turned on at that registration** for the
-    relay in this chapter to work.
+    relay in this chapter to work. A session node that only accepts STREAM connections must also
+    register an **Object Client MeshNode** in the same process (same mesh and Location Store as the
+    play node); startup validation fails without it. The registration example for the session, play,
+    and api nodes and the path for delayed responses to a session node are in
+    [Overview §5.1 Session Node](01-overview.en.md#51-session-node).
 
 ### 3.1 Binding
 

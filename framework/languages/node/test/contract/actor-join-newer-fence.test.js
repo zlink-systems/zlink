@@ -251,7 +251,9 @@ for (const request of [false, true]) {
       const relocation = targetHost.serviceRelocation;
       const progress = relocation.targetProgress.bind(relocation);
       t.mock.method(relocation, 'targetProgress', async (stage, authority, phase, signal) => {
-        if (phase === 'committed') {
+        // #4718: the owner CAS writes `committed`; `activating` is the first
+        // target write after commit and still precedes the Restore publish.
+        if (phase === 'activating') {
           commitEntered.resolve(authority);
           await releaseCommit.promise;
         }
