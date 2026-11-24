@@ -36,6 +36,7 @@ public final class Player implements ZLinkActor {
         return routes.requestToSpot(
                         Names.POOL_KEY,
                         new MatchRequest(UUID.randomUUID().toString(), context.actorId()))
+                .instanceSpot(Names.POOL)
                 .inMesh(Names.MESH)
                 .submit(MatchQueued.class)
                 .thenCompose(
@@ -65,6 +66,7 @@ public final class Player implements ZLinkActor {
 
     private CompletionStage<Void> cancelTicket(String reason) {
         return routes.requestToSpot(Names.POOL_KEY, new CancelTicket(state.ticketId, reason))
+                .instanceSpot(Names.POOL)
                 .inMesh(Names.MESH)
                 .submit(MatchCancelled.class)
                 .thenCompose(
@@ -192,7 +194,10 @@ public final class Player implements ZLinkActor {
     }
 
     private CompletionStage<Void> poolSend(Object message) {
-        return routes.sendToSpot(Names.POOL_KEY, message).inMesh(Names.MESH).submit();
+        return routes.sendToSpot(Names.POOL_KEY, message)
+                .instanceSpot(Names.POOL)
+                .inMesh(Names.MESH)
+                .submit();
     }
 
     private boolean isCurrent(String ticketId) {

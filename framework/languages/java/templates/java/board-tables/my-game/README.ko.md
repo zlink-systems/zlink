@@ -10,8 +10,9 @@ flowchart LR
   session -->|relay| tables[Play node ×N]
   tables -->|loadPlayer / commitRound| api[API node · Actor DB]
   api -->|player records / round results| location
-  tables -->|match requests| matchmaker[Matchmaker node · Pool Spot]
-  matchmaker -->|room preparation| tables
+  tables -->|match requests| matchmaker[Matchmaker node · Pool Instance Spot]
+  matchmaker -->|PrepareRoom| tables
+  tables -->|RoomPrepared| matchmaker
   tables -->|Location / lease| location[Redis]
 ```
 
@@ -136,7 +137,7 @@ public final class ConnectOnce {
 
 ## 매치메이킹
 
-Matchmaker는 SpotWide Pool `pool-board`를 실행합니다. `FindMatch`는 `MatchQueued(ticketId)`를 반환하고, `CancelMatch(ticketId)`는 취소된 ticket에 대해 사유가 `cancelled`인 `MatchCancelled`를 반환합니다. Pool은 ticket 도착 시와 500ms마다 가장 오래 기다린 ticket 두 개를 짝짓고 Table을 준비한 다음 두 Actor가 10초 이내에 입장을 보고하면 좌석을 확정합니다. 각 클라이언트는 `MatchFound(ticketId, roomId, seat)`와 `TableView`를 차례로 받고 기존 게임 메시지로 플레이할 수 있습니다. 대기 중인 ticket은 120초 후 만료됩니다. 연결이 끊어지면 대기 중인 ticket은 즉시 취소하고 예약된 ticket은 입장 기한까지 유지합니다.
+Matchmaker는 Pool Instance Spot 타입을 등록합니다. `pool-board`로 보낸 첫 메시지가 Pool을 활성화합니다. `FindMatch`는 `MatchQueued(ticketId)`를 반환하고, `CancelMatch(ticketId)`는 취소된 ticket에 대해 사유가 `cancelled`인 `MatchCancelled`를 반환합니다. Pool은 ticket이 도착할 때와 500ms마다 가장 오래 기다린 ticket 두 개를 짝짓습니다. 두 ticket을 대기열에서 빼고 배정을 준비 중으로 기록한 뒤 Table 생성이 진행되는 동안 turn을 반환합니다. Pool은 Table에 `PrepareRoom`을 보냅니다. Table이 `RoomPrepared`로 성공을 알리면 Pool은 배정을 입장 대기로 전환하고 두 Player에게 `MatchAssigned`를 보냅니다. 매칭 후 10초 이내에 두 Actor가 모두 입장을 보고하면 Pool이 좌석을 확정합니다. 각 클라이언트는 `MatchFound(ticketId, roomId, seat)`와 `TableView`를 차례로 받고 기존 게임 메시지로 플레이할 수 있습니다. 대기 중인 ticket은 120초 후 만료됩니다. 연결이 끊어지면 대기 중인 ticket은 즉시 취소하고 예약된 ticket은 입장 기한까지 유지합니다.
 
 `server/matchmaker`에는 메모리 내 queue와 `MatchRule` 매칭 정책이 있습니다. `MatchRule`을 바꾸면 대기 중인 플레이어의 매칭 방식을 변경할 수 있습니다. Pool은 ticket 전이와 할당 결정을 소유합니다. Table은 준비된 참가자를 확인하고 게임을 실행합니다.
 
@@ -209,4 +210,4 @@ Message Follow는 명시적으로 30초로 설정되어 있습니다. `SAFE_TO_S
 
 운영 환경의 실행 스크립트는 설정 파일을 직접 사용합니다. server host는 구조에서 node ID와 설정 경로를 도출하고 실행별 복사본에서만 Redis, 키 접두사와 리스너 엔드포인트 값을 교체합니다. 애플리케이션 transfer에는 Framework의 라우팅, membership 또는 lease 상태가 포함되지 않습니다.
 
-e2e runner는 public Table stable-type 제한을 통해 각 node의 선택적 `tableCapacity`를 선택된 시나리오 수로 설정합니다. 각 시나리오는 Table 하나를 유지하므로 runner는 `update`를 마지막에 실행합니다. update가 원본을 drain한 뒤에는 남은 node가 최대 용량에 도달하므로 교체 node만 새 table을 호스팅할 수 있습니다. 새 플레이어 두 명 모두 교체 node ID를 관찰해야 합니다. 용량을 생략하거나 0으로 설정하면 로컬 서버와 배포 용량에 제한이 없습니다. Entry 선언은 Table node에 속합니다. Matchmaker는 고정된 `pool-board` User Spot을 시작합니다.
+e2e runner는 public Table stable-type 제한을 통해 각 node의 선택적 `tableCapacity`를 선택된 시나리오 수로 설정합니다. 각 시나리오는 Table 하나를 유지하므로 runner는 `update`를 마지막에 실행합니다. update가 원본을 drain한 뒤에는 남은 node가 최대 용량에 도달하므로 교체 node만 새 table을 호스팅할 수 있습니다. 새 플레이어 두 명 모두 교체 node ID를 관찰해야 합니다. 용량을 생략하거나 0으로 설정하면 로컬 서버와 배포 용량에 제한이 없습니다. Entry 선언은 Table node에 속합니다. Matchmaker는 `pool-board` Instance Spot을 호스팅합니다.

@@ -9,8 +9,9 @@ flowchart LR
   session -->|relay| tables[Play node ×N]
   tables -->|loadPlayer / commitRound| api[API node · Actor DB]
   api -->|player records / round results| location
-  tables -->|match requests| matchmaker[Matchmaker node · Pool Spot]
-  matchmaker -->|room preparation| tables
+  tables -->|match requests| matchmaker[Matchmaker node · Pool Instance Spot]
+  matchmaker -->|PrepareRoom| tables
+  tables -->|RoomPrepared| matchmaker
   tables -->|Location / lease| location[Redis]
 ```
 
@@ -135,7 +136,7 @@ public final class ConnectOnce {
 
 ## Matchmaking
 
-Matchmaker runs the SpotWide Pool `pool-board`. `FindMatch` returns `MatchQueued(ticketId)`, and `CancelMatch(ticketId)` returns `MatchCancelled` with reason `cancelled` for a cancelled ticket. The Pool pairs the two longest-waiting tickets on arrival and every 500 ms, prepares a Table, and commits the seats after both Actors report entry within 10 seconds. Each client receives `MatchFound(ticketId, roomId, seat)` followed by `TableView` and can play with the existing game messages. A waiting ticket expires after 120 seconds. A disconnect cancels a waiting ticket immediately and leaves a reserved ticket to the entry deadline.
+Matchmaker registers the Pool Instance Spot type. The first message addressed to `pool-board` activates it. `FindMatch` returns `MatchQueued(ticketId)`, and `CancelMatch(ticketId)` returns `MatchCancelled` with reason `cancelled` for a cancelled ticket. The Pool pairs the two longest-waiting tickets on arrival and every 500 ms. It removes the pair from the waiting queue, records an assignment as preparing, and yields its turn during Table creation. It sends `PrepareRoom` to the Table. The Table sends back `RoomPrepared`, which moves a successful assignment to awaiting entry and triggers `MatchAssigned` for both Players. Both Actors must report entry within 10 seconds of the pairing for the Pool to commit the seats. Each client receives `MatchFound(ticketId, roomId, seat)` followed by `TableView` and can play with the existing game messages. A waiting ticket expires after 120 seconds. A disconnect cancels a waiting ticket immediately and leaves a reserved ticket to the entry deadline.
 
 `server/matchmaker` contains the in-memory queue and the `MatchRule` pairing policy. Change `MatchRule` to change which waiting players are paired. The Pool owns ticket transitions and assignment decisions. The Table checks the prepared members and runs the game.
 
@@ -208,4 +209,4 @@ Message Follow is explicitly configured for 30 seconds. The `SAFE_TO_SHUTDOWN` o
 
 Production launchers use the configuration files directly. The server host derives its node IDs and configuration paths from the structure and replaces Redis, key-prefix and listener endpoint values only in its run-specific copies. Application transfer contains no Framework routing, membership or lease state.
 
-The e2e runner sets each node's optional `tableCapacity` to the number of selected scenarios through the public Table stable-type limit. Each scenario retains one Table, so the runner executes `update` last. After update drains the source, the surviving node is at capacity, so only the replacement can host the new table. Both new players must observe the replacement node ID. Omitted or zero capacity leaves local server and deployment capacity unlimited. Entry declarations belong to Table nodes. Matchmaker starts the fixed `pool-board` User Spot.
+The e2e runner sets each node's optional `tableCapacity` to the number of selected scenarios through the public Table stable-type limit. Each scenario retains one Table, so the runner executes `update` last. After update drains the source, the surviving node is at capacity, so only the replacement can host the new table. Both new players must observe the replacement node ID. Omitted or zero capacity leaves local server and deployment capacity unlimited. Entry declarations belong to Table nodes. Matchmaker hosts the `pool-board` Instance Spot.

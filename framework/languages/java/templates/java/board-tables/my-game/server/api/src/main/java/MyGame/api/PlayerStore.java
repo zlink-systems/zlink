@@ -40,8 +40,10 @@ public final class PlayerStore implements AutoCloseable {
 
     PlayerStore(String endpoint, String prefix) {
         this.prefix = prefix;
-        client = RedisClient.create(
-                RedisURI.create(endpoint.contains("://") ? endpoint : "redis://" + endpoint));
+        client =
+                RedisClient.create(
+                        RedisURI.create(
+                                endpoint.contains("://") ? endpoint : "redis://" + endpoint));
         try {
             connection = client.connect();
         } catch (RuntimeException failure) {
@@ -86,7 +88,8 @@ public final class PlayerStore implements AutoCloseable {
             keys[i + 1] = playerKey(result.playerId());
             chips[i] = Long.toString(result.chips());
         }
-        // The script checks the round key and writes every balance atomically on the shared connection.
+        // The script checks the round key and writes every balance atomically on the shared
+        // connection.
         return connection
                 .async()
                 .<Long>eval(COMMIT_ROUND, ScriptOutputType.INTEGER, keys, chips)

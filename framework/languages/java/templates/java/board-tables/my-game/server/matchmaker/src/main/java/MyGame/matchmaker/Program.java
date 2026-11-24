@@ -5,9 +5,7 @@ import MyGame.*;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 
-import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.locations.redis.*;
-import systems.zlink.framework.spots.*;
 import systems.zlink.framework.spring.*;
 
 @EnableZLinkFramework
@@ -26,29 +24,12 @@ public class Program {
                     .setRoutingIdPrefix(config.id())
                     .objects()
                     .server()
-                    .addSpotFactory(
-                            Names.POOL,
-                            Pool.class,
-                            builder ->
-                                    builder.executionMode(ZLinkUserSpotExecutionMode.SPOT_WIDE)
-                                            .disableRelocation());
+                    .addInstanceSpotFactory(
+                            Names.POOL, Pool.class, builder -> builder.disableRelocation());
         };
     }
 
     public static void main(String[] args) throws Exception {
-        Hosting.run(
-                Program.class,
-                args,
-                app -> {
-                    var pool =
-                            app.getBean(ZLinkSpotManager.class)
-                                    .getOrCreate(Names.POOL_KEY, Names.POOL)
-                                    .inMesh(Names.MESH)
-                                    .submit()
-                                    .toCompletableFuture()
-                                    .join();
-                    if (pool.state() == ZLinkSpotCreateState.REJECTED)
-                        throw new IllegalStateException("Pool creation rejected");
-                });
+        Hosting.run(Program.class, args);
     }
 }

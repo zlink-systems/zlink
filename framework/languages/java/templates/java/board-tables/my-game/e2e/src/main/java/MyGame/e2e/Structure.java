@@ -137,7 +137,7 @@ public final class Structure {
             if (spot.path("type").asText().equals(Names.POOL)) {
                 require(
                         role.equals("matchmaker")
-                                && text(spot, "kind").equals("user")
+                                && text(spot, "kind").equals("instance")
                                 && text(spot, "logicalId").equals(Names.POOL_KEY)
                                 && !spot.has("dynamic"),
                         "Invalid Pool spot declaration");

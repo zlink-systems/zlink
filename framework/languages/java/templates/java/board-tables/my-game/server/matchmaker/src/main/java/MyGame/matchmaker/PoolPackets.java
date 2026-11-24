@@ -9,13 +9,25 @@ import java.util.concurrent.CompletionStage;
 public final class PoolPackets {
     private PoolPackets() {}
 
+    public static final class Prepare implements ZLinkSpotPacketHandler<Pool, PrepareRoom> {
+        public CompletionStage<Void> handle(Pool pool, PrepareRoom message) {
+            return pool.prepare(message);
+        }
+    }
+
     public static final class Enter implements ZLinkSpotPacketHandler<Pool, EnterReport> {
         public CompletionStage<Void> handle(Pool pool, EnterReport message) {
             return pool.report(message);
         }
     }
 
-    public static final class Tick implements ZLinkSpotTimerHandler<Pool> {
+    public static final class Prepared implements ZLinkSpotPacketHandler<Pool, RoomPrepared> {
+        public CompletionStage<Void> handle(Pool pool, RoomPrepared message) {
+            return pool.prepared(message);
+        }
+    }
+
+    public static final class Tick {
         public CompletionStage<Void> handle(Pool pool, ZLinkTimerTick tick) {
             return pool.tick();
         }

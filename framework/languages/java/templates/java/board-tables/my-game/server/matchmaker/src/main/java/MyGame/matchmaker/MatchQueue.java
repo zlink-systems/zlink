@@ -13,7 +13,8 @@ final class MatchQueue {
         final String id;
         final List<Ticket> members;
         final long deadline;
-        final Set<String> entered = new HashSet<>();
+        // Entry reports are accepted only after the Table confirms preparation.
+        Set<String> entered;
 
         Assignment(String id, List<Ticket> members, long deadline) {
             this.id = id;
@@ -65,6 +66,10 @@ final class MatchQueue {
 
     List<Assignment> expireAssignments(long now) {
         return assignments.values().stream().filter(a -> now - a.deadline >= 0).toList();
+    }
+
+    Assignment findAssignment(String assignmentId) {
+        return assignments.get(assignmentId);
     }
 
     Assignment assignment(String ticketId) {
