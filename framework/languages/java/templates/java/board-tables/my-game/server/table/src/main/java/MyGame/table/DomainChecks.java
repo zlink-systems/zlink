@@ -3,6 +3,7 @@ package MyGame.table;
 import MyGame.*;
 
 import com.fasterxml.jackson.databind.JsonNode;
+
 import java.security.SecureRandom;
 import java.util.*;
 import java.util.function.IntUnaryOperator;
@@ -45,9 +46,7 @@ final class DomainChecks {
 
     private static void shuffledDeckContainsEveryCardOnce() {
         var table = table(secureRandomIndex());
-        require(
-                table.admit("p1") && table.admit("p2"),
-                "Could not prepare shuffled deck");
+        require(table.admit("p1") && table.admit("p2"), "Could not prepare shuffled deck");
         require(table.startDomain("p1") == null, "Deck shuffle failed");
 
         var cards = new ArrayList<Integer>(table.state.deck);
@@ -63,9 +62,7 @@ final class DomainChecks {
 
     private static void injectedRandomProducesDeterministicOrder() {
         var table = table(bound -> bound - 1);
-        require(
-                table.admit("p1") && table.admit("p2"),
-                "Could not prepare deterministic shuffle");
+        require(table.admit("p1") && table.admit("p2"), "Could not prepare deterministic shuffle");
         require(table.startDomain("p1") == null, "Injected random source failed");
         require(
                 table.state.deck.equals(IntStream.range(0, 48).boxed().toList())
@@ -86,9 +83,7 @@ final class DomainChecks {
             require(outcome.rejection() == null, "Valid settlement bet was rejected");
             if (i == Rules.SEATS - 1) result = table.settleDomain(outcome);
             else
-                require(
-                        outcome.settlement() == null,
-                        "Settlement ended before every player acted");
+                require(outcome.settlement() == null, "Settlement ended before every player acted");
         }
         require(
                 result != null
@@ -161,8 +156,7 @@ final class DomainChecks {
 
     private static Table playingTable() {
         var table = table(secureRandomIndex());
-        require(
-                table.admit("p1") && table.admit("p2"), "Could not prepare bet boundary");
+        require(table.admit("p1") && table.admit("p2"), "Could not prepare bet boundary");
         table.state.seats.get(0).cards = List.of(11, 24);
         table.state.seats.get(1).cards = List.of(0, 13);
         table.state.handNumber = 1;
@@ -191,5 +185,4 @@ final class DomainChecks {
     private static void require(boolean condition, String message) {
         if (!condition) throw new IllegalStateException(message);
     }
-
 }

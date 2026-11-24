@@ -5,6 +5,7 @@ import MyGame.Rules;
 import java.util.*;
 
 public final class TableState {
+    public List<String> matchMembers;
     public List<Seat> seats = new ArrayList<>();
     public List<Integer> deck = new ArrayList<>();
     public long handNumber, pot;

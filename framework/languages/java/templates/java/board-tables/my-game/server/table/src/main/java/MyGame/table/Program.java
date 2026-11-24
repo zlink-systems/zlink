@@ -5,9 +5,10 @@ import MyGame.*;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 
-import java.util.Arrays;
 import systems.zlink.framework.locations.redis.*;
 import systems.zlink.framework.spring.*;
+
+import java.util.Arrays;
 
 @EnableZLinkFramework
 @SpringBootApplication(proxyBeanMethods = false)
