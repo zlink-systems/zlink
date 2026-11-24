@@ -26,6 +26,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Supplier;
 
@@ -38,17 +39,15 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                     if (primary != null) {
                         if (secondary != null && secondary != primary)
                             primary.addSuppressed(secondary);
-                        throw new java.util.concurrent.CompletionException(primary);
+                        throw new CompletionException(primary);
                     }
-                    if (secondary != null)
-                        throw new java.util.concurrent.CompletionException(secondary);
+                    if (secondary != null) throw new CompletionException(secondary);
                     return value;
                 });
     }
 
     private static Throwable unwrapCompletion(Throwable failure) {
-        while (failure instanceof java.util.concurrent.CompletionException
-                && failure.getCause() != null) {
+        while (failure instanceof CompletionException && failure.getCause() != null) {
             failure = failure.getCause();
         }
         return failure;
@@ -463,6 +462,7 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
         }
         Message payloadCopy = Message.from(packet.payload());
         String packetName = packet.packetName();
+        var inboundFlow = ZLinkFlowContext.current();
         releaseRouteParts(received);
         return host.admitApplicationJob(
                         () -> {
@@ -486,16 +486,18 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                                         return host.runWithOutbound(
                                                 context.dispatchOutbound(),
                                                 () -> {
+                                                    CompletionStage<?> handling;
                                                     try {
-                                                        return handlerInvoker.invokePacket(
-                                                                handler,
-                                                                spotSurface,
-                                                                payloadCopy,
-                                                                contentType,
-                                                                metadata,
-                                                                received.receivedAt(),
-                                                                context.handlerInstances()
-                                                                        ::instance);
+                                                        handling =
+                                                                handlerInvoker.invokePacket(
+                                                                        handler,
+                                                                        spotSurface,
+                                                                        payloadCopy,
+                                                                        contentType,
+                                                                        metadata,
+                                                                        received.receivedAt(),
+                                                                        context.handlerInstances()
+                                                                                ::instance);
                                                     } catch (RuntimeException decodeFailure) {
                                                         // invokePacket returns
                                                         // handler failures as a
@@ -506,6 +508,27 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                                                                 context.spotId(), "decode_error");
                                                         throw decodeFailure;
                                                     }
+                                                    return handling.handle(
+                                                            (ignored, error) -> {
+                                                                if (error == null) return null;
+                                                                if (host.dispatchErrorsEnabled()) {
+                                                                    host
+                                                                            .reportSpotRouteHandlerFailure(
+                                                                                    received,
+                                                                                    packetName,
+                                                                                    context
+                                                                                            .spotId(),
+                                                                                    inboundFlow,
+                                                                                    error);
+                                                                }
+                                                                throw error
+                                                                                instanceof
+                                                                                CompletionException
+                                                                                        completion
+                                                                        ? completion
+                                                                        : new CompletionException(
+                                                                                error);
+                                                            });
                                                 });
                                     },
                                     admission);

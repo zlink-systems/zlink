@@ -4,6 +4,7 @@ import systems.zlink.contracts.errors.ZlinkRequestException;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.SendFlags;
+import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.actors.ZLinkActorClient;
 import systems.zlink.framework.actors.ZLinkActorRequestCall;
@@ -17,6 +18,8 @@ import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAction;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
@@ -281,6 +284,7 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                                                             createPacketParts(
                                                                     ZLinkStreamMessageKind.SEND,
                                                                     Optional.empty(),
+                                                                    actorId,
                                                                     packetName,
                                                                     message,
                                                                     metadata);
@@ -340,6 +344,7 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                 createPacketParts(
                         ZLinkStreamMessageKind.REQUEST,
                         Optional.of(1L),
+                        actor.actor().actorId(),
                         packetName,
                         request,
                         metadata);
@@ -382,6 +387,7 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
     private List<Message> createPacketParts(
             ZLinkStreamMessageKind kind,
             Optional<Long> requestSeq,
+            String actorId,
             String packetName,
             Object message,
             Map<String, String> metadata) {
@@ -394,9 +400,27 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                         requestSeq,
                         packetName,
                         Map.copyOf(metadata));
-        Message headerPart = Message.from(ZLinkStreamHeaderCodec.encode(header));
-        Message payloadPart = ZLinkMessagePayloads.message(ZLinkMessage.of(message), serializer);
-        return List.of(headerPart, payloadPart);
+        byte[] headerBytes = ZLinkStreamHeaderCodec.encode(header);
+        ZLinkMessage payload = ZLinkMessage.of(message);
+        ZLinkEncodedPayload encoded;
+        try {
+            encoded = payload.toEncodedPayload(serializer);
+        } catch (RuntimeException failure) {
+            if (flowTracer != null) {
+                flowTracer.reportFailure(
+                        ZLinkDispatchErrorSurface.SPOT_ACTOR,
+                        kind == ZLinkStreamMessageKind.SEND
+                                ? ZLinkDispatchMessageKind.ACTOR_SEND
+                                : ZLinkDispatchMessageKind.ACTOR_REQUEST,
+                        ZLinkDispatchErrorReason.ENCODE_ERROR,
+                        ZLinkDispatchErrorAction.FAIL_CALLER,
+                        actorId,
+                        packetName,
+                        failure);
+            }
+            throw failure;
+        }
+        return List.of(Message.from(headerBytes), ZLinkMessagePayloads.message(encoded));
     }
 
     private RuntimeException mapBackendException(Throwable error, String operationName) {

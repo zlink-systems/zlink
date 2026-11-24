@@ -770,6 +770,7 @@ class ZLinkMessageFlowTracerTest {
                 Set.of(
                         "no_handler",
                         "decode_error",
+                        "encode_error",
                         "handler_exception",
                         "invalid_frame",
                         "reply_path_missing",

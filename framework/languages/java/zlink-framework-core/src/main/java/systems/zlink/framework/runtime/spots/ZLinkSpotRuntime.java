@@ -7422,6 +7422,26 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                         .sourceRid(received.routingId().orElse(null)));
     }
 
+    void reportSpotRouteHandlerFailure(
+            ZLinkBackendReceived received,
+            String packetName,
+            String spotId,
+            ZLinkFlowContext.State inboundFlow,
+            Throwable error) {
+        try (var ignored = ZLinkFlowContext.enter(inboundFlow)) {
+            reportDispatchError(
+                    DispatchFailureReport.of(
+                                    ZLinkDispatchErrorSurface.SPOT_ROUTE,
+                                    ZLinkDispatchMessageKind.SEND,
+                                    ZLinkDispatchErrorReason.HANDLER_EXCEPTION,
+                                    ZLinkDispatchErrorAction.DROP)
+                            .packetName(packetName)
+                            .spotId(spotId)
+                            .sourceRid(received.routingId().orElse(null))
+                            .error(error));
+        }
+    }
+
     /** Spec 27 §3: a malformed one-way route envelope is dropped as invalid_frame. */
     void reportSpotRouteInvalidFrameDropped(
             ZLinkBackendReceived received, String packetName, String spotId, Throwable error) {

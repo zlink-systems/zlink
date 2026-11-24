@@ -93,13 +93,24 @@ public final class ZLinkMessageFlowTracer {
             ZLinkDispatchErrorAction action,
             String actorId,
             Throwable failure) {
+        reportFailure(surface, messageKind, reason, action, actorId, null, failure);
+    }
+
+    public void reportFailure(
+            ZLinkDispatchErrorSurface surface,
+            ZLinkDispatchMessageKind messageKind,
+            ZLinkDispatchErrorReason reason,
+            ZLinkDispatchErrorAction action,
+            String actorId,
+            String packetName,
+            Throwable failure) {
         TracePoint point = beginDispatchError();
         if (point == null) return;
         point.trace(
                 ZLinkDispatchErrorReporter.failureEvent(
                         surface,
                         messageKind,
-                        null,
+                        packetName,
                         null,
                         null,
                         null,
@@ -110,7 +121,7 @@ public final class ZLinkMessageFlowTracer {
                         null,
                         reason,
                         action,
-                        ZLinkDispatchErrorReporter.errorDetails(failure)));
+                        ZLinkDispatchErrorReporter.errorDetails(reason, failure)));
     }
 
     private static final int FNV_OFFSET_BASIS = 0x811c9dc5;

@@ -11,6 +11,8 @@ import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
 
 import java.lang.reflect.InvocationTargetException;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicLong;
@@ -94,7 +96,7 @@ public final class ZLinkDispatchErrorReporter {
                 null,
                 null,
                 null,
-                errorDetails(error));
+                errorDetails(reason, error));
     }
 
     /** Whether a dispatch error record would be written at the live level. */
@@ -110,7 +112,7 @@ public final class ZLinkDispatchErrorReporter {
         ErrorDetails details =
                 error.failure() == null
                         ? new ErrorDetails(error.errorType(), error.errorMessage())
-                        : errorDetails(error.failure());
+                        : errorDetails(error.reason(), error.failure());
         report(
                 tracePoint,
                 error.surface(),
@@ -245,6 +247,10 @@ public final class ZLinkDispatchErrorReporter {
     }
 
     static ErrorDetails errorDetails(Throwable error) {
+        return errorDetails(null, error);
+    }
+
+    static ErrorDetails errorDetails(ZLinkDispatchErrorReason reason, Throwable error) {
         if (error == null) {
             return new ErrorDetails(null, null);
         }
@@ -254,7 +260,15 @@ public final class ZLinkDispatchErrorReporter {
                 && current.getCause() != null) {
             current = current.getCause();
         }
-        String message = current.getMessage();
+        Throwable diagnostic = current;
+        if (reason == ZLinkDispatchErrorReason.ENCODE_ERROR && diagnostic.getCause() != null) {
+            var visited = Collections.newSetFromMap(new IdentityHashMap<Throwable, Boolean>());
+            visited.add(diagnostic);
+            while (diagnostic.getCause() != null && visited.add(diagnostic.getCause())) {
+                diagnostic = diagnostic.getCause();
+            }
+        }
+        String message = diagnostic.getMessage();
         if (message == null) {
             message = "";
         }
