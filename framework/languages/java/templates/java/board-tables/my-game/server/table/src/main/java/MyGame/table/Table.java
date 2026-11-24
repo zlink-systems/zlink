@@ -16,21 +16,28 @@ public final class Table implements ZLinkSpot<Player> {
     private final ZLinkSpotContext context;
     private final NodeConfig config;
     private final ZLinkActorClient clients;
+    private final PlayerApi players;
     private final IntUnaryOperator randomIndex;
     TableState state = new TableState();
 
-    public Table(ZLinkSpotContext context, NodeConfig config, ZLinkActorClient clients) {
-        this(context, config, clients, new SecureRandom()::nextInt);
+    public Table(
+            ZLinkSpotContext context,
+            NodeConfig config,
+            ZLinkActorClient clients,
+            PlayerApi players) {
+        this(context, config, clients, players, new SecureRandom()::nextInt);
     }
 
     Table(
             ZLinkSpotContext context,
             NodeConfig config,
             ZLinkActorClient clients,
+            PlayerApi players,
             IntUnaryOperator randomIndex) {
         this.context = context;
         this.config = config;
         this.clients = clients;
+        this.players = players;
         this.randomIndex = Objects.requireNonNull(randomIndex);
     }
 
@@ -45,16 +52,21 @@ public final class Table implements ZLinkSpot<Player> {
 
     public CompletionStage<ZLinkSpotActorJoinResult> onActorJoin(
             String actorId, ZLinkMessage request) {
-        var join = request.decode(JoinTableRequest.class);
-        checkJoin(actorId, join);
+        var join = request.decode(TableAdmission.class);
+        checkJoin(actorId, join.playerId(), join.tableId());
+        boolean accepted;
+        if (state.matchMembers == null) {
+            accepted = admit(actorId, join.chips());
+        } else {
+            accepted = state.matchMembers.containsKey(actorId);
+            if (accepted && state.seats.isEmpty()) state.matchMembers.put(actorId, join.chips());
+        }
         return CompletableFuture.completedFuture(
-                (state.matchMembers == null ? admit(actorId) : state.matchMembers.contains(actorId))
-                        ? ZLinkSpotActorJoinResult.accept()
-                        : ZLinkSpotActorJoinResult.reject());
+                accepted ? ZLinkSpotActorJoinResult.accept() : ZLinkSpotActorJoinResult.reject());
     }
 
-    void checkJoin(String actorId, JoinTableRequest request) {
-        if (!request.playerId().equals(actorId) || !request.tableId().equals(context.spotId()))
+    void checkJoin(String actorId, String playerId, String tableId) {
+        if (!playerId.equals(actorId) || !tableId.equals(context.spotId()))
             throw new IllegalArgumentException("Join identity mismatch");
     }
 
@@ -78,23 +90,30 @@ public final class Table implements ZLinkSpot<Player> {
                         && new HashSet<>(request.members()).size() == Rules.MIN_PLAYERS
                         && request.members().stream().noneMatch(id -> id == null || id.isBlank());
         if (!valid) return new RoomPrepared(request.assignmentId(), false);
-        if (state.matchMembers == null && state.seats.isEmpty())
-            state.matchMembers = List.copyOf(request.members());
+        if (state.matchMembers == null && state.seats.isEmpty()) {
+            state.matchMembers = new LinkedHashMap<>();
+            request.members().forEach(member -> state.matchMembers.put(member, null));
+        }
         return new RoomPrepared(
-                request.assignmentId(), request.members().equals(state.matchMembers));
+                request.assignmentId(),
+                state.matchMembers != null
+                        && request.members().equals(new ArrayList<>(state.matchMembers.keySet())));
     }
 
     CompletionStage<Void> commit(CommitRoom message) {
         if (!reserved(message.assignmentId())) return CompletableFuture.completedFuture(null);
-        for (var member : state.matchMembers) {
-            admit(member);
-            logSeat(member, index(member));
-        }
+        var seats = new ArrayList<TableState.Seat>();
+        state.matchMembers.forEach(
+                (member, chips) ->
+                        seats.add(new TableState.Seat(member, Objects.requireNonNull(chips))));
+        state.seats = seats;
+        state.matchMembers.replaceAll((member, chips) -> null);
+        for (int i = 0; i < seats.size(); i++) logSeat(seats.get(i).playerId, i);
         return broadcastViews();
     }
 
     void withdraw(WithdrawRoom message) {
-        if (reserved(message.assignmentId())) state.matchMembers = List.of();
+        if (reserved(message.assignmentId())) state.matchMembers = Map.of();
     }
 
     private boolean reserved(String assignmentId) {
@@ -109,10 +128,10 @@ public final class Table implements ZLinkSpot<Player> {
     }
 
     // Seats the player at admission; a seated player is admitted again without a new seat.
-    boolean admit(String id) {
+    boolean admit(String id, long chips) {
         if (index(id) != Rules.NO_SEAT) return true;
         if (state.seats.size() == Rules.SEATS) return false;
-        state.seats.add(new TableState.Seat(id));
+        state.seats.add(new TableState.Seat(id, chips));
         return true;
     }
 
@@ -280,10 +299,12 @@ public final class Table implements ZLinkSpot<Player> {
         if (winners.isEmpty()) return null;
 
         long share = pot / winners.size(), remainder = pot % winners.size();
-        var winnerBalances = new ArrayList<Long>(winners.size());
+        var balances = new ArrayList<Long>(state.seats.size());
+        for (int i = 0; i < state.seats.size(); i++)
+            balances.add(state.seats.get(i).chips - (i == bettor ? betAmount : 0L));
         for (int i = 0; i < winners.size(); i++) {
             int winner = winners.get(i);
-            long balance = state.seats.get(winner).chips - (winner == bettor ? betAmount : 0L);
+            long balance = balances.get(winner);
             var withShare = Rules.tryAddContractIntegers(balance, share);
             if (withShare.isEmpty()) return null;
             balance = withShare.getAsLong();
@@ -292,14 +313,21 @@ public final class Table implements ZLinkSpot<Player> {
                 if (withRemainder.isEmpty()) return null;
                 balance = withRemainder.getAsLong();
             }
-            winnerBalances.add(balance);
+            balances.set(winner, balance);
         }
         return new SettlementPlan(
-                pot, List.copyOf(winners), List.copyOf(hands), List.copyOf(winnerBalances));
+                pot, List.copyOf(winners), List.copyOf(hands), List.copyOf(balances));
     }
 
     private CompletionStage<Void> settle(SettlementPlan plan) {
-        HandResult result = applySettlement(plan);
+        var results = new LinkedHashMap<String, Long>();
+        for (int i = 0; i < state.seats.size(); i++)
+            results.put(state.seats.get(i).playerId, plan.balances().get(i));
+        return players.commitRound(context.spotId(), state.handNumber, results)
+                .thenCompose(ignored -> announceSettlement(applySettlement(plan)));
+    }
+
+    private CompletionStage<Void> announceSettlement(HandResult result) {
         var winners =
                 result.winners().stream()
                         .map(seat -> "seat " + seat)
@@ -325,9 +353,11 @@ public final class Table implements ZLinkSpot<Player> {
         state.inHand = false;
         state.turnSeat = Rules.NO_SEAT;
         state.pot = 0L;
-        for (var seat : state.seats) seat.cards = List.of();
-        for (int i = 0; i < plan.winners().size(); i++)
-            state.seats.get(plan.winners().get(i)).chips = plan.winnerBalances().get(i);
+        for (int i = 0; i < state.seats.size(); i++) {
+            var seat = state.seats.get(i);
+            seat.cards = List.of();
+            seat.chips = plan.balances().get(i);
+        }
         return new HandResult(
                 state.handNumber, plan.pot(), plan.winners(), plan.hands(), seatViews());
     }
@@ -335,7 +365,7 @@ public final class Table implements ZLinkSpot<Player> {
     record BetOutcome(String rejection, SettlementPlan settlement) {}
 
     record SettlementPlan(
-            long pot, List<Integer> winners, List<RevealedHand> hands, List<Long> winnerBalances) {}
+            long pot, List<Integer> winners, List<RevealedHand> hands, List<Long> balances) {}
 
     private List<SeatView> seatViews() {
         var views = new ArrayList<SeatView>(state.seats.size());

@@ -7,6 +7,7 @@ public final class Names {
 
     public static final String LANGUAGE = "java",
             MESH = "my-game-tables",
+            API = "player-api",
             STREAM = "players",
             PLAYER = "Player",
             TABLE = "Table",

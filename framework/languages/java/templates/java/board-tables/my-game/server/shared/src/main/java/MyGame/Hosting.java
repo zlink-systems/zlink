@@ -112,17 +112,27 @@ public final class Hosting {
                 ready.get(Control.HOST_DEADLINE.toSeconds(), TimeUnit.SECONDS);
                 bootstrap.accept(app);
                 var meshEndpoint =
-                        runtime.listenerStatus(ZLinkListenerKind.ROUTE_MESH, Names.MESH).endpoint();
+                        config.meshEndpoint() == null
+                                ? null
+                                : runtime.listenerStatus(ZLinkListenerKind.ROUTE_MESH, Names.MESH)
+                                        .endpoint();
                 var streamEndpoint =
                         config.streamEndpoint() == null
                                 ? null
                                 : runtime.listenerStatus(ZLinkListenerKind.STREAM, Names.STREAM)
                                         .endpoint();
+                var apiEndpoint =
+                        meshEndpoint == null && config.apiEndpoint() != null
+                                ? runtime.listenerStatus(ZLinkListenerKind.CLIENT_SERVER, Names.API)
+                                        .endpoint()
+                                : null;
                 var endpoints = new LinkedHashMap<String, Object>();
                 endpoints.put("id", config.id());
                 endpoints.put("meshEndpoint", meshEndpoint);
                 endpoints.put("streamEndpoint", streamEndpoint);
-                var endpoint = streamEndpoint == null ? meshEndpoint : streamEndpoint;
+                endpoints.put("apiEndpoint", apiEndpoint);
+                var endpoint = streamEndpoint != null ? streamEndpoint : meshEndpoint;
+                if (apiEndpoint != null) endpoint = apiEndpoint;
                 System.out.println(title + " ready at " + endpoint);
                 System.out.println(Control.READY + Json.MAPPER.writeValueAsString(endpoints));
                 var input = new BufferedReader(new InputStreamReader(System.in));

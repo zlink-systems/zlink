@@ -6,6 +6,7 @@ import java.util.HashSet;
 import java.util.Set;
 
 public final class PlayerState {
+    public Long chips;
     public String ticketId;
     public MatchAssigned assignment;
     public String joining;

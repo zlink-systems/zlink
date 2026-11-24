@@ -8,9 +8,11 @@
 flowchart LR
   players[Players] -->|STREAM| session[Session node]
   session -->|relay| tables[Play node ×N]
-  tables -->|match requests| matchmaker[Matchmaker node]
+  tables -->|loadPlayer / commitRound| api[API node · Actor DB]
+  api -->|player records / round results| location
+  tables -->|match requests| matchmaker[Matchmaker node · Pool Spot]
   matchmaker -->|room preparation| tables
-  tables -->|Location / lease| location[Location Store]
+  tables -->|Location / lease| location[Redis]
 ```
 
 ## 사전 요구 사항
@@ -49,9 +51,9 @@ JDK 25를 설치하고 Docker를 시작합니다. 전용 터미널에서 서버�
 .\run-server.cmd
 ```
 
-실행 스크립트는 Redis, Play node A와 B, Matchmaker, Session을 시작합니다. 모든 node가 준비되면 콘솔에 `Server ready: ws://127.0.0.1:<port>`가 출력됩니다. 클라이언트가 연결된 동안 터미널을 열어 둡니다. Ctrl+C를 누르면 node를 중지하고 이번 실행의 Redis Compose 프로젝트를 삭제합니다.
+실행 스크립트는 Redis, API node, Play node A와 B, Matchmaker, Session을 시작합니다. 모든 node가 준비되면 콘솔에 `Server ready: ws://127.0.0.1:<port>`가 출력됩니다. 클라이언트가 연결된 동안 터미널을 열어 둡니다. Ctrl+C를 누르면 node를 중지하고 이번 실행의 Redis Compose 프로젝트를 삭제합니다.
 
-다른 터미널에서 `./run-e2e.sh` 또는 `.\run-e2e.cmd`를 실행합니다. PowerShell 스크립트를 직접 실행하려면 `pwsh -NoProfile -ExecutionPolicy Bypass -File ./run-server.ps1`과 `pwsh -NoProfile -ExecutionPolicy Bypass -File ./run-e2e.ps1`을 사용합니다. `run-server`로 시작한 서버가 실행 중이면 e2e 실행은 해당 서버에 대해 테스트 클라이언트만 실행하고 서버를 유지합니다. 이때 `table`, `reconnect`, `match`, `match-cancel`을 실행합니다. `--scenario match` 또는 `-Scenario match`로 시나리오를 선택합니다. `--attach` 또는 `-Attach`를 추가하면 기존 서버가 반드시 있어야 합니다. `update`는 node를 교체하므로 서버가 실행 중이지 않고 e2e 실행이 자체 서버를 시작할 때만 실행됩니다.
+다른 터미널에서 `./run-e2e.sh` 또는 `.\run-e2e.cmd`를 실행합니다. PowerShell 스크립트를 직접 실행하려면 `pwsh -NoProfile -ExecutionPolicy Bypass -File ./run-server.ps1`과 `pwsh -NoProfile -ExecutionPolicy Bypass -File ./run-e2e.ps1`을 사용합니다. `run-server`로 시작한 서버가 실행 중이면 e2e 실행은 해당 서버에 대해 테스트 클라이언트만 실행하고 서버를 유지합니다. 이때 `table`, `reconnect`, `match`, `match-cancel`, `persist`를 실행합니다. `--scenario match` 또는 `-Scenario match`로 시나리오를 선택합니다. `--attach` 또는 `-Attach`를 추가하면 기존 서버가 반드시 있어야 합니다. `update`는 node를 교체하므로 서버가 실행 중이지 않고 e2e 실행이 자체 서버를 시작할 때만 실행됩니다.
 
 ## 클라이언트 연결
 
@@ -138,6 +140,10 @@ Matchmaker는 SpotWide Pool `pool-board`를 실행합니다. `FindMatch`는 `Mat
 
 `server/matchmaker`에는 메모리 내 queue와 `MatchRule` 매칭 정책이 있습니다. `MatchRule`을 바꾸면 대기 중인 플레이어의 매칭 방식을 변경할 수 있습니다. Pool은 ticket 전이와 할당 결정을 소유합니다. Table은 준비된 참가자를 확인하고 게임을 실행합니다.
 
+## API node
+
+Play는 Player Actor가 착석하거나 매칭 대기열에 들어가기 전에 `loadPlayer`를 한 번 호출하고 칩을 Actor 상태에 보관합니다. Table은 정산 때 모든 좌석 결과를 ClientServer Channel의 `commitRound` 요청 한 번으로 보냅니다. API node는 테이블과 판 번호가 같은 요청을 중복으로 판정하고, Redis 트랜잭션 하나로 칩을 저장합니다. Play는 응답을 받은 뒤 정산 결과를 보냅니다.
+
 ## End-to-end 시나리오
 
 Docker는 Java e2e runner와 모든 node 역할을 컨테이너에서 실행합니다. node는 runner의 네트워크 네임스페이스를 공유하고 기존 stdin/stdout 제어 프로토콜을 유지합니다. Docker 소켓은 runner만 마운트합니다. 각 실행은 자신의 컨테이너, 네트워크와 이미지 태그를 삭제하며 로그는 `.logs/` 아래에 남습니다.
@@ -150,14 +156,14 @@ Linux 또는 WSL:
 
 ```sh
 ./run-e2e.sh
-./run-e2e.sh --scenario table,reconnect,match,match-cancel,update
+./run-e2e.sh --scenario table,reconnect,match,match-cancel,persist,update
 ```
 
 Windows:
 
 ```powershell
 .\run-e2e.cmd
-.\run-e2e.cmd -Scenario table,reconnect,match,match-cancel,update
+.\run-e2e.cmd -Scenario table,reconnect,match,match-cancel,persist,update
 ```
 
 runner는 `zlink.structure.json`을 검증하고 격리된 배포가 필요하면 로컬 서버와 같은 Java server host를 사용합니다. 격리된 각 실행은 OS가 할당한 포트와 고유한 Redis 키 접두사를 사용합니다. server host는 적용된 설정과 각 node의 stdout, stderr, Framework message-flow 파일(`<node>.flow.log`)을 `.logs/run-<id>/` 아래에 보관합니다. 독립 실행 콘솔에는 서버와 게임 이벤트가 표시됩니다. 정리에 실패하면 종료 코드가 1이 됩니다.
@@ -168,6 +174,7 @@ runner는 `zlink.structure.json`을 검증하고 격리된 배포가 필요하�
 | `reconnect` | Session ID가 바뀌어도 Actor ID/generation, 좌석, 칩, 비공개 카드와 대기 중인 차례가 유지됩니다. 정산은 모든 패를 비우며 이후 비공개 패 조회는 빈 목록을 반환합니다. |
 | `match` | 대기열에 등록된 두 클라이언트가 같은 room에서 서로 다른 좌석을 받은 뒤 한 판을 완료합니다. |
 | `match-cancel` | 대기열에 등록된 클라이언트가 ticket을 취소합니다. 이후 두 클라이언트가 매칭되어 한 판을 완료합니다. |
+| `persist` | 별도 Play·Session에서 같은 플레이어 ID로 새 Actor를 만들고 기존 API node를 통해 정산된 칩을 읽습니다. |
 | `update` | drain, 다른 node에서의 정산, 원본 교체와 새 게임을 거치는 동안 Table 상태와 클라이언트 연결이 유지됩니다. 정산은 모든 패를 비우며 이후 비공개 패 조회는 빈 목록을 반환합니다. |
 
 `./run-e2e.sh --check-structure` 또는 `.\run-e2e.cmd -CheckStructure`로 Redis나 node를 시작하지 않고 실제 구조 파일을 검증할 수 있습니다.
@@ -192,12 +199,13 @@ Message Follow는 명시적으로 30초로 설정되어 있습니다. `SAFE_TO_S
 
 ## 배포 순서
 
-1. Redis를 준비하고 node 설정 파일에 배포별로 고유한 공유 키 접두사 하나를 사용합니다. 모든 node에서 접근할 수 있는 mesh 엔드포인트와 클라이언트가 접근할 수 있는 Session stream 엔드포인트를 설정합니다.
-2. `server/table/build/install/table/bin/table`을 `server/config/play-a.json`과 `server/config/play-b.json` 각각에 대해 별도 프로세스로 시작합니다. Windows 실행 파일에는 `.bat` 접미사가 붙습니다.
-3. `server/matchmaker/build/install/matchmaker/bin/matchmaker`를 `server/config/matchmaker.json`과 함께 시작합니다.
-4. `server/session/build/install/session/bin/session`을 `server/config/session.json`과 함께 시작합니다. 프로세스는 Framework가 실제로 바인딩한 엔드포인트와 함께 `READY`를 게시합니다.
-5. 선택한 Table 프로세스의 stdin에 `drain`을 보냅니다. `RELOCATION_REQUESTED`, `RELOCATED`, `SAFE_TO_SHUTDOWN`을 기다린 다음 `shutdown`을 보내고 `STOPPED`와 프로세스 종료를 기다립니다.
-6. 같은 설정으로 교체 Table 프로세스를 시작합니다. 새 작업을 제출하기 전에 `READY`를 기다립니다.
+1. Redis를 준비하고 node 설정 파일에 배포별로 고유한 공유 키 접두사 하나를 사용합니다. 게임 node가 접근할 수 있는 mesh 엔드포인트, Play가 접근할 수 있는 API 엔드포인트, 클라이언트가 접근할 수 있는 Session stream 엔드포인트를 설정합니다.
+2. `server/api/build/install/api/bin/api`를 `server/config/api.json`과 함께 시작합니다. Play는 공유 Location Store에서 API의 ClientServer 엔드포인트를 찾습니다.
+3. `server/table/build/install/table/bin/table`을 `server/config/play-a.json`과 `server/config/play-b.json` 각각에 대해 별도 프로세스로 시작합니다. Windows 실행 파일에는 `.bat` 접미사가 붙습니다.
+4. `server/matchmaker/build/install/matchmaker/bin/matchmaker`를 `server/config/matchmaker.json`과 함께 시작합니다.
+5. `server/session/build/install/session/bin/session`을 `server/config/session.json`과 함께 시작합니다. 프로세스는 Framework가 실제로 바인딩한 엔드포인트와 함께 `READY`를 게시합니다.
+6. 선택한 Table 프로세스의 stdin에 `drain`을 보냅니다. `RELOCATION_REQUESTED`, `RELOCATED`, `SAFE_TO_SHUTDOWN`을 기다린 다음 `shutdown`을 보내고 `STOPPED`와 프로세스 종료를 기다립니다.
+7. 같은 설정으로 교체 Table 프로세스를 시작합니다. 새 작업을 제출하기 전에 `READY`를 기다립니다.
 
 운영 환경의 실행 스크립트는 설정 파일을 직접 사용합니다. server host는 구조에서 node ID와 설정 경로를 도출하고 실행별 복사본에서만 Redis, 키 접두사와 리스너 엔드포인트 값을 교체합니다. 애플리케이션 transfer에는 Framework의 라우팅, membership 또는 lease 상태가 포함되지 않습니다.
 

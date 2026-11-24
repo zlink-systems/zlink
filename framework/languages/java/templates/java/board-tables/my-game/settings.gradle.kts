@@ -4,4 +4,4 @@ dependencyResolutionManagement { repositories { mavenCentral() } }
 
 rootProject.name = "my-game"
 
-include("server:shared", "server:session", "server:table", "server:matchmaker", "e2e")
+include("server:shared", "server:session", "server:table", "server:matchmaker", "server:api", "e2e")

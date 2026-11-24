@@ -9,7 +9,7 @@ Use [Client connection in README](README.md#client-connection) for this template
 Every server process in this project is a stateful ZLink node. Before writing code, decide which kind you are editing.
 
 - A game node is not a REST server. A player's state is owned by one session-bound Actor (or the Spot that owns a shared value). Load it once on connect; do not read the database while handling a request.
-- Write only results to the database, one transaction per round. Check duplicate requests in Actor or Spot memory.
+- Store round results in one database transaction. The API node deduplicates round commits by table ID and hand number. Actors and Spots deduplicate game requests they own in memory.
 - While a game is running, a Spot handler never awaits a remote request or a database reply: the await holds the Spot's turn and stops every message and timer in it. When a round ends, the Spot writes the results of all its Actors in one transaction, then tells each Actor after the commit.
 - Values many players see live in node memory or one owning Spot; values many requests update are applied by that one owning Spot. A process that does not own a value sends a request to its owner instead of writing it.
 - Spots and Actors already process one message at a time. Do not guard their state with locks, semaphores or process-wide static stores, and do not update memory from database commit hooks; the writer updates its owner's memory after commit, others send a message to the owner.
@@ -27,7 +27,7 @@ Details: [Stateful game nodes and the HTTP lobby](https://docs.zlink.systems/jav
 
 ## Project overview
 
-This Java 25 project is a board-table server example in which players sit at a Table, are dealt private cards, and bet in turn. It runs a Session gateway for connections, Play nodes A and B whose Tables are created on demand, a Matchmaker node, and Redis for location and relocation state. `build.gradle.kts` pins the ZLink Framework to `0.34.0` and the binding to `1.26.0`.
+This Java 25 project is a board-table server example in which players sit at a Table, are dealt private cards, and bet in turn. It runs a Session gateway for connections, Play nodes A and B whose Tables are created on demand, a Matchmaker node, an API node for player balances, and Redis for location, relocation and player records. `build.gradle.kts` pins the ZLink Framework to `0.34.0` and the binding to `1.26.0`.
 
 The project layout below describes where to add gameplay, and "Extend this template's domain" describes where to add new rules. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 
@@ -42,7 +42,7 @@ Default builds and isolated e2e run nodes and the client in Docker. Run these co
 ```powershell
 .\run-e2e.cmd -BuildOnly
 .\run-e2e.cmd
-.\run-e2e.cmd -Scenario table,reconnect,match,match-cancel,update
+.\run-e2e.cmd -Scenario table,reconnect,match,match-cancel,persist,update
 .\run-e2e.cmd -CheckStructure
 ```
 
@@ -51,7 +51,7 @@ Bash provides the same workflow:
 ```bash
 ./run-e2e.sh --build-only
 ./run-e2e.sh
-./run-e2e.sh --scenario table,reconnect,match,match-cancel,update
+./run-e2e.sh --scenario table,reconnect,match,match-cancel,persist,update
 ./run-e2e.sh --check-structure
 ```
 
@@ -67,6 +67,10 @@ For host process debugging, install JDK 25 and add `--local` or `-Local`. Add `-
 
 The Matchmaker node registers one Pool factory and starts the SpotWide `pool-board` Spot. `MatchQueue` owns the in-memory queue, and `MatchRule` selects the oldest eligible pair. Keep pairing policy in `MatchRule`. `Pool` prepares each room, receives the Actors' entry reports, and decides commit or withdrawal. A Player stores and forwards its own ticket and reports connection loss from its current Spot. The Table admits prepared members and assigns seats on commit.
 
+### API node
+
+Play calls `loadPlayer` once before the Actor enters a table or matchmaking. The Table calls `commitRound` once after settlement with all seat balances. The API node serves both requests on the `player-api` ClientServer Channel and implements the Redis transaction. Send settlement results after the API reply.
+
 ### Tables and players
 
 An Actor is a game state object addressed by ID; `Player` in `server/table/src/main/java/MyGame/table/Player.java` represents the connected player and reports a rejected admission through the bound Session. A Spot is a state object that accepts Actors and executes shared game rules; `Table` in `server/table/src/main/java/MyGame/table/Table.java` owns seats, chips, the pot, the turn, and the hand state (`TableState`).
@@ -79,7 +83,7 @@ An Actor is a game state object addressed by ID; `Player` in `server/table/src/m
 
 ### E2E client
 
-`e2e/src/main/java/MyGame/e2e/Client.java` connects through the public connector, and `e2e/src/main/java/MyGame/e2e/Scenarios.java` checks results observable by the client. `e2e/src/main/java/MyGame/e2e/ServerHost.java` owns node startup, control, logging, and cleanup for both launch modes. `e2e/src/main/java/MyGame/e2e/ServerControl.java` publishes a loopback control endpoint for the standalone server. `e2e/src/main/java/MyGame/e2e/Program.java` runs scenarios using the selected server. Scenario and cleanup failures set exit code 1. `e2e/src/main/java/MyGame/e2e/Structure.java` validates the actual files before startup. Keep the scenario order `table,reconnect,match,match-cancel,update`. Verify new gameplay through received client results; the project includes no separate unit-test module or formatter configuration.
+`e2e/src/main/java/MyGame/e2e/Client.java` connects through the public connector, and `e2e/src/main/java/MyGame/e2e/Scenarios.java` checks results observable by the client. `e2e/src/main/java/MyGame/e2e/ServerHost.java` owns node startup, control, logging, and cleanup for both launch modes. `e2e/src/main/java/MyGame/e2e/ServerControl.java` publishes a loopback control endpoint for the standalone server. `e2e/src/main/java/MyGame/e2e/Program.java` runs scenarios using the selected server. Scenario and cleanup failures set exit code 1. `e2e/src/main/java/MyGame/e2e/Structure.java` validates the actual files before startup. Keep the scenario order `table,reconnect,match,match-cancel,persist,update`. Verify new gameplay through received client results; the project includes no separate unit-test module or formatter configuration.
 
 ## ZLink concepts in this project
 

@@ -137,6 +137,7 @@ public final class Scenarios {
         var p1 = new Client(server.endpoint(), "p1-" + suffix, tableId);
         var p2 = new Client(server.endpoint(), "p2-" + suffix, tableId);
         Throwable primary = null;
+        SeatView persisted = null;
         try {
             boolean matching = id == Scenario.MATCH || id == Scenario.MATCH_CANCEL;
             TableView first;
@@ -319,6 +320,9 @@ public final class Scenarios {
                                 && emptyHand.cards().isEmpty(),
                         "Settlement did not clear every private hand");
             }
+            if (id == Scenario.PERSIST) {
+                persisted = result1.seats().get(first.yourSeat());
+            }
             if (id == Scenario.UPDATE) {
                 server.control().replace(before1.nodeId());
                 run(Scenario.TABLE, server, before1.nodeId());
@@ -338,6 +342,28 @@ public final class Scenarios {
             if (cleanup != null) {
                 if (primary != null) primary.addSuppressed(cleanup);
                 else throw cleanup;
+            }
+        }
+        if (id == Scenario.PERSIST) verifyReload(server, persisted);
+    }
+
+    private static void verifyReload(ServerControl.Connection server, SeatView balance)
+            throws Exception {
+        check(balance.chips() != Rules.INITIAL_CHIPS, "Test round did not change the balance");
+        try (var host = new ServerHost(server.root(), 0, false)) {
+            var fresh = host.startPersistenceProbe(server.endpoints());
+            try (var reconnected =
+                    new Client(
+                            fresh.endpoint(), balance.playerId(), "table-" + UUID.randomUUID())) {
+                var view = reconnected.connect();
+                check(
+                        reconnected.sessionInfo().actorId().equals(balance.playerId()),
+                        "New Actor has the wrong player ID");
+                var seat = view.seats().get(view.yourSeat());
+                check(
+                        seat.playerId().equals(balance.playerId()),
+                        "Reloaded seat has the wrong player ID");
+                check(seat.chips() == balance.chips(), "New Actor did not load the settled chips");
             }
         }
     }

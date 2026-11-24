@@ -11,9 +11,11 @@ import java.util.concurrent.*;
 @ZLinkHandlerGroup(Names.PLAYER)
 public final class Join {
     private final ZLinkSpotManager spots;
+    private final PlayerApi players;
 
-    public Join(ZLinkSpotManager spots) {
+    public Join(ZLinkSpotManager spots, PlayerApi players) {
         this.spots = spots;
+        this.players = players;
     }
 
     @ZLinkSpotActorSend
@@ -24,15 +26,18 @@ public final class Join {
         if (actor.state.joining != null || actor.state.ticketId != null) {
             return actor.reply(new ActionRejected(Rules.TABLE_FULL, 0));
         }
-        return spots.getOrCreate(request.tableId(), Names.TABLE)
-                .inMesh(Names.MESH)
-                .request(request)
-                .submit()
+        return actor.loadPlayer(players)
+                .thenCompose(
+                        ignored ->
+                                spots.getOrCreate(request.tableId(), Names.TABLE)
+                                        .inMesh(Names.MESH)
+                                        .request(request)
+                                        .submit())
                 .thenAccept(
                         created -> {
                             if (created.state() == ZLinkSpotCreateState.REJECTED)
                                 throw new IllegalStateException("Table creation rejected");
-                            actor.joinTable(request);
+                            actor.joinTable(request.tableId());
                         });
     }
 }

@@ -9,13 +9,13 @@
         "./run-server.sh",
         "./run-e2e.sh --build-only",
         "./run-e2e.sh",
-        "./run-e2e.sh --scenario table,reconnect,match,match-cancel,update"
+        "./run-e2e.sh --scenario table,reconnect,match,match-cancel,persist,update"
       ],
       "powershell": [
         ".\\run-server.cmd",
         ".\\run-e2e.cmd -BuildOnly",
         ".\\run-e2e.cmd",
-        ".\\run-e2e.cmd -Scenario table,reconnect,match,match-cancel,update"
+        ".\\run-e2e.cmd -Scenario table,reconnect,match,match-cancel,persist,update"
       ]
     },
     "scenarios": [
@@ -23,6 +23,7 @@
       "reconnect",
       "match",
       "match-cancel",
+      "persist",
       "update"
     ]
   },
@@ -58,13 +59,38 @@
       "config": "server/config/matchmaker.json"
     },
     {
+      "id": "api",
+      "role": "api",
+      "title": "API node (Actor DB)",
+      "config": "server/config/api.json"
+    },
+    {
       "id": "location",
       "role": "location-store",
-      "title": "Location Store",
+      "title": "Redis",
       "config": "docker-compose.yml"
     }
   ],
-  "channels": [],
+  "channels": [
+    {
+      "name": "player-api",
+      "owner": "playA",
+      "kind": "client-server",
+      "role": "client"
+    },
+    {
+      "name": "player-api",
+      "owner": "playB",
+      "kind": "client-server",
+      "role": "client"
+    },
+    {
+      "name": "player-api",
+      "owner": "api",
+      "kind": "client-server",
+      "role": "server"
+    }
+  ],
   "spots": [
     {
       "id": "table-entry-a",
@@ -119,6 +145,21 @@
       "from": "matchmaker",
       "to": "playA",
       "label": "room preparation"
+    },
+    {
+      "from": "playA",
+      "to": "api",
+      "label": "loadPlayer / commitRound"
+    },
+    {
+      "from": "playB",
+      "to": "api",
+      "label": "loadPlayer / commitRound"
+    },
+    {
+      "from": "api",
+      "to": "location",
+      "label": "Player records / round results"
     }
   ]
 }

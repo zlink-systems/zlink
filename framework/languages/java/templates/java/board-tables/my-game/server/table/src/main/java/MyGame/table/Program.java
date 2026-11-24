@@ -5,6 +5,7 @@ import MyGame.*;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 
+import systems.zlink.framework.channels.ZLinkRouteClient;
 import systems.zlink.framework.locations.redis.*;
 import systems.zlink.framework.spring.*;
 
@@ -14,6 +15,11 @@ import java.util.Arrays;
 @SpringBootApplication(proxyBeanMethods = false)
 public class Program {
     @Bean
+    public PlayerApi playerApi(ZLinkRouteClient client) {
+        return new ChannelPlayerApi(client);
+    }
+
+    @Bean
     public ZLinkFrameworkConfigurer framework(
             NodeConfig config,
             ZLinkRedisLocationStore locations,
@@ -21,6 +27,8 @@ public class Program {
         return options -> {
             Hosting.configure(options, locations, relocations);
             options.addHandlersFromPackageOf(Program.class);
+            var api = options.addClientServerChannel(Names.API).client();
+            if (config.apiEndpoint() != null) api.connect(config.apiEndpoint());
             options.addRouteMesh(Names.MESH)
                     .listen(config.meshEndpoint())
                     .setRoutingIdPrefix(config.id())

@@ -25,6 +25,11 @@ public final class Player implements ZLinkActor {
         return context;
     }
 
+    CompletionStage<Void> loadPlayer(PlayerApi players) {
+        if (state.chips != null) return CompletableFuture.completedFuture(null);
+        return players.loadPlayer(context.actorId()).thenAccept(chips -> state.chips = chips);
+    }
+
     CompletionStage<Void> find() {
         state.disconnected = false;
         if (state.ticketId != null) return reply(new MatchQueued(state.ticketId));
@@ -98,8 +103,8 @@ public final class Player implements ZLinkActor {
         continueJoining();
     }
 
-    void joinTable(JoinTableRequest request) {
-        context.joinSpot(request.tableId(), request).defer();
+    void joinTable(String tableId) {
+        requestAdmission(tableId);
         state.joining = LEGACY_JOIN;
     }
 
@@ -116,12 +121,14 @@ public final class Player implements ZLinkActor {
         }
         var assignment = state.assignment;
         if (assignment != null && isCurrent(assignment.ticketId())) {
-            context.joinSpot(
-                            assignment.roomId(),
-                            new JoinTableRequest(context.actorId(), assignment.roomId()))
-                    .defer();
+            requestAdmission(assignment.roomId());
             state.joining = assignment.assignmentId();
         }
+    }
+
+    private void requestAdmission(String tableId) {
+        context.joinSpot(tableId, new TableAdmission(context.actorId(), tableId, state.chips))
+                .defer();
     }
 
     public CompletionStage<Void> onJoinCompleted(ZLinkActorJoinCompletion completion) {
@@ -168,6 +175,16 @@ public final class Player implements ZLinkActor {
         if (state.disconnected) return CompletableFuture.completedFuture(null);
         return reply(new MatchFound(assignment.ticketId(), view.tableId(), view.yourSeat()))
                 .thenCompose(ignored -> reply(view));
+    }
+
+    CompletionStage<Void> settled(HandResult result) {
+        state.chips =
+                result.seats().stream()
+                        .filter(seat -> context.actorId().equals(seat.playerId()))
+                        .findFirst()
+                        .orElseThrow()
+                        .chips();
+        return reply(result);
     }
 
     CompletionStage<Void> reply(Object message) {
