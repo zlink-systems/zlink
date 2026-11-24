@@ -42,10 +42,6 @@ const DEFAULT_USER_SPOT_CLEANUP_TIMEOUT_MS = 1_000;
 const DEFAULT_USER_SPOT_POLL_INTERVAL_MS = 10;
 
 export interface ZLinkUserSpotCreationCoordinatorOptions {
-  readonly relocationPolicy?: (
-    meshName: string | undefined,
-    stableType: string
-  ) => import('../locations/internal-location-contracts').ZLinkObjectReserveRequest['actorRelocationPolicy'];
   readonly store: ZLinkObjectCreationStore & ZLinkAuthorityStore;
   readonly leaseTracker: Pick<ZLinkOwnerLeaseTracker, 'isOwnerTokenLive'>;
   readonly target: (
@@ -142,27 +138,27 @@ export class ZLinkUserSpotCreationCoordinator {
     let target: Awaited<ReturnType<ZLinkUserSpotCreationCoordinatorOptions['target']>>;
     let reserved: ZLinkObjectReserveResult;
     for (;;) {
+      let placement: ReturnType<ZLinkUserSpotCreationCoordinatorOptions['target']> | undefined;
+      const selectTarget = () =>
+        (placement ??= this.options.target(request, signal, excludedHostRuns).catch((error) => {
+          if (error instanceof ZLinkFrameworkException) throw error;
+          throw createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.RequestFailed,
+            'User Spot placement provider failed.',
+            false,
+            error
+          );
+        }));
       try {
-        const spot = await this.awaitReady(request, signal, excludedHostRuns);
+        const spot = await this.awaitReady(request, signal, excludedHostRuns, selectTarget);
         if (spot !== undefined) {
           deadline.close();
           return { result: { spot, state: ZLinkSpotCreateState.Existing }, spot };
         }
+        target = await selectTarget();
       } catch (error) {
         deadline.close();
         throw error;
-      }
-      try {
-        target = await this.options.target(request, signal, excludedHostRuns);
-      } catch (error) {
-        deadline.close();
-        if (error instanceof ZLinkFrameworkException) throw error;
-        throw createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.RequestFailed,
-          'User Spot placement provider failed.',
-          false,
-          error
-        );
       }
       if (target === undefined) {
         try {
@@ -193,10 +189,6 @@ export class ZLinkUserSpotCreationCoordinator {
         reserved = await this.options.store.reserve(
           {
             key: { kind: 'user_spot', globalId: String(request.spotId) },
-            actorRelocationPolicy: this.options.relocationPolicy?.(
-              target.meshName,
-              request.stableType
-            ),
             intent: {
               stableType: request.stableType,
               requestContentReference: contentReference,
@@ -724,7 +716,8 @@ export class ZLinkUserSpotCreationCoordinator {
   private async awaitReady(
     request: ZLinkUserSpotCreationRequest,
     signal: AbortSignal,
-    excludedHostRuns: Map<string, bigint>
+    excludedHostRuns: Map<string, bigint>,
+    selectTarget: () => ReturnType<ZLinkUserSpotCreationCoordinatorOptions['target']>
   ): Promise<SpotRef | undefined> {
     const key = encodeAuthorityKey('user_spot', String(request.spotId));
     for (;;) {
@@ -758,15 +751,25 @@ export class ZLinkUserSpotCreationCoordinator {
             'User Spot creation requires repository ended-owner release support.'
           );
         }
+        const target = current.allocation.state === 'active' ? await selectTarget() : undefined;
         if (
-          await release.call(this.options.store, key, current.storeVersion.value, signal, {
-            key: { kind: 'user_spot', globalId: String(request.spotId) },
-            intent: { stableType: request.stableType },
-            actorRelocationPolicy: this.options.relocationPolicy?.(
-              request.meshName,
-              request.stableType
-            )
-          })
+          await release.call(
+            this.options.store,
+            key,
+            current.storeVersion.value,
+            signal,
+            target === undefined
+              ? undefined
+              : {
+                  key: { kind: 'user_spot', globalId: String(request.spotId) },
+                  intent: { stableType: request.stableType },
+                  target: {
+                    meshName: target.meshName,
+                    nodeRid: target.nodeRid,
+                    nodeLifecycleGeneration: target.nodeGeneration
+                  }
+                }
+          )
         )
           continue;
         const confirmed = await this.options.store.readAuthority(key, signal);

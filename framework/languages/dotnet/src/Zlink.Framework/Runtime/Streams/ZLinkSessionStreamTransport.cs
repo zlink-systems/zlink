@@ -33,7 +33,9 @@ internal sealed class ZLinkSessionStreamTransport(
     {
         if (header.Kind is not (ZlinkStreamMessageKind.Response or ZlinkStreamMessageKind.Error))
             return SubmitAsync(frame, cancellationToken);
-        return context.Runtime.SubmitStreamReplyAsync(
+
+        var authentication = context.AuthenticationAdmissionForReply(header);
+        var submission = context.Runtime.SubmitStreamReplyAsync(
             context,
             header,
             normalized =>
@@ -56,6 +58,18 @@ internal sealed class ZLinkSessionStreamTransport(
                 }
             }
         );
+        return authentication is null
+            ? submission
+            : ReleaseAfterSubmitAsync(submission, authentication);
+    }
+
+    private static async Task ReleaseAfterSubmitAsync(
+        Task submission,
+        ZLinkAuthenticationAdmission.Lease authentication
+    )
+    {
+        await submission.ConfigureAwait(false);
+        authentication.Release();
     }
 
     internal static Task SubmitAsync(
@@ -102,10 +116,32 @@ internal sealed class ZLinkSessionStreamTransport(
         if (requestHeader.RequestSeq is null)
             return ValueTask.CompletedTask;
 
-        var reply = ZLinkActorReply.FromError(exception);
-        var header = reply.CreateResponseHeader(requestHeader);
-        var frame = reply.EncodeFrame(header);
-        return SendReplyAsync(Message.From(frame), cancellationToken, header);
+        var (header, frame) = EncodeError(requestHeader, exception, ZlinkStreamMetadata.Empty);
+        return SendReplyAsync(frame, cancellationToken, header);
+    }
+
+    internal static (ZlinkStreamHeader Header, Message Frame) EncodeError(
+        ZlinkStreamHeader requestHeader,
+        Exception exception,
+        ZlinkStreamMetadata metadata
+    )
+    {
+        var header = ZLinkStreamReplyHeaders.CreateForRequest(
+            requestHeader,
+            ZlinkStreamMessageKind.Error,
+            ZlinkStreamCodec.Json,
+            ZlinkStreamHeaderFlags.None,
+            requestHeader.RequestSeq!.Value,
+            metadata
+        );
+        var payload = ZLinkEnvelopeCodec.EncodeProtocolJsonBytes(
+            ZLinkStreamWireError.FromException(exception)
+        );
+        var frame = ZLinkStreamFrameCodec.Encode(
+            ZLinkStreamProtocolDefaults.EncodeHeader(header).Span,
+            payload
+        );
+        return (header, Message.From(frame));
     }
 
     private async ValueTask SendReplyAsync(

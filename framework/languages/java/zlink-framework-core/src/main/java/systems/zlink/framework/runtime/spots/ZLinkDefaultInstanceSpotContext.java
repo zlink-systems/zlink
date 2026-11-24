@@ -94,14 +94,23 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
                         host.infrastructureExecutor(), ZLinkExecutionLanePolicy.spot());
         this.handlerInstances = host.createHandlerInstances();
         this.outbound = host.createContextOutbound(backendSpot, nodeRid);
+        execution = host.execution(this);
         this.timers =
                 host.createTimerRegistry(
                         backendSpot.spotId(),
                         handlerInstances,
-                        (timerName, operation) ->
-                                enqueueDispatch(() -> host.runWithOutbound(outbound, operation)));
-        execution = host.execution(this);
+                        ZLinkSpotTimerRegistry.Dispatch.withExecution(
+                                () -> execution,
+                                (timerName, operation) ->
+                                        enqueueDispatch(
+                                                () -> host.runWithOutbound(outbound, operation))));
         ZLinkSpotCloseCallAccess.executionPolicy(dispatchQueue, execution);
+        if (execution != null)
+            execution.onResume(
+                    () -> {
+                        dispatchQueue.resumePending();
+                        timers.resumePending();
+                    });
     }
 
     void bind(ZLinkInstanceSpot value, ZLinkInstanceSpotActivation owner) {

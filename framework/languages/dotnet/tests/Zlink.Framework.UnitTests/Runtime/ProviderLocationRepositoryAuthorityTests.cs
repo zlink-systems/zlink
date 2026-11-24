@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.AspNetCore;
+using Zlink.Framework.Internal;
 using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Backend.Contracts;
@@ -756,6 +757,113 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
         );
     }
 
+    internal static async Task<ZLinkObjectReservation> SeedExpiredPlayerAsync(
+        IZLinkLocationRepository repository,
+        ManualTimeProvider time,
+        string actorId
+    )
+    {
+        var oldOwner = await repository.ClaimLiveOwnerAsync("ended-play", TimeSpan.FromSeconds(1));
+        var oldPlay = Descriptor("source", oldOwner) with { MeshName = "entry" };
+        Assert.Equal(
+            ZLinkLocationWriteStatus.Stored,
+            (
+                await repository.UpdateMeshNodeAsync(oldPlay, ZLinkLocationWriteIntent.NewClaim)
+            ).Status
+        );
+        var request = Reservation(actorId, oldPlay, oldOwner);
+        var prior = Assert
+            .IsType<ZLinkObjectReserveResult.Reserved>(await repository.ReserveAsync(request))
+            .Reservation;
+        Assert.IsType<ZLinkObjectCommitResult.Committed>(
+            await repository.CommitAsync(
+                prior,
+                ActorPayload(actorId, oldPlay, oldOwner, ZLinkActorAuthorityState.Ready)
+            )
+        );
+        time.Advance(TimeSpan.FromSeconds(2));
+
+        return prior;
+    }
+
+    [Fact]
+    public async Task EndedActorReleaseRejectsChangedFactoryTargetDescriptor()
+    {
+        var time = new ManualTimeProvider();
+        var inner = new ZLinkInMemoryProviderLocationStore(time);
+        var provider = new InspectAuthorityBatchLocationStore(inner);
+        var repository = new ZLinkProviderLocationRepository(provider, time);
+        var oldOwner = await ClaimAsync(repository, "target-fence-old");
+        var oldDescriptor = Descriptor("source", oldOwner);
+        await repository.UpdateMeshNodeAsync(oldDescriptor, ZLinkLocationWriteIntent.NewClaim);
+        var original = Reservation("target-fence-player", oldDescriptor, oldOwner);
+        var prior = Assert
+            .IsType<ZLinkObjectReserveResult.Reserved>(await repository.ReserveAsync(original))
+            .Reservation;
+        var committed = Assert
+            .IsType<ZLinkObjectCommitResult.Committed>(
+                await repository.CommitAsync(
+                    prior,
+                    ActorPayload(
+                        "target-fence-player",
+                        oldDescriptor,
+                        oldOwner,
+                        ZLinkActorAuthorityState.Ready
+                    )
+                )
+            )
+            .Snapshot;
+        await repository.ReleaseOwnerLeaseAsync(oldOwner);
+
+        var newOwner = await ClaimAsync(repository, "target-fence-new");
+        var target = Descriptor("target", newOwner);
+        await repository.UpdateMeshNodeAsync(target, ZLinkLocationWriteIntent.NewClaim);
+        var next = Reservation("target-fence-player", target, newOwner);
+        await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await repository.ReserveAsync(next)
+        );
+        time.Advance(TimeSpan.FromSeconds(15));
+
+        var changed = false;
+        provider.Inspect = async write =>
+        {
+            if (!write.Mutations.OfType<ZLinkStoreMutation.Delete>().Any())
+                return;
+            provider.Inspect = null;
+            var key = ZLinkProviderLocationRepository.MeshKey(target.MeshName, target.Rid);
+            var read = Assert.IsType<ZLinkStoreReadResult.Found>(await inner.ReadAsync(key));
+            var row = JsonNode.Parse(read.Value.Bytes.Span)!;
+            row["descriptor"]!["objectCapabilities"]![0]!["policy"] = "recreate";
+            Assert.IsType<ZLinkStoreWriteResult.Applied>(
+                await inner.WriteAsync(
+                    new ZLinkStoreWriteRequest(
+                        [new ZLinkStoreCondition.Version(key, read.Value.Version)],
+                        [
+                            new ZLinkStoreMutation.Put(
+                                key,
+                                Encoding.UTF8.GetBytes(row.ToJsonString()),
+                                null
+                            ),
+                        ]
+                    )
+                )
+            );
+            changed = true;
+        };
+
+        var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await repository.ReserveAsync(next)
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
+        Assert.True(changed);
+        var retained = Assert
+            .IsType<ZLinkAuthorityReadResult.Found>(
+                await repository.ReadAuthorityAsync(original.Key)
+            )
+            .Snapshot;
+        Assert.Equal(committed.StoreVersion, retained.StoreVersion);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -807,7 +915,8 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
             await repository.ReadAuthorityAsync(request.Key)
         );
         var recovery = new ZLinkCreationAuthorityRecovery(
-            ZLinkObjectRelocationRegistration.DisabledPolicy
+            request.TargetDescriptor,
+            request.TargetNodeLifecycleGeneration
         );
         var waiting = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
             await repository.ReleaseEndedReservationAsync(
@@ -1103,10 +1212,7 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
             descriptor,
             nextOwner,
             ZLinkPlacementObjectKind.InstanceSpot
-        ) with
-        {
-            ObjectRelocationPolicy = ZLinkObjectRelocationRegistration.DisabledPolicy,
-        };
+        );
         if (outcome != "claimed")
             provider.Inspect = async write =>
             {
@@ -1170,16 +1276,16 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
     [InlineData((int)ZLinkPlacementObjectKind.UserSpot, "relocation", true)]
     [InlineData((int)ZLinkPlacementObjectKind.UserSpot, "typeMismatch", false)]
     [InlineData((int)ZLinkPlacementObjectKind.UserSpot, "typeMismatch", true)]
-    [InlineData((int)ZLinkPlacementObjectKind.UserSpot, "policySource", false)]
-    [InlineData((int)ZLinkPlacementObjectKind.UserSpot, "policySource", true)]
+    [InlineData((int)ZLinkPlacementObjectKind.UserSpot, "targetUnspecified", false)]
+    [InlineData((int)ZLinkPlacementObjectKind.UserSpot, "targetUnspecified", true)]
     [InlineData((int)ZLinkPlacementObjectKind.InstanceSpot, "aggregate", false)]
     [InlineData((int)ZLinkPlacementObjectKind.InstanceSpot, "aggregate", true)]
     [InlineData((int)ZLinkPlacementObjectKind.InstanceSpot, "relocation", false)]
     [InlineData((int)ZLinkPlacementObjectKind.InstanceSpot, "relocation", true)]
     [InlineData((int)ZLinkPlacementObjectKind.InstanceSpot, "typeMismatch", false)]
     [InlineData((int)ZLinkPlacementObjectKind.InstanceSpot, "typeMismatch", true)]
-    [InlineData((int)ZLinkPlacementObjectKind.InstanceSpot, "policySource", false)]
-    [InlineData((int)ZLinkPlacementObjectKind.InstanceSpot, "policySource", true)]
+    [InlineData((int)ZLinkPlacementObjectKind.InstanceSpot, "targetUnspecified", false)]
+    [InlineData((int)ZLinkPlacementObjectKind.InstanceSpot, "targetUnspecified", true)]
     public async Task EndedSpotRecreation(int objectKind, string scenario, bool inMemory)
     {
         var kind = (ZLinkPlacementObjectKind)objectKind;
@@ -1319,7 +1425,15 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
             await repository.ReleaseOwnerLeaseAsync(oldOwner);
         var newOwner = await ClaimAsync(repository, "ended-spot-new");
         var target = SpotReclaimDescriptor("target", newOwner, kind);
-        if (scenario == "policySource")
+        if (scenario == "unregistered")
+            target = target with
+            {
+                ObjectCapabilities = target
+                    .ObjectCapabilities.Where(capability => capability.ObjectKind != kind)
+                    .ToArray(),
+                Capacity = target.Capacity with { SpotTypes = [] },
+            };
+        if (scenario is "recreate" or "targetUnspecified")
             target = target with
             {
                 ObjectCapabilities = target
@@ -1327,29 +1441,18 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
                         capability.ObjectKind == kind
                             ? capability with
                             {
-                                Policy = ZLinkObjectMaintenancePolicyKind.Recreate,
+                                Policy =
+                                    scenario == "recreate"
+                                        ? ZLinkObjectMaintenancePolicyKind.Recreate
+                                        : ZLinkObjectMaintenancePolicyKind.Unspecified,
                             }
                             : capability
                     )
                     .ToArray(),
             };
         _ = await repository.UpdateMeshNodeAsync(target, ZLinkLocationWriteIntent.NewClaim);
-        var next = Reservation(spotId, target, newOwner, kind) with
-        {
-            ObjectRelocationPolicy =
-                scenario == "unregistered" ? null
-                : scenario == "recreate" ? ZLinkObjectRelocationRegistration.RecreatePolicy
-                : ZLinkObjectRelocationRegistration.DisabledPolicy,
-        };
-        if (
-            scenario
-            is "expired"
-                or "race"
-                or "policySource"
-                or "member"
-                or "firstPageMember"
-                or "snapshotExpired"
-        )
+        var next = Reservation(spotId, target, newOwner, kind);
+        if (scenario is "expired" or "race" or "member" or "firstPageMember" or "snapshotExpired")
         {
             var waiting = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
                 await repository.ReserveAsync(next)
@@ -1388,15 +1491,7 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
                 )
                 .Snapshot.StoreVersion
         );
-        if (
-            scenario
-            is "expired"
-                or "race"
-                or "policySource"
-                or "member"
-                or "firstPageMember"
-                or "snapshotExpired"
-        )
+        if (scenario is "expired" or "race" or "member" or "firstPageMember" or "snapshotExpired")
         {
             var results =
                 scenario == "race"
@@ -1892,14 +1987,12 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
                 break;
             case "batchBound":
             case "batchFits":
-                // Batch keys: Spot authority, owner, descriptor and capacity,
-                // the member node's owner and capacity, and one authority per
-                // member. 2,042 members fill the 2,048-key bound exactly.
-                for (
-                    var index = 0;
-                    memberIds.Count < (scenario == "batchFits" ? 2042 : 2043);
-                    index++
-                )
+                // The Spot authority, owner, descriptor and capacity, the member
+                // node's owner and capacity, and the factory target descriptor
+                // occupy seven keys before counting each member's authority.
+                const int maximumMembers = ZLinkLocationStoreLimits.MaximumUniqueKeys - 7;
+                var memberCount = scenario == "batchFits" ? maximumMembers : maximumMembers + 1;
+                for (var index = 0; memberIds.Count < memberCount; index++)
                     memberIds.Add(
                         (await AddMemberAsync($"member-bulk-{index:D4}", spotDescriptor, spotOwner))
                             .Key
@@ -1931,10 +2024,7 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
             writes++;
             return Task.CompletedTask;
         };
-        var next = Reservation(spotId, liveDescriptor, liveOwner, kind) with
-        {
-            ObjectRelocationPolicy = ZLinkObjectRelocationRegistration.DisabledPolicy,
-        };
+        var next = Reservation(spotId, liveDescriptor, liveOwner, kind);
         var releaseWait = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
             await repository.ReserveAsync(next)
         );
@@ -1997,11 +2087,7 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
                 competingMember = Assert
                     .IsType<ZLinkObjectReserveResult.Reserved>(
                         await repository.ReserveAsync(
-                            Reservation("member-b", liveDescriptor, liveOwner) with
-                            {
-                                ObjectRelocationPolicy =
-                                    ZLinkObjectRelocationRegistration.DisabledPolicy,
-                            }
+                            Reservation("member-b", liveDescriptor, liveOwner)
                         )
                     )
                     .Reservation;
@@ -2143,10 +2229,7 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
         var newOwner = await ClaimAsync(repository, "ready-actor-new-owner");
         var newDescriptor = Descriptor("ready-actor-new", newOwner);
         await PublishAsync(repository, newDescriptor, ZLinkLocationWriteIntent.NewClaim);
-        var request = Reservation("ready-actor-delay", newDescriptor, newOwner) with
-        {
-            ObjectRelocationPolicy = ZLinkObjectRelocationRegistration.DisabledPolicy,
-        };
+        var request = Reservation("ready-actor-delay", newDescriptor, newOwner);
 
         var waiting = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
             await repository.ReserveAsync(request)
@@ -2223,10 +2306,7 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
         var newOwner = await ClaimAsync(repository, "nonsteady-actor-new-owner");
         var newDescriptor = Descriptor("nonsteady-actor-new", newOwner);
         await PublishAsync(repository, newDescriptor, ZLinkLocationWriteIntent.NewClaim);
-        var request = Reservation("nonsteady-actor", newDescriptor, newOwner) with
-        {
-            ObjectRelocationPolicy = ZLinkObjectRelocationRegistration.DisabledPolicy,
-        };
+        var request = Reservation("nonsteady-actor", newDescriptor, newOwner);
 
         var unavailable = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
             await repository.ReserveAsync(request)
@@ -2273,10 +2353,7 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
         var newOwner = await ClaimAsync(repository, "restarted-actor-new-owner");
         var newDescriptor = Descriptor("restarted-actor-new", newOwner);
         await PublishAsync(repository, newDescriptor, ZLinkLocationWriteIntent.NewClaim);
-        var request = Reservation("restarted-actor", newDescriptor, newOwner) with
-        {
-            ObjectRelocationPolicy = ZLinkObjectRelocationRegistration.DisabledPolicy,
-        };
+        var request = Reservation("restarted-actor", newDescriptor, newOwner);
 
         _ = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
             await repository.ReserveAsync(request)
@@ -2363,10 +2440,7 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
             newDescriptor,
             newOwner,
             ZLinkPlacementObjectKind.UserSpot
-        ) with
-        {
-            ObjectRelocationPolicy = ZLinkObjectRelocationRegistration.DisabledPolicy,
-        };
+        );
         var scanStarted = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
@@ -2460,10 +2534,7 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
             newDescriptor,
             newOwner,
             ZLinkPlacementObjectKind.UserSpot
-        ) with
-        {
-            ObjectRelocationPolicy = ZLinkObjectRelocationRegistration.DisabledPolicy,
-        };
+        );
         var before = Assert.IsType<ZLinkAuthorityReadResult.Found>(
             await repository.ReadAuthorityAsync(spot.Reservation.Key)
         );
@@ -2678,10 +2749,7 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
         var oldOwner = await ClaimAsync(repository, "reclaim-old");
         var oldDescriptor = Descriptor("source", oldOwner, 1);
         _ = await repository.UpdateMeshNodeAsync(oldDescriptor, ZLinkLocationWriteIntent.NewClaim);
-        var request = Reservation("reclaim-actor", oldDescriptor, oldOwner) with
-        {
-            ObjectRelocationPolicy = ZLinkObjectRelocationRegistration.DisabledPolicy,
-        };
+        var request = Reservation("reclaim-actor", oldDescriptor, oldOwner);
         var first = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
             await repository.ReserveAsync(request)
         );
@@ -2727,12 +2795,23 @@ public sealed partial class ProviderLocationRepositoryAuthorityTests
             _ = await ClaimAsync(repository, oldOwner.OwnerId);
         var newOwner = await ClaimAsync(repository, "reclaim-new");
         var newDescriptor = Descriptor("target", newOwner, 1);
+        if (scenario is "recreate" or "relocationRecreate")
+            newDescriptor = newDescriptor with
+            {
+                ObjectCapabilities = newDescriptor
+                    .ObjectCapabilities.Select(capability =>
+                        capability.ObjectKind == ZLinkPlacementObjectKind.Actor
+                            ? capability with
+                            {
+                                Policy = ZLinkObjectMaintenancePolicyKind.Recreate,
+                            }
+                            : capability
+                    )
+                    .ToArray(),
+            };
         _ = await repository.UpdateMeshNodeAsync(newDescriptor, ZLinkLocationWriteIntent.NewClaim);
         var next = Reservation("reclaim-actor", newDescriptor, newOwner) with
         {
-            ObjectRelocationPolicy = scenario is "recreate" or "relocationRecreate"
-                ? ZLinkObjectRelocationRegistration.RecreatePolicy
-                : ZLinkObjectRelocationRegistration.DisabledPolicy,
             StableType = scenario == "typeMismatch" ? "different" : "player",
         };
         if (

@@ -90,6 +90,10 @@ public final class ZLinkRuntimeMetrics {
                 Kind.OBSERVABLE,
                 Unit.SECONDS,
                 Tag.STATE),
+        HOST_AUTHENTICATION_ADMISSION_IN_FLIGHT(
+                "zlink.host.authentication_admission.in_flight", Kind.OBSERVABLE, Unit.REQUEST),
+        HOST_AUTHENTICATION_ADMISSION_REJECTIONS(
+                "zlink.host.authentication_admission.rejections", Kind.COUNTER, Unit.REQUEST),
         HOST_APPLICATION_JOB_QUEUE_FLOW_STATE_CONFIG_FAILURES(
                 "zlink.host.application_job_queue.flow_state_config_failures",
                 Kind.COUNTER,

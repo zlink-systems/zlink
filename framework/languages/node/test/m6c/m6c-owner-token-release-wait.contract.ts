@@ -22,10 +22,7 @@ for (const backend of ['provider', 'memory'] as const) {
 
     const store = repository();
     const target = await seed(store);
-    const request = (id: string) => ({
-      ...reserveRequest(id, target),
-      actorRelocationPolicy: 'disabled' as const
-    });
+    const request = (id: string) => reserveRequest(id, target);
     const waiting = (observer: typeof store, id: string) =>
       assert.rejects(
         observer.reserve(request(id)),

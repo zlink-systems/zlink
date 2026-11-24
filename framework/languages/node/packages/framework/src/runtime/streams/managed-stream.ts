@@ -83,7 +83,8 @@ export class ZLinkManagedStream implements ZLinkStream {
     private readonly publicSessionId = streamSessionIdFromRoutingId(backendSessionRoutingId),
     private readonly nativeSessionRouteForMesh?: (
       meshName: string
-    ) => ZLinkNativeSessionRoute | undefined
+    ) => ZLinkNativeSessionRoute | undefined,
+    private readonly onTransportClosed?: () => void
   ) {}
 
   get sessionId(): string {
@@ -154,17 +155,9 @@ export class ZLinkManagedStream implements ZLinkStream {
       : (payload) => enqueue(() => this.submitRaw(payload));
   }
 
-  async submitRaw(payload: Message): Promise<ZLinkSubmitResult> {
-    if (this.isShutdownForced()) return { status: ZLinkSubmitStatus.Shutdown };
-    try {
-      await this.socket.submit(this.backendRoutingId(), payload);
-      return { status: ZLinkSubmitStatus.Submitted };
-    } catch (error) {
-      if (isZLinkBackendResultError(error) && error.operation === 'submit') {
-        return classifySubmitResult(error.result, 'STREAM submit', error.phase);
-      }
-      throw error;
-    }
+  submitRaw(payload: Message): Promise<ZLinkSubmitResult> {
+    if (this.isShutdownForced()) return Promise.resolve({ status: ZLinkSubmitStatus.Shutdown });
+    return submitStreamRaw(this.socket, this.backendSessionRoutingId, payload);
   }
 
   async submitBoundActor(actorId: string, parts: readonly Message[]): Promise<ZLinkSubmitResult> {
@@ -463,7 +456,9 @@ export class ZLinkManagedStream implements ZLinkStream {
 
   /** @internal Marks transport teardown before asynchronous lifecycle cleanup begins. */
   markTransportClosed(): void {
+    if (this.transportClosed) return;
     this.transportClosed = true;
+    this.onTransportClosed?.();
   }
 
   private hasNativeBinding(
@@ -522,6 +517,22 @@ export class ZLinkManagedStream implements ZLinkStream {
           }
         : undefined)
     );
+  }
+}
+
+export async function submitStreamRaw(
+  socket: ZLinkBackendStreamSocket,
+  routingId: unknown,
+  payload: Message
+): Promise<ZLinkSubmitResult> {
+  try {
+    await socket.submit(routingId as never, payload);
+    return { status: ZLinkSubmitStatus.Submitted };
+  } catch (error) {
+    if (isZLinkBackendResultError(error) && error.operation === 'submit') {
+      return classifySubmitResult(error.result, 'STREAM submit', error.phase);
+    }
+    throw error;
   }
 }
 

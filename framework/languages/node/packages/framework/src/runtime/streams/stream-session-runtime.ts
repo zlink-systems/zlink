@@ -62,6 +62,7 @@ import {
   ZLinkFrameworkInternalErrorKind
 } from '../framework-errors-internal';
 import { wrapFrameworkPayloadMessage } from '../messaging/payload-codec';
+import type { ZLinkAuthenticationAdmission } from './authentication-admission';
 import { boundSessionErrorPayload } from './bound-session-response-target';
 import {
   streamSessionIdFromRoutingId,
@@ -162,6 +163,7 @@ export interface ZLinkStreamSessionNodeRuntimeOptions extends ZLinkStreamSession
   readonly createPacket: () => ZLinkBackendStreamPacket;
   readonly monitor?: ZLinkBackendSocketMonitor;
   readonly applicationJobQueue: ApplicationJobQueuePort;
+  readonly authenticationAdmission?: ZLinkAuthenticationAdmission;
 }
 
 export class ZLinkStreamSessionRuntime {
@@ -169,6 +171,7 @@ export class ZLinkStreamSessionRuntime {
   readonly context: DefaultZLinkSessionContext;
   private creation: ZLinkStreamSessionCreation;
   private readonly serial = new ZLinkSessionSerialExecutor();
+  private authenticationTerminals: Set<() => void> | undefined;
   private connected = false;
   private disconnected = false;
   private disconnectQueued = false;
@@ -201,7 +204,8 @@ export class ZLinkStreamSessionRuntime {
       options.nativeSessionService,
       options.meshCompletions,
       undefined,
-      options.nativeSessionRouteForMesh
+      options.nativeSessionRouteForMesh,
+      () => this.completeAuthenticationRequests()
     );
     this.context = options.bindingRuntime.createSessionContext(
       this.stream,
@@ -390,13 +394,19 @@ export class ZLinkStreamSessionRuntime {
     payload: Message,
     decodedHeader: ZLinkStreamFrameHeader,
     terminalOwner?: ZLinkRetainedStreamOwner,
-    applicationJobPermit?: ApplicationJobPermitPort
+    applicationJobPermit?: ApplicationJobPermitPort,
+    releaseAuthentication?: () => void
   ): void {
     this.recordInbound();
+    const completeAdmission =
+      releaseAuthentication === undefined
+        ? undefined
+        : this.trackAuthentication(releaseAuthentication);
     let terminalReleased = false;
     const releaseTerminal = (): void => {
       if (terminalReleased) return;
       terminalReleased = true;
+      completeAdmission?.();
       terminalOwner?.close();
     };
     if (
@@ -423,7 +433,7 @@ export class ZLinkStreamSessionRuntime {
     this.enqueueApplication(
       async () => {
         try {
-          const dispatch = () => this.dispatchPacket(payload, decodedHeader);
+          const dispatch = () => this.dispatchPacket(payload, decodedHeader, completeAdmission);
           if (applicationJobPermit === undefined) await dispatch();
           else await runWithApplicationJobPermit(applicationJobPermit, dispatch);
         } finally {
@@ -442,6 +452,21 @@ export class ZLinkStreamSessionRuntime {
       },
       () => this.traceShutdownDrop(decodedHeader)
     );
+  }
+
+  private trackAuthentication(release: () => void): () => void {
+    const terminals = (this.authenticationTerminals ??= new Set());
+    const complete = (): void => {
+      if (terminals.delete(complete)) release();
+    };
+    terminals.add(complete);
+    if (this.stream.shutdownTransportClosed) complete();
+    return complete;
+  }
+
+  private completeAuthenticationRequests(): void {
+    if (this.authenticationTerminals === undefined) return;
+    for (const complete of this.authenticationTerminals) complete();
   }
 
   enqueueDisconnected(
@@ -519,6 +544,7 @@ export class ZLinkStreamSessionRuntime {
     }
     this.disposed = true;
     this.stream.shutdownSignal ??= shutdownSignal;
+    this.completeAuthenticationRequests();
     this.stopLivenessChecks();
     await this.waitForShutdown(this.serial.dispose());
     this.stream.markTransportClosed();
@@ -625,7 +651,8 @@ export class ZLinkStreamSessionRuntime {
 
   private async dispatchPacket(
     payload: Message,
-    decodedHeader: ZLinkStreamFrameHeader
+    decodedHeader: ZLinkStreamFrameHeader,
+    completeAdmission?: () => void
   ): Promise<void> {
     let dispatchPayload = payload;
     let enteredDispatch = false;
@@ -683,7 +710,7 @@ export class ZLinkStreamSessionRuntime {
         );
         return;
       }
-      this.context.enterDispatch(decodedHeader);
+      this.context.enterDispatch(decodedHeader, completeAdmission);
       enteredDispatch = true;
       const streamKind =
         decodedHeader.kind === ZLinkStreamMessageKind.Request
@@ -765,6 +792,7 @@ export class ZLinkStreamSessionRuntime {
         }
       );
     } catch (error) {
+      completeAdmission?.();
       if (this.stream.isShutdownForced()) return;
       this.options.dispatchErrors?.report({
         surface: ZLinkDispatchErrorSurface.StreamSession,
@@ -1412,6 +1440,7 @@ export class ZLinkStreamSessionNodeRuntime {
     let releasePermitOnFailure = true;
     let packetTransferred = false;
     let payload: Message | undefined;
+    let releaseAuthentication: (() => void) | undefined;
     let session: ZLinkStreamSessionRuntime | undefined;
     try {
       if (routingId === null || header === null || body === null) {
@@ -1428,6 +1457,21 @@ export class ZLinkStreamSessionNodeRuntime {
       } catch (error) {
         session = this.getOrCreateSession(routingId);
         throw error;
+      }
+      const admission = this.options.authenticationAdmission;
+      if (admission?.isAuthentication(decodedHeader) === true) {
+        releaseAuthentication = admission.tryAcquire();
+        if (releaseAuthentication === undefined) {
+          this.findSession(routingId)?.recordInbound();
+          permit.releaseAfterInternalProcessing();
+          releasePermitOnFailure = false;
+          void admission
+            .replyRejected(this.options.socket, routingId, decodedHeader)
+            .catch((error) => {
+              this.options.onError?.(error);
+            });
+          return;
+        }
       }
       payload = ownedMessage(body.data());
       if (decodedHeader.kind === ZLinkStreamMessageKind.Control) {
@@ -1465,7 +1509,14 @@ export class ZLinkStreamSessionNodeRuntime {
       const owner: ZLinkRetainedStreamOwner = {
         close: () => this.recyclePacket(packet)
       };
-      session.enqueuePacket(payload, decodedHeader, owner, applicationPermit);
+      session.enqueuePacket(
+        payload,
+        decodedHeader,
+        owner,
+        applicationPermit,
+        releaseAuthentication
+      );
+      releaseAuthentication = undefined;
       releasePermitOnFailure = false;
       payload = undefined;
       packetTransferred = true;
@@ -1487,6 +1538,7 @@ export class ZLinkStreamSessionNodeRuntime {
       throw failure;
     } finally {
       if (!packetTransferred) {
+        releaseAuthentication?.();
         if (releasePermitOnFailure) permit.releaseAfterInternalProcessing();
         payload?.close();
         this.recyclePacket(packet);

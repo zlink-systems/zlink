@@ -20,6 +20,7 @@ import type { ZLinkNetworkOptions } from './Builders';
 import { normalizeEndpoint, parseEndpointHostPort } from './EndpointNotation';
 import {
   defaultWorkerMaxThreads,
+  nodeEffectiveProcessorCount,
   DEFAULT_STREAM_NODE_MAX_MESSAGE_SIZE,
   DEFAULT_STREAM_HEARTBEAT_INTERVAL_MS,
   DEFAULT_STREAM_HEARTBEAT_TIMEOUT_MS,
@@ -101,18 +102,61 @@ export function normalizeStreamLiveness(
   return { heartbeatIntervalMs, heartbeatTimeoutMs, idleTimeoutMs };
 }
 
+export function normalizeStreamAuthenticationAdmission(options: ZLinkStreamNodeOptions): {
+  readonly authenticationPacketName?: string;
+  readonly maxConcurrentAuthentications: number;
+  readonly authenticationRetryDelayMs: number;
+} {
+  const authenticationPacketName = options.authenticationPacketName;
+  if (
+    authenticationPacketName !== undefined &&
+    (typeof authenticationPacketName !== 'string' || authenticationPacketName.trim().length === 0)
+  ) {
+    throw new ZLinkConfigurationException('STREAM authentication packet name is empty.');
+  }
+  const upperBound = 2_147_483_647;
+  for (const [key, value] of [
+    ['maxConcurrentAuthentications', options.maxConcurrentAuthentications],
+    ['authenticationRetryDelayMs', options.authenticationRetryDelayMs]
+  ] as const) {
+    if (value !== undefined && (!Number.isInteger(value) || value < 1 || value > upperBound)) {
+      throw new ZLinkConfigurationException(`STREAM ${key} must be an integer in 1..2147483647.`);
+    }
+  }
+  return {
+    authenticationPacketName,
+    maxConcurrentAuthentications:
+      options.maxConcurrentAuthentications ??
+      Math.min(Number(nodeEffectiveProcessorCount()) * 8, upperBound),
+    authenticationRetryDelayMs: options.authenticationRetryDelayMs ?? 500
+  };
+}
+
 export function toStreamNodeMap(
   streamNodes: ZLinkFrameworkRegistrationOptions['streamNodes'],
   network: ZLinkNetworkOptions
 ): Map<string, ZLinkStreamNodeOptions> {
+  let hostAdmission: ReturnType<typeof normalizeStreamAuthenticationAdmission> | undefined;
   return new Map(
     Object.entries(streamNodes ?? {}).map(([name, streamNode]) => {
       const normalized = normalizeListener(streamNode, network);
+      const admission = normalizeStreamAuthenticationAdmission(streamNode);
+      hostAdmission ??= admission;
+      if (
+        hostAdmission.authenticationPacketName !== admission.authenticationPacketName ||
+        hostAdmission.maxConcurrentAuthentications !== admission.maxConcurrentAuthentications ||
+        hostAdmission.authenticationRetryDelayMs !== admission.authenticationRetryDelayMs
+      ) {
+        throw new ZLinkConfigurationException(
+          'STREAM authentication admission settings must match across the host.'
+        );
+      }
       return [
         name,
         {
           ...normalized,
           ...normalizeStreamLiveness(streamNode),
+          ...admission,
           maxMessageSize: streamNode.maxMessageSize ?? DEFAULT_STREAM_NODE_MAX_MESSAGE_SIZE
         }
       ];
