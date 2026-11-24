@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 
 namespace Systems.Zlink.Stream.Connector.Runtime;
@@ -10,9 +11,12 @@ internal sealed class ZlinkStreamReceiveDispatcher(
     ZlinkStreamFrameSender frameSender,
     ZlinkStreamConnectorCallbacks callbacks,
     ZlinkStreamActors actors,
-    Func<ZlinkStreamCloseReason, string?, CancellationToken, ValueTask> closeFromServer
+    Func<ZlinkStreamCloseReason, string?, CancellationToken, ValueTask> closeFromServer,
+    ZlinkStreamRequestClock? requestClock = null
 )
 {
+    internal const string RetryAfterMetadataKey = "$zlink.admission.retryAfterMs";
+
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     public async ValueTask DispatchPacketAsync(
@@ -30,6 +34,12 @@ internal sealed class ZlinkStreamReceiveDispatcher(
 
         var actor = header.ActorSlot is { } actorSlot ? actors.Resolve(actorSlot) : null;
 
+        var receivedAt = header.Kind
+            is ZlinkStreamMessageKind.Response
+                or ZlinkStreamMessageKind.Error
+            ? (requestClock ?? ZlinkStreamRequestClock.System).Now
+            : default;
+
         if (header.Kind == ZlinkStreamMessageKind.Response)
         {
             var request = pending.TakeReply(header);
@@ -40,7 +50,15 @@ internal sealed class ZlinkStreamReceiveDispatcher(
             {
                 var decoded = frameSender.DecompressIfNeeded(header, frame.Payload);
                 request.Complete(
-                    new ZlinkStreamPendingCompletion(header, frame with { Payload = decoded }, null)
+                    new ZlinkStreamPendingCompletion(
+                        header,
+                        frame with
+                        {
+                            Payload = decoded,
+                        },
+                        null,
+                        receivedAt
+                    )
                 );
             }
             catch (ZlinkStreamException failure)
@@ -54,7 +72,8 @@ internal sealed class ZlinkStreamReceiveDispatcher(
                             : new ZlinkStreamError(
                                 ZlinkStreamErrorCode.Disconnected,
                                 "Connection ended before the reply completed."
-                            )
+                            ),
+                        receivedAt
                     )
                 );
                 if (failure.Error.Code != ZlinkStreamErrorCode.DecompressionFailed)
@@ -77,7 +96,9 @@ internal sealed class ZlinkStreamReceiveDispatcher(
         {
             var request = pending.TakeReply(header);
             if (request is not null)
-                request.Complete(new ZlinkStreamPendingCompletion(header, frame, failure.Error));
+                request.Complete(
+                    new ZlinkStreamPendingCompletion(header, frame, failure.Error, receivedAt)
+                );
             else
                 await callbacks
                     .PublishErrorAsync(failure.Error, cancellationToken)
@@ -88,10 +109,36 @@ internal sealed class ZlinkStreamReceiveDispatcher(
         frame = frame with { Payload = payload };
         if (header.Kind == ZlinkStreamMessageKind.Error)
         {
-            var error = ParseErrorPayload(frame.Payload);
+            var error = ParseErrorPayload(frame.Payload, out var remoteCode);
             var request = pending.TakeReply(header);
             if (request is not null)
-                request.Complete(new ZlinkStreamPendingCompletion(header, frame, error));
+            {
+                int? retryAfterMs = null;
+                if (
+                    remoteCode == "unavailable"
+                    && header.Metadata.TryGet(RetryAfterMetadataKey, out var retryAfter)
+                )
+                {
+                    if (
+                        int.TryParse(
+                            retryAfter,
+                            NumberStyles.None,
+                            CultureInfo.InvariantCulture,
+                            out var delay
+                        )
+                        && retryAfter == delay.ToString(CultureInfo.InvariantCulture)
+                    )
+                        retryAfterMs = delay;
+                    else
+                        error = new ZlinkStreamError(
+                            ZlinkStreamErrorCode.FrameDecodeFailed,
+                            "Invalid authentication admission retry delay."
+                        );
+                }
+                request.Complete(
+                    new ZlinkStreamPendingCompletion(header, frame, error, receivedAt, retryAfterMs)
+                );
+            }
             else
                 await callbacks.PublishErrorAsync(error, cancellationToken).ConfigureAwait(false);
             return;
@@ -226,13 +273,18 @@ internal sealed class ZlinkStreamReceiveDispatcher(
         }
     }
 
-    private static ZlinkStreamError ParseErrorPayload(ReadOnlyMemory<byte> payload)
+    private static ZlinkStreamError ParseErrorPayload(
+        ReadOnlyMemory<byte> payload,
+        out string? code
+    )
     {
+        code = null;
         try
         {
             var dto = JsonSerializer.Deserialize<WireError>(payload.Span, JsonOptions);
             if (dto is null || string.IsNullOrWhiteSpace(dto.Code) || dto.Message is null)
                 throw new JsonException("Remote stream error code and message are required.");
+            code = dto.Code;
             return new ZlinkStreamError(
                 ZlinkStreamErrorCode.RemoteError,
                 string.IsNullOrWhiteSpace(dto.Message) ? dto.Code : $"{dto.Code}: {dto.Message}"

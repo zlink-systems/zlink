@@ -111,7 +111,8 @@ internal sealed class ZLinkSessionSerialExecutor : IAsyncDisposable
         Func<CancellationToken, ValueTask> work,
         long payloadBytes,
         long metadataBytes,
-        bool transferred
+        bool transferred,
+        IZLinkSerialTerminalRelease? terminalRelease = null
     )
     {
         return _queue.TryPostApplicationWithAdmission(
@@ -119,7 +120,8 @@ internal sealed class ZLinkSessionSerialExecutor : IAsyncDisposable
             payloadBytes,
             metadataBytes,
             transferred,
-            out _
+            out _,
+            terminalRelease: terminalRelease
         );
     }
 

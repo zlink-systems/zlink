@@ -64,10 +64,33 @@ internal sealed class ZlinkStreamFrameSender(
             null,
             actorSlot
         );
-        return new ZlinkStreamOutboundFrame(
-            headerCodec.Encode(header, correlationId[..correlationLength]),
-            payloadBytes
-        );
+        var headerBytes = headerCodec.Encode(header, correlationId[..correlationLength]);
+        return new ZlinkStreamOutboundFrame(headerBytes, payloadBytes);
+    }
+
+    public static ReadOnlyMemory<byte> RentEncodedFrame(
+        ReadOnlyMemory<byte> header,
+        ReadOnlyMemory<byte> payload,
+        out byte[] buffer
+    )
+    {
+        var size = ZlinkStreamFrameCodec.GetFrameSize(header.Length, payload.Length);
+        buffer = ArrayPool<byte>.Shared.Rent(size);
+        ZlinkStreamFrameCodec.WriteFrame(buffer.AsSpan(0, size), header, payload);
+        return buffer.AsMemory(0, size);
+    }
+
+    public ZlinkStreamOutboundFrame WithRequestSequence(
+        ZlinkStreamOutboundFrame frame,
+        ZlinkStreamRequestSeq sequence
+    )
+    {
+        var header = headerCodec.Decode(frame.HeaderBytes);
+        return frame with
+        {
+            HeaderBytes = headerCodec.Encode(header with { RequestSeq = sequence }),
+            EncodedBytes = default,
+        };
     }
 
     private static byte[] EncodeHeartbeat(string name)
@@ -118,12 +141,14 @@ internal sealed class ZlinkStreamFrameSender(
         ReadOnlyMemory<byte> header,
         ReadOnlyMemory<byte> payload,
         CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> encodedFrame = default
+        ReadOnlyMemory<byte> encodedFrame = default,
+        Action? validateWrite = null
     )
     {
+        await sendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            await sendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            validateWrite?.Invoke();
             try
             {
                 if (!encodedFrame.IsEmpty)
@@ -136,28 +161,30 @@ internal sealed class ZlinkStreamFrameSender(
 
                 // One write per frame, as the Java, C++ and Node connectors do. A frame split
                 // across writes leaves its tail behind Nagle until the peer's delayed ACK (#1382).
-                var frameSize = ZlinkStreamFrameCodec.GetFrameSize(header.Length, payload.Length);
-                var frame = ArrayPool<byte>.Shared.Rent(frameSize);
+                byte[]? buffer = null;
                 try
                 {
-                    ZlinkStreamFrameCodec.WriteFrame(frame.AsSpan(0, frameSize), header, payload);
-                    await connection
-                        .WriteAsync(frame.AsMemory(0, frameSize), cancellationToken)
-                        .ConfigureAwait(false);
+                    var frame = RentEncodedFrame(header, payload, out buffer);
+                    await connection.WriteAsync(frame, cancellationToken).ConfigureAwait(false);
                 }
                 finally
                 {
-                    ArrayPool<byte>.Shared.Return(frame);
+                    if (buffer is not null)
+                        ArrayPool<byte>.Shared.Return(buffer);
                 }
             }
-            finally
+            catch (Exception ex) when (ex is not ZlinkStreamException)
             {
-                sendGate.Release();
+                throw ZlinkStreamConnector.Error(
+                    ZlinkStreamErrorCode.SendFailed,
+                    "Send failed.",
+                    ex
+                );
             }
         }
-        catch (Exception ex) when (ex is not ZlinkStreamException)
+        finally
         {
-            throw ZlinkStreamConnector.Error(ZlinkStreamErrorCode.SendFailed, "Send failed.", ex);
+            sendGate.Release();
         }
     }
 

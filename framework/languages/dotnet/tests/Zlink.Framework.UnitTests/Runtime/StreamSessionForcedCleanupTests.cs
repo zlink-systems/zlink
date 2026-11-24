@@ -11,7 +11,7 @@ using Zlink.Framework.Runtime.Dispatch;
 
 namespace Zlink.Framework.UnitTests;
 
-public sealed class StreamSessionForcedCleanupTests
+public sealed partial class StreamSessionForcedCleanupTests
 {
     [Fact]
     public async Task Fatal_pool_failure_ends_stream_source_and_is_reported_once()
