@@ -80,6 +80,7 @@ internal sealed class DeliverAnnounceHandler : IZLinkSpotPacketHandler<ZoneSpot,
 {
     public ValueTask HandleAsync(
         ZoneSpot spot,
+        IZLinkMessageContext context,
         DeliverAnnounceMsg message,
         CancellationToken cancellationToken
     ) => spot.DeliverAnnounceAsync(message, cancellationToken);
@@ -95,6 +96,7 @@ internal sealed class UpdatePositionHandler : IZLinkSpotPacketHandler<ZoneSpot, 
 {
     public ValueTask HandleAsync(
         ZoneSpot spot,
+        IZLinkMessageContext context,
         UpdatePositionMsg message,
         CancellationToken cancellationToken
     )

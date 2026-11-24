@@ -22,7 +22,12 @@ import {
 import { ZLinkConfigurationException } from '../configuration';
 import type { ZLinkRuntimeMetrics } from '../diagnostics';
 import { runWithOutboundFlow } from '../diagnostics/flow-context';
-import { flowIfEnabled, type ZLinkMessageFlowTracer } from '../diagnostics';
+import {
+  flowIfEnabled,
+  isRelocationDebugEnabled,
+  traceNodeRequestDeadline,
+  type ZLinkMessageFlowTracer
+} from '../diagnostics';
 import {
   ZLinkDispatchErrorSurface,
   ZLinkDispatchMessageKind,
@@ -291,6 +296,8 @@ interface ZLinkChannelTransportRuntime {
 }
 
 export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
+  private readonly requestDeadlineDiagnostics = isRelocationDebugEnabled();
+
   constructor(
     private readonly manager: () => ZLinkChannelTransportRuntime | undefined,
     private readonly routeChannelPredicate:
@@ -391,17 +398,20 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
     ) {
       return { status: ZLinkSubmitStatus.TargetNotFound };
     }
+    const sourceNodeRid =
+      node.routingId ?? (node.status().routingId as unknown as import('../../contracts').RoutingId);
+    const local = routingIdsEqual(sourceNodeRid, targetNodeRid);
     const parts = this.encodeMessage(
       ZLinkChannelMessageKind.Command,
       meshName,
       packetName,
       message,
       undefined,
-      metadata
+      metadata,
+      undefined,
+      !local && node.acceptsPackedChannelFrames === true
     );
-    const sourceNodeRid =
-      node.routingId ?? (node.status().routingId as unknown as import('../../contracts').RoutingId);
-    if (routingIdsEqual(sourceNodeRid, targetNodeRid)) {
+    if (local) {
       return this.submitLocalNode(meshName, String(sourceNodeRid), parts);
     }
     if (
@@ -506,6 +516,8 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
       timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       signal,
       (requestOperation, receiver) => {
+        if (this.requestDeadlineDiagnostics)
+          requestOperation.nodeRequestStartedMs = performance.now();
         requestOperation.mapCaller(
           (value) => {
             this.traceNodeRequest(
@@ -519,6 +531,13 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
             return value;
           },
           (error) => {
+            if (
+              requestOperation.nodeRequestStartedMs !== undefined &&
+              error instanceof ZLinkFrameworkException &&
+              error.kind === ZLinkFrameworkErrorKind.DeadlineExceeded
+            ) {
+              traceNodeRequestDeadline(requestOperation, meshName, targetNodeRid, correlationId);
+            }
             if (!isRemoteChannelErrorReply(error))
               this.traceNodeRequest(
                 ZLinkMessageFlowOutcome.ReplyReceived,
@@ -548,7 +567,8 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
             request,
             timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
             metadata,
-            correlationId
+            correlationId,
+            node.acceptsPackedChannelFrames === true
           );
         } catch (error) {
           requestOperation.fail(error);
@@ -622,19 +642,19 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
     packetName: string | undefined,
     message: unknown,
     metadata?: ReadonlyMap<string, string>
-  ): Promise<ZLinkSubmitResult> {
+  ): ZLinkSubmitResult | Promise<ZLinkSubmitResult> {
     return runWithOutboundFlow(this.flowCreationEnabled(), () =>
       this.submitToChannelScoped(meshName, channelName, packetName, message, metadata)
     );
   }
 
-  private async submitToChannelScoped(
+  private submitToChannelScoped(
     meshName: string,
     channelName: string,
     packetName: string | undefined,
     message: unknown,
     metadata?: ReadonlyMap<string, string>
-  ): Promise<ZLinkSubmitResult> {
+  ): ZLinkSubmitResult | Promise<ZLinkSubmitResult> {
     const node = this.requireMeshNode(meshName);
     const parts = this.encodeMessage(
       ZLinkChannelMessageKind.Command,
@@ -642,20 +662,37 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
       packetName,
       message,
       undefined,
-      metadata
+      metadata,
+      undefined,
+      node.acceptsPackedChannelFrames === true
     );
     const operation = `MeshNode '${meshName}' send to channel '${channelName}'`;
     try {
-      const result = mapMeshSubmitResult(
-        await node.sendToChannel(channelName, parts, NON_BLOCKING_SEND_OPTIONS)
-      );
-      if (result.status === ZLinkSubmitStatus.TargetNotFound) {
-        this.metrics?.recordChannelSelectionFailure(meshName, channelName, 'no_ready_target');
+      const submitted = node.sendToChannel(channelName, parts, NON_BLOCKING_SEND_OPTIONS);
+      if (submitted instanceof Promise) {
+        return submitted.then(
+          (result) => this.completeChannelSend(meshName, channelName, result),
+          (error) => {
+            throw mapMeshSubmissionError(error, operation);
+          }
+        );
       }
-      return result;
+      return this.completeChannelSend(meshName, channelName, submitted);
     } catch (error) {
       throw mapMeshSubmissionError(error, operation);
     }
+  }
+
+  private completeChannelSend(
+    meshName: string,
+    channelName: string,
+    submitted: number
+  ): ZLinkSubmitResult {
+    const result = mapMeshSubmitResult(submitted);
+    if (result.status === ZLinkSubmitStatus.TargetNotFound) {
+      this.metrics?.recordChannelSelectionFailure(meshName, channelName, 'no_ready_target');
+    }
+    return result;
   }
 
   requestToChannel<TReply>(
@@ -738,7 +775,9 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
             packetName,
             request,
             timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-            metadata
+            metadata,
+            undefined,
+            node.acceptsPackedChannelFrames === true
           );
         } catch (error) {
           requestOperation.fail(error);
@@ -1181,7 +1220,8 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
     message: unknown,
     timeoutMs?: number,
     metadata?: ReadonlyMap<string, string>,
-    correlationId?: string
+    correlationId?: string,
+    forService = false
   ): readonly MessageLike[] {
     return encodeChannelEnvelopeParts(
       kind,
@@ -1193,7 +1233,8 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
       this.codecs,
       correlationId,
       this.flowCreationEnabled(),
-      metadata
+      metadata,
+      forService
     );
   }
 

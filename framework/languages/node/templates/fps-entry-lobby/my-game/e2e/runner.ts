@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { EventEmitter } from 'node:events';
 import { finished } from 'node:stream/promises';
+import { inspect } from 'node:util';
 import { checkStructure } from './structure';
 import { runDomainChecks } from './domain-checks';
 import {
@@ -15,6 +16,10 @@ import {
   type NodeRole
 } from '../server/shared/constants';
 import type { NodeConfig } from '../server/shared/config';
+
+// Scenario failures are nested AggregateErrors; print every level so the cause reaches the CI log (#5312).
+inspect.defaultOptions.depth = null;
+
 const RunRoomCapacity = 1;
 class NodeProcess {
   readonly child: ChildProcess;

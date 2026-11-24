@@ -1,4 +1,4 @@
-import { AsyncLocalStorage } from 'node:async_hooks';
+import { FrameworkContextField } from '../framework-context';
 
 interface ZLinkActorExecutionContext {
   readonly actorId: string;
@@ -6,7 +6,7 @@ interface ZLinkActorExecutionContext {
   active: boolean;
 }
 
-const actorExecutionStorage = new AsyncLocalStorage<ZLinkActorExecutionContext>();
+const actorExecutionStorage = new FrameworkContextField<ZLinkActorExecutionContext>();
 const hiddenActiveProperty = Object.freeze({ enumerable: false });
 
 /** Runs one Actor handler while retaining its Actor FIFO claim across Yield. */
@@ -37,6 +37,13 @@ export function currentZLinkActorExecution():
   | undefined {
   const context = actorExecutionStorage.getStore();
   return context?.active === true ? context : undefined;
+}
+
+/** Carries the Actor mailbox claim into one of its Spot application turns. */
+export function bindZLinkActorExecution<T>(operation: () => T): () => T {
+  const context = actorExecutionStorage.getStore();
+  if (context?.active !== true) return operation;
+  return () => actorExecutionStorage.run(context, operation);
 }
 
 /** Runs Spot work outside the submitting Actor's execution scope. */

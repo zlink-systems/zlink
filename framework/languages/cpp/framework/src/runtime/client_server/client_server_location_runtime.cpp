@@ -1453,7 +1453,8 @@ task_t<void> client_server_location_runtime_t::dispatch_server_record (
         inbound.message.channel_name = record.owner;
         inbound.message.packet_name = request_envelope.message_name;
         inbound.message.content_type = request_envelope.content_type;
-        inbound.message.metadata = message_metadata_t (std::move (request_envelope.metadata));
+        inbound.message.metadata =
+          message_metadata_t (std::move (request_envelope.metadata).take_values ());
         if (!request_envelope.correlation_id.empty ())
             inbound.message.correlation_id = request_envelope.correlation_id;
         detail::message_flow_tracer_t flow (_channel_runtime.dispatch_options_ref ());

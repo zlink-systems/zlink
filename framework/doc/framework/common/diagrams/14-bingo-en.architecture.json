@@ -3,7 +3,7 @@
   "diagram_type": "architecture",
   "meta": {
     "title": "Bingo — a typical online game server configuration",
-    "subtitle": "split into a connection gateway · auth/matching · room servers",
+    "subtitle": "Clients connect through the session node. Channels carry auth and matchmaking requests.",
     "output": "14-bingo-en.html",
     "legend": {
       "mode": "hidden"
@@ -15,8 +15,8 @@
       50,
       150
     ],
-    "cols": 5,
-    "gapX": 80,
+    "cols": 4,
+    "gapX": 91,
     "gapY": 92,
     "cellW": 120,
     "cellH": 60
@@ -25,56 +25,56 @@
     {
       "id": "P",
       "type": "backend",
-      "label": "Play ×2",
-      "sublabel": "player actor · room Spot",
+      "label": "room ×2",
+      "sublabel": "player Actor · room",
       "row": 0,
-      "col": 2
+      "col": 3
     },
     {
       "id": "LS",
       "type": "external",
       "label": "Location Store",
-      "row": 1,
-      "col": 2
+      "row": 2,
+      "col": 1
     },
     {
       "id": "R",
       "type": "database",
       "label": "Redis",
       "sublabel": "waiting-room reservation",
-      "row": 1,
-      "col": 4
+      "row": 2,
+      "col": 3
     },
     {
       "id": "C",
       "type": "frontend",
       "label": "client",
-      "row": 2,
+      "row": 0,
       "col": 0
     },
     {
       "id": "S",
-      "type": "external",
-      "label": "Session ×2",
-      "sublabel": "endpoint · actor bind",
-      "row": 2,
+      "type": "database",
+      "label": "session node ×2",
+      "sublabel": "STREAM",
+      "row": 0,
       "col": 1
     },
     {
       "id": "A",
       "type": "external",
-      "label": "Api ×2",
-      "sublabel": "auth · matching requests",
-      "row": 2,
-      "col": 3
+      "label": "api node ×2",
+      "sublabel": "auth · matchmaking",
+      "row": 1,
+      "col": 1
     },
     {
       "id": "M",
       "type": "backend",
       "label": "Matchmaking",
-      "sublabel": "Matchmaker Instance Spot",
-      "row": 2,
-      "col": 4
+      "sublabel": "Instance Spot",
+      "row": 1,
+      "col": 3
     }
   ],
   "connections": [
@@ -87,16 +87,13 @@
     {
       "from": "S",
       "to": "A",
-      "label": "auth/matching request",
-      "variant": "default",
-      "labelDy": 40
+      "variant": "default"
     },
     {
       "from": "A",
       "to": "M",
       "label": "level bucket matching",
-      "variant": "default",
-      "labelDy": -40
+      "variant": "default"
     },
     {
       "from": "M",
@@ -106,43 +103,20 @@
     {
       "from": "S",
       "to": "P",
-      "label": "packet relay",
       "variant": "default",
-      "labelDx": -18
-    },
-    {
-      "from": "P",
-      "to": "S",
-      "label": "session push",
-      "variant": "default",
-      "labelDx": 18,
-      "fromSide": "left",
-      "toSide": "top"
+      "fromSide": "right",
+      "toSide": "left"
     },
     {
       "from": "A",
       "to": "P",
       "label": "room GetOrCreate",
-      "variant": "default",
-      "labelDx": 18
-    },
-    {
-      "from": "S",
-      "to": "LS",
-      "variant": "dashed"
+      "variant": "default"
     },
     {
       "from": "A",
       "to": "LS",
       "variant": "dashed"
-    },
-    {
-      "from": "P",
-      "to": "LS",
-      "label": "peer auto-connect",
-      "variant": "dashed",
-      "labelDx": 48,
-      "labelDy": 34
     }
   ],
   "cards": [
@@ -150,6 +124,7 @@
       "dot": "cyan",
       "title": "gateway configuration",
       "items": [
+        "The session node relays game packets to the room Spot and delivers pushes from the play node.",
         "client ↔ Session is one STREAM connection (bidirectional, emphasis) — client keeps only one, to Session",
         "Session·Api·Play each scale out ×2, server-to-server connections resolved by Location Store",
         "Session→Api matching request → Api matches a Matchmaker Instance Spot by level bucket"
@@ -162,6 +137,16 @@
         "Matchmaker Instance Spot atomically decides waiting-room reservations against Redis",
         "Api room GetOrCreate → Session packet relay, Play pushes to the bound session",
         "even when player actor and room Spot live on different Play servers the framework does a remote Spot join, location by LS auto-connect (dashed)"
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "play node",
+      "wraps": [
+        "P",
+        "M"
       ]
     }
   ]

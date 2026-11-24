@@ -55,6 +55,15 @@ public sealed class ChannelHeaderGoldenConformanceTests
                         decoded.ContentType
                     );
                     Assert.Equal(bytes, encoded.AsReadOnlySpan().ToArray());
+                    var prefix = new ZLinkEnvelopeCodec.PreparedEncoding();
+                    var prepared = decoded with { Encoding = prefix };
+                    using var first = ZLinkEnvelopeCodec.EncodeHeader(prepared);
+                    var cached = prefix.Find(prepared, prepared.ContentType);
+                    Assert.NotNull(cached);
+                    using var second = ZLinkEnvelopeCodec.EncodeHeader(prepared);
+                    Assert.Same(cached, prefix.Find(prepared, prepared.ContentType));
+                    Assert.Equal(bytes, first.ToArray());
+                    Assert.Equal(bytes, second.ToArray());
                 }
             }
         }
@@ -80,6 +89,40 @@ public sealed class ChannelHeaderGoldenConformanceTests
                 }
                 catch (ZLinkEnvelopeProtocolException) { }
             }
+        }
+    }
+
+    [Fact]
+    public void Deadline_preserves_subsecond_ticks_and_offset_across_cache_changes()
+    {
+        var instant = new DateTimeOffset(2000, 2, 29, 23, 59, 59, TimeSpan.FromMinutes(345));
+        var header = new ZLinkEnvelopeHeader(
+            ZLinkMessageKind.Request,
+            "channel",
+            "packet",
+            "application/json",
+            "correlation",
+            instant,
+            null,
+            null,
+            null
+        );
+        foreach (
+            var (deadline, expected) in new[]
+            {
+                (instant, "2000-02-29T23:59:59+05:45"),
+                (instant.AddTicks(1), "2000-02-29T23:59:59.0000001+05:45"),
+                (instant.AddMilliseconds(100), "2000-02-29T23:59:59.1+05:45"),
+                (instant.AddSeconds(1), "2000-03-01T00:00:00+05:45"),
+                (instant.ToOffset(TimeSpan.FromMinutes(-210)), "2000-02-29T14:44:59-03:30"),
+                (instant.ToOffset(TimeSpan.Zero), "2000-02-29T18:14:59+00:00"),
+                (new DateTimeOffset(instant.Ticks, TimeSpan.Zero), "2000-02-29T23:59:59+00:00"),
+                (instant, "2000-02-29T23:59:59+05:45"),
+            }
+        )
+        {
+            using var bytes = ZLinkEnvelopeCodec.EncodeHeader(header with { Deadline = deadline });
+            Assert.Equal(expected, ZLinkEnvelopeCodec.DecodeHeader(bytes).DeadlineText);
         }
     }
 

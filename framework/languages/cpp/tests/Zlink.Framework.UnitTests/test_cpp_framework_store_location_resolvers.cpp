@@ -1329,7 +1329,20 @@ class descriptor_owner_lease_client_t final : public zlink::framework::hosted_se
 
     zlink::framework::task_t<void> execute (zlink::framework::service_provider_t &services)
     {
-        auto user_flow = observe_request_flow (_user_spot_id, 0);
+        if (_observed_store) {
+            auto &discovery =
+              services.get_required<zlink::framework::runtime::live_location_reader_t> ();
+            const auto observed = discovery.poll_mesh_sources ("lease-target-mesh").result ();
+            if (observed) {
+                expired_descriptor_observed = std::any_of (
+                  observed.value ()->begin (), observed.value ()->end (), [] (const auto &row) {
+                      return row.descriptor.rid.to_string () == "aaa-stale-target"
+                             && !row.available ();
+                  });
+            } else {
+                discovery_error = observed.error_kind ();
+            }
+        }
         try {
             auto user = services.get_required<zlink::framework::spot_manager_t> ()
                           .get_or_create (zlink::framework::spot_id_t (_user_spot_id), "room")
@@ -1348,12 +1361,7 @@ class descriptor_owner_lease_client_t final : public zlink::framework::hosted_se
         catch (const std::exception &error) {
             user_exception = error.what ();
         }
-        if (_observed_store)
-            user_owner_checked_before_authority =
-              _observed_store->owner_was_read_in_expected_order ();
-        user_flow.reset ();
-
-        auto instance_flow = observe_request_flow (_instance_spot_id, 1);
+        auto instance_flow = observe_instance_request_flow ();
         try {
             auto route_client = _app->advanced ().zlink ().route_client (
               services.get_required<zlink::framework::serializer_registry_t> ());
@@ -1385,17 +1393,13 @@ class descriptor_owner_lease_client_t final : public zlink::framework::hosted_se
 
     void stop () noexcept override {}
 
-    /* Each request runs in its own flow so the store counts only that
-     * request's reads, on whichever worker the request resumes. */
     std::optional<zlink::framework::runtime::flow_context_t::scope_t>
-    observe_request_flow (const std::string &authority_fragment,
-                          unsigned authority_reads_before_owner)
+    observe_instance_request_flow ()
     {
         if (!_observed_store)
             return std::nullopt;
         auto flow_id = zlink::framework::runtime::flow_id_t::create ();
-        _observed_store->observe_owner_read_order (authority_fragment, authority_reads_before_owner,
-                                                   flow_id);
+        _observed_store->observe_owner_read_order (_instance_spot_id, 1, flow_id);
         return std::optional<zlink::framework::runtime::flow_context_t::scope_t> (
           std::in_place, zlink::framework::runtime::flow_value_t{
                            std::move (flow_id), zlink::framework::flow_origin_t::application,
@@ -1405,7 +1409,8 @@ class descriptor_owner_lease_client_t final : public zlink::framework::hosted_se
     std::optional<std::string> user_target;
     std::optional<zlink::framework::framework_error_kind_t> user_error;
     std::string user_exception;
-    std::optional<bool> user_owner_checked_before_authority;
+    bool expired_descriptor_observed = false;
+    std::optional<zlink::framework::framework_error_kind_t> discovery_error;
     std::optional<std::string> instance_target;
     std::optional<zlink::framework::framework_error_kind_t> instance_error;
     std::string instance_exception;
@@ -1427,7 +1432,8 @@ struct descriptor_owner_lease_result_t
     std::optional<std::string> user_target;
     std::optional<zlink::framework::framework_error_kind_t> user_error;
     std::string user_exception;
-    std::optional<bool> user_owner_checked_before_authority;
+    bool expired_descriptor_observed = false;
+    std::optional<zlink::framework::framework_error_kind_t> discovery_error;
     std::optional<std::string> instance_target;
     std::optional<zlink::framework::framework_error_kind_t> instance_error;
     std::string instance_exception;
@@ -1544,7 +1550,8 @@ descriptor_owner_lease_result_t run_descriptor_owner_lease_selection (
         result.user_target = std::move (client->user_target);
         result.user_error = client->user_error;
         result.user_exception = std::move (client->user_exception);
-        result.user_owner_checked_before_authority = client->user_owner_checked_before_authority;
+        result.expired_descriptor_observed = client->expired_descriptor_observed;
+        result.discovery_error = client->discovery_error;
         result.instance_target = std::move (client->instance_target);
         result.instance_error = client->instance_error;
         result.instance_exception = std::move (client->instance_exception);
@@ -2815,8 +2822,15 @@ TEST (ZLinkFrameworkStoreLocationResolvers, SessionBindUsesCallerRefAfterRelocat
     EXPECT_FALSE (resolvers.resolve_actor_session_binding_address (old_actor).result ().value ());
     const auto other_incarnation =
       detail::actor_ref_access_t::make (new_actor.node_rid (), "player", "bind-actor", 8);
-    EXPECT_FALSE (
-      resolvers.resolve_actor_session_binding_address (other_incarnation).result ().value ());
+    try {
+        (void) resolvers.resolve_actor_session_binding_address (other_incarnation)
+          .result ()
+          .value ();
+        FAIL () << "a different ObjectGeneration must end InvalidOperation";
+    }
+    catch (const framework_exception_t &error) {
+        EXPECT_EQ (framework_error_kind_t::invalid_operation, error.kind ());
+    }
     const auto other_mesh = detail::actor_ref_access_t::make (new_actor.node_rid (), "player",
                                                               "bind-actor", 7, "other-mesh");
     EXPECT_FALSE (resolvers.resolve_actor_session_binding_address (other_mesh).result ().value ());
@@ -2825,8 +2839,9 @@ TEST (ZLinkFrameworkStoreLocationResolvers, SessionBindUsesCallerRefAfterRelocat
     EXPECT_TRUE (resolvers.resolve_actor_session_binding_address (exact_mesh).result ().value ());
     const auto missing_actor =
       detail::actor_ref_access_t::make (new_actor.node_rid (), "player", "missing-actor", 7);
-    EXPECT_FALSE (
-      resolvers.resolve_actor_session_binding_address (missing_actor).result ().value ());
+    const auto missing = resolvers.resolve_actor_session_binding_address (missing_actor).result ();
+    ASSERT_FALSE (missing.has_value ());
+    EXPECT_EQ (framework_error_kind_t::not_found, missing.error_kind ());
 }
 
 TEST (ZLinkFrameworkStoreLocationResolvers, SessionBindRefreshesAuthorityAfterReturningToSameNode)
@@ -4029,7 +4044,7 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
     EXPECT_EQ (std::optional<std::string> ("zzz-live-target"), result.user_target)
       << result.user_exception;
     EXPECT_FALSE (result.user_error.has_value ());
-    EXPECT_EQ (std::optional<bool> (true), result.user_owner_checked_before_authority);
+    EXPECT_TRUE (result.expired_descriptor_observed);
     EXPECT_EQ (std::optional<std::string> ("zzz-live-target"), result.instance_target)
       << result.instance_exception;
     EXPECT_FALSE (result.instance_error.has_value ());
@@ -4062,7 +4077,8 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
     EXPECT_EQ (std::optional<framework_error_kind_t> (framework_error_kind_t::internal_failure),
                result.user_error)
       << result.user_exception;
-    EXPECT_EQ (std::optional<bool> (true), result.user_owner_checked_before_authority);
+    EXPECT_EQ (std::optional<framework_error_kind_t> (framework_error_kind_t::internal_failure),
+               result.discovery_error);
     EXPECT_FALSE (result.instance_target.has_value ());
     EXPECT_EQ (std::optional<framework_error_kind_t> (framework_error_kind_t::internal_failure),
                result.instance_error)
@@ -5491,19 +5507,29 @@ TEST (ZLinkFrameworkStoreLocationResolvers, OwnerReadOrderObservationCountsOnlyT
     EXPECT_TRUE (store.owner_was_read_in_expected_order ());
 }
 
-// The provider holds each handler's scan until the test has checked that
+// The provider holds each handler's authority read until the test has checked that
 // both executor workers can run another continuation.
-thread_local bool hold_user_spot_scan = false;
+constexpr std::array<std::string_view, 2> yielding_spot_ids{"yielding-spot-0", "yielding-spot-1"};
 
 class held_user_spot_store_t final : public zlink::framework::location_store_t
 {
   public:
     using completion_t =
-      zlink::framework::task_completion_source_t<zlink::framework::store_scan_result_t>;
+      zlink::framework::task_completion_source_t<zlink::framework::store_read_result_t>;
     zlink::framework::task_t<zlink::framework::store_read_result_t>
     read (zlink::framework::store_key_t key) override
     {
-        return inner.read (std::move (key));
+        if (std::none_of (yielding_spot_ids.begin (), yielding_spot_ids.end (),
+                          [&] (auto id) { return key.value.ends_with (id); }))
+            return inner.read (std::move (key));
+        auto completion = std::make_shared<completion_t> ();
+        auto task = completion->task ();
+        {
+            std::lock_guard lock (mutex);
+            held.push_back (completion);
+        }
+        entered.notify_all ();
+        return task;
     }
     zlink::framework::task_t<zlink::framework::store_write_result_t>
     write (zlink::framework::store_write_request_t request) override
@@ -5513,16 +5539,7 @@ class held_user_spot_store_t final : public zlink::framework::location_store_t
     zlink::framework::task_t<zlink::framework::store_scan_result_t>
     scan (zlink::framework::store_scan_request_t request) override
     {
-        if (!hold_user_spot_scan)
-            return inner.scan (std::move (request));
-        auto completion = std::make_shared<completion_t> ();
-        auto task = completion->task ();
-        {
-            std::lock_guard lock (mutex);
-            held.push_back (completion);
-        }
-        entered.notify_all ();
-        return task;
+        return inner.scan (std::move (request));
     }
     bool wait_for_handlers ()
     {
@@ -5538,8 +5555,9 @@ class held_user_spot_store_t final : public zlink::framework::location_store_t
         }
         for (const auto &completion : completions)
             completion->complete (
-              zlink::framework::result_t<zlink::framework::store_scan_result_t>::failure (
-                zlink::framework::framework_error_kind_t::unavailable, "held Store scan released"));
+              zlink::framework::result_t<zlink::framework::store_read_result_t>::failure (
+                zlink::framework::framework_error_kind_t::unavailable,
+                "held Store authority read released"));
     }
     zlink::framework::runtime::in_memory_location_store_t inner;
     std::mutex mutex;
@@ -5565,16 +5583,10 @@ class yielding_user_spot_client_t final : public zlink::framework::hosted_servic
         std::promise<void> completed;
         auto done = completed.get_future ();
         std::atomic_int remaining{2};
-        for (int index = 0; index < 2; ++index) {
+        for (const auto spot_id : yielding_spot_ids) {
             fw::runtime::handler_coroutine_executor ().post_native_continuation (
-              [&manager, &remaining, &completed, index] {
-                  hold_user_spot_scan = true;
-                  auto pending =
-                    manager
-                      .get_or_create (fw::spot_id_t ("yielding-spot-" + std::to_string (index)),
-                                      "room")
-                      .async ();
-                  hold_user_spot_scan = false;
+              [&manager, &remaining, &completed, spot_id] {
+                  auto pending = manager.get_or_create (fw::spot_id_t (spot_id), "room").async ();
                   fw::detail::observe_task_completion (
                     pending,
                     [&remaining, &completed] (const fw::result_t<fw::spot_create_result_t> &) {

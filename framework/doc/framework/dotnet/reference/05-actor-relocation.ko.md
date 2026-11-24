@@ -25,7 +25,7 @@ ValueTask OnSessionBoundAsync(
 **완료와 오류.** Callback은 bind 결과를 바꾸지 않습니다. 예외와 `SessionReplacementCallbackTimeout`
 초과는 runtime task 예외로 각각 한 번 보고하며, Actor·runtime 종료에 따른 취소는 보고하지 않습니다.
 시간 초과 시 callback에 취소를 전달합니다. 실행 순서와 중복 bind 판정과의 관계는
-[bind 확정 통지](../guide/server/39-session-binding.ko.md#7-bind-확정-통지)를 참고합니다.
+[bind 확정 통지](../guide/server/39-session-binding.ko.md#6-bind-확정-통지)를 참고합니다.
 
 ---
 

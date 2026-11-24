@@ -3,8 +3,8 @@
 // Kotlin (§17.3) joins this build under kotlin/.
 pluginManagement {
     repositories {
-        gradlePluginPortal()
         mavenCentral()
+        gradlePluginPortal()
     }
 }
 

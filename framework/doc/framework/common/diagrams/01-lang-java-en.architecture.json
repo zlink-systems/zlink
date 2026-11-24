@@ -123,5 +123,14 @@
       "to": "zb",
       "variant": "default"
     }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "Application host deployment roles",
+      "items": [
+        "An application can run as a session node that manages client sessions, a play node that hosts Spots, or an api node that handles requests like an ordinary HTTP server."
+      ]
+    }
   ]
 }

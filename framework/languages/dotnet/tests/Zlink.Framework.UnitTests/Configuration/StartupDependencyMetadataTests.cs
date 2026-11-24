@@ -222,6 +222,7 @@ public sealed class StartupDependencyMetadataTests
     {
         public ValueTask HandleAsync(
             BaseOwnerSpot spot,
+            IZLinkMessageContext context,
             OwnerMessage message,
             CancellationToken cancellationToken
         ) => ValueTask.CompletedTask;

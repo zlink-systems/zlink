@@ -17,7 +17,9 @@ public record ZLinkAuthoritySnapshot(
         long ownerLeaseGeneration,
         ZLinkPlacementAllocation allocation,
         Optional<ZLinkPendingObjectCreation> pendingCreation,
-        Instant storeNow)
+        Instant storeNow,
+        ZLinkAuthorityRelocation relocation,
+        long aggregateGeneration)
         implements ZLinkAuthorityReadResult {
     public ZLinkAuthoritySnapshot {
         Objects.requireNonNull(storeVersion, "storeVersion");
@@ -26,6 +28,30 @@ public record ZLinkAuthoritySnapshot(
         Objects.requireNonNull(allocation, "allocation");
         pendingCreation = Objects.requireNonNull(pendingCreation, "pendingCreation");
         Objects.requireNonNull(storeNow, "storeNow");
+    }
+
+    public ZLinkAuthoritySnapshot(
+            String storeVersion,
+            byte[] payload,
+            long objectGeneration,
+            long authorityOwnerGeneration,
+            String ownerId,
+            long ownerLeaseGeneration,
+            ZLinkPlacementAllocation allocation,
+            Optional<ZLinkPendingObjectCreation> pendingCreation,
+            Instant storeNow) {
+        this(
+                storeVersion,
+                payload,
+                objectGeneration,
+                authorityOwnerGeneration,
+                ownerId,
+                ownerLeaseGeneration,
+                allocation,
+                pendingCreation,
+                storeNow,
+                null,
+                0);
     }
 
     public ZLinkAuthoritySnapshot(
@@ -60,7 +86,7 @@ public record ZLinkAuthoritySnapshot(
     }
 
     public boolean steadyReady() {
-        return pendingCreation.isEmpty() && steadyReady(payload, allocation);
+        return pendingCreation.isEmpty() && relocation == null && steadyReady(payload, allocation);
     }
 
     public static boolean steadyReady(byte[] payload, ZLinkPlacementAllocation allocation) {

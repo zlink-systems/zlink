@@ -1,4 +1,5 @@
 import {
+  bindLifecycleCallerSpotTurn,
   captureZLinkSpotSerialTurn,
   isCurrentZLinkSpotSerialTurn,
   runZLinkSpotSerialTurn,
@@ -19,6 +20,7 @@ import {
   type ZLinkSerialWorkRecord
 } from '../execution/serial-execution-queue';
 import type { ZLinkSerialLifecycleContext } from '../execution/serial-execution-queue';
+import { bindZLinkActorExecution } from '../actors/actor-execution-context';
 import { ZLinkActorSerialExecutor } from '../actors/actor-mailbox';
 
 export type ZLinkSpotApplicationTurnContext = ZLinkExecutionBarrierClaim & {
@@ -33,17 +35,16 @@ export class ZLinkSpotSerialTurnExecutor {
   static closingAdmissionError(): ZLinkFrameworkException {
     return createInternalFrameworkException(
       ZLinkFrameworkInternalErrorKind.RequestTargetNotFound,
-      'Spot incarnation is closing (committed Close).'
+      'SPOT is closing.'
     );
   }
   private readonly scheduler: ZLinkSerialExecutionQueue;
   private depth = 0;
-  private turnSequence = 0;
   private executionBarrier: ZLinkExecutionBarrier | undefined;
-  private resumedOwnerTurn: ZLinkSpotSerialTurn | undefined;
+  // Undefined before the first segment and null when idle after execution starts.
+  private activeSegment: { readonly turn: ZLinkSpotSerialTurn } | null | undefined;
   private lastActivityAtMs = performance.now();
   private lifecycleAdmissionClosed = false;
-  activeTurnId = 0;
 
   constructor(
     private readonly yieldAllowed = true,
@@ -52,7 +53,9 @@ export class ZLinkSpotSerialTurnExecutor {
   ) {
     this.scheduler = new ZLinkSerialExecutionQueue(
       (record) => this.runQueuedRecord(record),
-      schedulerOptions
+      schedulerOptions,
+      undefined,
+      bindZLinkActorExecution
     );
   }
 
@@ -70,7 +73,7 @@ export class ZLinkSpotSerialTurnExecutor {
   }
 
   get isCurrentTurn(): boolean {
-    return this.depth > 0 && isCurrentZLinkSpotSerialTurn(this);
+    return isCurrentZLinkSpotSerialTurn(this);
   }
 
   get hasPendingWork(): boolean {
@@ -83,6 +86,10 @@ export class ZLinkSpotSerialTurnExecutor {
 
   get currentTurn(): ZLinkSpotSerialTurn | undefined {
     return captureZLinkSpotSerialTurn(this);
+  }
+
+  get currentSegment(): object | undefined {
+    return this.isCurrentTurn ? (this.activeSegment ?? undefined) : undefined;
   }
 
   /** Waits for turns admitted through the execution barrier to complete. */
@@ -108,7 +115,7 @@ export class ZLinkSpotSerialTurnExecutor {
     return instanceIntent
       ? createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.SpotMoving,
-          'The Spot incarnation released its authority before admitting this Instance intent message.'
+          'The Instance Spot incarnation released its authority.'
         )
       : ZLinkSpotSerialTurnExecutor.closingAdmissionError();
   }
@@ -122,18 +129,15 @@ export class ZLinkSpotSerialTurnExecutor {
   }
 
   /** Distinguishes a gate-owning turn from a suspended AsyncLocalStorage tail. */
-  isActiveTurn(turn: ZLinkSpotSerialTurn, turnId: number): boolean {
-    return (
-      this.depth > 0 &&
-      (this.resumedOwnerTurn === turn || (turnId === this.activeTurnId && !turn.isSuspended))
-    );
+  isActiveTurn(turn: ZLinkSpotSerialTurn): boolean {
+    return this.activeSegment?.turn === turn && !turn.isSuspended;
   }
 
   setExecutionBarrier(barrier: ZLinkExecutionBarrier): void {
     if (this.executionBarrier !== undefined && this.executionBarrier !== barrier) {
       throw new Error('ZLink Spot serial executor already belongs to another execution barrier.');
     }
-    if (this.turnSequence !== 0 && this.executionBarrier === undefined) {
+    if (this.activeSegment !== undefined && this.executionBarrier === undefined) {
       throw new Error('ZLink execution barrier must be attached before the first serial turn.');
     }
     this.executionBarrier = barrier;
@@ -239,10 +243,12 @@ export class ZLinkSpotSerialTurnExecutor {
     }
     const submit = (claim?: ZLinkExecutionBarrierClaim): Promise<T> => {
       try {
-        return this.scheduler.submitLifecycleOperation(() => {
-          requireAdmission();
-          return operation();
-        });
+        return this.scheduler.submitLifecycleOperation(
+          bindLifecycleCallerSpotTurn(() => {
+            requireAdmission();
+            return operation();
+          })
+        );
       } catch (error) {
         return Promise.reject(error);
       } finally {
@@ -406,6 +412,16 @@ export class ZLinkSpotSerialTurnExecutor {
     return turn.yieldPromise(pending);
   }
 
+  private async runSegment<T>(turn: ZLinkSpotSerialTurn, operation: () => Promise<T>): Promise<T> {
+    const segment = { turn };
+    this.activeSegment = segment;
+    try {
+      return await operation();
+    } finally {
+      if (this.activeSegment === segment) this.activeSegment = null;
+    }
+  }
+
   private runTurn<T>(
     operation: () => Promise<T> | T,
     resolve: (value: T) => void,
@@ -420,31 +436,16 @@ export class ZLinkSpotSerialTurnExecutor {
       this.yieldAllowed,
       work
     );
-    const wrapped = async () => {
-      this.depth += 1;
-      this.lastActivityAtMs = performance.now();
-      this.turnSequence += 1;
-      const turnId = this.turnSequence;
-      this.activeTurnId = turnId;
-      try {
-        return await runZLinkSpotSerialTurn(this, turnId, turn, operation);
-      } finally {
-        this.depth -= 1;
-        this.activeTurnId = 0;
-      }
-    };
-    const owner = wrapped();
+    this.depth += 1;
+    this.lastActivityAtMs = performance.now();
+    const owner = this.runSegment(turn, () => runZLinkSpotSerialTurn(this, turn, operation));
     turn.bindOwner(owner);
-    owner.then(
-      () => {
-        turn.releaseBoundExecutionClaim();
-        release?.();
-      },
-      () => {
-        turn.releaseBoundExecutionClaim();
-        release?.();
-      }
-    );
+    const releaseOwner = () => {
+      this.depth -= 1;
+      turn.releaseBoundExecutionClaim();
+      release?.();
+    };
+    owner.then(releaseOwner, releaseOwner);
     return Promise.race([owner.then(resolve, reject), turn.suspended]);
   }
 
@@ -460,14 +461,11 @@ export class ZLinkSpotSerialTurnExecutor {
           'The yielded Spot turn cannot resume after its execution unit was sealed.'
         );
       }
-      this.resumedOwnerTurn = turn;
-      try {
+      await this.runSegment(turn, () => {
         turn.resetSuspension();
         resume();
-        await turn.resumeOwnerUntilNextYield();
-      } finally {
-        if (this.resumedOwnerTurn === turn) this.resumedOwnerTurn = undefined;
-      }
+        return turn.resumeOwnerUntilNextYield();
+      });
     }, turn).catch((error) => {
       try {
         turn.executionAllowed();

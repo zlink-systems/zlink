@@ -386,6 +386,18 @@ final class ZLinkUserSpotRetireSourceBuilder {
             ZLinkUserSpotRelocationBarrier barrier,
             ZLinkUserSpotRelocationBarrier.Seal seal,
             ZLinkRelocationMetricOperation metrics) {
+        UUID aggregateId = UUID.randomUUID();
+        var phaseParticipants =
+                Stream.concat(
+                                Stream.of(admission.inventory().spot()),
+                                admission.inventory().actors().stream())
+                        .map(
+                                owned ->
+                                        new ZLinkAggregateRelocationCoordinator.ExpectedParticipant(
+                                                owned.key(),
+                                                owned.snapshot().objectGeneration(),
+                                                owned.snapshot().authorityOwnerGeneration()))
+                        .toList();
         metrics.sealed(System.nanoTime());
         AtomicReference<List<SealedSessionRoute>> sealedSessions = new AtomicReference<>(List.of());
         return readInventory(
@@ -397,19 +409,27 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                         new IllegalStateException(
                                                 "User Spot authority changed before Capture"));
                             }
-                            return barrier.runCapture(
-                                    seal,
-                                    () ->
-                                            capture(
-                                                    spot,
-                                                    current,
-                                                    seal,
-                                                    admission.target(),
-                                                    cancellation));
+                            return coordinator
+                                    .prepareSource(
+                                            phaseParticipants,
+                                            current.spot().key(),
+                                            aggregateId,
+                                            admission.target().applicationVersion(),
+                                            cancellation)
+                                    .thenCompose(
+                                            ignored ->
+                                                    barrier.runCapture(
+                                                            seal,
+                                                            () ->
+                                                                    capture(
+                                                                            spot,
+                                                                            current,
+                                                                            seal,
+                                                                            admission.target(),
+                                                                            cancellation)));
                         })
                 .thenCompose(
                         captured -> {
-                            UUID aggregateId = UUID.randomUUID();
                             return sealSessionRoutes(
                                             captured,
                                             aggregateId,
@@ -467,6 +487,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                                 return CompletableFuture.completedFuture(
                                                         new PreparedSource(
                                                                 metrics,
+                                                                coordinator,
                                                                 barrier,
                                                                 seal,
                                                                 exact,
@@ -501,7 +522,22 @@ final class ZLinkUserSpotRetireSourceBuilder {
                             }
                             //  §8.1: restore the source before command 44 abort.
                             CompletionStage<Void> release =
-                                    barrier.abortAsync(seal)
+                                    coordinator
+                                            .abortSourceProgress(
+                                                    phaseParticipants,
+                                                    aggregateId,
+                                                    admission
+                                                            .inventory()
+                                                            .spot()
+                                                            .snapshot()
+                                                            .ownerId(),
+                                                    admission
+                                                            .inventory()
+                                                            .spot()
+                                                            .snapshot()
+                                                            .ownerLeaseGeneration(),
+                                                    () -> false)
+                                            .thenCompose(ignored -> barrier.abortAsync(seal))
                                             .thenAccept(
                                                     aborted -> {
                                                         if (!aborted) {
@@ -510,6 +546,22 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                                                             + " lost during abort");
                                                         }
                                                     })
+                                            .thenCompose(
+                                                    ignored ->
+                                                            coordinator.clearSourceProgress(
+                                                                    phaseParticipants,
+                                                                    aggregateId,
+                                                                    admission
+                                                                            .inventory()
+                                                                            .spot()
+                                                                            .snapshot()
+                                                                            .ownerId(),
+                                                                    admission
+                                                                            .inventory()
+                                                                            .spot()
+                                                                            .snapshot()
+                                                                            .ownerLeaseGeneration(),
+                                                                    () -> false))
                                             .thenCompose(
                                                     ignored ->
                                                             abortSessionRoutes(
@@ -1195,6 +1247,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
 
     static final class PreparedSource {
         final ZLinkRelocationMetricOperation metrics;
+        private final ZLinkAggregateRelocationCoordinator coordinator;
         private final ZLinkUserSpotRelocationBarrier barrier;
         private final ZLinkUserSpotRelocationBarrier.Seal seal;
         private final Captured captured;
@@ -1220,22 +1273,12 @@ final class ZLinkUserSpotRetireSourceBuilder {
                 boolean owner) {}
 
         private <T> T inStateLane(Supplier<T> work) {
-            try {
-                return stateLane.runAsync(work).toCompletableFuture().join();
-            } catch (CompletionException failure) {
-                Throwable cause = failure.getCause();
-                if (cause instanceof RuntimeException runtimeFailure) {
-                    throw runtimeFailure;
-                }
-                if (cause instanceof Error error) {
-                    throw error;
-                }
-                throw failure;
-            }
+            return stateLane.awaitResult(work);
         }
 
         private PreparedSource(
                 ZLinkRelocationMetricOperation metrics,
+                ZLinkAggregateRelocationCoordinator coordinator,
                 ZLinkUserSpotRelocationBarrier barrier,
                 ZLinkUserSpotRelocationBarrier.Seal seal,
                 Captured captured,
@@ -1247,6 +1290,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
                 UnresolvedPreparations unresolved,
                 ZLinkSpotRetireControl.StageRequest stageRequest) {
             this.metrics = metrics;
+            this.coordinator = coordinator;
             this.barrier = barrier;
             this.seal = seal;
             this.captured = captured;
@@ -1521,7 +1565,28 @@ final class ZLinkUserSpotRetireSourceBuilder {
             //  restore, then terminal progress removal while the lanes are
             //  still paused. Lane resume is the last observable step. Command 44
             //  abort follows the source restore (Session-Actor binding §8.1).
-            return CompletableFuture.<Void>completedFuture(null)
+            var participants =
+                    Stream.concat(
+                                    Stream.of(captured.inventory().spot()),
+                                    captured.inventory().actors().stream())
+                            .map(
+                                    owned ->
+                                            new ZLinkAggregateRelocationCoordinator
+                                                    .ExpectedParticipant(
+                                                    owned.key(),
+                                                    owned.snapshot().objectGeneration(),
+                                                    owned.snapshot().authorityOwnerGeneration()))
+                            .toList();
+            var source = captured.inventory().spot().snapshot();
+            return coordinator
+                    .abortSource(
+                            participants,
+                            new ZLinkAggregateFence(
+                                    stageRequest.fence().aggregateId(),
+                                    stageRequest.fence().aggregateGeneration()),
+                            source.ownerId(),
+                            source.ownerLeaseGeneration(),
+                            () -> false)
                     .thenCompose(
                             ignored -> {
                                 Map<String, Long> targetOwnerGenerations = Map.of();
@@ -1586,6 +1651,14 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                                     }
                                                 });
                             })
+                    .thenCompose(
+                            ignored ->
+                                    coordinator.clearSourceProgress(
+                                            participants,
+                                            stageRequest.fence().aggregateId(),
+                                            source.ownerId(),
+                                            source.ownerLeaseGeneration(),
+                                            () -> false))
                     .thenCompose(ignored -> abortSessionRoutes(sessionSealer, sealedSessionRoutes));
         }
 
@@ -1799,18 +1872,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
         }
 
         private <T> T inStateLane(Supplier<T> work) {
-            try {
-                return stateLane.runAsync(work).toCompletableFuture().join();
-            } catch (CompletionException failure) {
-                Throwable cause = failure.getCause();
-                if (cause instanceof RuntimeException runtimeFailure) {
-                    throw runtimeFailure;
-                }
-                if (cause instanceof Error error) {
-                    throw error;
-                }
-                throw failure;
-            }
+            return stateLane.awaitResult(work);
         }
     }
 

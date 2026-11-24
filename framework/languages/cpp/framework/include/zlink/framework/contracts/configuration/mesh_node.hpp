@@ -619,67 +619,99 @@ template <typename THandler, typename TRequest, typename TReply>
 mesh_channel_server_builder_t &mesh_channel_server_builder_t::add_handler (bool request,
                                                                            std::string packet_name)
 {
+    constexpr auto method = [] {
+        if constexpr (requires {
+                          static_cast<TReply (THandler::*) (
+                            const TRequest &, const route_message_context_t &)> (&THandler::handle);
+                      }) {
+            return static_cast<TReply (THandler::*) (
+              const TRequest &, const route_message_context_t &)> (&THandler::handle);
+        } else if constexpr (requires {
+                                 static_cast<task_t<TReply> (THandler::*) (
+                                   const TRequest &, const route_message_context_t &)> (
+                                   &THandler::handle);
+                             }) {
+            return static_cast<task_t<TReply> (THandler::*) (
+              const TRequest &, const route_message_context_t &)> (&THandler::handle);
+        } else if constexpr (requires {
+                                 static_cast<TReply (THandler::*) (const TRequest &)> (
+                                   &THandler::handle);
+                             }) {
+            return static_cast<TReply (THandler::*) (const TRequest &)> (&THandler::handle);
+        } else {
+            return static_cast<task_t<TReply> (THandler::*) (const TRequest &)> (&THandler::handle);
+        }
+    }();
     auto codecs = std::make_shared<detail::handler_codec_plan_t<TRequest, TReply>> ();
+    // Select the path from the handler signature: a synchronous result completes inline without a
+    // coroutine frame. The member pointer is a template parameter here, not a lambda queried with
+    // decltype, because MSVC cannot parse the latter.
+    auto invoke = [codecs]<typename TResult, typename... TArgs> (
+                    TResult (THandler::*target) (TArgs...)) -> detail::mesh_handler_invoker_t {
+        if constexpr (detail::is_task_v<TResult>) {
+            return [target, codecs] (
+                     service_provider_t &services, serializer_registry_t &serializers,
+                     const zlink::message_t &message, const route_message_context_t &context,
+                     detail::handler_start_callback_ref_t before_application_handler)
+                     -> task_t<zlink::message_t> {
+                // The handler can keep a reference to the decoded request across suspension.
+                const auto plan = codecs;
+                try {
+                    auto &owner = detail::create_dispatch_instance<THandler> (services);
+                    auto payload =
+                      plan->deserialize (serializers, message, context.content_type.value_or (""));
+                    if constexpr (std::is_invocable_v<decltype (target), THandler &,
+                                                      const TRequest &,
+                                                      const route_message_context_t &>) {
+                        auto reply = co_await detail::invoke_prepared_handler (
+                          before_application_handler, target, owner, payload, context);
+                        co_return result_t<zlink::message_t>::success (
+                          detail::encoded_payload_to_raw (plan->serialize (serializers, reply)));
+                    } else {
+                        auto reply = co_await detail::invoke_prepared_handler (
+                          before_application_handler, target, owner, payload);
+                        co_return result_t<zlink::message_t>::success (
+                          detail::encoded_payload_to_raw (plan->serialize (serializers, reply)));
+                    }
+                }
+                catch (...) {
+                    co_return detail::current_exception_result<zlink::message_t> ();
+                }
+            };
+        } else {
+            return [target, codecs] (
+                     service_provider_t &services, serializer_registry_t &serializers,
+                     const zlink::message_t &message, const route_message_context_t &context,
+                     detail::handler_start_callback_ref_t before_application_handler)
+                     -> task_t<zlink::message_t> {
+                try {
+                    auto &owner = detail::create_dispatch_instance<THandler> (services);
+                    auto payload = codecs->deserialize (serializers, message,
+                                                        context.content_type.value_or (""));
+                    if constexpr (std::is_invocable_v<decltype (target), THandler &,
+                                                      const TRequest &,
+                                                      const route_message_context_t &>) {
+                        return detail::serialize_handler_result (
+                          detail::invoke_prepared_handler (before_application_handler, target,
+                                                           owner, payload, context),
+                          serializers, codecs);
+                    } else {
+                        return detail::serialize_handler_result (
+                          detail::invoke_prepared_handler (before_application_handler, target,
+                                                           owner, payload),
+                          serializers, codecs);
+                    }
+                }
+                catch (...) {
+                    return task_t<zlink::message_t> (
+                      detail::current_exception_result<zlink::message_t> ());
+                }
+            };
+        }
+    }(method);
     return add_handler_registration (detail::mesh_handler_registration_t{
       request, _channel_name, std::move (packet_name), std::type_index (typeid (THandler)),
-      std::type_index (typeid (TRequest)), std::type_index (typeid (TReply)),
-      [codecs] (service_provider_t &services, serializer_registry_t &serializers,
-                const zlink::message_t &message, const route_message_context_t &context,
-                detail::handler_start_callback_ref_t before_application_handler)
-        -> task_t<zlink::message_t> {
-          const auto plan = codecs;
-          try {
-              auto &owner = detail::create_dispatch_instance<THandler> (services);
-              auto payload =
-                plan->deserialize (serializers, message, context.content_type.value_or (""));
-              if constexpr (requires {
-                                static_cast<TReply (THandler::*) (
-                                  const TRequest &, const route_message_context_t &)> (
-                                  &THandler::handle);
-                            }) {
-                  auto reply = detail::invoke_prepared_handler (
-                    before_application_handler,
-                    static_cast<TReply (THandler::*) (
-                      const TRequest &, const route_message_context_t &)> (&THandler::handle),
-                    owner, payload, context);
-                  co_return result_t<zlink::message_t>::success (
-                    detail::encoded_payload_to_raw (plan->serialize (serializers, reply)));
-              } else if constexpr (requires {
-                                       static_cast<task_t<TReply> (THandler::*) (
-                                         const TRequest &, const route_message_context_t &)> (
-                                         &THandler::handle);
-                                   }) {
-                  auto reply = co_await detail::invoke_prepared_handler (
-                    before_application_handler,
-                    static_cast<task_t<TReply> (THandler::*) (
-                      const TRequest &, const route_message_context_t &)> (&THandler::handle),
-                    owner, payload, context);
-                  co_return result_t<zlink::message_t>::success (
-                    detail::encoded_payload_to_raw (plan->serialize (serializers, reply)));
-              } else if constexpr (requires {
-                                       static_cast<TReply (THandler::*) (const TRequest &)> (
-                                         &THandler::handle);
-                                   }) {
-                  auto reply = detail::invoke_prepared_handler (
-                    before_application_handler,
-                    static_cast<TReply (THandler::*) (const TRequest &)> (&THandler::handle), owner,
-                    payload);
-                  co_return result_t<zlink::message_t>::success (
-                    detail::encoded_payload_to_raw (plan->serialize (serializers, reply)));
-              } else {
-                  auto reply = co_await detail::invoke_prepared_handler (
-                    before_application_handler,
-                    static_cast<task_t<TReply> (THandler::*) (const TRequest &)> (
-                      &THandler::handle),
-                    owner, payload);
-                  co_return result_t<zlink::message_t>::success (
-                    detail::encoded_payload_to_raw (plan->serialize (serializers, reply)));
-              }
-          }
-          catch (...) {
-              co_return detail::current_exception_result<zlink::message_t> ();
-          }
-      },
+      std::type_index (typeid (TRequest)), std::type_index (typeid (TReply)), std::move (invoke),
       [codecs] (serializer_registry_t &serializers) { codecs->bind (serializers); }});
 }
 

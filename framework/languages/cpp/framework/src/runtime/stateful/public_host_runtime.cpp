@@ -3684,7 +3684,10 @@ public_host_runtime_t::relocation_target_fence (const relocation_target_attempt_
             {coordinator.owner_id, static_cast<std::int64_t> (coordinator.lease_generation)},
             {attempt.prepare.target.target_owner_id,
              static_cast<std::int64_t> (attempt.prepare.target.target_owner_lease_generation)},
-            attempt.prepare.relocation};
+            attempt.prepare.relocation,
+            coordinator.node_routing_id,
+            coordinator.node_generation,
+            attempt.prepare.target_attempt_generation};
 }
 
 public_host_runtime_t::relocation_target_settlement_t
@@ -4053,7 +4056,8 @@ bool public_host_runtime_t::submit_relocation_target_authority (
               attempt.prepare.coordinator.expected_authority_store_version,
               attempt.prepare.relocation,
               {attempt.prepare.coordinator.owner_id,
-               static_cast<std::int64_t> (attempt.prepare.coordinator.lease_generation)});
+               static_cast<std::int64_t> (attempt.prepare.coordinator.lease_generation)},
+              &attempt.prepare);
             if (published.status != stateful::authority_publish_status_t::published
                 || !published.current || published.current->source != attempt.sources.front ())
                 return adopt_store_fences ();
@@ -4087,8 +4091,7 @@ bool public_host_runtime_t::submit_relocation_target_authority (
             const auto prepared = _aggregate_relocation_authority->prepare (
               attempt.sources, attempt.targets.front ().node_id, target_owner,
               attempt.restore_identity.reference, attempt.restore_identity.checksum_crc32c,
-              attempt.restore_identity.inventory_digest,
-              attempt.prepare.coordinator.expected_authority_store_version);
+              attempt.restore_identity.inventory_digest, relocation_target_fence (attempt));
             if (prepared.status != stateful::aggregate_publish_status_t::prepared)
                 return false;
             attempt.authority_fence = prepared.fence;
@@ -4318,6 +4321,11 @@ task_t<bool> public_host_runtime_t::try_finalize_relocation_target (relocation_a
         co_await discard_attempt ();
         co_return false;
     }
+
+    if (attempt.targets.size () == 1
+        && attempt.targets.front ().kind == stateful::object_kind_t::actor && _relocation_authority
+        && !_relocation_authority->finish_relocation (attempt.targets.front (), attempt.prepare))
+        co_return false;
 
     for (const auto &object : attempt.wire_objects)
         (void) _relocation_wire->unregister_target (
@@ -7498,25 +7506,26 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations (
     co_return count;
 }
 
-bool public_host_runtime_t::dispatch_bound_session_send (
+task_t<bool> public_host_runtime_t::dispatch_bound_session_send (
   const mesh::service_mailbox_record_t &mailbox_record)
 {
     if (mailbox_record.parts ().size () != 2)
-        return false;
+        co_return false;
     const auto record = protocol::decode_bound_session_send (
       protocol::message_bytes (mailbox_record.parts ().front ()));
     if (mailbox_record.source_routing_id != record.actor.target_node_routing_id
         || mailbox_record.source_node_generation == 0
         || mailbox_record.source_node_generation != record.actor.target_node_generation)
-        return false;
+        co_return false;
     bound_session_operations_t operations;
     _lifecycle_configuration_lane.run_sync ([&] { operations = _bound_session_operations; });
     if (!operations.capture_send && !operations.send)
-        return false;
+        co_return false;
     const auto application = protocol::decode_application_payload (
       protocol::message_bytes (mailbox_record.parts ().back ()), capture_flow ());
     auto parts = protocol::decode_application_parts (application);
-    std::function<stateful::stateful_error_t (std::vector<zlink::message_t>)> delivery;
+    bound_session_operations_t::delivery_capability_t delivery;
+    std::optional<task_t<stateful::stateful_error_t>> submitted;
     const auto admitted = _sessions.capture_outbound (
       record.actor.actor_id, record.actor.object_generation, record.expected_binding_generation,
       [&] {
@@ -7527,13 +7536,17 @@ bool public_host_runtime_t::dispatch_bound_session_send (
               delivery = std::move (*capability);
           } else {
               delivery = [operations, record] (std::vector<zlink::message_t> payload) {
-                  return operations.send (record, std::move (payload));
+                  return task_t<stateful::stateful_error_t> (
+                    result_t<stateful::stateful_error_t>::success (
+                      operations.send (record, std::move (payload))));
               };
           }
+          submitted.emplace (delivery (std::move (parts)));
           return true;
       });
-    return admitted == stateful::stateful_error_t::none
-           && delivery (std::move (parts)) == stateful::stateful_error_t::none;
+    if (admitted != stateful::stateful_error_t::none)
+        co_return false;
+    co_return (co_await *submitted) == stateful::stateful_error_t::none;
 }
 
 task_t<std::size_t>
@@ -8412,11 +8425,27 @@ public_host_runtime_t::dispatch_application_claim (
                 // The outbound stream delivery is a transport handoff, not an application handler.
                 mailbox_record.before_application_handler = {};
                 mailbox_record.application_permit.reset ();
-                (void) dispatch_bound_session_send (mailbox_record);
-                ++batch->count;
-                if (!entry.retained.load (std::memory_order_acquire))
-                    release_mailbox_reservation ();
-                continue;
+                const auto deliver =
+                  [] (std::shared_ptr<public_host_runtime_t> self,
+                      std::shared_ptr<application_claim_batch_t> batch, task_t<bool> delivery,
+                      mesh::service_mailbox_settlement_t release) -> task_t<std::size_t> {
+                    std::exception_ptr failure;
+                    try {
+                        (void) co_await delivery;
+                        ++batch->count;
+                        if (!batch->entries[batch->index].retained.load (std::memory_order_acquire))
+                            release ();
+                        ++batch->index;
+                    }
+                    catch (...) {
+                        failure = std::current_exception ();
+                    }
+                    co_return co_await self->continue_application_claim (batch,
+                                                                         std::move (failure));
+                };
+                return deliver (shared_from_this (), batch,
+                                dispatch_bound_session_send (mailbox_record),
+                                std::move (release_mailbox_reservation));
             }
             const auto wire_kind = mailbox_record.application_kind ();
             if (!wire_kind)
@@ -9925,40 +9954,18 @@ public_host_runtime_t::decode_operation_record (call_id_t operation,
                                                 foundation::operation_terminal_t terminal,
                                                 const zlink::message_t &payload) const
 {
-    if (terminal == foundation::operation_terminal_t::shutdown)
-        return detail::boundary_failure<receive_record_t> (detail::boundary_error_t::shutdown,
-                                                           "MeshNode operation owner is closed");
+    const auto status =
+      messaging::request_failure_mapper_t{}.operation_reply_status (terminal, payload);
+    if (!status)
+        return detail::result_access_t::failure<receive_record_t> (status.exception ());
     receive_record_t record;
     record.kind = record_kind_t::completion;
     record.domain = ready_domain_t::infrastructure;
     record.operation_id = operation;
     record.operation_kind = kind;
     record.source_node_rid = zlink::routing_id_t::from (_options.mesh.descriptor.node_routing_id);
-    switch (terminal) {
-        case foundation::operation_terminal_t::completed:
-            record.terminal_result = 0;
-            break;
-        case foundation::operation_terminal_t::timed_out:
-            record.terminal_result = static_cast<int> (zlink::request_result_t::timed_out);
-            break;
-        case foundation::operation_terminal_t::route_unavailable:
-            record.terminal_result = static_cast<int> (zlink::request_result_t::not_connected);
-            break;
-        default:
-            record.terminal_result = static_cast<int> (zlink::request_result_t::internal_error);
-            break;
-    }
-    if (record.terminal_result != 0 && !payload.is_empty ()) {
-        try {
-            const auto reply = protocol::decode_reply_header (protocol::message_bytes (payload));
-            record.terminal_result = static_cast<int> (reply.terminal_result);
-            record.failure_errno = static_cast<int> (reply.failure_code);
-        }
-        catch (const protocol::service_wire_error_t &) {
-            record.terminal_result = static_cast<int> (zlink::request_result_t::protocol_error);
-            record.failure_errno = 0;
-        }
-    }
+    record.terminal_result = static_cast<int> (status.value ().terminal_result);
+    record.failure_errno = static_cast<int> (status.value ().failure_code);
     return result_t<receive_record_t>::success (std::move (record));
 }
 

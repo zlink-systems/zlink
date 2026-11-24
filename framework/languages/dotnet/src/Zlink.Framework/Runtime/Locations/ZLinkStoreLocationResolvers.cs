@@ -23,6 +23,17 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
     private readonly ZLinkLocationOptions _options;
     private readonly TimeProvider _time;
     private readonly ZLinkStateLane _lane = new();
+    private readonly Dictionary<string, MeshObservation> _meshObservations = new(
+        StringComparer.Ordinal
+    );
+    private long _nextPlacementSelection;
+
+    private sealed record MeshObservation(IReadOnlyList<ZLinkMeshNodeDescriptor> Nodes)
+    {
+        internal TaskCompletionSource Changed { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
     internal ZLinkStateLane Lane => _lane;
 
     // Only in-flight reads retain observation state; the latest read may cache
@@ -67,6 +78,9 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
         CancellationToken cancellationToken = default
     )
     {
+        var previous = await _lane
+            .RunAsync(() => _meshObservations.GetValueOrDefault(meshName))
+            .ConfigureAwait(false);
         var rows = await ZLinkLocationStoreRead
             .ExecuteAsync(
                 _health,
@@ -90,7 +104,130 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
         ZLinkFrameworkDebugLog.SpotDiscovery(
             $"autoconnect_live_snapshot mesh={meshName} live_rows={live.Count} live_rids={string.Join(',', live.Select(static row => row.Rid.ToString()))}"
         );
+        await _lane
+            .RunAsync(() =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!ReferenceEquals(previous, _meshObservations.GetValueOrDefault(meshName)))
+                    return;
+                _meshObservations[meshName] = new MeshObservation(live);
+                previous?.Changed.TrySetResult();
+            })
+            .ConfigureAwait(false);
         return live;
+    }
+
+    internal async ValueTask<ZLinkMeshNodeDescriptor?> SelectPlacementAsync(
+        string meshName,
+        ZLinkPlacementObjectKind kind,
+        string stableType,
+        Func<
+            IReadOnlyList<ZLinkMeshNodeDescriptor>,
+            IReadOnlyList<ZLinkMeshNodeDescriptor>
+        > admitted,
+        IReadOnlySet<(RoutingId Rid, ulong Generation)> excluded,
+        CancellationToken cancellationToken
+    )
+    {
+        var refreshAvailable = true;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var observation = await _lane
+                .RunAsync(() => _meshObservations.GetValueOrDefault(meshName))
+                .ConfigureAwait(false);
+            var candidates =
+                observation
+                    ?.Nodes.Where(candidate =>
+                        !excluded.Contains((candidate.Rid, candidate.LifecycleGeneration))
+                        && HasPlacementCapacity(candidate, kind, stableType)
+                        && _leaseTracker.HasObservedAdmissionLease(
+                            new ZLinkLocationOwnerToken(
+                                candidate.OwnerId,
+                                candidate.LeaseGeneration
+                            )
+                        )
+                    )
+                    .OrderBy(static candidate => candidate.Rid, ZLinkRoutingIdOrder.Instance)
+                    .ToArray()
+                ?? [];
+            var eligible = admitted(
+                candidates
+                    .Where(static candidate =>
+                        candidate.State == ZLinkFrameworkRuntimeState.Serving
+                    )
+                    .ToArray()
+            );
+            if (
+                !ReferenceEquals(
+                    observation,
+                    await _lane
+                        .RunAsync(() => _meshObservations.GetValueOrDefault(meshName))
+                        .ConfigureAwait(false)
+                )
+            )
+                continue;
+
+            cancellationToken.ThrowIfCancellationRequested();
+            if (eligible.Count > 0)
+                return ZLinkWeightedSelector.Select(
+                    eligible,
+                    static candidate => candidate.PlacementWeight,
+                    ref _nextPlacementSelection
+                );
+            if (observation is not null && candidates.Length > 0)
+            {
+                await observation.Changed.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                continue;
+            }
+            if (!refreshAvailable)
+                return null;
+            refreshAvailable = false;
+            await ListLiveMeshNodesAsync(meshName, cancellationToken)
+                .AsTask()
+                .WaitAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+    }
+
+    internal static bool HasPlacementCapacity(
+        ZLinkMeshNodeDescriptor candidate,
+        ZLinkPlacementObjectKind kind,
+        string stableType
+    )
+    {
+        if (
+            candidate.State
+                is not (ZLinkFrameworkRuntimeState.Preparing or ZLinkFrameworkRuntimeState.Serving)
+            || candidate.ObjectRole != ZLinkMeshNodeObjectRole.Server
+            || candidate.PlacementWeight <= 0
+            || !candidate.ObjectCapabilities.Any(capability =>
+                capability.ObjectKind == kind
+                && string.Equals(capability.StableType, stableType, StringComparison.Ordinal)
+                && (
+                    kind != ZLinkPlacementObjectKind.Actor
+                    || (candidate.EntrySpotId is not null && capability.EntryAccepted)
+                )
+            )
+        )
+            return false;
+
+        if (kind == ZLinkPlacementObjectKind.Actor)
+        {
+            var actors = candidate.Capacity.Actors;
+            return actors.Limit == 0 || actors.Active + (long)actors.Reserved < actors.Limit;
+        }
+
+        var spots = candidate.Capacity.Spots;
+        return (spots.Limit == 0 || spots.Active + (long)spots.Reserved < spots.Limit)
+            && candidate.Capacity.SpotTypes.Any(capacity =>
+                capacity.ObjectKind == kind
+                && string.Equals(capacity.StableType, stableType, StringComparison.Ordinal)
+                && (
+                    capacity.Limit == 0
+                    || capacity.Active + (long)capacity.Reserved < capacity.Limit
+                )
+            );
     }
 
     internal async ValueTask<ZLinkResolvedSpotLocation?> ResolveSpotRowAsync(
@@ -194,9 +331,10 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
                 .ConfigureAwait(false);
             var snapshot = (authority as ZLinkAuthorityReadResult.Found)?.Snapshot;
             var raw = ProjectSpot(authority);
-            var (row, liveRowPresent) = await _liveRows
+            var (row, lease) = await _liveRows
                 .ResolveWithPresenceAsync(raw, static row => row.OwnerId, cancellationToken)
                 .ConfigureAwait(false);
+            var liveRowPresent = lease is not null;
             if (row is null)
             {
                 await InvalidateSpotRouteAsync(key).ConfigureAwait(false);
@@ -213,26 +351,17 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
             if (IsClosingSpot(authority))
             {
                 await InvalidateSpotRouteAsync(key).ConfigureAwait(false);
-                var remaining = await _leaseTracker
-                    .GetOwnerTokenRemainingAdmissionLifetimeAsync(
-                        new ZLinkLocationOwnerToken(row.OwnerId, row.LeaseGeneration),
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
-                return remaining is null
+                var admission = _leaseTracker.GetAdmissionLifetime(
+                    lease!,
+                    new ZLinkLocationOwnerToken(row.OwnerId, row.LeaseGeneration)
+                );
+                return admission is null
                     ? (null, liveRowPresent, ZLinkLocationResolutionKind.KnownUnavailable, snapshot)
                     : (row, liveRowPresent, ZLinkLocationResolutionKind.Closing, snapshot);
             }
 
             if (
-                !await AdmitAndCacheReadyRouteAsync(
-                        _spotRoutes,
-                        key,
-                        row,
-                        authority,
-                        cancellationToken,
-                        read
-                    )
+                !await AdmitAndCacheReadyRouteAsync(_spotRoutes, key, row, authority, lease!, read)
                     .ConfigureAwait(false)
             )
             {
@@ -274,12 +403,38 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
     }
 
     /// <summary>Reads the Actor's current row from the Location Store, never from the route
-    /// cache, and caches the result. Every Session bind reads here for its fence
-    /// (Session-Actor binding §5).</summary>
+    /// cache, and caches the result.</summary>
     internal async ValueTask<ZLinkResolvedActorLocation?> ReadActorRowAsync(
         ZLinkActorLocationKey key,
         CancellationToken cancellationToken = default
     ) => (await ReadActorRowCoreAsync(key, cancellationToken).ConfigureAwait(false)).Row;
+
+    internal async ValueTask<ZLinkResolvedActorLocation> ReadActorSessionBindingRowAsync(
+        ActorRef actor,
+        CancellationToken cancellationToken
+    )
+    {
+        var key = new ZLinkActorLocationKey(actor.ActorId);
+        var authority = await ReadActorAuthorityAsync(key, cancellationToken).ConfigureAwait(false);
+        var (row, _, _) = await ResolveActorAuthorityAsync(key, authority, cancellationToken)
+            .ConfigureAwait(false);
+        if (authority is ZLinkAuthorityReadResult.Missing)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.NotFound,
+                $"Actor '{actor.ActorId}' authority was not found."
+            );
+        if (row is not null && row.ActorRef.ObjectGeneration != actor.ObjectGeneration)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.InvalidOperation,
+                $"Actor '{actor.ActorId}' binding ObjectGeneration {actor.ObjectGeneration} differs from the current {row.ActorRef.ObjectGeneration}."
+            );
+        if (row is null || row.ActorRef != actor)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                $"Actor '{actor.ActorId}' binding route is unavailable."
+            );
+        return row;
+    }
 
     private async ValueTask<(
         ZLinkResolvedActorLocation? Row,
@@ -287,8 +442,18 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
         ZLinkLocationResolutionKind Kind
     )> ReadActorRowCoreAsync(ZLinkActorLocationKey key, CancellationToken cancellationToken)
     {
+        var authority = await ReadActorAuthorityAsync(key, cancellationToken).ConfigureAwait(false);
+        return await ResolveActorAuthorityAsync(key, authority, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async ValueTask<ZLinkAuthorityReadResult> ReadActorAuthorityAsync(
+        ZLinkActorLocationKey key,
+        CancellationToken cancellationToken
+    )
+    {
         _runtime?.EnsureOwnerAdmissionOpen();
-        var authority = await ZLinkLocationStoreRead
+        return await ZLinkLocationStoreRead
             .ExecuteAsync(
                 _health,
                 "ZLinkActorLocation-resolver-read",
@@ -300,10 +465,23 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
                     )
             )
             .ConfigureAwait(false);
+    }
+
+    private async ValueTask<(
+        ZLinkResolvedActorLocation? Row,
+        bool LiveRowPresent,
+        ZLinkLocationResolutionKind Kind
+    )> ResolveActorAuthorityAsync(
+        ZLinkActorLocationKey key,
+        ZLinkAuthorityReadResult authority,
+        CancellationToken cancellationToken
+    )
+    {
         var raw = ProjectActor(authority, key.ActorId);
-        var (row, liveRowPresent) = await _liveRows
+        var (row, lease) = await _liveRows
             .ResolveWithPresenceAsync(raw, static row => row.OwnerId, cancellationToken)
             .ConfigureAwait(false);
+        var liveRowPresent = lease is not null;
         // Reference generation 0 marks a claimed-but-unpublished actor:
         // the claim precedes activation, so such a row is never a
         // resolvable reference (40-location-runtime §6).
@@ -322,13 +500,7 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
         }
 
         if (
-            !await AdmitAndCacheReadyRouteAsync(
-                    _actorRoutes,
-                    key,
-                    row,
-                    authority,
-                    cancellationToken
-                )
+            !await AdmitAndCacheReadyRouteAsync(_actorRoutes, key, row, authority, lease!)
                 .ConfigureAwait(false)
         )
         {
@@ -492,7 +664,9 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
                 return (false, (TRow?)null);
 
             var cacheAge = _time.GetElapsedTime(route.StoredAt);
-            var ownerLeaseAge = _time.GetElapsedTime(route.OwnerLeaseLifetimeMeasuredAt);
+            var ownerLeaseAge = _leaseTracker.TimeProvider.GetElapsedTime(
+                route.OwnerLeaseLifetimeMeasuredAt
+            );
             if (
                 cacheAge >= route.MaxAge
                 || ownerLeaseAge >= route.OwnerLeaseLifetime
@@ -515,7 +689,7 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
         TKey key,
         TRow row,
         ZLinkAuthorityReadResult authority,
-        CancellationToken cancellationToken,
+        ZLinkOwnerLeaseTracker.Snapshot lease,
         SpotRouteRead? read = null
     )
         where TKey : notnull
@@ -524,20 +698,11 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
         if (authority is not ZLinkAuthorityReadResult.Found found)
             return false;
 
-        // Measure the lease lifetime from before the asynchronous read. If the
-        // continuation is delayed, this makes cache expiry earlier rather than
-        // extending it past the owner's admission deadline.
-        var ownerLeaseLifetimeMeasuredAt = _time.GetTimestamp();
-        var remaining = await _leaseTracker
-            .GetOwnerTokenRemainingAdmissionLifetimeAsync(
-                new ZLinkLocationOwnerToken(
-                    found.Snapshot.OwnerId,
-                    found.Snapshot.OwnerLeaseGeneration
-                ),
-                cancellationToken
-            )
-            .ConfigureAwait(false);
-        if (remaining is not { } leaseLifetime)
+        var admission = _leaseTracker.GetAdmissionLifetime(
+            lease,
+            new ZLinkLocationOwnerToken(found.Snapshot.OwnerId, found.Snapshot.OwnerLeaseGeneration)
+        );
+        if (admission is not { } leaseLifetime)
             return false;
 
         var maxAge = _options.RouteCacheMaxAge;
@@ -552,8 +717,8 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
             found.Snapshot.OwnerLeaseGeneration,
             _time.GetTimestamp(),
             maxAge,
-            ownerLeaseLifetimeMeasuredAt,
-            leaseLifetime,
+            leaseLifetime.MeasuredAt,
+            leaseLifetime.Lifetime,
             _health?.RecoveryGeneration ?? 0
         );
         await _lane
@@ -835,10 +1000,7 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
         targetNodeRid = default;
         if (
             snapshot.OwnerLeaseGeneration <= 0
-            || !ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                snapshot.Payload.Span,
-                out canonical
-            )
+            || !ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(snapshot, out canonical)
             || canonical.Phase is < 4 or > 8
             || canonical.TargetOwnerId != snapshot.OwnerId
         )

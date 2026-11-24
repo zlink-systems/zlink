@@ -1,3 +1,4 @@
+import { createObjectCreationDeadline } from './object-creation-deadline';
 import type { ZLinkOwnerLeaseTracker } from '../locations/lease-tracker';
 import { sameAuthorityIncarnation } from '../locations/lifecycle-runtime';
 import { encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
@@ -73,7 +74,7 @@ export interface ZLinkActorPlacementCoordinatorOptions {
     meshName: string | undefined,
     stableType: string,
     signal?: AbortSignal,
-    excludedNodeRids?: ReadonlySet<string>
+    excludedHostRuns?: ReadonlyMap<string, bigint>
   ) => Promise<ZLinkActorPlacementTarget | undefined>;
   readonly remoteCreate: (
     meshName: string,
@@ -98,11 +99,11 @@ export class ZLinkActorPlacementCoordinator {
   ): Promise<ZLinkActorCreateResult> {
     const deadlineUnixMs = Date.now() + timeoutMs;
     const remainingMs = Math.max(0, deadlineUnixMs - Date.now());
-    const deadline = createDeadline(remainingMs, signal);
+    const deadline = createObjectCreationDeadline(remainingMs, 'Actor', signal);
     const deadlineMs = performance.now() + remainingMs;
     const contentReference = encodeLocationCreationContent(requestPayload);
     const requestSha256 = createHash('sha256').update(requestPayload).digest();
-    const excluded = new Set<string>();
+    const excludedHostRuns = new Map<string, bigint>();
     const operationId = randomOperationId();
     try {
       for (;;) {
@@ -125,7 +126,12 @@ export class ZLinkActorPlacementCoordinator {
           )
             return { status: 'existing', actor: existing };
         }
-        const target = await this.options.target(meshName, stableType, deadline.signal, excluded);
+        const target = await this.options.target(
+          meshName,
+          stableType,
+          deadline.signal,
+          excludedHostRuns
+        );
         if (target === undefined) {
           throw createInternalFrameworkException(
             ZLinkFrameworkInternalErrorKind.PlacementCapacityExhausted,
@@ -183,7 +189,7 @@ export class ZLinkActorPlacementCoordinator {
           );
         }
         if (reserved.kind === 'placementCapacityExhausted') {
-          excluded.add(encodeRoutingIdStorageHex(target.nodeRid));
+          excludedHostRuns.set(encodeRoutingIdStorageHex(target.nodeRid), target.nodeGeneration);
           continue;
         }
         if (reserved.kind === 'alreadyExists' || reserved.kind === 'conflict') {
@@ -234,7 +240,7 @@ export class ZLinkActorPlacementCoordinator {
         ) {
           //  The target refused before the callback and cancelled its reservation
           //  (Actor model §6.3); exclude this host run like a Reserve failure.
-          excluded.add(encodeRoutingIdStorageHex(target.nodeRid));
+          excludedHostRuns.set(encodeRoutingIdStorageHex(target.nodeRid), target.nodeGeneration);
           continue;
         }
         if (remote.terminalResult !== RequestResult.Ok || remote.failureCode !== 0) {
@@ -416,7 +422,7 @@ export class ZLinkActorPlacementCoordinator {
         );
       }
     } catch (error) {
-      const cleanup = createDeadline(1_000);
+      const cleanup = createObjectCreationDeadline(1_000, 'Actor');
       try {
         await this.options.store.abort(
           {
@@ -748,30 +754,6 @@ function terminalPublication(record: ServiceActorCreateRecord, terminalEnvelope:
     },
     terminalEnvelope,
     operationDeadline: new Date(Number(record.deadlineUnixMs))
-  };
-}
-
-function createDeadline(timeoutMs: number, parent?: AbortSignal) {
-  const controller = new AbortController();
-  const abort = () => controller.abort(parent?.reason);
-  parent?.addEventListener('abort', abort, { once: true });
-  const timer = setTimeout(
-    () =>
-      controller.abort(
-        createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
-          'Actor creation deadline exceeded.',
-          true
-        )
-      ),
-    Math.max(1, timeoutMs)
-  );
-  return {
-    signal: controller.signal,
-    close: () => {
-      clearTimeout(timer);
-      parent?.removeEventListener('abort', abort);
-    }
   };
 }
 

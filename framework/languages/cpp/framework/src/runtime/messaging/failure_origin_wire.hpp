@@ -63,7 +63,7 @@ inline void write_error_origin (envelope_header_t &header, const framework_excep
                                           std::string (framework_origin_metadata_value));
 }
 
-inline bool has_framework_origin (const std::map<std::string, std::string> &metadata)
+inline bool has_framework_origin (const envelope_metadata_t &metadata)
 {
     const auto found = metadata.find (std::string (framework_origin_metadata_key));
     return found != metadata.end () && found->second == framework_origin_metadata_value;

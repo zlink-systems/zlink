@@ -553,6 +553,11 @@ jobs:
         with:
           node-version: 24
 
+      # package-source.py runs generate-service-wire-codecs.mjs --check, which loads
+      # the protocol schema tools (ajv) from this directory.
+      - name: Install protocol schema tools
+        run: npm ci --prefix framework/runtime/protocol --ignore-scripts
+
       - name: Create source archive and verify the tag's recipes
         # release-check.sh --write builds the archive with
         # framework/languages/cpp/scripts/package-source.py (reproducible from
@@ -622,6 +627,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install Conan
+        id: conan
         shell: bash
         # ConanCenter recipes fetch upstream sources (m4 from ftp.gnu.org); fall back to
         # ConanCenter's backup of the same sha256 when the upstream mirror is unreachable.
@@ -630,6 +636,17 @@ jobs:
           conan_home="$(conan config home)"
           mkdir -p "${conan_home}"
           echo 'core.sources:download_urls=["origin", "https://c3i.jfrog.io/artifactory/conan-center-backup-sources/"]' >> "${conan_home}/global.conf"
+          echo 'core.net.http:max_retries=5' >> "${conan_home}/global.conf"
+          echo 'core.net.http:timeout=120' >> "${conan_home}/global.conf"
+          echo "conan_home=${conan_home}" >> "${GITHUB_OUTPUT}"
+
+      # Conan's p directory contains both the cache database and package data.
+      - name: Cache Conan packages
+        uses: ./.github/actions/main-cache
+        with:
+          path: ${{ steps.conan.outputs.conan_home }}/p
+          key: framework-cpp-conan-${{ runner.os }}-${{ runner.arch }}-${{ matrix.platform }}-2.32.0-${{ hashFiles(format('framework/languages/cpp/packaging/conan/conan.{0}.lock', matrix.platform)) }}-${{ hashFiles('framework/languages/cpp/scripts/package-prebuilt.sh', 'framework/languages/cpp/packaging/prebuilt-platforms.json') }}-${{ matrix.c_compiler }}-${{ matrix.cxx_compiler }}-${{ matrix.compiler_version }}
+          restore-keys: framework-cpp-conan-${{ runner.os }}-${{ runner.arch }}-${{ matrix.platform }}-2.32.0-
 
       - name: Set up MSVC
         if: matrix.platform == 'windows-x64'

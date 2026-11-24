@@ -1116,9 +1116,14 @@ internal abstract partial class ZLinkSpotActivation
     internal bool HasCommittedClose => _successor is not null;
     internal bool HasCompletedClose => _successor?.Task.IsCompleted == true;
 
-    internal void BeginCommittedClose()
+    private (string SpotId, string Source, Task Completion)? CommittedClose =>
+        _successor is { Task: { } completion }
+            ? (SpotId, (string)completion.AsyncState!, completion)
+            : null;
+
+    internal void BeginCommittedClose(string source)
     {
-        _successor = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        _successor = new(source, TaskCreationOptions.RunContinuationsAsynchronously);
         _serial.SchedulePendingApplications();
     }
 
@@ -1340,16 +1345,14 @@ internal abstract partial class ZLinkSpotActivation
     internal ValueTask BeginCloseBoundaryAsync(CancellationToken cancellationToken) =>
         _serial.BeginCloseBoundaryAsync(cancellationToken);
 
-    internal async ValueTask InvokeExplicitClosingAsync(
-        ZLinkSpotCloseReason reason,
-        DateTimeOffset deadline
-    )
+    internal async ValueTask InvokeExplicitClosingAsync(DateTimeOffset deadline)
     {
         if (Interlocked.Exchange(ref _closingInvoked, 1) != 0)
             return;
         try
         {
-            await InvokeClosingAsync(reason, deadline).ConfigureAwait(false);
+            await InvokeClosingAsync(ZLinkSpotCloseReason.ExplicitClose, deadline)
+                .ConfigureAwait(false);
         }
         catch (Exception exception)
         {
@@ -1682,13 +1685,7 @@ internal abstract partial class ZLinkSpotActivation
                 acceptedJournalFactory,
                 received.MessageFollowHopCount != 0,
                 operationAdmission,
-                admission =>
-                    ZLinkSpotActivationDispatcher.RejectApplicationRouteForDrain(
-                        received,
-                        ChannelName,
-                        admission,
-                        _runtime
-                    ),
+                RejectAdmission,
                 state.ReleaseForRelocation,
                 state.ReleaseForRelocation
             );
@@ -1701,15 +1698,7 @@ internal abstract partial class ZLinkSpotActivation
             acceptedJournalFactory,
             received.MessageFollowHopCount != 0,
             operationAdmission,
-            admission =>
-            {
-                ZLinkSpotActivationDispatcher.RejectApplicationRouteForDrain(
-                    received,
-                    ChannelName,
-                    admission,
-                    _runtime
-                );
-            },
+            RejectAdmission,
             () =>
             {
                 if (!TryHoldForMessageFollow(received, acceptedJournalLength))
@@ -1721,6 +1710,18 @@ internal abstract partial class ZLinkSpotActivation
             },
             received.Dispose
         );
+
+        void RejectAdmission(ZLinkAcceptedWorkAdmission admission) =>
+            ZLinkSpotActivationDispatcher.RejectApplicationRouteForDrain(
+                received,
+                ChannelName,
+                admission,
+                _runtime,
+                // Instance intent can be forwarded and refused by a successor.
+                received.InstanceIntent
+                    ? null
+                    : CommittedClose
+            );
     }
 
     private async ValueTask DispatchQueuedApplicationRouteAsync(
@@ -1802,7 +1803,8 @@ internal abstract partial class ZLinkSpotActivation
             received,
             ChannelName,
             ZLinkAcceptedWorkAdmission.Closing,
-            _runtime
+            _runtime,
+            CommittedClose
         );
         return true;
     }

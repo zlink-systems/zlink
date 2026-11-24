@@ -79,10 +79,15 @@ export class ServiceCapturedObjectRelocation {
   }
 }
 
-/** Captures the two valid relocation units: User Spot aggregate or one Actor. */
+/** Captures User Spot aggregates, standalone Actors and Instance Spots. */
 export class ServiceRelocationObjectCaptureOwner {
   constructor(
-    private readonly maxConcurrentCallbacks: number = DEFAULT_RELOCATION_CALLBACK_CONCURRENCY
+    private readonly maxConcurrentCallbacks: number = DEFAULT_RELOCATION_CALLBACK_CONCURRENCY,
+    private readonly progress?: (
+      phase: 'preparing' | 'captured' | 'aborted',
+      units: readonly ServiceRelocationCaptureUnit[],
+      memberships: readonly ServiceRelocationMembership[]
+    ) => Promise<void>
   ) {
     requireCallbackConcurrency(maxConcurrentCallbacks);
   }
@@ -127,30 +132,12 @@ export class ServiceRelocationObjectCaptureOwner {
     aggregateId: string,
     aggregateGeneration: bigint,
     spot: ServiceRelocationCaptureUnit,
-    actors: readonly ServiceRelocationCaptureUnit[],
-    memberships: readonly ServiceRelocationMembership[],
     signal?: AbortSignal
   ): Promise<ServiceCapturedObjectRelocation> {
-    if (
-      spot.objectKind !== 'instance_spot' ||
-      actors.some((actor) => actor.objectKind !== 'actor')
-    ) {
-      throw new TypeError(
-        'Instance Spot relocation requires one Spot and only Actor participants.'
-      );
+    if (spot.objectKind !== 'instance_spot') {
+      throw new TypeError('Instance Spot relocation requires one Instance Spot.');
     }
-    if (actors.length !== memberships.length) {
-      throw new TypeError(
-        'Instance Spot relocation membership must cover every Actor exactly once.'
-      );
-    }
-    return await this.capture(
-      aggregateId,
-      aggregateGeneration,
-      [spot, ...actors],
-      memberships,
-      signal
-    );
+    return await this.capture(aggregateId, aggregateGeneration, [spot], [], signal);
   }
 
   private async capture(
@@ -171,6 +158,7 @@ export class ServiceRelocationObjectCaptureOwner {
         captured.push(capture);
         capture.work = await unit.seal(signal);
       }
+      await this.progress?.('preparing', units, memberships);
       const participants = await mapConcurrentOrdered(
         captured,
         this.maxConcurrentCallbacks,
@@ -195,6 +183,7 @@ export class ServiceRelocationObjectCaptureOwner {
         },
         signal
       );
+      await this.progress?.('captured', units, memberships);
       return new ServiceCapturedObjectRelocation(
         {
           aggregateId,
@@ -206,7 +195,11 @@ export class ServiceRelocationObjectCaptureOwner {
       );
     } catch (error) {
       try {
-        await abortSourceSeals(captured.map(({ unit }) => unit));
+        try {
+          await this.progress?.('aborted', units, memberships);
+        } finally {
+          await abortSourceSeals(captured.map(({ unit }) => unit));
+        }
       } catch (rollbackError) {
         throw new AggregateError(
           [error, rollbackError],
@@ -385,14 +378,22 @@ export class ServiceRelocationObjectRestoreOwner<
     await this.target.replayQueuedMessage(hidden, message, signal);
   }
 
-  async normalize(
+  normalize(
     staging: ServiceObjectRelocationStaging<THidden>,
     authority: ZLinkAuthoritySnapshot,
     signal?: AbortSignal
   ): Promise<void> {
-    for (const hidden of staging.hidden.values()) {
-      await this.target.normalize(hidden, authority, signal);
+    const terminals: Promise<void>[] = [];
+    try {
+      for (const hidden of staging.hidden.values()) {
+        terminals.push(this.target.normalize(hidden, authority, signal));
+      }
+    } catch (error) {
+      // Admission can throw after earlier participants have installed their prefixes.
+      void Promise.allSettled(terminals);
+      throw error;
     }
+    return Promise.all(terminals).then(() => undefined);
   }
 
   async openAdmission(

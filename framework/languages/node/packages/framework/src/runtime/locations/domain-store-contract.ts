@@ -38,7 +38,7 @@ import type {
   ZLinkObjectCreationCompleteRequest,
   ZLinkObjectCreationCompleteResult,
   ZLinkObjectReserveResult
-} from '../../contracts/Locations/Authority';
+} from './internal-location-contracts';
 import type {
   ZLinkObjectReserveRequest,
   ZLinkEndedOwnerReleaseIntent
@@ -170,7 +170,8 @@ export interface ZLinkDomainLocationStore {
 
   prepareAggregate(
     request: ZLinkAggregatePrepareRequest,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    deadlineUnixMs?: bigint
   ): Promise<ZLinkAggregatePrepareResult>;
   commitAggregate(
     fence: ZLinkAggregateFence,

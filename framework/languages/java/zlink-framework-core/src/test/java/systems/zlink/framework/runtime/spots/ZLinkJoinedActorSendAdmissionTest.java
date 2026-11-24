@@ -13,7 +13,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
-import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.ZLinkMessageContext;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorClient;
@@ -338,7 +337,6 @@ final class ZLinkJoinedActorSendAdmissionTest {
     @Test
     void sendWithoutHandlerIsAdmittedAndReportedWithoutPoisoningActor() throws Exception {
         var options = options("send-missing-handler", null, null, null, true);
-        options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
         var dropped = new CompletableFuture<String>();
         var logger =
                 Logger.getLogger(
@@ -446,9 +444,8 @@ final class ZLinkJoinedActorSendAdmissionTest {
         return ZLinkFrameworkRuntimeTestAccess.start(options, probe.provider());
     }
 
-    // Startup can return while a host is still Preparing (a fixed RID waits out the previous
-    // owner lease before its descriptor is published). Placement and request admission only
-    // use Serving hosts, so the cross-node steps start after both hosts serve (#4366).
+    // Startup can return before descriptor publication. Wait for both hosts to serve before
+    // starting cross-node work.
     private static void awaitServing(ZLinkFrameworkRuntime... runtimes) throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(WAIT_SECONDS);
         for (var runtime : runtimes) {
@@ -462,13 +459,13 @@ final class ZLinkJoinedActorSendAdmissionTest {
     }
 
     private static DefaultZLinkFrameworkOptions options(
-            String rid,
+            String routingIdPrefix,
             ZLinkInMemoryLocationStore locations,
             InMemoryRelocationStore relocations,
             String sourceEndpoint,
             boolean hostsTable) {
         return options(
-                rid,
+                routingIdPrefix,
                 locations,
                 relocations,
                 sourceEndpoint,
@@ -477,21 +474,20 @@ final class ZLinkJoinedActorSendAdmissionTest {
     }
 
     private static DefaultZLinkFrameworkOptions options(
-            String rid,
+            String routingIdPrefix,
             ZLinkInMemoryLocationStore locations,
             InMemoryRelocationStore relocations,
             String sourceEndpoint,
             boolean hostsTable,
             ZLinkUserSpotExecutionMode executionMode) {
         var options = new DefaultZLinkFrameworkOptions();
-        options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
-        options.configureDispatch()
-                .messageFlow(systems.zlink.framework.configuration.ZLinkMessageFlowLogMode.NORMAL);
+        options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
         options.addLocationStore(locations == null ? new ZLinkInMemoryLocationStore() : locations);
         options.addRelocationStore(
                 relocations == null ? new InMemoryRelocationStore() : relocations);
         var node = options.addRouteMesh("game");
-        node.listen("tcp://127.0.0.1:0").setRoutingId(RoutingId.from(rid));
+        // These scenarios use fresh MeshNodes. Keep the names as diagnostic prefixes.
+        node.listen("tcp://127.0.0.1:0").setRoutingIdPrefix(routingIdPrefix);
         if (sourceEndpoint != null) node.peerConnections().connect(sourceEndpoint);
         var objects = node.objects().server();
         objects.addEntrySpot(Lobby.class);

@@ -63,13 +63,22 @@ internal sealed class ZLinkChannelRequestTerminalTrace(
 
 internal sealed class ZLinkRouteClient(ZLinkFrameworkRuntime runtime) : IZLinkRouteClient
 {
+    private readonly ZLinkEnvelopeCodec.PreparedEncoding _commandPrefix = new();
+    private readonly ZLinkEnvelopeCodec.PreparedEncoding _requestPrefix = new();
+
     public IZLinkSendCall SendToNode<TMessage>(
         string meshName,
         RoutingId targetNodeRid,
         TMessage message
     )
     {
-        return new ZLinkRouteSendCall<TMessage>(runtime, meshName, targetNodeRid, message);
+        return new ZLinkRouteSendCall<TMessage>(
+            runtime,
+            meshName,
+            targetNodeRid,
+            message,
+            _commandPrefix
+        );
     }
 
     public IZLinkRequestCall RequestToNode<TRequest>(
@@ -78,17 +87,23 @@ internal sealed class ZLinkRouteClient(ZLinkFrameworkRuntime runtime) : IZLinkRo
         TRequest request
     )
     {
-        return new ZLinkRouteRequestCall<TRequest>(runtime, meshName, targetNodeRid, request);
+        return new ZLinkRouteRequestCall<TRequest>(
+            runtime,
+            meshName,
+            targetNodeRid,
+            request,
+            _requestPrefix
+        );
     }
 
     public IZLinkSendCall SendToChannel<TMessage>(string channelName, TMessage message)
     {
-        return new ZLinkChannelSendCall<TMessage>(runtime, channelName, message);
+        return new ZLinkChannelSendCall<TMessage>(runtime, channelName, message, _commandPrefix);
     }
 
     public IZLinkRequestCall RequestToChannel<TRequest>(string channelName, TRequest request)
     {
-        return new ZLinkChannelRequestCall<TRequest>(runtime, channelName, request);
+        return new ZLinkChannelRequestCall<TRequest>(runtime, channelName, request, _requestPrefix);
     }
 }
 
@@ -104,7 +119,8 @@ internal sealed class ZLinkSpotClient(ZLinkFrameworkRuntime runtime) : IZLinkSpo
 internal sealed class ZLinkChannelSendCall<TMessage>(
     ZLinkFrameworkRuntime runtime,
     string channelName,
-    TMessage message
+    TMessage message,
+    ZLinkEnvelopeCodec.PreparedEncoding prefix
 ) : IZLinkSendCall
 {
     private ZLinkCallMetadata? _metadata;
@@ -144,7 +160,8 @@ internal sealed class ZLinkChannelSendCall<TMessage>(
             ZLinkMessageKind.Command,
             channelName,
             ZLinkMessageNameResolver.ResolveFromMessage(message),
-            metadata: selected.Header
+            metadata: selected.Header,
+            encoding: prefix
         );
         metadata = selected.Frame;
         return ZLinkClientCallCodec.EncodeEnvelopeParts(
@@ -158,7 +175,8 @@ internal sealed class ZLinkChannelSendCall<TMessage>(
 internal sealed class ZLinkChannelRequestCall<TRequest>(
     ZLinkFrameworkRuntime runtime,
     string channelName,
-    TRequest request
+    TRequest request,
+    ZLinkEnvelopeCodec.PreparedEncoding prefix
 ) : IZLinkRequestCall
 {
     private ZLinkCallMetadata? _metadata;
@@ -228,7 +246,8 @@ internal sealed class ZLinkChannelRequestCall<TRequest>(
                 channelName,
                 packetName,
                 timeout,
-                metadata: headerMetadata
+                metadata: headerMetadata,
+                encoding: prefix
             );
             terminal?.SetCorrelation(header.CorrelationId);
             var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(
@@ -273,7 +292,8 @@ internal sealed class ZLinkRouteSendCall<TMessage>(
     ZLinkFrameworkRuntime runtime,
     string meshName,
     RoutingId targetNodeRid,
-    TMessage message
+    TMessage message,
+    ZLinkEnvelopeCodec.PreparedEncoding? prefix = null
 ) : IZLinkSendCall
 {
     private ZLinkCallMetadata? _metadata;
@@ -347,7 +367,8 @@ internal sealed class ZLinkRouteSendCall<TMessage>(
             runtime.Registration.TimeProvider,
             ZLinkMessageKind.Command,
             meshName,
-            _messageName
+            _messageName,
+            encoding: prefix
         );
         return ZLinkClientCallCodec.EncodeEnvelopeParts(
             header,
@@ -361,7 +382,8 @@ internal sealed class ZLinkRouteRequestCall<TRequest>(
     ZLinkFrameworkRuntime runtime,
     string meshName,
     RoutingId targetNodeRid,
-    TRequest request
+    TRequest request,
+    ZLinkEnvelopeCodec.PreparedEncoding prefix
 ) : IZLinkRequestCall
 {
     private ZLinkCallMetadata? _metadata;
@@ -437,7 +459,8 @@ internal sealed class ZLinkRouteRequestCall<TRequest>(
                 ZLinkMessageKind.Request,
                 meshName,
                 packetName,
-                timeout
+                timeout,
+                encoding: prefix
             );
             terminal?.SetCorrelation(header.CorrelationId);
             var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(

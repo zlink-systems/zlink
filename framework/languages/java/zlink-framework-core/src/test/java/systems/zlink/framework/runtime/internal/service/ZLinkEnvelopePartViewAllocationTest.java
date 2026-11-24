@@ -195,7 +195,8 @@ public final class ZLinkEnvelopePartViewAllocationTest {
                 }
             }
             System.out.printf(
-                    "sends=%d headerArrays=%d retainedViews=%d writerViews=%d payloadCopies=%d controlArrays=%d controlViews=%d copyObjects=%s%n",
+                    "sends=%d headerArrays=%d retainedViews=%d writerViews=%d payloadCopies=%d"
+                            + " controlArrays=%d controlViews=%d copyObjects=%s%n",
                     SENDS,
                     arrays,
                     views,
@@ -206,7 +207,7 @@ public final class ZLinkEnvelopePartViewAllocationTest {
                     copyObjects);
             assertEquals(SENDS, controlArrays);
             assertEquals(SENDS, controlViews);
-            assertEquals(SENDS, arrays, "one owned protobuf header byte array per send");
+            assertEquals(0, arrays, "the protobuf header is written into the final frame");
             assertEquals(SENDS, copies, "one payload copy into the final native frame");
             assertEquals(0, views, "retained header bytes need no temporary heap buffer");
             assertEquals(0, writerViews, "header bytes need no temporary heap buffer for encoding");

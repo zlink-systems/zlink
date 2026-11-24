@@ -128,6 +128,15 @@ node 집합의 이름이고, Actor를 만들 때 `inMesh`에 지정한 mesh 안�
 만들었는지 이미 있었는지는 결과가 알려 준다. 처음 만들었으면 `created`, 있던 것을 찾았으면
 `existing`이다.
 
+#### 3.1.1 생성이 deadline 안에 끝나지 않을 때 {#creation-deadline}
+
+`getOrCreate`가 정해진 deadline 안에 끝나지 않으면 `DeadlineExceeded`를 반환한다.
+호출자가 취소하면 언어별 취소 결과로 관찰된다.
+다른 호출의 생성 완료를 기다리다가 deadline에 도달했다면, 진행 중인 생성 시도는 여전히 성공할 수 있다.
+
+`submit(signal)`의 `Promise`는 deadline에 `kind`가 `ZLinkFrameworkErrorKind.DeadlineExceeded`인 `ZLinkFrameworkException`으로 reject된다.
+호출자 취소는 같은 `Promise`의 취소에 따른 rejection으로 관찰된다.
+
 ### 3.2 호출하기
 
 actor id만 준다. 그 Actor가 지금 어느 Spot 안에 있는지는 Framework가 찾는다.
@@ -144,9 +153,8 @@ actor id만 준다. 그 Actor가 지금 어느 Spot 안에 있는지는 Framewor
 
 ### 3.3 참조의 generation
 
-`ActorRef`·`SpotRef`의 **generation**은 같은 id의 몇 번째 instance인지를 세는 값이다. Location
-Store가 object를 만들 때 발급하며 join·relocation·`RecreateOnRelocation`으로 바뀌지 않는다. 같은
-id를 없앤 뒤 다시 만들면 새 generation을 받는다.
+`ActorRef`와 `SpotRef`의 [generation](34-activation-lifetime.ko.md#object-generation)은
+같은 ID를 사용하는 서로 다른 instance를 구분한다.
 
 일반 message는 generation을 보지 않고 지금 존재하는 object로 간다. 반면 참조를 통한 닫기·지우기·
 이동 같은 lifecycle 호출은 그 참조의 generation이 현재 generation과 같을 때만 효력이 있다. 그래서

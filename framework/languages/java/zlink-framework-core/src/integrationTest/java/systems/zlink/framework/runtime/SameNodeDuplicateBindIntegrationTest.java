@@ -296,6 +296,9 @@ final class SameNodeDuplicateBindIntegrationTest {
     void sessionBoundNotificationKeepsSuccessfulBind(String outcome) throws Exception {
         sessions.clear();
         var options = new DefaultZLinkFrameworkOptions();
+        if (outcome.equals("timeout")) {
+            options.setSessionReplacementCallbackTimeout(Duration.ofMillis(100));
+        }
         options.addLocationStore(new ZLinkInMemoryLocationStore());
         options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
         options.addRouteMesh("game")
@@ -336,7 +339,8 @@ final class SameNodeDuplicateBindIntegrationTest {
                     assertEquals(
                             outcome.equals("recreated")
                                     ? ZLinkFrameworkErrorKind.INVALID_OPERATION
-                                    : ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                    // Destroy removes the authority: NotFound (06-framework-api).
+                                    : ZLinkFrameworkErrorKind.NOT_FOUND,
                             assertInstanceOf(
                                             ZLinkFrameworkException.class,
                                             failure.getCause(),
@@ -361,7 +365,7 @@ final class SameNodeDuplicateBindIntegrationTest {
                     var cancellation = await(player.boundCancellation);
                     if (outcome.equals("timeout")) {
                         assertInstanceOf(
-                                TimeoutException.class, failures.next.poll(35, TimeUnit.SECONDS));
+                                TimeoutException.class, failures.next.poll(3, TimeUnit.SECONDS));
                         assertTrue(cancellation.isCancellationRequested());
                     } else if (outcome.equals("actor-destroy")) {
                         destruction = runtime.actorManager().destroy(created.actor());

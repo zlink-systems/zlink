@@ -7,7 +7,7 @@ require_quiet || exit 2
 : > "$LOGS/results.txt"
 LIB="$CORE_LIB"; INC="$Z/core/include"
 CORE_ABI="$(sed -n 's/^LIBZLINK_ABI_SOVERSION=//p' "$Z/VERSION")"
-NODE_CORE_PREFIX="${ZLINK_CORE_CACHE_DIR:-$HOME/.cache/zlink/core}/$CORE_VER/linux-x64"
+NODE_CORE_PREFIX="$(bash "$Z/scripts/gate/materialize-local-core-prefix.sh" "$(dirname "$LIB")")" || exit $?
 run c        bindings/c      env ZLINK_C_CORE_BUILD_DIR="$Z/core/build-dev" ZLINK_CORE_INCLUDE_DIR="$INC" bash tests/run_tests.sh
 run cpp      bindings/cpp    env ZLINK_CORE_SOURCE=local ZLINK_CPP_CORE_BUILD_DIR="$Z/core/build-dev" ZLINK_BUILD_JOBS=4 bash tests/run_tests.sh
 run dotnet   bindings/dotnet env ZLINK_LIBRARY_PATH="$LIB" TMPDIR=/dev/shm/zlink-tmp-dotnet UseSharedCompilation=false MSBUILDDISABLENODEREUSE=1 DOTNET_CLI_TELEMETRY_OPTOUT=1 bash tests/run_tests.sh

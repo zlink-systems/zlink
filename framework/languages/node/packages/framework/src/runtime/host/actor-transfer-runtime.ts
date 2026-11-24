@@ -222,6 +222,14 @@ export class ZLinkActorTransferRuntime {
     this.options.spotManager()?.captureSourceActorPacketPrefix(actor);
   }
 
+  beginRelocationTargetIngress(
+    actorId: string,
+    objectGeneration: bigint
+  ): (reason?: unknown) => void {
+    this.options.actorHandoff.beginProvisional(actorId, objectGeneration);
+    return (reason) => this.options.actorHandoff.cancel(actorId, reason);
+  }
+
   /** Relocation activation owns admission; handler terminals are observed independently. */
   admitRelocationPrefix(
     actor: ZLinkActor,
@@ -229,7 +237,7 @@ export class ZLinkActorTransferRuntime {
     packets: readonly ZLinkActorHandoffPacket[],
     start: Promise<void>,
     onResult: (packet: ZLinkActorHandoffPacket, result: ZLinkActorHandoffResult) => Promise<void>
-  ): void {
+  ): Promise<void> {
     const manager = this.options.spotManager();
     if (manager === undefined) throw new Error('Relocated Actor has no local FIFO owner.');
     const admitted = this.options.actorHandoff.admitTransferredPrefix(
@@ -240,10 +248,12 @@ export class ZLinkActorTransferRuntime {
       this.options.prepareApplicationJob,
       start,
       (packet, result) => {
-        void this.observeHandoffReplay(onResult(packet, result));
+        const delivery = onResult(packet, result);
+        void this.observeHandoffReplay(delivery);
+        return delivery;
       }
     );
-    void this.observeHandoffReplay(admitted.terminal);
+    return admitted.terminal;
   }
 
   async completeDeferredActorHandoff(
@@ -292,7 +302,7 @@ export class ZLinkActorTransferRuntime {
     completion: ZLinkDeferredJoinCompletion,
     actor: ZLinkActor,
     actorRef: ActorRef,
-    submitMailbox: <T>(operation: () => Promise<T>) => Promise<T>,
+    submitMailbox: (operation: () => Promise<void>) => Promise<void>,
     signal?: AbortSignal
   ): Promise<void> {
     const terminalKey = deferredJoinTerminalKey(completion);
@@ -329,7 +339,7 @@ export class ZLinkActorTransferRuntime {
     completion: ZLinkDeferredJoinCompletion,
     actor: ZLinkActor,
     actorRef: ActorRef,
-    submitMailbox: <T>(operation: () => Promise<T>) => Promise<T>
+    submitMailbox: (operation: () => Promise<void>) => Promise<void>
   ): Promise<void> {
     const targetActorRef = this.options
       .actorManager()
@@ -1070,7 +1080,7 @@ export class ZLinkActorTransferRuntime {
     for (;;) {
       signal?.throwIfAborted();
       try {
-        prepared = await store.prepareAggregate(request, signal);
+        prepared = await store.prepareAggregate(request, signal, BigInt(deadlineUnixMs));
       } catch (error) {
         firstError ??= error;
       }
@@ -1128,7 +1138,8 @@ export class ZLinkActorTransferRuntime {
     const state = this.options.actorManager()?.getState(actor.context.actorId);
     state?.setJoinedSpot(spotId, spot);
     const actorRef = state?.nativeActorRef;
-    const binding = state?.boundSession;
+    // The legacy routed transfer stages this input before its native Actor exists.
+    const binding = state?.boundSessionValue;
     if (
       actorRef !== undefined &&
       binding?.sessionNodeRid !== undefined &&
@@ -1141,7 +1152,8 @@ export class ZLinkActorTransferRuntime {
           actorRef,
           binding.sessionNodeRid,
           binding.sessionRid,
-          binding.bindingGeneration
+          binding.bindingGeneration,
+          binding
         );
     }
   }

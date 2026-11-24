@@ -344,7 +344,16 @@ curl http://127.0.0.1:5080/locations/players/ghost
 [generation](22-actor.ko.md#33-참조의-generation)**만 대상으로 삼으며, 같은 id로 다시 만들어진
 대상은 그대로 둔다.
 
-## 6. 관련 문서
+## 6. 생성이 몰릴 때 {#creation-load}
+
+여러 호출이 같은 Actor ID나 Spot ID를 동시에 생성하려 하면 Location Store에서 생성 권한을
+얻은 target만 factory를 실행한다. 생성 권한을 얻지 못한 호출은 별도 factory를 실행하지 않는다.
+
+로그인이 집중되어 서로 다른 Actor ID를 생성하면 새 ID마다 Location Store에 생성 권한을 예약하는 왕복이 발생하며,
+승인된 생성 결과도 Store에 기록한다. 처리량과 지연은 Store 처리 성능과 target node의 배치 및 수용량에 따라
+달라진다. 예상 로그인 부하에서 생성 완료까지 걸리는 시간을 측정하고 그 결과로 deadline을 정한다.
+
+## 7. 관련 문서
 
 - id로 호출하는 상태 객체 — [Spot](21-spot.ko.md) · [Actor](22-actor.ko.md)
 - Store가 무엇을 적어 두는가 — [Channel 동작 원리](30-channel-patterns.ko.md#61-location-store--누가-어디-있는지-적어-두는-곳)

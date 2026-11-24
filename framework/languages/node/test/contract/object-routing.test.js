@@ -1,4 +1,8 @@
-const { prepareZLinkRequestReply, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
+const { LegacyRelocationAuthorityFixture } = require('./fixtures/legacy-relocation-authority');
+const {
+  prepareZLinkRequestReply,
+  identityRequestReply
+} = require('../../packages/framework/dist/runtime/messaging/request-result');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const framework = require('../../packages/framework/dist');
@@ -9,16 +13,13 @@ const {
 const {
   ZLinkFrameworkInternalErrorKind
 } = require('../../packages/framework/dist/runtime/framework-errors-internal');
-const {
-  ServiceRelocationAuthorityPayloadCodec
-} = require('../../packages/framework/dist/runtime/foundation/service-relocation-runtime');
 const channelEnvelope = require('../../packages/framework/dist/runtime/channels/channel-envelope');
 const {
   ZLinkBufferMessage
 } = require('../../packages/framework/dist/runtime/backend/runtime-message');
 
 function relocationAuthorityPayload(payload) {
-  return new ServiceRelocationAuthorityPayloadCodec().publish(payload, {
+  return new LegacyRelocationAuthorityFixture().publish(payload, {
     phase: 'sourceCleanupCompleted',
     reference: 'relocation-root',
     checksumCrc32c: 7,
@@ -79,7 +80,9 @@ function actorRow(actorId, nodeRid = 'node-a') {
 }
 
 function resolverFor(resolveActor, now) {
-  const unused = () => { throw new Error('unexpected store operation'); };
+  const unused = () => {
+    throw new Error('unexpected store operation');
+  };
   return new internal.ZLinkStoreLocationResolvers({
     stores: {
       authorityStore: { readAuthority: unused },
@@ -91,7 +94,7 @@ function resolverFor(resolveActor, now) {
     },
     leaseTracker: {
       isOwnerTokenLive: async () => true,
-      remainingOwnerTokenLeaseMs: async () => 60_000
+      ownerTokenLeaseDeadlineMs: async () => performance.now() + 60_000
     },
     spotMeshNames: ['play'],
     routeCacheMaxAgeMs: 15_000,
@@ -103,32 +106,50 @@ test('direct Actor resolution caches only positive Ready routes and supports exp
   let now = 0;
   let reads = 0;
   let current = actorRow('actor-1');
-  const resolver = resolverFor(async ({ actorId }) => {
-    reads += 1;
-    return actorId === current?.actorId ? current : undefined;
-  }, () => now);
+  const resolver = resolverFor(
+    async ({ actorId }) => {
+      reads += 1;
+      return actorId === current?.actorId ? current : undefined;
+    },
+    () => now
+  );
 
-  assert.equal((await resolver.resolveActorRow({ meshName: '', actorId: 'actor-1' })).actorRef.nodeRid, 'node-a');
+  assert.equal(
+    (await resolver.resolveActorRow({ meshName: '', actorId: 'actor-1' })).actorRef.nodeRid,
+    'node-a'
+  );
   current = actorRow('actor-1', 'node-b');
-  assert.equal((await resolver.resolveActorRow({ meshName: '', actorId: 'actor-1' })).actorRef.nodeRid, 'node-a');
+  assert.equal(
+    (await resolver.resolveActorRow({ meshName: '', actorId: 'actor-1' })).actorRef.nodeRid,
+    'node-a'
+  );
   assert.equal(reads, 1);
 
   resolver.invalidateActorRoute('actor-1');
-  assert.equal((await resolver.resolveActorRow({ meshName: '', actorId: 'actor-1' })).actorRef.nodeRid, 'node-b');
+  assert.equal(
+    (await resolver.resolveActorRow({ meshName: '', actorId: 'actor-1' })).actorRef.nodeRid,
+    'node-b'
+  );
   assert.equal(reads, 2);
 
   now = 15_000;
   current = actorRow('actor-1', 'node-c');
-  assert.equal((await resolver.resolveActorRow({ meshName: '', actorId: 'actor-1' })).actorRef.nodeRid, 'node-c');
+  assert.equal(
+    (await resolver.resolveActorRow({ meshName: '', actorId: 'actor-1' })).actorRef.nodeRid,
+    'node-c'
+  );
   assert.equal(reads, 3);
 });
 
 test('direct Actor resolution does not negative-cache Missing results', async () => {
   let reads = 0;
-  const resolver = resolverFor(async () => {
-    reads += 1;
-    return undefined;
-  }, () => 0);
+  const resolver = resolverFor(
+    async () => {
+      reads += 1;
+      return undefined;
+    },
+    () => 0
+  );
 
   assert.equal(await resolver.resolveActorRow({ meshName: '', actorId: 'missing' }), undefined);
   assert.equal(await resolver.resolveActorRow({ meshName: '', actorId: 'missing' }), undefined);
@@ -173,7 +194,7 @@ test('authority-backed Spot resolution uses the same positive-only cache boundar
     authority,
     (meshName) => meshName,
     undefined,
-    { remainingOwnerTokenLeaseMs: async () => 60_000 },
+    { ownerTokenLeaseDeadlineMs: async () => performance.now() + 60_000 },
     15_000,
     () => 0
   );
@@ -186,22 +207,94 @@ test('authority-backed Spot resolution uses the same positive-only cache boundar
   assert.equal(reads, 2);
 });
 
+test('Ready Spot caching keeps the observed lease deadline through target-state lookup', async () => {
+  let now = 0;
+  let leaseReads = 0;
+  let reads = 0;
+  const authority = {
+    async readAuthority() {
+      reads += 1;
+      return {
+        kind: 'snapshot',
+        storeVersion: { value: '1' },
+        payload: internal.encodeServiceUserSpotAuthorityPayload({
+          state: 'ready',
+          stableType: 'Room',
+          spotId: 'room-1',
+          ownerId: 'owner-a',
+          ownerLeaseGeneration: 2n,
+          ownerMeshName: 'play',
+          ownerNodeRid: 'node-a',
+          ownerNodeGeneration: 3n
+        }),
+        objectGeneration: 4n,
+        authorityOwnerGeneration: 5n,
+        ownerId: 'owner-a',
+        ownerLeaseGeneration: 2n,
+        allocation: {
+          state: 'active',
+          objectKind: 'user_spot',
+          stableType: 'Room',
+          descriptor: { meshName: 'play', nodeRid: 'node-a' },
+          descriptorLifecycleGeneration: 3n,
+          capacity: { actors: 0, spots: 1 }
+        },
+        storeNow: new Date()
+      };
+    }
+  };
+  const tracker = new internal.ZLinkOwnerLeaseTracker({
+    monotonicNowMs: () => now,
+    store: {
+      async readOwnerLease() {
+        leaseReads++;
+        return {
+          kind: 'found',
+          token: { ownerId: 'owner-a', leaseGeneration: 2n },
+          storeNow: new Date(now),
+          leaseExpiresAt: new Date(100)
+        };
+      }
+    }
+  });
+  const resolver = new internal.ZLinkAuthoritySpotRouteResolver(
+    authority,
+    (meshName) => meshName,
+    undefined,
+    tracker,
+    15_000,
+    () => now,
+    async () => { now = 90; }
+  );
+
+  assert.equal((await resolver.resolve('room-1')).targetNodeRid, 'node-a');
+  assert.equal((await resolver.resolve('room-1')).authorityOwnerGeneration, 5n);
+  assert.equal(reads, 1);
+  assert.equal(leaseReads, 1);
+  now = 100;
+  await assert.rejects(() => resolver.resolve('room-1'), /owner lease is unavailable/);
+  assert.equal(reads, 2);
+  assert.equal(leaseReads, 2);
+});
+
 test('Ready Instance authority with an expired owner remains unavailable instead of missing', async () => {
   const authority = {
     async readAuthority() {
       return {
         kind: 'snapshot',
         storeVersion: { value: '1' },
-        payload: relocationAuthorityPayload(internal.encodeServiceInstanceAuthorityPayload({
-          state: 'ready',
-          stableType: 'Room',
-          spotId: 'room-owner-lost',
-          ownerId: 'owner-a',
-          ownerLeaseGeneration: 2n,
-          ownerMeshName: 'play',
-          ownerNodeRid: 'node-a',
-          ownerNodeGeneration: 3n
-        })),
+        payload: relocationAuthorityPayload(
+          internal.encodeServiceInstanceAuthorityPayload({
+            state: 'ready',
+            stableType: 'Room',
+            spotId: 'room-owner-lost',
+            ownerId: 'owner-a',
+            ownerLeaseGeneration: 2n,
+            ownerMeshName: 'play',
+            ownerNodeRid: 'node-a',
+            ownerNodeGeneration: 3n
+          })
+        ),
         objectGeneration: 4n,
         authorityOwnerGeneration: 5n,
         ownerId: 'owner-a',
@@ -222,15 +315,16 @@ test('Ready Instance authority with an expired owner remains unavailable instead
     authority,
     (meshName) => meshName,
     undefined,
-    { remainingOwnerTokenLeaseMs: async () => 0 },
+    { ownerTokenLeaseDeadlineMs: async () => -Infinity },
     15_000,
     () => 0
   );
 
   await assert.rejects(
     () => resolver.resolve('room-owner-lost'),
-    (error) => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
-      && internal.internalFrameworkErrorKind(error) === undefined
+    (error) =>
+      error.kind === framework.ZLinkFrameworkErrorKind.Unavailable &&
+      internal.internalFrameworkErrorKind(error) === undefined
   );
 });
 
@@ -243,16 +337,23 @@ test('Closing Spot authority retains the owner route without caching it as Ready
         kind: 'snapshot',
         storeVersion: { value: 'closing-v1' },
         payload: internal.encodeServiceUserSpotAuthorityPayload({
-          state: 'closing', stableType: 'Room', spotId: 'closing-room',
-          ownerId: 'owner-a', ownerLeaseGeneration: 2n,
-          ownerMeshName: 'play', ownerNodeRid: 'node-a', ownerNodeGeneration: 3n
+          state: 'closing',
+          stableType: 'Room',
+          spotId: 'closing-room',
+          ownerId: 'owner-a',
+          ownerLeaseGeneration: 2n,
+          ownerMeshName: 'play',
+          ownerNodeRid: 'node-a',
+          ownerNodeGeneration: 3n
         }),
         objectGeneration: 4n,
         authorityOwnerGeneration: 5n,
         ownerId: 'owner-a',
         ownerLeaseGeneration: 2n,
         allocation: {
-          state: 'active', objectKind: 'user_spot', stableType: 'Room',
+          state: 'active',
+          objectKind: 'user_spot',
+          stableType: 'Room',
           descriptor: { meshName: 'play', nodeRid: 'node-a' },
           descriptorLifecycleGeneration: 3n,
           capacity: { actors: 0, spots: 1 }
@@ -262,8 +363,12 @@ test('Closing Spot authority retains the owner route without caching it as Ready
     }
   };
   const resolver = new internal.ZLinkAuthoritySpotRouteResolver(
-    authority, meshName => meshName, undefined,
-    { remainingOwnerTokenLeaseMs: async () => 60_000 }, 15_000, () => 0
+    authority,
+    (meshName) => meshName,
+    undefined,
+    { ownerTokenLeaseDeadlineMs: async () => performance.now() + 60_000 },
+    15_000,
+    () => 0
   );
   assert.equal((await resolver.resolve('closing-room')).targetNodeRid, 'node-a');
   assert.equal((await resolver.resolve('closing-room')).targetSpotGeneration, 4n);
@@ -271,26 +376,24 @@ test('Closing Spot authority retains the owner route without caching it as Ready
 });
 
 test('target owner maps absent direct Spot to NotFound', () => {
-  const { ServiceStatefulRuntime } = require(
-    '../../packages/framework/dist/internal'
-  );
+  const { ServiceStatefulRuntime } = require('../../packages/framework/dist/internal');
   const runtime = new ServiceStatefulRuntime({ setServiceIngress() {} }, 'node-a', 3n);
   const fence = {
     spot: { spotId: 'closing-room', generation: 4n },
-    targetNodeRid: 'node-a', targetNodeGeneration: 3n,
-    authorityOwnerGeneration: 5n, ownerLeaseGeneration: 2n,
+    targetNodeRid: 'node-a',
+    targetNodeGeneration: 3n,
+    authorityOwnerGeneration: 5n,
+    ownerLeaseGeneration: 2n,
     storeVersion: 'closing-v1'
   };
   assert.throws(
     () => runtime.validateDirectSpotFence(fence),
-    error => error.kind === framework.ZLinkFrameworkErrorKind.NotFound
+    (error) => error.kind === framework.ZLinkFrameworkErrorKind.NotFound
   );
 });
 
 test('cached Ready direct Spot route applies host admission before Spot Close seal', async () => {
-  const { ServiceStatefulRuntime } = require(
-    '../../packages/framework/dist/internal'
-  );
+  const { ServiceStatefulRuntime } = require('../../packages/framework/dist/internal');
   class Lookup {}
   let authorityState = 'ready';
   let routedCalls = 0;
@@ -302,86 +405,125 @@ test('cached Ready direct Spot route applies host admission before Spot Close se
     async readAuthority() {
       if (authorityState === 'missing') return { kind: 'missing' };
       return {
-        kind: 'snapshot', storeVersion: { value: 'v1' },
+        kind: 'snapshot',
+        storeVersion: { value: 'v1' },
         payload: internal.encodeServiceUserSpotAuthorityPayload({
-          state: authorityState, stableType: 'Room', spotId: 'room-direct',
-          ownerId: 'owner-a', ownerLeaseGeneration: 2n,
-          ownerMeshName: 'play', ownerNodeRid: 'node-a', ownerNodeGeneration: 3n
+          state: authorityState,
+          stableType: 'Room',
+          spotId: 'room-direct',
+          ownerId: 'owner-a',
+          ownerLeaseGeneration: 2n,
+          ownerMeshName: 'play',
+          ownerNodeRid: 'node-a',
+          ownerNodeGeneration: 3n
         }),
-        objectGeneration: 4n, authorityOwnerGeneration: 5n,
-        ownerId: 'owner-a', ownerLeaseGeneration: 2n,
+        objectGeneration: 4n,
+        authorityOwnerGeneration: 5n,
+        ownerId: 'owner-a',
+        ownerLeaseGeneration: 2n,
         allocation: {
-          state: 'active', objectKind: 'user_spot', stableType: 'Room',
+          state: 'active',
+          objectKind: 'user_spot',
+          stableType: 'Room',
           descriptor: { meshName: 'play', nodeRid: 'node-a' },
           descriptorLifecycleGeneration: 3n,
           capacity: { actors: 0, spots: 1 }
-        }, storeNow: new Date()
+        },
+        storeNow: new Date()
       };
     }
   };
   const resolver = new internal.ZLinkAuthoritySpotRouteResolver(
-    authority, meshName => meshName, undefined,
-    { remainingOwnerTokenLeaseMs: async () => 60_000 }, 15_000, () => 0
+    authority,
+    (meshName) => meshName,
+    undefined,
+    { ownerTokenLeaseDeadlineMs: async () => performance.now() + 60_000 },
+    15_000,
+    () => 0
   );
   const owner = new ServiceStatefulRuntime({ setServiceIngress() {} }, 'node-a', 3n);
   owner.restoreUserSpotAuthority('room-direct', 'Room', 4n, 5n);
   const addressTransport = new internal.ZLinkHostSpotAddressTransport({
     resolver: () => resolver,
     routed: {
-      async sendToSpot() { throw new Error('send is not used.'); },
-      requestToSpot(route) { return prepareZLinkRequestReply((async () => {
-        routedCalls++;
-        const claim = admission.claim('play', 'direct Spot request');
-        try {
-          const spotClaim = await barrier.enter();
-          spotClaim.release();
-        } finally {
-          claim.close();
-        }
-        owner.validateDirectSpotFence({
-          spot: { spotId: String(route.spotId), generation: route.targetSpotGeneration },
-          targetNodeRid: String(route.targetNodeRid),
-          targetNodeGeneration: route.targetNodeGeneration,
-          authorityOwnerGeneration: route.authorityOwnerGeneration,
-          ownerLeaseGeneration: route.ownerLeaseGeneration,
-          storeVersion: route.authorityStoreVersion
-        });
-      })(), identityRequestReply); }
+      async sendToSpot() {
+        throw new Error('send is not used.');
+      },
+      requestToSpot(route) {
+        return prepareZLinkRequestReply(
+          (async () => {
+            routedCalls++;
+            const claim = admission.claim('play', 'direct Spot request');
+            try {
+              const spotClaim = await barrier.enter();
+              spotClaim.release();
+            } finally {
+              claim.close();
+            }
+            owner.validateDirectSpotFence({
+              spot: { spotId: String(route.spotId), generation: route.targetSpotGeneration },
+              targetNodeRid: String(route.targetNodeRid),
+              targetNodeGeneration: route.targetNodeGeneration,
+              authorityOwnerGeneration: route.authorityOwnerGeneration,
+              ownerLeaseGeneration: route.ownerLeaseGeneration,
+              storeVersion: route.authorityStoreVersion
+            });
+          })(),
+          identityRequestReply
+        );
+      }
     },
-    meshNames: () => ['play'], meshNode: () => undefined,
-    completions: () => undefined, defaultRequestTimeoutMs: 1_000
+    meshNames: () => ['play'],
+    meshNode: () => undefined,
+    completions: () => undefined,
+    defaultRequestTimeoutMs: 1_000
   });
   const request = () => addressTransport.requestToSpotAddress('room-direct', new Lookup(), {});
   await resolver.resolve('room-direct');
   const seal = barrier.seal('close');
   assert.equal(barrier.commit(seal), true);
   authorityState = 'closing';
-  await assert.rejects(request, error => error.kind === framework.ZLinkFrameworkErrorKind.NotFound);
+  await assert.rejects(
+    request,
+    (error) => error.kind === framework.ZLinkFrameworkErrorKind.NotFound
+  );
   admission.close();
-  await assert.rejects(request, error => error.kind === framework.ZLinkFrameworkErrorKind.ShuttingDown);
+  await assert.rejects(
+    request,
+    (error) => error.kind === framework.ZLinkFrameworkErrorKind.ShuttingDown
+  );
   authorityState = 'creating';
   resolver.invalidate('room-direct');
-  await assert.rejects(request, error => error.kind === framework.ZLinkFrameworkErrorKind.NotFound);
+  await assert.rejects(
+    request,
+    (error) => error.kind === framework.ZLinkFrameworkErrorKind.NotFound
+  );
   authorityState = 'missing';
-  await assert.rejects(request, error => error.kind === framework.ZLinkFrameworkErrorKind.NotFound);
+  await assert.rejects(
+    request,
+    (error) => error.kind === framework.ZLinkFrameworkErrorKind.NotFound
+  );
   assert.equal(routedCalls, 2);
 });
 
 test('owner ingress admits a direct request before the Close authority commit', async () => {
-  const { ServiceStatefulRuntime } = require(
-    '../../packages/framework/dist/internal'
-  );
+  const { ServiceStatefulRuntime } = require('../../packages/framework/dist/internal');
   const owner = new ServiceStatefulRuntime({ setServiceIngress() {} }, 'node-a', 3n);
   const fence = {
     spot: { spotId: 'close-race-room', generation: 4n },
-    targetNodeRid: 'node-a', targetNodeGeneration: 3n,
-    authorityOwnerGeneration: 5n, ownerLeaseGeneration: 2n,
+    targetNodeRid: 'node-a',
+    targetNodeGeneration: 3n,
+    authorityOwnerGeneration: 5n,
+    ownerLeaseGeneration: 2n,
     storeVersion: 'ready-v1'
   };
   owner.restoreUserSpotAuthority('close-race-room', 'Room', 4n, 5n);
   owner.rememberSpotRoute(fence);
   let dispatched = 0;
-  owner.enqueueApplicationFrame = () => { dispatched++; return 'application'; };
+  owner.enqueueApplicationFrame = () => {
+    dispatched++;
+    return 'application';
+  };
   const ingress = { parts: [Buffer.alloc(0), Buffer.alloc(0)] };
   const record = { kind: 'spotRequest', target: fence, correlation: 'corr-race' };
   assert.equal(await owner.handleIngress(ingress, record, Buffer.alloc(0)), 'application');
@@ -389,23 +531,26 @@ test('owner ingress admits a direct request before the Close authority commit', 
 });
 
 test('local loopback Spot request admits before the Close authority commit', async () => {
-  const { ServiceStatefulRuntime } = require(
-    '../../packages/framework/dist/internal'
-  );
-  const { encodeSpotHeader } = require(
-    '../../packages/framework/dist/runtime/foundation/service-stateful-wire-codec'
-  );
+  const { ServiceStatefulRuntime } = require('../../packages/framework/dist/internal');
+  const {
+    encodeSpotHeader
+  } = require('../../packages/framework/dist/runtime/foundation/service-stateful-wire-codec');
   const owner = new ServiceStatefulRuntime({ setServiceIngress() {} }, 'node-a', 3n);
   const fence = {
     spot: { spotId: 'local-close-race', generation: 4n },
-    targetNodeRid: 'node-a', targetNodeGeneration: 3n,
-    authorityOwnerGeneration: 5n, ownerLeaseGeneration: 2n,
+    targetNodeRid: 'node-a',
+    targetNodeGeneration: 3n,
+    authorityOwnerGeneration: 5n,
+    ownerLeaseGeneration: 2n,
     storeVersion: 'ready-v1'
   };
   owner.restoreUserSpotAuthority('local-close-race', 'Room', 4n, 5n);
   owner.rememberSpotRoute(fence);
   let dispatched = 0;
-  owner.enqueueApplicationFrame = () => { dispatched++; return 'application'; };
+  owner.enqueueApplicationFrame = () => {
+    dispatched++;
+    return 'application';
+  };
   const ingress = {
     parts: [encodeSpotHeader('spotRequest', 'source-spot', fence, 1n), Buffer.alloc(0)]
   };
@@ -419,7 +564,7 @@ test('authority Spot resolution does not re-cache a route invalidated during the
   let storeVersion = 'v1';
   let releaseRead;
   let signalReadStarted;
-  const readStarted = new Promise(resolve => {
+  const readStarted = new Promise((resolve) => {
     signalReadStarted = resolve;
   });
   const authority = {
@@ -429,7 +574,7 @@ test('authority Spot resolution does not re-cache a route invalidated during the
       const readStoreVersion = storeVersion;
       if (reads === 1) {
         signalReadStarted();
-        await new Promise(resolve => {
+        await new Promise((resolve) => {
           releaseRead = resolve;
         });
       }
@@ -466,7 +611,7 @@ test('authority Spot resolution does not re-cache a route invalidated during the
     authority,
     (meshName) => meshName,
     undefined,
-    { remainingOwnerTokenLeaseMs: async () => 60_000 },
+    { ownerTokenLeaseDeadlineMs: async () => performance.now() + 60_000 },
     15_000,
     () => 0
   );
@@ -492,16 +637,18 @@ test('authority Actor route carries every fence and a changed StoreVersion inval
       return {
         kind: 'snapshot',
         storeVersion: { value: storeVersion },
-        payload: relocationAuthorityPayload(internal.encodeActorAuthorityIdentity({
-          actorType: 'Player',
-          actor: { actorId: 'actor-1', nodeRid: 'node-a', objectGeneration: 7n },
-          meshName: 'play',
-          ownerNodeGeneration: 11n,
-          owner: { ownerId: 'owner-a', leaseGeneration: 13n },
-          spotId: 'entry-a',
-          spotGeneration: 11n,
-          spotKind: framework.ZLinkSpotKind.Entry
-        })),
+        payload: relocationAuthorityPayload(
+          internal.encodeActorAuthorityIdentity({
+            actorType: 'Player',
+            actor: { actorId: 'actor-1', nodeRid: 'node-a', objectGeneration: 7n },
+            meshName: 'play',
+            ownerNodeGeneration: 11n,
+            owner: { ownerId: 'owner-a', leaseGeneration: 13n },
+            spotId: 'entry-a',
+            spotGeneration: 11n,
+            spotKind: framework.ZLinkSpotKind.Entry
+          })
+        ),
         objectGeneration: 7n,
         authorityOwnerGeneration: 17n,
         ownerId: 'owner-a',
@@ -518,7 +665,9 @@ test('authority Actor route carries every fence and a changed StoreVersion inval
       };
     }
   };
-  const unused = () => { throw new Error('legacy object row must not be read'); };
+  const unused = () => {
+    throw new Error('legacy object row must not be read');
+  };
   const resolver = new internal.ZLinkStoreLocationResolvers({
     stores: {
       authorityStore: authority,
@@ -528,7 +677,7 @@ test('authority Actor route carries every fence and a changed StoreVersion inval
       actorStore: { resolveActor: unused },
       routeStore: { resolveRoute: unused }
     },
-    leaseTracker: { remainingOwnerTokenLeaseMs: async () => 60_000 },
+    leaseTracker: { ownerTokenLeaseDeadlineMs: async () => performance.now() + 60_000 },
     routeCacheMaxAgeMs: 15_000,
     monotonicNowMs: () => 0
   });
@@ -569,7 +718,9 @@ test('authority Actor route projects a foreign payload from the canonical outer 
       };
     }
   };
-  const unused = () => { throw new Error('legacy object row must not be read'); };
+  const unused = () => {
+    throw new Error('legacy object row must not be read');
+  };
   const resolver = new internal.ZLinkStoreLocationResolvers({
     stores: {
       authorityStore: authority,
@@ -579,7 +730,7 @@ test('authority Actor route projects a foreign payload from the canonical outer 
       actorStore: { resolveActor: unused },
       routeStore: { resolveRoute: unused }
     },
-    leaseTracker: { remainingOwnerTokenLeaseMs: async () => 60_000 },
+    leaseTracker: { ownerTokenLeaseDeadlineMs: async () => performance.now() + 60_000 },
     routeCacheMaxAgeMs: 15_000,
     monotonicNowMs: () => 0
   });
@@ -631,7 +782,9 @@ test('Message Follow invalidation deletes only the exact cached Actor route fenc
       };
     }
   };
-  const unused = () => { throw new Error('unexpected legacy store access'); };
+  const unused = () => {
+    throw new Error('unexpected legacy store access');
+  };
   const resolver = new internal.ZLinkStoreLocationResolvers({
     stores: {
       authorityStore: authority,
@@ -641,7 +794,7 @@ test('Message Follow invalidation deletes only the exact cached Actor route fenc
       actorStore: { resolveActor: unused },
       routeStore: { resolveRoute: unused }
     },
-    leaseTracker: { remainingOwnerTokenLeaseMs: async () => 60_000 },
+    leaseTracker: { ownerTokenLeaseDeadlineMs: async () => performance.now() + 60_000 },
     routeCacheMaxAgeMs: 15_000,
     monotonicNowMs: () => 0
   });
@@ -651,25 +804,97 @@ test('Message Follow invalidation deletes only the exact cached Actor route fenc
   nodeGeneration = 19n;
   authorityOwnerGeneration = 23n;
   ownerLeaseGeneration = 29n;
-  assert.equal(resolver.invalidateActorRouteIfMatches({
-    actorId: 'actor-follow',
-    objectGeneration: 7n,
-    targetNodeRid: 'node-stale-not-current',
-    targetNodeGeneration: 11n,
-    authorityOwnerGeneration: 17n,
-    ownerLeaseGeneration: 13n
-  }), false);
+  assert.equal(
+    resolver.invalidateActorRouteIfMatches({
+      actorId: 'actor-follow',
+      objectGeneration: 7n,
+      targetNodeRid: 'node-stale-not-current',
+      targetNodeGeneration: 11n,
+      authorityOwnerGeneration: 17n,
+      ownerLeaseGeneration: 13n
+    }),
+    false
+  );
   assert.equal((await resolveReadyActorRoute(resolver, 'actor-follow')).actorRef.nodeRid, 'node-a');
 
-  assert.equal(resolver.invalidateActorRouteIfMatches({
-    actorId: 'actor-follow',
-    objectGeneration: 7n,
-    targetNodeRid: 'node-a',
-    targetNodeGeneration: 11n,
-    authorityOwnerGeneration: 17n,
-    ownerLeaseGeneration: 13n
-  }), true);
+  assert.equal(
+    resolver.invalidateActorRouteIfMatches({
+      actorId: 'actor-follow',
+      objectGeneration: 7n,
+      targetNodeRid: 'node-a',
+      targetNodeGeneration: 11n,
+      authorityOwnerGeneration: 17n,
+      ownerLeaseGeneration: 13n
+    }),
+    true
+  );
   assert.equal((await resolveReadyActorRoute(resolver, 'actor-follow')).actorRef.nodeRid, 'node-b');
+});
+
+test('stale Join invalidates only the Spot route fence it used', async () => {
+  const {
+    ZLinkAuthoritySpotRouteResolver
+  } = require('../../packages/framework/dist/runtime/locations/resolvers');
+  const {
+    encodeServiceUserSpotAuthorityPayload
+  } = require('../../packages/framework/dist/runtime/foundation/service-authority-payload-codec');
+  const spotId = 'table';
+  const ownerId = 'owner';
+  const targetNodeRid = 'node';
+  const ownerLeaseGeneration = 3n;
+  const snapshot = {
+    kind: 'snapshot',
+    objectGeneration: 7n,
+    authorityOwnerGeneration: 11n,
+    ownerId,
+    ownerLeaseGeneration,
+    allocation: { state: 'active', descriptorLifecycleGeneration: 2n },
+    storeVersion: { value: 'old-version' },
+    payload: encodeServiceUserSpotAuthorityPayload({
+      state: 'ready',
+      stableType: 'Table',
+      spotId,
+      ownerId,
+      ownerLeaseGeneration,
+      ownerMeshName: 'play',
+      ownerNodeRid: targetNodeRid,
+      ownerNodeGeneration: 2n
+    })
+  };
+  let current = snapshot;
+  let reads = 0;
+  const resolver = new ZLinkAuthoritySpotRouteResolver(
+    {
+      async readAuthority() {
+        reads++;
+        return current;
+      }
+    },
+    (mesh) => mesh,
+    undefined,
+    {
+      async ownerTokenLeaseDeadlineMs() {
+        return 30_000;
+      }
+    },
+    15_000,
+    () => 0
+  );
+
+  const used = await resolver.resolve(spotId);
+  current = { ...snapshot, storeVersion: { value: 'current-version' } };
+  resolver.invalidateIfMatches?.({ ...used, authorityOwnerGeneration: 10n });
+  assert.equal(await resolver.resolve(spotId), used);
+  assert.equal(reads, 1);
+
+  resolver.invalidateIfMatches?.(used);
+  const replacement = await resolver.resolve(spotId);
+  assert.equal(replacement.authorityStoreVersion, 'current-version');
+  assert.equal(reads, 2);
+
+  resolver.invalidateIfMatches?.(used);
+  assert.equal(await resolver.resolve(spotId), replacement);
+  assert.equal(reads, 2);
 });
 
 test('Session Actor relay route is the stored binding route rather than a per-message Store lookup', async () => {
@@ -736,8 +961,8 @@ test('request reply preserves its reply correlation without resolving the reques
   const request = {
     kind: internal.ZLinkStreamMessageKind.Request,
     codec: internal.ZLinkStreamCodec.Json,
-    flags: internal.ZLinkStreamHeaderFlags.HasRequestSeq
-      | internal.ZLinkStreamHeaderFlags.HasMetadata,
+    flags:
+      internal.ZLinkStreamHeaderFlags.HasRequestSeq | internal.ZLinkStreamHeaderFlags.HasMetadata,
     requestSeq: 731n,
     name: 'Lookup',
     metadata: new Map([['request-only', 'value']]),
@@ -765,30 +990,43 @@ test('a failed direct Spot operation does not refresh and resubmit to a fresh ow
   class Notice {}
   let refreshCount = 0;
   let submitCount = 0;
-  const handle = internal.createSpotHandle('spot-1', {
-    meshName: 'play',
-    nodeRid: 'node-old',
-    spotId: 'spot-1',
-    spotKind: framework.ZLinkSpotKind.User
-  }, async () => {
-    refreshCount += 1;
-    return {
+  const handle = internal.createSpotHandle(
+    'spot-1',
+    {
       meshName: 'play',
-      nodeRid: 'node-new',
+      nodeRid: 'node-old',
       spotId: 'spot-1',
       spotKind: framework.ZLinkSpotKind.User
-    };
-  });
-
-  const result = await internal.sendToSpotHandle({
-    async sendToSpot() {
-      submitCount += 1;
-      return { status: ZLinkSubmitStatus.TargetNotFound };
     },
-    requestToSpot() { return prepareZLinkRequestReply((async () => {
-      throw new Error('unexpected request');
-    })(), identityRequestReply); }
-  }, handle, new Notice());
+    async () => {
+      refreshCount += 1;
+      return {
+        meshName: 'play',
+        nodeRid: 'node-new',
+        spotId: 'spot-1',
+        spotKind: framework.ZLinkSpotKind.User
+      };
+    }
+  );
+
+  const result = await internal.sendToSpotHandle(
+    {
+      async sendToSpot() {
+        submitCount += 1;
+        return { status: ZLinkSubmitStatus.TargetNotFound };
+      },
+      requestToSpot() {
+        return prepareZLinkRequestReply(
+          (async () => {
+            throw new Error('unexpected request');
+          })(),
+          identityRequestReply
+        );
+      }
+    },
+    handle,
+    new Notice()
+  );
 
   assert.equal(result.status, ZLinkSubmitStatus.TargetNotFound);
   assert.equal(submitCount, 1);
@@ -803,31 +1041,45 @@ test('a direct Spot handle request preserves a route disconnect despite a draini
     ZLinkFrameworkInternalErrorKind.RouteNotConnected,
     'SpotNode router request failed with result 109.'
   );
-  const handle = internal.createSpotHandle('spot-1', {
-    meshName: 'play',
-    nodeRid: 'node-a',
-    spotId: 'spot-1',
-    spotKind: framework.ZLinkSpotKind.User,
-    targetNodeState: framework.ZLinkFrameworkRuntimeState.Serving
-  }, async () => {
-    refreshCount += 1;
-    return {
+  const handle = internal.createSpotHandle(
+    'spot-1',
+    {
       meshName: 'play',
       nodeRid: 'node-a',
       spotId: 'spot-1',
       spotKind: framework.ZLinkSpotKind.User,
-      targetNodeState: framework.ZLinkFrameworkRuntimeState.Draining
-    };
-  });
+      targetNodeState: framework.ZLinkFrameworkRuntimeState.Serving
+    },
+    async () => {
+      refreshCount += 1;
+      return {
+        meshName: 'play',
+        nodeRid: 'node-a',
+        spotId: 'spot-1',
+        spotKind: framework.ZLinkSpotKind.User,
+        targetNodeState: framework.ZLinkFrameworkRuntimeState.Draining
+      };
+    }
+  );
 
   await assert.rejects(
-    () => internal.requestToSpotHandle({
-      async sendToSpot() {},
-      requestToSpot() { return prepareZLinkRequestReply((async () => {
-        requestCount += 1;
-        throw routeError;
-      })(), identityRequestReply); }
-    }, handle, new Lookup()),
+    () =>
+      internal.requestToSpotHandle(
+        {
+          async sendToSpot() {},
+          requestToSpot() {
+            return prepareZLinkRequestReply(
+              (async () => {
+                requestCount += 1;
+                throw routeError;
+              })(),
+              identityRequestReply
+            );
+          }
+        },
+        handle,
+        new Lookup()
+      ),
     (error) => error === routeError && error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
   );
   assert.equal(requestCount, 1);
@@ -857,12 +1109,17 @@ test('Spot address requests preserve the original route failure after invalidati
     resolver: () => resolver,
     routed: {
       async sendToSpot() {},
-      requestToSpot() { return prepareZLinkRequestReply((async () => {
-        throw internal.createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.RouteNotConnected,
-          'MeshNode request failed with result 109.'
+      requestToSpot() {
+        return prepareZLinkRequestReply(
+          (async () => {
+            throw internal.createInternalFrameworkException(
+              ZLinkFrameworkInternalErrorKind.RouteNotConnected,
+              'MeshNode request failed with result 109.'
+            );
+          })(),
+          identityRequestReply
         );
-      })(), identityRequestReply); }
+      }
     },
     meshNames: () => [],
     meshNode: () => undefined,
@@ -871,9 +1128,10 @@ test('Spot address requests preserve the original route failure after invalidati
   });
 
   await assert.rejects(
-    () => addressTransport.requestToSpotAddress('spot-1', new Lookup(), {
-      instanceSpot: false
-    }),
+    () =>
+      addressTransport.requestToSpotAddress('spot-1', new Lookup(), {
+        instanceSpot: false
+      }),
     (error) => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
   );
   assert.equal(invalidated, 1);
@@ -928,11 +1186,16 @@ for (const terminalKind of ['SpotMoving', 'RequestTargetNotFound']) {
             async sendToSpot() {
               throw new Error('Unexpected send.');
             },
-            requestToSpot() { return prepareZLinkRequestReply((async () => {
-              requests += 1;
-              if (requests === 1 || !rereads) throw terminal;
-              return { activated: false };
-            })(), identityRequestReply); }
+            requestToSpot() {
+              return prepareZLinkRequestReply(
+                (async () => {
+                  requests += 1;
+                  if (requests === 1 || !rereads) throw terminal;
+                  return { activated: false };
+                })(),
+                identityRequestReply
+              );
+            }
           },
           meshNames: () => ['play'],
           meshNode: () => ({
@@ -949,7 +1212,8 @@ for (const terminalKind of ['SpotMoving', 'RequestTargetNotFound']) {
               coldSubmits += 1;
               replyParts = channelEnvelope
                 .encodeChannelReplyParts(
-                  channelEnvelope.decodeChannelEnvelope(encoded.map(ZLinkBufferMessage.from)).header,
+                  channelEnvelope.decodeChannelEnvelope(encoded.map(ZLinkBufferMessage.from))
+                    .header,
                   { activated: true }
                 )
                 .map(ZLinkBufferMessage.from);
@@ -1015,9 +1279,14 @@ test('Missing Instance synchronous rejection is preserved without a second submi
       async sendToSpot() {
         throw new Error('Unexpected send.');
       },
-      requestToSpot() { return prepareZLinkRequestReply((async () => {
-        throw new Error('Unexpected existing route request.');
-      })(), identityRequestReply); }
+      requestToSpot() {
+        return prepareZLinkRequestReply(
+          (async () => {
+            throw new Error('Unexpected existing route request.');
+          })(),
+          identityRequestReply
+        );
+      }
     },
     meshNames: () => ['play'],
     meshNode: () => ({
@@ -1095,10 +1364,15 @@ test('Missing Instance terminal NotFound is not resubmitted after completion', a
       async sendToSpot() {
         throw new Error('send is not used by this test.');
       },
-      requestToSpot(route) { return prepareZLinkRequestReply((async () => {
-        assert.equal(route, freshRoute);
-        return { route: route.targetNodeRid };
-      })(), identityRequestReply); }
+      requestToSpot(route) {
+        return prepareZLinkRequestReply(
+          (async () => {
+            assert.equal(route, freshRoute);
+            return { route: route.targetNodeRid };
+          })(),
+          identityRequestReply
+        );
+      }
     },
     meshNames: () => ['play'],
     meshNode: () => ({
@@ -1131,10 +1405,14 @@ test('Missing Instance terminal NotFound is not resubmitted after completion', a
     defaultRequestTimeoutMs: 1_000
   });
 
-  await assert.rejects(() => addressTransport.requestToSpotAddress('spot-1', new Lookup(), {
-    instanceSpot: true,
-    instanceSpotType: 'chat-room'
-  }), /Instance Spot request failed with result 102/);
+  await assert.rejects(
+    () =>
+      addressTransport.requestToSpotAddress('spot-1', new Lookup(), {
+        instanceSpot: true,
+        instanceSpotType: 'chat-room'
+      }),
+    /Instance Spot request failed with result 102/
+  );
   assert.equal(invalidated, 0);
   assert.equal(missingRequests, 1);
 });
@@ -1152,8 +1430,17 @@ test('Ready Instance owner loss does not enter cold activation', async () => {
       }
     }),
     routed: {
-      async sendToSpot() { throw new Error('Ready route must not be used.'); },
-      requestToSpot() { return prepareZLinkRequestReply((async () => { throw new Error('Ready route must not be used.'); })(), identityRequestReply); }
+      async sendToSpot() {
+        throw new Error('Ready route must not be used.');
+      },
+      requestToSpot() {
+        return prepareZLinkRequestReply(
+          (async () => {
+            throw new Error('Ready route must not be used.');
+          })(),
+          identityRequestReply
+        );
+      }
     },
     meshNames: () => ['play'],
     meshNode: () => ({
@@ -1176,10 +1463,11 @@ test('Ready Instance owner loss does not enter cold activation', async () => {
   });
 
   await assert.rejects(
-    () => addressTransport.requestToSpotAddress('spot-owner-lost', new Lookup(), {
-      instanceSpot: true,
-      instanceSpotType: 'chat-room'
-    }),
+    () =>
+      addressTransport.requestToSpotAddress('spot-owner-lost', new Lookup(), {
+        instanceSpot: true,
+        instanceSpotType: 'chat-room'
+      }),
     (error) => error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
   );
   assert.equal(coldActivations, 0);
@@ -1188,11 +1476,21 @@ test('Ready Instance owner loss does not enter cold activation', async () => {
 test('Spot send route resolution has no time limit and submits once when authority becomes ready', async () => {
   let resolveAuthority;
   let submits = 0;
-  const authorityRead = new Promise(resolve => { resolveAuthority = resolve; });
+  const authorityRead = new Promise((resolve) => {
+    resolveAuthority = resolve;
+  });
   const addressTransport = new internal.ZLinkHostSpotAddressTransport({
-    resolver: () => ({ async resolve() { await authorityRead; return {
-      routerChannelId: 'play', targetNodeRid: 'node-a', spotId: 'spot-1', spotKind: framework.ZLinkSpotKind.User
-    }; } }),
+    resolver: () => ({
+      async resolve() {
+        await authorityRead;
+        return {
+          routerChannelId: 'play',
+          targetNodeRid: 'node-a',
+          spotId: 'spot-1',
+          spotKind: framework.ZLinkSpotKind.User
+        };
+      }
+    }),
     routed: {
       async sendToSpot(_target, _message, options) {
         assert.equal(options.timeoutMs, undefined);
@@ -1201,13 +1499,18 @@ test('Spot send route resolution has no time limit and submits once when authori
         return { status: ZLinkSubmitStatus.Submitted };
       }
     },
-    meshNames: () => [], meshNode: () => undefined, completions: () => undefined,
+    meshNames: () => [],
+    meshNode: () => undefined,
+    completions: () => undefined,
     defaultRequestTimeoutMs: 20
   });
   let completed = false;
-  const pending = addressTransport.sendToSpotAddress('spot-1', { value: 1 }, { instanceSpot: false })
-    .finally(() => { completed = true; });
-  await new Promise(resolve => setTimeout(resolve, 3100));
+  const pending = addressTransport
+    .sendToSpotAddress('spot-1', { value: 1 }, { instanceSpot: false })
+    .finally(() => {
+      completed = true;
+    });
+  await new Promise((resolve) => setTimeout(resolve, 3100));
   assert.equal(completed, false);
   assert.equal(submits, 0);
   resolveAuthority();
@@ -1250,9 +1553,14 @@ test('Missing Instance send directly awaits binding admission and submits once',
       async sendToSpot() {
         throw new Error('Ready route must not be used.');
       },
-      requestToSpot() { return prepareZLinkRequestReply((async () => {
-        throw new Error('Ready route must not be used.');
-      })(), identityRequestReply); }
+      requestToSpot() {
+        return prepareZLinkRequestReply(
+          (async () => {
+            throw new Error('Ready route must not be used.');
+          })(),
+          identityRequestReply
+        );
+      }
     },
     meshNames: () => ['play'],
     meshNode: () => node,
@@ -1362,7 +1670,10 @@ test('unbind does not retire a still-open relocation seal whose Session identity
     sealId: 'seal-foreign'
   };
   await bindings.sealRelocation(claim, fence);
-  assert.equal((await bindings.relocationSnapshot('actor-foreign-seal', 'seal-foreign'))?.phase, 'sealed');
+  assert.equal(
+    (await bindings.relocationSnapshot('actor-foreign-seal', 'seal-foreign'))?.phase,
+    'sealed'
+  );
 
   await bindings.unbind('actor-foreign-seal', context, 'binding-old');
 

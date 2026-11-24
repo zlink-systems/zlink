@@ -324,7 +324,10 @@ final class ZLinkInstanceSpotActivationDeadlineTest {
                     requestedType == null
                             ? ZLinkSpotRuntimeTestAccess.resolveInstanceType(host, MESH, null)
                             : ZLinkSpotRuntimeTestAccess.selectInstanceSpotTarget(
-                                    host, MESH, requestedType);
+                                    host,
+                                    MESH,
+                                    requestedType,
+                                    System.currentTimeMillis() + WAIT.toMillis());
             var failure =
                     assertThrows(
                             ExecutionException.class,

@@ -208,13 +208,45 @@ function encodeApplicationPayloadWith(
   return result;
 }
 
-/**
- * Encodes the framework multipart payload directly into its M6A application
- * frame. The caller supplies borrowed message views; this function performs
- * the single ownership copy needed for the outbound frame.
- */
+type MultipartBytes = Uint8Array | string;
+const PACKED_APPLICATION_FRAME = Symbol('packed service multipart');
+type PackedParts = [Buffer] & { [PACKED_APPLICATION_FRAME]?: true };
+
+export function borrowPackedMultipartApplicationFrame(
+  parts: readonly unknown[]
+): Buffer | undefined {
+  return (parts as PackedParts)[PACKED_APPLICATION_FRAME] === true
+    ? (parts[0] as Buffer)
+    : undefined;
+}
+
+/** Writes the channel header from reusable encoder storage and then the body. */
+export function encodeChannelMultipartApplicationPayload(
+  header: Uint8Array,
+  headerLength: number,
+  payload: MultipartBytes
+): readonly [Buffer] {
+  const payloadLength = multipartPartLength(payload);
+  const multipartLength = checkedMultipartLength(2, headerLength + payloadLength);
+  const frame = allocateApplicationPayload(
+    SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME,
+    SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE,
+    multipartLength,
+    allocatePayloadBytes
+  );
+  const offset = frame.writeUInt32BE(2, frame.byteLength - multipartLength);
+  const headerOffset = frame.writeUInt32BE(headerLength, offset);
+  if (Buffer.isBuffer(header)) header.copy(frame, headerOffset, 0, headerLength);
+  else frame.set(header.subarray(0, headerLength), headerOffset);
+  writeMultipartPart(frame, headerOffset + headerLength, payload, payloadLength);
+  const parts: PackedParts = [frame];
+  parts[PACKED_APPLICATION_FRAME] = true;
+  return parts;
+}
+
+/** Copies borrowed parts once into the M6A application frame. */
 export function encodeMultipartApplicationPayload(
-  parts: readonly (Uint8Array | string)[],
+  parts: readonly MultipartBytes[],
   packetName: string,
   contentType: string
 ): Buffer {
@@ -240,40 +272,50 @@ function multipartPartLength(part: Uint8Array | string): number {
   return typeof part === 'string' ? Buffer.byteLength(part, 'utf8') : part.byteLength;
 }
 
-function multipartPayloadLength(parts: readonly (Uint8Array | string)[]): number {
+function multipartPayloadLength(parts: readonly MultipartBytes[]): number {
   if (parts.length === 0) fail('Multipart payload must contain at least one part.');
   if (parts.length > MAX_U32) fail('Multipart part count exceeds u32.');
-  let length = 4;
-  for (let index = 0; index < parts.length; index += 1) {
-    const partLength = multipartPartLength(parts[index]!);
-    if (partLength > MAX_U32) fail('Multipart part exceeds u32.');
-    length += 4 + partLength;
-    if (length > MAX_U32) fail('Multipart payload exceeds u32.');
+  let dataLength = 0;
+  for (let index = 0; index < parts.length; index++) {
+    const length = multipartPartLength(parts[index]!);
+    if (length > MAX_U32) fail('Multipart part exceeds u32.');
+    dataLength += length;
   }
+  return checkedMultipartLength(parts.length, dataLength);
+}
+
+function checkedMultipartLength(partCount: number, dataLength: number): number {
+  const length = 4 + 4 * partCount + dataLength;
+  if (length > MAX_U32) fail('Multipart payload exceeds u32.');
   return length;
 }
 
 function writeMultipartPayload(
   result: Buffer,
   offset: number,
-  parts: readonly (Uint8Array | string)[]
+  parts: readonly MultipartBytes[]
 ): void {
-  result.writeUInt32BE(parts.length, offset);
-  offset += 4;
-  for (let index = 0; index < parts.length; index += 1) {
-    const part = parts[index]!;
-    if (typeof part === 'string') {
-      // multipartPayloadLength sized the frame for this exact string, so the
-      // write cannot truncate; its byte count is the length field.
-      const length = result.write(part, offset + 4, 'utf8');
-      result.writeUInt32BE(length, offset);
-      offset += 4 + length;
-    } else {
-      result.writeUInt32BE(part.byteLength, offset);
-      result.set(part, offset + 4);
-      offset += 4 + part.byteLength;
-    }
+  offset = result.writeUInt32BE(parts.length, offset);
+  for (let index = 0; index < parts.length; index++) {
+    offset = writeMultipartPart(result, offset, parts[index]!);
   }
+}
+
+function writeMultipartPart(
+  result: Buffer,
+  offset: number,
+  part: MultipartBytes,
+  length?: number
+): number {
+  let bytes: number;
+  if (typeof part === 'string') {
+    bytes = result.write(part, offset + 4, 'utf8');
+  } else {
+    result.set(part, offset + 4);
+    bytes = length ?? part.byteLength;
+  }
+  result.writeUInt32BE(bytes, offset);
+  return offset + 4 + bytes;
 }
 
 // The packet name and content type of an application frame are validated and

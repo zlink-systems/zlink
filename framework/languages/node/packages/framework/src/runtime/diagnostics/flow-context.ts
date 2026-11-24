@@ -1,4 +1,4 @@
-import { AsyncLocalStorage } from 'node:async_hooks';
+import { FrameworkContextField } from '../framework-context';
 import { randomBytes } from 'node:crypto';
 import type { ZLinkFlowOrigin } from '../../contracts';
 const FLOW_UUID_BYTES = 16;
@@ -21,7 +21,7 @@ export interface ZLinkFlowContextValue {
   readonly streamSessionId?: string;
 }
 
-const flowStorage = new AsyncLocalStorage<ZLinkFlowContextValue | undefined>();
+const flowStorage = new FrameworkContextField<ZLinkFlowContextValue | undefined>();
 
 export function currentFlowContext(): ZLinkFlowContextValue | undefined {
   return flowStorage.getStore();
@@ -66,6 +66,12 @@ export function runWithFlow<T>(flow: ZLinkFlowContextValue | undefined, callback
     return callback();
   }
   return flowStorage.run(flow, callback);
+}
+
+/** Propagates the submitted operation's flow across a serial queue. */
+export function bindFlowContext<T>(operation: () => T): () => T {
+  const flow = currentFlowContext();
+  return flow === undefined ? operation : () => runWithFlow(flow, operation);
 }
 
 /**

@@ -229,11 +229,13 @@ public sealed class SpotContracts
 
         await new RoomPacketHandler().HandleAsync(
             room,
+            null!,
             new RoomEvent("opened"),
             CancellationToken.None
         );
         var roomReply = await new RoomRequestHandler().HandleAsync(
             room,
+            null!,
             new JoinRoom("room-1"),
             CancellationToken.None
         );
@@ -1034,6 +1036,7 @@ public sealed class SpotContracts
     {
         public ValueTask HandleAsync(
             RoomSpot spot,
+            IZLinkMessageContext context,
             RoomEvent message,
             CancellationToken cancellationToken
         )
@@ -1047,6 +1050,7 @@ public sealed class SpotContracts
     {
         public ValueTask<JoinedRoom> HandleAsync(
             RoomSpot spot,
+            IZLinkMessageContext context,
             JoinRoom request,
             CancellationToken cancellationToken
         )

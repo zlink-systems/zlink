@@ -5,62 +5,96 @@
     "title": "System composition and topology",
     "subtitle": "two Apis, two Plays as manual RouteMesh peers · each Play's tictactoe.api picks one Api",
     "output": "sample-tictactoe-topology-en.html",
-    "legend": { "mode": "hidden" }
+    "legend": {
+      "mode": "hidden"
+    }
   },
-  "layout": { "mode": "grid", "origin": [50, 150], "cols": 5, "gapX": 80, "gapY": 78, "cellW": 120, "cellH": 60 },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      150
+    ],
+    "cols": 3,
+    "gapX": 120,
+    "gapY": 88,
+    "cellW": 132,
+    "cellH": 60
+  },
   "components": [
-    { "id": "H", "type": "frontend", "label": "Host Client", "row": 1, "col": 0 },
-    { "id": "A1", "type": "frontend", "label": "Api A", "row": 1, "col": 1 },
-    { "id": "AC1", "type": "messagebus", "label": "tictactoe.api", "sublabel": "Play A", "row": 0, "col": 2 },
-    { "id": "P1", "type": "backend", "label": "Play A", "row": 1, "col": 2 },
-    { "id": "P2", "type": "backend", "label": "Play B", "row": 2, "col": 2 },
-    { "id": "AC2", "type": "messagebus", "label": "tictactoe.api", "sublabel": "Play B", "row": 3, "col": 2 },
-    { "id": "A2", "type": "frontend", "label": "Api B", "row": 2, "col": 3 },
-    { "id": "G", "type": "frontend", "label": "Guest Client", "row": 2, "col": 4 },
-    { "id": "O", "type": "frontend", "label": "Observer Client", "row": 3, "col": 4 }
-  ],
-  "boundaries": [
-    { "kind": "region", "label": "Servers", "wraps": ["A1", "A2", "AC1", "P1", "P2", "AC2"] }
+    {
+      "id": "C",
+      "type": "external",
+      "label": "client",
+      "row": 0,
+      "col": 0,
+      "sublabel": "host · guest · observer"
+    },
+    {
+      "id": "A",
+      "type": "frontend",
+      "label": "api node ×2",
+      "row": 0,
+      "col": 1,
+      "sublabel": "Api A/B"
+    },
+    {
+      "id": "P",
+      "type": "backend",
+      "label": "play node ×2",
+      "row": 0,
+      "col": 2,
+      "sublabel": "Play A/B · room"
+    },
+    {
+      "id": "LS",
+      "type": "external",
+      "label": "Location Store",
+      "row": 1,
+      "col": 2
+    }
   ],
   "connections": [
-    { "from": "H", "to": "A1", "label": "HTTP", "variant": "default" },
-    { "from": "G", "to": "A2", "variant": "default" },
-    { "from": "O", "to": "A2", "variant": "default" },
-
-    { "from": "H", "to": "P1", "label": "STREAM", "variant": "default", "fromSide": "top", "toSide": "top" },
-    { "from": "G", "to": "P2", "variant": "default", "fromSide": "bottom", "toSide": "bottom" },
-    { "from": "O", "to": "P2", "variant": "default" },
-
-    { "from": "A1", "to": "P1", "variant": "default" },
-    { "from": "A1", "to": "P2", "variant": "default" },
-    { "from": "A2", "to": "P1", "variant": "default" },
-    { "from": "A2", "to": "P2", "variant": "default" },
-    { "from": "P1", "to": "P2", "variant": "default" },
-
-    { "from": "P1", "to": "AC1", "variant": "default" },
-    { "from": "P2", "to": "AC2", "variant": "default" },
-    { "from": "AC1", "to": "A1", "variant": "dashed" },
-    { "from": "AC1", "to": "A2", "variant": "dashed" },
-    { "from": "AC2", "to": "A1", "variant": "dashed" },
-    { "from": "AC2", "to": "A2", "variant": "dashed" }
+    {
+      "from": "C",
+      "to": "A",
+      "label": "HTTP"
+    },
+    {
+      "from": "A",
+      "to": "P",
+      "label": "RouteMesh"
+    },
+    {
+      "from": "C",
+      "to": "P",
+      "fromSide": "top",
+      "toSide": "top",
+      "label": "STREAM"
+    },
+    {
+      "from": "P",
+      "to": "A",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "bottom",
+      "label": "client/server"
+    },
+    {
+      "from": "P",
+      "to": "LS",
+      "variant": "dashed"
+    }
   ],
   "cards": [
     {
-      "dot": "cyan",
-      "title": "Client and server edges",
+      "dot": "emerald",
+      "title": "Sample connections and roles",
       "items": [
-        "Clients (mermaid subgraph): Host, Guest, Observer. Host connects HTTP to Api A and STREAM to Play A; guest and observer connect HTTP to Api B and STREAM to Play B.",
-        "Api A/B are object clients; Play A/B are object servers providing the same object type, Entry Spot, and Logical Multicast membership.",
-        "All four Api↔Play solid links are the same tictactoe RouteMesh; Play A — Play B is the manual RouteMesh peer."
-      ]
-    },
-    {
-      "dot": "violet",
-      "title": "tictactoe.api channel (dashed) and location",
-      "items": [
-        "Each Play has an independent tictactoe.api ClientServer channel that receives the Api A and Api B endpoints and selects one Api for an authentication request.",
-        "No object peer is created between Api A and Api B; the Play↔Api peer direction is set by the runner's manual endpoint configuration.",
-        "The Location Store (in the §3 resource table) records the current owner of RoomId and ActorId; the Relocation Store holds only post-relocation pending-request recovery. CreateGameHttpRes.PlayEndpoints is for ingress selection, not owner evidence."
+        "The host uses HTTP on Api A and STREAM on Play A. The guest and observer connect to Api B and Play B.",
+        "Play A/B also act as session nodes. They are manual RouteMesh peers and use the separate tictactoe.api ClientServer channel to request authentication.",
+        "The Location Store records the current owner for RoomId and ActorId.",
+        "The play node is the Client that requests authentication from the api node, the Server on the tictactoe.api ClientServer Channel."
       ]
     }
   ]

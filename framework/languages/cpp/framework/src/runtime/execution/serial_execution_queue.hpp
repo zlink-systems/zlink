@@ -299,6 +299,7 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     struct handler_resume_t
     {
         std::shared_ptr<serial_turn_handle_impl_t> handler;
+        std::optional<framework_error_kind_t> failure;
     };
     struct borrowed_callback_t
     {
@@ -363,38 +364,42 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
         bool cancel_requested = false;
     };
     active_turn_t *current_turn_locked () noexcept;
-    bool schedule_drain_locked ();
+    bool schedule_drain_locked (const std::function<void ()> &on_wake_rejected);
     bool publish_locked (std::unique_ptr<publication_node_t> node,
-                         std::function<void ()> *continuation = nullptr,
-                         work_item_t *rejected = nullptr);
+                         std::function<void ()> *continuation,
+                         work_item_t *rejected,
+                         const std::function<void ()> &on_wake_rejected);
     void import_publications ();
     void import_publications_until (publication_node_t *cut);
     void run_shared_gate ();
     void release_shared_gate ();
     bool submit_control (std::function<void ()> control,
-                         std::function<void ()> *continuation = nullptr);
+                         std::function<void ()> *continuation,
+                         const std::function<void ()> &on_wake_rejected);
     template <typename T, typename TControl> task_t<T> control_async (TControl control)
     {
         auto completion = std::make_shared<task_completion_source_t<T>> ();
         auto task = completion->task ();
-        if (!submit_control ([retained = weak_from_this ().lock (), completion,
-                              control = std::move (control)] () mutable {
-                try {
-                    if constexpr (std::is_void_v<T>) {
-                        control ();
-                        completion->complete (result_t<void>::success ());
-                    } else {
-                        completion->complete (result_t<T>::success (control ()));
-                    }
-                }
-                catch (const framework_exception_t &error) {
-                    completion->complete (detail::result_access_t::failure<T> (error));
-                }
-                catch (const std::exception &error) {
-                    completion->complete (result_t<T>::failure (
-                      framework_error_kind_t::internal_failure, error.what ()));
-                }
-            }))
+        if (!submit_control (
+              [retained = weak_from_this ().lock (), completion,
+               control = std::move (control)] () mutable {
+                  try {
+                      if constexpr (std::is_void_v<T>) {
+                          control ();
+                          completion->complete (result_t<void>::success ());
+                      } else {
+                          completion->complete (result_t<T>::success (control ()));
+                      }
+                  }
+                  catch (const framework_exception_t &error) {
+                      completion->complete (detail::result_access_t::failure<T> (error));
+                  }
+                  catch (const std::exception &error) {
+                      completion->complete (result_t<T>::failure (
+                        framework_error_kind_t::internal_failure, error.what ()));
+                  }
+              },
+              nullptr, {}))
             completion->complete (result_t<T>::failure (framework_error_kind_t::shutting_down,
                                                         "shared Spot gate executor is stopping"));
         return task;
@@ -411,8 +416,10 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     bool resume_suspended_owned (const std::shared_ptr<serial_turn_handle_impl_t> &turn,
                                  std::function<void ()> work);
     bool prepare_application_head_owned ();
-    std::pair<runtime::handler_entry_t, std::function<void ()>> accept_application_locked (
-      work_item_t &item, const std::shared_ptr<serial_application_record_t> &preceding) noexcept;
+    std::pair<runtime::handler_entry_t, std::function<void ()>>
+    accept_application_locked (work_item_t &item, bool tail_blocks) noexcept;
+    bool application_tail_blocks () const noexcept;
+    void refresh_application_tail () noexcept;
     template <typename Mutation>
     void mutate_fifo_locked (lane_state_t &lane,
                              Mutation &&mutation,
@@ -448,7 +455,8 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
                          serial_work_options_t options,
                          serial_submission_id_t submission_id = 0,
                          std::function<void ()> cancel = {},
-                         item_origin_t origin = {});
+                         item_origin_t origin = {},
+                         std::function<void ()> resume = {});
     result_t<serial_submission_id_t> try_post_cancellable_async (std::string name,
                                                                  async_work_t work,
                                                                  std::function<void ()> cancel,
@@ -464,10 +472,10 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
                  serial_work_lane_t lane,
                  item_origin_t origin,
                  bool holds_application_while_waiting = false);
-    bool try_post_resume (std::string name,
-                          async_work_t work,
-                          const std::shared_ptr<serial_turn_handle_impl_t> &handler,
-                          bool holds_application_while_waiting);
+    void post_resume (std::string name,
+                      std::function<void ()> continuation,
+                      const std::shared_ptr<serial_turn_handle_impl_t> &handler,
+                      bool holds_application_while_waiting);
     void activate_turn_locked (work_item_t &item) noexcept;
     std::deque<work_item_t>::iterator next_lifecycle_locked () noexcept;
     bool has_queued_locked () const noexcept;
@@ -528,11 +536,16 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     std::condition_variable _empty;
     lane_state_t _application;
     lane_state_t _lifecycle;
-    // Actor pending membership and these indexes share the producer mutex;
-    // Spot pending membership remains exclusive to its execution gate.
+    // The producer mutex guards only publication (tail, cursor hand-off, close).
+    // Pending membership and these indexes belong to the execution gate in every
+    // gated mode; a standalone queue still shares them with its producers.
     // Derived FIFO membership indexes; mutable barrier phases are read by
     // the readiness decision and never copied here.
-    std::weak_ptr<serial_application_record_t> _application_tail_record;
+    // The one decision a producer takes from the tail: (generation << 1) | whether the
+    // last accepted application record is durable or waiting, so its successors take over.
+    // Producers store it at acceptance; the gate owner lowers it by compare-exchange
+    // and raises it only inside the producer boundary.
+    std::atomic<std::uint64_t> _application_tail{0};
     std::shared_ptr<stateful::relocation_seal_binding_t> _relocation_seal;
     std::size_t _application_barriers = 0;
     // P changes tail; the shared-gate consumer changes cursor. The cursor

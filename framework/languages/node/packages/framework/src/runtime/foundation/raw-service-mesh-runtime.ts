@@ -399,11 +399,7 @@ export class RawServiceMeshRuntime {
     const expected = this.expectedPeers.get(nodeRoutingId);
     if (
       lifecycleGeneration !== undefined &&
-      // Discovery has already fenced this RID to a replacement process.
-      // The old auto-connect intent must not use disconnectRid here: that
-      // is RID-wide and can close the provisional replacement before its
-      // Hello/admission promotes it. admitPeer owns exact old-pair teardown
-      // after the replacement descriptor is accepted.
+      // RID-wide shutdown applies only to the requested lifecycle.
       ((expected?.lifecycleGeneration !== undefined &&
         expected.lifecycleGeneration !== lifecycleGeneration) ||
         (current !== undefined && current.descriptor.lifecycleGeneration !== lifecycleGeneration) ||
@@ -425,18 +421,17 @@ export class RawServiceMeshRuntime {
     } finally {
       if (current !== undefined) this.removePeer(current);
       this.topology.forgetNotRequired(nodeRoutingId);
-      if (
-        lifecycleGeneration === undefined ||
-        expected?.lifecycleGeneration === undefined ||
-        expected.lifecycleGeneration === lifecycleGeneration
-      ) {
-        this.expectedPeers.delete(nodeRoutingId);
-      }
+      this.expectedPeers.delete(nodeRoutingId);
       this.notifyPeerConnectionIntentRemoved(nodeRoutingId);
     }
   }
 
-  disconnectPeerEndpoint(endpoint: string): void {
+  disconnectPeerEndpoint(endpoint: string, intentRid?: string, intentLifecycle?: bigint): void {
+    // The intent owns the outbound registration. Discovery may already have
+    // published a different lifecycle at this endpoint (MeshNode §7.1).
+    const matchesIntent = (rid: string, lifecycle: bigint | undefined): boolean =>
+      (intentRid === undefined || rid === intentRid) &&
+      (intentLifecycle === undefined || lifecycle === intentLifecycle);
     try {
       this.requireStarted().disconnect(endpoint);
     } catch (error) {
@@ -445,16 +440,32 @@ export class RawServiceMeshRuntime {
       this.endpointOnlyPeers.delete(endpoint);
       const removed = new Set<string>();
       for (const [nodeRoutingId, expected] of this.expectedPeers) {
-        if (expected.endpoint === endpoint) {
+        if (
+          expected.endpoint === endpoint &&
+          matchesIntent(nodeRoutingId, expected.lifecycleGeneration)
+        ) {
           this.expectedPeers.delete(nodeRoutingId);
           removed.add(nodeRoutingId);
         }
       }
       for (const peer of this.topology.peers()) {
-        if (peer.descriptor.advertisedEndpoint === endpoint) {
+        if (
+          peer.descriptor.advertisedEndpoint === endpoint &&
+          matchesIntent(peer.descriptor.nodeRoutingId, peer.descriptor.lifecycleGeneration)
+        ) {
           this.removePeer(peer);
           removed.add(peer.descriptor.nodeRoutingId);
         }
+      }
+      if (intentRid !== undefined) {
+        const admission = this.topology.routeAdmission(intentRid)?.descriptor;
+        if (
+          admission?.advertisedEndpoint === endpoint &&
+          matchesIntent(intentRid, admission.lifecycleGeneration)
+        ) {
+          this.topology.forgetNotRequired(intentRid);
+        }
+        removed.add(intentRid);
       }
       for (const nodeRoutingId of removed) this.notifyPeerConnectionIntentRemoved(nodeRoutingId);
     }
@@ -681,7 +692,10 @@ export class RawServiceMeshRuntime {
     targetNodeRoutingId: string,
     payload: ServiceApplicationPayloadInput
   ): boolean | Promise<boolean> {
-    return this.send(targetNodeRoutingId, [NODE_SEND_HEADER, this.applicationFrame(payload)]);
+    return this.sendApplication(targetNodeRoutingId, [
+      NODE_SEND_HEADER,
+      this.applicationFrame(payload)
+    ]);
   }
 
   sendToChannel(
@@ -692,7 +706,7 @@ export class RawServiceMeshRuntime {
     if (selection.kind !== 'selected') return selection.submitResult;
     const selected = selection.peer;
     const applicationFrame = this.applicationFrame(payload);
-    const submitted = this.send(selected.descriptor.nodeRoutingId, [
+    const submitted = this.sendApplication(selected.descriptor.nodeRoutingId, [
       encodeChannelSendHeader(channelName),
       applicationFrame
     ]);
@@ -1788,6 +1802,8 @@ export class RawServiceMeshRuntime {
       }
     }
     if (selectedTargetNodeRoutingId === this.descriptor.nodeRoutingId) {
+      if (requestOperation?.nodeRequestStartedMs !== undefined)
+        requestOperation.localDispatchMs = performance.now();
       encodedPayload = copyPayloadBytes(encodedPayload);
       // The registry ends local admission before delivering the terminal.
       const pending =
@@ -1875,6 +1891,7 @@ export class RawServiceMeshRuntime {
     }
     const parts = [header, encodedPayload];
     const completed = (replyParts: readonly Buffer[]) => {
+      if (pending.nodeRequestStartedMs !== undefined) pending.replyReceivedMs = performance.now();
       try {
         if (replyParts.length < 1 || replyParts.length > 2) {
           throw new ServiceWireProtocolError('Invalid reply parts.');
@@ -1921,6 +1938,12 @@ export class RawServiceMeshRuntime {
         operationKind
       );
     if (selectedPeer !== undefined) {
+      if (pending.nodeRequestStartedMs !== undefined) {
+        const now = performance.now();
+        pending.routeGeneration = this.selectedRoutes.get(selectedTargetNodeRoutingId);
+        if (pending.routeGeneration !== undefined) pending.routeSelectedMs = now;
+        pending.peerAdmittedMs = now;
+      }
       try {
         this.requireStarted().request(
           selectedTargetNodeRoutingId,
@@ -1942,6 +1965,7 @@ export class RawServiceMeshRuntime {
       selectedTargetNodeRoutingId,
       pending,
       (remaining, finished) => {
+        if (pending.nodeRequestStartedMs !== undefined) pending.peerAdmittedMs = performance.now();
         this.requireStarted().request(
           selectedTargetNodeRoutingId,
           parts,
@@ -2182,11 +2206,12 @@ export class RawServiceMeshRuntime {
     if (failure !== undefined) throw failure.error;
   }
 
-  private send(
+  sendApplication(
     targetNodeRoutingId: string,
-    parts: readonly Uint8Array[]
+    parts: readonly Uint8Array[],
+    lifecycleGeneration?: bigint
   ): boolean | Promise<boolean> {
-    if (!this.isPeerRouteReady(targetNodeRoutingId)) return false;
+    if (!this.isPeerRouteReady(targetNodeRoutingId, lifecycleGeneration)) return false;
     try {
       const submission = this.requireStarted().submitSend(targetNodeRoutingId, parts);
       if (submission.result === SubmitResult.Ok) return true;

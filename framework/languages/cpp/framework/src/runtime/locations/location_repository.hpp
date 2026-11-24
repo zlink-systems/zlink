@@ -98,6 +98,8 @@ struct pending_object_creation_t
     bool operator== (const pending_object_creation_t &) const = default;
 };
 
+struct authority_aggregate_t;
+
 struct authority_snapshot_t
 {
     std::string store_version;
@@ -108,6 +110,7 @@ struct authority_snapshot_t
     std::chrono::system_clock::time_point store_now;
     placement_allocation_t allocation;
     std::optional<pending_object_creation_t> pending_creation;
+    std::shared_ptr<const authority_aggregate_t> aggregate{};
 
     bool same_incarnation (const authority_snapshot_t &other) const
     {
@@ -171,6 +174,7 @@ struct authority_put_t
     std::vector<std::byte> payload;
     std::optional<std::chrono::steady_clock::time_point> operation_deadline;
     std::shared_ptr<const std::pair<authority_snapshot_t, location_owner_token_t>> preservation;
+    std::optional<std::shared_ptr<const authority_aggregate_t>> replace_aggregate{};
 
     static authority_put_t preserve (authority_snapshot_t snapshot, location_owner_token_t owner)
     {
@@ -242,6 +246,7 @@ struct authority_retarget_t
 {
     std::vector<std::byte> payload;
     object_creation_target_t target;
+    std::optional<std::shared_ptr<const authority_aggregate_t>> replace_aggregate{};
 };
 struct authority_restore_t
 {
@@ -866,7 +871,18 @@ class location_repository_t
     }
 
   protected:
-    // Location runtime §6.1: one observation per record and exact owner token.
+    // An invalid authority owner token keeps its first observation for this repository.
+    bool authority_release_wait_elapsed (const location_owner_token_t &owner)
+    {
+        const std::lock_guard lock (_reclaim_mutex);
+        const auto now = _reclaim_now ();
+        const auto first = _authority_reclaim_observations
+                             .try_emplace (std::pair{owner.owner_id, owner.lease_generation}, now)
+                             .first;
+        return reclaim_delay_elapsed (now - first->second);
+    }
+
+    // Fixed RID claims retain the descriptor-scoped observation.
     // Capture the sequence before Store I/O; older continuations cannot replace newer observations.
     std::uint64_t reclaim_read_sequence ()
     {
@@ -904,9 +920,7 @@ class location_repository_t
             found->second = {owner, now, read_sequence};
         else
             found->second.sequence = read_sequence;
-        // Divide elapsed time rather than multiplying a potentially large configured margin.
-        return std::chrono::duration_cast<std::chrono::milliseconds> (now - found->second.at) / 3
-               >= _reclaim_margin;
+        return reclaim_delay_elapsed (now - found->second.at);
     }
 
     void retain_reclaim_observation (
@@ -936,6 +950,12 @@ class location_repository_t
     }
 
   private:
+    bool reclaim_delay_elapsed (std::chrono::steady_clock::duration elapsed) const
+    {
+        return std::chrono::duration_cast<std::chrono::milliseconds> (elapsed) / 3
+               >= _reclaim_margin;
+    }
+
     struct reclaim_observation_t
     {
         location_owner_token_t owner;
@@ -944,6 +964,8 @@ class location_repository_t
     };
     std::mutex _reclaim_mutex;
     std::map<std::string, reclaim_observation_t> _reclaim_observations;
+    std::map<std::pair<std::string, std::int64_t>, std::chrono::steady_clock::time_point>
+      _authority_reclaim_observations;
     std::uint64_t _reclaim_sequence = 0;
     std::chrono::milliseconds _reclaim_margin{detail::default_owner_lease_fencing_margin};
     std::function<std::chrono::steady_clock::time_point ()> _reclaim_now{

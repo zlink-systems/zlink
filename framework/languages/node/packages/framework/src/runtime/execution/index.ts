@@ -1,5 +1,6 @@
 import type { ZLinkExecutionPolicy } from '../admission';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { FrameworkContextField } from '../framework-context';
 import { startOutsideStateLane } from './state-lane';
 import { isAbortError } from '../abort';
 import { RuntimeDisposal } from '../disposal';
@@ -17,26 +18,24 @@ export interface ZLinkRuntimeTaskFailure {
 
 interface ZLinkSpotSerialTurnContext {
   readonly executor: ZLinkSpotSerialTurnExecutorLike;
-  readonly turnId: number;
   readonly turn: ZLinkSpotSerialTurn;
 }
 
 interface ZLinkSpotSerialTurnExecutorLike {
-  readonly activeTurnId: number;
   readonly sourceSpotId?: unknown;
-  isActiveTurn(turn: ZLinkSpotSerialTurn, turnId: number): boolean;
+  isActiveTurn(turn: ZLinkSpotSerialTurn): boolean;
   post<T>(operation: () => Promise<T> | T): Promise<T>;
 }
 
-const spotSerialTurnStorage = new AsyncLocalStorage<ZLinkSpotSerialTurnContext>();
+const spotSerialTurnStorage = new FrameworkContextField<ZLinkSpotSerialTurnContext>();
 
 export type ZLinkExecutionArea = 'application' | 'infrastructure';
 
-const executionAreaStorage = new AsyncLocalStorage<ZLinkExecutionArea>();
+const executionAreaStorage = new FrameworkContextField<ZLinkExecutionArea>();
 
 // Capture once through the execution owners, independently of module load scope.
 export const detachedMeshDispatchScope = startOutsideStateLane(() =>
-  executionAreaStorage.exit(() => spotSerialTurnStorage.exit(() => AsyncLocalStorage.snapshot()))
+  executionAreaStorage.exit(() => runOutsideZLinkSpotSerialTurn(() => AsyncLocalStorage.snapshot()))
 );
 
 export function runZLinkExecutionArea<T>(area: ZLinkExecutionArea, operation: () => T): T {
@@ -162,7 +161,7 @@ export class ZLinkSpotSerialTurn {
     if (
       current?.turn !== this ||
       !this.yieldAllowed ||
-      !current.executor.isActiveTurn(this, current.turnId) ||
+      !current.executor.isActiveTurn(this) ||
       this.yieldUsed
     ) {
       throw createInternalFrameworkException(
@@ -222,13 +221,27 @@ export class ZLinkSpotSerialTurn {
 
 export function runZLinkSpotSerialTurn<T>(
   executor: ZLinkSpotSerialTurnExecutorLike,
-  turnId: number,
   turn: ZLinkSpotSerialTurn,
   operation: () => Promise<T> | T
 ): Promise<T> {
   return runZLinkExecutionArea('application', () =>
-    spotSerialTurnStorage.run({ executor, turnId, turn }, async () => operation())
+    spotSerialTurnStorage.run({ executor, turn }, async () => operation())
   );
+}
+
+/** Starts work that owns a separate execution gate. */
+export function runOutsideZLinkSpotSerialTurn<T>(operation: () => T): T {
+  return spotSerialTurnStorage.exit(operation);
+}
+
+/** Preserves the lifecycle caller's active Spot turn for re-entry checks. */
+export function bindLifecycleCallerSpotTurn<T>(operation: () => T): () => T {
+  const caller = spotSerialTurnStorage.getStore();
+  if (caller === undefined) return operation;
+  return () =>
+    caller.executor.isActiveTurn(caller.turn)
+      ? spotSerialTurnStorage.run(caller, operation)
+      : operation();
 }
 
 export function captureZLinkSpotSerialTurn(
@@ -247,7 +260,7 @@ export function captureZLinkSpotSerialTurn(
 /** Returns the physical Spot owner only while its captured turn owns the gate. */
 export function currentZLinkSpotSerialSourceId(): unknown {
   const current = spotSerialTurnStorage.getStore();
-  if (current === undefined || !current.executor.isActiveTurn(current.turn, current.turnId)) {
+  if (current === undefined || !current.executor.isActiveTurn(current.turn)) {
     return undefined;
   }
   return current.executor.sourceSpotId;
@@ -295,9 +308,7 @@ export function captureZLinkExecutionTurn(): ZLinkCapturedExecutionTurn | undefi
 export function isCurrentZLinkSpotSerialTurn(executor: ZLinkSpotSerialTurnExecutorLike): boolean {
   const current = spotSerialTurnStorage.getStore();
   return (
-    current !== undefined &&
-    current.executor === executor &&
-    executor.isActiveTurn(current.turn, current.turnId)
+    current !== undefined && current.executor === executor && executor.isActiveTurn(current.turn)
   );
 }
 

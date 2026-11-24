@@ -1948,7 +1948,8 @@ int admitted_bound_session_delivery_keeps_original_session_after_rebind ()
           },
           replacement_route))
         return 3;
-    if (!(*admitted) ("push", stream_codec_t::message_pack, zlink::message_t::from ("body")))
+    if (!(*admitted) ("push", stream_codec_t::message_pack, zlink::message_t::from ("body"))
+           .result ())
         return 4;
     test::acknowledge_delivery ();
     events = observations->snapshot ();
@@ -1983,7 +1984,8 @@ int admitted_bound_session_delivery_keeps_original_session_after_rebind ()
           },
           replacement_route))
         return 8;
-    if ((*admitted) ("push", stream_codec_t::message_pack, zlink::message_t::from ("body")))
+    if ((*admitted) ("push", stream_codec_t::message_pack, zlink::message_t::from ("body"))
+          .result ())
         return 9;
     test::acknowledge_delivery ();
     events = observations->snapshot ();
@@ -2023,7 +2025,8 @@ int admitted_bound_session_delivery_keeps_original_session_after_rebind ()
           replacement_route))
         return 13;
     live_mode->store (message_flow_log_mode_t::detailed, std::memory_order_relaxed);
-    if (!(*admitted) ("push", stream_codec_t::message_pack, zlink::message_t::from ("body")))
+    if (!(*admitted) ("push", stream_codec_t::message_pack, zlink::message_t::from ("body"))
+           .result ())
         return 14;
     test::acknowledge_delivery ();
     events = observations->snapshot ();
@@ -4194,7 +4197,8 @@ class fixed_reconcile_authority_store_t final
              std::vector<std::byte> = {},
              std::string = {},
              zlink::framework::runtime::protocol::relocation_id_t = {},
-             zlink::framework::location_owner_token_t = {}) override
+             zlink::framework::location_owner_token_t = {},
+             const zlink::framework::runtime::protocol::relocation_prepare_t * = nullptr) override
     {
         return {};
     }
@@ -4669,7 +4673,7 @@ int relocation_barrier_fences_late_actor_request_without_deadlock ()
     auto request_record = accepted_actor_fifo_record (source_fence, 1, envelope, "ask");
     const runtime::serial_application_record_t *transferred_record = nullptr;
     spot_inbound_message_t metadata;
-    metadata.values = envelope.metadata;
+    metadata.values = envelope.metadata.values ();
     auto asked = spots.relay_actor_packet (
       actor, gateway.actor_context (actor), stream_message_kind_t::request, "FencedAsk",
       zlink::message_t::from (std::string ("ask")), provider, serializers, std::move (metadata),
@@ -5105,18 +5109,19 @@ int leave_notification_travels_node_level_and_reaches_source_entry_spot_once ()
 
         std::optional<stateful::authority_relocation_reference_t> record;
 
-        stateful::authority_publish_result_t
-        publish (const stateful::object_ref_t &,
-                 const stateful::object_ref_t &,
-                 location_owner_token_t,
-                 object_creation_target_t,
-                 std::string,
-                 std::uint32_t,
-                 stateful::inventory_digest_t,
-                 std::vector<std::byte> = {},
-                 std::string = {},
-                 zlink::framework::runtime::protocol::relocation_id_t = {},
-                 location_owner_token_t = {}) override
+        stateful::authority_publish_result_t publish (
+          const stateful::object_ref_t &,
+          const stateful::object_ref_t &,
+          location_owner_token_t,
+          object_creation_target_t,
+          std::string,
+          std::uint32_t,
+          stateful::inventory_digest_t,
+          std::vector<std::byte> = {},
+          std::string = {},
+          zlink::framework::runtime::protocol::relocation_id_t = {},
+          location_owner_token_t = {},
+          const zlink::framework::runtime::protocol::relocation_prepare_t * = nullptr) override
         {
             return {};
         }
@@ -5573,18 +5578,19 @@ int early_zero_generation_leave_waits_for_source_transfer_completion (bool no_fo
 
         std::optional<stateful::authority_relocation_reference_t> record;
 
-        stateful::authority_publish_result_t
-        publish (const stateful::object_ref_t &,
-                 const stateful::object_ref_t &,
-                 location_owner_token_t,
-                 object_creation_target_t,
-                 std::string,
-                 std::uint32_t,
-                 stateful::inventory_digest_t,
-                 std::vector<std::byte> = {},
-                 std::string = {},
-                 zlink::framework::runtime::protocol::relocation_id_t = {},
-                 location_owner_token_t = {}) override
+        stateful::authority_publish_result_t publish (
+          const stateful::object_ref_t &,
+          const stateful::object_ref_t &,
+          location_owner_token_t,
+          object_creation_target_t,
+          std::string,
+          std::uint32_t,
+          stateful::inventory_digest_t,
+          std::vector<std::byte> = {},
+          std::string = {},
+          zlink::framework::runtime::protocol::relocation_id_t = {},
+          location_owner_token_t = {},
+          const zlink::framework::runtime::protocol::relocation_prepare_t * = nullptr) override
         {
             return {};
         }
@@ -6001,13 +6007,7 @@ int reconnect_push_reaches_new_session_across_two_hosts ()
                 throw framework_exception_t (framework_error_kind_t::not_configured,
                                              "new Session host rejected the push");
             }
-            const auto delivered = (*delivery) (std::move (packet_name), codec, payload);
-            if (!delivered) {
-                throw delivered.error ()
-                  ? *delivered.error ()
-                  : framework_exception_t (framework_error_kind_t::internal_failure,
-                                           "new Session client delivery failed");
-            }
+            co_await (*delivery) (std::move (packet_name), codec, payload);
             co_return;
         };
     };
@@ -9762,6 +9762,11 @@ int main (int argc, char **argv)
             return relocation_prepare_preserves_runtime_failure ();
         if (test == "--join-completion-callback")
             return join_completion_callback_failure_is_reported ();
+        if (test == "--join-completion-delivery") {
+            const auto result = join_completion_waits_for_bound_session_delivery_terminal ();
+            std::cerr << "Join completion delivery result=" << result << '\n';
+            return result;
+        }
         if (test == "--close-unbound")
             return close_unbound_session_reports_invalid_operation ();
         if (test == "--close-binding")

@@ -4,6 +4,9 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Contracts.Messaging;
+using Zlink.Framework.LocationProvider;
+using Zlink.Framework.Runtime.Configuration;
+using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.UnitTests;
 
@@ -679,6 +682,258 @@ public sealed class RuntimeConformanceFixtureTests
             }
         }
         Assert.True(failures.Count == 0, string.Join(Environment.NewLine, failures));
+    }
+
+    [Fact]
+    public async Task Route_mesh_placement_observes_shared_discovery_transitions()
+    {
+        using var document = Load("route-mesh-placement-v1.json");
+        foreach (
+            var kind in new[] { ZLinkPlacementObjectKind.Actor, ZLinkPlacementObjectKind.UserSpot }
+        )
+        foreach (
+            var scenario in document
+                .RootElement.GetProperty("discoveryTransitions")
+                .EnumerateArray()
+        )
+        {
+            const string mesh = "discovery";
+            const string type = "room";
+            var initial = scenario.GetProperty("initial").GetString();
+            var update = scenario.GetProperty("update").GetString();
+            var result = scenario.GetProperty("result").GetString();
+            var provider = new PlacementScanStore();
+            var store = new ZLinkProviderLocationRepository(provider);
+            var options = new ZLinkLocationOptions { PollingInterval = TimeSpan.Zero };
+            var leaseTracker = new ZLinkOwnerLeaseTracker(store, options);
+            var resolver = new ZLinkStoreLocationResolvers(store, leaseTracker, options: options);
+            var owner = await store.ClaimLiveOwnerAsync("placement", TimeSpan.FromMinutes(1));
+            var rid = RoutingId.From("placement");
+            var descriptor = ZLinkMeshNodeDescriptorFactory.Create(
+                new ZLinkFrameworkRegistration(),
+                new ZLinkSpotNodeRegistration
+                {
+                    SpotNodeName = mesh,
+                    SpotMeshChannelName = mesh,
+                    ObjectRole = ZLinkMeshNodeObjectRole.Server,
+                },
+                rid,
+                lifecycleGeneration: 1,
+                endpoint: "tcp://127.0.0.1:1",
+                entrySpotId: "entry",
+                descriptorRevision: 1,
+                ZLinkFrameworkRuntimeState.Preparing
+            ) with
+            {
+                OwnerId = owner.OwnerId,
+                LeaseGeneration = owner.LeaseGeneration,
+                ObjectCapabilities =
+                [
+                    new ZLinkObjectCapability(
+                        kind,
+                        type,
+                        ZLinkObjectMaintenancePolicyKind.Disabled,
+                        false,
+                        0,
+                        EntryAccepted: kind == ZLinkPlacementObjectKind.Actor
+                    ),
+                ],
+                PlacementWeight = initial == "zeroWeight" ? 0 : 100,
+            };
+            if (kind == ZLinkPlacementObjectKind.UserSpot)
+                descriptor = descriptor with
+                {
+                    Capacity = descriptor.Capacity with { SpotTypes = [new(kind, type, 0, 0, 1)] },
+                };
+            if (initial != "empty")
+                Assert.Equal(
+                    ZLinkLocationWriteStatus.Stored,
+                    (
+                        await store.UpdateMeshNodeAsync(
+                            descriptor,
+                            ZLinkLocationWriteIntent.NewClaim
+                        )
+                    ).Status
+                );
+            await resolver.ListLiveMeshNodesAsync(mesh);
+            var discoveryScans = provider.Scans;
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var selected = resolver
+                .SelectPlacementAsync(
+                    mesh,
+                    kind,
+                    initial == "incompatible" ? "other" : type,
+                    static candidates => candidates,
+                    new HashSet<(RoutingId, ulong)>(),
+                    deadline.Token
+                )
+                .AsTask();
+            if (initial == "preparing")
+            {
+                Assert.False(selected.IsCompleted);
+                Assert.Equal(discoveryScans, provider.Scans);
+                switch (update)
+                {
+                    case "serving":
+                    case "zeroWeight":
+                        Assert.Equal(
+                            ZLinkLocationWriteStatus.Stored,
+                            (
+                                await store.UpdateMeshNodeAsync(
+                                    descriptor with
+                                    {
+                                        DescriptorRevision = 2,
+                                        State =
+                                            update == "serving"
+                                                ? ZLinkFrameworkRuntimeState.Serving
+                                                : descriptor.State,
+                                        PlacementWeight =
+                                            update == "zeroWeight" ? 0 : descriptor.PlacementWeight,
+                                    },
+                                    ZLinkLocationWriteIntent.Renew
+                                )
+                            ).Status
+                        );
+                        break;
+                    case "empty":
+                        await store.RemoveMeshNodeAsync(new(mesh, rid), owner);
+                        break;
+                    case "expiredLease":
+                        await store.ReleaseOwnerLeaseAsync(owner);
+                        break;
+                }
+                if (update is not null)
+                {
+                    await resolver.ListLiveMeshNodesAsync(mesh);
+                    discoveryScans++;
+                }
+                else
+                {
+                    deadline.Cancel();
+                    await Assert.ThrowsAnyAsync<OperationCanceledException>(() => selected);
+                }
+            }
+            if (result == "placed")
+                Assert.Equal(rid, (await selected)?.Rid);
+            if (result == "unavailable")
+                Assert.Null(await selected);
+            Assert.Equal(
+                discoveryScans + scenario.GetProperty("requestScans").GetInt32(),
+                provider.Scans
+            );
+        }
+    }
+
+    private sealed class PlacementScanStore : IZLinkLocationStore
+    {
+        private readonly ZLinkInMemoryProviderLocationStore _store = new();
+        private int _scans;
+        internal int Scans => Volatile.Read(ref _scans);
+
+        public ValueTask<ZLinkStoreReadResult> ReadAsync(
+            ZLinkStoreKey key,
+            CancellationToken cancellationToken = default
+        ) => _store.ReadAsync(key, cancellationToken);
+
+        public ValueTask<ZLinkStoreWriteResult> WriteAsync(
+            ZLinkStoreWriteRequest request,
+            CancellationToken cancellationToken = default
+        ) => _store.WriteAsync(request, cancellationToken);
+
+        public ValueTask<ZLinkStoreScanResult> ScanAsync(
+            ZLinkStoreScanRequest request,
+            CancellationToken cancellationToken = default
+        )
+        {
+            Interlocked.Increment(ref _scans);
+            return _store.ScanAsync(request, cancellationToken);
+        }
+    }
+
+    [Fact]
+    public async Task Route_mesh_placement_uses_create_deadline_and_preserves_ready_objects()
+    {
+        const string mesh = "discovery";
+        const string actorType = "placement-actor";
+        const string spotType = "placement-spot";
+        var store = new ZLinkInMemoryProviderLocationStore();
+        var services = new ServiceCollection();
+        services.AddZLinkFramework(options =>
+        {
+            options.AddLocationStore(store);
+            options.ConfigureLocations().PollingInterval = TimeSpan.FromSeconds(30);
+            var objects = options
+                .AddRouteMesh(mesh)
+                .Listen($"inproc://placement-discovery-{Guid.NewGuid():N}")
+                .Objects()
+                .Server();
+            PlacementEntrySpotTypes[0](objects);
+            PlacementSpotTypes[0](objects, spotType);
+            objects.AddActorFactory<PlacementActor, PlacementActorFactory>(
+                actorType,
+                static factory => factory.DisableRelocation()
+            );
+        });
+        await using var provider = services.BuildServiceProvider();
+        var hosted = provider
+            .GetServices<IHostedService>()
+            .Single(static service => service is ZLinkFrameworkHostedService);
+        await hosted.StartAsync(CancellationToken.None);
+        try
+        {
+            var repository = provider.GetRequiredService<IZLinkLocationRepository>();
+            var resolver = provider.GetRequiredService<ZLinkStoreLocationResolvers>();
+            var actorId = $"discovery-actor-{Guid.NewGuid():N}";
+            var spotId = $"discovery-spot-{Guid.NewGuid():N}";
+            var actor = provider.GetRequiredService<IZLinkActorManager>();
+            var spot = provider.GetRequiredService<IZLinkSpotManager>();
+            async Task PublishAsync(ZLinkFrameworkRuntimeState state, int weight)
+            {
+                var local = Assert.Single(await resolver.ListLiveMeshNodesAsync(mesh));
+                var written = await repository.UpdateMeshNodeAsync(
+                    local with
+                    {
+                        DescriptorRevision = local.DescriptorRevision + 1,
+                        State = state,
+                        PlacementWeight = weight,
+                    },
+                    ZLinkLocationWriteIntent.Renew
+                );
+                Assert.Equal(ZLinkLocationWriteStatus.Stored, written.Status);
+                await resolver.ListLiveMeshNodesAsync(mesh);
+            }
+
+            await PublishAsync(ZLinkFrameworkRuntimeState.Preparing, 100);
+            var timeout = TimeSpan.FromMilliseconds(500);
+            var actorTimeout = Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await actor.GetOrCreate(actorId, actorType).InMesh(mesh).Timeout(timeout).Async()
+            );
+            var spotTimeout = Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await spot.GetOrCreate(spotId, spotType).InMesh(mesh).Timeout(timeout).Async()
+            );
+            Assert.All(
+                await Task.WhenAll(actorTimeout, spotTimeout),
+                error => Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, error.Kind)
+            );
+            var newActor = actor.GetOrCreate(actorId, actorType).InMesh(mesh).Async().AsTask();
+            var newSpot = spot.GetOrCreate(spotId, spotType).InMesh(mesh).Async().AsTask();
+            await PublishAsync(ZLinkFrameworkRuntimeState.Serving, 100);
+            Assert.IsType<ZLinkActorCreateResult.Created>(await newActor);
+            Assert.Equal(ZLinkSpotCreateState.Created, (await newSpot).State);
+
+            await PublishAsync(ZLinkFrameworkRuntimeState.Preparing, 0);
+            Assert.IsType<ZLinkActorCreateResult.Existing>(
+                await actor.GetOrCreate(actorId, actorType).InMesh(mesh).Async()
+            );
+            Assert.Equal(
+                ZLinkSpotCreateState.Existing,
+                (await spot.GetOrCreate(spotId, spotType).InMesh(mesh).Async()).State
+            );
+        }
+        finally
+        {
+            await hosted.StopAsync(CancellationToken.None);
+        }
     }
 
     private static async Task RunPlacementScenarioAsync(JsonElement lease, JsonElement scenario)

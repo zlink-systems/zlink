@@ -113,6 +113,7 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         public ValueTask<SourceDiscoveryPing> HandleAsync(
             SourceDiscoverySpot spot,
+            IZLinkMessageContext context,
             SourceDiscoveryPing request,
             CancellationToken cancellationToken
         )

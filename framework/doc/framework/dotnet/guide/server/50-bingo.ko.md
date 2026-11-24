@@ -31,7 +31,11 @@ Bingo 샘플의 역할과 코드 위치, 주요 메시지 흐름, 실행 검증�
 
 ## 1. 이 샘플이 보여 주는 것
 
-client는 Session 서버의 STREAM 연결 하나만 유지한다. 인증은 API가, 대기방 예약은 Matchmaking이,
+`Session`은 클라이언트 세션을 관리하는 session node입니다. `Play`는 room Spot이 있는 play node입니다.
+`Api`는 일반 HTTP 서버처럼 요청을 받아 처리하는 api node로, 인증과 매치메이킹 요청을 처리합니다.
+play node인 `Play`는 `bingo.api` [ClientServer Channel](../../../common/spec/server/02-channel-transport/03-client-server-channel.ko.md)의 Client로 api node인 `Api`를 호출합니다.
+
+client는 session node의 STREAM 연결 하나만 유지한다. 인증은 API가, 대기방 예약은 Matchmaking이,
 게임 진행은 room을 소유한 Play가 처리하고, 서버 사이의 연결과 object의 위치는 Location Store가
 해석한다. 한 판은 인증 → 매칭 → room join → card 제출 → timer 추첨과 push → 승자 확정과 reward
 publish → cleanup 순서로 진행되며, 이 장의 절도 같은 순서다.
@@ -41,7 +45,7 @@ publish → cleanup 순서로 진행되며, 이 장의 절도 같은 순서다.
 
 이 구성이 framework 기능을 가장 많이 사용하는 이유는 흐름마다 다른 기능이 필요하기 때문이다.
 연결 하나에 player를 묶는 데는 session binding이, 대기방 예약에는 요청이 올 때 만들어지는
-Instance Spot이, room에는 참가자·timer·push를 한 줄로 처리하는 User Spot이, 다른 Play 서버의
+Instance Spot이, room에는 참가자·timer·push를 한 줄로 처리하는 User Spot이, 다른 play node의
 관전자에게 알리는 데는 Logical Multicast가 쓰인다.
 
 ## 2. 역할과 코드 위치
@@ -51,10 +55,10 @@ package 경로는 다르지만 디렉터리 이름은 같다.
 
 | 역할 | process 수 | 소유하는 것 | 코드 위치 |
 | --- | ---: | --- | --- |
-| Session | 2 | STREAM 연결, 인증 전 packet 처리, Actor bind와 relay | `Server/Session` |
-| API | 2 | 인증, player record, 매칭 조율 | `Server/Api` |
-| Matchmaking | 1 | level bucket별 대기방 예약 — Redis가 결정을 보관한다 | `Server/Matchmaking` |
-| Play | 2 | player Actor, room Spot, timer, push, reward publish | `Server/Play/Infrastructure` |
+| session node | 2 | STREAM 연결, 인증 전 packet 처리, Actor bind와 relay | `Server/Session` |
+| api node (Api) | 2 | 인증, player record, 매칭 조율 | `Server/Api` |
+| play node (Matchmaking) | 1 | level bucket별 대기방 예약 — Redis가 결정을 보관한다 | `Server/Matchmaking` |
+| play node (room) | 2 | player Actor, room Spot, timer, push, reward publish | `Server/Play/Infrastructure` |
 | Client | 1 | 인증부터 관찰 종료까지의 시나리오와 self-check | `Client` |
 
 Bingo 규칙 — card 검증, 번호 추첨, mark와 승자 판정 — 은 `Server/Play/Domain`에 있고 framework
@@ -106,7 +110,7 @@ Actor의 생성 payload가 이때 함께 전달된다.
 --8<-- "framework/languages/dotnet/samples/Bingo/Server/Session/Sessions/Handlers/AuthenticateSessionHandler.cs:doc-bingo-session-auth"
 ```
 
-Actor를 얻는 호출은 어느 Play node에 만들지 정하지 않는다. 이미 있으면 그 Actor를, 없으면 새로
+Actor를 얻는 호출은 어느 play node에 만들지 정하지 않는다. 이미 있으면 그 Actor를, 없으면 새로
 만든 Actor를 돌려주며, 어느 쪽이든 Session은 반환된 참조를 그대로 묶는다.
 
 `Server/Session/Sessions/Handlers/AuthenticateSessionHandler.cs`
@@ -159,7 +163,7 @@ room Spot을 만들거나 찾는다.
 ```
 
 Instance Spot은 첫 요청이 도착할 때 만들어진다. 같은 id로 동시에 온 요청은 하나의 생성을
-기다리며, room의 `GetOrCreate`도 같은 규칙을 따른다 — API는 어느 Play node에 room을 만들지
+기다리며, room의 `GetOrCreate`도 같은 규칙을 따른다 — API는 어느 play node에 room을 만들지
 정하지 않는다. Matchmaker는 예약을 Redis에서 원자적으로 결정하므로 process memory에 복구
 근거를 두지 않고, 활동이 없으면 timer로 자신을 닫는다.
 
@@ -204,8 +208,8 @@ timer handler는 room Spot의 turn 안에서 실행되므로 card 제출 handler
 --8<-- "framework/languages/dotnet/samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/Handlers/BingoRoomDrawTimerHandler.cs:doc-bingo-draw-timer"
 ```
 
-push는 각 player Actor에 묶인 session으로 보낸다. Actor가 어느 Play node에 있든, session이 어느
-Session node에 있든, 보내는 쪽은 Actor의 bound session만 가리킨다.
+push는 각 player Actor에 묶인 session으로 보낸다. Actor가 어느 play node에 있든, session이 어느
+session node에 있든, 보내는 쪽은 Actor의 bound session만 가리킨다.
 
 `Server/Play/Infrastructure/ZLink/Spots/Notifications/BingoNotificationPublisher.cs`
 
@@ -234,7 +238,7 @@ publish 완료는 관전자의 처리 완료를 보장하지 않으므로 관전
 --8<-- "framework/languages/dotnet/samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/BingoRoom.cs:doc-bingo-reward-publish"
 ```
 
-각 Play node의 관찰용 room이 같은 topic을 구독한다. 구독 handler는 event의 `RoomId`가 자신이
+각 play node의 관찰용 room이 같은 topic을 구독한다. 구독 handler는 event의 `RoomId`가 자신이
 관찰하는 room과 일치할 때만 관전자 Actor의 bound session으로 notify를 보낸다.
 
 `Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/Handlers/BingoRewardAcquiredEventHandler.cs`

@@ -76,6 +76,14 @@ services implemented in several languages at once. Room, zone, match, and
 actor-based topologies are composed from the same RouteMesh, Spot, Actor, and
 STREAM primitives.
 
+A session node manages client sessions. A play node hosts Spots for roles such
+as zones, dungeon instances, tables, and matches. An api node receives and
+handles requests like an ordinary HTTP server, including matchmaking and
+database reads and writes of Actor data.
+
+An example real-time game server deployment is
+`client → L4 → session node ×N → play node ×N → api node ×N`.
+
 ## A quick look
 
 A server that owns the `greeting` channel — registration, then the handler:

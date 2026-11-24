@@ -1054,12 +1054,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                 ZLinkFrameworkErrorKind.ProtocolError,
                 $"Actor '{message.ActorId}' source leave target fence is stale."
             );
-        if (
-            ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                found.Snapshot.Payload.Span,
-                out var canonical
-            )
-        )
+        if (ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(found.Snapshot, out var canonical))
         {
             if (
                 canonical.RelocationHigh == 0
@@ -1632,10 +1627,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZLinkAuthoritySnapshot snapshot,
         string expectedReference
     ) =>
-        ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-            snapshot.Payload.Span,
-            out var publication
-        )
+        ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(snapshot, out var publication)
         && publication.Phase
             is >= (byte)ZLinkStandaloneActorCanonicalPhase.Activated
                 and <= (byte)ZLinkStandaloneActorCanonicalPhase.Completed
@@ -3831,14 +3823,16 @@ internal sealed partial class ZLinkFrameworkRuntime
         string actorId,
         ZlinkStreamHeader header,
         Message payload,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        Action<ZLinkActorReply>? registerReply = null
     ) =>
         SubmitActorForReplyAsync(
             actorId,
             header,
             payload,
             relocationReplay: false,
-            cancellationToken
+            cancellationToken,
+            registerReply
         );
 
     internal ValueTask<ZLinkActorReply> SubmitActorForReplyAsync(
@@ -3846,7 +3840,8 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZlinkStreamHeader header,
         Message payload,
         bool relocationReplay,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        Action<ZLinkActorReply>? registerReply = null
     )
     {
         return _actorSessionManager.SubmitActorForReplyAsync(
@@ -3854,7 +3849,8 @@ internal sealed partial class ZLinkFrameworkRuntime
             header,
             payload,
             relocationReplay,
-            cancellationToken
+            cancellationToken,
+            registerReply
         );
     }
 
@@ -5065,15 +5061,6 @@ internal sealed partial class ZLinkFrameworkRuntime
     internal bool SendActorBoundSession(string actorId, IReadOnlyList<Message> parts)
     {
         return _actorBoundSessionCoordinator.Send(actorId, parts);
-    }
-
-    internal bool SendActorBoundSessionIfCurrent(
-        string actorId,
-        string expectedBindingToken,
-        IReadOnlyList<Message> parts
-    )
-    {
-        return _actorBoundSessionCoordinator.SendIfBoundTo(actorId, expectedBindingToken, parts);
     }
 
     internal ValueTask<ZLinkOneWaySubmitResult> SendActorBoundSessionIfCurrentAsync(

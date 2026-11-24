@@ -9,6 +9,64 @@ namespace Zlink.Framework.UnitTests;
 public sealed class TimerLifecycleTests(Xunit.Abstractions.ITestOutputHelper output)
 {
     [Fact]
+    public async Task ConcurrentReservationsCoalesceWakeWithoutThrowing()
+    {
+        var fullExceptions = 0;
+        void Observe(
+            object? sender,
+            System.Runtime.ExceptionServices.FirstChanceExceptionEventArgs args
+        )
+        {
+            if (
+                args.Exception is SemaphoreFullException
+                && Environment.StackTrace.Contains(
+                    "ZLinkTimerScheduler.SignalWake",
+                    StringComparison.Ordinal
+                )
+            )
+                Interlocked.Increment(ref fullExceptions);
+        }
+
+        var time = new ControllableTimeProvider();
+        await using var scheduler = new ZLinkTimerScheduler(time);
+        await using var timer = new ZLinkTimer(
+            new ZLinkTimerLogicalSnapshot(
+                "concurrent",
+                TimeSpan.FromHours(1),
+                new ZLinkTimerOptions(),
+                time.GetUtcNow(),
+                0,
+                0,
+                null,
+                null
+            ),
+            CancellationToken.None,
+            static (_, _) => ValueTask.FromResult(false),
+            static (_, _, _, _) => ValueTask.CompletedTask,
+            startFrozen: true,
+            scheduler: scheduler
+        );
+
+        AppDomain.CurrentDomain.FirstChanceException += Observe;
+        try
+        {
+            const int reservations = 20_000;
+            Parallel.For(
+                0,
+                reservations,
+                new ParallelOptions { MaxDegreeOfParallelism = 4 },
+                version => scheduler.Schedule(timer, TimeSpan.FromHours(1), version)
+            );
+            Assert.Equal(reservations, scheduler.ScheduledEntryCount);
+            Assert.Equal(0, Volatile.Read(ref fullExceptions));
+        }
+        finally
+        {
+            AppDomain.CurrentDomain.FirstChanceException -= Observe;
+        }
+    }
+
+    [Fact]
     public async Task EarlierTimerRearmsDeadlineWithoutLosingTheWakeWaiter()
     {
         var time = new ControllableTimeProvider();
@@ -86,11 +144,13 @@ public sealed class TimerLifecycleTests(Xunit.Abstractions.ITestOutputHelper out
         {
             var time = new ControllableTimeProvider();
             await using var scheduler = new ZLinkTimerScheduler(time);
+            const int tickCount = 100;
+            var period = TimeSpan.FromSeconds(1);
             var count = 0;
             await using var timer = new ZLinkTimer(
                 new ZLinkTimerLogicalSnapshot(
                     "normal",
-                    TimeSpan.FromSeconds(1),
+                    period,
                     new ZLinkTimerOptions(),
                     time.GetUtcNow(),
                     0,
@@ -108,15 +168,21 @@ public sealed class TimerLifecycleTests(Xunit.Abstractions.ITestOutputHelper out
                 startFrozen: true,
                 scheduler: scheduler
             );
+            var countsAtArming = new List<int>(tickCount + 1);
+            var finalArm = time.WaitForNextTimerAsync(
+                period,
+                occurrences: tickCount + 1,
+                beforeNextOccurrence: () =>
+                {
+                    countsAtArming.Add(Volatile.Read(ref count));
+                    // Fire the virtual deadline before the scheduler can replace this wait.
+                    time.AdvanceMonotonic(period);
+                }
+            );
             timer.Resume();
-            await WaitUntilAsync(() => time.ActiveTimerCount == 1);
-            for (var index = 1; index <= 100; index++)
-            {
-                var armed = time.WaitForNextTimerAsync(TimeSpan.FromSeconds(1));
-                time.AdvanceMonotonic(TimeSpan.FromSeconds(1));
-                await armed.WaitAsync(TimeSpan.FromSeconds(5));
-                Assert.Equal(index, Volatile.Read(ref count));
-            }
+            await finalArm.WaitAsync(TimeSpan.FromSeconds(5));
+            countsAtArming.Add(Volatile.Read(ref count));
+            Assert.Equal(Enumerable.Range(0, tickCount + 1), countsAtArming);
             var tickCancellations = Volatile.Read(ref cancellations);
             await timer.CancelAsync();
             var drained = scheduler.DisposeAsync().AsTask();

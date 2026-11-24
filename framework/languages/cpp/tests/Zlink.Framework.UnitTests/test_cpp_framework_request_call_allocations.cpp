@@ -137,12 +137,14 @@ void expect_public_and_physical_reply_allocations (const allocation_sample_t &sa
       allocation_containing (sample, std::addressof (physical.result ()));
     ASSERT_TRUE (public_allocation.has_value ());
     ASSERT_TRUE (physical_allocation.has_value ());
-    EXPECT_NE (std::addressof (pending.result ()), std::addressof (physical.result ()));
     if (coallocated) {
+        if (pending.result ())
+            EXPECT_EQ (std::addressof (pending.result ()), std::addressof (physical.result ()));
         EXPECT_EQ (*public_allocation, *physical_allocation);
         const auto admission = fw::detail::request_task_access_t::admission_source (pending);
         EXPECT_EQ (allocation_containing (sample, admission.get ()), public_allocation);
     } else {
+        EXPECT_NE (std::addressof (pending.result ()), std::addressof (physical.result ()));
         EXPECT_NE (*public_allocation, *physical_allocation);
     }
 }
@@ -657,6 +659,33 @@ TEST (RequestCallAllocations, NodeProjectionKeepsSubmitTargetWhenInlineReplyRele
     EXPECT_EQ (submissions, 1u);
 }
 
+TEST (RequestCallAllocations, PreparedReplyDoesNotCopyTypedPayloadForThePublicObserver)
+{
+    std::optional<fw::detail::request_receiver_t<int>> terminal;
+    auto pending = fw::detail::request_task_access_t::receive_public<std::string, int> (
+      [&] (auto receiver) { terminal.emplace (std::move (receiver)); },
+      [] (const auto &input) {
+          return fw::result_t<std::string>::success (
+            std::string (static_cast<std::size_t> (input.value ()), 'r'));
+      });
+    terminal->admitted->complete (fw::result_t<void>::success ());
+    auto physical = fw::detail::request_task_access_t::physical_reply (pending);
+    const std::string expected (1024, 'r');
+    unsigned observations = 0;
+    fw::detail::observe_task_terminal (pending, [&] (const auto &result) {
+        EXPECT_EQ (result.value (), expected);
+        EXPECT_TRUE (physical.await_ready ());
+        ++observations;
+    });
+    const auto allocations = fw::tests::count_allocations (
+      [&] { terminal->complete (fw::result_t<int>::success (1024)); });
+    std::printf ("typed reply delivery allocations=%zu\n", allocations);
+    EXPECT_EQ (allocations, 1u);
+    EXPECT_EQ (observations, 1u);
+    EXPECT_EQ (physical.result ().value (), expected);
+    EXPECT_EQ (pending.result ().value (), expected);
+}
+
 TEST (RequestCallAllocations, RouteNodeProjectionDecodesPhysicalReplyAfterEarlyPublicFailure)
 {
     fw::serializer_registry_t serializers;
@@ -693,6 +722,7 @@ TEST (RequestCallAllocations, RouteNodeProjectionDecodesPhysicalReplyAfterEarlyP
     EXPECT_EQ (physical.result ().value ().value, 51);
     EXPECT_EQ (decoded, 1u);
     EXPECT_EQ (pending.result ().error_kind (), fw::framework_error_kind_t::unavailable);
+    EXPECT_NE (std::addressof (pending.result ()), std::addressof (physical.result ()));
     route.stop ();
 }
 
@@ -715,6 +745,8 @@ TEST (RequestCallAllocations, NodeRequestUsesOnlyItsPreparedReceiverAboveTheTran
     });
     auto client = builder.route_client (serializers);
     fw::channel_request_call_t::metadata_map_t metadata{{"allocation-probe", "node-request"}};
+    const auto channel_fields = std::make_shared<const std::string> (
+      fw::runtime::messaging::encode_request_channel_header_fields ("m"));
     const auto encode_node = [&] {
         return sample_allocations ([&] {
             fw::runtime::messaging::client_call_codec_t codec;
@@ -725,7 +757,7 @@ TEST (RequestCallAllocations, NodeRequestUsesOnlyItsPreparedReceiverAboveTheTran
             const auto serializer = serializers.get<payload_t> ();
             (void) codec.encode_service_payload_parts (
               std::move (header), serializer.serialize (payload_t{}),
-              fw::detail::serializer_registry_access_t::request_plan (serializer));
+              fw::detail::serializer_registry_access_t::request_plan (serializer), channel_fields);
         });
     };
     const auto first_encode = encode_node ().total;
@@ -1486,6 +1518,8 @@ TEST (RequestCallAllocations, AppClassifiedNodeFailureAddsNoTransportReplyState)
         auto sample = sample_allocations ([&] { pending.emplace (call.async<payload_t> ()); });
         EXPECT_EQ (pending->result ().error_kind (), fw::framework_error_kind_t::not_found);
         expect_public_and_physical_reply_allocations (sample, *pending, true);
+        auto physical = fw::detail::request_task_access_t::physical_reply (*pending);
+        EXPECT_NE (std::addressof (pending->result ()), std::addressof (physical.result ()));
         const auto admission = fw::detail::request_task_access_t::admission_source (*pending);
         EXPECT_TRUE (allocation_containing (sample, admission.get ()).has_value ());
         auto admission_task = admission->task ();
