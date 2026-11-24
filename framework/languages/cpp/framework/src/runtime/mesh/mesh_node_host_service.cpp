@@ -2970,6 +2970,7 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                     return missing (*terminal);
                                 });
                         }
+                        std::optional<flow_value_t> terminal_flow;
                         auto running = std::make_shared<task_t<zlink::message_t>> (
                           detail::spot_node_runtime_t (registration->spot_state)
                             .dispatch_instance_activation (
@@ -2980,23 +2981,29 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                 + std::to_string (request.operation.low),
                               services, *_serializers, std::move (accept_activation),
                               application.flow_id, application.flow_origin, terminal.get (),
-                              original));
+                              original, application.flow_id ? nullptr : &terminal_flow));
                         detail::observe_task_completion (
                           *running, [this, running, original_command, terminal,
-                                     done] (const result_t<zlink::message_t> &reply) {
+                                     terminal_flow = std::move (terminal_flow),
+                                     done] (const result_t<zlink::message_t> &reply) mutable {
                               if (!reply) {
                                   const auto failure =
                                     messaging::request_failure_mapper_t{}.target_failure_reply (
-                                      *reply.error ());
-                                  if (!failure) {
-                                      done ({105,
-                                             static_cast<std::uint32_t> (
-                                               protocol::framework_error_code::requestFailed),
-                                             std::nullopt, std::move (*terminal)});
-                                      return;
-                                  }
-                                  done ({failure->terminal_result, failure->failure_code,
-                                         std::nullopt, std::move (*terminal)});
+                                      reply.exception ());
+                                  const auto wire =
+                                    failure.value_or (messaging::request_wire_failure_t{
+                                      105, static_cast<std::uint32_t> (
+                                             protocol::framework_error_code::requestFailed)});
+                                  const auto *error = reply.error ();
+                                  auto handler_error =
+                                    error
+                                        && detail::error_origin (*error)
+                                             == detail::error_origin_t::application
+                                      ? reply.exception ()
+                                      : std::exception_ptr{};
+                                  done ({wire.terminal_result, wire.failure_code, std::nullopt,
+                                         std::move (*terminal), std::move (handler_error),
+                                         std::move (terminal_flow)});
                                   return;
                               }
                               std::optional<protocol::application_payload_t> response;

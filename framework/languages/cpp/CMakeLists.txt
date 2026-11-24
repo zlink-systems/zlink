@@ -3288,6 +3288,21 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_message_flow.cpp
     "framework-unit;framework-regression;framework-observability;diagnostics")
   add_zlink_framework_test(
+    test_cpp_framework_dispatch_failure_flow
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_dispatch_failure_flow.cpp
+    "framework-unit;framework-contract;framework-observability;diagnostics"
+    contract)
+  target_use_zlink_gtest_main(test_cpp_framework_dispatch_failure_flow)
+  set_property(TEST test_cpp_framework_dispatch_failure_flow APPEND PROPERTY
+    ENVIRONMENT "GTEST_FILTER=DispatchFailureFlow.ActorEncodeFailureIsReportedBeforeSubmission")
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_spot_handler_failure_flow
+    COMMAND test_cpp_framework_dispatch_failure_flow
+      --gtest_filter=DispatchFailureFlow.AsyncSpotHandlerFailureRetainsReceivedFlow
+    LABELS "framework-unit;framework-contract;framework-observability;diagnostics"
+    TIER contract
+    TIMEOUT 30)
+  add_zlink_framework_test(
     test_cpp_framework_telemetry_process_exit
     tests/Zlink.Framework.UnitTests/test_cpp_framework_telemetry_process_exit.cpp
     "framework-unit;framework-regression;framework-observability;diagnostics")

@@ -31,7 +31,8 @@ make_actor_client (live_location_reader_t &store,
                    std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> mesh_nodes,
                    std::shared_ptr<actor_location_observer_t> actor_locations,
                    location_options_t options,
-                   std::function<void ()> admit_call = {});
+                   std::function<void ()> admit_call = {},
+                   dispatch_options_t dispatch = {});
 
 // Internal fixture access to the production cache and prepared receiver.
 struct actor_client_test_access_t

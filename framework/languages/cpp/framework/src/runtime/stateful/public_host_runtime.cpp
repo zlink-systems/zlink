@@ -5275,11 +5275,16 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
                 const auto exception =
                   result.exception ? result.exception : std::make_exception_ptr (error);
                 reporter.report_lazy ([&] {
+                    const auto terminal_error = detail::framework_error (result.exception);
                     message_dispatch_error_event_t event{
                       .surface = dispatch_error_surface_t::instance_spot,
                       .message_kind = activation->request ? dispatch_message_kind_t::request
                                                           : dispatch_message_kind_t::send,
-                      .reason = detail::dispatch_reason_from_error (&error),
+                      .reason = terminal_error
+                                    && detail::error_origin (*terminal_error)
+                                         == detail::error_origin_t::application
+                                  ? detail::spot_handler_failure_reason (terminal_error.get ())
+                                  : detail::dispatch_reason_from_error (&error),
                       .action = activation->request ? dispatch_error_action_t::reply_error
                                                     : dispatch_error_action_t::drop,
                       .packet_name = owned_command->application_payload.packet_name (),
@@ -5288,8 +5293,13 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
                         zlink::routing_id_t::from (activation->source_node_routing_id).to_string (),
                       .exception = exception,
                       .mesh_name = lifetime->_options.mesh.descriptor.mesh_name};
-                    event.flow_id = owned_command->application_payload.flow_id;
-                    event.flow_origin = owned_command->application_payload.flow_origin;
+                    if (result.terminal_flow) {
+                        event.flow_id = result.terminal_flow->flow_id;
+                        event.flow_origin = result.terminal_flow->origin;
+                    } else {
+                        event.flow_id = owned_command->application_payload.flow_id;
+                        event.flow_origin = owned_command->application_payload.flow_origin;
+                    }
                     return event;
                 });
             }

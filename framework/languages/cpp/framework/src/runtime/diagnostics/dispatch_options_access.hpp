@@ -161,7 +161,13 @@ class dispatch_options_access_t
             else
                 record.observer = options._dispatch_error_observer;
             if (event.exception) {
-                auto summary = diagnostic_event_sink_t::exception_summary (event.exception);
+                auto exception = event.exception;
+                if constexpr (std::is_same_v<Event, message_dispatch_error_event_t>) {
+                    if (event.reason == dispatch_error_reason_t::encode_error)
+                        exception =
+                          diagnostic_event_sink_t::innermost_exception (std::move (exception));
+                }
+                auto summary = diagnostic_event_sink_t::exception_summary (exception);
                 if constexpr (std::is_same_v<Event, message_dispatch_error_event_t>) {
                     event.error_type = std::move (summary.type);
                     event.error_message = std::move (summary.message);

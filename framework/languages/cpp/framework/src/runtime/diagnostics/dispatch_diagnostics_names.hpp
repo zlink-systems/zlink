@@ -88,6 +88,8 @@ inline std::string_view enum_name (dispatch_error_reason_t value) noexcept
             return "no_handler";
         case dispatch_error_reason_t::payload_decode_failed:
             return "decode_error";
+        case dispatch_error_reason_t::encode_error:
+            return "encode_error";
         case dispatch_error_reason_t::handler_exception:
             return "handler_exception";
         case dispatch_error_reason_t::invalid_frame:

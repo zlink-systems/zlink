@@ -695,7 +695,13 @@ bool write_value (const T &value, Output &out, std::string *error)
                     return false;
                 out += ':';
             }
-            return write_value (value.*(field.member), out, error);
+            if (write_value (value.*(field.member), out, error))
+                return true;
+            if (error) {
+                error->insert (0, ": ");
+                error->insert (0, field.name);
+            }
+            return false;
         };
         if constexpr (layout::count == 0)
             out += '{';

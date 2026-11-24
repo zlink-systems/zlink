@@ -120,16 +120,9 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
       zlink::framework::detail::encoded_payload_from_raw (request_result.value ()));
     EXPECT_EQ (10, decoded_reply.value);
 
-    {
-        std::unique_lock lock (events_mutex);
-        ASSERT_TRUE (events_changed.wait_for (lock, std::chrono::seconds (2),
-                                              [&] { return events.size () >= 4; }));
-    }
-
     const auto has_event_transition = [&] (std::string_view packet,
                                            zlink::framework::message_flow_outcome_t outcome,
                                            std::string_view correlation) {
-        const std::lock_guard lock (events_mutex);
         return std::any_of (events.begin (), events.end (), [&] (const auto &event) {
             return event.packet_name && *event.packet_name == packet && event.outcome == outcome
                    && event.surface == zlink::framework::dispatch_error_surface_t::spot_route
@@ -139,18 +132,23 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
                    && *event.flow_origin == zlink::framework::flow_origin_t::application;
         });
     };
-    EXPECT_TRUE (has_event_transition (traced_event_t::packet_name,
-                                       zlink::framework::message_flow_outcome_t::received,
-                                       "operation-send"));
-    EXPECT_TRUE (has_event_transition (traced_event_t::packet_name,
-                                       zlink::framework::message_flow_outcome_t::dispatched,
-                                       "operation-send"));
-    EXPECT_TRUE (has_event_transition (traced_request_t::packet_name,
-                                       zlink::framework::message_flow_outcome_t::received,
-                                       "operation-request"));
-    EXPECT_TRUE (has_event_transition (traced_request_t::packet_name,
-                                       zlink::framework::message_flow_outcome_t::replied,
-                                       "operation-request"));
+    {
+        std::unique_lock lock (events_mutex);
+        ASSERT_TRUE (events_changed.wait_for (lock, std::chrono::seconds (2), [&] {
+            return has_event_transition (traced_request_t::packet_name,
+                                         zlink::framework::message_flow_outcome_t::replied,
+                                         "operation-request");
+        }));
+        EXPECT_TRUE (has_event_transition (traced_event_t::packet_name,
+                                           zlink::framework::message_flow_outcome_t::received,
+                                           "operation-send"));
+        EXPECT_TRUE (has_event_transition (traced_event_t::packet_name,
+                                           zlink::framework::message_flow_outcome_t::dispatched,
+                                           "operation-send"));
+        EXPECT_TRUE (has_event_transition (traced_request_t::packet_name,
+                                           zlink::framework::message_flow_outcome_t::received,
+                                           "operation-request"));
+    }
     runtime->release_native_handles ();
 }
 } // namespace

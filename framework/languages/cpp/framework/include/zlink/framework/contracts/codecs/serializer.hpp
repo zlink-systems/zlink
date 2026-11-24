@@ -245,9 +245,9 @@ template <typename T> class serializer_t
             throw;
         }
         catch (...) {
-            throw detail::make_origin_exception (framework_error_kind_t::protocol_error,
-                                                 detail::failure_origin_t::payload_encode,
-                                                 "payload serialization failed");
+            std::throw_with_nested (detail::make_origin_exception (
+              framework_error_kind_t::protocol_error, detail::failure_origin_t::payload_encode,
+              "payload serialization failed"));
         }
     }
 

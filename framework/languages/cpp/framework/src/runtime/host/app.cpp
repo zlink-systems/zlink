@@ -3367,12 +3367,13 @@ void app_t::_apply_zlink_framework ()
         _state->services.add_factory<actor_client_t> (
           [mesh_nodes, actor_location_observer,
            admission = detail::channel_runtime_t::from (_state->zlink.message_bus ()),
-           location_options = options.location_options ()] (service_provider_t &provider) mutable {
+           location_options = options.location_options (),
+           dispatch = options.configure_dispatch ()] (service_provider_t &provider) mutable {
               return runtime::make_actor_client (
                 provider.get_required<runtime::live_location_reader_t> (),
                 provider.get_required<serializer_registry_t> (), mesh_nodes,
                 actor_location_observer, location_options,
-                [admission] { admission.admit_outbound (); });
+                [admission] { admission.admit_outbound (); }, dispatch);
           },
           service_lifetime_t::singleton);
     }
