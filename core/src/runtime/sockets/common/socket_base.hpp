@@ -315,8 +315,11 @@ class socket_base_t : public own_t,
                                     uint32_t kind_ = 0,
                                     uint32_t disconnect_reason_ = 0,
                                     uint64_t connection_id_ = 0);
-    int get_events_internal (int events_, uint32_t *out_,
-                             bool consume_primary_signaler_ = true);
+    int get_events_internal (int events_,
+                             uint32_t *out_,
+                             bool consume_primary_signaler_ = true,
+                             bool transport_output_ = false,
+                             bool drain_primary_signaler_ = false);
     void set_all_pipes_nodelay ();
     int bind (const char *endpoint_uri_);
     int connect (const char *endpoint_uri_);
@@ -1315,7 +1318,8 @@ class socket_base_t : public own_t,
                           bool throttle_,
                           bool force_if_command_pending_ = false,
                           const uint64_t *observed_command_wait_epoch_ = NULL,
-                          bool primary_poller_drain_ = false);
+                          bool primary_poller_drain_ = false,
+                          bool defer_to_async_executor_ = false);
     enum submit_command_progress_mode_t
     {
         submit_command_progress_failed = -1,
