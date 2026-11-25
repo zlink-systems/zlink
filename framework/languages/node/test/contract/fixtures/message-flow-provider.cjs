@@ -10,6 +10,10 @@ if (!isMainThread && process.env.ZLINK_TEST_MESSAGE_FLOW_CHANNEL) {
   logs.setGlobalLoggerProvider(new LoggerProvider({ processors: [{
     onEmit(record) {
       if (failProvider) throw new Error('logger provider failed');
+      if (process.env.ZLINK_TEST_MESSAGE_FLOW_STDERR === '1'
+          && record.eventName === 'zlink.dispatch_error') {
+        process.stderr.write(`zlink.dispatch_error ${JSON.stringify(record.attributes)}\n`);
+      }
       if (process.env.ZLINK_NODE_BOOTSTRAP_FLOW_DIR) {
         const fs = require('node:fs'), path = require('node:path');
         fs.mkdirSync(process.env.ZLINK_NODE_BOOTSTRAP_FLOW_DIR, { recursive: true });
