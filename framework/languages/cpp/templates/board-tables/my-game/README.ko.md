@@ -14,4 +14,6 @@
 
 ## 알려진 문제
 
+- 이 템플릿에는 아직 `run-server`가 없습니다. `run-e2e`(Docker 격리 실행)를 사용합니다. 다른 템플릿의 매치메이킹·API node·`run-server`/attach 흐름은 [#5647](https://github.com/zlink-systems/zlink/issues/5647)에서 다룹니다.
+
 drain 확인에 약 30초가 걸리므로 대기하는 동안 진행 중인 판의 턴 시간이 끝날 수 있습니다. 턴 시계가 있는 게임의 update 시나리오에서는 판을 끝낸 뒤 옮깁니다. 남은 시간이 이전되는지는 시계를 제어하는 도메인 검사에서 확인합니다.

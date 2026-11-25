@@ -179,6 +179,8 @@ Use `--no-build` or `-NoBuild` with local mode to reuse a debugger build. Scenar
 
 ## Known issues
 
+- This template has no `run-server` yet: use `run-e2e` (isolated Docker run). Matchmaking, the API node and the `run-server`/attach flow of the other templates are tracked in [#5647](https://github.com/zlink-systems/zlink/issues/5647).
+
 Drain confirmation takes about 30 seconds, so a turn clock may expire during the wait. For an update scenario in a game with turn clocks, finish the round before relocating it. Verify that relocation preserves the remaining time in a domain check with a controlled clock.
 
 Validated against the published Framework 0.34.1 packages.
