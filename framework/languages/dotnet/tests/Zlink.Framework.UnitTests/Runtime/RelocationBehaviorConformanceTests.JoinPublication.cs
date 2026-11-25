@@ -12,7 +12,7 @@ public sealed partial class RelocationBehaviorConformanceTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Actor_join_releases_publication_after_callback_and_captured_delivery(
+    public async Task Actor_join_normalizes_publication_at_the_captured_request_boundary(
         bool captureRequest
     )
     {
@@ -28,7 +28,7 @@ public sealed partial class RelocationBehaviorConformanceTests
         trace.ReleaseSourceLeave.TrySetResult();
         var store = new RecordingLocationStore(new ZLinkInMemoryProviderLocationStore(), trace)
         {
-            HoldFirstTargetCleaning = true,
+            HoldFirstTargetCleaning = captureRequest,
         };
         var roots = new SynchronizedRelocationStore();
         var authority = new ZLinkProviderLocationRepository(store);
@@ -102,12 +102,13 @@ public sealed partial class RelocationBehaviorConformanceTests
             trace.ReleaseJoinHandler.TrySetResult();
             await join.WaitAsync(timeout);
 
-            var atCallback = Assert.IsType<ZLinkAuthorityRelocation>(
-                await joinCallbackState.Task.WaitAsync(timeout)
-            );
-            Assert.Equal(ServiceWireCodec.RelocationPhase.Activated, atCallback.Phase);
+            var atCallback = await joinCallbackState.Task.WaitAsync(timeout);
             if (request is not null)
             {
+                Assert.Equal(
+                    ServiceWireCodec.RelocationPhase.Activated,
+                    Assert.IsType<ZLinkAuthorityRelocation>(atCallback).Phase
+                );
                 await handlerEntered.Task.WaitAsync(timeout);
                 Assert.False(request.IsCompleted);
                 Assert.True(target.Runtime.TryGetActorState(actorId, out var actor));
@@ -116,14 +117,15 @@ public sealed partial class RelocationBehaviorConformanceTests
                 Assert.Equal(atCallback, await ReadRelocationAsync());
                 releaseHandler.TrySetResult();
                 Assert.Equal("saved", (await request.WaitAsync(timeout)).Marker);
+                await store.TargetCleaningStarted.Task.WaitAsync(timeout);
+                store.ReleaseTargetCleaning.TrySetResult();
             }
             else
             {
+                Assert.Null(atCallback);
                 Assert.False(handlerEntered.Task.IsCompleted);
             }
 
-            await store.TargetCleaningStarted.Task.WaitAsync(timeout);
-            store.ReleaseTargetCleaning.TrySetResult();
             await WaitForSteadyActorAuthorityAsync(store, actorId).WaitAsync(timeout);
         }
         finally

@@ -111,36 +111,46 @@ public sealed partial class RelocationBehaviorConformanceTests
         var client = source.Services.GetRequiredService<IZLinkActorClient>();
         try
         {
-            if (scenario is "replayed send" or "replayed request")
-            {
-                var firstJoin = client
-                    .RequestToActor(actorId, new BeginBehaviorJoin(first.Spot.SpotId))
+            var replayedJoin = scenario is "replayed send" or "replayed request";
+            store.HoldFirstTargetCleaning = !replayedJoin;
+            var firstJoin = client
+                .RequestToActor(actorId, new BeginBehaviorJoin(first.Spot.SpotId))
+                .Timeout(TimeSpan.FromSeconds(15))
+                .Async<BehaviorAck>()
+                .AsTask();
+            await trace.WaitAsync("relocationRequested");
+
+            var next = new NextBehaviorJoin(second.Spot.SpotId, TimeSpan.FromSeconds(15));
+            Task<BehaviorAck>? capturedRequest = null;
+            if (scenario == "replayed send")
+                await client.SendToActor(actorId, new NextBehaviorJoinSend(next)).Async();
+            else if (scenario == "replayed request")
+                capturedRequest = client
+                    .RequestToActor(actorId, next)
                     .Timeout(TimeSpan.FromSeconds(15))
                     .Async<BehaviorAck>()
                     .AsTask();
-                await trace.WaitAsync("relocationRequested");
-                var next = new NextBehaviorJoin(second.Spot.SpotId, TimeSpan.FromSeconds(15));
-                Task<BehaviorAck>? replayedRequest = null;
-                if (scenario == "replayed request")
-                    replayedRequest = client
-                        .RequestToActor(actorId, next)
-                        .Timeout(TimeSpan.FromSeconds(15))
-                        .Async<BehaviorAck>()
-                        .AsTask();
-                else
-                    await client.SendToActor(actorId, new NextBehaviorJoinSend(next)).Async();
+            else
+                capturedRequest = client
+                    .RequestToActor(actorId, new BehaviorWork("saved"))
+                    .Timeout(TimeSpan.FromSeconds(15))
+                    .Async<BehaviorAck>()
+                    .AsTask();
 
-                var state = source.Runtime.GetOrCreateActorState(actorId);
-                await WaitUntilAsync(() =>
-                    state.Handoff._lane.RunAsync(() => state.Handoff._frames.Count != 0)
-                );
-                trace.ReleaseJoinHandler.TrySetResult();
-                await firstJoin;
-                if (replayedRequest is not null)
-                    await replayedRequest;
+            Assert.True(source.Runtime.TryGetActorState(actorId, out var state));
+            await WaitUntilAsync(() =>
+                state.Handoff._lane.RunAsync(() => state.Handoff._frames.Count != 0)
+            );
+            trace.ReleaseJoinHandler.TrySetResult();
+            await firstJoin;
+
+            if (replayedJoin)
+            {
+                if (capturedRequest is not null)
+                    await capturedRequest;
                 await WaitUntilAsync(() => trace.JoinCompletions.Count == 2);
                 var replayed = trace.JoinCompletions.Last();
-                if (replayedRequest is null)
+                if (capturedRequest is null)
                 {
                     Assert.IsType<ZLinkActorJoinCompletion.Accepted>(replayed.Completion);
                     Assert.Equal("final", replayed.Node);
@@ -158,11 +168,7 @@ public sealed partial class RelocationBehaviorConformanceTests
             }
 
             var shortDeadline = scenario == "deadline";
-            trace.ReleaseJoinHandler.TrySetResult();
-            store.HoldFirstTargetCleaning = true;
-            await client
-                .RequestToActor(actorId, new BeginBehaviorJoin(first.Spot.SpotId))
-                .Async<BehaviorAck>();
+            Assert.Equal("saved", (await capturedRequest!).Marker);
             await store.TargetCleaningStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
             var repository = new ZLinkProviderLocationRepository(store);

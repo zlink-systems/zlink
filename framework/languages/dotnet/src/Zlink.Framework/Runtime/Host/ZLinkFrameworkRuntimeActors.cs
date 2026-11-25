@@ -1143,26 +1143,15 @@ internal sealed partial class ZLinkFrameworkRuntime
 
         try
         {
-            // A direct remote join always holds a remote-join import
-            // (Handoff.Import), never a canonical maintenance import, so this
-            // completion path owns the replay drive itself: the durable and
-            // relayed frames already sit in the import queue
-            // (Import/AppendPreparedImport) and there is no trailing
-            // completion batch in the direct protocol.
-            //
-            // Ordering (spec 15 §4.2 step 7 / spec 52 §4.3): the Actor's public Join
-            // completion callback is part of the target lifecycle and runs
-            // BEFORE application dispatch becomes runnable — the replay below
-            // is what admits saved/relayed/temporary work into handlers, so
-            // the completion terminal must precede it, mirroring the
-            // store-based recovery path. Callback traffic issued before the
-            // session route commit is held by the session seal and released
-            // when the route update lands (spec 15 §4.2 step 8).
-            var target = ResolveActorHandoffTarget(spotId);
+            // The direct import already contains the durable and relayed frames.
+            // Reserve them in the FIFO before the callback, then open dispatch
+            // after it (Spot/Actor membership §4.2 step 7).
+            _ = ResolveActorHandoffTarget(spotId);
+            Task? pendingRequestDelivery = null;
             await ZLinkActorTargetActivation
                 .CompleteAsync(
                     () => progressDurableAuthority(false, cancellationToken),
-                    () =>
+                    async () =>
                     {
                         actorState.Handoff.PrepareImportedReplay([]);
                         _ = AdmitTransferredActorPrefix(
@@ -1171,7 +1160,14 @@ internal sealed partial class ZLinkFrameworkRuntime
                             targetMeshName,
                             isCapturedRequest: static frame => frame.RelocationReplyRouteId != 0
                         );
-                        return ValueTask.CompletedTask;
+                        var delivery = actorState.Handoff.CapturedRequestDelivery(
+                            request.HandoffId
+                        );
+                        if (delivery is { IsCompletedSuccessfully: false })
+                            pendingRequestDelivery = delivery;
+                        else
+                            await progressDurableAuthority(true, cancellationToken)
+                                .ConfigureAwait(false);
                     },
                     async () =>
                     {
@@ -1234,13 +1230,12 @@ internal sealed partial class ZLinkFrameworkRuntime
                             .ConfigureAwait(false);
                         actorState.Handoff.Complete(request.HandoffId);
                         dispatchOpened();
-                        if (
-                            actorState.Handoff.CapturedRequestDelivery(request.HandoffId) is
-                            { } delivery
-                        )
+                        if (pendingRequestDelivery is { } delivery)
+                        {
                             await delivery.WaitAsync(cancellationToken).ConfigureAwait(false);
-                        await progressDurableAuthority(true, cancellationToken)
-                            .ConfigureAwait(false);
+                            await progressDurableAuthority(true, cancellationToken)
+                                .ConfigureAwait(false);
+                        }
                         finishTargetStage();
                     }
                 )

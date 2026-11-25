@@ -327,13 +327,10 @@ public sealed class JoinCallbackSendTests
                             ZLinkActorAuthorityPayloadCodec.AuthorityKey(actor.ActorId)
                         )
                 );
-                Assert.True(
-                    ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
-                        authority.Snapshot,
-                        out var publication
-                    )
+                Assert.Null(authority.Snapshot.Relocation);
+                Assert.False(
+                    ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(authority.Snapshot, out _)
                 );
-                Assert.Equal((byte)ZLinkStandaloneActorCanonicalPhase.Activated, publication.Phase);
                 Assert.Equal(target.LocalNodeRid, authority.Snapshot.Allocation.Descriptor.Rid);
                 Assert.True(target.Runtime.TryGetActorState(actor.ActorId, out var state));
                 Assert.False(state.Handoff.TargetActivation.IsCompleted);
