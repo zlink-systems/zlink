@@ -28,7 +28,7 @@ export function spotTypeDimension(
   return `spot-type\0${canonicalPlacementObjectKind(type.objectKind)}\0${type.stableType}`;
 }
 
-function dimensions(capacity: ZLinkCapacityVector, limits?: CapacityLimits) {
+export function capacityDimensions(capacity: ZLinkCapacityVector, limits?: CapacityLimits) {
   const values: [string, number, number?][] = [
     ['actors', capacity.actors, limits?.actors.limit],
     ['spots', capacity.spots, limits?.spots.limit]
@@ -66,7 +66,7 @@ export function capacityMutations(...changes: readonly CapacityChange[]): ZLinkS
   const deltas = new Map<string, bigint>();
   for (const { descriptor, capacity, active, pending } of changes) {
     const scope = capacityScope(descriptor);
-    for (const [dimension, count] of dimensions(capacity)) {
+    for (const [dimension, count] of capacityDimensions(capacity)) {
       for (const [state, direction] of [
         ['active', active],
         ['pending', pending]
@@ -88,7 +88,10 @@ export function capacityReservationConditions(
 ): ZLinkStoreCondition[] | undefined {
   const scope = capacityScope(descriptor);
   const conditions: ZLinkStoreCondition[] = [];
-  for (const [dimension, count, limit] of dimensions(capacity, descriptor.populationCapacity)) {
+  for (const [dimension, count, limit] of capacityDimensions(
+    capacity,
+    descriptor.populationCapacity
+  )) {
     if (limit === undefined) return undefined;
     if (limit !== 0) {
       conditions.push({

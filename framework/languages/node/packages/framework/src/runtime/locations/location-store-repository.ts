@@ -37,6 +37,7 @@ import {
   type ZLinkStoreMutation,
   type ZLinkStoreReadResult,
   type ZLinkStoreScanCursor,
+  type ZLinkStoreScanItem,
   type ZLinkStoreValue,
   type ZLinkStoreVersion,
   type ZLinkStoreWriteRequest,
@@ -72,11 +73,16 @@ import {
 } from './capacity-counters';
 import { readStoreCounter, validateStoreWriteRequest } from './provider-write-request';
 import { ZLinkAggregateInventoryStore } from './aggregate-inventory-store';
+import { GENERATION_FLOOR_KEY, ZLinkLocationStoreFormat } from './location-store-format';
 import {
   AGGREGATE_PREFIX,
-  GENERATION_FLOOR_KEY,
-  ZLinkLocationStoreFormat
-} from './location-store-format';
+  generation,
+  jsonObject,
+  readLegacyJson,
+  type LegacyAggregate
+} from './legacy-aggregate-record';
+import { ZLinkConfigurationException } from '../../contracts/Configuration/ConfigurationException';
+
 import { decodeAuthorityKey, encodeAuthorityKey } from './authority-key-codec';
 import { ZLinkInMemoryLocationStore } from './in-memory-location-store';
 import { PROVIDER_STORAGE_NAMESPACE_PREFIX, storeKey } from './in-memory-provider-location-store';
@@ -318,7 +324,14 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
             reviveMeshDescriptor(
               decodeCanonicalDescriptorRecord<ZLinkMeshNodeDescriptor>(bytes).descriptor
             ).rid
-          )
+          ),
+        ownerLeaseIsLive: async ({ ownerId, leaseGeneration }) => {
+          const lease = await this.provider.read(ownerKey(ownerId), signal);
+          return lease.kind === 'found' && matchesLiveOwnerLease(lease, ownerId, leaseGeneration);
+        },
+        authorityKey,
+        settleParticipants: (root, aggregate) =>
+          this.settleLegacyParticipants(root, aggregate, signal)
       },
       signal
     ).convert();
@@ -3390,27 +3403,175 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     if (sha256Hex(payload) !== marker.authorityPayloadSha256) {
       throw new Error('Committed aggregate participant payload checksum is invalid.');
     }
-    const projected: StoredAuthoritySnapshot =
-      marker.ownerTransition === 'newOwner'
-        ? {
-            relocation: record.snapshot.relocation,
-            payload: Buffer.from(payload),
-            objectGeneration: record.snapshot.objectGeneration,
-            authorityOwnerGeneration: marker.targetAuthorityOwnerGeneration,
-            ownerId: aggregate.targetOwner.ownerId,
-            ownerLeaseGeneration: aggregate.targetOwner.leaseGeneration,
-            allocation: {
-              ...record.snapshot.allocation,
-              descriptor: { ...aggregate.targetDescriptor },
-              descriptorLifecycleGeneration: aggregate.targetDescriptorLifecycleGeneration,
-              capacity: cloneCapacity(record.snapshot.allocation.capacity)
+    const projected = committedParticipantSnapshot(record, marker, aggregate, payload);
+    return authoritySnapshot(projected, version, storeNow);
+  }
+
+  private async settleLegacyParticipants(
+    root: ZLinkStoreScanItem,
+    aggregate: LegacyAggregate,
+    signal?: AbortSignal
+  ): Promise<void> {
+    if (aggregate.layout === 'cpp') return;
+    const target = {
+      targetOwner: { ownerId: aggregate.ownerId, leaseGeneration: aggregate.leaseGeneration },
+      targetDescriptor: {
+        meshName: aggregate.mesh,
+        rid: decodeRoutingId(aggregate.rid, aggregate.ridHex)
+      },
+      targetDescriptorLifecycleGeneration: aggregate.lifecycleGeneration
+    };
+    const fence = aggregateFence(aggregateId(aggregate.id), aggregate.generation);
+    let cursor: ZLinkStoreScanCursor | undefined;
+    do {
+      const page = await this.provider.scan(
+        { prefix: AUTHORITY_PREIMAGE_PREFIX, cursor, limit: ZLINK_PROVIDER_MAX_PAGE_SIZE },
+        signal
+      );
+      if (page.kind === 'expired') {
+        cursor = undefined;
+        await macrotaskBoundary();
+        continue;
+      }
+      for (const authority of page.value.items) {
+        const record = decodeAuthorityRecord(authority.value.bytes);
+        const marker = record.aggregate;
+        try {
+          let snapshot = record.snapshot;
+          if (aggregate.layout === 'dotnet') {
+            const envelope = readLegacyJson(authority.value.bytes);
+            if (envelope.aggregateFence == null) continue;
+            const foreignFence = jsonObject(envelope.aggregateFence);
+            if (
+              String(foreignFence.aggregateId).replaceAll('-', '').toLowerCase() !== aggregate.id ||
+              generation(String(foreignFence.aggregateGeneration)) !== aggregate.generation
+            )
+              continue;
+            if (aggregate.phase === 'committed') {
+              const index = Number(envelope.aggregateParticipantIndex);
+              if (
+                envelope.aggregateParticipantIndex == null ||
+                !Number.isSafeInteger(index) ||
+                index < 0
+              ) {
+                throw new TypeError('Invalid .NET participant index.');
+              }
+              const child = `${root.key.value}:participant:${index}:`;
+              const metadata = readLegacyJson(
+                await requireProviderBytes(this.provider, storeKey(child + 'meta'), signal)
+              );
+              const payload = await requireProviderBytes(
+                this.provider,
+                storeKey(child + 'payload'),
+                signal
+              );
+              const authorityId = String(metadata.key);
+              if (
+                authorityKey(authorityId).value !== authority.key.value ||
+                Number(metadata.index) !== index ||
+                Buffer.from(String(metadata.authorityPayloadSha256), 'base64').toString('hex') !==
+                  sha256Hex(payload)
+              )
+                throw new TypeError('Invalid .NET participant metadata.');
+              const transition = metadata.ownerTransition;
+              if (transition !== '1' && transition !== '2') {
+                throw new TypeError('Invalid .NET participant owner transition.');
+              }
+              snapshot = committedParticipantSnapshot(
+                record,
+                {
+                  ownerTransition: transition === '2' ? 'newOwner' : 'preserve',
+                  targetAuthorityOwnerGeneration: generation(
+                    metadata.targetAuthorityOwnerGeneration
+                  )
+                },
+                target,
+                payload
+              );
+              const header = jsonObject(
+                decodeJson<Record<string, unknown>>(root.value.bytes).header
+              );
+              if (header.clearRelocation === true) {
+                snapshot = { ...snapshot, relocation: undefined };
+              } else if (header.relocation != null) {
+                snapshot = {
+                  ...snapshot,
+                  relocation: decodeAuthorityAggregate({ relocation: header.relocation }).relocation
+                };
+              }
+            }
+          } else {
+            if (
+              marker?.aggregateId !== aggregate.id ||
+              marker.aggregateGeneration !== aggregate.generation
+            ) {
+              continue;
+            }
+            if (aggregate.phase === 'committed') {
+              const key =
+                aggregate.layout === 'java'
+                  ? storeKey(
+                      `${PREFIX}aggregate-inventory:${aggregate.id}:${aggregate.generation}:participant:${marker.index}:payload`
+                    )
+                  : aggregateParticipantPayloadKey(fence, marker.index);
+              const payload = await requireProviderBytes(this.provider, key, signal);
+              if (sha256Hex(payload) !== marker.authorityPayloadSha256) {
+                throw new TypeError('Committed participant payload checksum is invalid.');
+              }
+              snapshot = committedParticipantSnapshot(record, marker, target, payload);
             }
           }
-        : {
-            ...record.snapshot,
-            payload: Buffer.from(payload)
-          };
-    return authoritySnapshot(projected, version, storeNow);
+
+          const result = await this.provider.write(
+            {
+              conditions: [
+                { kind: 'version', key: root.key, expected: root.value.version },
+                { kind: 'version', key: authority.key, expected: authority.value.version }
+              ],
+              mutations: [
+                {
+                  kind: 'put',
+                  key: authority.key,
+                  bytes: encodeAuthorityRecord({
+                    ...record,
+                    snapshot,
+                    aggregate: undefined,
+                    visibleStoreVersion: undefined
+                  })
+                }
+              ]
+            },
+            signal
+          );
+          if (result.kind === 'applied') continue;
+          if (result.kind === 'corrupt')
+            throw new TypeError('The Store rejected participant cleanup.');
+          throw new ZLinkFrameworkException(
+            ZLinkFrameworkErrorKind.Unavailable,
+            'The aggregate participant changed during conversion.'
+          );
+        } catch (error) {
+          // A peer can publish the participant and remove its payload after our scan.
+          const current = await this.provider.read(authority.key, signal);
+          if (
+            current.kind !== 'found' ||
+            current.value.version.value !== authority.value.version.value
+          )
+            continue;
+          if (!(
+            error instanceof MissingAggregateParticipantValue ||
+            error instanceof TypeError ||
+            error instanceof SyntaxError ||
+            error instanceof RangeError
+          ))
+            throw error;
+          throw new ZLinkConfigurationException(
+            `Cannot settle v11 aggregate participant ${authority.key.value}. ${error.message}`
+          );
+        }
+      }
+      cursor = page.value.nextCursor;
+    } while (cursor !== undefined);
   }
 
   private async normalizeCommittedAggregate(
@@ -3458,28 +3619,9 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
         if (sha256Hex(payload) !== entry.authorityPayloadSha256) {
           throw new Error('Committed aggregate participant payload checksum is invalid.');
         }
-        const snapshot: StoredAuthoritySnapshot =
-          record.aggregate.ownerTransition === 'newOwner'
-            ? {
-                payload: Buffer.from(payload),
-                objectGeneration: record.snapshot.objectGeneration,
-                authorityOwnerGeneration: record.aggregate.targetAuthorityOwnerGeneration,
-                ownerId: aggregate.targetOwner.ownerId,
-                ownerLeaseGeneration: aggregate.targetOwner.leaseGeneration,
-                allocation: {
-                  ...record.snapshot.allocation,
-                  descriptor: { ...aggregate.targetDescriptor },
-                  descriptorLifecycleGeneration: aggregate.targetDescriptorLifecycleGeneration,
-                  capacity: cloneCapacity(record.snapshot.allocation.capacity)
-                }
-              }
-            : {
-                ...record.snapshot,
-                payload: Buffer.from(payload)
-              };
         const normalized: AuthorityRecord = {
           ...record,
-          snapshot: { ...snapshot, relocation: record.snapshot.relocation },
+          snapshot: committedParticipantSnapshot(record, record.aggregate, aggregate, payload),
           aggregate: undefined,
           visibleStoreVersion: undefined
         };
@@ -3680,6 +3822,34 @@ function validateAggregateFence(fence: ZLinkAggregateFence): void {
   }
 }
 
+function committedParticipantSnapshot(
+  record: AuthorityRecord,
+  marker: Pick<
+    AggregateParticipantFenceRecord,
+    'ownerTransition' | 'targetAuthorityOwnerGeneration'
+  >,
+  aggregate: Pick<
+    AggregateRecord,
+    'targetOwner' | 'targetDescriptor' | 'targetDescriptorLifecycleGeneration'
+  >,
+  payload: Uint8Array
+): StoredAuthoritySnapshot {
+  const snapshot = { ...record.snapshot, payload: Buffer.from(payload) };
+  if (marker.ownerTransition !== 'newOwner') return snapshot;
+  return {
+    ...snapshot,
+    authorityOwnerGeneration: marker.targetAuthorityOwnerGeneration,
+    ownerId: aggregate.targetOwner.ownerId,
+    ownerLeaseGeneration: aggregate.targetOwner.leaseGeneration,
+    allocation: {
+      ...snapshot.allocation,
+      descriptor: { ...aggregate.targetDescriptor },
+      descriptorLifecycleGeneration: aggregate.targetDescriptorLifecycleGeneration,
+      capacity: cloneCapacity(snapshot.allocation.capacity)
+    }
+  };
+}
+
 function aggregateRecord(
   request: ZLinkAggregatePrepareRequest,
   requestFingerprint: string,
@@ -3793,6 +3963,8 @@ function addCapacityVector(
   };
 }
 
+class MissingAggregateParticipantValue extends Error {}
+
 async function requireProviderBytes(
   provider: ZLinkLocationStore,
   key: ZLinkStoreKey,
@@ -3800,7 +3972,9 @@ async function requireProviderBytes(
 ): Promise<Uint8Array> {
   const read = await provider.read(key, signal);
   if (read.kind === 'missing') {
-    throw new Error(`Aggregate participant value is missing: ${key.value}.`);
+    throw new MissingAggregateParticipantValue(
+      `Aggregate participant value is missing: ${key.value}.`
+    );
   }
   return read.value.bytes;
 }

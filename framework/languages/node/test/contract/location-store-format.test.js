@@ -258,7 +258,7 @@ for (const [format, legacyType] of [
   });
 }
 
-test('unfinished v11 aggregate blocks both floor and marker until v11 terminates it', async (t) => {
+test('malformed v11 aggregate blocks both floor and marker', async (t) => {
   const store = new framework.ZLinkInMemoryProviderLocationStore();
   const aggregate = 'zlink:v11:aggregate:relocation:1';
   await put(store, aggregate, '{"state":"staging"}');
@@ -270,10 +270,7 @@ test('unfinished v11 aggregate blocks both floor and marker until v11 terminates
   assert.equal(await read(store, FORMAT), undefined);
   assert.equal(await read(store, 'zlink:v11:owner-counter'), undefined);
 
-  await put(store, aggregate, '{"state":"aborted"}');
-  await startup(t, store, 1);
-  assert.equal(await read(store, FORMAT), 'converted');
-  assert.equal(await read(store, aggregate), '{"state":"aborted"}');
+  assert.equal(await read(store, aggregate), '{"state":"staging"}');
 });
 
 for (const targets of [2047, 2048]) {
@@ -484,40 +481,6 @@ test('startup uses the generation floor for an ID issued before conversion', asy
   assert.ok(ready.authorityOwnerGeneration > previousOwnerGeneration);
   assert.equal(ready.objectGeneration, 17n);
   assert.equal(ready.authorityOwnerGeneration, 17n);
-});
-
-test('terminal Java, .NET and C++ v11 aggregate headers do not block conversion', async (t) => {
-  const store = new framework.ZLinkInMemoryProviderLocationStore();
-  const uuid = '01020304-0506-0708-090a-0b0c0d0e0f10';
-  // Java uses DataOutputStream: state, UUID, generation, target, owner, digest,
-  // capacity, participant count and request fingerprint.
-  const javaHeader = Buffer.from(
-    [
-      '02',
-      uuid.replaceAll('-', ''),
-      '0000000000000001',
-      '00016d',
-      '00023131',
-      '0000000000000001',
-      '00016f',
-      '0000000000000001',
-      '00000020',
-      '00'.repeat(32),
-      '00000000',
-      '00000000',
-      '00',
-      '00000001',
-      '00000020',
-      '00'.repeat(32)
-    ].join(''),
-    'hex'
-  );
-  await put(store, `zlink:v11:aggregate:${uuid}:1`, javaHeader);
-  await put(store, 'zlink:v11:aggregate:dotnet:2', '{"status":3}');
-  await put(store, 'zlink:v11:aggregate:cpp', '{"status":"committed"}');
-
-  await startup(t, store, 0);
-  assert.equal(await read(store, FORMAT), 'converted');
 });
 
 test('a late converter accepts an aggregate created after another startup completes', async (t) => {
