@@ -36,6 +36,7 @@ import systems.zlink.framework.locationprovider.ZLinkStoreWriteApplied;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteRequest;
 import systems.zlink.framework.locationprovider.ZLinkStoreWriteResult;
 import systems.zlink.framework.messaging.ZLinkMessage;
+import systems.zlink.framework.runtime.InMemoryRelocationStore;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.diagnostics.ZLinkTelemetryTestFence;
@@ -264,6 +265,7 @@ final class ZLinkSpotCloseConformanceTest {
         options.configureDispatch()
                 .messageFlow(systems.zlink.framework.configuration.ZLinkMessageFlowLogMode.NORMAL);
         options.addLocationStore(store);
+        options.addRelocationStore(new InMemoryRelocationStore());
         var node = options.addRouteMesh("close-mesh");
         int port;
         try (var socket = new java.net.ServerSocket(0)) {
@@ -281,7 +283,7 @@ final class ZLinkSpotCloseConformanceTest {
                 "player",
                 FailurePlayer.class,
                 FailureFactory.class,
-                factory -> factory.disableRelocation());
+                factory -> factory.recreateOnRelocation());
         return options;
     }
 

@@ -792,11 +792,16 @@ public sealed class UserSpotExecutionSchedulerTests
                 {
                     attempts++;
                     throw new InvalidOperationException("retry");
-                }
+                },
+                static () => ValueTask.CompletedTask
             )
         );
         Assert.True(
-            await executor.TryOpenRelocationAfterMessageFollowAsync(seal, () => attempts++)
+            await executor.TryOpenRelocationAfterMessageFollowAsync(
+                seal,
+                () => attempts++,
+                static () => ValueTask.CompletedTask
+            )
         );
 
         Assert.Equal(2, attempts);
@@ -823,7 +828,8 @@ public sealed class UserSpotExecutionSchedulerTests
                         callbackEntered.TrySetResult();
                         Assert.True(allowReservation.Wait(TimeSpan.FromSeconds(5)));
                         reservation = executor.ReserveRelocationActorQueue(seal, "actor-1");
-                    }
+                    },
+                    static () => ValueTask.CompletedTask
                 )
                 .AsTask()
         );
@@ -884,7 +890,8 @@ public sealed class UserSpotExecutionSchedulerTests
                 {
                     callbackEntered.TrySetResult();
                     Assert.True(allowReservation.Wait(TimeSpan.FromSeconds(5)));
-                }
+                },
+                static () => ValueTask.CompletedTask
             )
         );
         try
@@ -892,7 +899,11 @@ public sealed class UserSpotExecutionSchedulerTests
             await callbackEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
             var competing = Task.Run(() =>
             {
-                var pending = executor.TryOpenRelocationAfterMessageFollowAsync(seal, () => { });
+                var pending = executor.TryOpenRelocationAfterMessageFollowAsync(
+                    seal,
+                    static () => { },
+                    static () => ValueTask.CompletedTask
+                );
                 invocationReturned.TrySetResult();
                 return pending.AsTask();
             });

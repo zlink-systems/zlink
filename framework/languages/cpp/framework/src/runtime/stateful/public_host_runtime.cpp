@@ -3676,18 +3676,8 @@ task_t<void> public_host_runtime_t::discard_relocation_target_attempts (
 stateful::relocation_authority_fence_t
 public_host_runtime_t::relocation_target_fence (const relocation_target_attempt_t &attempt)
 {
-    const auto &primary = stateful::relocation_primary (attempt.sources);
-    const auto &coordinator = attempt.prepare.coordinator;
-    return {primary.kind,
-            primary.key,
-            coordinator.expected_authority_store_version,
-            {coordinator.owner_id, static_cast<std::int64_t> (coordinator.lease_generation)},
-            {attempt.prepare.target.target_owner_id,
-             static_cast<std::int64_t> (attempt.prepare.target.target_owner_lease_generation)},
-            attempt.prepare.relocation,
-            coordinator.node_routing_id,
-            coordinator.node_generation,
-            attempt.prepare.target_attempt_generation};
+    return stateful::relocation_authority_fence_t::from_prepare (
+      stateful::relocation_primary (attempt.sources), attempt.prepare);
 }
 
 public_host_runtime_t::relocation_target_settlement_t
@@ -4548,17 +4538,38 @@ public_host_runtime_t::submit_relocation_ready_reply (protocol::relocation_prepa
                                             protocol::relocation_role_t::target});
     const relocation_attempt_key_t key{prepare.relocation.high, prepare.relocation.low,
                                        prepare.target_attempt_generation};
-    co_return co_await _relocation_session_terminal_lane.run_task ([&] {
+    const auto current_attempt = [&] () -> relocation_target_attempt_t & {
         const auto found = _relocation_target_attempts.find (key);
         if (_options.mesh.shutdown_admission_seal->load (std::memory_order_acquire)
             || found == _relocation_target_attempts.end () || found->second.prepare != prepare
             || !found->second.pending || found->second.targets.empty ())
             throw framework_exception_t (framework_error_kind_t::shutting_down,
                                          "Relocation target stopped before readiness reply");
+        return found->second;
+    };
+    const auto source = co_await _relocation_session_terminal_lane.run_task (
+      [&] () -> std::optional<stateful::object_ref_t> {
+          const auto &attempt = current_attempt ();
+          if (relocation_target_wire_ready (attempt))
+              return std::nullopt;
+          if (attempt.sources.empty () || !_relocation_authority)
+              throw framework_exception_t (framework_error_kind_t::unavailable,
+                                           "Relocation target preparation has no source authority");
+          return stateful::relocation_primary (attempt.sources);
+      });
+    if (source) {
+        const auto prepared =
+          co_await _relocation_authority->record_target_prepared (*source, prepare);
+        if (!prepared)
+            throw framework_exception_t (framework_error_kind_t::unavailable,
+                                         "Relocation target preparation lost its authority fence");
+    }
+    co_return co_await _relocation_session_terminal_lane.run_task ([&] {
+        auto &attempt = current_attempt ();
         const auto sent = submit && submit ();
-        if (sent && !relocation_target_wire_ready (found->second))
-            set_relocation_finalize_at_on_lane (found->second, std::chrono::steady_clock::now ()
-                                                                 + _relocation_cutover_wait);
+        if (sent && !relocation_target_wire_ready (attempt))
+            set_relocation_finalize_at_on_lane (attempt, std::chrono::steady_clock::now ()
+                                                           + _relocation_cutover_wait);
         return sent;
     });
 }

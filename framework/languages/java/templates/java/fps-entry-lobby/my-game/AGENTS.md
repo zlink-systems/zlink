@@ -27,7 +27,7 @@ Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/jav
 
 ## Project and commands
 
-This Java 25 project runs a Session node, play nodes A and B (match), and a Redis Location Store. Entry Spots forward players to the fixed Matchmaking User Spot; same-mode players enter dynamic Room User Spots. Public Framework and connector versions are pinned to 0.32.0 in `gradle/libs.versions.toml`. The [README](README.md) owns execution and deployment instructions. [zlink.structure.json](zlink.structure.json) describes the topology and scenario order.
+This Java 25 project runs a Session node, play nodes A and B (match), and a Redis Location Store. Entry Spots forward players to the fixed Matchmaking User Spot; same-mode players enter dynamic Room User Spots. Public Framework and connector versions are pinned to 0.34.2 in `gradle/libs.versions.toml`. The [README](README.md) owns execution and deployment instructions. [zlink.structure.json](zlink.structure.json) describes the topology and scenario order.
 
 Run commands from this project root with Docker Compose v2 and Linux containers:
 
