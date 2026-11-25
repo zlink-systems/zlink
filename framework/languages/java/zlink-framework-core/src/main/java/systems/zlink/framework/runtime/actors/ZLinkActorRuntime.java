@@ -55,6 +55,7 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkPlacementAllocati
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkActorJoinRelocationPort;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceMessageFollowWireCodec;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddress;
@@ -62,6 +63,7 @@ import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolv
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkLocationLifecycle;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
+import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
 import systems.zlink.framework.runtime.messaging.ZLinkPayloadEncoding;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
@@ -3217,15 +3219,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         return context.hasBoundSession(sourceNodeRid, sourceSessionRid);
     }
 
-    public CompletionStage<Boolean> sendBoundSessionFrame(ZLinkActor actor, byte[] frameBytes) {
-        DefaultActorContext context = actorRegistry.context(actor);
-        if (context == null) {
-            throw new ZLinkConfigurationException(
-                    "actor is not managed by this runtime: " + actor.context().actorId());
-        }
-        return context.sendBoundSessionFrame(frameBytes);
-    }
-
     public Optional<String> spotId(ZLinkActor actor) {
         DefaultActorContext context = actorRegistry.context(actor);
         if (context == null) {
@@ -3833,15 +3826,32 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             Message payload,
             SpotTransportAddress target,
             byte[] acceptedJournalRecord) {
+        boolean request =
+                header.requestSequence().isPresent()
+                        || header.kind() == ZLinkStreamMessageKind.REQUEST;
+        var channelHeader =
+                ZLinkChannelEnvelope.create(
+                        request
+                                ? ZLinkChannelEnvelope.KIND_REQUEST
+                                : ZLinkChannelEnvelope.KIND_COMMAND,
+                        target.routerChannelId(),
+                        ZLinkActorSpotRoutePackets.ACTOR_PACKET_NAME,
+                        "application/octet-stream",
+                        null,
+                        Map.of(),
+                        null);
         List<Message> parts =
                 ZLinkActorSpotRoutePackets.createActorPacketParts(
                         actorRef, header, payload, null, null, acceptedJournalRecord);
-        Message packetName = Message.from(parts.getFirst());
-        Message envelope = ZLinkActorEntryTransferEnvelope.encode(parts);
-        List<Message> wireParts = List.of(packetName, envelope);
+        List<Message> wireParts;
+        try (var body =
+                ZLinkFrameworkMultipartView.owned(ZLinkActorEntryTransferEnvelope.encode(parts))) {
+            wireParts = ZLinkChannelEnvelope.encode(channelHeader, body);
+        } finally {
+            parts.forEach(Message::close);
+        }
         try {
-            if (header.requestSequence().isPresent()
-                    || header.kind() == ZLinkStreamMessageKind.REQUEST) {
+            if (request) {
                 return routedTransport
                         .requestToSpotViaRouterChannel(
                                 target.routerChannelId(),
@@ -3877,8 +3887,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                             wireParts)
                     .thenApply(ignored -> Optional.<Message>empty());
         } finally {
-            wireParts.forEach(Message::close);
-            parts.forEach(Message::close);
+            ZLinkFrameworkMultipartView.closeAll(wireParts);
         }
     }
 
@@ -5403,10 +5412,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
 
         boolean hasBoundSession(RoutingId sourceNodeRid, RoutingId sourceSessionRid) {
             return state.hasBoundSession(sourceNodeRid, sourceSessionRid);
-        }
-
-        CompletionStage<Boolean> sendBoundSessionFrame(byte[] frameBytes) {
-            return state.sendBoundSessionFrame(frameBytes);
         }
 
         CompletionStage<Void> disconnectBoundSessionForDestroy() {
