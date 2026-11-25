@@ -3006,7 +3006,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/support/actor_maintenance_join_stream_fixture.cpp
     tests/support/actor_maintenance_join_suffix_fixture.cpp
     tests/Zlink.Framework.UnitTests/test_cpp_framework_spotwide_host_relocation.cpp
-    tests/Zlink.Framework.UnitTests/test_cpp_framework_spot_reincarnate_conformance.cpp)
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_spot_reincarnate_conformance.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_maintenance_join_callback_publication.cpp)
   target_compile_features(test_cpp_framework_spot_close_conformance PRIVATE cxx_std_20)
   target_link_zlink_test_harness(test_cpp_framework_spot_close_conformance)
   target_use_zlink_gtest_main(test_cpp_framework_spot_close_conformance)

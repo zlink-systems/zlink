@@ -2271,9 +2271,10 @@ stateful_object_runtime_t::restore_relocation (frozen_object_state_t frozen,
     }
 }
 
-stateful_error_t
-stateful_object_runtime_t::commit_relocation_restore (const object_ref_t &target,
-                                                      const relocation_restore_identity_t &identity)
+stateful_error_t stateful_object_runtime_t::commit_relocation_restore (
+  const object_ref_t &target,
+  const relocation_restore_identity_t &identity,
+  const std::function<void ()> &before_actor_join_completion)
 {
     relocation_state_commit_t commit;
     const auto preflight = _lane.run_sync ([&, this] {
@@ -2293,7 +2294,7 @@ stateful_object_runtime_t::commit_relocation_restore (const object_ref_t &target
         return preflight;
     if (commit) {
         try {
-            if (!commit ({target}))
+            if (!commit ({target}, before_actor_join_completion))
                 return stateful_error_t::conflict;
         }
         catch (...) {
@@ -2340,7 +2341,7 @@ stateful_error_t stateful_object_runtime_t::commit_relocation_restore_aggregate 
         return preflight;
     if (commit) {
         try {
-            if (!commit (targets))
+            if (!commit (targets, {}))
                 return stateful_error_t::conflict;
         }
         catch (...) {

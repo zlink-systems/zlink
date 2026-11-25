@@ -4899,7 +4899,7 @@ void test_relocation_ready_boundary (test_context_t &test, ready_boundary_case_t
               co_return co_await restore_release.task ();
           co_return true;
       },
-      [] (const auto &) { return true; },
+      [] (const auto &, const auto &) { return true; },
       [&] (const auto &) -> f::task_t<void> {
           ++aborts;
           co_return;
@@ -6252,7 +6252,7 @@ void test_application_relocation_remote_production_path (test_context_t &test,
         target.native_node ().objects ().configure_relocation_materialization (
           [] (const auto &, const auto &, const auto &,
               std::stop_token) -> framework::task_t<bool> { co_return true; },
-          [&] (const auto &) {
+          [&] (const auto &, const auto &) {
               lifecycle_callback_entered.store (true, std::memory_order_release);
               release.get ();
               return true;
@@ -6995,9 +6995,10 @@ void test_application_user_spot_aggregate_remote_production_path (test_context_t
                 return detail::spot_node_runtime_t (spot_state)
                   .materialize_relocation_state (frozen, object, spot, cancellation);
             },
-            [spot_state] (const std::vector<object_ref_t> &objects) {
+            [spot_state] (const std::vector<object_ref_t> &objects,
+                          const auto &before_join_completion) {
                 return detail::spot_node_runtime_t (spot_state)
-                  .commit_relocation_materialization (objects);
+                  .commit_relocation_materialization (objects, before_join_completion);
             },
             [spot_state] (const std::vector<object_ref_t> &objects) {
                 return detail::spot_node_runtime_t (spot_state)
@@ -8091,7 +8092,7 @@ void test_stateful_application_queue_accepts_active_backlog (test_context_t &tes
           return zlink::framework::task_t<bool> (
             zlink::framework::result_t<bool>::success (materialized));
       },
-      [&] (const std::vector<object_ref_t> &targets) {
+      [&] (const std::vector<object_ref_t> &targets, const auto &) {
           lifecycle_committed = targets == std::vector<object_ref_t>{restore_target};
           const auto [claim_error, claimed] =
             progressive_restore.try_claim (restore_target, turn_domain_t::application);
@@ -8182,7 +8183,7 @@ void test_stateful_application_queue_accepts_active_backlog (test_context_t &tes
           ++aggregate_materialized;
           return zlink::framework::task_t<bool> (zlink::framework::result_t<bool>::success (true));
       },
-      [&] (const std::vector<object_ref_t> &) {
+      [&] (const std::vector<object_ref_t> &, const auto &) {
           ++aggregate_commit_count;
           return true;
       },

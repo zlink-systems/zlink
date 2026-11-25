@@ -3222,10 +3222,11 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                     .materialize_relocation_state (frozen, target, target_spot, cancellation);
               },
               [weak_registration = std::weak_ptr (registration)] (
-                const std::vector<stateful::object_ref_t> &targets) {
+                const std::vector<stateful::object_ref_t> &targets,
+                const std::function<void ()> &before_actor_join_completion) {
                   const auto registration = detail::lock_runtime_owner (weak_registration);
                   return detail::spot_node_runtime_t (registration->spot_state)
-                    .commit_relocation_materialization (targets);
+                    .commit_relocation_materialization (targets, before_actor_join_completion);
               },
               [weak_registration = std::weak_ptr (registration)] (
                 const std::vector<stateful::object_ref_t> &targets) {

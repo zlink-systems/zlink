@@ -37,6 +37,8 @@ const fw::actor_context_t &actor_t::context () const noexcept
 
 fw::task_t<void> actor_t::on_join_completed (const fw::actor_join_completion_t &completion)
 {
+    if (observations->join_completion_view)
+        co_await observations->join_completion_view ();
     bool hold = false;
     std::shared_ptr<native_handoff_hold_t> held_suffix;
     const auto current_spot = _context.spot_id ();
@@ -316,7 +318,7 @@ fw::task_t<void> room_t::push (actor_t &actor, fw::message_context_t &, const pr
     co_await actor.context ().bound_session ().send (message).async ();
 }
 
-probe_t room_t::probe (actor_t &actor, fw::message_context_t &, const probe_t &request)
+fw::task_t<probe_t> room_t::probe (actor_t &actor, fw::message_context_t &, const probe_t &request)
 {
     if (!observations->joined_payloads.empty ()) {
         std::lock_guard lock (observations->mutex);
@@ -329,7 +331,9 @@ probe_t room_t::probe (actor_t &actor, fw::message_context_t &, const probe_t &r
         }
     }
     observations->changed.notify_all ();
-    return request.value == instance_probe ? probe_t{actor.instance} : request;
+    if (observations->before_room_probe_reply)
+        co_await observations->before_room_probe_reply ();
+    co_return request.value == instance_probe ? probe_t{actor.instance} : request;
 }
 
 fw::task_t<fw::spot_actor_join_result_t> room_t::on_actor_join (std::string_view joining_actor,

@@ -4396,11 +4396,22 @@ task_t<bool> public_host_runtime_t::try_finalize_relocation_target (relocation_a
 
     stateful::stateful_error_t committed = stateful::stateful_error_t::none;
     std::exception_ptr commit_failure;
+    std::shared_ptr<task_completion_source_t<void>> normalized_before_join;
+    std::function<void ()> before_actor_join_completion;
+    if (canonical_application_join) {
+        before_actor_join_completion = [&] {
+            auto normalization =
+              complete_relocation_target_when_delivered (key, &normalized_before_join).result ();
+            commit_failure = normalization.exception ();
+            normalization.value ();
+        };
+    }
     try {
         // Membership §4.2 steps 7-8: lifecycle and queue opening precede command 44.
         committed = attempt.targets.size () == 1
                       ? _objects.commit_relocation_restore (attempt.targets.front (),
-                                                            attempt.restore_identity)
+                                                            attempt.restore_identity,
+                                                            before_actor_join_completion)
                       : _objects.commit_relocation_restore_aggregate (attempt.targets,
                                                                       attempt.restore_identity);
     }
@@ -4443,10 +4454,13 @@ task_t<bool> public_host_runtime_t::try_finalize_relocation_target (relocation_a
     start_relocation_session_route_submission (key);
     co_await _relocation_session_terminal_lane.run_task ([&] {
         const auto found = _relocation_target_attempts.find (key);
-        if (found != _relocation_target_attempts.end ())
+        if (found != _relocation_target_attempts.end () && !normalized_before_join)
             found->second.phase = relocation_target_phase_t::dispatch_open;
     });
-    co_await complete_relocation_target_when_delivered (key);
+    if (normalized_before_join)
+        normalized_before_join->complete (result_t<void>::success ());
+    else
+        co_await complete_relocation_target_when_delivered (key);
     for (const auto &target : attempt.targets) {
         auto notified = std::make_shared<task_t<bool>> (notify_stateful_owner (target));
         detail::observe_task_completion (
@@ -4457,20 +4471,29 @@ task_t<bool> public_host_runtime_t::try_finalize_relocation_target (relocation_a
     co_return true;
 }
 
-task_t<void>
-public_host_runtime_t::complete_relocation_target_when_delivered (relocation_attempt_key_t key)
+task_t<void> public_host_runtime_t::complete_relocation_target_when_delivered (
+  relocation_attempt_key_t key,
+  std::shared_ptr<task_completion_source_t<void>> *before_actor_join_completion)
 {
     using publication_t = std::pair<stateful::object_ref_t, protocol::relocation_prepare_t>;
     std::optional<publication_t> publication;
     const auto terminal = co_await _relocation_session_terminal_lane.run_task ([&] {
         const auto found = _relocation_target_attempts.find (key);
-        if (found == _relocation_target_attempts.end ()
-            || found->second.phase != relocation_target_phase_t::dispatch_open
-            || std::any_of (
-              found->second.captured_requests.begin (), found->second.captured_requests.end (),
-              [] (const auto &request) { return !request.delivery->task ().await_ready (); }))
+        if (found == _relocation_target_attempts.end ())
             return std::shared_ptr<task_completion_source_t<void>>{};
         auto &attempt = found->second;
+        // Membership §4.2 step 7: only a Join without captured requests normalizes
+        // before its callback. Captured replies can be delivered after dispatch opens.
+        const bool can_release =
+          before_actor_join_completion
+            ? attempt.phase == relocation_target_phase_t::cutover_received
+                && attempt.captured_requests.empty ()
+            : attempt.phase == relocation_target_phase_t::dispatch_open
+                && std::ranges::all_of (attempt.captured_requests, [] (const auto &request) {
+                       return request.delivery->task ().await_ready ();
+                   });
+        if (!can_release)
+            return std::shared_ptr<task_completion_source_t<void>>{};
         if (_relocation_authority && attempt.targets.size () == 1
             && attempt.targets.front ().kind == stateful::object_kind_t::actor)
             publication.emplace (attempt.targets.front (), attempt.prepare);
@@ -4486,11 +4509,16 @@ public_host_runtime_t::complete_relocation_target_when_delivered (relocation_att
             && !_relocation_authority->finish_relocation (publication->first, publication->second))
             throw framework_exception_t (framework_error_kind_t::unavailable,
                                          "Relocation target lost its authority publication fence");
-        terminal->complete (result_t<void>::success ());
+        if (before_actor_join_completion)
+            *before_actor_join_completion = terminal;
+        else
+            terminal->complete (result_t<void>::success ());
     }
     catch (...) {
-        terminal->complete (result_t<void>::failure (
-          framework_error_kind_t::unavailable, "Relocation target could not release publication"));
+        if (!before_actor_join_completion)
+            terminal->complete (
+              result_t<void>::failure (framework_error_kind_t::unavailable,
+                                       "Relocation target could not release publication"));
         throw;
     }
 }

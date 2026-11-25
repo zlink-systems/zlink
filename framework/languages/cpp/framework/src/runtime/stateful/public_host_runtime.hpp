@@ -1210,7 +1210,9 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     using relocation_attempt_key_t = std::tuple<std::uint64_t, std::uint64_t, std::uint64_t>;
     struct relocation_target_attempt_t;
     task_t<bool> try_finalize_relocation_target (relocation_attempt_key_t key);
-    task_t<void> complete_relocation_target_when_delivered (relocation_attempt_key_t key);
+    task_t<void> complete_relocation_target_when_delivered (
+      relocation_attempt_key_t key,
+      std::shared_ptr<task_completion_source_t<void>> *before_actor_join_completion = nullptr);
     void record_relocation_reply_delivered (
       relocation_attempt_key_t key,
       const std::shared_ptr<task_completion_source_t<void>> &delivery);

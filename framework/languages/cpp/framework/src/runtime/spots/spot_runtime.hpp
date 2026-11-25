@@ -2412,8 +2412,9 @@ class spot_node_runtime_t
                                   const runtime::stateful::object_ref_t &target,
                                   const std::optional<runtime::stateful::object_ref_t> &target_spot,
                                   std::stop_token cancellation = {});
-    bool
-    commit_relocation_materialization (const std::vector<runtime::stateful::object_ref_t> &targets);
+    bool commit_relocation_materialization (
+      const std::vector<runtime::stateful::object_ref_t> &targets,
+      const std::function<void ()> &before_actor_join_completion = {});
     task_t<void>
     retire_relocation_source (const std::vector<runtime::stateful::object_ref_t> &sources);
     task_t<result_t<remote_actor_transfer_t>> transfer_actor_out (const actor_ref_t &actor_ref,

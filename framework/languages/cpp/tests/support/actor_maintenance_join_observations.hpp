@@ -102,6 +102,8 @@ struct observations_t
     int entry_left = 0;
     std::atomic<fw::actor_client_t *> joined_sender{nullptr};
     std::function<fw::task_t<void> (fw::actor_id_t)> joined_view;
+    std::function<fw::task_t<void> ()> join_completion_view;
+    std::function<fw::task_t<void> ()> before_room_probe_reply;
     bool release_replay_post = false;
     bool next_join_attempted = false;
     bool send_after_close = false;

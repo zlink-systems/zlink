@@ -318,7 +318,8 @@ class stateful_object_runtime_t
                                   const object_ref_t &,
                                   const std::optional<object_ref_t> &,
                                   std::stop_token)>;
-    using relocation_state_commit_t = std::function<bool (const std::vector<object_ref_t> &)>;
+    using relocation_state_commit_t =
+      std::function<bool (const std::vector<object_ref_t> &, const std::function<void ()> &)>;
     using relocation_state_abort_t =
       std::function<task_t<void> (const std::vector<object_ref_t> &)>;
     // Relocation flow §4.2 cut S of the participants' actual execution owner. In one producer
@@ -538,8 +539,10 @@ class stateful_object_runtime_t
                                   std::vector<object_ref_t> targets,
                                   relocation_restore_identity_t identity,
                                   std::stop_token cancellation = {});
-    stateful_error_t commit_relocation_restore (const object_ref_t &target,
-                                                const relocation_restore_identity_t &identity);
+    stateful_error_t
+    commit_relocation_restore (const object_ref_t &target,
+                               const relocation_restore_identity_t &identity,
+                               const std::function<void ()> &before_actor_join_completion = {});
     stateful_error_t
     commit_relocation_restore_aggregate (const std::vector<object_ref_t> &targets,
                                          const relocation_restore_identity_t &identity);

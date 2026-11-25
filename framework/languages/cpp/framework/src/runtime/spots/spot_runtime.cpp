@@ -8682,7 +8682,8 @@ task_t<bool> spot_node_runtime_t::materialize_actor_relocation_state (
 }
 
 bool spot_node_runtime_t::commit_relocation_materialization (
-  const std::vector<runtime::stateful::object_ref_t> &targets)
+  const std::vector<runtime::stateful::object_ref_t> &targets,
+  const std::function<void ()> &before_actor_join_completion)
 {
     end_relocation_activation_admissions (targets);
     std::vector<std::shared_ptr<spot_context_state_t>> ready;
@@ -8844,6 +8845,8 @@ bool spot_node_runtime_t::commit_relocation_materialization (
           .get ();
         state->complete_relocation_ready (spot_relocation_ready_outcome_t::relocated);
     }
+    if (before_actor_join_completion)
+        before_actor_join_completion ();
     for (auto &completion : actor_join_completions) {
         if (actor_transfer_marker_enabled ()) {
             emit_actor_transfer_marker ("location_committed", completion.actor,
