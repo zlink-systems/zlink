@@ -455,7 +455,7 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
         if (sharedSpotGate) {
             return executeSpot(0, () -> operation.apply(true));
         }
-        return timerQueue(timerName).enqueue(() -> operation.apply(false), null);
+        return timerQueue(timerName).enqueueWithPayloadBytes(0, () -> operation.apply(false), null);
     }
 
     <T> CompletionStage<T> prepareRelocationTarget(Supplier<CompletionStage<T>> operation) {

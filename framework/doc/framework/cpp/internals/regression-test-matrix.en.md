@@ -32,7 +32,7 @@ messaging unit test.
 |----|------|-------------|-----------|
 | SYLD-001 | `contract` | `Zlink.Framework.ContractTests/test_cpp_framework_contract_headers.cpp` | `yield()` exists on request, actor join, bound session send, and worker call, and is not exposed on route request or ordinary send/publish. |
 | SYLD-002 | `unit` | `Zlink.Framework.UnitTests/test_cpp_framework_spot_runtime.cpp` | The default `submit()` of request and worker keeps the serial gate, and `yield()` lets other mailbox work run before returning to the original continuation. Actor join keeps the same gate with `async()`. |
-| SYLD-003 | `unit` | `Zlink.Framework.UnitTests/test_cpp_framework_execution.cpp` | The serial execution queue distinguishes a released turn from normal completion. |
+| SYLD-003 | `unit` | `Zlink.Framework.UnitTests/test_cpp_framework_execution_request_turns.cpp` | The serial execution queue distinguishes a released turn from normal completion. |
 | SYLD-004 | `contract`, `sample` | `test_cpp_framework_sample_parity`, `test_cpp_framework_layout_contract` | The C++ sample layout matches the public contract documents, and the Entry Spot actor handler example doesn't depend on `yield()`. |
 | SYLD-005 | `unit` | `Zlink.Framework.UnitTests/test_cpp_framework_spot_runtime.cpp` | An Entry Spot actor packet runs on its target actor's mailbox. Different actors are not blocked by the Entry Spot's single queue, and consecutive packets of the same actor are processed in order. A `yield()` inside an Entry Spot actor handler becomes a contract error immediately, with no timeout. |
 

@@ -26,6 +26,12 @@ export interface ZlinkStreamRequestSendingContext {
   setMetadata(key: string, value: string): void;
 }
 
+export interface ZlinkStreamAdmissionWaitingContext {
+  readonly requestPacketName: string;
+  readonly actorId?: string;
+  readonly retryAfterMs: number;
+}
+
 export interface ZlinkStreamReplyReceivedContext {
   readonly requestPacketName: string;
   readonly actorId?: string;

@@ -27,13 +27,6 @@ internal sealed partial class ZLinkLocationRuntime
         ZLinkOwnerLeaseReadResult? exact = null
     )
     {
-        var recovery = await _lane
-            .RunAsync(() =>
-                GetHealthSnapshot().StoreOutage is not null || _discardedExecutions.Count != 0
-            )
-            .ConfigureAwait(false);
-        if (!recovery)
-            return ZLinkOwnerLeaseRecovery.NotYet;
         exact ??= await _store
             .ReadOwnerLeaseAsync(owner.OwnerId, cancellationToken)
             .ConfigureAwait(false);
@@ -99,22 +92,30 @@ internal sealed partial class ZLinkLocationRuntime
                     <= episode.Lifetime
         );
 
+    private void FinishRecoveryOnLane()
+    {
+        if (
+            GetHealthSnapshot().StoreOutage is { } episode
+            && episode.Executions.Count == 0
+            && IsOwnerAdmissionOpenOnLane()
+            && IsBeforeRecoveryDeadline(episode)
+        )
+            UpdateHealth(health => health with { StoreOutage = null });
+    }
+
     private async ValueTask RecoverPreservedExecutionsAsync(
         ZLinkStoreOutageEpisode episode,
-        ZLinkLocationOwnerToken? renewingOwner
+        ZLinkLocationOwnerToken owner,
+        ZLinkLocationOwnerToken? renewingOwner,
+        IReadOnlyDictionary<ZLinkMeshNodeDescriptorKey, Task<bool>>? publications
     )
     {
         // A late completion of an operation started before the outage cannot confirm recovery.
-        var owner = await _lane.RunAsync(RequireOwnerTokenOnLane).ConfigureAwait(false);
         if (renewingOwner is null && owner == episode.Owner)
             return;
-        Volatile.Write(ref episode.Recovering, 1);
+        await _lane.RunAsync(() => episode.BeginRecovery(owner)).ConfigureAwait(false);
         await episode.CaptureCompleted.Task.ConfigureAwait(false);
         using var timeout = new CancellationTokenSource(_options.OwnerLeaseRenewTimeout, _time);
-        IReadOnlyDictionary<ZLinkMeshNodeDescriptorKey, Task<bool>> publications =
-            new Dictionary<ZLinkMeshNodeDescriptorKey, Task<bool>>();
-        if (owner != episode.Owner && SubmitRecoveryDescriptorsAsync is { } submit)
-            publications = await submit(timeout.Token).ConfigureAwait(false);
         var executions = await Task.WhenAll(
                 episode.Executions.Select(async execution =>
                     (
@@ -147,9 +148,7 @@ internal sealed partial class ZLinkLocationRuntime
         await _lane
             .RunAsync(() =>
             {
-                if (!IsBeforeRecoveryDeadline(episode) || episode.Executions.Count != 0)
-                    return;
-                UpdateHealth(health => health with { StoreOutage = null });
+                FinishRecoveryOnLane();
                 ScheduleOwnerDeadlinesOnLane();
             })
             .ConfigureAwait(false);
@@ -165,7 +164,9 @@ internal sealed partial class ZLinkLocationRuntime
                 );
             var descriptorConfirmation =
                 owner == episode.Owner ? Task.FromResult(true)
-                : descriptorKey is { } key && publications.TryGetValue(key, out var confirmation)
+                : descriptorKey is { } key
+                && publications is not null
+                && publications.TryGetValue(key, out var confirmation)
                     ? confirmation
                 : Task.FromResult(false);
             bool recovered;
@@ -227,7 +228,7 @@ internal sealed partial class ZLinkLocationRuntime
                 {
                     if (!IsBeforeRecoveryDeadline(episode) || IsDiscarded(execution))
                         return;
-                    episode.CompleteExecution(execution);
+                    episode.CompleteExecution(execution, recovered: true);
                     ExecutionResumed?.Invoke(execution);
                 })
                 .ConfigureAwait(false);

@@ -174,9 +174,15 @@ export class ZlinkStreamReceiveDispatcher {
       return;
     }
     if (header.kind === ZlinkStreamMessageKind.Error) {
+      const receivedAt = performance.now();
       let error: ZlinkStreamError;
+      let retryAfter: string | undefined;
       try {
-        error = decodeRemoteError(this.decodePayload(header, payload));
+        const remote = decodeRemoteError(this.decodePayload(header, payload));
+        error = remote;
+        if (remote.cause.code === 'unavailable') {
+          retryAfter = header.metadata.get('$zlink.admission.retryAfterMs');
+        }
       } catch (cause) {
         if (cause instanceof ZlinkStreamConnectionEnd) throw cause;
         error = toStreamError(
@@ -187,7 +193,7 @@ export class ZlinkStreamReceiveDispatcher {
       }
       if (
         header.requestSeq === undefined ||
-        !this.pendingRequests.reject(header.requestSeq, error)
+        !this.pendingRequests.reject(header.requestSeq, error, retryAfter, receivedAt)
       ) {
         this.events.publishError(error, signal);
       }
@@ -245,7 +251,7 @@ export class ZlinkStreamReceiveDispatcher {
 function decodeRemoteError(decodedPayload: Uint8Array): {
   readonly code: ZlinkStreamErrorCode;
   readonly message: string;
-  readonly cause: unknown;
+  readonly cause: { readonly code: string; readonly message: string };
 } {
   let decoded: unknown;
   try {

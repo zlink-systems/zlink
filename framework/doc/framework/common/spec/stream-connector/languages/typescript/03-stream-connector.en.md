@@ -151,6 +151,7 @@ interface ZlinkStreamConnector {
   ): Disposable;
 
   onRequestSending(handler: (context: ZlinkStreamRequestSendingContext) => void): Disposable;
+  onAdmissionWaiting(handler: (context: ZlinkStreamAdmissionWaitingContext, signal?: AbortSignal) => Promise<void> | void): Disposable;
   onReplyReceived(
     handler: (context: ZlinkStreamReplyReceivedContext, signal?: AbortSignal) => Promise<void> | void
   ): Disposable;
@@ -246,6 +247,12 @@ interface ZlinkStreamMessage<TPayload = unknown> {
   readonly metadata: ZlinkStreamMetadata;
   readonly payload: TPayload;
   readonly actorId?: string;                   // the counterpart bound Actor; undefined for a frame without a slot (common spec §5.6)
+}
+
+interface ZlinkStreamAdmissionWaitingContext {
+  readonly requestPacketName: string;
+  readonly actorId?: string;
+  readonly retryAfterMs: number;
 }
 
 interface ZlinkStreamRequestSendingContext {
@@ -354,6 +361,7 @@ interface ZlinkStreamConnectorOptions {
   readonly transportFactory?: ZlinkStreamTransportFactory;
   readonly connectTimeoutMs?: number;
   readonly requestTimeoutMs?: number;
+  readonly maxAdmissionWaitMs?: number;
   readonly waitTimeoutMs?: number;
   readonly heartbeat?: ZlinkStreamHeartbeatOptions;
   readonly reconnect?: ZlinkStreamReconnectOptions;
@@ -402,6 +410,7 @@ interface RequiredZlinkStreamConnectorOptions {
   readonly transport: ZlinkStreamTransport;
   readonly connectTimeoutMs: number;
   readonly requestTimeoutMs: number;
+  readonly maxAdmissionWaitMs?: number;
   readonly waitTimeoutMs: number;
   readonly heartbeat: Required<ZlinkStreamHeartbeatOptions>;
   readonly reconnect: Required<ZlinkStreamReconnectOptions>;
@@ -523,3 +532,5 @@ TypeScript signature and browser execution environment.
 <!-- framework-adapter-nav:bottom:start -->
 [Document list](../../../../../../README.en.md)
 <!-- framework-adapter-nav:bottom:end -->
+
+Admission waiting and its default deadline are defined by [common spec §5.8](../../32-stream-connector.en.md#58-admission-wait-and-automatic-retry).

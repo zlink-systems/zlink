@@ -11,6 +11,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -160,7 +161,15 @@ class host_capacity_runtime_t
         std::lock_guard lock (_mutex);
         _core_context->reset_core_hwm_budget_metrics ();
         _application_jobs->reset_metrics ();
+        if (_reset_authentication_admission)
+            _reset_authentication_admission ();
         ++_measurement_epoch;
+    }
+
+    void bind_authentication_admission_reset (std::function<void ()> reset)
+    {
+        std::lock_guard lock (_mutex);
+        _reset_authentication_admission = std::move (reset);
     }
 
   private:
@@ -293,6 +302,7 @@ class host_capacity_runtime_t
     core_hwm_profile_t _configured_core_profile;
     std::array<metric_registration_t, host_capacity_metric_catalog.size ()> _metrics;
     mutable std::mutex _mutex;
+    std::function<void ()> _reset_authentication_admission;
     std::uint64_t _measurement_epoch = 0;
 };
 

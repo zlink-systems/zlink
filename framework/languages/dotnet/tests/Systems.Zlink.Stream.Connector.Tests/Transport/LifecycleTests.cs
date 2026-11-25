@@ -1666,14 +1666,12 @@ public sealed partial class StreamConnectorTests
                 _ = queue.SendAsync(frame, CancellationToken.None);
 
             var error = await Assert.ThrowsAsync<ZlinkStreamException>(async () =>
-                await queue
-                    .SubmitRequestAsync(
-                        connection,
-                        new ZlinkStreamOutboundFrame(ReadOnlyMemory<byte>.Empty, new byte[] { 2 }),
-                        CancellationToken.None,
-                        () => { }
-                    )
-                    .AsTask()
+                await queue.SubmitRequestAsync(
+                    connection,
+                    new ZlinkStreamOutboundFrame(ReadOnlyMemory<byte>.Empty, new byte[] { 2 }),
+                    CancellationToken.None,
+                    () => { }
+                )
             );
             Assert.Equal(ZlinkStreamErrorCode.SendFailed, error.Error.Code);
             releaseFirst.TrySetResult();
