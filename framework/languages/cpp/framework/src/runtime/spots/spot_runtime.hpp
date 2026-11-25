@@ -172,6 +172,16 @@ class spot_node_builder_state_t
     dispatch_options_t dispatch;
     // Install before node start; clear after node stop. Only tests wait in this callback.
     handler_invocation_callback_t handler_invocation_for_tests;
+#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+    std::function<task_t<void> ()> before_remote_source_replay_for_tests;
+    enum class remote_entry_join_stage_t
+    {
+        dispatched,
+        approved,
+        prepare
+    };
+    std::function<void (remote_entry_join_stage_t)> remote_entry_join_for_tests;
+#endif
     runtime::location_lifecycle_t *location_lifecycle = nullptr;
     std::function<task_t<void> (authority_key_t, authority_snapshot_t, task_t<void>)>
       discarded_authority_cleanup;

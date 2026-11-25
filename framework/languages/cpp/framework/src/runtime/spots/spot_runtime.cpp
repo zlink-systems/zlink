@@ -10798,6 +10798,10 @@ task_t<void> spot_node_runtime_t::complete_remote_actor_transfer (
         }
     }
 
+#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+    if (_state->before_remote_source_replay_for_tests)
+        co_await _state->before_remote_source_replay_for_tests ();
+#endif
     for (;;) {
         auto replay = _state->actor_transfer_coordinator->finish_move_replay (key);
         order_bound_session_handoff (replay.backlog);

@@ -616,6 +616,11 @@ admit_wire_actor_join (const std::shared_ptr<spot_node_builder_state_t> &spot_st
         result.receive_chunk_limit_bytes =
           static_cast<std::uint32_t> (detail::spot_actor_join_advertised_receive_chunk_limit_bytes);
         result.application_reply = std::move (result_application_reply);
+#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+        if (request.entry && spot_state->remote_entry_join_for_tests)
+            spot_state->remote_entry_join_for_tests (
+              spot_node_builder_state_t::remote_entry_join_stage_t::approved);
+#endif
         return result;
     }
     catch (const framework_exception_t &error) {
@@ -827,8 +832,7 @@ task_t<void> mesh_node_runtime_t::start (
                                     host::actor_join_operation_target_completion_t completion) {
           spot_node_runtime_t spot (spot_state);
           spot.dispatch_wire_actor_join_admission (
-            spot_id_t (request.target_spot.spot_id),
-            request.entry ? std::string_view{} : request.actor.actor_id,
+            spot_id_t (request.target_spot.spot_id), request.actor.actor_id,
             [spot_state, routing_id, request, payload = std::move (payload), serializers,
              completion] () -> task_t<void> {
                 completion (
@@ -840,6 +844,11 @@ task_t<void> mesh_node_runtime_t::start (
                   rejected.error_kind (),
                   rejected.error () ? detail::failure_code (*rejected.error ()) : 0));
             });
+#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+          if (request.entry && spot_state->remote_entry_join_for_tests)
+              spot_state->remote_entry_join_for_tests (
+                spot_node_builder_state_t::remote_entry_join_stage_t::dispatched);
+#endif
       });
     node->configure_actor_join_relocation (
       [spot_state] (const runtime::protocol::relocation_prepare_t &prepare) {
@@ -3350,6 +3359,11 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
                          object] (const std::vector<runtime::stateful::frozen_object_state_t> &,
                                   const runtime::stateful::relocation_payload_manifest_t &manifest)
         -> task_t<runtime::stateful::relocation_reason_t> {
+#if defined(ZLINK_FRAMEWORK_TEST_CREATION_PROBE)
+          if (s->target_entry && _state->spot_state->remote_entry_join_for_tests)
+              _state->spot_state->remote_entry_join_for_tests (
+                spot_node_builder_state_t::remote_entry_join_stage_t::prepare);
+#endif
           co_return co_await _node->prepare_relocation_remote (
             s->target.node_rid,
             runtime::protocol::relocation_prepare_t{
