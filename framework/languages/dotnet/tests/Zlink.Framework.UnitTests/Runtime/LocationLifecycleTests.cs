@@ -360,7 +360,7 @@ public sealed class LocationLifecycleTests
                 await fixture.Store.ReadAuthorityAsync(actorKey)
             )
             .Snapshot;
-        Assert.NotEqual(before.ObjectGeneration, spot.ObjectGeneration);
+        Assert.Equal(provider, before.ObjectGeneration == spot.ObjectGeneration);
         if (scenario == "missing")
             Assert.IsType<ZLinkAuthorityCompareExchangeResult.Deleted>(
                 await fixture.Store.CompareExchangeAuthorityAsync(
@@ -477,7 +477,7 @@ public sealed class LocationLifecycleTests
         var before = Assert
             .IsType<ZLinkAuthorityReadResult.Found>(await fixture.Store.ReadAuthorityAsync(key))
             .Snapshot;
-        Assert.NotEqual(before.ObjectGeneration, spot.ObjectGeneration);
+        Assert.Equal(provider, before.ObjectGeneration == spot.ObjectGeneration);
         var expected = new ActorRef(
             ActorId,
             before.ObjectGeneration + (wrongGeneration ? 1UL : 0UL),
@@ -541,7 +541,7 @@ public sealed class LocationLifecycleTests
         var original = Assert
             .IsType<ZLinkAuthorityReadResult.Found>(await fixture.Store.ReadAuthorityAsync(key))
             .Snapshot;
-        Assert.NotEqual(original.ObjectGeneration, spot.ObjectGeneration);
+        Assert.Equal(provider, original.ObjectGeneration == spot.ObjectGeneration);
         if (scenario == "priorRevision")
             Assert.IsType<ZLinkAuthorityCompareExchangeResult.Stored>(
                 await fixture.Store.CompareExchangeAuthorityAsync(

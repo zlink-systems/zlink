@@ -1,4 +1,3 @@
-import { dispatchReasonFromError } from '../diagnostics/dispatch-error-details';
 import { runOutsideZLinkActorExecution } from '../actors/actor-execution-context';
 import type {
   RoutingId,
@@ -24,6 +23,8 @@ import {
   createInternalFrameworkException
 } from '../framework-errors-internal';
 import { resolveLifecycleHandler } from '../handlers/handler-instance-scope';
+import type { ZLinkFlowContextValue } from '../diagnostics/flow-context';
+import { reportSpotPacketFailure } from './spot-packet-terminal';
 import type { ZLinkSpotHandlerRegistration } from './spot-handler-registry';
 import type { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 import type { ZLinkSerialWorkOptions } from '../execution/serial-execution-queue';
@@ -54,6 +55,9 @@ interface ZLinkRoutedSpotPacketContext {
   readonly channelName: string;
   readonly onAdmitted?: () => void;
   readonly contentType?: string;
+  readonly correlationId?: string;
+  readonly inboundFlow?: ZLinkFlowContextValue;
+  readonly sourceRid?: string;
   readonly metadata?: ReadonlyMap<string, string> | Readonly<Record<string, string>>;
   readonly workOptions?: ZLinkSerialWorkOptions;
   readonly admissionTimeoutMs?: number;
@@ -207,6 +211,7 @@ export class ZLinkRoutedSpotPacketDispatch {
             channelName: context.channelName,
             contentType: context.contentType,
             packetName: packetName!,
+            correlationId: context.correlationId,
             metadata:
               context.metadata === undefined
                 ? ZLinkMessageMetadataEmpty
@@ -319,23 +324,29 @@ export class ZLinkRoutedSpotPacketDispatch {
     returnResponse: boolean,
     error: unknown
   ): void {
-    const reporter = this.options.dispatchErrors;
-    if (reporter?.captureEnabled() !== true) return;
-    reporter.report({
-      surface:
-        context.activationRecord?.activationRecord?.kind === 'instanceSpot'
-          ? ZLinkDispatchErrorSurface.InstanceSpot
-          : ZLinkDispatchErrorSurface.SpotRoute,
-      messageKind: returnResponse
-        ? ZLinkDispatchMessageKind.Request
-        : ZLinkDispatchMessageKind.Send,
-      reason: dispatchReasonFromError(error),
-      action: returnResponse ? ZLinkDispatchErrorAction.FailCaller : ZLinkDispatchErrorAction.Drop,
-      packetName,
-      channelName: context.channelName,
-      spotId: String(spotId),
+    reportSpotPacketFailure(
+      this.options.dispatchErrors,
+      {
+        surface:
+          context.activationRecord?.activationRecord?.kind === 'instanceSpot'
+            ? ZLinkDispatchErrorSurface.InstanceSpot
+            : ZLinkDispatchErrorSurface.SpotRoute,
+        messageKind: returnResponse
+          ? ZLinkDispatchMessageKind.Request
+          : ZLinkDispatchMessageKind.Send,
+        action: returnResponse
+          ? ZLinkDispatchErrorAction.FailCaller
+          : ZLinkDispatchErrorAction.Drop,
+        packetName,
+        channelName: context.channelName,
+        spotId: String(spotId),
+        sourceRid: context.sourceRid,
+        correlationId: context.correlationId,
+        flowId: context.inboundFlow?.flowId,
+        flowOrigin: context.inboundFlow?.flowOrigin
+      },
       error
-    });
+    );
   }
 
   private reportMissing(
