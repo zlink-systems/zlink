@@ -842,7 +842,7 @@ public sealed class StandaloneActorRelocationRuntimeTests
     }
 
     [Fact]
-    public void Startup_recovery_requires_exact_source_lease_expiry()
+    public void Relocation_delivery_requires_exact_source_lease_expiry()
     {
         var now = DateTimeOffset.UtcNow;
         var source = new ZLinkActorRelocationSourceFence(
@@ -853,39 +853,43 @@ public sealed class StandaloneActorRelocationRuntimeTests
         );
 
         Assert.True(
-            ZLinkStandaloneActorRelocationRuntime.IsExactSourceLeaseExpired(
+            ZLinkFrameworkRuntime.IsExactSourceLeaseExpired(
                 new ZLinkOwnerLeaseReadResult.Missing(),
-                source
+                source.OwnerId,
+                source.OwnerLeaseGeneration
             )
         );
         Assert.True(
-            ZLinkStandaloneActorRelocationRuntime.IsExactSourceLeaseExpired(
+            ZLinkFrameworkRuntime.IsExactSourceLeaseExpired(
                 new ZLinkOwnerLeaseReadResult.Found(
                     new ZLinkLocationOwnerToken("source-owner", 4),
                     now.AddMinutes(1),
                     now
                 ),
-                source
+                source.OwnerId,
+                source.OwnerLeaseGeneration
             )
         );
         Assert.True(
-            ZLinkStandaloneActorRelocationRuntime.IsExactSourceLeaseExpired(
+            ZLinkFrameworkRuntime.IsExactSourceLeaseExpired(
                 new ZLinkOwnerLeaseReadResult.Found(
                     new ZLinkLocationOwnerToken("source-owner", 3),
                     now,
                     now
                 ),
-                source
+                source.OwnerId,
+                source.OwnerLeaseGeneration
             )
         );
         Assert.False(
-            ZLinkStandaloneActorRelocationRuntime.IsExactSourceLeaseExpired(
+            ZLinkFrameworkRuntime.IsExactSourceLeaseExpired(
                 new ZLinkOwnerLeaseReadResult.Found(
                     new ZLinkLocationOwnerToken("source-owner", 3),
                     now.AddMinutes(1),
                     now
                 ),
-                source
+                source.OwnerId,
+                source.OwnerLeaseGeneration
             )
         );
     }

@@ -105,6 +105,13 @@ public sealed partial class RelocationBehaviorConformanceTests
                 .Snapshot;
             Assert.Equal(target.LocalNodeRid, committed.Allocation.Descriptor.Rid);
             Assert.Equal(original.ObjectGeneration, committed.ObjectGeneration);
+            var progress = ZLinkAuthorityAggregateCodec
+                .Replace(null, committed.Relocation)!
+                .Value.GetProperty("relocation")
+                .GetProperty("completion");
+            Assert.Equal("0", progress.GetProperty("acceptedRequests").GetString());
+            Assert.Equal("0", progress.GetProperty("completedResults").GetString());
+            Assert.Equal("0", progress.GetProperty("pendingDeliveries").GetString());
             var spots = target.Services.GetRequiredService<IZLinkSpotManager>();
             var beforeDispatch = await spots.FindAsync(spotId);
 

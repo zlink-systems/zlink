@@ -1,3 +1,5 @@
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Identifiers;
@@ -195,9 +197,22 @@ internal sealed class ZLinkSpotRetireScheduler(
         CancellationToken cancellationToken
     )
     {
+        var logger = runtime.Services.GetService<ILogger<ZLinkFrameworkMaintenanceRuntime>>();
         foreach (var unit in units)
         {
             var inventory = CreateInventory(unit.Activation, unit.Instance);
+            var authority = await authorityStore
+                .ReadAuthorityAsync(
+                    ZLinkAuthorityKeyCodec.EncodeSpot(inventory.SpotId),
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+            if (
+                authority is ZLinkAuthorityReadResult.Found found
+                && ZLinkRelocationCompletionStore.CompletionBlocker(found.Snapshot, logger)
+                    is not null
+            )
+                return ZLinkFrameworkRelocationReason.OperationInProgress;
             if (
                 inventory.RequiredCapabilities.Any(static capability =>
                     capability.Policy == ZLinkObjectMaintenancePolicyKind.Disabled

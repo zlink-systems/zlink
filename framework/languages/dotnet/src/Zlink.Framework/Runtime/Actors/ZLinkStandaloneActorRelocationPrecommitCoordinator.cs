@@ -31,6 +31,7 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(sourceAuthority);
+        ZLinkRelocationCompletionStore.RequireCompletionSettled(source);
         var (high, low) = RelocationParts(relocationId);
         var state = new ZLinkCanonicalRelocationAuthorityState(
             high,
@@ -190,7 +191,8 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
         ZLinkActorAuthorityPayload targetAuthority,
         Func<bool> isTargetLeaseValid,
         TimeSpan resubmitInterval,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ulong? acceptedRequests = null
     )
     {
         // A .NET source persists phases 1/2 while it captures its in-memory
@@ -237,7 +239,15 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
                     state.CoordinatorExpectedAuthorityStoreVersion,
                     payload
                 ),
-            captured.Relocation?.Completion
+            ZLinkRelocationCompletionProgress.Start(
+                acceptedRequests
+                    ?? (ulong)
+                        root
+                            .Participants.Single()
+                            .AcceptedJobs.Count(job =>
+                                job.CanonicalRequest is { ReplyRouteId: not 0 }
+                            )
+            )
         );
         var mutation = new ZLinkAuthorityMutation.Put(
             payload,

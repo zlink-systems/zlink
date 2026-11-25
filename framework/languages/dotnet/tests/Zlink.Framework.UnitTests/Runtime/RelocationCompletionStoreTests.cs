@@ -54,8 +54,8 @@ public sealed class RelocationCompletionStoreTests
             ZLinkRelocationCompletionStore.RequireCompleted(pending.Relocation!)
         );
         Assert.NotEqual(
-            ZLinkRelocationCompletionProgress.Read(published.Relocation!)!.Reference,
-            ZLinkRelocationCompletionProgress.Read(pending.Relocation!)!.Reference
+            published.Relocation!.Completion!.Reference,
+            pending.Relocation!.Completion!.Reference
         );
 
         var reader = new ZLinkRelocationCompletionStore(authority, blobs);
@@ -123,7 +123,7 @@ public sealed class RelocationCompletionStoreTests
         var attempts = new List<string>();
         authority.BeforeExchange = relocation =>
         {
-            attempts.Add(ZLinkRelocationCompletionProgress.Read(relocation)!.Reference!);
+            attempts.Add(relocation.Completion!.Reference!);
             if (attempts.Count == 1)
                 throw new TimeoutException("Location Store did not return the CAS result.");
             return ValueTask.CompletedTask;
@@ -245,7 +245,7 @@ public sealed class RelocationCompletionStoreTests
             default
         );
         var relocation = current.Relocation!;
-        var reference = ZLinkRelocationCompletionProgress.Read(relocation)!.Reference!;
+        var reference = relocation.Completion!.Reference!;
         var newChunks = blobs
             .Payloads.Where(pair => !existing.Contains(pair.Key) && pair.Key != reference)
             .OrderBy(pair => pair.Value.Length)
@@ -353,7 +353,7 @@ public sealed class RelocationCompletionStoreTests
         var writer = new ZLinkRelocationCompletionStore(authority, blobs);
         var (published, _) = await writer.AppendAsync(Key, authority.Snapshot, First, default);
         var relocation = published.Relocation!;
-        var completion = ZLinkRelocationCompletionProgress.Read(relocation)!;
+        var completion = relocation.Completion!;
         var reference = completion.Reference!;
 
         switch (damage)
@@ -370,7 +370,7 @@ public sealed class RelocationCompletionStoreTests
             case "sha256":
                 relocation = relocation with
                 {
-                    Completion = (completion with { Sha256 = new string('0', 64) }).ToJson(),
+                    Completion = completion with { Sha256 = new string('0', 64) },
                 };
                 break;
             case "relocationId":
@@ -379,13 +379,13 @@ public sealed class RelocationCompletionStoreTests
             case "completedResults":
                 relocation = relocation with
                 {
-                    Completion = (completion with { CompletedResults = 2 }).ToJson(),
+                    Completion = completion with { CompletedResults = 2 },
                 };
                 break;
             case "pendingDeliveries":
                 relocation = relocation with
                 {
-                    Completion = (completion with { PendingDeliveries = 0 }).ToJson(),
+                    Completion = completion with { PendingDeliveries = 0 },
                 };
                 break;
         }
@@ -427,7 +427,7 @@ public sealed class RelocationCompletionStoreTests
                     new("01", 12, "source", 7, "original"),
                     new string('a', 64),
                     1,
-                    ZLinkRelocationCompletionProgress.Start(2).ToJson()
+                    ZLinkRelocationCompletionProgress.Start(2)
                 ),
             };
 

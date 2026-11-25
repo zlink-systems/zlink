@@ -86,6 +86,7 @@
         <Compile Include="Runtime/SpotRequestSourceDiscoveryTests.cs"/>
         <Compile Include="Runtime/SourceRequestOwnerContractTests.cs"/>
         <Compile Include="Runtime/HostRelocationSealStageTests.cs"/>
+        <Compile Include="Runtime/SpotWideCompletionTests.cs"/>
         <Compile Include="Runtime/StartupStoreStallTests.cs"/>
         <Compile Include="Runtime/PreReadyLogicalMulticastTests.cs"/>
         <Compile Include="Runtime/SpotWideMemberSealCaptureTests.cs"/>
@@ -325,6 +326,7 @@
         <Compile Include="Runtime/ReconciliationRunnerTests.cs"/>
         <Compile Include="Runtime/RelocationRuntimeTests.cs"/>
         <Compile Include="Runtime/RelocationRuntimeTests.AggregatePublicationProbe.cs"/>
+        <Compile Include="Runtime/RelocationRuntimeTests.AggregateCompletion.cs"/>
         <Compile Include="Runtime/AuditRuntimeFailureReporter.cs"/>
         <Compile Include="Runtime/ActorMembershipOwnershipTests.cs"/>
         <Compile Include="Runtime/RelocationBehaviorConformanceTests.cs"/>

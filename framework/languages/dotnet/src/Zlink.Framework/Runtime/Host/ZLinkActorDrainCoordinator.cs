@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.Runtime.Host;
@@ -13,6 +14,32 @@ internal sealed class ZLinkActorDrainCoordinator(
     ZLinkFrameworkRegistration registration
 )
 {
+    internal async ValueTask<bool> HasCompletionBlockerAsync(CancellationToken cancellationToken)
+    {
+        if (registration.Locations.ResolveStore() is not { } store)
+            return false;
+        var logger = services.GetService<ILogger<ZLinkFrameworkMaintenanceRuntime>>();
+        foreach (var state in actorSessions.SnapshotStates())
+        {
+            if (state.Actor is null || state.NativeActorRef is not { } actorRef)
+                continue;
+            var authority = await store
+                .ReadAuthorityAsync(
+                    ZLinkActorAuthorityPayloadCodec.AuthorityKey(state.ActorId),
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+            if (
+                authority is ZLinkAuthorityReadResult.Found found
+                && found.Snapshot.Allocation.Descriptor.Rid == actorRef.NodeRid
+                && ZLinkRelocationCompletionStore.CompletionBlocker(found.Snapshot, logger)
+                    is not null
+            )
+                return true;
+        }
+        return false;
+    }
+
     public async ValueTask<ZLinkFrameworkRelocationReason?> PreflightAsync(
         ZLinkRetirePreflightPlan plan,
         ZLinkRelocationTargetSelection selection,

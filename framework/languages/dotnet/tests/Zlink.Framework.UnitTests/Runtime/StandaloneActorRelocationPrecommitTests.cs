@@ -201,6 +201,11 @@ public sealed class StandaloneActorRelocationPrecommitTests
             targetAuthority,
             CancellationToken.None
         );
+        var relocationRecord = ZLinkAuthorityAggregateCodec
+            .Replace(null, committed.Relocation)!
+            .Value.GetProperty("relocation");
+        Assert.True(relocationRecord.TryGetProperty("completion", out var completion));
+        Assert.Equal("0", completion.GetProperty("acceptedRequests").GetString());
         var committedState = Projection(committed);
         Assert.Equal(4, committedState.Phase);
         Assert.Equal(prepare.TargetAttemptGeneration, committedState.TargetAttemptGeneration);

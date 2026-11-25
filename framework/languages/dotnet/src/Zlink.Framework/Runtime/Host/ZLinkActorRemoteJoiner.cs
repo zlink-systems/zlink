@@ -234,6 +234,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                 ZLinkFrameworkErrorKind.InvalidOperation,
                 $"Actor '{actor.Context.ActorId}' authority changed before handoff."
             );
+        ZLinkRelocationCompletionStore.RequireCompletionSettled(authority.Snapshot);
         var precommit = new ZLinkStandaloneActorRelocationPrecommitCoordinator(authorityStore);
         var actorAuthorityOwnerGeneration = authority.Snapshot.AuthorityOwnerGeneration;
         var captureRequired = relocation.PolicyKind == 2;

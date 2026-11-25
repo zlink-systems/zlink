@@ -1,4 +1,3 @@
-using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using Systems.Zlink.Framework.Runtime.Protocol;
@@ -22,14 +21,6 @@ internal sealed record ZLinkRelocationCompletionProgress(
         new(acceptedRequests, 0, 0, null, null);
 
     internal bool IsReady => AcceptedRequests == CompletedResults && PendingDeliveries == 0;
-
-    internal static ZLinkRelocationCompletionProgress? Read(ZLinkAuthorityRelocation relocation) =>
-        relocation.Completion?.Deserialize<ZLinkRelocationCompletionProgress>(
-            ZLinkJsonSerializerOptions.Default
-        );
-
-    internal JsonElement ToJson() =>
-        JsonSerializer.SerializeToElement(this, ZLinkJsonSerializerOptions.Default);
 }
 
 internal sealed class ZLinkRelocationCompletionStore(
@@ -41,10 +32,7 @@ internal sealed class ZLinkRelocationCompletionStore(
 {
     internal static string? CompletionBlocker(ZLinkAuthoritySnapshot source, ILogger? logger = null)
     {
-        if (
-            source.Relocation is not { } active
-            || ZLinkRelocationCompletionProgress.Read(active) is not { IsReady: false } completion
-        )
+        if (source.Relocation is not { Completion: { IsReady: false } completion } active)
             return null;
         var reason =
             completion.PendingDeliveries > 0 ? "pending_delivery" : "completion_in_progress";
@@ -74,9 +62,7 @@ internal sealed class ZLinkRelocationCompletionStore(
         bool renew = false
     )
     {
-        var progress =
-            ZLinkRelocationCompletionProgress.Read(relocation)
-            ?? throw DataLost("Completion authority is missing.");
+        var progress = relocation.Completion ?? throw DataLost("Completion authority is missing.");
         if (
             progress.CompletedResults > progress.AcceptedRequests
             || progress.PendingDeliveries > progress.CompletedResults
@@ -173,7 +159,7 @@ internal sealed class ZLinkRelocationCompletionStore(
 
     internal static void RequireCompleted(ZLinkAuthorityRelocation relocation)
     {
-        if (ZLinkRelocationCompletionProgress.Read(relocation) is not { IsReady: true })
+        if (relocation.Completion is not { IsReady: true })
             throw DataLost("Relocation still has incomplete requests or pending delivery.");
     }
 
@@ -190,7 +176,7 @@ internal sealed class ZLinkRelocationCompletionStore(
             RequireCompleted(relocation);
             if (
                 relocation.Phase == ServiceWireCodec.RelocationPhase.Completed
-                || ZLinkRelocationCompletionProgress.Read(relocation)!.AcceptedRequests == 0
+                || relocation.Completion!.AcceptedRequests == 0
             )
                 return authority;
 
@@ -328,7 +314,7 @@ internal sealed class ZLinkRelocationCompletionStore(
         var record = await ReadAsync(relocation, cancellationToken).ConfigureAwait(false);
         var entries = record.Entries.ToList();
         var index = entries.FindIndex(entry.MatchesRequest);
-        var progress = ZLinkRelocationCompletionProgress.Read(relocation)!;
+        var progress = relocation.Completion!;
         if (index >= 0)
         {
             var previous = entries[index];
@@ -394,7 +380,7 @@ internal sealed class ZLinkRelocationCompletionStore(
             null
         )
         {
-            Relocation = relocation with { Completion = replacement.ToJson() },
+            Relocation = relocation with { Completion = replacement },
         };
         while (true)
         {
@@ -437,7 +423,7 @@ internal sealed class ZLinkRelocationCompletionStore(
                         await WaitForStoreAsync(cancellationToken).ConfigureAwait(false);
                     }
                 }
-                if (ZLinkRelocationCompletionProgress.Read(observed.Relocation!) == replacement)
+                if (observed.Relocation!.Completion == replacement)
                 {
                     _ = await ReadAsync(observed.Relocation, cancellationToken)
                         .ConfigureAwait(false);
@@ -467,7 +453,7 @@ internal sealed class ZLinkRelocationCompletionStore(
         CancellationToken cancellationToken
     )
     {
-        if (ZLinkRelocationCompletionProgress.Read(relocation) is not { PendingDeliveries: > 0 })
+        if (relocation.Completion is not { PendingDeliveries: > 0 })
             return;
         try
         {

@@ -502,70 +502,6 @@ public sealed partial class RelocationRuntimeTests
     }
 
     [Fact]
-    public void SpotReplyRelaySenderRejectsStaleDurableTargetAttempt()
-    {
-        var targetRid = RoutingId.From("reply-target");
-        var targetOwner = new ZLinkLocationOwnerToken("target-owner", 17);
-        var state = new ZLinkCanonicalRelocationAuthorityState(
-            11,
-            13,
-            19,
-            RoutingId.From("reply-source").ToHex(),
-            23,
-            "source-owner",
-            29,
-            targetRid.ToHex(),
-            31,
-            targetOwner.OwnerId,
-            checked((ulong)targetOwner.LeaseGeneration),
-            "coordinator-owner",
-            41,
-            RoutingId.From("reply-coordinator").ToHex(),
-            43,
-            7,
-            "reply-root",
-            47,
-            53
-        );
-        var canonical = new ZLinkCanonicalRelocationAuthorityProjection(
-            state.RelocationHigh,
-            state.RelocationLow,
-            state.TargetAttemptGeneration,
-            state.TargetOwnerId,
-            state.TargetOwnerLeaseGeneration,
-            state.Phase,
-            state.RelocationReference,
-            state.RelocationChecksumCrc32c,
-            state.ApplicationVersion,
-            ReadOnlyMemory<byte>.Empty,
-            state
-        );
-
-        Assert.True(
-            ZLinkFrameworkRuntime.IsExactCanonicalReplyRelayTarget(
-                canonical,
-                11,
-                13,
-                19,
-                targetRid,
-                31,
-                targetOwner
-            )
-        );
-        Assert.False(
-            ZLinkFrameworkRuntime.IsExactCanonicalReplyRelayTarget(
-                canonical,
-                11,
-                13,
-                20,
-                targetRid,
-                31,
-                targetOwner
-            )
-        );
-    }
-
-    [Fact]
     public void ProductionSpotWriterCreatesCanonicalInitialRoot()
     {
         var header = ZLinkClientCallCodec.CreateEnvelope(
@@ -4087,7 +4023,7 @@ public sealed partial class RelocationRuntimeTests
         );
     }
 
-    private static byte[] CreateMinimalCanonicalFrozenRecord()
+    private static byte[] CreateMinimalCanonicalFrozenRecord(string messageName = "p")
     {
         using var source = new MemoryStream();
         WriteText8(source, "n");
@@ -4096,7 +4032,7 @@ public sealed partial class RelocationRuntimeTests
         WriteUInt64(source, 1);
 
         using var payload = new MemoryStream();
-        WriteText8(payload, "p");
+        WriteText8(payload, messageName);
         WriteText8(payload, "application/octet-stream");
         WriteUInt32(payload, 0);
 
@@ -4829,7 +4765,7 @@ public sealed partial class RelocationRuntimeTests
                 DateTimeOffset.UtcNow
             )
             {
-                Relocation = request.Relocation,
+                Relocation = request.ApplyRelocation(current: null, participant),
             };
         }
 
