@@ -1207,21 +1207,6 @@ internal sealed class ZLinkActorRemoteJoiner(
         }
     }
 
-    internal static ZLinkCanonicalRelocationAuthorityState? FinishingTarget(
-        ZLinkAuthoritySnapshot snapshot
-    ) =>
-        ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(snapshot, out var state)
-        && ZLinkAuthorityRelocation.IsCommittedTargetAuthority(
-            snapshot,
-            (ServiceWireCodec.RelocationPhase)state.Phase,
-            state.State.TargetNodeRid,
-            state.State.TargetNodeGeneration,
-            state.TargetOwnerId,
-            state.TargetOwnerLeaseGeneration
-        )
-            ? state.State
-            : null;
-
     private async ValueTask<ZLinkAuthorityReadResult> ReadCaptureAuthorityAsync(
         IZLinkLocationRepository store,
         ZLinkAuthorityKey key,
@@ -1232,7 +1217,7 @@ internal sealed class ZLinkActorRemoteJoiner(
         var read = await store.ReadAuthorityAsync(key, cancellationToken).ConfigureAwait(false);
         if (
             read is not ZLinkAuthorityReadResult.Found found
-            || FinishingTarget(found.Snapshot) is not { } previous
+            || ZLinkAuthorityRelocation.FinishingTarget(found.Snapshot) is not { } previous
         )
             return read;
 
@@ -1258,7 +1243,7 @@ internal sealed class ZLinkActorRemoteJoiner(
         cancellationToken.ThrowIfCancellationRequested();
         if (
             read is ZLinkAuthorityReadResult.Found current
-            && FinishingTarget(current.Snapshot) is not null
+            && ZLinkAuthorityRelocation.FinishingTarget(current.Snapshot) is not null
         )
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Unavailable,

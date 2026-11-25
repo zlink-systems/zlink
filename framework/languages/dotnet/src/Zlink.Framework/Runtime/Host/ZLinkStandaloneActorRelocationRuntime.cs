@@ -2890,7 +2890,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 read is ZLinkAuthorityReadResult.Found found
                 && found.Snapshot.ObjectGeneration == actor.Generation
                 && found.Snapshot.Allocation.Descriptor.Rid == actor.NodeRid
-                && ZLinkActorRemoteJoiner.FinishingTarget(found.Snapshot) is not null
+                && ZLinkAuthorityRelocation.FinishingTarget(found.Snapshot) is not null
             )
                 return true;
         }

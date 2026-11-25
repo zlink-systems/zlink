@@ -60,6 +60,21 @@ internal sealed record ZLinkAuthorityRelocation(
         [property: JsonPropertyOrder(4)] string ExpectedStoreVersion
     ) : Fence(NodeRid, NodeGeneration, OwnerId, OwnerLeaseGeneration);
 
+    internal static ZLinkCanonicalRelocationAuthorityState? FinishingTarget(
+        ZLinkAuthoritySnapshot snapshot
+    ) =>
+        ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(snapshot, out var state)
+        && IsCommittedTargetAuthority(
+            snapshot,
+            (ServiceWireCodec.RelocationPhase)state.Phase,
+            state.State.TargetNodeRid,
+            state.State.TargetNodeGeneration,
+            state.TargetOwnerId,
+            state.TargetOwnerLeaseGeneration
+        )
+            ? state.State
+            : null;
+
     internal static bool MatchesCommittedTarget(
         ZLinkAuthoritySnapshot authority,
         Guid relocationId,
