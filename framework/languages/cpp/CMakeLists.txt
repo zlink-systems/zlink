@@ -2899,7 +2899,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     TIMEOUT 30)
 
   add_executable(test_cpp_framework_location_store_format
-    tests/Zlink.Framework.UnitTests/test_cpp_framework_location_store_format.cpp)
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_location_store_format.cpp
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_location_store_legacy_aggregate.cpp)
   target_compile_features(test_cpp_framework_location_store_format PRIVATE cxx_std_20)
   target_link_zlink_test_harness(test_cpp_framework_location_store_format)
   target_use_zlink_gtest_main(test_cpp_framework_location_store_format)

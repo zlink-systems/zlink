@@ -193,25 +193,16 @@ TEST (LocationStoreFormat, SharedConcurrentStartupConversion)
     }
 }
 
-TEST (LocationStoreFormat, TerminalLegacyAggregateDoesNotRequireRollback)
+TEST (LocationStoreFormat, LeaseRenewalKeepsCompletedFormat)
 {
     startup_store_t store;
-    const std::string cpp = "zlink:v11:aggregate:000000000000400080000000000000a1";
-    const std::string dotnet = "zlink:v11:aggregate:000000000000400080000000000000a2:1";
-    const std::string participant = dotnet + ":participant:0:payload";
-    store.seed (cpp, R"({"status":"aborted","targetNodeRid":"legacy-display"})");
-    store.seed (dotnet, R"({"state":2})");
-    store.seed (participant, "opaque");
-
     provider_location_repository_t repository (store);
     location_runtime_t runtime (repository, {}, "conversion-owner");
     runtime.start (zlink::routing_id_t::from ("startup"));
-    EXPECT_EQ (store.marker_reads.load (), 1u);
-    EXPECT_TRUE (std::holds_alternative<owner_lease_renewed_t> (runtime.renew_owner_lease_once ()));
-    EXPECT_EQ (store.marker_reads.load (), 1u);
     EXPECT_EQ (store.value (format_key), "converted");
-    EXPECT_EQ (store.value ({cpp}), R"({"status":"aborted","targetNodeRid":"legacy-display"})");
-    EXPECT_EQ (store.value ({dotnet}), R"({"state":2})");
-    EXPECT_EQ (store.value ({participant}), "opaque");
+    const auto marker_reads_after_startup = store.marker_reads.load ();
+    EXPECT_GT (marker_reads_after_startup, 0u);
+    EXPECT_TRUE (std::holds_alternative<owner_lease_renewed_t> (runtime.renew_owner_lease_once ()));
+    EXPECT_EQ (store.marker_reads.load (), marker_reads_after_startup);
 }
 }
