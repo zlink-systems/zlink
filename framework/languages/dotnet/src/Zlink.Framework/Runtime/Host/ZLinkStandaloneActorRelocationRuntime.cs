@@ -2863,6 +2863,40 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         CloseTargetAttemptIfEmpty(key, slot);
     }
 
+    internal async ValueTask<bool> HasFinishingStandaloneTargetAsync(
+        CancellationToken cancellationToken
+    )
+    {
+        if (registration.Locations.ResolveStore() is not { } store)
+            return false;
+
+        // A target stage spans the commit and publication release. Verify the
+        // authority only for staged Actors, since the Store can settle first.
+        HashSet<ZLinkAuthorityKey>? checkedKeys = null;
+        foreach (var (_, slot) in _targetAttempts)
+        {
+            if (
+                slot.Stage is not { } stage
+                || stage.ActorState
+                    is not { LiveActivation: null, Actor: not null, NativeActorRef: { } actor }
+            )
+                continue;
+            var key = stage.Participant.AuthorityKey;
+            if (!(checkedKeys ??= []).Add(key))
+                continue;
+
+            var read = await store.ReadAuthorityAsync(key, cancellationToken).ConfigureAwait(false);
+            if (
+                read is ZLinkAuthorityReadResult.Found found
+                && found.Snapshot.ObjectGeneration == actor.Generation
+                && found.Snapshot.Allocation.Descriptor.Rid == actor.NodeRid
+                && ZLinkActorRemoteJoiner.FinishingTarget(found.Snapshot) is not null
+            )
+                return true;
+        }
+        return false;
+    }
+
     internal Task? FindTargetTerminal(
         ZLinkCanonicalRelocationAuthorityState previous,
         ZLinkAuthorityKey key,
