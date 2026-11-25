@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.locations;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.ZLinkLocationOptions;
@@ -891,7 +892,26 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                             return new StartState(startupLifecycle, true);
                         });
         if (state.claim()) {
-            attemptInitialOwnerLeaseClaim(state.lifecycle());
+            StartupLifecycle lifecycle = state.lifecycle();
+            stores.unifiedStore()
+                    .convertStoreFormat(lifecycle.completion()::isCancelled)
+                    .whenComplete(
+                            (ignored, failure) -> {
+                                if (failure == null) {
+                                    attemptInitialOwnerLeaseClaim(lifecycle);
+                                } else {
+                                    lifecycle.cleanup().complete(null);
+                                    stateLane
+                                            .runAsync(
+                                                    () ->
+                                                            installStartupClaimCore(
+                                                                    lifecycle.completion(),
+                                                                    null,
+                                                                    failure,
+                                                                    monotonicNow.getAsLong()))
+                                            .thenCompose(Supplier::get);
+                                }
+                            });
         }
         return state.lifecycle().completion();
     }
@@ -1075,7 +1095,9 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
             RenewState state, CompletableFuture<Void> lifecycle) {
         ZLinkLocationOwnerToken token = state.token();
         if (token == null) {
-            return claimOwnerLease(lifecycle)
+            return stores.unifiedStore()
+                    .convertStoreFormat(lifecycle::isCancelled)
+                    .thenCompose(ignored -> claimOwnerLease(lifecycle))
                     .thenApply(
                             ignored ->
                                     () ->
@@ -2456,10 +2478,14 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
             installOwnerLeaseCore(claimed, operationStartedNanos);
         } else {
             recordFailureCore(failureMessage(failure));
-            if (unwrap(failure) instanceof OwnerLeaseClaimRejectedException) {
+            Throwable cause = unwrap(failure);
+            if (cause instanceof OwnerLeaseClaimRejectedException
+                    || cause instanceof ZLinkConfigurationException
+                    || cause instanceof ZLinkFrameworkException error
+                            && error.kind() == ZLinkFrameworkErrorKind.DATA_LOST) {
                 started = false;
                 return () -> {
-                    completion.completeExceptionally(unwrap(failure));
+                    completion.completeExceptionally(cause);
                     return CompletableFuture.completedFuture(null);
                 };
             }

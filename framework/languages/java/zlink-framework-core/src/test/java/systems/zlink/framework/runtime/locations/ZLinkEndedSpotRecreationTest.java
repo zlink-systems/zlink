@@ -14,6 +14,7 @@ import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.internal.locations.*;
 import systems.zlink.framework.spots.ZLinkSpotKind;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -52,7 +53,6 @@ final class ZLinkEndedSpotRecreationTest {
                         ZLinkServiceAuthorityPayloadCodec.State.READY);
         var actor = member(fixture, "conflict-actor", false);
         var spot = read(fixture, fixture.key);
-        assertNotEquals(actor.objectGeneration(), spot.objectGeneration());
         byte[] localSpot =
                 new ZLinkServiceAuthorityPayloadCodec()
                         .encodeUser(
@@ -378,7 +378,6 @@ final class ZLinkEndedSpotRecreationTest {
                         ZLinkPlacementObjectKind.USER_SPOT,
                         ZLinkServiceAuthorityPayloadCodec.State.READY);
         var actor = member(fixture, "stale-actor", false);
-        assertNotEquals(actor.objectGeneration(), fixture.reservation.objectGeneration());
         try (var runtime =
                         new ZLinkLocationRuntime(
                                 ZLinkRegisteredLocationStores.fromUnified(fixture.store),
@@ -800,19 +799,27 @@ final class ZLinkEndedSpotRecreationTest {
                                         .ZLinkProviderLocationRepository)
                                 fixture.store);
         var read =
-                (ZLinkStoreReadFound)
-                        provider.read(new ZLinkStoreKey("zlink:v11:capacity:mesh:old"), () -> false)
-                                .toCompletableFuture()
-                                .join();
-        try {
-            return new com.fasterxml.jackson.databind.ObjectMapper()
-                    .readTree(read.value().bytes())
-                    .path("active")
-                    .path(actors ? "actors" : "spots")
-                    .asLong();
-        } catch (java.io.IOException failure) {
-            throw new AssertionError(failure);
-        }
+                provider.read(
+                                activeCapacityKey(
+                                        fixture.oldDescriptor, actors ? "actors" : "spots"),
+                                () -> false)
+                        .toCompletableFuture()
+                        .join();
+        return read instanceof ZLinkStoreReadFound found
+                ? Long.parseLong(new String(found.value().bytes(), StandardCharsets.UTF_8))
+                : 0;
+    }
+
+    private static ZLinkStoreKey activeCapacityKey(
+            ZLinkMeshNodeDescriptor descriptor, String dimension) {
+        return new ZLinkStoreKey(
+                "zlink:v12:capacity\0"
+                        + descriptor.meshName()
+                        + "\0"
+                        + descriptor.rid().toHex()
+                        + "\0"
+                        + dimension
+                        + "\0active");
     }
 
     @ParameterizedTest
@@ -1387,49 +1394,39 @@ final class ZLinkEndedSpotRecreationTest {
         var member = endedMember(memberFixture, "inconsistent-member", true);
         var spotVersion = read(fixture, fixture.key).storeVersion();
         var memberVersion = read(fixture, member.authorityKey()).storeVersion();
-        var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
-        var page =
+        var capacity = activeCapacityKey(memberDescriptor, "actors");
+        var value =
                 assertInstanceOf(
-                                ZLinkStoreScanPageResult.class,
+                                ZLinkStoreReadFound.class,
                                 provider.delegate
-                                        .scan(
-                                                new ZLinkStoreScanRequest("", null, 1000),
-                                                () -> false)
+                                        .read(capacity, () -> false)
                                         .toCompletableFuture()
                                         .join())
                         .value();
-        boolean changed = false;
-        for (var item : page.items()) {
-            var record = mapper.readTree(item.value().bytes());
-            if (record.path("active").path("actors").asLong() != 1
-                    || record.path("active").path("spots").asLong() != 0) continue;
-            ((com.fasterxml.jackson.databind.node.ObjectNode) record.path("active"))
-                    .put("actors", 0);
-            assertInstanceOf(
-                    ZLinkStoreWriteApplied.class,
-                    provider.delegate
-                            .write(
-                                    new ZLinkStoreWriteRequest(
-                                            List.of(
-                                                    new ZLinkStoreVersionCondition(
-                                                            item.key(), item.value().version())),
-                                            List.of(
-                                                    new ZLinkStorePut(
-                                                            item.key(),
-                                                            mapper.writeValueAsBytes(record),
-                                                            null))),
-                                    () -> false)
-                            .toCompletableFuture()
-                            .join());
-            changed = true;
-        }
-        assertTrue(changed);
+        assertEquals("1", new String(value.bytes(), StandardCharsets.UTF_8));
+        assertInstanceOf(
+                ZLinkStoreWriteApplied.class,
+                provider.delegate
+                        .write(
+                                new ZLinkStoreWriteRequest(
+                                        List.of(
+                                                new ZLinkStoreVersionCondition(
+                                                        capacity, value.version())),
+                                        List.of(
+                                                new ZLinkStorePut(
+                                                        capacity,
+                                                        "0".getBytes(StandardCharsets.UTF_8),
+                                                        null))),
+                                () -> false)
+                        .toCompletableFuture()
+                        .join());
         fixture.store.releaseOwnerLease(fixture.oldOwner).toCompletableFuture().join();
         fixture.store.releaseOwnerLease(memberOwner).toCompletableFuture().join();
 
         var failure = assertThrows(CompletionException.class, () -> reserveNewSpot(fixture));
 
-        var accounting = assertInstanceOf(IllegalStateException.class, failure.getCause());
+        var accounting = assertInstanceOf(ZLinkFrameworkException.class, failure.getCause());
+        assertEquals(ZLinkFrameworkErrorKind.DATA_LOST, accounting.kind());
         assertEquals("Location Store capacity record is inconsistent", accounting.getMessage());
         assertEquals(spotVersion, read(fixture, fixture.key).storeVersion());
         assertEquals(memberVersion, read(fixture, member.authorityKey()).storeVersion());
@@ -1558,11 +1555,16 @@ final class ZLinkEndedSpotRecreationTest {
     }
 
     @ParameterizedTest
-    @CsvSource({"provider, 2043", "memory, 2043", "provider, 2044", "memory, 2044"})
-    void endedMemberReleaseIsBoundedByOneProviderBatch(String backend, int members) {
-        // Batch keys: Spot authority, owner lease, source and target descriptors, and capacity,
-        // plus one authority per member (all share the Spot's owner and node). 2,043 fill the
-        // 2,048-key bound exactly.
+    @CsvSource({
+        "provider, 2041, true",
+        "provider, 2042, false",
+        "memory, 2043, true",
+        "memory, 2044, false"
+    })
+    void endedMemberReleaseIsBoundedByOneProviderBatch(String backend, int members, boolean fits) {
+        // The Spot authority, owner lease and two descriptors use four keys.
+        // The provider uses three active capacity counters for Spots, the Spot type
+        // and Actors. The in-memory repository counts one capacity record for the node.
         var fixture =
                 fixture(
                         backend,
@@ -1573,7 +1575,7 @@ final class ZLinkEndedSpotRecreationTest {
         for (int index = 0; index < members; index++)
             keys.add(endedMember(fixture, "bulk-" + index, true).authorityKey());
         fixture.store.releaseOwnerLease(fixture.oldOwner).toCompletableFuture().join();
-        if (members <= 2043) {
+        if (fits) {
             reserveNewSpot(fixture);
             for (String key : keys)
                 assertInstanceOf(

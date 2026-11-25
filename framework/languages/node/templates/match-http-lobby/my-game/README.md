@@ -20,7 +20,7 @@ flowchart LR
 
 ## Prerequisites
 
-Docker Compose with a running Docker daemon, and PowerShell 7 for the PowerShell runner. Public Framework packages are pinned to 0.32.0 in `package.json`. This directory can be copied independently of the repository.
+Docker Compose with a running Docker daemon, and PowerShell 7 for the PowerShell runner. Public Framework packages are pinned to 0.34.0 in `package.json`. This directory can be copied independently of the repository.
 
 ## Build
 
@@ -169,7 +169,7 @@ The runner validates structure before starting an isolated Compose project. It s
 
 ## Known issues
 
-Validated against the published Framework 0.32.0 packages.
+Validated against the published Framework 0.34.0 packages.
 
 Typed push delivery restores the declared DTO class through the packet-name-to-class table in `handlers.ts` (#1731).
 

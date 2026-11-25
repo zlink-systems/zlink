@@ -23,7 +23,7 @@ Details: [Responsibilities of Play and API Nodes](https://docs.zlink.systems/nod
 
 ## Project overview
 
-This Node.js 22 (TypeScript, NestJS) project is a MORPG server example in which players form parties in a lobby and move ready parties into dungeons. It runs a Session node for connections, a play node (party lobby) that hosts the Party Spots, play nodes A and B (dungeon) that host Dungeons, and Redis for location and relocation state. `package.json` pins the ZLink Framework and connector packages to `0.32.0`.
+This Node.js 22 (TypeScript, NestJS) project is a MORPG server example in which players form parties in a lobby and move ready parties into dungeons. It runs a Session node for connections, a play node (party lobby) that hosts the Party Spots, play nodes A and B (dungeon) that host Dungeons, and Redis for location and relocation state. `package.json` pins the ZLink Framework and connector packages to `0.34.0`.
 
 The project layout and feature procedure below describe where to add gameplay. The [README](README.md) covers prerequisites, deployment, and known issues in the public packages. [zlink.structure.json](zlink.structure.json) describes the initial node composition and scenarios; Framework and Redis manage object placement at runtime.
 
@@ -185,7 +185,7 @@ The value applies to child processes started from that environment; preserve std
 export ZLINK_DEBUG_FRAMEWORK_RELOCATION=1
 ```
 
-`ZLINK_DEBUG_FRAMEWORK_RELOCATION` is a version-specific diagnostic switch in the public `0.32.0` package, so do not use it as a routing API. Let the runner clean up its own processes and Compose project, preserve cleanup failures, and avoid stopping unrelated processes or containers.
+`ZLINK_DEBUG_FRAMEWORK_RELOCATION` is a version-specific diagnostic switch in the public `0.34.0` package, so do not use it as a routing API. Let the runner clean up its own processes and Compose project, preserve cleanup failures, and avoid stopping unrelated processes or containers.
 
 ## Reporting ZLink defects
 
