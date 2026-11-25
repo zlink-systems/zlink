@@ -6,6 +6,26 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class ServiceWireRelocationCodecTests
 {
+    [Fact]
+    public void Durable_chunk_accepts_exactly_64_mib_of_data()
+    {
+        const int maximumDataBytes = 64 * 1024 * 1024;
+        var data = new byte[maximumDataBytes];
+        data[^1] = 0xad;
+
+        var encoded = ServiceWirePilotCodec.EncodeRelocationDataChunkV1(new(3, data));
+        var decoded = ServiceWirePilotCodec.DecodeRelocationDataChunkV1(encoded);
+
+        Assert.Equal(maximumDataBytes + 23, encoded.Length);
+        Assert.Equal(3U, decoded.Order);
+        Assert.True(data.AsSpan().SequenceEqual(decoded.Data));
+        Assert.Throws<InvalidDataException>(() =>
+            ServiceWirePilotCodec.EncodeRelocationDataChunkV1(
+                new(3, new byte[maximumDataBytes + 1])
+            )
+        );
+    }
+
     [Theory]
     [InlineData(1UL)]
     [InlineData(ulong.MaxValue)]
