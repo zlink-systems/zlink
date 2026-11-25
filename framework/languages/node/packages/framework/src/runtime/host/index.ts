@@ -2383,7 +2383,10 @@ export class ZLinkFrameworkRuntimeHost
     this.ensureLocationRuntime();
     const options = this.actorRuntimeOptionsFactory().createActorClientOptions();
     this.actorClientLocationResolver = options.locationResolver();
-    return options;
+    return {
+      ...options,
+      dispatchErrors: () => this.createDispatchErrorReporter(this.runtimeOrPreStartErrorSink)
+    };
   }
 
   createLocationHandleResolver(): ZLinkStoreLocationResolvers | undefined {

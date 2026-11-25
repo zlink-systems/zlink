@@ -166,6 +166,47 @@ export interface ZLinkStreamSessionNodeRuntimeOptions extends ZLinkStreamSession
   readonly authenticationAdmission?: ZLinkAuthenticationAdmission;
 }
 
+class ZLinkStreamReaderLiveness {
+  private permitResumedAt = -Infinity;
+
+  acquire(
+    queue: ApplicationJobQueuePort,
+    signal: AbortSignal,
+    clock: ZLinkStreamLivenessClock
+  ): Promise<ApplicationJobPermitPort> {
+    return new Promise((resolve, reject) => {
+      const previousResume = this.permitResumedAt;
+      const rejectAcquire = (error: unknown): void => {
+        this.permitResumedAt = previousResume;
+        reject(error);
+      };
+      // The queue can call a grant or rejection callback before returning.
+      this.permitResumedAt = Infinity;
+      try {
+        const permit = queue.acquireOrResume(
+          (granted) => {
+            this.permitResumedAt = clock.now();
+            resolve(granted);
+          },
+          rejectAcquire,
+          signal,
+          'remote'
+        );
+        if (permit !== undefined) {
+          this.permitResumedAt = previousResume;
+          resolve(permit);
+        }
+      } catch (error) {
+        rejectAcquire(error);
+      }
+    });
+  }
+
+  inboundDeadline(lastReceivedAt: number, timeoutMs: number): number {
+    return timeoutMs > 0 ? Math.max(lastReceivedAt, this.permitResumedAt) + timeoutMs : Infinity;
+  }
+}
+
 export class ZLinkStreamSessionRuntime {
   readonly stream: ZLinkManagedStream;
   readonly context: DefaultZLinkSessionContext;
@@ -193,7 +234,8 @@ export class ZLinkStreamSessionRuntime {
       session: ZLinkStreamSessionRuntime,
       creationFailed: boolean
     ) => void = () => {},
-    admission?: ZLinkStreamSessionAdmission
+    admission?: ZLinkStreamSessionAdmission,
+    private readonly readerLiveness = new ZLinkStreamReaderLiveness()
   ) {
     this.liveness = normalizeStreamLiveness(options);
     this.livenessClock = options.livenessClock ?? systemLivenessClock;
@@ -836,10 +878,14 @@ export class ZLinkStreamSessionRuntime {
     const now = this.livenessClock.now();
     const due = Math.min(
       this.nextHeartbeatPingAt,
-      this.lastInboundFrameAt + this.liveness.heartbeatTimeoutMs,
-      this.liveness.idleTimeoutMs > 0
-        ? this.lastApplicationActivityAt + this.liveness.idleTimeoutMs
-        : Infinity
+      this.readerLiveness.inboundDeadline(
+        this.lastInboundFrameAt,
+        this.liveness.heartbeatTimeoutMs
+      ),
+      this.readerLiveness.inboundDeadline(
+        this.lastApplicationActivityAt,
+        this.liveness.idleTimeoutMs
+      )
     );
     this.livenessTimer = this.livenessClock.setTimer(
       () => {
@@ -855,7 +901,10 @@ export class ZLinkStreamSessionRuntime {
       return;
     }
     const now = this.livenessClock.now();
-    if (now - this.lastInboundFrameAt >= this.liveness.heartbeatTimeoutMs) {
+    if (
+      now >=
+      this.readerLiveness.inboundDeadline(this.lastInboundFrameAt, this.liveness.heartbeatTimeoutMs)
+    ) {
       await this.closeForLiveness(
         ZLinkStreamCloseReasonCode.HeartbeatTimeout,
         'heartbeat_timeout',
@@ -864,8 +913,11 @@ export class ZLinkStreamSessionRuntime {
       return;
     }
     if (
-      this.liveness.idleTimeoutMs > 0 &&
-      now - this.lastApplicationActivityAt >= this.liveness.idleTimeoutMs
+      now >=
+      this.readerLiveness.inboundDeadline(
+        this.lastApplicationActivityAt,
+        this.liveness.idleTimeoutMs
+      )
     ) {
       await this.closeForLiveness(
         ZLinkStreamCloseReasonCode.IdleTimeout,
@@ -1153,6 +1205,8 @@ interface StreamConnectionMetadata {
 }
 
 export class ZLinkStreamSessionNodeRuntime {
+  // PACKET readiness identifies the listener. recvPacket identifies the peer.
+  private readonly readerLiveness = new ZLinkStreamReaderLiveness();
   // A rejected routing ID occupies its admission slot until bounded retirement.
   private readonly sessions = new Map<string, ZLinkStreamSessionRuntime | null>();
   private readonly availablePackets: ZLinkBackendStreamPacket[] = [];
@@ -1386,15 +1440,18 @@ export class ZLinkStreamSessionNodeRuntime {
       let packet: ZLinkBackendStreamPacket | undefined;
       let packetTransferred = false;
       try {
-        permit = await this.options.applicationJobQueue.acquire(signal, 'remote');
+        if (!this.options.readablePoller.wait(0)) {
+          await this.waitReceiveLoopWake(signal);
+          continue;
+        }
+        permit = await this.readerLiveness.acquire(
+          this.options.applicationJobQueue,
+          signal,
+          this.options.livenessClock ?? systemLivenessClock
+        );
         if (this.isReceiveStopped(signal)) {
           permit.releaseAfterInternalProcessing();
           break;
-        }
-        if (!this.options.readablePoller.wait(0)) {
-          permit.releaseAfterInternalProcessing();
-          await this.waitReceiveLoopWake(signal);
-          continue;
         }
         packet = this.takePacket();
         if (!this.options.socket.recvPacket(packet, ZLINK_RECV_DONT_WAIT)) {
@@ -1883,7 +1940,8 @@ export class ZLinkStreamSessionNodeRuntime {
       routingId,
       (sessionId, session, creationFailed) =>
         this.retireAdmission(sessionId, session, creationFailed),
-      { triggeringHeader }
+      { triggeringHeader },
+      this.readerLiveness
     );
     this.sessions.set(sessionId, created);
     return created;

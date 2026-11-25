@@ -183,6 +183,11 @@ class service_topology_registry_t
     // pointer keeps that snapshot alive and is null when the peer is absent.
     std::shared_ptr<const admitted_peer_t>
     peer (std::span<const std::uint8_t> node_routing_id) const;
+    // Application ingress also accepts the last ready admission of an ended route.
+    std::shared_ptr<const admitted_peer_t>
+    claim_ingress_peer (std::span<const std::uint8_t> node_routing_id,
+                        std::uint64_t route_generation,
+                        bool application) const;
     result_t<std::vector<std::uint8_t>>
     select (const std::string &channel_name,
             service_liveness_registry_t::connection_t *admission = nullptr);
@@ -205,9 +210,15 @@ class service_topology_registry_t
                    const service_node_descriptor_t *expected_descriptor,
                    service_liveness_registry_t::clock_t::time_point now,
                    protocol::command command);
+    enum class peer_disconnect_t
+    {
+        removal,
+        route_end
+    };
     std::pair<bool, std::function<void ()>>
     disconnect_on_lane (const std::vector<std::uint8_t> &node_routing_id,
-                        const std::vector<std::uint8_t> &connection_id);
+                        const std::vector<std::uint8_t> &connection_id,
+                        peer_disconnect_t reason = peer_disconnect_t::removal);
     std::function<void ()> publish_local_on_lane (service_node_descriptor_t descriptor);
     std::vector<admitted_peer_t> peers_on_lane () const;
     std::vector<service_node_descriptor_t> not_required_peers_on_lane () const;
@@ -231,7 +242,10 @@ class service_topology_registry_t
         std::vector<zlink::connection_attempt_t> attempts;
         std::shared_ptr<task_completion_source_t<void>> changed =
           std::make_shared<task_completion_source_t<void>> ();
-        std::map<std::vector<std::uint8_t>, admitted_peer_t, raw_mesh_byte_vector_less_t> peers;
+        using peers_t =
+          std::map<std::vector<std::uint8_t>, admitted_peer_t, raw_mesh_byte_vector_less_t>;
+        peers_t peers;
+        peers_t ended_admissions;
         expected_peers_t expected_peers;
     };
 

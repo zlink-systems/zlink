@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Elastic-2.0 */
 
 #include "runtime/mesh/service_topology_registry.hpp"
+#include "runtime/backend/raw_route_port.hpp"
 #include "runtime/mesh/service_channel_membership.hpp"
 #include "runtime/client_server/weighted_selector.hpp"
 #include <opentelemetry/metrics/provider.h>
@@ -301,6 +302,10 @@ service_topology_registry_t::expect_peer_on_lane (const service_node_descriptor_
 {
     auto next = std::make_shared<topology_state_t> (
       *std::atomic_load_explicit (_topology.get (), std::memory_order_acquire));
+    const auto ended = next->ended_admissions.find (descriptor.node_routing_id);
+    if (ended != next->ended_admissions.end () && descriptor.lifecycle_generation != 0
+        && ended->second.descriptor.lifecycle_generation != descriptor.lifecycle_generation)
+        next->ended_admissions.erase (ended);
     next->expected_peers.insert_or_assign (descriptor.node_routing_id, descriptor);
     return publish_topology (std::move (next), {});
 }
@@ -311,10 +316,17 @@ service_topology_registry_t::forget_peer_on_lane (const std::vector<std::uint8_t
 {
     const auto current = std::atomic_load_explicit (_topology.get (), std::memory_order_acquire);
     const auto found = current->expected_peers.find (node_routing_id);
-    if (found == current->expected_peers.end () || found->second.advertised_endpoint != endpoint)
+    if (found == current->expected_peers.end ()) {
+        const auto ended = current->ended_admissions.find (node_routing_id);
+        if (ended == current->ended_admissions.end ()
+            || ended->second.descriptor.advertised_endpoint != endpoint)
+            return {};
+    } else if (found->second.advertised_endpoint != endpoint) {
         return {};
+    }
     auto next = std::make_shared<topology_state_t> (*current);
     next->expected_peers.erase (node_routing_id);
+    next->ended_admissions.erase (node_routing_id);
     return publish_topology (std::move (next), {});
 }
 
@@ -443,6 +455,7 @@ service_topology_registry_t::admit_on_lane (service_node_descriptor_t descriptor
         auto next = std::make_shared<topology_state_t> (*topology);
         auto key = descriptor.node_routing_id;
         next->peers.erase (key);
+        next->ended_admissions.erase (key);
         _not_required_peers.insert_or_assign (std::move (key), std::move (descriptor));
         ++_topology_version;
         auto changed = publish_topology (std::move (next), _change_handler);
@@ -474,6 +487,11 @@ service_topology_registry_t::admit_on_lane (service_node_descriptor_t descriptor
     auto next = std::make_shared<topology_state_t> (*topology);
     _not_required_peers.erase (descriptor.node_routing_id);
     auto key = descriptor.node_routing_id;
+    const auto ended = next->ended_admissions.find (key);
+    if (ended != next->ended_admissions.end ()
+        && (ready
+            || ended->second.descriptor.lifecycle_generation != descriptor.lifecycle_generation))
+        next->ended_admissions.erase (ended);
     ++_topology_version;
     const auto admission_epoch =
       same_admission ? admitted->second.admission_epoch : _topology_version;
@@ -500,7 +518,8 @@ bool service_topology_registry_t::disconnect (const std::vector<std::uint8_t> &n
 
 std::pair<bool, std::function<void ()>>
 service_topology_registry_t::disconnect_on_lane (const std::vector<std::uint8_t> &node_routing_id,
-                                                 const std::vector<std::uint8_t> &connection_id)
+                                                 const std::vector<std::uint8_t> &connection_id,
+                                                 peer_disconnect_t reason)
 {
     const auto topology = std::atomic_load_explicit (_topology.get (), std::memory_order_acquire);
     std::function<void ()> changed;
@@ -509,7 +528,19 @@ service_topology_registry_t::disconnect_on_lane (const std::vector<std::uint8_t>
         return std::pair{false, std::move (changed)};
     }
     auto next = std::make_shared<topology_state_t> (*topology);
-    next->peers.erase (node_routing_id);
+    auto ended = next->peers.extract (node_routing_id);
+    if (reason == peer_disconnect_t::removal) {
+        next->ended_admissions.erase (node_routing_id);
+    } else if (ended.mapped ().ready) {
+        const auto expected = topology->expected_peers.find (node_routing_id);
+        if (expected == topology->expected_peers.end ()
+            || expected->second.lifecycle_generation == 0
+            || expected->second.lifecycle_generation
+                 == ended.mapped ().descriptor.lifecycle_generation) {
+            ended.mapped ().liveness.reset ();
+            next->ended_admissions.insert_or_assign (node_routing_id, std::move (ended.mapped ()));
+        }
+    }
     ++_topology_version;
     changed = publish_topology (std::move (next), _change_handler);
     rebuild_channel_selections ();
@@ -555,6 +586,25 @@ service_topology_registry_t::peer (std::span<const std::uint8_t> node_routing_id
     if (found == topology->peers.end ())
         return nullptr;
     return std::shared_ptr<const admitted_peer_t> (std::move (topology), &found->second);
+}
+
+std::shared_ptr<const admitted_peer_t>
+service_topology_registry_t::claim_ingress_peer (std::span<const std::uint8_t> node_routing_id,
+                                                 std::uint64_t route_generation,
+                                                 bool application) const
+{
+    auto topology = std::atomic_load_explicit (_topology.get (), std::memory_order_acquire);
+    const auto current = topology->peers.find (node_routing_id);
+    if (current != topology->peers.end () && (!application || current->second.ready)
+        && detail::backend::is_route_connection (current->second.connection_id, route_generation))
+        return {std::move (topology), &current->second};
+    if (application) {
+        const auto ended = topology->ended_admissions.find (node_routing_id);
+        if (ended != topology->ended_admissions.end ()
+            && detail::backend::is_route_connection (ended->second.connection_id, route_generation))
+            return {std::move (topology), &ended->second};
+    }
+    return nullptr;
 }
 
 void service_topology_registry_t::materialize_selection_state (selection_state_t &state)
