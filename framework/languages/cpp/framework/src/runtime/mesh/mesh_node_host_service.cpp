@@ -1225,14 +1225,7 @@ mesh_node_host_service_t::create_actor (bool exclusive,
                           framework_error_kind_t::unavailable,
                           "Actor placement target is not RouteMesh-admitted");
                     std::tie (target, target_runtime, target_peer_epoch, reserve) =
-                      if (!placement_target)
-                    {
-                        placement_target = co_await select_user_spot_target_t::run (
-                          this, selected_mesh, stable_type, source, deadline, excluded_targets,
-                          *spot_id);
-                        if (placement_target)
-                            use_target ();
-                    }
+                      co_await select_target ();
                     continue;
                 }
                 const auto source_status = (*source_runtime)->native_node ().status ();
@@ -1906,7 +1899,12 @@ task_t<spot_create_result_t> mesh_node_host_service_t::create_user_spot (
                           deadline - std::chrono::steady_clock::now ())));
             continue;
         }
-        co_await select_target ();
+        if (!placement_target) {
+            placement_target = co_await select_user_spot_target_t::run (
+              this, selected_mesh, stable_type, source, deadline, excluded_targets, *spot_id);
+            if (placement_target)
+                use_target ();
+        }
         if (!placement_target) {
             // A winner may have committed between the Missing observation and
             // placement lookup. Only the outer observation classifies it.
