@@ -251,7 +251,7 @@ final class ZLinkJavaActorAuthorityFailureTest {
             var topology = new ZLinkServiceTopologyRegistry(descriptor);
             assertEquals(
                     ZLinkServiceTopologyRegistry.AdmissionResult.ADMITTED,
-                    topology.admit(descriptor(source), "1", ServiceWireConstants.COMMAND_HELLO));
+                    topology.admit(descriptor(source), "1", ServiceWireConstants.COMMAND_ADMIT));
             var port =
                     new ZLinkJavaRawServicePort(
                             context,

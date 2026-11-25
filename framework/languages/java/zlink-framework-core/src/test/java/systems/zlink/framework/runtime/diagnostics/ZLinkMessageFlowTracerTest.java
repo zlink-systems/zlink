@@ -781,7 +781,8 @@ class ZLinkMessageFlowTracerTest {
                         "location_unavailable",
                         "activation_rejected",
                         "activation_timeout",
-                        "encode_error"),
+                        "encode_error",
+                        "session_creation_failed"),
                 Set.copyOf(
                         Arrays.stream(ZLinkDispatchErrorReason.values())
                                 .map(ZLinkDispatchErrorReason::traceName)

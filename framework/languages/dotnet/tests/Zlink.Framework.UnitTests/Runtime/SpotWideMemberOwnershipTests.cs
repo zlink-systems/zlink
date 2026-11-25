@@ -70,6 +70,10 @@ public sealed partial class RelocationBehaviorConformanceTests
             relocateSpots: true,
             configureServices: services => services.AddTransient<LeaveRelocatedSpotHandler>()
         );
+        var normalization = SpotWideNormalizationGate.Install(
+            target.Runtime.Registration.Locations
+        );
+        normalization.Release.TrySetResult();
         await WaitUntilAsync(() =>
             source
                 .Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
@@ -129,6 +133,8 @@ public sealed partial class RelocationBehaviorConformanceTests
         var spots = target.Services.GetRequiredService<IZLinkSpotManager>();
         var relocatedSpot = Assert.IsType<SpotRef>(await spots.FindAsync(spotId));
         Assert.Equal(target.LocalNodeRid, relocatedSpot.NodeRid);
+        // Close starts after the relocation has settled.
+        await normalization.Settled.Task.WaitAsync(timeout);
         Assert.True(await spots.CloseAsync(relocatedSpot));
         Assert.Null(await spots.FindAsync(spotId));
     }

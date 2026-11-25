@@ -268,6 +268,10 @@ invalid argument. [Socket Common](README.en.md) owns the contract for
 `zlink_disconnect_rid()` itself; [§10 Internals](#10-internals) explains how
 the ID is found internally.
 
+The disconnect request is placed after the send frames that connection has already accepted. Core writes those frames
+before the disconnect and doesn't drop them because of the request. A successful return doesn't mean the peer has
+received them.
+
 ## 10. Internals
 
 > **Contract ownership for this section** — §1–§9 of this document own the

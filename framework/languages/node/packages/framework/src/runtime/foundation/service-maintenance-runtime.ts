@@ -27,7 +27,7 @@ export interface ServiceMaintenanceOptions {
 /** Owns first-intent-wins maintenance admission and terminal observation. */
 export class ServiceMaintenanceRuntime {
   private readonly lane = new ZLinkStateLane();
-  private readonly units: ServiceRelocationUnit[] = [];
+  private readonly batches: ServiceRelocationUnit[][] = [[]];
   private readonly observers = new Set<(snapshot: ServiceMaintenanceSnapshot) => void>();
   private activeOutbound = 0;
   private state: ServiceMaintenanceState = 'serving';
@@ -38,14 +38,25 @@ export class ServiceMaintenanceRuntime {
   constructor(private readonly options: ServiceMaintenanceOptions) {}
 
   enqueue(unit: ServiceRelocationUnit): void {
+    this.validateEnqueue([unit]);
+    this.batches.at(-1)!.push(unit);
+    this.publish();
+  }
+
+  enqueueBatch(units: readonly ServiceRelocationUnit[]): void {
+    this.validateEnqueue(units);
+    if (units.length === 0) return;
+    this.batches.push([...units]);
+    this.publish();
+  }
+
+  private validateEnqueue(units: readonly ServiceRelocationUnit[]): void {
     if (this.state !== 'serving' && this.state !== 'preparing' && this.state !== 'retiring') {
       throw new Error('Maintenance admission is sealed.');
     }
-    if (unit.id.length === 0) {
+    if (units.some((unit) => unit.id.length === 0)) {
       throw new TypeError('Relocation unit identity must be valid.');
     }
-    this.units.push(unit);
-    this.publish();
   }
 
   observe(observer: (snapshot: ServiceMaintenanceSnapshot) => void): () => void {
@@ -87,7 +98,7 @@ export class ServiceMaintenanceRuntime {
     return {
       ...(this.kind === undefined ? {} : { kind: this.kind }),
       state: this.state,
-      queued: this.units.length,
+      queued: this.batches.reduce((total, batch) => total + batch.length, 0),
       activeOutbound: this.activeOutbound,
       ...(this.terminalError === undefined ? {} : { terminalError: this.terminalError })
     };
@@ -141,6 +152,17 @@ export class ServiceMaintenanceRuntime {
   }
 
   private async runUnits(signal: AbortSignal, stopStartingSignal?: AbortSignal): Promise<void> {
+    // Host relocation flow §7: a later batch starts only after this batch settles successfully.
+    for (const batch of this.batches) {
+      await this.runBatch(batch, signal, stopStartingSignal);
+    }
+  }
+
+  private async runBatch(
+    batch: ServiceRelocationUnit[],
+    signal: AbortSignal,
+    stopStartingSignal?: AbortSignal
+  ): Promise<void> {
     const pending = new Set<Promise<void>>();
     // A unit failure is recorded before its promise leaves `pending`, so no
     // failure is lost. Every started unit runs to its own terminal before the
@@ -154,7 +176,7 @@ export class ServiceMaintenanceRuntime {
     };
     for (;;) {
       await reportFailure();
-      const queued = await this.lane.run(() => this.units.length > 0);
+      const queued = await this.lane.run(() => batch.length > 0);
       if (!queued && pending.size === 0) {
         await reportFailure();
         return;
@@ -168,16 +190,16 @@ export class ServiceMaintenanceRuntime {
       let admitted = false;
       for (let index = 0; ;) {
         if (stopStartingSignal?.aborted === true) break;
-        const unit = await this.lane.run(() => this.units.at(index));
+        const unit = await this.lane.run(() => batch.at(index));
         if (unit === undefined) break;
         if (!unit.ready()) {
           index++;
           continue;
         }
         const claim = await this.lane.run(() => {
-          const current = this.units.indexOf(unit);
+          const current = batch.indexOf(unit);
           if (current < 0) return { claimed: false };
-          this.units.splice(current, 1);
+          batch.splice(current, 1);
           this.activeOutbound++;
           return { claimed: true, publication: this.publishCore() };
         });
