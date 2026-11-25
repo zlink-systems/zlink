@@ -778,7 +778,25 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
             byte[] metadata,
             List<Message> parts,
             Long replyRouteId) {
-        ZLinkInternalMeshNode.PeerAuthorityFence local = localAuthorityFence;
+        var message =
+                localSpotMessage(
+                        sourceSpotId, targetSpotId, targetSpotGeneration, metadata, replyRouteId);
+        return message == null ? new byte[0] : encodeLocalSpotAccepted(message, metadata, parts);
+    }
+
+    byte[] encodeLocalSpotAccepted(
+            ZLinkServiceM6BWireCodec.SpotMessage message, byte[] metadata, List<Message> parts) {
+        var local = localAuthorityFence;
+        return ZLinkServiceFrozenRecordCodec.encodeSpot(
+                local, local, message, metadata, wire.encodeFrameworkMultipartFrame(parts));
+    }
+
+    ZLinkServiceM6BWireCodec.SpotMessage localSpotMessage(
+            String sourceSpotId,
+            String targetSpotId,
+            long targetSpotGeneration,
+            byte[] metadata,
+            Long replyRouteId) {
         ZLinkServiceNodeDescriptor descriptor = localDescriptor;
         ZLinkJavaRawSpotNode spots = (ZLinkJavaRawSpotNode) spotNode();
         long ownerGeneration =
@@ -786,33 +804,28 @@ final class ZLinkJavaRawMeshNode implements ZLinkInternalMeshNode {
         long ownerLeaseGeneration =
                 spots.spotAuthorityOwnerLeaseGeneration(
                         routingId, targetSpotId, targetSpotGeneration);
-        if (local == null
+        if (localAuthorityFence == null
                 || descriptor == null
                 || ownerGeneration <= 0
                 || ownerLeaseGeneration <= 0) {
-            return new byte[0];
+            return null;
         }
         UUID operation = UUID.randomUUID();
-        var message =
-                new ZLinkServiceM6BWireCodec.SpotMessage(
-                        replyRouteId != null,
-                        metadata == null || metadata.length == 0
-                                ? 0
-                                : ServiceWireConstants.FLAG_METADATA,
-                        replyRouteId,
-                        operation.getMostSignificantBits(),
-                        operation.getLeastSignificantBits(),
-                        0,
-                        sourceSpotId,
-                        new ZLinkServiceM6BWireCodec.SpotRouteFence(
-                                targetSpotId,
-                                targetSpotGeneration,
-                                routingId,
-                                descriptor.lifecycleGeneration(),
-                                ownerGeneration,
-                                ownerLeaseGeneration));
-        return ZLinkServiceFrozenRecordCodec.encodeSpot(
-                local, local, message, metadata, wire.encodeFrameworkMultipartFrame(parts));
+        return new ZLinkServiceM6BWireCodec.SpotMessage(
+                replyRouteId != null,
+                metadata == null || metadata.length == 0 ? 0 : ServiceWireConstants.FLAG_METADATA,
+                replyRouteId,
+                operation.getMostSignificantBits(),
+                operation.getLeastSignificantBits(),
+                0,
+                sourceSpotId,
+                new ZLinkServiceM6BWireCodec.SpotRouteFence(
+                        targetSpotId,
+                        targetSpotGeneration,
+                        routingId,
+                        descriptor.lifecycleGeneration(),
+                        ownerGeneration,
+                        ownerLeaseGeneration));
     }
 
     ZLinkServiceM6BWireCodec.ActorMessage localActorMessage(

@@ -42,6 +42,7 @@
 #include <future>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -316,23 +317,37 @@ class actor_candidate_lease_store_t final : public zlink::framework::location_st
         missing_expiry,
         read_failure
     };
-    explicit actor_candidate_lease_store_t (view_t view) : view (view) {}
+    actor_candidate_lease_store_t (view_t view, bool warm) : view (view), warm (warm) {}
 
     zlink::framework::task_t<zlink::framework::store_read_result_t>
     read (zlink::framework::store_key_t key) override
     {
         using namespace zlink::framework;
-        const auto &flow = runtime::flow_context_t::current ();
-        const bool observed = flow && flow->flow_id == flow_id;
-        if (observed && key.value.find ("lease-new-actor") != std::string::npos)
+        const bool observed = in_create_flow ();
+        if (observed && key.value == authority_key)
             ++authority_reads;
+        // A background read after discovery published a Serving observation signals the warm case.
+        if (discovery && !observed) {
+            const auto snapshot = discovery->mesh_observation ("actor-lease-mesh");
+            if (snapshot
+                && std::any_of (
+                  snapshot->sources.begin (), snapshot->sources.end (), [] (const auto &source) {
+                      return source.available ()
+                             && source.descriptor.state == framework_runtime_state_t::serving;
+                  }))
+                serving_observed.complete (result_t<void>::success ());
+        }
         auto result = co_await inner.read (key);
-        if (observed && key.value.starts_with (std::string ("owner-lease") + '\0')) {
-            ++owner_reads;
-            if (view == view_t::read_failure)
+        // Reservation reads the owner first for descriptor identity, then for lease validity.
+        if (observed && key.value == owner_key
+            && (!warm || (authority_reads.load () > 0 && ++reservation_owner_reads == 2))) {
+            if (view == view_t::read_failure) {
+                ++owner_reads;
                 throw framework_exception_t (framework_error_kind_t::unavailable,
                                              "injected Actor candidate owner read failure");
+            }
             if (auto *found = std::get_if<store_found_t> (&result)) {
+                ++owner_reads;
                 // Candidate reads use a Store clock independent of the host clock.
                 found->value.store_now =
                   std::chrono::system_clock::time_point (std::chrono::hours (24));
@@ -361,29 +376,55 @@ class actor_candidate_lease_store_t final : public zlink::framework::location_st
     zlink::framework::task_t<zlink::framework::store_write_result_t>
     write (zlink::framework::store_write_request_t request) override
     {
+        for (const auto &mutation : request.mutations) {
+            if (std::visit ([] (const auto &entry) { return entry.key.value == authority_key; },
+                            mutation))
+                ++authority_writes;
+        }
         return inner.write (std::move (request));
     }
     zlink::framework::task_t<zlink::framework::store_scan_result_t>
     scan (zlink::framework::store_scan_request_t request) override
     {
-        return inner.scan (std::move (request));
+        using namespace zlink::framework;
+        if (!warm && view != view_t::live && request.prefix == mesh_prefix && !in_create_flow ())
+            co_return store_scan_result_t{store_scan_page_t{}};
+        co_return co_await inner.scan (std::move (request));
     }
 
-    in_memory_location_store_t inner;
-    const view_t view;
+    std::string owner_key;
+    zlink::framework::runtime::live_location_reader_t *discovery = nullptr;
+    zlink::framework::task_completion_source_t<void> serving_observed;
     const std::string flow_id = zlink::framework::runtime::flow_id_t::create ();
     std::atomic<int> owner_reads{0};
     std::atomic<int> authority_reads{0};
+    std::atomic<int> authority_writes{0};
+
+  private:
+    bool in_create_flow () const
+    {
+        const auto &flow = zlink::framework::runtime::flow_context_t::current ();
+        return flow && flow->flow_id == flow_id;
+    }
+
+    inline static const std::string authority_key =
+      std::string ("authority") + '\0' + "actor" + '\0' + "lease-new-actor";
+    inline static const std::string mesh_prefix =
+      std::string ("mesh-node") + '\0' + "actor-lease-mesh" + '\0';
+    in_memory_location_store_t inner;
+    const view_t view;
+    const bool warm;
+    std::atomic<int> reservation_owner_reads{0};
 };
 
-TEST (ZLinkFrameworkStoreLocationResolvers, ActorCandidatesRequireLiveDescriptorOwner)
+static void verify_actor_candidate_owner_leases (
+  std::initializer_list<actor_candidate_lease_store_t::view_t> views, bool warm)
 {
     namespace fw = zlink::framework;
     using view_t = actor_candidate_lease_store_t::view_t;
-    for (const auto view : {view_t::missing, view_t::expired, view_t::replaced, view_t::live,
-                            view_t::missing_expiry, view_t::read_failure}) {
+    for (const auto view : views) {
         SCOPED_TRACE (static_cast<int> (view));
-        auto store = std::make_shared<actor_candidate_lease_store_t> (view);
+        auto store = std::make_shared<actor_candidate_lease_store_t> (view, warm);
         auto factory = std::make_shared<lease_target_actor_factory_t> ();
         auto app = fw::app_t::create ();
         app.add_zlink_framework ([&] (fw::zlink_framework_options_t &options) {
@@ -406,11 +447,18 @@ TEST (ZLinkFrameworkStoreLocationResolvers, ActorCandidatesRequireLiveDescriptor
         app.set_message_flow_mode (fw::message_flow_log_mode_t::normal);
         int app_result = -1;
         auto services = app.advanced ().services ().build_provider ();
+        store->owner_key = std::string ("owner-lease") + '\0'
+                           + services.get_required<fw::runtime::location_runtime_t> ().owner_id ();
+        if (warm)
+            store->discovery = &services.get_required<fw::runtime::live_location_reader_t> ();
         std::jthread host ([&] { app_result = app.run (0, nullptr); });
         bool created = false;
         std::optional<fw::framework_error_kind_t> error;
         try {
             fw::test::wait_for_serving (services);
+            if (warm && !store->serving_observed.task ().result_for (std::chrono::seconds (2)))
+                throw fw::framework_exception_t (fw::framework_error_kind_t::deadline_exceeded,
+                                                 "Serving discovery observation was not published");
             fw::runtime::flow_context_t::scope_t flow (
               fw::runtime::flow_value_t{store->flow_id, fw::flow_origin_t::application,
                                         fw::message_flow_log_mode_t::normal, std::nullopt});
@@ -436,11 +484,17 @@ TEST (ZLinkFrameworkStoreLocationResolvers, ActorCandidatesRequireLiveDescriptor
             EXPECT_TRUE (created);
             EXPECT_FALSE (error.has_value ());
             EXPECT_EQ (1, factory->calls.load ());
+            EXPECT_GT (store->authority_writes.load (), 0);
         } else {
             EXPECT_FALSE (created);
             EXPECT_EQ (0, factory->calls.load ());
-            // Exclusive creation has no authority fallback: no reservation or activation is reached.
-            EXPECT_EQ (0, store->authority_reads.load ());
+            if (warm) {
+                EXPECT_EQ (1, store->authority_reads.load ());
+                EXPECT_EQ (1, store->owner_reads.load ());
+            } else {
+                EXPECT_EQ (0, store->authority_reads.load ());
+            }
+            EXPECT_EQ (0, store->authority_writes.load ());
             EXPECT_EQ (std::optional<fw::framework_error_kind_t> (
                          view == view_t::missing_expiry
                            ? fw::framework_error_kind_t::internal_failure
@@ -448,6 +502,23 @@ TEST (ZLinkFrameworkStoreLocationResolvers, ActorCandidatesRequireLiveDescriptor
                        error);
         }
     }
+}
+
+TEST (ZLinkFrameworkStoreLocationResolvers, ActorCandidatesRequireLiveDescriptorOwner)
+{
+    using view_t = actor_candidate_lease_store_t::view_t;
+    verify_actor_candidate_owner_leases ({view_t::missing, view_t::expired, view_t::replaced,
+                                          view_t::live, view_t::missing_expiry,
+                                          view_t::read_failure},
+                                         false);
+}
+
+TEST (ZLinkFrameworkStoreLocationResolvers, ActorCandidatesRequireLiveDescriptorOwnerAtReservation)
+{
+    using view_t = actor_candidate_lease_store_t::view_t;
+    verify_actor_candidate_owner_leases ({view_t::missing, view_t::expired, view_t::replaced,
+                                          view_t::missing_expiry, view_t::read_failure},
+                                         true);
 }
 
 class ended_user_reclaim_client_t final : public zlink::framework::hosted_service_t

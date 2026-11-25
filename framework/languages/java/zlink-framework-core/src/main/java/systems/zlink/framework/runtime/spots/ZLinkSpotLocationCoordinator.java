@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.spots;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationWriteStatus;
 import systems.zlink.framework.runtime.locations.ZLinkLocationLifecycle;
 import systems.zlink.framework.spots.ZLinkSpotKind;
@@ -34,6 +35,10 @@ final class ZLinkSpotLocationCoordinator {
 
     void setLifecycle(ZLinkLocationLifecycle lifecycle) {
         this.lifecycle = lifecycle;
+    }
+
+    boolean isOwnerLeaseValid(ZLinkLocationOwnerToken owner) {
+        return lifecycle != null && lifecycle.isOwnerLeaseValid(owner);
     }
 
     String publisherChannelName(RoutingId nodeRid) {

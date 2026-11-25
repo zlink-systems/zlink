@@ -4073,6 +4073,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         return publishers.client();
     }
 
+    boolean isOwnerLeaseValid(ZLinkLocationOwnerToken owner) {
+        return spotLocations.isOwnerLeaseValid(owner);
+    }
+
     public void setLocationLifecycle(ZLinkLocationLifecycle lifecycle) {
         spotLocations.setLifecycle(lifecycle);
     }
@@ -5691,7 +5695,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 });
     }
 
-    private void rememberRecoveredSpot(
+    void rememberRecoveredSpot(
             systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot snapshot,
             String spotId) {
         var allocation = snapshot.allocation();
