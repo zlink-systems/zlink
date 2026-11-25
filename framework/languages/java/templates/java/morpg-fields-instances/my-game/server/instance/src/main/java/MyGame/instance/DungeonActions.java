@@ -12,10 +12,7 @@ public final class DungeonActions {
     @ZLinkSpotActorRequest
     public CompletionStage<DungeonLeft> leave(
             Dungeon spot, Player actor, ZLinkMessageContext context, LeaveDungeonRequest request) {
-        var dungeon = spot.context();
-        return dungeon.leaveActor(actor)
-                .thenApply(
-                        ignored -> new DungeonLeft(dungeon.spotId(), dungeon.objectGeneration()));
+        return spot.leave(actor);
     }
 
     @ZLinkSpotActorSend

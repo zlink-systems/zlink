@@ -56,7 +56,7 @@ The foreground server allows multiple active Dungeons per play node. Isolated E2
 
 Each run keeps effective node settings, node stdout and stderr, Framework message-flow logs (`*.flow.log`), and any failure details in `.logs/run-<id>/`. Local build output is in `.logs/build.log` and isolated Docker build and cleanup output is in `.logs/docker-*/`.
 
-Send `LeaveDungeonRequest` and wait for `DungeonLeft` to leave a Dungeon. After the last player leaves, the server closes the Dungeon User Spot before replying and returns the slot to the configured Dungeon capacity. A disconnect preserves membership for reconnect.
+Send `LeaveDungeonRequest` and wait for `DungeonLeft`. The Dungeon counts the players still inside after the leave and returns that count as `remainingPlayers`. At zero, the Session closes that Spot generation before replying and releases its capacity. A disconnect preserves Dungeon membership for reconnect.
 
 ## Client connection
 
@@ -163,6 +163,7 @@ The runner validates `zlink.structure.json`, creates one isolated Redis Compose 
 | party | Server-issued IDs; invalid-party, not-ready and non-leader rejection without state changes; internal packet rejection; back-to-back entry reaches one active run; distinct parties get distinct Dungeons; FinalStage completes the run |
 | reconnect | Same Actor, Dungeon, RunId, Phase and Stage after reconnect; advancement and completion continue |
 | update | Drain and safe-shutdown observations; preserved Sessions, RunId, Phase and Stage; replacement accepts a distinct party and Dungeon |
+| `dungeon-leave` | Verify that the remaining player can query the same Dungeon after the first departure and that the last departure releases the slot. |
 
 For structure checks only, pass `--check-structure` to the shell runner or `-CheckStructure` to PowerShell. Checks examine real files and permit additional valid composition declarations.
 

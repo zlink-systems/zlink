@@ -84,7 +84,7 @@ An Actor is a game state object addressed by ID; `Player` in `server/shared/src/
 
 `server/instance/src/main/java/MyGame/instance/Program.java` registers the Dungeon factory (`dungeonCapacity` from `server/config/instanceA.json`) and the Entry Spot. `Dungeon` is an application-created User Spot, distinct from the Framework Instance Spot; `DungeonRun` stores the owner Party Spot ID, Run ID, admitted members, phase, and stage. Dungeon IDs derive from server-issued `run-` IDs. `Prepare.prepare` handles idempotent preparation. After all members arrive, Dungeon sends `RunStarted` to the owner Party Spot; completion sends `RunCompleted` to the same Party ID. In a Dungeon, `EnterDungeonRequest` returns the current state, while town-only Party requests are rejected with `run-in-progress`.
 
-`LeaveDungeonRequest` runs in the Dungeon Actor handler, which awaits the public membership leave. The Session then attempts to close the same Spot generation through the public Spot manager, outside the Dungeon turn. Close preserves the Spot while members remain and releases its capacity after the last Actor leaves. The Session sends `DungeonLeft` after the close attempt. Disconnect preserves Dungeon membership for reconnect.
+`LeaveDungeonRequest` runs in the Dungeon Actor handler. The Dungeon reports `remainingPlayers` from its joined players after the public membership leave. Only when the count is zero does the Session ask the public Spot manager to close the same Spot generation from outside the Dungeon turn. The Session then replies with `DungeonLeft`. Disconnect preserves Dungeon membership for reconnect.
 
 ### Shared contracts and hosting
 

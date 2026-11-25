@@ -16,7 +16,11 @@ public final class Scenarios implements AutoCloseable {
     Scenarios(Nodes nodes, List<Scenario> selectedScenarios) {
         this.nodes = nodes;
         this.selectedScenarios = Set.copyOf(selectedScenarios);
-        this.lastScenario = selectedScenarios.isEmpty() ? null : selectedScenarios.getLast();
+        this.lastScenario =
+                selectedScenarios.reversed().stream()
+                        .filter(scenario -> scenario != Scenario.DUNGEON_LEAVE)
+                        .findFirst()
+                        .orElse(null);
     }
 
     private static void require(boolean value, String message) {
@@ -41,7 +45,11 @@ public final class Scenarios implements AutoCloseable {
         var leaderLeft = leader.leaveDungeon();
         var memberLeft = member.leaveDungeon();
         Structure.require(
-                leaderLeft.dungeonId().equals(dungeon.dungeonId()) && leaderLeft.equals(memberLeft),
+                leaderLeft.dungeonId().equals(dungeon.dungeonId())
+                        && leaderLeft.dungeonId().equals(memberLeft.dungeonId())
+                        && leaderLeft.objectGeneration() == memberLeft.objectGeneration()
+                        && leaderLeft.remainingPlayers() == 1
+                        && memberLeft.remainingPlayers() == 0,
                 "Dungeon departure identified a different Spot");
     }
 
@@ -131,7 +139,45 @@ public final class Scenarios implements AutoCloseable {
                 "Dungeon entry changed Session");
     }
 
+    private void verifyDungeonLeave() throws Exception {
+        var first = create("leave-leader" + playerSuffix);
+        var last = create("leave-member" + playerSuffix);
+        var otherLeader = create("leave-other-leader" + playerSuffix);
+        var otherMember = create("leave-other-member" + playerSuffix);
+        var freshLeader = create("leave-fresh-leader" + playerSuffix);
+        var freshMember = create("leave-fresh-member" + playerSuffix);
+        for (var client :
+                List.of(first, last, otherLeader, otherMember, freshLeader, freshMember)) {
+            client.join(250);
+        }
+        var original = enter(first, last);
+        var other = enter(otherLeader, otherMember);
+        Structure.require(
+                !original.nodeId().equals(other.nodeId()), "Each instance must hold one Dungeon");
+        var firstLeft = first.leaveDungeon();
+        sameDungeon(original, last.dungeon());
+        var lastLeft = last.leaveDungeon();
+        Structure.require(
+                firstLeft.dungeonId().equals(original.dungeonId())
+                        && lastLeft.dungeonId().equals(original.dungeonId())
+                        && firstLeft.objectGeneration() == lastLeft.objectGeneration()
+                        && firstLeft.remainingPlayers() == 1
+                        && lastLeft.remainingPlayers() == 0,
+                "Expected the Dungeon to report one remaining player and then zero");
+        var fresh = enter(freshLeader, freshMember);
+        Structure.require(
+                fresh.nodeId().equals(original.nodeId())
+                        && !fresh.dungeonId().equals(original.dungeonId()),
+                "Last departure did not release the original Dungeon slot");
+        leaveDungeon(freshLeader, freshMember, fresh);
+        leaveDungeon(otherLeader, otherMember, other);
+    }
+
     void run(Scenario scenario) throws Exception {
+        if (scenario == Scenario.DUNGEON_LEAVE) {
+            verifyDungeonLeave();
+            return;
+        }
         if (scenario == Scenario.FIELD) {
             var player = create("p1" + playerSuffix);
             var observer = create("border-p2" + playerSuffix);

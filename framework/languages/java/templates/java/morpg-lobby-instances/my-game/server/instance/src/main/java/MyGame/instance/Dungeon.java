@@ -58,7 +58,18 @@ public final class Dungeon implements ZLinkSpot<Player> {
                 .thenCompose(ignored -> broadcast());
     }
 
+    public CompletionStage<DungeonLeft> leave(Player actor) {
+        return context.leaveActor(actor)
+                .thenApply(
+                        ignored ->
+                                new DungeonLeft(
+                                        context.spotId(),
+                                        context.objectGeneration(),
+                                        state.joined.size()));
+    }
+
     public CompletionStage<Void> onLeaveActor(Player actor) {
+        state.joined.remove(actor.context().actorId());
         System.out.println("Player left " + context.spotId());
         return CompletableFuture.completedFuture(null);
     }

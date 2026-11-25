@@ -66,7 +66,7 @@ Java 배포본을 빌드한 후 Redis와 노드를 시작합니다. `Server read
 
 실행별 `.logs/run-<id>/`에 실제 노드 설정, 노드별 stdout·stderr, Framework message-flow(`*.flow.log`), 시나리오 실패 상세가 남습니다. 로컬 빌드 로그는 `.logs/build.log`, Docker 빌드와 정리 로그는 `.logs/docker-*/`에 남습니다.
 
-Dungeon을 떠나려면 `LeaveDungeonRequest`를 보내고 `DungeonLeft` 응답을 기다립니다. 마지막 플레이어가 떠나면 서버는 응답 전에 Dungeon User Spot을 닫아 설정된 용량의 슬롯을 반환합니다. 연결이 끊기면 재접속에 사용할 멤버십을 유지합니다.
+Dungeon을 떠나려면 `LeaveDungeonRequest`를 보내고 `DungeonLeft` 응답을 기다립니다. Dungeon은 퇴장 후 남은 플레이어 수를 `remainingPlayers`에 담습니다. 이 값이 0이면 Session이 같은 세대의 Dungeon Spot을 닫아 응답 전에 슬롯을 반환합니다. 연결이 끊기면 재접속에 사용할 멤버십을 유지합니다.
 
 ## 클라이언트 연결
 
@@ -159,6 +159,7 @@ public final class ConnectOnce {
 | `dungeon` | 파티의 Dungeon 입장과 Run ID·명단·단계 등 공유 상태를 확인합니다. |
 | `reconnect` | 재접속 후 새 Session에서 Actor 식별자와 게임 상태를 확인합니다. |
 | `update` | 노드 drain과 상태 재배치, 기존 Session 유지, 교체 노드의 새 요청 처리를 확인합니다. |
+| `dungeon-leave` | 한 명이 떠난 뒤 남은 플레이어가 같은 Dungeon을 조회하고, 마지막 퇴장으로 슬롯이 반환되는지 확인합니다. |
 
 실행기는 선택한 시나리오별로 제목과 통과·실패를 출력하고 마지막 줄에 `Scenarios: k/n passed`를 표시합니다. 실패 시 상세 로그 경로를 함께 출력합니다. 구조만 검사할 때는 `--check-structure`를 사용합니다. 호스트 프로세스 디버깅은 서버를 종료한 후 `--local` 또는 `-Local`로 실행합니다. `--no-build` 또는 `-NoBuild`로 기존 배포본을 재사용할 수 있습니다. 격리 실행은 고유한 Redis 키와 가용 포트를 사용하며 실행기 소유 리소스를 종료 시 정리합니다.
 

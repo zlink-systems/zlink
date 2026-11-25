@@ -16,7 +16,7 @@ object Names {
     const val DUNGEON_SCENARIO = "dungeon"
     const val RECONNECT = "reconnect"
     const val UPDATE = "update"
-    val SCENARIOS = listOf(FIELD_SCENARIO, DUNGEON_SCENARIO, RECONNECT, UPDATE)
+    val SCENARIOS = listOf(FIELD_SCENARIO, DUNGEON_SCENARIO, RECONNECT, UPDATE, "dungeon-leave")
 }
 
 object Rules {
@@ -63,7 +63,11 @@ enum class RunPhase {
 
 @JsonSerialize class LeaveDungeonRequest
 
-data class DungeonLeft(val dungeonId: String, val objectGeneration: Long)
+data class DungeonLeft(
+    val dungeonId: String,
+    val objectGeneration: Long,
+    val remainingPlayers: Int,
+)
 
 class SessionInfoRequest
 

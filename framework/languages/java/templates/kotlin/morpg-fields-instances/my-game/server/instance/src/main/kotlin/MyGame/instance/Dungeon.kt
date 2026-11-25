@@ -61,7 +61,14 @@ class Dungeon(
         sendToMembers(view())
     }
 
-    override suspend fun onLeaveActorSuspending(actor: Player) {}
+    override suspend fun onLeaveActorSuspending(actor: Player) {
+        state.entered.remove(actor.context.actorId())
+    }
+
+    suspend fun leave(actor: Player): DungeonLeft {
+        context.leaveActor(actor).await()
+        return DungeonLeft(context.spotId(), context.objectGeneration(), state.entered.size)
+    }
 
     override suspend fun onDisconnectActorSuspending(actor: Player) {}
 
@@ -114,11 +121,11 @@ class Dungeon(
     }
 
     private suspend fun sendToMembers(current: DungeonView) {
-        for (id in state.members) actors.kotlin().sendToActor(id, current).await()
+        for (id in state.entered) actors.kotlin().sendToActor(id, current).await()
     }
 
     private suspend fun sendToMembersExcept(current: DungeonView, excluded: String) {
-        for (id in state.members) {
+        for (id in state.entered) {
             if (id != excluded) actors.kotlin().sendToActor(id, current).await()
         }
     }

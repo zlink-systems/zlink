@@ -57,7 +57,7 @@ Docker 이미지 빌드에는 `./run-e2e.sh --build-only` 또는 `.\run-e2e.cmd 
 
 서버 접속 정보는 `.logs/server.json`에 기록됩니다. 노드별 stdout, stderr, Framework message-flow와 시나리오 실패 상세는 `.logs/run-<id>/`에 남습니다. 연결 실행의 노드 로그는 서버가 출력한 경로에, 시나리오 실패 상세는 e2e가 출력한 경로에 기록됩니다. Docker 빌드·정리 로그는 `.logs/docker-<project>/`에 남습니다.
 
-Dungeon을 떠나려면 `LeaveDungeonRequest`를 보내고 `DungeonLeft` 응답을 기다립니다. 마지막 플레이어가 떠나면 서버는 응답 전에 Dungeon User Spot을 닫아 설정된 용량의 슬롯을 반환합니다. 연결이 끊기면 재접속에 사용할 멤버십을 유지합니다.
+Dungeon을 떠나려면 `LeaveDungeonRequest`를 보내고 `DungeonLeft` 응답을 기다립니다. Dungeon은 퇴장 후 남은 플레이어 수를 `remainingPlayers`에 담습니다. 이 값이 0이면 Session이 같은 세대의 Dungeon Spot을 닫아 응답 전에 슬롯을 반환합니다. 연결이 끊기면 재접속에 사용할 멤버십을 유지합니다.
 
 ## 클라이언트 연결
 
@@ -149,6 +149,7 @@ suspend fun connectOnce(endpoint: String, playerId: String) {
 | `dungeon` | Dungeon 생성 및 입장과 템플릿에 정의된 진행 상태를 확인합니다. |
 | `reconnect` | 새 Session으로 연결해 같은 Actor와 게임 상태를 복구하는지 확인합니다. |
 | `update` | drain 후 기존 접속과 게임 상태가 유지되고, 교체 노드가 새 요청을 받는지 확인합니다. |
+| `dungeon-leave` | 한 명이 떠난 뒤 남은 플레이어가 같은 Dungeon을 조회하고, 마지막 퇴장으로 슬롯이 반환되는지 확인합니다. |
 
 ```bash
 ./run-e2e.sh --scenario field,dungeon,reconnect,update

@@ -56,7 +56,7 @@ The local server permits multiple Dungeons per instance. Isolated scenarios reta
 
 The server publishes its endpoints in `.logs/server.json`. Each run keeps node stdout, stderr, Framework message-flow records and failure details under `.logs/run-<id>/`. For an attached run, find the node logs under the directory printed by `run-server` and the scenario details under the directory printed by `run-e2e`. Docker build and cleanup logs are under `.logs/docker-<project>/`.
 
-Send `LeaveDungeonRequest` and wait for `DungeonLeft` to leave a Dungeon. After the last player leaves, the server closes the Dungeon User Spot before replying and returns the slot to the configured Dungeon capacity. A disconnect preserves membership for reconnect.
+Send `LeaveDungeonRequest` and wait for `DungeonLeft`. The Dungeon counts the players still inside after the leave and returns that count as `remainingPlayers`. At zero, the Session closes that Spot generation before replying and releases its capacity. A disconnect preserves Dungeon membership for reconnect.
 
 ## Client connection
 
@@ -167,6 +167,7 @@ The runner validates `zlink.structure.json`, starts its own Redis Compose projec
 | party | Server-issued IDs; invalid-party, not-ready and non-leader rejection without state changes; internal packet rejection; back-to-back entry reaches one active run; distinct parties get distinct Dungeons; FinalStage completes the run |
 | reconnect | Same Actor, Dungeon, RunId, Phase and Stage after reconnect; advancement and completion continue |
 | update | Drain and safe-shutdown observations; preserved Sessions, RunId, Phase and Stage; replacement accepts a distinct party and Dungeon |
+| `dungeon-leave` | Verify that the remaining player can query the same Dungeon after the first departure and that the last departure releases the slot. |
 
 Run the structure checker alone with `./run-e2e.sh --check-structure` or `.\run-e2e.cmd -CheckStructure`. Party domain tests run with `./gradlew --no-daemon :server:lobby:test`.
 

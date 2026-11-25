@@ -54,7 +54,14 @@ class Dungeon(
         broadcast()
     }
 
-    override suspend fun onLeaveActorSuspending(actor: Player) {}
+    override suspend fun onLeaveActorSuspending(actor: Player) {
+        state.joined.remove(actor.context.actorId())
+    }
+
+    suspend fun leave(actor: Player): DungeonLeft {
+        context.leaveActor(actor).await()
+        return DungeonLeft(context.spotId(), context.objectGeneration(), state.joined.size)
+    }
 
     private fun view() =
         DungeonView(

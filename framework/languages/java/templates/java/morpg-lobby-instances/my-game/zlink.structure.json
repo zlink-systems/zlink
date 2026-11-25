@@ -21,7 +21,8 @@
     "scenarios": [
       "party",
       "reconnect",
-      "update"
+      "update",
+      "dungeon-leave"
     ]
   },
   "nodes": [

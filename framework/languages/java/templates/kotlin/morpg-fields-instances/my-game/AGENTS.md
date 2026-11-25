@@ -85,7 +85,7 @@ An Actor is a game state object addressed by ID; `Player` in `server/shared/src/
 
 `server/instance/src/main/kotlin/MyGame/instance/Program.kt` registers the Entry Spot, the `Dungeon` factory, and the `Player` factory. `Dungeon` is a dynamic User Spot whose `DungeonRun` stores its owner Party Spot ID, Run ID, members, phase, and stage. It admits only members with the prepared Run ID, reports arrivals and completion to the owning Party Spot, and pushes `DungeonView`. `Prepare` and `DungeonActions` handle preparation and player requests. Add encounters, rewards, and Dungeon lifecycle behavior in this module.
 
-`LeaveDungeonRequest` runs in the Dungeon Actor handler, which awaits the public membership leave. The Session then attempts to close the same Spot generation through the public Spot manager, outside the Dungeon turn. Close preserves the Spot while members remain and releases its capacity after the last Actor leaves. The Session sends `DungeonLeft` after the close attempt. Disconnect preserves Dungeon membership for reconnect.
+`LeaveDungeonRequest` runs in the Dungeon Actor handler. The Dungeon reports `remainingPlayers` from its joined players after the public membership leave. Only when the count is zero does the Session ask the public Spot manager to close the same Spot generation from outside the Dungeon turn. The Session then replies with `DungeonLeft`. Disconnect preserves Dungeon membership for reconnect.
 
 ### Shared contracts and hosting
 

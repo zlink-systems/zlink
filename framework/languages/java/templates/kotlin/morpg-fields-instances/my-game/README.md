@@ -59,7 +59,7 @@ The local server permits multiple Dungeons per instance. Isolated scenarios reta
 
 The server publishes its endpoints in `.logs/server.json`. Each run keeps node stdout, stderr, Framework message-flow records and failure details under `.logs/run-<id>/`. For an attached run, find the node logs under the directory printed by `run-server` and the scenario details under the directory printed by `run-e2e`. Docker build and cleanup logs are under `.logs/docker-<project>/`.
 
-Send `LeaveDungeonRequest` and wait for `DungeonLeft` to leave a Dungeon. After the last player leaves, the server closes the Dungeon User Spot before replying and returns the slot to the configured Dungeon capacity. A disconnect preserves membership for reconnect.
+Send `LeaveDungeonRequest` and wait for `DungeonLeft`. The Dungeon counts the players still inside after the leave and returns that count as `remainingPlayers`. At zero, the Session closes that Spot generation before replying and releases its capacity. A disconnect preserves Dungeon membership for reconnect.
 
 ## Client connection
 
@@ -171,6 +171,7 @@ The Kotlin runner checks the structure, starts an isolated Redis Compose project
 | dungeon | Two players join a server-issued party and Run ID, enter the same Dungeon, advance through completion, and verify that the completed run is reported to the Party Spot. |
 | reconnect | A new physical Session binds the same Actor and observes the same Dungeon, members and stage. |
 | update | The occupied instance drains through all relocation signals; both Sessions and Dungeon state persist; the replacement instance accepts a new party. |
+| `dungeon-leave` | Verify that the remaining player can query the same Dungeon after the first departure and that the last departure releases the slot. |
 
 The domain check covers movement rejection order, sequence bounds, relative-time relocation snapshots, PartyRun transitions, idempotent Dungeon preparation, run completion, enum names, and nullable JSON. Run it separately with `./run-e2e.sh --check-domain` or `.\run-e2e.cmd -CheckDomain`. Non-field scenarios share their party fixture. Selecting reconnect or update alone creates that fixture first. Structure-only validation is available through `./run-e2e.sh --check-structure` or `.\run-e2e.cmd -CheckStructure`.
 

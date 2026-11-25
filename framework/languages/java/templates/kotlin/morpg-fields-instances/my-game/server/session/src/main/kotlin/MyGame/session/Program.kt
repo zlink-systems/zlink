@@ -109,9 +109,11 @@ class GameSession(
                         .await()
 
                 // Close outside the Dungeon turn, after its membership change completes.
-                val dungeon = spots.find(left.dungeonId).await().orElse(null)
-                if (dungeon?.objectGeneration() == left.objectGeneration) {
-                    spots.close(dungeon).await()
+                if (left.remainingPlayers == 0) {
+                    val dungeon = spots.find(left.dungeonId).await().orElse(null)
+                    if (dungeon?.objectGeneration() == left.objectGeneration) {
+                        spots.close(dungeon).await()
+                    }
                 }
 
                 session.client().kotlin().reply(left).await()

@@ -13,11 +13,7 @@ class DungeonActions {
         actor: Player,
         context: ZLinkMessageContext,
         request: LeaveDungeonRequest,
-    ): DungeonLeft {
-        val dungeon = spot.context
-        dungeon.leaveActor(actor).await()
-        return DungeonLeft(dungeon.spotId(), dungeon.objectGeneration())
-    }
+    ): DungeonLeft = spot.leave(actor)
 
     @ZLinkSpotActorSend
     suspend fun login(

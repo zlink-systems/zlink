@@ -104,21 +104,23 @@ public final class GameSession implements ZLinkSession {
                 .requestToActor(bound().actorId(), new LeaveDungeonRequest())
                 .submit(DungeonLeft.class)
                 .thenCompose(
-                        left ->
-                                // Close outside the Dungeon turn, after its membership change
-                                // completes.
-                                spots.find(left.dungeonId())
-                                        .thenCompose(
-                                                found -> {
-                                                    if (found.isPresent()
-                                                            && found.get().objectGeneration()
-                                                                    == left.objectGeneration()) {
-                                                        return spots.close(found.get());
-                                                    }
-                                                    return CompletableFuture.completedFuture(false);
-                                                })
-                                        .thenCompose(
-                                                closed -> context.client().reply(left).submit()));
+                        left -> {
+                            if (left.remainingPlayers() != 0) {
+                                return context.client().reply(left).submit();
+                            }
+                            // Close outside the Dungeon turn after the last membership change.
+                            return spots.find(left.dungeonId())
+                                    .thenCompose(
+                                            found -> {
+                                                if (found.isPresent()
+                                                        && found.get().objectGeneration()
+                                                                == left.objectGeneration()) {
+                                                    return spots.close(found.get());
+                                                }
+                                                return CompletableFuture.completedFuture(false);
+                                            })
+                                    .thenCompose(closed -> context.client().reply(left).submit());
+                        });
     }
 
     private ZLinkSessionActor bound() {

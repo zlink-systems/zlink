@@ -8,10 +8,51 @@ private fun sameActor(before: SessionInfo, after: SessionInfo) {
     }
 }
 
+private suspend fun verifyDungeonLeave(
+    create: suspend (String) -> Client,
+    enter: suspend (Client, Client) -> DungeonView,
+) {
+    val first = create("leave-leader")
+    val last = create("leave-member")
+    val otherLeader = create("leave-other-leader")
+    val otherMember = create("leave-other-member")
+    val freshLeader = create("leave-fresh-leader")
+    val freshMember = create("leave-fresh-member")
+    for (client in listOf(first, last, otherLeader, otherMember, freshLeader, freshMember)) client
+        .join(250.0)
+    val original = enter(first, last)
+    val other = enter(otherLeader, otherMember)
+    check(original.nodeId != other.nodeId) { "Each instance must hold one Dungeon" }
+    val firstLeft = first.leaveDungeon()
+    sameDungeon(original, last.dungeon())
+    val lastLeft = last.leaveDungeon()
+    check(
+        firstLeft.dungeonId == original.dungeonId &&
+            lastLeft.dungeonId == original.dungeonId &&
+            firstLeft.objectGeneration == lastLeft.objectGeneration &&
+            firstLeft.remainingPlayers == 1 &&
+            lastLeft.remainingPlayers == 0
+    ) {
+        "Expected the Dungeon to report one remaining player and then zero"
+    }
+    val fresh = enter(freshLeader, freshMember)
+    check(fresh.nodeId == original.nodeId && fresh.dungeonId != original.dungeonId) {
+        "Last departure did not release the original Dungeon slot"
+    }
+    leaveDungeon(freshLeader, freshMember, fresh)
+    leaveDungeon(otherLeader, otherMember, other)
+}
+
 private suspend fun leaveDungeon(leader: Client, member: Client, dungeon: DungeonView) {
     val leaderLeft = leader.leaveDungeon()
     val memberLeft = member.leaveDungeon()
-    check(leaderLeft.dungeonId == dungeon.dungeonId && leaderLeft == memberLeft) {
+    check(
+        leaderLeft.dungeonId == dungeon.dungeonId &&
+            leaderLeft.dungeonId == memberLeft.dungeonId &&
+            leaderLeft.objectGeneration == memberLeft.objectGeneration &&
+            leaderLeft.remainingPlayers == 1 &&
+            memberLeft.remainingPlayers == 0
+    ) {
         "Dungeon departure identified a different Spot"
     }
 }
@@ -34,7 +75,7 @@ private fun party(view: PartyView, id: String, members: List<String>) =
 
 class Scenarios(private val target: ScenarioTarget, selectedScenarios: List<String>) {
     private val selectedScenarios = selectedScenarios.toSet()
-    private val lastScenario = selectedScenarios.lastOrNull()
+    private val lastScenario = selectedScenarios.lastOrNull { it != "dungeon-leave" }
     private val clients = mutableListOf<Client>()
     private lateinit var leader: Client
     private lateinit var member: Client
@@ -114,6 +155,10 @@ class Scenarios(private val target: ScenarioTarget, selectedScenarios: List<Stri
     }
 
     suspend fun run(name: String) {
+        if (name == "dungeon-leave") {
+            verifyDungeonLeave({ create(it + "-" + java.util.UUID.randomUUID()) }, ::enter)
+            return
+        }
         if (name == Names.FIELD_SCENARIO) {
             val player = create("p1")
             val observer = create("border-p2")

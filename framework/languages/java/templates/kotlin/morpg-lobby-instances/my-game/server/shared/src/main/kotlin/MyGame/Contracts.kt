@@ -25,6 +25,7 @@ enum class Scenario(val id: String) {
     PARTY("party"),
     RECONNECT("reconnect"),
     UPDATE("update"),
+    DUNGEON_LEAVE("dungeon-leave"),
 }
 
 enum class NodeRole(val id: String) {
@@ -58,7 +59,11 @@ object Rules {
 
 @JsonSerialize class LeaveDungeonRequest
 
-data class DungeonLeft(val dungeonId: String, val objectGeneration: Long)
+data class DungeonLeft(
+    val dungeonId: String,
+    val objectGeneration: Long,
+    val remainingPlayers: Int,
+)
 
 class SessionInfoRequest
 
