@@ -2,6 +2,7 @@
 #include "../support/telemetry_observation.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 #include "../support/runtime_metric_contract.hpp"
+#include "../support/host_readiness.hpp"
 
 #include <zlink/framework.hpp>
 #include <zlink/stream_connector.hpp>
@@ -2410,9 +2411,167 @@ int stream_write_terminal_during_host_shutdown (bool success)
     return sealed && preserved ? 0 : 1;
 }
 
+namespace
+{
+namespace fw = zlink::framework;
+namespace connector = zlink::stream_connector;
+
+class admission_test_session_t final : public fw::packet_stream_session_t
+{
+  public:
+    static constexpr const char *session_name = "admission-test-session";
+
+    fw::task_t<void> on_connected (fw::stream_t &) override { co_return; }
+    fw::task_t<void> on_disconnected (fw::stream_t &) override { co_return; }
+    fw::task_t<void> on_error (fw::stream_t &, const fw::stream_error_t &) override { co_return; }
+    fw::task_t<void> on_packet (fw::stream_t &stream,
+                                const fw::session_message_context_t &,
+                                const fw::message_t &payload) override
+    {
+        co_await stream.reply_packet (payload).async ();
+    }
+};
+
+class admission_test_readiness_t final : public fw::hosted_service_t
+{
+  public:
+    std::promise<fw::service_provider_t *> started;
+
+    fw::task_t<void> start (fw::service_provider_t &services) override
+    {
+        started.set_value (&services);
+        co_return;
+    }
+
+    void stop () noexcept override {}
+};
+
+int session_creation_failure (bool websocket)
+{
+    using namespace std::chrono_literals;
+    const std::string node_name = "admission-test-stream";
+    const std::string exception_message = "application session factory rejected connection";
+    std::atomic_bool fail_next{false};
+    std::atomic_size_t factory_failures{0};
+    std::atomic_size_t diagnostic_errors{0};
+    std::atomic_size_t creation_failure_flows{0};
+
+    auto app = fw::app_t::create ();
+    app.logging ().use_provider ("admission-test", [&] (const fw::log_record_t &record) {
+        std::string details = record.message;
+        for (const auto &field : record.fields) {
+            details += " " + field.value;
+            if (field.value == "session_creation_failed")
+                ++creation_failure_flows;
+        }
+        if (record.level == fw::log_level_t::error && details.find (node_name) != std::string::npos
+            && details.find (admission_test_session_t::session_name) != std::string::npos
+            && details.find (exception_message) != std::string::npos)
+            ++diagnostic_errors;
+    });
+    app.advanced ().services ().add_factory<admission_test_session_t> (
+      [&] (fw::service_provider_t &) {
+          if (fail_next.exchange (false)) {
+              ++factory_failures;
+              throw std::runtime_error (exception_message);
+          }
+          return std::make_unique<admission_test_session_t> ();
+      },
+      fw::service_lifetime_t::scoped);
+    auto &options = app.add_zlink_framework ();
+    options.configure_dispatch ().message_flow (fw::message_flow_log_mode_t::normal);
+    options.add_route_mesh ("admission-test-mesh")
+      .set_automatic_routing_id_prefix ("admission-test")
+      .listen (loopback_tcp_any_port);
+    options.add_stream_node (node_name)
+      .bind (websocket ? "ws://127.0.0.1:0" : "tcp://127.0.0.1:0")
+      .register_session<admission_test_session_t> ();
+    auto readiness = std::make_unique<admission_test_readiness_t> ();
+    auto started = readiness->started.get_future ();
+    app.add_hosted_service (std::move (readiness));
+    int host_result = -1;
+    std::thread host ([&] { host_result = app.run (0, nullptr); });
+    struct host_guard_t
+    {
+        fw::app_t &app;
+        std::thread &host;
+        ~host_guard_t ()
+        {
+            if (host.joinable ()) {
+                app.stop ();
+                host.join ();
+            }
+        }
+    } host_guard{app, host};
+
+    if (started.wait_for (5s) != std::future_status::ready) {
+        std::cerr << "FAIL STREAM admission host did not start\n";
+        return 1;
+    }
+    auto &services = *started.get ();
+    fw::test::wait_for_serving (services);
+    connector::connector_options_t client_options;
+    client_options.endpoint = services.get_required<fw::framework_runtime_t> ()
+                                .listener_status (fw::listener_kind_t::stream, node_name)
+                                .endpoint;
+    client_options.dispatch_mode = connector::dispatch_mode_t::immediate;
+    client_options.connect_timeout = 2s;
+    client_options.reconnect.enabled = false;
+    const auto echo_ok = [] (connector::connector_t &client) {
+        const std::vector<std::uint8_t> request{1, 2, 3};
+        const auto reply =
+          client.request (connector::packet_t{.name = "admission-test-echo", .payload = request})
+            .timeout (2s)
+            .submit<std::vector<std::uint8_t>> ();
+        return reply && reply.value () == request;
+    };
+    bool existing_connection_ok = false;
+    bool next_connection_ok = false;
+    bool transport_error = false;
+    {
+        auto existing = connector::connector_factory_t::create (client_options);
+        if (!existing.connect () || !echo_ok (existing)) {
+            std::cerr << "FAIL first healthy STREAM connection could not exchange a request\n";
+            return 1;
+        }
+        fail_next = true;
+        std::promise<std::optional<connector::close_reason_t>> disconnect;
+        auto disconnected = disconnect.get_future ();
+        auto rejected = connector::connector_factory_t::create (client_options);
+        const auto subscription = rejected.on_disconnected (
+          [&] (std::optional<connector::close_reason_t> reason) { disconnect.set_value (reason); });
+        (void) rejected.connect ();
+        transport_error = disconnected.wait_for (2s) == std::future_status::ready
+                          && disconnected.get () == connector::close_reason_t::transport_error;
+        existing_connection_ok = echo_ok (existing);
+        auto next = connector::connector_factory_t::create (client_options);
+        next_connection_ok = next.connect () && echo_ok (next);
+    }
+    app.stop ();
+    host.join ();
+
+    const bool passed = transport_error && existing_connection_ok && next_connection_ok
+                        && factory_failures == 1 && diagnostic_errors == 1
+                        && creation_failure_flows == 0 && host_result == 0;
+    std::cout << (passed ? "PASS" : "FAIL") << " STREAM session creation failure"
+              << " transport_error=" << transport_error
+              << " existing_connection_ok=" << existing_connection_ok
+              << " next_connection_ok=" << next_connection_ok
+              << " factory_failures=" << factory_failures
+              << " diagnostic_errors=" << diagnostic_errors
+              << " connection_only_creation_failure_flows=" << creation_failure_flows
+              << " host_result=" << host_result << '\n';
+    return passed ? 0 : 1;
+}
+} // namespace
+
 int main (int argc, char **argv)
 {
     zlink::framework::completion_owner_t completion_owner;
+    if (argc == 2 && std::string_view (argv[1]) == "--session-creation-failure-tcp")
+        return session_creation_failure (false);
+    if (argc == 2 && std::string_view (argv[1]) == "--session-creation-failure-ws")
+        return session_creation_failure (true);
 #ifdef ZLINK_FRAMEWORK_TEST_CREATION_PROBE
     if (argc == 2 && std::string_view (argv[1]) == "--core-session-lifecycle-boundaries") {
         zlink::framework::detail::configure_stream_dispatch_executor ();

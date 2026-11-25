@@ -3778,18 +3778,8 @@ task_t<void> public_host_runtime_t::discard_relocation_target_attempts (
 stateful::relocation_authority_fence_t
 public_host_runtime_t::relocation_target_fence (const relocation_target_attempt_t &attempt)
 {
-    const auto &primary = stateful::relocation_primary (attempt.sources);
-    const auto &coordinator = attempt.prepare.coordinator;
-    return {primary.kind,
-            primary.key,
-            coordinator.expected_authority_store_version,
-            {coordinator.owner_id, static_cast<std::int64_t> (coordinator.lease_generation)},
-            {attempt.prepare.target.target_owner_id,
-             static_cast<std::int64_t> (attempt.prepare.target.target_owner_lease_generation)},
-            attempt.prepare.relocation,
-            coordinator.node_routing_id,
-            coordinator.node_generation,
-            attempt.prepare.target_attempt_generation};
+    return stateful::relocation_authority_fence_t::from_prepare (
+      stateful::relocation_primary (attempt.sources), attempt.prepare);
 }
 
 public_host_runtime_t::relocation_target_settlement_t
@@ -4693,17 +4683,38 @@ public_host_runtime_t::submit_relocation_ready_reply (protocol::relocation_prepa
                                             protocol::relocation_role_t::target});
     const relocation_attempt_key_t key{prepare.relocation.high, prepare.relocation.low,
                                        prepare.target_attempt_generation};
-    co_return co_await _relocation_session_terminal_lane.run_task ([&] {
+    const auto current_attempt = [&] () -> relocation_target_attempt_t & {
         const auto found = _relocation_target_attempts.find (key);
         if (_options.mesh.shutdown_admission_seal->load (std::memory_order_acquire)
             || found == _relocation_target_attempts.end () || found->second.prepare != prepare
             || !found->second.pending || found->second.targets.empty ())
             throw framework_exception_t (framework_error_kind_t::shutting_down,
                                          "Relocation target stopped before readiness reply");
+        return found->second;
+    };
+    const auto source = co_await _relocation_session_terminal_lane.run_task (
+      [&] () -> std::optional<stateful::object_ref_t> {
+          const auto &attempt = current_attempt ();
+          if (relocation_target_wire_ready (attempt))
+              return std::nullopt;
+          if (attempt.sources.empty () || !_relocation_authority)
+              throw framework_exception_t (framework_error_kind_t::unavailable,
+                                           "Relocation target preparation has no source authority");
+          return stateful::relocation_primary (attempt.sources);
+      });
+    if (source) {
+        const auto prepared =
+          co_await _relocation_authority->record_target_prepared (*source, prepare);
+        if (!prepared)
+            throw framework_exception_t (framework_error_kind_t::unavailable,
+                                         "Relocation target preparation lost its authority fence");
+    }
+    co_return co_await _relocation_session_terminal_lane.run_task ([&] {
+        auto &attempt = current_attempt ();
         const auto sent = submit && submit ();
-        if (sent && !relocation_target_wire_ready (found->second))
-            set_relocation_finalize_at_on_lane (found->second, std::chrono::steady_clock::now ()
-                                                                 + _relocation_cutover_wait);
+        if (sent && !relocation_target_wire_ready (attempt))
+            set_relocation_finalize_at_on_lane (attempt, std::chrono::steady_clock::now ()
+                                                           + _relocation_cutover_wait);
         return sent;
     });
 }
@@ -6068,6 +6079,13 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
     }
     current = co_await run_blocking_step<authority_read_result_t> (
       [store, authority_key] { return store->read_authority (authority_key); });
+    const auto activation_creation_target = [&] {
+        return object_creation_target_t{
+          request.target.mesh_name,
+          node_rid_t::from_string (
+            zlink::routing_id_t::from (request.target.target_node_routing_id).to_string ()),
+          request.target.target_node_generation, *instance_owner};
+    };
     auto current_ready = decode_current_authority (current);
     if (request.target.authority_owner_generation == 0) {
         if (const auto *snapshot = std::get_if<authority_snapshot_t> (&current)) {
@@ -6116,9 +6134,7 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
                 object_reserve_request_t release;
                 release.key = {placement_object_kind_t::instance_spot, request.target.spot_id};
                 release.intent.stable_type = request.target.stable_type;
-                if (instance_materializer->relocation_policy)
-                    release.relocation_policy =
-                      instance_materializer->relocation_policy (request.target.stable_type);
+                release.target = activation_creation_target ();
                 const auto released = co_await store->release_ended_reservation (
                   authority_key, snapshot->store_version, {}, std::move (release));
                 if (released)
@@ -6184,11 +6200,7 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
     reserve.intent.request_content_reference = recovery_root.reference;
     reserve.intent.request_sha256 = request_sha256;
     reserve.intent.request_encoded_size = recovery_public.size ();
-    reserve.target = {
-      request.target.mesh_name,
-      node_rid_t::from_string (
-        zlink::routing_id_t::from (request.target.target_node_routing_id).to_string ()),
-      request.target.target_node_generation, *instance_owner};
+    reserve.target = activation_creation_target ();
     const std::string creating = "zlink:instance-spot:creating:v1";
     for (const auto value : creating)
         reserve.creating_payload.push_back (

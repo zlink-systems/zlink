@@ -1424,11 +1424,13 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
 
     internal async ValueTask<bool> TryOpenRelocationAfterMessageFollowAsync(
         ZLinkSpotExecutionRelocationSeal seal,
-        Action reserveBeforeApplicationAdmission
+        Action reserveBeforeApplicationAdmission,
+        Func<ValueTask> recordDispatchOpening
     )
     {
         ArgumentNullException.ThrowIfNull(seal);
         ArgumentNullException.ThrowIfNull(reserveBeforeApplicationAdmission);
+        ArgumentNullException.ThrowIfNull(recordDispatchOpening);
         var opening = await RunBarrierStateAsync(
                 () =>
                 {
@@ -1454,10 +1456,13 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         if (opening is null)
             return false;
 
-        using var scope = EnterRelocationAdmissionOpening(opening);
         try
         {
-            reserveBeforeApplicationAdmission();
+            using (EnterRelocationAdmissionOpening(opening))
+                reserveBeforeApplicationAdmission();
+            // The queue has switched to the target and trailing work has been
+            // reserved. Publish the boundary before releasing ordinary ingress.
+            await recordDispatchOpening().ConfigureAwait(false);
         }
         catch
         {

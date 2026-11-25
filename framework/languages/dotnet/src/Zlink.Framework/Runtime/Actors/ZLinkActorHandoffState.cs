@@ -573,6 +573,24 @@ internal sealed class ZLinkActorHandoffState(
         );
     }
 
+    internal ZLinkActorHandoffCaptureResult TryCaptureTargetRequest(
+        string handoffId,
+        ZLinkSpotActorFrame frame,
+        ZLinkFrameworkRuntime runtime
+    ) =>
+        AwaitStateLane(
+            _lane.RunAsync(() =>
+                _handoffId == handoffId && IsTargetAdmissionClosedLocked()
+                    ? TryCaptureOnStateLane(
+                        frame,
+                        runtime,
+                        static (rt, fr) =>
+                            ZLinkActorInboundPipeline.EnsureRelocationReplyRoute(rt, fr)
+                    )
+                    : ZLinkActorHandoffCaptureResult.NotSealed
+            )
+        );
+
     private ZLinkActorHandoffCaptureResult TryCaptureOnStateLane<TState>(
         ZLinkSpotActorFrame frame,
         TState prepareState,

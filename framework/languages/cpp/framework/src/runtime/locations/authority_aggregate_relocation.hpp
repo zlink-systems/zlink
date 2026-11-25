@@ -199,7 +199,9 @@ replace (const std::shared_ptr<const authority_aggregate_t> &current, json_t rel
 inline std::shared_ptr<const authority_aggregate_t>
 without_capture (const std::shared_ptr<const authority_aggregate_t> &current)
 {
-    return current && current->relocation && current->relocation->phase == "captured"
+    return current && current->relocation
+               && (current->relocation->phase == "captured"
+                   || current->relocation->phase == "prepared")
              ? replace (current, nullptr)
              : current;
 }

@@ -115,20 +115,18 @@ internal sealed class ZLinkActorRemoteJoiner(
             );
 
         var actorType = actorState.ActorType;
-        var handoffId = Guid.NewGuid().ToString("N");
-        ZLinkActorRelocationRegistry.TryResolve(
-            registration,
-            actorType,
-            actorRef.NodeRid,
-            out var relocation
-        );
-        if (relocation is null)
+        var sourceNode = runtime.GetSpotNodeRuntime(actorRef.NodeRid);
+        if (!sourceNode.Registration.ActorRelocations.TryGetValue(actorType, out var relocation))
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Rejected,
                 $"Actor type '{actorType}' relocation policy is not registered on the source node."
             );
+        if (relocation.PolicyKind == ZLinkObjectRelocationRegistration.DisabledPolicy)
+            throw ZLinkActorRelocationRegistry.CreateDisabledException(relocation);
 
+        var handoffId = Guid.NewGuid().ToString("N");
         return await SubmitRoutedJoinActorCoreAsync(
+                sourceNode,
                 actor,
                 actorRef,
                 actorState,
@@ -195,6 +193,7 @@ internal sealed class ZLinkActorRemoteJoiner(
     }
 
     private async ValueTask<ZLinkActorJoinResult> SubmitRoutedJoinActorCoreAsync(
+        ZLinkSpotNodeRuntime sourceNode,
         IZLinkActor actor,
         ZLinkBackendActorRef actorRef,
         ZLinkActorRuntimeState actorState,
@@ -268,6 +267,7 @@ internal sealed class ZLinkActorRemoteJoiner(
             try
             {
                 result = await SubmitRoutedJoinActorTransactionAsync(
+                        sourceNode,
                         actor,
                         actorRef,
                         actorState,
@@ -503,6 +503,7 @@ internal sealed class ZLinkActorRemoteJoiner(
     }
 
     private async ValueTask<ZLinkActorJoinResult> SubmitRoutedJoinActorTransactionAsync(
+        ZLinkSpotNodeRuntime sourceNode,
         IZLinkActor actor,
         ZLinkBackendActorRef actorRef,
         ZLinkActorRuntimeState actorState,
@@ -529,7 +530,6 @@ internal sealed class ZLinkActorRemoteJoiner(
         var sourceSpotId = ResolveSourceSpotId(sourceAuthority);
 
         var admissionDeadline = deadline.Utc;
-        var sourceNode = runtime.GetSpotNodeRuntime(actorRef.NodeRid);
         var canonicalRequest = CreateCanonicalActorJoinRequest(
             actorRef,
             sourceAuthority,

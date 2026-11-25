@@ -681,7 +681,10 @@ internal sealed partial class ZLinkFrameworkRuntime
         }
     }
 
-    internal async ValueTask OpenInboundSpotAggregateAdmissionAsync(TargetStage stage)
+    internal async ValueTask OpenInboundSpotAggregateAdmissionAsync(
+        TargetStage stage,
+        Func<ValueTask> recordDispatchOpening
+    )
     {
         var handoffId = stage.Envelope.AggregateId.ToString("N");
         await OpenTargetAdmissionOnceAsync(
@@ -689,8 +692,12 @@ internal sealed partial class ZLinkFrameworkRuntime
                 () =>
                     stage.Spot.Activation.OpenRelocationTargetAdmissionAsync(
                         stage.TargetAdmissionSeal,
-                        () =>
+                        static () => { },
+                        async () =>
                         {
+                            // The FIFO prefix was reserved during publication.
+                            // Release it with the Spot only after the phase CAS.
+                            await recordDispatchOpening().ConfigureAwait(false);
                             foreach (var actorState in stage.ActorStates)
                                 actorState.Handoff.Complete(handoffId);
                         }

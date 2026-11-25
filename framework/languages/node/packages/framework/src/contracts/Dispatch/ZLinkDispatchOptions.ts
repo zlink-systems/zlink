@@ -197,6 +197,7 @@ export type ZLinkDispatchErrorReason =
   | 'target_closed'
   | 'location_unavailable'
   | 'stale_target'
+  | 'session_creation_failed'
   | 'shutdown';
 
 export type ZLinkDispatchErrorAction = 'reply_error' | 'fail_caller' | 'drop';
@@ -210,6 +211,7 @@ export enum ZLinkRuntimeDispatchErrorReason {
   UnexpectedReply = 'unexpected_reply',
   Backpressure = 'backpressure',
   StaleTarget = 'stale_target',
+  SessionCreationFailed = 'session_creation_failed',
   Shutdown = 'shutdown'
 }
 

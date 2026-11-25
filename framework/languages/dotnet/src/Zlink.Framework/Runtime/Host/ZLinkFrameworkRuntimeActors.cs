@@ -2887,6 +2887,8 @@ internal sealed partial class ZLinkFrameworkRuntime
             async ct =>
             {
                 actorState.Handoff.ClaimDurableFrame(frame);
+                if (frame.TargetAdmission is { IsCompletedSuccessfully: true, Result: false })
+                    return;
                 using var dispatchScope = actorState.EnterDispatch();
                 using var invocation = ZLinkApplicationJobQueueInvocation.Enter(prepared!);
                 if (dispatch is not null)
@@ -2911,6 +2913,8 @@ internal sealed partial class ZLinkFrameworkRuntime
             async ct =>
             {
                 await start.WaitAsync(ct).ConfigureAwait(false);
+                if (frame.TargetAdmission is { } authorization)
+                    await authorization.WaitAsync(ct).ConfigureAwait(false);
                 var acquired = await hostQueue.AcquireAsync(ct, frame.Origin).ConfigureAwait(false);
                 Interlocked.Exchange(ref prepared, acquired);
                 if (ct.IsCancellationRequested)
