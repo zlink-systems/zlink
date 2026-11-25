@@ -45,6 +45,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
 import java.util.function.BooleanSupplier;
+import java.util.function.Function;
 import java.util.function.IntFunction;
 import java.util.function.LongFunction;
 import java.util.function.LongSupplier;
@@ -141,6 +142,10 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     @FunctionalInterface
     interface IngressAdmission {
         CompletionStage<Void> submit(LongFunction<CompletionStage<Void>> operation);
+    }
+
+    public void observeReplyAcceptance(java.util.function.Consumer<ZLinkStreamHeader> observer) {
+        relayHeaders.observeReplyAcceptance(observer);
     }
 
     public void enterRelayDispatch(ZLinkStreamHeader header) {
@@ -375,30 +380,37 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     }
 
     public CompletionStage<Void> notifyDisconnectedAll(Duration timeout) {
-        return notifyDisconnectedAllCore(timeout, null);
+        return notifyDisconnectedAllCore(timeout, null, null);
     }
 
     public CompletionStage<Void> notifyDisconnectedAll(
-            CompletionStage<Void> acceptedPackets, Duration timeout) {
-        if (bound.isEmpty() || acceptedPackets.toCompletableFuture().isDone()) {
-            return notifyDisconnectedAll(timeout);
+            CompletionStage<Void> acceptedPackets,
+            Duration timeout,
+            CompletableFuture<Void> forcedStop) {
+        if (bound.isEmpty()
+                || acceptedPackets.toCompletableFuture().isDone()
+                || forcedStop.isDone()) {
+            return notifyDisconnectedAllCore(timeout, null, forcedStop);
         }
         long deadlineNanos = System.nanoTime() + timeout.toNanos();
         var deadline =
                 new CompletableFuture<Void>().orTimeout(timeout.toNanos(), TimeUnit.NANOSECONDS);
-        return CompletableFuture.anyOf(acceptedPackets.toCompletableFuture(), deadline)
+        return CompletableFuture.anyOf(acceptedPackets.toCompletableFuture(), deadline, forcedStop)
                 .handle((ignored, failure) -> null)
                 .thenComposeAsync(
                         ignored ->
                                 notifyDisconnectedAllCore(
                                         Duration.ofNanos(
                                                 Math.max(0, deadlineNanos - System.nanoTime())),
-                                        deadline))
+                                        deadline,
+                                        forcedStop))
                 .whenComplete((ignored, failure) -> deadline.complete(null));
     }
 
     private CompletionStage<Void> notifyDisconnectedAllCore(
-            Duration timeout, CompletableFuture<Void> deadline) {
+            Duration timeout,
+            CompletableFuture<Void> deadline,
+            CompletableFuture<Void> forcedStop) {
         Objects.requireNonNull(timeout, "timeout");
         // The existing state owner fixes the binding identities and ends its admission together.
         StopRelocationState stopped = stopRelocationOwnerCore(null, null);
@@ -410,12 +422,26 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                         "Session disconnected while relocation state was pending"));
         return CompletableFuture.allOf(
                         current.stream()
-                                .map(actor -> notifyDisconnectedSafely(actor, timeout, deadline))
+                                .map(
+                                        actor ->
+                                                notifyDisconnectedSafely(
+                                                        actor, timeout, deadline, forcedStop))
                                 .toArray(CompletableFuture[]::new))
-                .whenComplete(
-                        (ignored, error) -> {
-                            current.forEach(this::removeBinding);
-                        });
+                .handle(
+                        (ignored, error) ->
+                                CompletableFuture.allOf(
+                                                current.stream()
+                                                        .map(this::removeBinding)
+                                                        .map(CompletionStage::toCompletableFuture)
+                                                        .toArray(CompletableFuture[]::new))
+                                        .thenCompose(
+                                                removed ->
+                                                        error == null
+                                                                ? CompletableFuture
+                                                                        .<Void>completedFuture(null)
+                                                                : CompletableFuture
+                                                                        .<Void>failedFuture(error)))
+                .thenCompose(Function.identity());
     }
 
     private StopRelocationState stopRelocationOwnerCore(
@@ -467,10 +493,18 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
             List<ZLinkSessionActor> disconnected) {}
 
     private static CompletableFuture<Void> notifyDisconnectedSafely(
-            ZLinkSessionActor actor, Duration timeout, CompletableFuture<Void> deadline) {
+            ZLinkSessionActor actor,
+            Duration timeout,
+            CompletableFuture<Void> deadline,
+            CompletableFuture<Void> forcedStop) {
         try {
+            if (forcedStop != null && forcedStop.isDone()) {
+                return CompletableFuture.completedFuture(null);
+            }
             return actor instanceof ZLinkBoundActor boundActor
-                    ? boundActor.notifyDisconnected(timeout, deadline).toCompletableFuture()
+                    ? boundActor
+                            .notifyDisconnected(timeout, deadline, forcedStop)
+                            .toCompletableFuture()
                     : actor.notifyDisconnected().toCompletableFuture();
         } catch (RuntimeException error) {
             return CompletableFuture.failedFuture(error);
@@ -1250,7 +1284,8 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                         disconnectFailure);
         }
         stopped.disconnected()
-                .forEach(actor -> notifyDisconnectedSafely(actor, RELAY_SUBMIT_TIMEOUT, null));
+                .forEach(
+                        actor -> notifyDisconnectedSafely(actor, RELAY_SUBMIT_TIMEOUT, null, null));
         completeRelocationStop(stopped, failure);
     }
 

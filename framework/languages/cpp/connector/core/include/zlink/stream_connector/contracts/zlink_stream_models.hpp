@@ -73,6 +73,13 @@ struct reply_received_context_t
     std::chrono::milliseconds elapsed{0};
 };
 
+struct admission_waiting_context_t
+{
+    std::string request_packet_name;
+    std::optional<std::string> actor_id;
+    std::chrono::milliseconds retry_after{0};
+};
+
 /// A received message: the decoded payload with everything the receiving code
 /// needs to place it (stream-connector §5.5).
 ///

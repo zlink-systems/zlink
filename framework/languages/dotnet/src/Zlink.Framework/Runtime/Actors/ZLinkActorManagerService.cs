@@ -298,12 +298,6 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
         var applicationHash = System.Security.Cryptography.SHA256.HashData(applicationPayload);
         var contentReference = ZLinkInlineCreationIntentCodec.Encode(applicationPayload);
         var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorId);
-        var creationRelocationPolicy = source.Registration.ActorFactories.TryGetValue(
-            actorType,
-            out var relocation
-        )
-            ? relocation.Relocation.PolicyKind
-            : (byte?)null;
         var resolver =
             runtime.Services.GetService<ZLinkStoreLocationResolvers>()
             ?? throw new ZLinkConfigurationException(
@@ -313,6 +307,25 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
         var joinRetryAttempt = 0;
         while (true)
         {
+            ZLinkMeshNodeDescriptor? target = null;
+            async ValueTask<ZLinkMeshNodeDescriptor?> SelectTargetAsync() =>
+                target ??= await resolver
+                    .SelectPlacementAsync(
+                        selectedMesh,
+                        ZLinkPlacementObjectKind.Actor,
+                        actorType,
+                        candidates =>
+                            ZLinkMeshNodeTargetAvailability.FilterAdmitted(
+                                source.Node.RoutingId,
+                                source.Node.LifecycleGeneration,
+                                candidates,
+                                source.Node.MeshPeers()
+                            ),
+                        excluded,
+                        deadlineToken
+                    )
+                    .ConfigureAwait(false);
+
             if (
                 !createOnly
                 && await store.ReadAuthorityAsync(key, deadlineToken).ConfigureAwait(false)
@@ -326,7 +339,7 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                         actorId,
                         actorType,
                         current.Snapshot,
-                        creationRelocationPolicy,
+                        SelectTargetAsync,
                         deadlineToken
                     )
                     .ConfigureAwait(false)
@@ -334,22 +347,7 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
             )
                 return existingActor;
 
-            var target = await resolver
-                .SelectPlacementAsync(
-                    selectedMesh,
-                    ZLinkPlacementObjectKind.Actor,
-                    actorType,
-                    candidates =>
-                        ZLinkMeshNodeTargetAvailability.FilterAdmitted(
-                            source.Node.RoutingId,
-                            source.Node.LifecycleGeneration,
-                            candidates,
-                            source.Node.MeshPeers()
-                        ),
-                    excluded,
-                    deadlineToken
-                )
-                .ConfigureAwait(false);
+            target = await SelectTargetAsync().ConfigureAwait(false);
             if (target is null)
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.Unavailable,
@@ -385,8 +383,7 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                         target.LifecycleGeneration,
                         owner,
                         creating,
-                        new ZLinkCapacityVector(1, 0, null),
-                        creationRelocationPolicy
+                        new ZLinkCapacityVector(1, 0, null)
                     ),
                     deadlineToken
                 )
@@ -419,7 +416,7 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                         actorId,
                         actorType,
                         existing.Current,
-                        creationRelocationPolicy,
+                        SelectTargetAsync,
                         deadlineToken
                     )
                     .ConfigureAwait(false);
@@ -441,7 +438,7 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                         actorId,
                         actorType,
                         found.Snapshot,
-                        creationRelocationPolicy,
+                        SelectTargetAsync,
                         deadlineToken
                     )
                     .ConfigureAwait(false);
@@ -619,7 +616,7 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
         string actorId,
         string actorType,
         ZLinkAuthoritySnapshot current,
-        byte? creationRelocationPolicy,
+        Func<ValueTask<ZLinkMeshNodeDescriptor?>> selectTarget,
         CancellationToken cancellationToken
     )
     {
@@ -637,11 +634,12 @@ internal sealed class ZLinkActorManagerService(ZLinkFrameworkRuntime runtime) : 
                 && !await HasLiveOwnerAsync(current, cancellationToken).ConfigureAwait(false)
             )
             {
-                await store
-                    .ReleaseEndedReservationAsync(
+                await ZLinkAuthorityCleanup
+                    .ReleaseEndedAuthorityForCreationAsync(
+                        store,
                         key,
-                        current.StoreVersion,
-                        new ZLinkCreationAuthorityRecovery(creationRelocationPolicy),
+                        current,
+                        selectTarget,
                         cancellationToken
                     )
                     .ConfigureAwait(false);

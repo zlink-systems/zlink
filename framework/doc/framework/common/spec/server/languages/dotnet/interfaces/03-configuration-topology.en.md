@@ -264,6 +264,9 @@ public interface IZLinkStreamNodeBuilder
  IZLinkStreamNodeBuilder MaxMessageSize(long bytes);
  IZLinkStreamNodeBuilder SetHeartbeat(TimeSpan interval, TimeSpan timeout);
  IZLinkStreamNodeBuilder SetIdleTimeout(TimeSpan timeout);
+ string? AuthenticationPacketName { get; set; }
+ int MaxConcurrentAuthentications { get; set; }
+ TimeSpan AuthenticationRetryDelay { get; set; }
  IZLinkStreamSocketConfig ConfigureSocket();
  IZLinkStreamNodeBuilder EnableActorDispatch();
  IZLinkStreamNodeBuilder SetTlsServer(
@@ -663,3 +666,5 @@ implementation can only be registered in a single-process contract test.
 The store capability and the Redis constructor/options are owned
 by
 [.NET Location And Maintenance](08-location-maintenance.en.md).
+
+Defaults and validation for authentication admission are defined by [authentication admission](../../../04-session/03-authentication-admission.en.md).

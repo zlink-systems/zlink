@@ -1,5 +1,6 @@
 package systems.zlink.framework.runtime.configuration;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -7,7 +8,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 
+import systems.zlink.framework.configuration.ZLinkStreamNodeBuilder;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.streams.ZLinkSession;
 
 import java.time.Duration;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -15,8 +18,81 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionHandler;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 
 final class ZLinkFrameworkRegistrationTest {
+    @Test
+    void authenticationAdmissionValidatesSettingsBeforeHostStartup() {
+        assertAdmissionInvalid(node -> node.maxConcurrentAuthentications(0));
+        assertAdmissionInvalid(node -> node.maxConcurrentAuthentications(-1));
+        assertAdmissionInvalid(node -> node.authenticationRetryDelay(Duration.ZERO));
+        assertAdmissionInvalid(node -> node.authenticationRetryDelay(Duration.ofNanos(1)));
+        assertAdmissionInvalid(
+                node -> node.authenticationRetryDelay(Duration.ofMillis(1).plusNanos(1)));
+        assertAdmissionInvalid(node -> node.authenticationRetryDelay(Duration.ofMillis(-1)));
+        assertAdmissionInvalid(
+                node -> node.authenticationRetryDelay(Duration.ofMillis(1L + Integer.MAX_VALUE)));
+
+        var options = new DefaultZLinkFrameworkOptions();
+        options.addStreamNode("clients")
+                .bind(0)
+                .registerSession(FirstSession.class)
+                .authenticationPacketName("Login")
+                .maxConcurrentAuthentications(Integer.MAX_VALUE)
+                .authenticationRetryDelay(Duration.ofMillis(Integer.MAX_VALUE));
+        assertDoesNotThrow(options::validate);
+    }
+
+    @Test
+    void authenticationAdmissionRequiresMatchingOptionsAcrossStreamRegistrations() {
+        assertAdmissionConflict(node -> node.authenticationPacketName("OtherLogin"));
+        assertAdmissionConflict(node -> node.authenticationPacketName(null));
+        assertAdmissionConflict(node -> node.maxConcurrentAuthentications(3));
+        assertAdmissionConflict(node -> node.authenticationRetryDelay(Duration.ofMillis(499)));
+        assertDoesNotThrow(admissionAcrossStreamRegistrations().options()::validate);
+    }
+
+    private static void assertAdmissionInvalid(Consumer<ZLinkStreamNodeBuilder> change) {
+        var options = new DefaultZLinkFrameworkOptions();
+        var node = options.addStreamNode("clients").bind(0).registerSession(FirstSession.class);
+        assertThrows(
+                ZLinkConfigurationException.class,
+                () -> {
+                    change.accept(node);
+                    options.validate();
+                });
+    }
+
+    private static void assertAdmissionConflict(Consumer<ZLinkStreamNodeBuilder> change) {
+        var registrations = admissionAcrossStreamRegistrations();
+        change.accept(registrations.second());
+        assertThrows(ZLinkConfigurationException.class, registrations.options()::validate);
+    }
+
+    private static StreamRegistrations admissionAcrossStreamRegistrations() {
+        var options = new DefaultZLinkFrameworkOptions();
+        options.addStreamNode("first")
+                .bind(0)
+                .registerSession(FirstSession.class)
+                .authenticationPacketName("Login")
+                .maxConcurrentAuthentications(2);
+        var second =
+                options.addStreamNode("second")
+                        .bind(0)
+                        .registerSession(SecondSession.class)
+                        .authenticationPacketName("Login")
+                        .maxConcurrentAuthentications(2)
+                        .authenticationRetryDelay(Duration.ofMillis(500));
+        return new StreamRegistrations(options, second);
+    }
+
+    private record StreamRegistrations(
+            DefaultZLinkFrameworkOptions options, ZLinkStreamNodeBuilder second) {}
+
+    private abstract static class FirstSession implements ZLinkSession {}
+
+    private abstract static class SecondSession implements ZLinkSession {}
+
     @Test
     void messageFollowDurationDefaultsToCommonContract() {
         var registration = new ZLinkFrameworkRegistration();

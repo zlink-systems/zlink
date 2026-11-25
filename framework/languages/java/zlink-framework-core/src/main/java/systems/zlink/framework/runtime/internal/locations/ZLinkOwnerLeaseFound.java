@@ -18,4 +18,10 @@ public record ZLinkOwnerLeaseFound(
         }
         Objects.requireNonNull(storeNow, "storeNow");
     }
+
+    public boolean isLiveFor(String ownerId, long leaseGeneration) {
+        return token.ownerId().equals(ownerId)
+                && token.leaseGeneration() == leaseGeneration
+                && leaseExpiresAt.isAfter(storeNow);
+    }
 }

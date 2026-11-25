@@ -91,6 +91,7 @@ public interface ZLinkStreamConnector {
         Class<TPayload> payloadType,
         ZLinkStreamMessageHandler<TPayload> handler);
     AutoCloseable onRequestSending(ZLinkStreamRequestSendingHandler handler);
+    AutoCloseable onAdmissionWaiting(ZLinkStreamAdmissionWaitingHandler handler);
     AutoCloseable onReplyReceived(ZLinkStreamReplyReceivedHandler handler);
     AutoCloseable onErrorReceived(ZLinkStreamErrorHandler handler);
     AutoCloseable onDisconnected(ZLinkStreamDisconnectedHandler handler);
@@ -194,7 +195,8 @@ public record ZLinkStreamConnectorOptions(
     ZLinkStreamCompression compression,
     ZLinkStreamCompressionCodec compressionCodec,
     ZLinkStreamPacketNameResolver nameResolver, // 공통 스펙 §5.4의 name resolver 주입점
-    ZLinkStreamTypedCodec typedCodec) { // 공통 스펙 §5.4의 typed payload codec 주입점
+    ZLinkStreamTypedCodec typedCodec,
+    Duration maxAdmissionWait) { // 공통 스펙 §5.4의 typed payload codec 주입점
 
     // 공통 스펙 §6이 요구하는 무제한 reconnect를 표현하는 이름 붙인 상수다.
     public static final int UNLIMITED_RECONNECT_ATTEMPTS = -1;
@@ -324,6 +326,11 @@ Java는 결과를 `CompletionStage`로 전달한다.
 `AutoCloseable onReplyReceived(ZLinkStreamReplyReceivedHandler)`로 등록하고 반환값의 `close()`로 해제한다.
 
 ```java
+public record ZLinkStreamAdmissionWaiting(String requestPacketName, String actorId, Duration retryAfter) {}
+public interface ZLinkStreamAdmissionWaitingHandler {
+    CompletionStage<Void> handle(ZLinkStreamAdmissionWaiting event);
+}
+
 public interface ZLinkStreamRequestSendingHandler {
     void handle(ZLinkStreamRequestSendingContext context);
 }
@@ -546,6 +553,7 @@ class ZLinkKotlinStreamConnector {
     inline fun <reified TPayload> messages(): Flow<ZLinkStreamMessage<TPayload>>
     fun <TPayload : Any> messages(packetName: String, payloadType: KClass<TPayload>): Flow<ZLinkStreamMessage<TPayload>>
     fun onRequestSending(handler: ZLinkStreamRequestSendingHandler): AutoCloseable
+    fun onAdmissionWaiting(handler: ZLinkStreamAdmissionWaitingHandler): AutoCloseable
     fun repliesReceived(): Flow<ZLinkStreamReplyReceivedContext>
     fun errors(): Flow<ZLinkStreamError>
     fun actors(): List<ZLinkKotlinStreamActor>
@@ -675,3 +683,5 @@ Java connector는 아래 테스트를 별도 suite로 가진다.
 <!-- framework-adapter-nav:bottom:start -->
 [문서 목록](../../../../../../README.ko.md) | [이전: Java STREAM](../../../server/languages/java/interfaces/stream-session.ko.md)
 <!-- framework-adapter-nav:bottom:end -->
+
+입장 대기와 기본 마감은 [공통 스펙 §5.8](../../32-stream-connector.ko.md#58-입장-대기와-자동-재시도)이 정한다.

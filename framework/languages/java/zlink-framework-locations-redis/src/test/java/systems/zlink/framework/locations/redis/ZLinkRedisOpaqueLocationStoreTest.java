@@ -7,6 +7,10 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.lettuce.core.FlushMode;
+import io.lettuce.core.RedisClient;
+import io.lettuce.core.RedisCommandExecutionException;
+
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.framework.locationprovider.ZLinkLocationStore;
@@ -33,8 +37,93 @@ import java.util.UUID;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.regex.Pattern;
 
 class ZLinkRedisOpaqueLocationStoreTest {
+    @Test
+    void reusesCachedScriptsAndRecoversAfterScriptFlush() throws Exception {
+        String endpoint = ZLinkTestRedis.endpoint();
+        String prefix = "script-cache:" + UUID.randomUUID();
+        var key = new ZLinkStoreKey("descriptor/cache");
+        var write =
+                new ZLinkStoreWriteRequest(
+                        List.of(), List.of(new ZLinkStorePut(key, new byte[] {1}, null)));
+        var keys = new ZLinkRedisLocationKeys(prefix);
+        String sequenceKey = keys.opaqueSequenceKey();
+        try (var client = RedisClient.create(endpoint);
+                var connection = client.connect();
+                var store =
+                        new ZLinkRedisLocationStore(
+                                new ZLinkRedisLocationOptions()
+                                        .setConnectionString(endpoint)
+                                        .setKeyPrefix(prefix))) {
+            var commands = connection.sync();
+            exerciseOpaqueScripts(store, key, write);
+            String warmed = commands.info("commandstats");
+
+            for (int repeat = 0; repeat < 3; repeat++) {
+                exerciseOpaqueScripts(store, key, write);
+            }
+            String repeated = commands.info("commandstats");
+            assertScriptCalls("warm", warmed, repeated, 0, 9);
+
+            long sequence = Long.parseLong(commands.get(sequenceKey));
+            commands.scriptFlush(FlushMode.SYNC);
+            exerciseOpaqueScripts(store, key, write);
+            String recovered = commands.info("commandstats");
+            assertScriptCalls("after SCRIPT FLUSH", repeated, recovered, 3, 3);
+            long recoveredSequence = Long.parseLong(commands.get(sequenceKey));
+            assertEquals(sequence + 1, recoveredSequence);
+            System.out.printf(
+                    "Write sequence after SCRIPT FLUSH: %d -> %d%n", sequence, recoveredSequence);
+
+            exerciseOpaqueScripts(store, key, write);
+            String rewarmed = commands.info("commandstats");
+            assertScriptCalls("rewarmed", recovered, rewarmed, 0, 3);
+
+            commands.set(keys.opaqueRecordKey(key.value()), "invalid record type");
+            var failure =
+                    assertThrows(
+                            ExecutionException.class,
+                            () -> store.read(key, () -> false).toCompletableFuture().get());
+            assertInstanceOf(RedisCommandExecutionException.class, failure.getCause());
+            assertTrue(failure.getCause().getMessage().startsWith("WRONGTYPE"));
+            String failed = commands.info("commandstats");
+            assertScriptCalls("WRONGTYPE", rewarmed, failed, 0, 1);
+        }
+    }
+
+    private static void assertScriptCalls(
+            String phase, String before, String after, long expectedEval, long expectedEvalSha) {
+        long eval = scriptCalls(after, "eval") - scriptCalls(before, "eval");
+        long evalSha = scriptCalls(after, "evalsha") - scriptCalls(before, "evalsha");
+        System.out.printf("Redis commandstats %s: EVAL %+d, EVALSHA %+d%n", phase, eval, evalSha);
+        assertEquals(expectedEval, eval, phase + " EVAL");
+        assertEquals(expectedEvalSha, evalSha, phase + " EVALSHA");
+    }
+
+    private static void exerciseOpaqueScripts(
+            ZLinkRedisLocationStore store, ZLinkStoreKey key, ZLinkStoreWriteRequest write)
+            throws Exception {
+        assertInstanceOf(
+                ZLinkStoreWriteApplied.class,
+                store.write(write, () -> false).toCompletableFuture().get());
+        assertInstanceOf(
+                ZLinkStoreReadFound.class,
+                store.read(key, () -> false).toCompletableFuture().get());
+        assertInstanceOf(
+                ZLinkStoreScanPageResult.class,
+                store.scan(new ZLinkStoreScanRequest("descriptor/", null, 1), () -> false)
+                        .toCompletableFuture()
+                        .get());
+    }
+
+    private static long scriptCalls(String commandStats, String command) {
+        var matcher =
+                Pattern.compile("(?m)^cmdstat_" + command + ":calls=(\\d+),").matcher(commandStats);
+        return matcher.find() ? Long.parseLong(matcher.group(1)) : 0;
+    }
+
     @Test
     void completedSnapshotAllowsImmediateHistoryReclamation() throws Exception {
         String endpoint = ZLinkTestRedis.endpoint();

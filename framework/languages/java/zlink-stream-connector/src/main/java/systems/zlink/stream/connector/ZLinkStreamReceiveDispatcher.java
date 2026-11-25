@@ -16,6 +16,7 @@ import java.util.function.Supplier;
 
 final class ZLinkStreamReceiveDispatcher {
     private static final ObjectMapper ERROR_MAPPER = new ObjectMapper();
+    private static final String ADMISSION_RETRY_AFTER = "$zlink.admission.retryAfterMs";
     static final String HEARTBEAT_PING_NAME = "$zlink.heartbeat.ping";
     static final String HEARTBEAT_PONG_NAME = "$zlink.heartbeat.pong";
 
@@ -72,6 +73,10 @@ final class ZLinkStreamReceiveDispatcher {
             dispatchControl(header, payload);
             return;
         }
+        long errorReceivedAt =
+                header.kind() == ZLinkStreamWireProtocol.KIND_ERROR
+                        ? pendingRequests.nanoTime()
+                        : 0;
         byte[] decodedPayload;
         ZLinkStreamActorRegistry.DefaultActor actor;
         try {
@@ -114,7 +119,7 @@ final class ZLinkStreamReceiveDispatcher {
                                     + header.correlationId());
         }
         if (header.kind() == ZLinkStreamWireProtocol.KIND_ERROR) {
-            dispatchError(header, decodedPayload);
+            dispatchError(header, decodedPayload, errorReceivedAt);
             return;
         }
         if (header.kind() == ZLinkStreamWireProtocol.KIND_SEND
@@ -189,7 +194,8 @@ final class ZLinkStreamReceiveDispatcher {
                                 ZLinkStreamConnectorPayloadCodec.fromWireCodec(header.codec())));
     }
 
-    private void dispatchError(ZLinkStreamWireProtocol.Header header, byte[] payload) {
+    private void dispatchError(
+            ZLinkStreamWireProtocol.Header header, byte[] payload, long receivedAt) {
         ZLinkStreamError error;
         RuntimeException requestFailure;
         try {
@@ -205,6 +211,14 @@ final class ZLinkStreamReceiveDispatcher {
                     || !message.isTextual()
                     || message.textValue().isBlank()) {
                 throw new IOException("error payload requires string code and message fields");
+            }
+            String retryAfter = header.metadata().get(ADMISSION_RETRY_AFTER);
+            if (retryAfter != null
+                    && header.requestSeq() != null
+                    && "unavailable".equals(code.textValue())
+                    && pendingRequests.admissionRejected(
+                            header.requestSeq(), retryAfter, receivedAt)) {
+                return;
             }
             requestFailure =
                     new IllegalStateException(code.textValue() + ": " + message.textValue());

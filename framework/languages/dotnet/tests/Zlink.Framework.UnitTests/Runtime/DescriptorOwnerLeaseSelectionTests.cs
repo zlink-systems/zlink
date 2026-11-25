@@ -413,7 +413,8 @@ public sealed partial class EntrySpotActorDispatchTests
             "expired-ready-spot-owner",
             RoutingId.From("expired-ready-spot-node"),
             TimeSpan.FromSeconds(1),
-            userSpot: true
+            userSpot: true,
+            userSpotRelocationPolicy: ZLinkObjectRelocationRegistration.RecreatePolicy
         );
         try
         {
@@ -928,7 +929,8 @@ public sealed partial class EntrySpotActorDispatchTests
         RoutingId ownerNodeRid,
         TimeSpan leaseTtl,
         bool userSpot,
-        bool corruptExpiry = false
+        bool corruptExpiry = false,
+        byte? userSpotRelocationPolicy = null
     )
     {
         var time = new ManualTimeProvider();
@@ -945,7 +947,20 @@ public sealed partial class EntrySpotActorDispatchTests
                     corruptStore = new(inner, ZLinkProviderLocationRepository.OwnerKey(ownerId))
                 : null,
             locationTimeProvider: time,
-            joinTimeProvider: time
+            joinTimeProvider: time,
+            configureNode: registration =>
+            {
+                if (userSpotRelocationPolicy is { } targetPolicy)
+                {
+                    var stableType = typeof(EmptyUserSpot).FullName!;
+                    registration.SpotRelocations[stableType] = registration.SpotRelocations[
+                        stableType
+                    ] with
+                    {
+                        PolicyKind = targetPolicy,
+                    };
+                }
+            }
         );
         try
         {

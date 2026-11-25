@@ -1275,6 +1275,27 @@ class stream_node_options_builder_t
         return *this;
     }
 
+    stream_node_options_builder_t &set_authentication_packet_name (std::string name)
+    {
+        _authentication.packet_name = std::move (name);
+        apply ();
+        return *this;
+    }
+
+    stream_node_options_builder_t &set_max_concurrent_authentications (std::int64_t value)
+    {
+        _authentication.max_concurrent = value;
+        apply ();
+        return *this;
+    }
+
+    stream_node_options_builder_t &set_authentication_retry_delay (std::chrono::milliseconds delay)
+    {
+        _authentication.retry_delay = delay;
+        apply ();
+        return *this;
+    }
+
     stream_node_options_builder_t &set_tls_server (std::string certificate_file,
                                                    std::string private_key_file,
                                                    bool require_client_certificate = false)
@@ -1359,6 +1380,7 @@ class stream_node_options_builder_t
         const auto session_name = _session_name;
         const auto max_message_size = _socket_config.max_message_size;
         const auto liveness = _liveness;
+        const auto authentication = _authentication;
         const auto tls_certificate_file = _tls_certificate_file;
         const auto tls_private_key_file = _tls_private_key_file;
         const auto tls_require_client_certificate = _tls_require_client_certificate;
@@ -1368,10 +1390,11 @@ class stream_node_options_builder_t
           "stream_node:" + stream_name,
           [stream_name, endpoint, port, bind_host_override, options, session_name, max_message_size,
            tls_certificate_file, tls_private_key_file, tls_require_client_certificate,
-           advertise_host_override, liveness] (zlink_builder_t &zlink) {
+           advertise_host_override, liveness, authentication] (zlink_builder_t &zlink) {
               auto stream = zlink.stream (stream_name);
               stream.set_max_message_size (max_message_size);
               stream.set_liveness (liveness);
+              stream.set_authentication (authentication);
               if (port) {
                   stream.bind ("tcp://" + bind_host_override.value_or (options->bind_host) + ":"
                                + std::to_string (*port));
@@ -1405,6 +1428,7 @@ class stream_node_options_builder_t
     std::string _tls_private_key_file;
     stream_socket_config_t _socket_config;
     detail::stream_liveness_options_t _liveness;
+    detail::stream_authentication_options_t _authentication;
     bool _tls_require_client_certificate = false;
     bool _session_configured = false;
 };
