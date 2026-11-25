@@ -26,8 +26,11 @@ import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -226,11 +229,14 @@ final class ZLinkLocationStoreFormatStartupTest {
     @ValueSource(ints = {0, 1, 2})
     void settlesV11AggregateBeforeConvertingCapacity(int state) throws Exception {
         boolean prepared = state == 1;
-        var store = new ZLinkInMemoryProviderLocationStore();
+        var clock = new StoreClock();
+        var store = new ZLinkInMemoryProviderLocationStore(clock);
+        claimLegacyOwner(store, Duration.ofSeconds(1));
         var aggregate = UUID.fromString("00000000-0000-4000-8000-0000000000a2");
         var aggregateKey = new ZLinkStoreKey("zlink:v11:aggregate:" + aggregate + ":1");
         put(store, aggregateKey, legacyAggregateRecord(aggregate, state));
         put(store, legacy("a"), legacyUsage("{}", "{}", 2, prepared ? 1 : 0));
+        clock.now = clock.now.plusSeconds(1);
 
         try (var host = start(store)) {
             startup(host);
@@ -240,6 +246,81 @@ final class ZLinkLocationStoreFormatStartupTest {
         assertEquals("2", value(store, capacity("61", "actors", "active")));
         assertNull(value(store, capacity("61", "actors", "pending")));
         assertEquals("converted", value(store, FORMAT));
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {0, 1, 2})
+    void liveV11AggregateOwnerStopsStartupWithoutChangingStore(int state) throws Exception {
+        var store = new ZLinkInMemoryProviderLocationStore();
+        claimLegacyOwner(store, Duration.ofMinutes(1));
+        var earlier = UUID.fromString("00000000-0000-4000-8000-0000000000a1");
+        var live = UUID.fromString("00000000-0000-4000-8000-0000000000a2");
+        put(
+                store,
+                new ZLinkStoreKey("zlink:v11:aggregate:" + earlier + ":1"),
+                legacyAggregateRecord(earlier, 0, "expired-owner"));
+        put(
+                store,
+                new ZLinkStoreKey("zlink:v11:aggregate:" + live + ":1"),
+                legacyAggregateRecord(live, state));
+        put(store, legacy("a"), legacyUsage("{}", "{}", 2, state == 1 ? 1 : 0));
+        var before = snapshot(store);
+
+        try (var host = start(store)) {
+            assertInstanceOf(ZLinkConfigurationException.class, startupFailure(host));
+        }
+
+        var after = snapshot(store);
+        assertEquals(
+                before.stream().map(ZLinkStoreScanItem::key).toList(),
+                after.stream().map(ZLinkStoreScanItem::key).toList());
+        for (int i = 0; i < before.size(); i++) {
+            var oldValue = before.get(i).value();
+            var newValue = after.get(i).value();
+            assertEquals(oldValue.version(), newValue.version());
+            assertEquals(oldValue.expiresAt(), newValue.expiresAt());
+            assertArrayEquals(oldValue.bytes(), newValue.bytes());
+        }
+    }
+
+    private static List<ZLinkStoreScanItem> snapshot(ZLinkLocationStore store) {
+        var page =
+                assertInstanceOf(
+                                ZLinkStoreScanPageResult.class,
+                                store.scan(new ZLinkStoreScanRequest("", null, 1000), () -> false)
+                                        .toCompletableFuture()
+                                        .join())
+                        .value();
+        assertNull(page.nextCursor());
+        return page.items();
+    }
+
+    private static void claimLegacyOwner(ZLinkLocationStore store, Duration ttl) {
+        var repository = new ZLinkProviderLocationRepository(store);
+        var lease =
+                assertInstanceOf(
+                        ZLinkOwnerLeaseClaimed.class,
+                        repository.claimOwnerLease("v11-owner", ttl).toCompletableFuture().join());
+        assertEquals(1L, lease.token().leaseGeneration());
+    }
+
+    private static final class StoreClock extends Clock {
+        private Instant now = Instant.now();
+
+        @Override
+        public ZoneId getZone() {
+            return ZoneOffset.UTC;
+        }
+
+        @Override
+        public Clock withZone(ZoneId zone) {
+            return Clock.fixed(now, zone);
+        }
+
+        @Override
+        public Instant instant() {
+            return now;
+        }
     }
 
     @Test
@@ -370,6 +451,11 @@ final class ZLinkLocationStoreFormatStartupTest {
 
     /** State 0 staging, 1 prepared, 2 committed (v11 aggregate record layout). */
     private static byte[] legacyAggregateRecord(UUID aggregate, int state) throws Exception {
+        return legacyAggregateRecord(aggregate, state, "v11-owner");
+    }
+
+    private static byte[] legacyAggregateRecord(UUID aggregate, int state, String owner)
+            throws Exception {
         var bytes = new ByteArrayOutputStream();
         try (var record = new DataOutputStream(bytes)) {
             record.writeByte(state);
@@ -379,7 +465,7 @@ final class ZLinkLocationStoreFormatStartupTest {
             record.writeUTF("mesh");
             record.writeUTF("61");
             record.writeLong(1);
-            record.writeUTF("v11-owner");
+            record.writeUTF(owner);
             record.writeLong(1);
             record.writeInt(32);
             record.write(new byte[32]);

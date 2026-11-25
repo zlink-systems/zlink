@@ -2542,19 +2542,15 @@ final class ZLinkProviderAuthorityRepository {
         return scanLegacyAggregates(null, new ArrayList<>(), cancellation)
                 .thenCompose(
                         items -> {
-                            // Validate every release before any legacy row is changed.
+                            // Validate leases and capacity before changing any legacy row.
                             var projected = new HashMap<ZLinkStoreKey, ZLinkLegacyCapacity>();
                             CompletionStage<Void> validated = completed(null);
                             for (var item : items) {
                                 validated =
                                         validated.thenCompose(
                                                 ignored ->
-                                                        planLegacyRelease(
-                                                                        item,
-                                                                        legacyAggregate(item),
-                                                                        projected,
-                                                                        cancellation)
-                                                                .thenApply(put -> null));
+                                                        validateLegacyAggregate(
+                                                                item, projected, cancellation));
                             }
                             return validated.thenCompose(
                                     ignored -> {
@@ -2571,6 +2567,26 @@ final class ZLinkProviderAuthorityRepository {
                         });
     }
 
+    private CompletionStage<Void> validateLegacyAggregate(
+            ZLinkStoreScanItem item,
+            Map<ZLinkStoreKey, ZLinkLegacyCapacity> projected,
+            systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+        var aggregate = legacyAggregate(item);
+        var owner = aggregate.targetOwner();
+        return provider.read(ownerKey(owner.ownerId()), cancellation)
+                .thenCompose(
+                        lease -> {
+                            if (ZLinkProviderOwnerLeaseRepository.isLive(
+                                    lease, owner.ownerId(), owner.leaseGeneration())) {
+                                throw new ZLinkConfigurationException(
+                                        "v11 aggregate has a live target owner: "
+                                                + item.key().value());
+                            }
+                            return planLegacyRelease(item, aggregate, projected, cancellation)
+                                    .thenApply(release -> null);
+                        });
+    }
+
     private CompletionStage<List<ZLinkStoreScanItem>> scanLegacyAggregates(
             ZLinkStoreScanCursor cursor,
             List<ZLinkStoreScanItem> items,
@@ -2582,10 +2598,7 @@ final class ZLinkProviderAuthorityRepository {
                             if (result instanceof ZLinkStoreScanExpired)
                                 return scanLegacyAggregates(null, new ArrayList<>(), cancellation);
                             var page = ((ZLinkStoreScanPageResult) result).value();
-                            for (var item : page.items()) {
-                                legacyAggregate(item);
-                                items.add(item);
-                            }
+                            items.addAll(page.items());
                             return page.nextCursor() == null
                                     ? completed(items)
                                     : scanLegacyAggregates(page.nextCursor(), items, cancellation);
