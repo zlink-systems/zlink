@@ -1240,6 +1240,9 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         // PACKET readiness has no routing id. One reader clock applies to this socket's sessions.
         // The receive turns update it on the same state lane that runs liveness checks.
         private long permitResumedNanos = NO_PERMIT_WAIT;
+        // Counts queue grants so a wait recorded after its grant does not overwrite the resume.
+        private final java.util.concurrent.atomic.AtomicLong permitGrants =
+                new java.util.concurrent.atomic.AtomicLong();
 
         private StreamReceiveLoop(
                 StreamNodeRegistration streamNode, ZLinkBackendStreamSocket stream) {
@@ -1329,19 +1332,30 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         }
 
         private ZLinkApplicationJobQueue.Permit acquirePermit() {
-            return inStateLane(
-                    () -> {
-                        var permit =
-                                applicationJobQueue.acquireOrResume(
-                                        receiveExecutor,
-                                        this::runTurn,
-                                        pendingAcquire,
-                                        ZLinkApplicationJobQueue.Origin.REMOTE);
-                        if (permit == null) {
-                            permitResumedNanos = WAITING_FOR_PERMIT;
-                        }
-                        return permit;
-                    });
+            // A free permit takes no state-lane turn. Only a wait is recorded, and a grant that
+            // already started the next turn keeps its later resume time.
+            long grantsBefore = permitGrants.get();
+            var permit =
+                    applicationJobQueue.acquireOrResume(
+                            receiveExecutor,
+                            this::resumeTurn,
+                            pendingAcquire,
+                            ZLinkApplicationJobQueue.Origin.REMOTE);
+            if (permit == null) {
+                inStateLane(
+                        () -> {
+                            if (permitGrants.get() == grantsBefore) {
+                                permitResumedNanos = WAITING_FOR_PERMIT;
+                            }
+                            return null;
+                        });
+            }
+            return permit;
+        }
+
+        private void resumeTurn(ZLinkApplicationJobQueue.Permit granted) {
+            permitGrants.incrementAndGet();
+            runTurn(granted);
         }
 
         private long inboundRemainingNanos(long now, long lastActivity, long timeout) {
