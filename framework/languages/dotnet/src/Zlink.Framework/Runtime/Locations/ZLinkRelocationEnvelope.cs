@@ -3,6 +3,7 @@ using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
 using Systems.Zlink.Framework.Runtime.Protocol;
+using Zlink.Framework.Runtime.Actors;
 
 namespace Zlink.Framework.Runtime.Locations;
 
@@ -846,7 +847,7 @@ internal static class ZLinkRelocationEnvelopeCodec
                 "Infrastructure relocation records require a node source."
             );
         var source = new CanonicalReader(reader.ReadBytes(reader.ReadUInt16()));
-        _ = source.ReadText8();
+        _ = source.ReadRid();
         if (source.ReadUInt64() == 0)
             throw new InvalidDataException(
                 "The relocation saved work source generation is invalid."
@@ -869,7 +870,7 @@ internal static class ZLinkRelocationEnvelopeCodec
                 );
             if (sourceKind == (byte)ServiceWireCodec.FrozenSourceKind.BoundSession)
             {
-                _ = source.ReadText8();
+                _ = source.ReadRid();
                 if (source.ReadUInt64() == 0 || source.ReadUInt64() == 0)
                     throw new InvalidDataException("The relocation saved work binding is invalid.");
             }
@@ -945,8 +946,13 @@ internal static class ZLinkRelocationEnvelopeCodec
                 or > (byte)ServiceWireCodec.FrozenSourceKind.BoundSession
         )
             throw new InvalidDataException("The relocation saved work source kind is invalid.");
+        var actorRecord =
+            recordKind
+            is (byte)ServiceWireCodec.MeshRecordKind.ActorSend
+                or (byte)ServiceWireCodec.MeshRecordKind.ActorRequest;
         var source = new CanonicalReader(reader.ReadBytes(reader.ReadUInt16()));
-        var sourceNodeRid = source.ReadText8();
+        var actorSourceRid = actorRecord ? source.ReadRid() : default;
+        var sourceNodeRid = actorRecord ? string.Empty : source.ReadText8();
         var sourceNodeGeneration = source.ReadUInt64();
         var sourceOwnerId = source.ReadText8();
         var sourceOwnerLease = source.ReadUInt64();
@@ -966,7 +972,10 @@ internal static class ZLinkRelocationEnvelopeCodec
                 );
             if (sourceKind == (byte)ServiceWireCodec.FrozenSourceKind.BoundSession)
             {
-                _ = source.ReadText8();
+                if (actorRecord)
+                    _ = source.ReadRid();
+                else
+                    _ = source.ReadText8();
                 if (source.ReadUInt64() == 0 || source.ReadUInt64() == 0)
                     throw new InvalidDataException("The relocation saved work binding is invalid.");
             }
@@ -983,17 +992,6 @@ internal static class ZLinkRelocationEnvelopeCodec
                 : ZLinkMessageMetadata.Empty;
         var operationHigh = reader.ReadUInt64();
         var operationLow = reader.ReadUInt64();
-        operation =
-            operationHigh == 0 && operationLow == 0
-                ? null
-                : new CanonicalSavedWorkOperation(
-                    sourceOwnerId,
-                    sourceOwnerLease,
-                    sourceNodeRid,
-                    sourceNodeGeneration,
-                    operationHigh,
-                    operationLow
-                );
         var operationKind = reader.ReadUInt32();
         if (operationKind > (uint)ServiceWireCodec.MeshOperationKind.ActorCreate)
             throw new InvalidDataException("The relocation saved work operation kind is invalid.");
@@ -1023,15 +1021,30 @@ internal static class ZLinkRelocationEnvelopeCodec
                 operationKind,
                 operationHigh != 0 || operationLow != 0
             );
+            operation = SavedWorkOperation(sourceNodeRid);
             return null;
         }
         var targetSpotId = reader.ReadText8();
         var targetSpotGeneration = reader.ReadUInt64();
-        var targetNodeRid = reader.ReadText8();
+        var actorTargetRid = actorRecord ? reader.ReadRid() : default;
+        var targetNodeRid = actorRecord ? string.Empty : reader.ReadText8();
         var targetNodeGeneration = reader.ReadUInt64();
         var targetAuthorityOwnerGeneration = reader.ReadUInt64();
         var targetOwnerLeaseGeneration = reader.ReadUInt64();
         var payload = ReadCanonicalApplicationPayloadProjection(ref reader);
+        if (actorRecord)
+        {
+            var legacy = ZLinkCanonicalActorAcceptedJournal.IsLegacyContentType(
+                payload.ContentType
+            );
+            sourceNodeRid = ZLinkCanonicalActorAcceptedJournal
+                .DecodeRid(RoutingId.From(actorSourceRid.Span), legacy)
+                .ToHex();
+            targetNodeRid = ZLinkCanonicalActorAcceptedJournal
+                .DecodeRid(RoutingId.From(actorTargetRid.Span), legacy)
+                .ToHex();
+        }
+        operation = SavedWorkOperation(sourceNodeRid);
         return new ZLinkCanonicalAcceptedRequest(
             new ZLinkCanonicalRequestSourceFence(
                 sourceOwnerId,
@@ -1052,6 +1065,18 @@ internal static class ZLinkRelocationEnvelopeCodec
             metadata,
             payload
         );
+
+        CanonicalSavedWorkOperation? SavedWorkOperation(string nodeRid) =>
+            operationHigh == 0 && operationLow == 0
+                ? null
+                : new CanonicalSavedWorkOperation(
+                    sourceOwnerId,
+                    sourceOwnerLease,
+                    nodeRid,
+                    sourceNodeGeneration,
+                    operationHigh,
+                    operationLow
+                );
     }
 
     private readonly record struct CanonicalSavedWorkOperation(
@@ -1270,7 +1295,7 @@ internal static class ZLinkRelocationEnvelopeCodec
     private static void ReadCanonicalActorFence(ref CanonicalReader reader)
     {
         ReadCanonicalActorRef(ref reader);
-        _ = reader.ReadText8();
+        _ = reader.ReadRid();
         if (reader.ReadUInt64() == 0 || reader.ReadUInt64() == 0 || reader.ReadUInt64() == 0)
             throw new InvalidDataException("The Actor authority fence is invalid.");
     }
@@ -1598,6 +1623,14 @@ internal static class ZLinkRelocationEnvelopeCodec
 
         internal ulong ReadUInt64() =>
             BinaryPrimitives.ReadUInt64BigEndian(ReadBytes(sizeof(ulong)).Span);
+
+        internal ReadOnlyMemory<byte> ReadRid()
+        {
+            var length = ReadByte();
+            if (length == 0)
+                throw new InvalidDataException("A relocation RID is empty.");
+            return ReadBytes(length);
+        }
 
         internal string ReadText8()
         {

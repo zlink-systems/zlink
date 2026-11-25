@@ -33,11 +33,14 @@ function descriptor(rid, changes = {}) {
     ...changes
   };
 }
-async function observePlacement(rows) {
+async function observePlacement(
+  rows,
+  listLiveMeshNodes = async () => {
+    assert.fail('placement must use the discovery observation');
+  }
+) {
   const requestSources = new ZLinkRequestSourceResolver({
-    listLiveMeshNodes: async () => {
-      assert.fail('placement must use the discovery observation');
-    },
+    listLiveMeshNodes,
     remainingOwnerTokenLeaseMs: async ({ ownerId }) => (ownerId === 'expired' ? 0 : 30_000)
   });
   await requestSources.observeLiveDescriptors(
@@ -103,8 +106,15 @@ test('Entry placement permits unlimited capacity and has no fallback candidate',
     (await unlimited.selectPlacement('play', 'actor', 'player', undefined)).rid,
     'source'
   );
-  const zeroWeight = await observePlacement([descriptor('source', { placementWeight: 0 })]);
+  const rows = [descriptor('source', { placementWeight: 0 })];
+  let refreshes = 0;
+  const zeroWeight = await observePlacement(rows, async (meshName) => {
+    assert.equal(meshName, 'play');
+    refreshes++;
+    return rows;
+  });
   assert.equal(await zeroWeight.selectPlacement('play', 'actor', 'player', undefined), undefined);
+  assert.equal(refreshes, 1);
 });
 function nativeAdmission() {
   const calls = [];

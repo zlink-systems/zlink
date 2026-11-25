@@ -1113,6 +1113,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZLinkRemoteActorJoinRequest request,
         ZLinkActorRelocationRecoveryRecord recovery,
         string targetMeshName,
+        Func<ZLinkActorHandoffFrame, Task> dispatchReplay,
         Func<CancellationToken, ValueTask> normalizeDurableAuthority,
         CancellationToken cancellationToken,
         Action finishTargetStage
@@ -1150,7 +1151,12 @@ internal sealed partial class ZLinkFrameworkRuntime
                     () =>
                     {
                         actorState.Handoff.PrepareImportedReplay([]);
-                        AdmitTransferredActorPrefix(actorState, request.HandoffId, targetMeshName);
+                        AdmitTransferredActorPrefix(
+                            actorState,
+                            request.HandoffId,
+                            targetMeshName,
+                            dispatchReplay
+                        );
                         return ValueTask.CompletedTask;
                     },
                     async () =>

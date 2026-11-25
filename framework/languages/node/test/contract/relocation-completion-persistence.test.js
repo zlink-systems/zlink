@@ -251,7 +251,7 @@ test('target commit fixes capture plus pre-boundary request counts, excluding Se
     offer: { prepare: { target: {} } },
     boundaryRelay: [1, 0].map((kind) => ({
       object: { actorId: 'actor' },
-      frozenRecord: { applicationPayload: { bytes: Buffer.from([kind]) } }
+      frozenRecord: { canonicalBytes: Buffer.from([kind]) }
     })),
     owner: {
       async replayRelayedMessage(_staging, objectKey, message) {

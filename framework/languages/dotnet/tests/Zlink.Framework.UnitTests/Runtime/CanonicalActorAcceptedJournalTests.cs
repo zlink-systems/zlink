@@ -1,7 +1,10 @@
+using System.Text.Json;
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Systems.Zlink.Stream.Connector.Runtime.Protocol;
 using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Backend.Contracts;
+using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Service;
 using Zlink.Framework.Runtime.Streams;
@@ -10,6 +13,73 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class CanonicalActorAcceptedJournalTests
 {
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Java_multipart_record_round_trips_the_wire_identity(bool request)
+    {
+        var frameworkRoot = Common.FrameworkTestEnvironment.GetFrameworkRoot();
+        var path = Path.GetFullPath(
+            "../../runtime/protocol/golden/actor-accepted-record-v1.json",
+            frameworkRoot
+        );
+        using var fixture = JsonDocument.Parse(File.ReadAllText(path));
+        var bytes = Convert.FromHexString(
+            fixture.RootElement.GetProperty(request ? "requestHex" : "sendHex").GetString()!
+        );
+        var transfer = ServiceWirePilotCodec.EncodeRelocationEnvelopeV1(
+            new ServiceWirePilotCodec.RelocationEnvelopeV1(
+                1,
+                2,
+                new ServiceWirePilotCodec.RelocationActorIdentity("accepted-actor", 3, 4),
+                0,
+                [new ServiceWirePilotCodec.RelocationApplicationState(1, false, [])],
+                [new ServiceWirePilotCodec.RelocationSavedWork(1, 9, bytes)],
+                [],
+                [],
+                []
+            )
+        );
+        var records = Assert
+            .Single(ZLinkRelocationEnvelopeCodec.Decode(transfer).Participants)
+            .AcceptedJobs;
+        var record = Assert.Single(records);
+        var accepted = Assert.Single(
+            ZLinkStandaloneActorRelocationRuntime.DecodeAcceptedRecords(records)
+        );
+        var frame = accepted.Frame;
+        var target = Assert.IsType<ZLinkBackendActorRef>(accepted.FrozenTargetActor);
+
+        Assert.Equal(9, frame.ArrivalIndex);
+        Assert.Equal(9UL, (frame with { ArrivalIndex = 0 }).CanonicalAcceptedSequence);
+        Assert.Equal("accepted-actor", target.ActorId);
+        Assert.Equal(RoutingId.From(new byte[] { 2, 0, 128 }), target.NodeRid);
+        Assert.Equal(target.NodeRid.ToBytes().ToArray(), frame.ReplyActorNodeRid);
+        Assert.Equal(target.Generation, frame.ReplyActorGeneration);
+        Assert.Equal(RoutingId.From(new byte[] { 0, 255, 1 }), accepted.RequestSource.NodeRid);
+        Assert.Equal(accepted.RequestSource.NodeRid.ToHex(), record.RequestSource?.NodeRid);
+        Assert.Equal(target.NodeRid.ToHex(), record.CanonicalRequest?.TargetNodeRid);
+        Assert.Equal((ulong)(request ? 37 : 0), frame.RelocationReplyRouteId);
+        Assert.Equal(
+            new MeshOperationId(31, request ? 41UL : 42UL),
+            frame.RouteContext.OperationId
+        );
+        Assert.Equal(
+            "accepted-packet",
+            ZLinkStreamProtocolDefaults.DecodeHeader(frame.Header).Name
+        );
+        Assert.Equal(new byte[] { 0, 255, 3 }, frame.Body);
+        if (request)
+            accepted = accepted with
+            {
+                Frame = frame with
+                {
+                    RouteContext = frame.RouteContext with { ReplyCapability = "source-callback" },
+                },
+            };
+        Assert.Equal(bytes, ZLinkCanonicalActorAcceptedJournal.Encode(accepted, target));
+    }
+
     [Fact]
     public void Request_round_trip_preserves_operation_reply_and_authority_fences()
     {

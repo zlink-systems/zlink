@@ -2172,10 +2172,9 @@ stage_dotnet_source_java_target_relocation() {
 # JoinEntrySpot(); the only candidate is the target node. The target node is
 # then restarted (new lifecycle; same routing id except .NET, whose Object-role
 # routing id is framework assigned) and a second Actor does the same. Its
-# request carries the generation the source holds for the target: either
-# discovery already shows the new lifecycle and the new process commits the
-# membership, or the old generation is refused as Unavailable. Any other
-# outcome fails the cell.
+# restart check requires the Actor's committed allocation on the new
+# lifecycle. An Unavailable terminal alone cannot prove that the request
+# never reached the binding submission boundary.
 entry_join_rid_args() {
   local language="$1" rid="$2"
   # .NET Object-role MeshNodes cannot use a fixed routing id.
@@ -2184,10 +2183,54 @@ entry_join_rid_args() {
   fi
 }
 
+entry_join_store_fence() {
+  local port="$1" prefix="$2" kind="$3" identity="$4" old_generation="${5:-}"
+  local client=(redis-cli -p "${port}" --raw)
+  if ((${#REDIS_CONTAINERS[@]} > 0)); then
+    client=(docker exec "${REDIS_CONTAINERS[-1]}" redis-cli --raw)
+  fi
+  "${client[@]}" EVAL '
+    local function read(logical)
+      local key = redis.call("HGET", KEYS[1], logical)
+      if not key then return nil end
+      local member = redis.call("ZREVRANGE", key, 0, 0)[1]
+      if not member or string.byte(member, 1) ~= 1 then return nil end
+      local record = cmsgpack.unpack(string.sub(member, 2))
+      if record[5] then return nil end
+      return cjson.decode(record[2])
+    end
+
+    if ARGV[1] == "actor" then
+      local row = read("authority" .. string.char(0) .. "actor" .. string.char(0) .. ARGV[2])
+      local allocation = row and row.allocation
+      if allocation and allocation.state == "active" then
+        return allocation.descriptor.routingIdHex .. " " .. allocation.descriptorLifecycleGeneration
+      end
+      return nil
+    end
+
+    local mesh = "mesh-node" .. string.char(0) .. "cross.entry-join" .. string.char(0)
+    local found = nil
+    for _, key in ipairs(redis.call("HKEYS", KEYS[1])) do
+      if string.sub(key, 1, #mesh) == mesh then
+        local row = read(key)
+        local descriptor = row and row.descriptor
+        if descriptor and descriptor.endpoint == ARGV[2]
+          and descriptor.lifecycleGeneration ~= ARGV[3] then
+          if found then return redis.error_reply("ambiguous restarted Entry Spot descriptor") end
+          found = descriptor.routingIdHex .. " " .. descriptor.lifecycleGeneration
+        end
+      end
+    end
+    return found
+  ' 1 "${prefix}:location:{zlink-location-v3}:opaque:map" "${kind}" "${identity}" "${old_generation}"
+}
+
 stage_entry_join_cell() {
   local source="$1" target="$2"
   local redis_port source_port target_port run_id start_file restart_file
   local source_events home_events restart_events source_rid home_rid home_pid actor second
+  local redis_prefix old_fence old_generation restarted_fence actor_fence
   read -r redis_port source_port target_port <<<"$(free_port 3)"
   run_id="entry-join-${source}-${target}"
   start_file="${RUN_DIR}/${run_id}.start"
@@ -2199,8 +2242,9 @@ stage_entry_join_cell() {
   home_rid="${target}-entry-join-target"
   actor="cross-lang-entry-join-actor"
   second="${actor}-restart"
+  redis_prefix="zlink-cross-${run_id}-${redis_port}"
   local common=(--mesh-name cross.entry-join --redis-endpoint "127.0.0.1:${redis_port}"
-    --redis-key-prefix "zlink-cross-${run_id}-${redis_port}")
+    --redis-key-prefix "${redis_prefix}")
   local source_peer=() target_peer=()
   if [[ "${target}" != dotnet ]]; then source_peer=(--peer-rid "${home_rid}"); fi
   if [[ "${source}" != dotnet ]]; then target_peer=(--peer-rid "${source_rid}"); fi
@@ -2256,6 +2300,13 @@ stage_entry_join_cell() {
   # The second Actor must be in the User Spot before the target node restarts.
   wait_for_line "${source_events}" "user-spot-joined|actor=${second}|" 90
 
+  old_fence="$(entry_join_store_fence "${redis_port}" "${redis_prefix}" actor "${actor}")"
+  if [[ ! "${old_fence}" =~ ^[[:xdigit:]]+\ ([1-9][0-9]*)$ ]]; then
+    echo "remote Entry Spot join ${source}->${target}: old allocation fence is missing" >&2
+    exit 1
+  fi
+  old_generation="${BASH_REMATCH[1]}"
+
   # Restart the target node: a new lifecycle generation for its descriptor.
   kill "${home_pid}" >/dev/null 2>&1 || true
   wait "${home_pid}" >/dev/null 2>&1 || true
@@ -2265,6 +2316,12 @@ stage_entry_join_cell() {
     --bind-endpoint "tcp://127.0.0.1:${target_port}" --event-file "${restart_events}"
   wait_for_ready "${RUN_DIR}/${run_id}-target-restarted.ready" 180
   wait_for_line "${restart_events}" "user-spot-created|spot=cross-lang-entry-join-spot-restarted" 60
+  restarted_fence="$(entry_join_store_fence "${redis_port}" "${redis_prefix}" descriptor \
+    "tcp://127.0.0.1:${target_port}" "${old_generation}")"
+  if [[ ! "${restarted_fence}" =~ ^[[:xdigit:]]+\ [1-9][0-9]*$ ]]; then
+    echo "remote Entry Spot join ${source}->${target}: new descriptor fence is missing" >&2
+    exit 1
+  fi
   touch "${restart_file}"
   wait_for_line "${source_events}" "entry-join-request-reply|phase=restart|accepted=true|actor=${second}" 90
 
@@ -2286,8 +2343,20 @@ stage_entry_join_cell() {
     sleep 0.2
   done
   case "${outcome}" in
-    joined) wait_for_line "${restart_events}" "user-spot-probe|nodeRid=" 90 ;;
-    Unavailable) ;;
+    joined)
+      wait_for_line "${restart_events}" "user-spot-probe|nodeRid=" 90
+      actor_fence="$(entry_join_store_fence "${redis_port}" "${redis_prefix}" actor "${second}")"
+      if [[ "${actor_fence}" != "${restarted_fence}" ]] \
+        || grep -qF "entry-spot-joined|actor=${second}|nodeRid=" "${home_events}"; then
+        echo "remote Entry Spot join ${source}->${target}: expected restarted fence '${restarted_fence}', got '${actor_fence}'" >&2
+        exit 1
+      fi
+      outcome="joined at generation ${restarted_fence##* } (was ${old_generation})"
+      ;;
+    Unavailable)
+      echo "remote Entry Spot join ${source}->${target}: Unavailable without evidence of zero binding submissions" >&2
+      exit 1
+      ;;
     *)
       echo "remote Entry Spot join ${source}->${target}: restarted target outcome '${outcome:-timeout}'" >&2
       grep -F "user-spot-join-" "${source_events}" >&2 || true
