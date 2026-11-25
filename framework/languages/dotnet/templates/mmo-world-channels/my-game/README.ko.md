@@ -35,7 +35,7 @@ flowchart LR
 
 ## 요구 사항과 빌드
 
-Linux 컨테이너를 실행할 수 있는 Docker Compose v2를 설치합니다. Bash 또는 Windows용 PowerShell 7에서 스크립트를 실행합니다. 호스트에서 서버를 실행하거나 디버깅하려면 .NET 8 SDK를 설치합니다. `Directory.Packages.props`는 공개 Framework와 STREAM connector 0.34.0, binding 1.26.0을 사용합니다. NuGet.org에서 복원하며 저장소 checkout 없이 빌드할 수 있습니다.
+Linux 컨테이너를 실행할 수 있는 Docker Compose v2를 설치합니다. Bash 또는 Windows용 PowerShell 7에서 스크립트를 실행합니다. 호스트에서 서버를 실행하거나 디버깅하려면 .NET 8 SDK를 설치합니다. `Directory.Packages.props`는 공개 Framework와 STREAM connector 0.34.1, binding 1.26.0을 사용합니다. NuGet.org에서 복원하며 저장소 checkout 없이 빌드할 수 있습니다.
 
 ```bash
 ./run-e2e.sh --build-only
@@ -166,7 +166,7 @@ Console.WriteLine(await received.Task.WaitAsync(ct));
 
 ## 검증 대상 버전
 
-공개 Framework 0.34.0 패키지로 검증합니다.
+공개 Framework 0.34.1 패키지로 검증합니다.
 
 ## 배포 순서
 
