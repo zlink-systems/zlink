@@ -20,7 +20,7 @@ The Lobby and Instance roles (`lobby`, `instanceA`, and `instanceB`) explicitly 
 
 ## Prerequisites
 
-Docker Compose v2, and PowerShell 7 on Windows. Framework packages are pinned to 0.32.0 in `package.json`; the native binding is pinned to 1.23.0. These versions use public npm packages.
+Docker Compose v2, and PowerShell 7 on Windows. Framework packages are pinned to 0.34.0 in `package.json`; the native binding is pinned to 1.26.0. These versions use public npm packages.
 
 ## Build
 
@@ -134,7 +134,7 @@ pwsh -NoProfile -File ./run-e2e.ps1 -CheckStructure
 
 ## Known issues
 
-Validated against the published Framework 0.32.0 packages.
+Validated against the published Framework 0.34.0 packages.
 
 Node typed handler payloads require the packet-name-to-class restoration table before forwarding (#1731, planned for 0.32.0). Keep this table until the published Framework preserves declared DTO classes.
 

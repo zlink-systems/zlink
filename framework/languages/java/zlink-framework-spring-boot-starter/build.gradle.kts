@@ -19,6 +19,7 @@ dependencies {
     compileOnlyApi("io.micrometer:micrometer-core:1.15.8")
     testImplementation("io.micrometer:micrometer-core:1.15.8")
     testImplementation(project(":zlink-stream-connector"))
+    testRuntimeOnly("org.slf4j:slf4j-jdk14:2.0.16")
     testImplementation(project(":zlink-framework-testkit"))
     testImplementation(testFixtures(project(":zlink-framework-core")))
     testImplementation(project(":zlink-framework-codec-protobuf"))

@@ -164,7 +164,7 @@ The runner checks `zlink.structure.json`, starts its own two Redis containers an
 
 ## Known issues
 
-Validated against the published Framework 0.32.0 packages.
+Validated against the published Framework 0.34.2 packages.
 
 ## Deployment sequence
 

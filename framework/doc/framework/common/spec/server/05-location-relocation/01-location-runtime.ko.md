@@ -1701,9 +1701,12 @@ Source ingress hold 원본 제거, 위치 record의 `Completed` 변경과 Sessio
 route update 적용은 target application message 처리를 막지 않는다. 실행 중인 source와
 target runtime이 이 후속 작업을 각자 계속한다.
 
-Resolver는 위 `Ready` 조건을 모두 만족하기 전에는 이동 중인 object를 `Ready`로 반환하지
-않는다. Target dispatch 전환 뒤 이전 owner를 통한 reply 전달과 `Completed` 기록을 위해 완료
-기록 payload 위치를 유지하는 것은 `Ready`를 막지 않는다.
+Owner 변경이 commit되면 resolver는 target을 그 object의 route로 반환한다. 위 `Ready` 조건을
+아직 다 만족하지 않은 target은 그 route로 온 message를 거절(`NotFound` 등)하지 않고 이 절 첫
+문단의 temporary queue에 받아, application dispatch를 열 때 순서대로 실행한다. 그래서 caller는
+commit과 dispatch 개방 사이에 보낸 첫 요청도 실패 없이 처리받는다. Target dispatch 전환 뒤 이전
+owner를 통한 reply 전달과 `Completed` 기록을 위해 완료 기록 payload 위치를 유지하는 것은 `Ready`를
+막지 않는다. (#5576)
 
 `PerActor` User Spot의 target shell은 Spot authority CAS, source Spot queue relay와 target
 Spot admission 준비가 끝나면 `ToSpot`, Create와 Join에 대해 Ready가 된다. Member Actor

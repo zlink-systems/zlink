@@ -388,7 +388,12 @@ nodes at once, or rerunning it after an interruption, gives the same result.
 
 0. If an unfinished v11 aggregate (an in-flight relocation record) remains, finish it with the v11 procedure
    before converting. If a record that can't be finished remains, don't convert; stop with a startup
-   configuration error.
+   configuration error. Because every v11 node has stopped, the v11 staging retention (24 hours after
+   staging) doesn't apply. Abort Staging and Prepared aggregates (for Prepared, return the target v11 capacity
+   record's pending count in the same batch), and finish participant and inventory cleanup for Committed and
+   Aborted aggregates before deleting their root. If any aggregate's target owner lease is still live, a v11 node
+   may still be writing; change nothing and stop with a startup configuration error (starting again after that
+   lease expires proceeds).
 1. If `zlink:v12:generation-floor` is absent, Put the larger of `zlink:v11:object-counter` and
    `zlink:v11:authority-owner-counter` (or `1` when both are absent) under a `Missing` condition.
 2. For each remaining v11 MeshNode capacity record, one batch Puts its active and pending values into

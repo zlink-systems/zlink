@@ -12,6 +12,106 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class StreamFlowEndToEndTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Session_Creation_Failure_Closes_Only_That_Connection(bool packetFirst)
+    {
+        const string nodeName = "creation.stream";
+        var failures = new CreationFailure(packetFirst);
+        var logs = new FlowLoggerProvider();
+        var builder = Host.CreateApplicationBuilder();
+        builder.Logging.AddProvider(logs);
+        builder.Services.AddSingleton(failures);
+        builder.Services.AddZLinkFramework(options =>
+        {
+            options.ConfigureDispatch().Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+            options.AddStreamNode(nodeName).Bind("tcp://127.0.0.1:0").AddSession<CreationSession>();
+        });
+        using var host = builder.Build();
+        await host.StartAsync();
+        var endpoint = host
+            .Services.GetRequiredService<IZLinkFrameworkRuntime>()
+            .GetListenerStatus(ZLinkListenerKind.Stream, nodeName)
+            .Endpoint;
+        var options = new ZlinkStreamConnectorOptions
+        {
+            Endpoint = new Uri(endpoint),
+            DispatchMode = ZlinkStreamDispatchMode.Immediate,
+            Reconnect = new ZlinkStreamReconnectOptions { Enabled = false },
+            Heartbeat = new ZlinkStreamHeartbeatOptions { Enabled = false },
+        };
+        await using var blocker = ZlinkStreamConnectorFactory.Create(options);
+        try
+        {
+            if (packetFirst)
+            {
+                await blocker.Connect.Async();
+                await failures.Blocked.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            await using var first = ZlinkStreamConnectorFactory.Create(options);
+            var disconnected = new TaskCompletionSource<ZlinkStreamCloseReason>(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            using var observation = first.OnDisconnected(
+                (info, _) =>
+                {
+                    disconnected.TrySetResult(info.CloseReason);
+                    return ValueTask.CompletedTask;
+                }
+            );
+            await first.Connect.Async();
+            if (packetFirst)
+            {
+                var rejected = await Assert.ThrowsAsync<ZlinkStreamException>(async () =>
+                    await first
+                        .Request(new FlowRequest("rejected"))
+                        .Timeout(TimeSpan.FromSeconds(5))
+                        .Async<FlowReply>()
+                );
+                Assert.Equal(ZlinkStreamErrorCode.RemoteError, rejected.Error.Code);
+                Assert.StartsWith("internal_failure:", rejected.Error.Message);
+                var flow = await logs.CreationFlow.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.Contains("outcome=failed", flow);
+                Assert.Contains($"packet={nameof(FlowRequest)}", flow);
+                Assert.Contains(failures.Error.Message, flow);
+            }
+            Assert.Equal(
+                ZlinkStreamCloseReason.TransportError,
+                await disconnected.Task.WaitAsync(TimeSpan.FromSeconds(5))
+            );
+            Assert.False(first.IsConnected);
+            failures.Release.TrySetResult();
+            if (packetFirst)
+            {
+                var heldReply = await blocker
+                    .Request(new FlowRequest("existing"))
+                    .Timeout(TimeSpan.FromSeconds(5))
+                    .Async<FlowReply>();
+                Assert.Equal("existing", heldReply.Value);
+            }
+
+            await using var next = ZlinkStreamConnectorFactory.Create(options);
+            await next.Connect.Async();
+            var reply = await next.Request(new FlowRequest("next"))
+                .Timeout(TimeSpan.FromSeconds(5))
+                .Async<FlowReply>();
+            Assert.Equal("next", reply.Value);
+            Assert.True(next.IsConnected);
+
+            var error = Assert.Single(logs.Errors.Where(entry => entry.Message.Contains(nodeName)));
+            Assert.Contains(nameof(CreationSession), error.Message);
+            Assert.Same(failures.Error, error.Exception);
+            Assert.Equal(packetFirst, logs.CreationFlow.Task.IsCompleted);
+            Assert.Equal(packetFirst ? 3 : 2, failures.Attempts);
+        }
+        finally
+        {
+            failures.Release.TrySetResult();
+            await host.StopAsync();
+        }
+    }
+
     [Fact]
     public async Task Connector_Request_Starts_Server_Flow_At_Stream_Ingress()
     {
@@ -228,7 +328,10 @@ public sealed class StreamFlowEndToEndTests
     {
         private readonly object _gate = new();
         private readonly List<string> _messages = [];
+        private readonly List<(string Message, Exception? Exception)> _errors = [];
         public TaskCompletionSource Replied { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<string> CreationFlow { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public IReadOnlyList<string> Messages
@@ -241,19 +344,26 @@ public sealed class StreamFlowEndToEndTests
             }
         }
 
+        public IReadOnlyList<(string Message, Exception? Exception)> Errors
+        {
+            get
+            {
+                lock (_gate)
+                    return _errors.ToArray();
+            }
+        }
+
         public ILogger CreateLogger(string categoryName) =>
-            categoryName == ZLinkMessageFlowTracer.LoggerCategory
-                ? new FlowLogger(this)
-                : Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
+            new FlowLogger(this, categoryName == "zlink.framework.dispatch");
 
         public void Dispose() { }
 
-        private sealed class FlowLogger(FlowLoggerProvider owner) : ILogger
+        private sealed class FlowLogger(FlowLoggerProvider owner, bool captureFlow) : ILogger
         {
             public IDisposable? BeginScope<TState>(TState state)
                 where TState : notnull => null;
 
-            public bool IsEnabled(LogLevel logLevel) => true;
+            public bool IsEnabled(LogLevel logLevel) => captureFlow || logLevel >= LogLevel.Error;
 
             public void Log<TState>(
                 LogLevel logLevel,
@@ -263,12 +373,81 @@ public sealed class StreamFlowEndToEndTests
                 Func<TState, Exception?, string> formatter
             )
             {
+                if (!IsEnabled(logLevel))
+                    return;
                 var message = formatter(state, exception);
                 lock (owner._gate)
-                    owner._messages.Add(message);
-                if (message.Contains("phase=replied", StringComparison.Ordinal))
+                {
+                    if (captureFlow)
+                        owner._messages.Add(message);
+                    if (logLevel == LogLevel.Error)
+                        owner._errors.Add((message, exception));
+                }
+                if (captureFlow && message.Contains("phase=replied", StringComparison.Ordinal))
                     owner.Replied.TrySetResult();
+                if (
+                    captureFlow
+                    && message.Contains("reason=session_creation_failed", StringComparison.Ordinal)
+                )
+                    owner.CreationFlow.TrySetResult(message);
             }
+        }
+    }
+
+    private sealed class CreationFailure(bool packetFirst)
+    {
+        public int Attempts;
+        public InvalidOperationException Error { get; } = new("session constructor failed");
+        public TaskCompletionSource Blocked { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void Create()
+        {
+            var attempt = Interlocked.Increment(ref Attempts);
+            if (packetFirst && attempt == 1)
+            {
+                Blocked.TrySetResult();
+                Release.Task.WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+            }
+            else if (attempt == (packetFirst ? 2 : 1))
+            {
+                throw Error;
+            }
+        }
+    }
+
+    private sealed class CreationSession : IZLinkSession
+    {
+        public CreationSession(IZLinkSessionContext context, CreationFailure failure)
+        {
+            failure.Create();
+            Context = context;
+        }
+
+        public IZLinkSessionContext Context { get; }
+
+        public ValueTask OnConnectedAsync(CancellationToken cancellationToken) =>
+            ValueTask.CompletedTask;
+
+        public ValueTask OnDisconnectedAsync(CancellationToken cancellationToken) =>
+            ValueTask.CompletedTask;
+
+        public ValueTask OnErrorAsync(
+            ZLinkStreamError error,
+            CancellationToken cancellationToken
+        ) => ValueTask.CompletedTask;
+
+        public async ValueTask OnDispatchAsync(
+            ZLinkSessionDispatchContext dispatch,
+            ZLinkMessage payload,
+            CancellationToken cancellationToken
+        )
+        {
+            await Context
+                .Client.Reply(new FlowReply(payload.Decode<FlowRequest>().Value, Context.SessionId))
+                .Async();
         }
     }
 

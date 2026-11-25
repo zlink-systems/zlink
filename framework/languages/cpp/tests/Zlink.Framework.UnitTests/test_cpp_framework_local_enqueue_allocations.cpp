@@ -309,7 +309,6 @@ struct stateful_spot_fixture_t
         request.capacity_bundle = {
           0, 1,
           spot_type_capacity_delta_t{placement_object_kind_t::user_spot, "framework.spot", 1}};
-        request.relocation_policy = detail::factory_relocation_kind_t::disabled;
         const auto reserved = store->reserve (request).result ().value ();
         EXPECT_TRUE (std::holds_alternative<object_reserved_t> (reserved));
         const auto fence = std::get<object_reserved_t> (reserved).fence;
