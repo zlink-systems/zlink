@@ -132,7 +132,6 @@ for (const count of [0, 32, 2048]) {
           });
       const reserved = await repository.reserve({
         key,
-        actorRelocationPolicy: 'disabled',
         intent: {
           stableType,
           requestContentReference: `request-${index}`,

@@ -19,6 +19,7 @@ const {
   ZLinkRuntimeTaskErrorSink,
   ZLinkRuntimeTaskRunner
 } = require('../../packages/framework/dist/runtime/execution');
+const { ReceiveKind } = require('../../packages/framework/dist/runtime/foundation/service-runtime-contracts');
 const flowContext = require('../../packages/framework/dist/runtime/diagnostics/flow-context');
 const { BoundedReplayMap } = require('../../packages/framework/dist/runtime/host/bounded-replay-map');
 const detachedTaskRunner = new ZLinkRuntimeTaskRunner(
@@ -488,10 +489,11 @@ test('framework host republishes the current lifecycle state after owner lease r
     get currentOwnerToken() {
       return currentToken;
     },
-    addOwnerLeaseRenewedHandler(handler) {
+    ownerLeaseUsable: true,
+    confirmOwnerPublication() {},
+    setOwnerLeaseRecoveryPublication(handler) {
       recoveryHandler = handler;
-    },
-    removeOwnerLeaseRenewedHandler() {}
+    }
   };
   const publishedStates = [];
   const spotNodeRuntime = {
@@ -550,9 +552,9 @@ for (let iteration = 1; iteration <= 40; iteration++) {
     );
     let handler;
     const runtime = {
-      currentOwnerToken: lease.token, ownerLeaseUsable: true, ownerLeaseRecoveryRequired: true,
-      addOwnerLeaseRenewedHandler(callback) { handler = callback; },
-      removeOwnerLeaseRenewedHandler() {},
+      currentOwnerToken: lease.token, ownerLeaseUsable: true, ownerAdmissionOpen: true,
+      ownerLeaseRecoveryRequired: true, confirmOwnerPublication() {},
+      setOwnerLeaseRecoveryPublication(callback) { handler = callback; },
       closeOwnerLeaseAdmission(error) { throw error; }
     };
     const discoveryRuntime = host.locationOwner.ensureRuntime('play');
@@ -634,8 +636,8 @@ test('Preparing host without a usable owner lease stays excluded during recovery
   let handler;
   const runtime = {
     ownerLeaseUsable: false,
-    addOwnerLeaseRenewedHandler(callback) { handler = callback; },
-    removeOwnerLeaseRenewedHandler() {}
+    ownerAdmissionOpen: false,
+    setOwnerLeaseRecoveryPublication(callback) { handler = callback; }
   };
   host.locationOwner.runtime = runtime;
   host.runtimeState = framework.ZLinkFrameworkRuntimeState.Preparing;
@@ -1025,6 +1027,10 @@ test('a Serving Fixed RID host republishes its descriptor after its own lease ge
   }, {
     backendAdapterFactory: fakeBackendAdapterFactory([], rid('fixed-recovery-node'))
   });
+  let releasePublication;
+  let releaseCallback;
+  const publication = new Promise(resolve => { releasePublication = resolve; });
+  const callback = new Promise(resolve => { releaseCallback = resolve; });
   try {
     await runtime.start();
     assert.equal(runtime.status.state, framework.ZLinkFrameworkRuntimeState.Preparing);
@@ -1042,20 +1048,60 @@ test('a Serving Fixed RID host republishes its descriptor after its own lease ge
     assert.ok(oldOwner);
     assert.equal(before.ownerId, oldOwner.ownerId);
     assert.equal(before.leaseGeneration, oldOwner.leaseGeneration);
-    assert.equal(
-      await runtime.locationOwner.locationStore().removeMeshNode(
-        { meshName: 'play', rid: rid('fixed-recovery-node') },
-        oldOwner
-      ),
-      framework.ZLinkLocationWriteStatus.Stored
-    );
-    assert.equal((await runtime.locationOwner.locationStore().listMeshNodes('play')).items.length, 0);
+    const store = runtime.locationOwner.locationStore();
+    const location = runtime.locationOwner.currentRuntime;
+    const oldExecution = {};
+    let disposed = 0;
+    const staleWrite = callback.then(() => store.updateMeshNode(
+      { ...before, descriptorRevision: before.descriptorRevision + 1n },
+      framework.ZLinkLocationWriteIntent.Renew
+    ));
+    location.trackExecution(oldExecution, () => true, () => {
+      disposed++;
+      return staleWrite.then(() => undefined);
+    });
+    const write = store.updateMeshNode.bind(store);
+    let submitted;
+    const submission = new Promise(resolve => { submitted = resolve; });
+    t.mock.method(store, 'updateMeshNode', async (descriptor, intent, signal) => {
+      if (descriptor.leaseGeneration !== oldOwner.leaseGeneration) {
+        assert.equal(intent, framework.ZLinkLocationWriteIntent.Renew);
+        submitted(descriptor);
+        await publication;
+      }
+      return await write(descriptor, intent, signal);
+    });
 
-    storeNow += 60_001;
-    clock.advance(60_001);
+    storeNow += 60_010;
+    clock.advance(60_010);
     const recovery = waitForNextHostOwnerRecovery(runtime);
-    assert.equal(await runtime.locationOwner.currentRuntime.renewOwnerLeaseOnce(), true);
-    await recovery;
+    assert.equal(await location.renewOwnerLeaseOnce(), true);
+    try {
+      const pending = await submission;
+      assert.equal(pending.ownerId, oldOwner.ownerId);
+      assert.notEqual(pending.leaseGeneration, oldOwner.leaseGeneration);
+      assert.ok(pending.descriptorRevision > before.descriptorRevision);
+      assert.equal(disposed, 1);
+      assert.equal(location.executionDecision(oldExecution), 'lost');
+      assert.equal(runtime[inspectRuntime]().ownerAdmissionOpen, false);
+      assert.throws(() => runtime.admission.requireActorCreate('actor', 'play'), /admission is closed/u);
+      assert.throws(() => runtime.admission.requireRequest('Create Spot', 'play'), /admission is closed/u);
+      await assert.rejects(runtime.admission.run(
+        'play', 'Actor message', () => assert.fail('Actor message ran'), ReceiveKind.ActorRequest
+      ), /admission is closed/u);
+    } finally {
+      releasePublication();
+      await recovery;
+    }
+    assert.equal(runtime[inspectRuntime]().ownerAdmissionOpen, true);
+    runtime.admission.requireActorCreate('actor', 'play');
+    runtime.admission.requireRequest('Create Spot', 'play');
+    assert.equal(await runtime.admission.run(
+      'play', 'Actor message', () => 'received', ReceiveKind.ActorRequest
+    ), 'received');
+    assert.equal(location.executionDecision(oldExecution), 'lost');
+    releaseCallback();
+    assert.equal((await staleWrite).status, framework.ZLinkLocationWriteStatus.RejectedConflict);
 
     const newOwner = runtime.locationOwner.currentRuntime.currentOwnerToken;
     const after = (await runtime.locationOwner.locationStore().listMeshNodes('play')).items[0];
@@ -1067,6 +1113,8 @@ test('a Serving Fixed RID host republishes its descriptor after its own lease ge
     assert.equal(after.ownerId, newOwner.ownerId);
     assert.equal(after.leaseGeneration, newOwner.leaseGeneration);
   } finally {
+    releaseCallback();
+    releasePublication();
     await runtime.stop();
   }
 });

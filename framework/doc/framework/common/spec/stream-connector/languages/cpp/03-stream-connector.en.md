@@ -129,6 +129,13 @@ struct reply_received_context_t {
     std::optional<error_t> error;
     std::chrono::milliseconds elapsed;
 };
+struct admission_waiting_context_t {
+    std::string request_packet_name;
+    std::optional<std::string> actor_id;
+    std::chrono::milliseconds retry_after{0};
+};
+subscription_t on_admission_waiting(
+    std::function<void(const admission_waiting_context_t&)> handler);
 subscription_t on_request_sending(
     std::function<void(request_sending_context_t&)> callback);
 subscription_t on_reply_received(
@@ -448,6 +455,7 @@ struct connector_options_t {
     reconnect_options_t reconnect;
     std::size_t max_send_payload_size = 64 * 1024;
     std::size_t max_receive_payload_size = 64 * 1024;
+    std::optional<std::chrono::milliseconds> max_admission_wait;
     bool skip_server_certificate_validation = false;
     dispatch_mode_t dispatch_mode = dispatch_mode_t::manual;
     compression_t compression = compression_t::lz4;
@@ -502,3 +510,5 @@ rules.
 behavior. The existence of the per-language contract document and the
 test helper interface is verified by
 `test_cpp_framework_target_contract`'s `TH-CP-01` gate.
+
+Admission waiting and its default deadline are defined by [common spec §5.8](../../32-stream-connector.en.md).

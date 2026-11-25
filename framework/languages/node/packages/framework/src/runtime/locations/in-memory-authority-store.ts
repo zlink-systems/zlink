@@ -33,6 +33,7 @@ import type {
   ZLinkAuthorityStoreVersion,
   ZLinkCapacityVector,
   ZLinkLocationOwnerToken,
+  ZLinkMeshNodeDescriptor,
   ZLinkMeshNodeDescriptorKey,
   ZLinkObjectAbortRequest,
   ZLinkObjectAbortResult,
@@ -50,6 +51,7 @@ import type {
   ZLinkPlacementAllocation
 } from './internal-location-contracts';
 import { encodeAuthorityKey } from './authority-key-codec';
+import { requireDisabledCreationPolicy } from './ended-authority-creation-policy';
 import { ZLinkOwnerLeaseReleaseDelay } from './owner-lease-release-delay';
 import { creationTerminalPreimage } from './opaque-record-key';
 import {
@@ -67,6 +69,7 @@ const MAX_U64 = UINT64_MAX;
 const relocationAuthorityCodec = new ServiceRelocationAuthorityPayloadCodec();
 
 export interface ZLinkInMemoryAuthorityValidation {
+  readMeshNode?(key: ZLinkMeshNodeDescriptorKey): ZLinkMeshNodeDescriptor | undefined;
   isOwnerLive(owner: ZLinkLocationOwnerToken): boolean;
   isTargetLive(
     descriptor: ZLinkMeshNodeDescriptorKey,
@@ -400,6 +403,8 @@ export class ZLinkInMemoryAuthorityStore {
     )
       return false;
     let members: string[] = [];
+    let factoryKey: ZLinkMeshNodeDescriptorKey | undefined;
+    let factoryDescriptor: ZLinkMeshNodeDescriptor | undefined;
     if (current.snapshot.allocation.state === 'active') {
       let unavailable = false;
       for (const aggregate of this.aggregates.values()) {
@@ -439,27 +444,33 @@ export class ZLinkInMemoryAuthorityStore {
       const releaseCandidate =
         !unavailable &&
         (discarded !== undefined ||
-          (creation?.actorRelocationPolicy === 'disabled' &&
+          (creation !== undefined &&
             creation.key.kind === current.snapshot.allocation.objectKind &&
             creation.intent.stableType === current.snapshot.allocation.stableType &&
             (spot !== undefined || actor?.state === 'ready')));
       const ownerLive = this.validation.isOwnerLive(owner);
       if (ownerLive) return false;
-      const releaseAllowed = releaseCandidate && this.ownerLeaseReleaseDelay.allowsAuthority(owner);
-      if (discarded !== undefined && unavailable) return false;
-      if (
-        unavailable ||
-        (discarded === undefined && creation?.actorRelocationPolicy !== 'disabled')
-      )
+      if (!releaseCandidate && discarded !== undefined) return false;
+      if (!releaseCandidate)
         throw new ZLinkFrameworkException(
           ZLinkFrameworkErrorKind.Unavailable,
           'Object owner lease is unavailable.'
         );
-      if (discarded === undefined && spot?.kind === 'user_spot') {
-        members = this.endedSpotMembers(key.value, current.snapshot, spot.spotId);
+      if (creation !== undefined) {
+        factoryKey = { meshName: creation.target.meshName, rid: creation.target.nodeRid };
+        factoryDescriptor = this.validation.readMeshNode?.(factoryKey);
+        requireDisabledCreationPolicy(
+          current.snapshot.allocation,
+          creation.target.nodeLifecycleGeneration,
+          factoryDescriptor
+        );
       }
-      if (discarded !== undefined && releaseCandidate && !releaseAllowed) return false;
-      if (releaseCandidate && !releaseAllowed)
+      const releaseAllowed = this.ownerLeaseReleaseDelay.allowsAuthority(owner);
+      if (discarded === undefined && spot?.kind === 'user_spot') {
+        members = this.endedSpotMembers(key.value, current.snapshot, spot.spotId, factoryKey);
+      }
+      if (discarded !== undefined && !releaseAllowed) return false;
+      if (!releaseAllowed)
         throw new ZLinkFrameworkException(
           ZLinkFrameworkErrorKind.Unavailable,
           'Object owner lease release is waiting for the invalid lease delay.'
@@ -477,6 +488,12 @@ export class ZLinkInMemoryAuthorityStore {
       )
         return false;
     }
+    // Descriptor writes replace the row object, which is the in-memory version fence.
+    if (
+      factoryKey !== undefined &&
+      this.validation.readMeshNode?.(factoryKey) !== factoryDescriptor
+    )
+      return false;
     this.adjustCapacity(
       current.snapshot.allocation.state === 'active' ? this.activeCapacity : this.pendingCapacity,
       current.snapshot.allocation,
@@ -500,7 +517,12 @@ export class ZLinkInMemoryAuthorityStore {
    * with an invalid owner lease. The release must fit one provider batch; its key set mirrors
    * the provider repository batch (authorities, owner leases, descriptor and capacity records).
    */
-  private endedSpotMembers(spotKey: string, spot: StoredSnapshot, spotId: string): string[] {
+  private endedSpotMembers(
+    spotKey: string,
+    spot: StoredSnapshot,
+    spotId: string,
+    factoryKey?: ZLinkMeshNodeDescriptorKey
+  ): string[] {
     const descriptorKey = (descriptor: ZLinkMeshNodeDescriptorKey) =>
       `${descriptor.meshName}\0${String(descriptor.rid)}`;
     const batchKeys = new Set<string>([
@@ -509,6 +531,7 @@ export class ZLinkInMemoryAuthorityStore {
       `descriptor:${descriptorKey(spot.allocation.descriptor)}`,
       `capacity:${descriptorKey(spot.allocation.descriptor)}`
     ]);
+    if (factoryKey !== undefined) batchKeys.add(`descriptor:${descriptorKey(factoryKey)}`);
     const members: string[] = [];
     let memberReleasePending = false;
     let unavailableMember = false;

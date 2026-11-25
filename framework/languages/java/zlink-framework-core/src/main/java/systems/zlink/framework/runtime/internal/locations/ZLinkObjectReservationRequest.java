@@ -1,7 +1,6 @@
 package systems.zlink.framework.runtime.internal.locations;
 
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
-import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration.RelocationPolicy;
 
 import java.util.Objects;
 
@@ -16,35 +15,7 @@ public record ZLinkObjectReservationRequest(
         long targetDescriptorLifecycleGeneration,
         ZLinkLocationOwnerToken targetOwner,
         byte[] creatingPayload,
-        ZLinkPlacementCapacityBundle capacityBundle,
-        RelocationPolicy relocationPolicy) {
-    public ZLinkObjectReservationRequest(
-            ZLinkPlacementObjectKind objectKind,
-            String authorityKey,
-            String stableType,
-            String creationIntentReference,
-            byte[] creationIntentHash,
-            int creationIntentEncodedSize,
-            ZLinkMeshNodeDescriptorKey targetDescriptor,
-            long targetDescriptorLifecycleGeneration,
-            ZLinkLocationOwnerToken targetOwner,
-            byte[] creatingPayload,
-            ZLinkPlacementCapacityBundle capacityBundle) {
-        this(
-                objectKind,
-                authorityKey,
-                stableType,
-                creationIntentReference,
-                creationIntentHash,
-                creationIntentEncodedSize,
-                targetDescriptor,
-                targetDescriptorLifecycleGeneration,
-                targetOwner,
-                creatingPayload,
-                capacityBundle,
-                null);
-    }
-
+        ZLinkPlacementCapacityBundle capacityBundle) {
     public ZLinkObjectReservationRequest {
         Objects.requireNonNull(objectKind, "objectKind");
         Objects.requireNonNull(authorityKey, "authorityKey");

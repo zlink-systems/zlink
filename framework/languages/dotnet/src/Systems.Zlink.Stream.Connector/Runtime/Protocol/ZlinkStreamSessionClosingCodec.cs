@@ -25,6 +25,9 @@ internal static class ZlinkStreamSessionClosingCodec
     public static byte[] EncodeProtocolError(string? diagnostic = null) =>
         Encode(ZlinkStreamCloseReason.ProtocolError, diagnostic);
 
+    public static byte[] EncodeTransportError(string diagnostic) =>
+        Encode(ZlinkStreamCloseReason.TransportError, diagnostic);
+
     public static ZlinkStreamHeader CreateHeader() =>
         new(
             ZlinkStreamMessageKind.Control,

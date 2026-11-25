@@ -69,6 +69,7 @@ int verify_wait_observations (zlink::context_t &context,
                               zlink::stream_connector::connector_t &connector);
 
 int verify_request_terminal_races ();
+int verify_login_admission ();
 
 int verify_typed_send_and_request (zlink::context_t &context,
                                    const std::string &endpoint,

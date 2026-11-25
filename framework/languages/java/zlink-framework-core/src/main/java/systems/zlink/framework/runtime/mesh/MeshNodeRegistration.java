@@ -235,9 +235,9 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
         return Map.copyOf(relocatableActorFactories);
     }
 
-    public RelocationPolicy actorRelocationPolicy(String stableType) {
+    public boolean isActorRelocationDisabled(String stableType) {
         var factory = relocatableActorFactories.get(stableType);
-        return factory == null ? null : factory.relocationPolicy();
+        return factory != null && factory.relocationPolicy() instanceof RelocationPolicy.Disabled;
     }
 
     /**

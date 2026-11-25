@@ -14,6 +14,7 @@ import systems.zlink.framework.actors.ZLinkActorContext;
 import systems.zlink.framework.actors.ZLinkActorCreateResult;
 import systems.zlink.framework.actors.ZLinkActorFactory;
 import systems.zlink.framework.locations.ZLinkLocationOptions;
+import systems.zlink.framework.runtime.InMemoryRelocationStore;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
@@ -66,6 +67,7 @@ final class ZLinkEntrySpotJoinPayloadOwnershipTest {
         PLAYER_CONTEXT.set(null);
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(new ZLinkInMemoryLocationStore());
+        options.addRelocationStore(new InMemoryRelocationStore());
         options.configureLocations().setOwnerLeaseFencingMargin(Duration.ofNanos(1));
         var node = options.addRouteMesh("entry-join");
         node.listen("inproc://entry-join-" + UUID.randomUUID())
@@ -76,7 +78,7 @@ final class ZLinkEntrySpotJoinPayloadOwnershipTest {
                 "player",
                 Player.class,
                 PlayerFactory.class,
-                factory -> factory.disableRelocation());
+                factory -> factory.recreateOnRelocation());
 
         try (ZLinkFrameworkRuntime runtime =
                 ZLinkFrameworkRuntimeTestAccess.start(
@@ -329,7 +331,6 @@ final class ZLinkEntrySpotJoinPayloadOwnershipTest {
                                             new AssertionError("Fallback transport"));
                                 },
                                 canonical,
-                                ignored -> "player",
                                 null,
                                 null,
                                 actors,

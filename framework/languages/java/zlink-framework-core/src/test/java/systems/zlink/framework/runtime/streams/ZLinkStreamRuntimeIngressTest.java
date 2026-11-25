@@ -8,9 +8,13 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import systems.zlink.contracts.core.RoutingId;
@@ -29,6 +33,12 @@ import systems.zlink.framework.channels.ZLinkSendCall;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.locationprovider.ZLinkStoreKey;
+import systems.zlink.framework.locationprovider.ZLinkStorePut;
+import systems.zlink.framework.locationprovider.ZLinkStoreReadFound;
+import systems.zlink.framework.locationprovider.ZLinkStoreReadMissing;
+import systems.zlink.framework.locationprovider.ZLinkStoreWriteApplied;
+import systems.zlink.framework.locationprovider.ZLinkStoreWriteRequest;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
@@ -51,11 +61,14 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkSpotBackendAdapter;
 import systems.zlink.framework.runtime.internal.backend.ZLinkStreamBackendAdapter;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLaneTestAccess;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
+import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetricProbe;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
+import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
 import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 import systems.zlink.framework.streams.ZLinkSession;
@@ -68,6 +81,8 @@ import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 import java.lang.reflect.Proxy;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -86,18 +101,23 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
+import java.util.stream.Stream;
+import java.util.stream.StreamSupport;
 
 final class ZLinkStreamRuntimeIngressTest {
     private static final RoutingId PEER_A = RoutingId.from("peer-a");
@@ -114,9 +134,27 @@ final class ZLinkStreamRuntimeIngressTest {
     void distinctBinaryRoutingIdsWithTheSameDisplayKeepSeparateSessions(boolean connectionReady)
             throws Exception {
         var stream = new FakeStream();
-        var runtime = startDeterministic(stream, new java.util.concurrent.atomic.AtomicLong());
         var binary = RoutingId.fromHex("0000007b");
         var text = RoutingId.from("123");
+        var binaryRemoved = new CompletableFuture<Void>();
+        var peerSessions =
+                new HashMap<RoutingId, ZLinkStreamRuntime.SessionState>() {
+                    @Override
+                    public boolean remove(Object routingId, Object state) {
+                        boolean removed = super.remove(routingId, state);
+                        if (removed && binary.equals(routingId)) {
+                            binaryRemoved.complete(null);
+                        }
+                        return removed;
+                    }
+                };
+        var runtime =
+                startDeterministic(
+                        stream,
+                        new java.util.concurrent.atomic.AtomicLong(),
+                        ignored -> {},
+                        new ZLinkStateLane(),
+                        new HashMap<>(Map.of("stream", peerSessions)));
         assertEquals(binary.toString(), text.toString());
         if (connectionReady) {
             stream.errorHandler.handle(binary, MonitorEventType.CONNECTION_READY, 0, "ready");
@@ -139,7 +177,8 @@ final class ZLinkStreamRuntimeIngressTest {
 
         stream.errorHandler.handle(
                 RoutingId.fromHex("0000007b"), MonitorEventType.DISCONNECTED, 0, "closed");
-        binarySession.transportClosed.get(5, TimeUnit.SECONDS);
+        binaryRemoved.get(5, TimeUnit.SECONDS);
+        assertTrue(binarySession.transportClosed.isDone());
         dispatchDeterministic(runtime, RoutingId.from("123"), "surviving", false);
         dispatchDeterministic(runtime, RoutingId.fromHex("0000007b"), "reconnected", false);
 
@@ -604,11 +643,10 @@ final class ZLinkStreamRuntimeIngressTest {
         var clock = new java.util.concurrent.atomic.AtomicLong();
         ZLinkStreamRuntime runtime = startDeterministic(stream, clock);
         TestSession.failNextConstruction = true;
-        assertThrows(
-                RuntimeException.class,
-                () ->
-                        stream.errorHandler.handle(
-                                PEER_A, MonitorEventType.CONNECTION_READY, 0, "ready"));
+        stream.errorHandler.handle(PEER_A, MonitorEventType.CONNECTION_READY, 0, "ready");
+        assertEquals(PEER_A, stream.disconnectedPeer.get(5, TimeUnit.SECONDS));
+        assertEquals(1, stream.sessionClosingSends.get());
+        assertEquals(List.of(PEER_A), stream.disconnectedPeers);
         assertEquals(0, runtime.sessionContextCount());
         stream.errorHandler.handle(PEER_B, MonitorEventType.CONNECTION_READY, 0, "ready");
         assertEquals(1, runtime.sessionContextCount());
@@ -656,7 +694,18 @@ final class ZLinkStreamRuntimeIngressTest {
                     configure,
             systems.zlink.framework.runtime.internal.execution.ZLinkStateLane stateLane,
             Map<String, Map<RoutingId, ZLinkStreamRuntime.SessionState>> sessions) {
+        return startDeterministic(stream, clock, configure, stateLane, sessions, ignored -> {});
+    }
+
+    private ZLinkStreamRuntime startDeterministic(
+            FakeStream stream,
+            AtomicLong clock,
+            Consumer<systems.zlink.framework.configuration.ZLinkStreamNodeBuilder> configure,
+            systems.zlink.framework.runtime.internal.execution.ZLinkStateLane stateLane,
+            Map<String, Map<RoutingId, ZLinkStreamRuntime.SessionState>> sessions,
+            Consumer<DefaultZLinkFrameworkOptions> configureOptions) {
         var options = new DefaultZLinkFrameworkOptions();
+        configureOptions.accept(options);
         var builder =
                 options.addStreamNode("stream")
                         .bind("tcp://127.0.0.1:18081")
@@ -789,6 +838,7 @@ final class ZLinkStreamRuntimeIngressTest {
         TestSession.replacementMode = ReplacementMode.NONE;
         TestSession.decodeWirePayload = false;
         TestSession.replyOnDispatch = false;
+        TestSession.authenticationWork = null;
         TestSession.decodedWirePayload.set(null);
         // Retiring callbacks finish before probes become visible to the next test.
         TestSession.created.clear();
@@ -937,6 +987,606 @@ final class ZLinkStreamRuntimeIngressTest {
         assertTrue(stream.successfulReceives.get() >= 1);
         assertTrue(stream.readinessWaits.get() >= 1);
         assertEquals(List.of("packet"), session.packetNames);
+    }
+
+    @Test
+    void authenticationAdmissionRejectsAnotherSessionBeforeDispatchAndReturnsItsPermit()
+            throws Exception {
+        var replies = new CopyOnWriteArrayList<AuthenticationReply>();
+        FakeStream stream =
+                new FakeStream() {
+                    @Override
+                    public CompletionStage<Void> replyAsync(
+                            RoutingId routingId, ZLinkStreamHeader header, List<Message> parts) {
+                        replies.add(
+                                new AuthenticationReply(
+                                        routingId,
+                                        header,
+                                        new String(
+                                                parts.getFirst().toByteArray(),
+                                                StandardCharsets.UTF_8)));
+                        return CompletableFuture.completedFuture(null);
+                    }
+                };
+        TestSession.holdFirstDispatch = true;
+        try (var metrics = ZLinkRuntimeMetricProbe.install();
+                var work = new AuthenticationWork(PEER_B)) {
+            TestSession.authenticationWork = work;
+            startDeterministic(
+                    stream,
+                    new java.util.concurrent.atomic.AtomicLong(),
+                    builder ->
+                            builder.authenticationPacketName("Login")
+                                    .maxConcurrentAuthentications(1)
+                                    .authenticationRetryDelay(Duration.ofMillis(500)));
+            stream.enqueue(PEER_A, authenticationFrame(ZLinkStreamMessageKind.REQUEST, "Login", 1));
+            TestSession first = awaitSession();
+            try {
+                assertTrue(first.dispatchLatch.await(5, TimeUnit.SECONDS));
+                AtomicInteger rejectedCloses = new AtomicInteger();
+                stream.enqueueTracked(
+                        PEER_B,
+                        authenticationFrame(ZLinkStreamMessageKind.REQUEST, "Login", 2),
+                        rejectedCloses);
+                awaitValue(rejectedCloses, 1);
+
+                assertEquals(
+                        1, replies.size(), "the second request must receive the admission error");
+                AuthenticationReply reply = replies.getFirst();
+                assertEquals(PEER_B, reply.peer());
+                assertEquals(ZLinkStreamMessageKind.ERROR, reply.header().kind());
+                assertEquals(Optional.of(2L), reply.header().requestSequence());
+                assertEquals("500", reply.header().metadata().get("$zlink.admission.retryAfterMs"));
+                assertEquals(
+                        AUTHENTICATION_FIXTURE_JSON.readTree(
+                                "{\"code\":\"unavailable\",\"message\":\"Authentication admission is full.\"}"),
+                        AUTHENTICATION_FIXTURE_JSON.readTree(reply.body()));
+                assertEquals(List.of(first), TestSession.created);
+                assertEquals(1, first.dispatchCount.get());
+                awaitCondition(
+                        () ->
+                                lastRegistration.applicationJobQueue().snapshot().permitsInUse()
+                                        == 0);
+                assertEquals(
+                        0,
+                        lastRegistration.applicationJobQueue().snapshot().queuedApplicationJobs());
+                assertEquals(
+                        1,
+                        metrics.observable(
+                                "zlink.host.authentication_admission.in_flight", Map.of()));
+                assertEquals(
+                        Map.of(),
+                        metrics.only("zlink.host.authentication_admission.rejections").tags());
+                assertEquals(0, work.actorLookups.get());
+                assertEquals(0, work.actorCreates.get());
+                assertEquals(0, work.storeReads.get());
+                assertEquals(0, work.storeWrites.get());
+                assertTrue(work.actors.localActor("authentication-probe").isEmpty());
+                assertTrue(
+                        work.store.read(work.key, () -> false).toCompletableFuture().get()
+                                instanceof ZLinkStoreReadMissing);
+
+                var responsePeer = RoutingId.from("response-peer");
+                var responseCloses = new AtomicInteger();
+                stream.enqueueTracked(
+                        responsePeer,
+                        authenticationFrame(ZLinkStreamMessageKind.RESPONSE, "", 3),
+                        responseCloses);
+                awaitValue(responseCloses, 1);
+                awaitCondition(
+                        () ->
+                                lastRegistration.applicationJobQueue().snapshot().permitsInUse()
+                                        == 0);
+                assertEquals(1, replies.size());
+                assertEquals(1, metrics.observable(AUTHENTICATION_IN_FLIGHT, Map.of()));
+                assertEquals(1, metrics.count(AUTHENTICATION_REJECTIONS));
+
+                first.firstDispatch.complete(null);
+                awaitCondition(
+                        () ->
+                                metrics.observable(
+                                                "zlink.host.authentication_admission.in_flight",
+                                                Map.of())
+                                        == 0);
+                var acceptedCloses = new AtomicInteger();
+                stream.enqueueTracked(
+                        PEER_B,
+                        authenticationFrame(ZLinkStreamMessageKind.REQUEST, "Login", 3),
+                        acceptedCloses);
+                awaitValue(acceptedCloses, 1);
+                assertEquals(1, work.actorLookups.get());
+                assertEquals(1, work.actorCreates.get());
+                assertEquals(1, work.storeReads.get());
+                assertEquals(1, work.storeWrites.get());
+                assertTrue(work.actors.localActor("authentication-probe").isPresent());
+                assertTrue(
+                        work.store.read(work.key, () -> false).toCompletableFuture().get()
+                                instanceof ZLinkStoreReadFound);
+            } finally {
+                first.firstDispatch.complete(null);
+            }
+        }
+    }
+
+    @Test
+    void authenticationAdmissionSharesOneLimitAcrossStreamRegistrations() throws Exception {
+        var rejection = new CompletableFuture<ZLinkStreamHeader>();
+        var first = new FakeStream();
+        FakeStream second =
+                new FakeStream() {
+                    @Override
+                    public CompletionStage<Void> replyAsync(
+                            RoutingId routingId, ZLinkStreamHeader header, List<Message> parts) {
+                        rejection.complete(header);
+                        return CompletableFuture.completedFuture(null);
+                    }
+                };
+        var options = new DefaultZLinkFrameworkOptions();
+        options.addStreamNode("first")
+                .bind("tcp://127.0.0.1:18081")
+                .registerSession(TestSession.class)
+                .authenticationPacketName("Login")
+                .maxConcurrentAuthentications(1);
+        options.addStreamNode("second")
+                .bind("tcp://127.0.0.1:18082")
+                .registerSession(SecondarySession.class)
+                .authenticationPacketName("Login")
+                .maxConcurrentAuthentications(1);
+        options.validate();
+        var sockets = List.of(first, second).iterator();
+        TestSession.holdFirstDispatch = true;
+        runtimes.add(start(new FakeProvider(sockets::next), options.registration()));
+        first.enqueue(PEER_A, authenticationFrame(ZLinkStreamMessageKind.REQUEST, "Login", 1));
+        TestSession held = awaitSession();
+        try {
+            assertTrue(held.dispatchLatch.await(5, TimeUnit.SECONDS));
+            second.enqueue(PEER_B, authenticationFrame(ZLinkStreamMessageKind.REQUEST, "Login", 1));
+            assertEquals(ZLinkStreamMessageKind.ERROR, rejection.get(5, TimeUnit.SECONDS).kind());
+            assertEquals(List.of(held), TestSession.created);
+        } finally {
+            TestSession.holdFirstDispatch = false;
+            held.firstDispatch.complete(null);
+            TestSession.created.forEach(session -> session.firstDispatch.complete(null));
+        }
+    }
+
+    private static byte[] authenticationFrame(
+            ZLinkStreamMessageKind kind, String packetName, long sequence) {
+        ZLinkStreamHeader header =
+                new ZLinkStreamHeader(
+                        kind,
+                        ZLinkStreamCodec.JSON,
+                        EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                        sequence == 0 ? Optional.empty() : Optional.of(sequence),
+                        packetName,
+                        Map.of());
+        return ZLinkStreamFrameCodec.encode(
+                ZLinkStreamHeaderCodec.encode(header), "{}".getBytes(StandardCharsets.UTF_8));
+    }
+
+    private record AuthenticationReply(RoutingId peer, ZLinkStreamHeader header, String body) {}
+
+    private static final ObjectMapper AUTHENTICATION_FIXTURE_JSON = new ObjectMapper();
+    private static final String AUTHENTICATION_IN_FLIGHT =
+            "zlink.host.authentication_admission.in_flight";
+    private static final String AUTHENTICATION_REJECTIONS =
+            "zlink.host.authentication_admission.rejections";
+
+    static Stream<org.junit.jupiter.params.provider.Arguments> authenticationAdmissionScenarios()
+            throws Exception {
+        for (Path directory = Path.of("").toAbsolutePath();
+                directory != null;
+                directory = directory.getParent()) {
+            Path fixture =
+                    directory.resolve("framework/runtime/conformance/login-admission-v1.json");
+            if (Files.isRegularFile(fixture)) {
+                JsonNode scenarios =
+                        AUTHENTICATION_FIXTURE_JSON
+                                .readTree(fixture.toFile())
+                                .required("serverScenarios");
+                // Version 1 contains only stage-one server scenarios. Queue and ticket cases
+                // belong to stage two and are outside the scope of this test.
+                return StreamSupport.stream(scenarios.spliterator(), false)
+                        .map(
+                                scenario ->
+                                        org.junit.jupiter.params.provider.Arguments.of(
+                                                scenario.required("name").asText(), scenario));
+            }
+        }
+        throw new AssertionError("login-admission-v1.json was not found");
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("authenticationAdmissionScenarios")
+    void authenticationAdmissionConformsToFixture(String name, JsonNode scenario) throws Exception {
+        TestSession.holdFirstDispatch = true;
+        TestSession.recordCreationCallbacks = true;
+        try (var metrics = ZLinkRuntimeMetricProbe.install()) {
+            var driver = new AuthenticationFixtureDriver(scenario, metrics);
+            try {
+                if (name.equals("over-limit-rejected-before-handler")) {
+                    TestSession.authenticationWork =
+                            new AuthenticationWork(RoutingId.from("session-b"));
+                }
+                driver.start();
+                for (JsonNode step : scenario.required("steps")) {
+                    driver.run(step);
+                }
+            } finally {
+                driver.finish();
+                if (TestSession.authenticationWork != null) {
+                    TestSession.authenticationWork.close();
+                }
+            }
+        }
+    }
+
+    private final class AuthenticationFixtureDriver {
+        private final JsonNode scenario;
+        private final ZLinkRuntimeMetricProbe metrics;
+        private final AtomicLong clock = new AtomicLong();
+        private final BlockingAuthenticationExecutor executor =
+                new BlockingAuthenticationExecutor();
+        private final Map<String, CompletableFuture<Boolean>> applicationTurns = new HashMap<>();
+        private final Map<String, TestSession> sessions = new HashMap<>();
+        private final Map<RoutingId, Long> permitReservations =
+                new java.util.concurrent.ConcurrentHashMap<>();
+        private final List<AuthenticationReply> replies = new CopyOnWriteArrayList<>();
+        private ZLinkStreamRuntime runtime;
+        private FakeStream stream;
+        private CompletableFuture<Void> replyAdmission;
+        private CompletionStage<Void> shutdown;
+        private long leaseReturns;
+
+        AuthenticationFixtureDriver(JsonNode scenario, ZLinkRuntimeMetricProbe metrics) {
+            this.scenario = scenario;
+            this.metrics = metrics;
+        }
+
+        void start() throws Exception {
+            JsonNode given = scenario.required("given");
+            replyAdmission = new CompletableFuture<>();
+            executor.open = true;
+            stream =
+                    new FakeStream() {
+                        @Override
+                        public ZLinkBackendStreamReceived recv() {
+                            ZLinkBackendStreamReceived packet = super.recv();
+                            if (packet != null) {
+                                permitReservations.put(
+                                        packet.routingId().orElseThrow(),
+                                        lastRegistration
+                                                .applicationJobQueue()
+                                                .snapshot()
+                                                .reservedSupplyPermits());
+                            }
+                            return packet;
+                        }
+
+                        @Override
+                        public CompletionStage<Void> replyAsync(
+                                RoutingId routingId,
+                                ZLinkStreamHeader header,
+                                List<Message> parts) {
+                            var wireHeader =
+                                    ZLinkStreamHeaderCodec.decodeOrPlain(
+                                            ZLinkStreamHeaderCodec.encode(header));
+                            replies.add(
+                                    new AuthenticationReply(
+                                            routingId,
+                                            wireHeader,
+                                            new String(
+                                                    parts.getFirst().toByteArray(),
+                                                    StandardCharsets.UTF_8)));
+                            return scenario.required("name")
+                                            .asText()
+                                            .startsWith("terminal-releases-reply")
+                                    ? replyAdmission
+                                    : CompletableFuture.completedFuture(null);
+                        }
+                    };
+            runtime =
+                    startDeterministic(
+                            stream,
+                            clock,
+                            builder -> {
+                                if (!given.required("authenticationPacketName").isNull()) {
+                                    builder.authenticationPacketName(
+                                            given.required("authenticationPacketName").asText());
+                                }
+                                if (!given.required("maxConcurrentAuthentications").isNull()) {
+                                    builder.maxConcurrentAuthentications(
+                                            given.required("maxConcurrentAuthentications").asInt());
+                                }
+                                builder.authenticationRetryDelay(
+                                        Duration.ofMillis(
+                                                given.required("authenticationRetryDelayMs")
+                                                        .asLong()));
+                            },
+                            new systems.zlink.framework.runtime.internal.execution.ZLinkStateLane(),
+                            new HashMap<>(),
+                            options -> options.useHandlerExecutor(executor::execute));
+            var registration = lastRegistration.streamNodes().getFirst();
+            assertEquals(
+                    scenario.required("expectedEffectiveLimit").asInt(),
+                    registration
+                            .authenticationAdmission(given.required("effectiveCpuCores").asInt())
+                            .limit());
+            sessions.clear();
+            for (JsonNode step : scenario.required("steps")) {
+                if (!step.required("action").asText().equals("receive")) continue;
+                String id = step.required("requestId").asText();
+                RoutingId peer = RoutingId.from(step.required("sessionId").asText());
+                stream.errorHandler.handle(peer, MonitorEventType.CONNECTION_READY, 0, "ready");
+                var session = TestSession.lastSession.get();
+                assertEquals(peer, session.context.routingId().orElseThrow());
+                awaitCondition(() -> session.creationCallbacks.contains("connected"));
+                sessions.put(id, session);
+            }
+            executor.open = false;
+        }
+
+        void run(JsonNode step) throws Exception {
+            String id = step.required("requestId").asText();
+            JsonNode expected = step.required("expect");
+            switch (step.required("action").asText()) {
+                case "receive" -> receive(step, id, expected);
+                case "handlerStart" -> assertTrue(applicationTurns.get(id).complete(true));
+                case "clientTimeout" -> clock.addAndGet(Duration.ofSeconds(1).toNanos());
+                case "await" -> {
+                    clock.addAndGet(Duration.ofMillis(1).toNanos());
+                    runLivenessTimers(runtime);
+                }
+                case "terminal" -> terminal(step, id, expected);
+                default -> throw new AssertionError(step);
+            }
+            awaitCondition(
+                    () -> handlerCalls() == expected.required("handlerCalls").asInt(),
+                    "handler call count for " + step);
+            awaitCondition(
+                    () ->
+                            lastRegistration.applicationJobQueue().snapshot().permitsInUse()
+                                    == expected.required("heldPermits").asInt(),
+                    "ingress permit count for " + step);
+            assertEquals(expected.required("inFlight").asInt(), inFlight(), step::toString);
+        }
+
+        private void receive(JsonNode step, String id, JsonNode expected) throws Exception {
+            if (shutdown != null) {
+                // The fixture probes capacity after shutdown. A closed STREAM socket cannot
+                // receive the probe, so submit it to the next runtime epoch.
+                shutdown.toCompletableFuture().get(5, TimeUnit.SECONDS);
+                runtimes.remove(runtime);
+                shutdown = null;
+                start();
+            }
+            RoutingId peer = sessions.get(id).context.routingId().orElseThrow();
+            AtomicInteger ownershipReturns = new AtomicInteger();
+            String kind = step.required("kind").asText();
+            byte[] frame =
+                    switch (kind) {
+                        case "Request" ->
+                                authenticationFrame(
+                                        ZLinkStreamMessageKind.REQUEST,
+                                        step.required("packetName").asText(),
+                                        Long.parseUnsignedLong(
+                                                step.required("requestSeq").asText()));
+                        case "Send" ->
+                                authenticationFrame(
+                                        ZLinkStreamMessageKind.SEND,
+                                        step.required("packetName").asText(),
+                                        0);
+                        case "Heartbeat" -> controlFrame(HEARTBEAT_PING);
+                        default -> throw new AssertionError(kind);
+                    };
+            stream.enqueueTracked(peer, frame, ownershipReturns);
+            String decision = expected.required("decision").asText();
+            if (decision.equals("accepted")) {
+                var turn = executor.turns.poll(5, TimeUnit.SECONDS);
+                assertTrue(turn != null, "accepted request did not reach the application executor");
+                applicationTurns.put(id, turn);
+            } else {
+                awaitValue(ownershipReturns, 1);
+            }
+            if (decision.equals("rejected")) {
+                var reply = replies.getLast();
+                JsonNode error = expected.required("error");
+                assertEquals(peer, reply.peer());
+                assertEquals(ZLinkStreamMessageKind.ERROR, reply.header().kind());
+                assertEquals(error.required("packetName").asText(), reply.header().packetName());
+                assertEquals(
+                        error.required("requestSeq").asText(),
+                        Long.toUnsignedString(reply.header().requestSequence().orElseThrow()));
+                assertEquals(
+                        error.required("body"), AUTHENTICATION_FIXTURE_JSON.readTree(reply.body()));
+                assertEquals(
+                        error.required("metadata"),
+                        AUTHENTICATION_FIXTURE_JSON.valueToTree(reply.header().metadata()));
+                assertEquals(
+                        error.required("connectionClosed").asBoolean(),
+                        stream.disconnectedPeers.contains(peer));
+                assertEquals(
+                        expected.required("permitReservations").asLong(),
+                        permitReservations.get(peer));
+                awaitCondition(
+                        () ->
+                                lastRegistration.applicationJobQueue().snapshot().permitsInUse()
+                                        == 0);
+                assertEquals(expected.required("permitReturns").asInt(), ownershipReturns.get());
+                assertEquals(
+                        expected.required("applicationQueuedJobs").asLong(),
+                        lastRegistration.applicationJobQueue().snapshot().queuedApplicationJobs());
+                assertEquals(
+                        expected.required("handlerCallsForRequest").asInt(),
+                        sessions.get(id).dispatchCount.get());
+                assertEquals(
+                        expected.required("actorCreates").asInt(),
+                        TestSession.authenticationWork.actorCreates.get());
+                assertEquals(0, TestSession.authenticationWork.actorLookups.get());
+                assertEquals(
+                        expected.required("storeWrites").asInt(),
+                        TestSession.authenticationWork.storeWrites.get());
+                assertEquals(0, TestSession.authenticationWork.storeReads.get());
+                assertEquals(1, metrics.count(AUTHENTICATION_REJECTIONS));
+            } else {
+                assertTrue(expected.required("error").isNull());
+                assertTrue(replies.stream().noneMatch(reply -> reply.peer().equals(peer)));
+            }
+        }
+
+        private void terminal(JsonNode step, String id, JsonNode expected) throws Exception {
+            TestSession session = sessions.get(id);
+            long before = inFlight();
+            if (before != 0) {
+                switch (step.required("reason").asText()) {
+                    case "replySuccess" -> finishReply(session, false);
+                    case "replyFailure" -> finishReply(session, true);
+                    case "handlerException" ->
+                            assertTrue(
+                                    session.firstDispatch.completeExceptionally(
+                                            new IllegalStateException("test handler failure")));
+                    case "cancellation" -> {
+                        executor.open = true;
+                        stream.errorHandler.handle(
+                                session.context.routingId().orElseThrow(),
+                                MonitorEventType.DISCONNECTED,
+                                0,
+                                "closed");
+                        assertFalse(session.firstDispatch.isDone());
+                    }
+                    case "enqueueRejected" -> assertTrue(applicationTurns.get(id).complete(false));
+                    case "callbackWithoutReply" -> assertTrue(session.firstDispatch.complete(null));
+                    case "shutdown" -> {
+                        executor.open = true;
+                        runtime.beginDrain();
+                        shutdown = runtime.closeAsync();
+                    }
+                    default -> throw new AssertionError(step);
+                }
+            } else {
+                if (step.required("reason").asText().equals("enqueueRejected")) {
+                    assertFalse(applicationTurns.get(id).complete(false));
+                }
+                session.firstDispatch.complete(null);
+                if (step.required("reason").asText().equals("cancellation")) {
+                    session.transportClosed.get(5, TimeUnit.SECONDS);
+                    executor.open = false;
+                }
+            }
+            awaitCondition(() -> inFlight() == expected.required("inFlight").asInt());
+            leaseReturns += before - inFlight();
+            assertEquals(expected.required("leaseReturns").asLong(), leaseReturns);
+        }
+
+        private void finishReply(TestSession session, boolean failure) throws Exception {
+            var context = (ZLinkStreamSessionContextState) session.context;
+            CompletionStage<Void> reply =
+                    failure
+                            ? context.sendErrorReply(
+                                    context.currentDispatchHeader().orElseThrow(),
+                                    new ZLinkFrameworkException(
+                                            ZLinkFrameworkErrorKind.UNAVAILABLE, "Test failure."))
+                            : context.client().reply(Map.of("ok", true)).submit();
+            assertEquals(1, inFlight());
+            assertFalse(session.firstDispatch.isDone());
+            var sent = replies.getLast();
+            assertEquals(
+                    failure ? ZLinkStreamMessageKind.ERROR : ZLinkStreamMessageKind.RESPONSE,
+                    sent.header().kind());
+            assertTrue(sent.header().metadata().isEmpty());
+            replyAdmission.complete(null);
+            reply.toCompletableFuture().get(5, TimeUnit.SECONDS);
+            assertFalse(session.firstDispatch.isDone());
+        }
+
+        private long inFlight() {
+            return metrics.observable(AUTHENTICATION_IN_FLIGHT, Map.of());
+        }
+
+        private int handlerCalls() {
+            return TestSession.created.stream()
+                    .mapToInt(session -> session.dispatchCount.get())
+                    .sum();
+        }
+
+        void finish() {
+            executor.open = true;
+            applicationTurns.values().forEach(turn -> turn.complete(true));
+            executor.turns.forEach(turn -> turn.complete(true));
+            TestSession.created.forEach(session -> session.firstDispatch.complete(null));
+            if (replyAdmission != null) replyAdmission.complete(null);
+            if (shutdown != null) shutdown.toCompletableFuture().join();
+        }
+    }
+
+    private static final class AuthenticationWork implements AutoCloseable {
+        private final RoutingId peer;
+        private final AtomicInteger actorLookups = new AtomicInteger();
+        private final AtomicInteger actorCreates = new AtomicInteger();
+        private final AtomicInteger storeReads = new AtomicInteger();
+        private final AtomicInteger storeWrites = new AtomicInteger();
+        private final ZLinkStoreKey key = new ZLinkStoreKey("authentication-probe");
+        private final ZLinkInMemoryLocationStore store = new ZLinkInMemoryLocationStore();
+        private final ZLinkActorRuntime actors;
+
+        AuthenticationWork(RoutingId peer) {
+            this.peer = peer;
+            var spot = newProbeSpotNode(actorCreates);
+            actors =
+                    new ZLinkActorRuntime(
+                            spot,
+                            Map.of("probe", ProbeFactory.class),
+                            Duration.ofSeconds(1),
+                            new ZLinkJsonMessageSerializer(),
+                            ZLinkHandlerActivator.reflection());
+            actors.setMeshName(MESH);
+        }
+
+        CompletionStage<Void> run() {
+            actorLookups.incrementAndGet();
+            return actors.getOrCreateLocalActor(key.value(), ProbeActor.class)
+                    .thenCompose(
+                            actor -> {
+                                assertTrue(actor.isPresent());
+                                storeReads.incrementAndGet();
+                                return store.read(key, () -> false);
+                            })
+                    .thenCompose(
+                            prior -> {
+                                assertTrue(prior instanceof ZLinkStoreReadMissing);
+                                storeWrites.incrementAndGet();
+                                return store.write(
+                                        new ZLinkStoreWriteRequest(
+                                                List.of(),
+                                                List.of(
+                                                        new ZLinkStorePut(
+                                                                key, new byte[] {1}, null))),
+                                        () -> false);
+                            })
+                    .thenAccept(result -> assertTrue(result instanceof ZLinkStoreWriteApplied));
+        }
+
+        @Override
+        public void close() {
+            actors.closeAsync().toCompletableFuture().join();
+        }
+    }
+
+    private static final class BlockingAuthenticationExecutor {
+        private final LinkedBlockingQueue<CompletableFuture<Boolean>> turns =
+                new LinkedBlockingQueue<>();
+        private volatile boolean open;
+
+        void execute(Runnable command) {
+            if (!open) {
+                var turn = new CompletableFuture<Boolean>();
+                turns.add(turn);
+                if (open) turn.complete(true);
+                if (!turn.join())
+                    throw new RejectedExecutionException("test application enqueue rejection");
+            }
+            command.run();
+        }
     }
 
     @Test
@@ -2648,29 +3298,7 @@ final class ZLinkStreamRuntimeIngressTest {
                 .registerSession(TestSession.class);
         ZLinkFrameworkRegistration registration = options.registration();
         ZLinkJsonMessageSerializer serializer = new ZLinkJsonMessageSerializer();
-        ZLinkInternalSpotNode spotNode =
-                (ZLinkInternalSpotNode)
-                        Proxy.newProxyInstance(
-                                ZLinkInternalSpotNode.class.getClassLoader(),
-                                new Class<?>[] {ZLinkInternalSpotNode.class},
-                                (proxy, method, arguments) ->
-                                        switch (method.getName()) {
-                                            case "routingId" -> RoutingId.from("actor-node");
-                                            case "createActor" -> {
-                                                if (arguments[1] instanceof Message request) {
-                                                    request.close();
-                                                }
-                                                yield new ZLinkBackendActorRef(
-                                                        RoutingId.from("actor-node"),
-                                                        (String) arguments[0],
-                                                        7);
-                                            }
-                                            case "localAuthorityLeaseGeneration" -> 11L;
-                                            case "rememberActorAuthority",
-                                                    "observeActorAuthority" ->
-                                                    null;
-                                            default -> defaultValue(method.getReturnType());
-                                        });
+        ZLinkInternalSpotNode spotNode = newProbeSpotNode(new AtomicInteger());
         ZLinkActorRuntime actors =
                 new ZLinkActorRuntime(
                         spotNode,
@@ -2760,6 +3388,30 @@ final class ZLinkStreamRuntimeIngressTest {
         return new ReplacementFixture(runtime, actors, requestedPeer, requestedGeneration);
     }
 
+    private static ZLinkInternalSpotNode newProbeSpotNode(AtomicInteger actorCreates) {
+        return (ZLinkInternalSpotNode)
+                Proxy.newProxyInstance(
+                        ZLinkInternalSpotNode.class.getClassLoader(),
+                        new Class<?>[] {ZLinkInternalSpotNode.class},
+                        (proxy, method, arguments) ->
+                                switch (method.getName()) {
+                                    case "routingId" -> RoutingId.from("actor-node");
+                                    case "createActor" -> {
+                                        actorCreates.incrementAndGet();
+                                        if (arguments[1] instanceof Message request) {
+                                            request.close();
+                                        }
+                                        yield new ZLinkBackendActorRef(
+                                                RoutingId.from("actor-node"),
+                                                (String) arguments[0],
+                                                7);
+                                    }
+                                    case "localAuthorityLeaseGeneration" -> 11L;
+                                    case "rememberActorAuthority", "observeActorAuthority" -> null;
+                                    default -> defaultValue(method.getReturnType());
+                                });
+    }
+
     private static systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
                     .BoundSessionReplaced
             replacement(ZLinkBackendActorRef actorRef) {
@@ -2846,8 +3498,12 @@ final class ZLinkStreamRuntimeIngressTest {
     }
 
     private ZLinkStreamRuntime start(FakeStream stream, ZLinkFrameworkRegistration registration) {
+        return start(new FakeProvider(stream), registration);
+    }
+
+    private ZLinkStreamRuntime start(
+            FakeProvider provider, ZLinkFrameworkRegistration registration) {
         lastRegistration = registration;
-        FakeProvider provider = new FakeProvider(stream);
         return new ZLinkStreamRuntime(
                         provider,
                         new ZLinkBackendAdapterOptions(Duration.ofSeconds(1)),
@@ -3031,7 +3687,7 @@ final class ZLinkStreamRuntimeIngressTest {
                 .anyMatch(frame -> frame.getClassName().equals(className));
     }
 
-    public static final class TestSession implements ZLinkSession {
+    public static class TestSession implements ZLinkSession {
         private static final AtomicReference<TestSession> lastSession = new AtomicReference<>();
         private static CompletableFuture<TestSession> connected = new CompletableFuture<>();
         private final List<ZLinkStreamError> transportErrors = new CopyOnWriteArrayList<>();
@@ -3046,6 +3702,7 @@ final class ZLinkStreamRuntimeIngressTest {
         private static volatile ReplacementMode replacementMode = ReplacementMode.NONE;
         private static volatile boolean decodeWirePayload;
         private static volatile boolean replyOnDispatch;
+        private static volatile AuthenticationWork authenticationWork;
         private static final List<TestSession> created = new CopyOnWriteArrayList<>();
         private static final AtomicReference<WirePayload> decodedWirePayload =
                 new AtomicReference<>();
@@ -3136,11 +3793,21 @@ final class ZLinkStreamRuntimeIngressTest {
             if (replyOnDispatch && dispatch.canReply()) {
                 return context.client().reply(Map.of("ok", true)).submit();
             }
+            var work = authenticationWork;
+            if (work != null && context.routingId().orElseThrow().equals(work.peer)) {
+                return work.run();
+            }
             if (count == 1 && holdFirstDispatch) {
                 return firstDispatch;
             }
             secondDispatchLatch.countDown();
             return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    public static final class SecondarySession extends TestSession {
+        public SecondarySession(ZLinkSessionContext context) {
+            super(context);
         }
     }
 
@@ -3168,10 +3835,14 @@ final class ZLinkStreamRuntimeIngressTest {
     private record ProbeActor(ZLinkActorContext context) implements ZLinkActor {}
 
     private static final class FakeProvider implements ZLinkBackendAdapterProvider {
-        private final FakeStream stream;
+        private final Supplier<FakeStream> streams;
 
         private FakeProvider(FakeStream stream) {
-            this.stream = stream;
+            this(() -> stream);
+        }
+
+        private FakeProvider(Supplier<FakeStream> streams) {
+            this.streams = streams;
         }
 
         @Override
@@ -3186,7 +3857,7 @@ final class ZLinkStreamRuntimeIngressTest {
 
         @Override
         public ZLinkStreamBackendAdapter createStreamAdapter(ZLinkBackendAdapterOptions options) {
-            return (context, meshNode) -> stream;
+            return (context, meshNode) -> streams.get();
         }
 
         @Override

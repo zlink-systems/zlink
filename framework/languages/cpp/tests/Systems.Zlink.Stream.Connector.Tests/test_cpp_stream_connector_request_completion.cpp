@@ -154,6 +154,7 @@ int verify_request_terminal_races ()
                 std::lock_guard<std::mutex> lock (state->transport_mutex);
                 connection = std::move (state->connection);
                 state->pending_requests.clear ();
+                state->request_attempts.clear ();
                 state->pending_waits.clear ();
                 state->write_queue.clear ();
                 state->dispatch_queue.clear ();

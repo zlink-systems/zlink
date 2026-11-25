@@ -1627,7 +1627,71 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         await runtime
             .CompleteInboundSpotAggregateReplayAsync(stage, cancellationToken)
             .ConfigureAwait(false);
-        await runtime.OpenInboundSpotAggregateAdmissionAsync(stage).ConfigureAwait(false);
+        await runtime
+            .OpenInboundSpotAggregateAdmissionAsync(
+                stage,
+                () => RecordDispatchOpeningAsync(stage, cancellationToken)
+            )
+            .ConfigureAwait(false);
+    }
+
+    private async ValueTask RecordDispatchOpeningAsync(
+        TargetStage stage,
+        CancellationToken cancellationToken
+    )
+    {
+        var store =
+            registration.Locations.ResolveStore()
+            ?? throw new ZLinkConfigurationException("Location Store is not registered.");
+        var spot = stage.SpotParticipant;
+        var read = await store
+            .ReadAuthorityAsync(spot.AuthorityKey, cancellationToken)
+            .ConfigureAwait(false);
+        if (
+            read is not ZLinkAuthorityReadResult.Found found
+            || found.Snapshot.AuthorityOwnerGeneration != stage.TargetAuthorityOwnerGeneration
+            || !MatchesStageAuthority(
+                stage,
+                spot,
+                found.Snapshot,
+                StageOwner(stage),
+                Convert.ToHexString(stage.Envelope.InventoryDigest.Span).ToLowerInvariant()
+            )
+        )
+            throw new ZLinkRelocationDataLostException(
+                "SPOT authority changed before target dispatch opened."
+            );
+
+        var snapshot = found.Snapshot;
+        var relocation = snapshot.Relocation!;
+        if (relocation.Phase >= ServiceWireCodec.RelocationPhase.Activated)
+            return;
+
+        var result = await store
+            .CompareExchangeAuthorityAsync(
+                spot.AuthorityKey,
+                snapshot.StoreVersion,
+                new ZLinkAuthorityMutation.Put(
+                    snapshot.Payload,
+                    ZLinkAuthorityGenerationTransition.Preserve,
+                    TargetOwner: null,
+                    TargetAllocation: null
+                )
+                {
+                    Relocation = relocation with
+                    {
+                        Phase = ServiceWireCodec.RelocationPhase.Activated,
+                    },
+                },
+                cancellationToken
+            )
+            .ConfigureAwait(false);
+        if (result is not ZLinkAuthorityCompareExchangeResult.Stored)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                $"SPOT '{stage.Spot.Activation.SpotId}' dispatch phase update conflicted.",
+                ZLinkRetryAdvice.RetryAfterBackoff
+            );
     }
 
     private async ValueTask<Dictionary<

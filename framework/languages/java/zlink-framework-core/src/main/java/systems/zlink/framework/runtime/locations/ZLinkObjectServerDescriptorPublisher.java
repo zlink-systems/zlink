@@ -22,6 +22,7 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Supplier;
 
 /** Publishes MeshNode discovery descriptors under the host owner lease. */
 public final class ZLinkObjectServerDescriptorPublisher {
@@ -70,14 +71,21 @@ public final class ZLinkObjectServerDescriptorPublisher {
     }
 
     public CompletionStage<Void> publish(ZLinkFrameworkRuntimeState state) {
-        long seen = changes.get();
-        return publishDescriptors(state).thenRun(() -> confirmed.accumulateAndGet(seen, Math::max));
+        return publish(state, runtime::currentOwnerToken);
     }
 
-    private CompletionStage<Void> publishDescriptors(ZLinkFrameworkRuntimeState state) {
+    private CompletionStage<Void> publish(
+            ZLinkFrameworkRuntimeState state, Supplier<ZLinkLocationOwnerToken> publicationOwner) {
+        long seen = changes.get();
+        return publishDescriptors(state, publicationOwner)
+                .thenRun(() -> confirmed.accumulateAndGet(seen, Math::max));
+    }
+
+    private CompletionStage<Void> publishDescriptors(
+            ZLinkFrameworkRuntimeState state, Supplier<ZLinkLocationOwnerToken> publicationOwner) {
         ZLinkLocationOwnerToken owner;
         try {
-            owner = runtime.currentOwnerToken();
+            owner = publicationOwner.get();
         } catch (ZLinkFrameworkException ownerAdmissionClosed) {
             // Location runtime §5: an expired owner does not publish a descriptor.
             return CompletableFuture.failedFuture(
@@ -178,7 +186,7 @@ public final class ZLinkObjectServerDescriptorPublisher {
     public CompletionStage<Void> recoverAfterOwnerLease(
             ZLinkFrameworkRuntimeState state, ZLinkLocationOwnerToken previousOwner) {
         if (previousOwner == null) {
-            return publish(state);
+            return publish(state, runtime::descriptorPublicationOwnerToken);
         }
         List<CompletionStage<?>> removals = new ArrayList<>();
         for (MeshNodeRegistration configured : registration.meshNodes()) {
@@ -197,7 +205,8 @@ public final class ZLinkObjectServerDescriptorPublisher {
                                                         previousOwner)));
             }
         }
-        return requirePublicationResults(removals).thenCompose(ignored -> publish(state));
+        return requirePublicationResults(removals)
+                .thenCompose(ignored -> publish(state, runtime::descriptorPublicationOwnerToken));
     }
 
     public CompletionStage<Void> remove() {

@@ -102,6 +102,8 @@ inline std::string_view enum_name (dispatch_error_reason_t value) noexcept
             return "stale_target";
         case dispatch_error_reason_t::shutdown:
             return "shutdown";
+        case dispatch_error_reason_t::session_creation_failed:
+            return "session_creation_failed";
     }
     return "unknown";
 }

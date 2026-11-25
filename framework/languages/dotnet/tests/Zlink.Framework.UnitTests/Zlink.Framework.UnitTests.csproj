@@ -90,6 +90,8 @@
         <Compile Include="Runtime/PreReadyLogicalMulticastTests.cs"/>
         <Compile Include="Runtime/SpotWideMemberSealCaptureTests.cs"/>
         <Compile Include="Runtime/SpotWideMemberOwnershipTests.cs"/>
+        <Compile Include="Runtime/SpotWideFindReadinessTests.cs"/>
+        <Compile Include="Runtime/SpotTargetRelocationReleaseTests.cs"/>
         <Compile Include="Runtime/SpotActorDispatchErrorReasonTests.cs"/>
         <Compile Include="TestCompletionPollerDriver.cs"/>
         <Compile Include="../../cross-language/Zlink.Framework.TestHost/TestHostMessageFlowListener.cs" Link="Support/TestHostMessageFlowListener.cs"/>
@@ -294,6 +296,7 @@
         <Compile Include="Runtime/StreamWireInteropTests.cs"/>
         <Compile Include="Runtime/StreamSessionLivenessTests.cs"/>
         <Compile Include="Runtime/StreamSessionForcedCleanupTests.cs"/>
+        <Compile Include="Runtime/StreamAuthenticationAdmissionTests.cs"/>
         <Compile Include="Runtime/StreamDisconnectProgressTests.cs"/>
         <Compile Include="Runtime/StreamFlowEndToEndTests.cs"/>
         <Compile Include="Runtime/StreamRequestRoundTripLatencyTests.cs"/>

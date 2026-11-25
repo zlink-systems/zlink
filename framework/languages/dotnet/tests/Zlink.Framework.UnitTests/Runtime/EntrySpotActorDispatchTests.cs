@@ -7671,6 +7671,66 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
+    public async Task EntrySpotTimerKeepsPendingTickWhileOwnerAdmissionIsClosed()
+    {
+        var probe = new EntryTimerSerialProbe();
+        var locationTime = new ManualTimeProvider();
+        var timerTime = new ControllableTimeProvider();
+        SpotCloseFaultStore store = null!;
+        var (runtime, _) = await CreateStartedRuntimeAsync(
+            new CapturingSpotNode(),
+            entrySpotType: typeof(TimerProbeEntrySpot),
+            locationStoreWrapper: inner => store = new SpotCloseFaultStore(inner),
+            locationTimeProvider: locationTime,
+            joinTimeProvider: timerTime,
+            entryTimerProbe: probe
+        );
+        try
+        {
+            var locations = runtime.Services.GetRequiredService<ZLinkLocationRuntime>();
+            var activation = Assert.IsType<ZLinkEntrySpotActivation>(
+                runtime.GetSpotNodeRuntime(RoutingId.From("entry-node")).EntrySpotActivation
+            );
+            var period = TimeSpan.FromSeconds(1);
+            var timeout = TimeSpan.FromSeconds(5);
+            var firstDue = timerTime.WaitForNextTimerAsync(period);
+            await using var timer =
+                await activation.EntrySpot.Context.AddTimer<EntryTimerProbeHandler>(
+                    "entry.lease",
+                    period,
+                    new ZLinkTimerOptions { OverrunPolicy = ZLinkTimerOverrunPolicy.DelayNextTick }
+                );
+            await firstDue.WaitAsync(timeout);
+            var secondDue = timerTime.WaitForNextTimerAsync(period);
+            timerTime.AdvanceMonotonic(period);
+            await secondDue.WaitAsync(timeout);
+            Assert.Equal(new[] { "timer:start" }, probe.Events.ToArray());
+
+            store.BeforeRead = _ =>
+                Task.FromException(new InvalidOperationException("Store unavailable."));
+            Assert.False(await locations.RenewOwnerLeaseOnceAsync());
+            locationTime.AdvanceMonotonicOnly(TimeSpan.FromMinutes(1));
+            Assert.False(locations.IsOwnerAdmissionOpen);
+            var pendingDue = timerTime.WaitForNextTimerAsync(period);
+            timerTime.AdvanceMonotonic(period);
+            await pendingDue.WaitAsync(timeout);
+            Assert.Equal(new[] { "timer:start" }, probe.Events.ToArray());
+
+            store.BeforeRead = null;
+            Assert.True(await locations.RenewOwnerLeaseOnceAsync());
+            var resumedDue = timerTime.WaitForNextTimerAsync(period);
+            timerTime.AdvanceMonotonic(period);
+            await resumedDue.WaitAsync(timeout);
+            Assert.Equal(new[] { "timer:start", "timer:start" }, probe.Events.ToArray());
+        }
+        finally
+        {
+            store.BeforeRead = null;
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task Application_signaled_defer_blocks_later_framework_operations_and_continues_without_relocation()
     {
         var services = new ServiceCollection().BuildServiceProvider();
@@ -13691,7 +13751,10 @@ public sealed partial class EntrySpotActorDispatchTests
         AcceptedSendProbe? acceptedSendProbe = null,
         ILoggerFactory? loggerFactory = null,
         TimeProvider? joinTimeProvider = null,
-        TimeSpan? sessionReplacementCallbackTimeout = null
+        TimeSpan? sessionReplacementCallbackTimeout = null,
+        bool objectClient = false,
+        Action<ZLinkSpotNodeRegistration>? configureNode = null,
+        EntryTimerSerialProbe? entryTimerProbe = null
     )
     {
         const string locationOwnerId = "entry-spot-dispatch-owner";
@@ -13770,6 +13833,11 @@ public sealed partial class EntrySpotActorDispatchTests
             .AddTransient<MeshRouteRequestHandler>();
         if (acceptedSendProbe is not null)
             serviceCollection.AddSingleton(acceptedSendProbe);
+        if (entryTimerProbe is not null)
+            serviceCollection
+                .AddSingleton(entryTimerProbe)
+                .AddTransient<BlockingProbeRouteHandler>()
+                .AddTransient<EntryTimerProbeHandler>();
         if (instanceDispatchProbe is not null)
             serviceCollection
                 .AddSingleton(instanceDispatchProbe)
@@ -13845,6 +13913,11 @@ public sealed partial class EntrySpotActorDispatchTests
                 .SpotNodes["entry"]
                 .ChannelMemberships.Add(new ZLinkMeshChannelMembership { ChannelName = "entry" });
         }
+        if (objectClient)
+        {
+            registration.Locations._repository = runtimeLocationStore;
+            new ZLinkMeshNodeBuilder(registration.SpotNodes["entry"]).Objects().Client();
+        }
         if (includeActorFactory)
         {
             new Zlink.Framework.Runtime.Configuration.Builders.ZLinkMeshNodeBuilder(
@@ -13906,6 +13979,7 @@ public sealed partial class EntrySpotActorDispatchTests
             registration.SpotNodes["entry"].ObjectRole = ZLinkMeshNodeObjectRole.Server;
             registration.SpotNodes["entry"].ObjectRoleSelected = true;
         }
+        configureNode?.Invoke(registration.SpotNodes["entry"]);
         registration.ActorCatalog.Build(registration.SpotNodes.Values);
         runtime = new ZLinkFrameworkRuntime(
             services,
@@ -14015,7 +14089,12 @@ public sealed partial class EntrySpotActorDispatchTests
                 )
             );
         }
-        if (includeInstanceSpotRoute)
+        if (
+            includeInstanceSpotRoute
+            && registration
+                .SpotNodes["entry"]
+                .InstanceSpotRelocations.ContainsKey("Tests.InstanceSpot")
+        )
         {
             _ = await PublishLocalInstanceSpotAuthorityAsync(
                 locationStore,
