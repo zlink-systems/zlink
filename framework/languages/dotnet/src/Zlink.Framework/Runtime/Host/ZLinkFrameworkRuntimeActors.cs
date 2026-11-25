@@ -273,11 +273,16 @@ internal sealed partial class ZLinkFrameworkRuntime
                 if (actorBaseline.ActiveCount != 0 || !handoffBaseline.IsSafe)
                     continue;
 
-                preflightStage = "spot_target_preflight";
+                preflightStage = "relocation_target_preflight";
                 if (
-                    Services.GetService<ZLinkSpotRetireTargetRuntime>() is { } spotTarget
-                    && await spotTarget
-                        .HasFinishingSpotTargetAsync(cancellationToken)
+                    (
+                        Services.GetService<ZLinkSpotRetireTargetRuntime>() is { } spotTarget
+                        && await spotTarget
+                            .HasFinishingSpotTargetAsync(cancellationToken)
+                            .ConfigureAwait(false)
+                    )
+                    || await _standaloneActorRelocationRuntime
+                        .HasFinishingActorTargetAsync(cancellationToken)
                         .ConfigureAwait(false)
                 )
                     return ZLinkFrameworkRelocationReason.OperationInProgress;

@@ -23,12 +23,6 @@ internal sealed class ZLinkActorDrainCoordinator(
         if (states.Length == 0)
             return null;
 
-        if (
-            await relocation
-                .HasFinishingStandaloneTargetAsync(cancellationToken)
-                .ConfigureAwait(false)
-        )
-            return ZLinkFrameworkRelocationReason.OperationInProgress;
         foreach (
             var actorType in states
                 .Select(static state => state.ActorType)
