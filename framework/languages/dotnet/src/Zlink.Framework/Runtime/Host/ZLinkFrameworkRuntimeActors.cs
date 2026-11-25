@@ -1534,6 +1534,9 @@ internal sealed partial class ZLinkFrameworkRuntime
                             _ = actorState.Handoff.PrepareCanonicalMaintenanceReplay(
                                 request.HandoffId
                             );
+                            actorState.TrackRelocationCompletion(
+                                replayProgress!.Authority.Relocation
+                            );
                             _ = QueueCanonicalStandaloneActorFrames(
                                 actorState,
                                 publishedActorAuthority,

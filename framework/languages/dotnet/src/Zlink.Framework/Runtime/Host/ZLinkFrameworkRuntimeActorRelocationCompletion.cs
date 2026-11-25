@@ -310,13 +310,16 @@ internal sealed partial class ZLinkFrameworkRuntime
         );
 
     internal bool TryFinishDurableActorCompletion(
+        ZLinkActorRuntimeState actorState,
         Task prefix,
         ZLinkRelocationEnvelope identity,
         ZLinkLocationOwnerToken owner,
         ZLinkStandaloneActorRelocationProgressCoordinator coordinator,
         Func<ValueTask>? releaseAdmission = null
-    ) =>
-        TryRunDetached(
+    )
+    {
+        var candidate = actorState.RelocationCompletionCandidate;
+        return TryRunDetached(
             "actor relocation completion delivery",
             async token =>
             {
@@ -342,6 +345,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                     await coordinator
                         .NormalizeSteadyAsync(identity, owner, token)
                         .ConfigureAwait(false);
+                    if (candidate?.RelocationId == identity.AggregateId)
+                        actorState.ClearRelocationCompletionCandidate(candidate);
                 }
                 finally
                 {
@@ -350,6 +355,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                 }
             }
         );
+    }
 
     private async ValueTask<ZLinkRelocationCompletionDelivery> DeliverStoredRelocationReplyAsync(
         ZLinkAuthoritySnapshot authority,

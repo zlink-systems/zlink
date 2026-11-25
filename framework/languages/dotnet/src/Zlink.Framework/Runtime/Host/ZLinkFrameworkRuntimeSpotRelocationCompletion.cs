@@ -179,6 +179,12 @@ internal sealed partial class ZLinkFrameworkRuntime
             await completionStore
                 .MarkCompletedAsync(key, authority, cancellationToken)
                 .ConfigureAwait(false);
+        foreach (var actor in stage.ActorStates)
+            if (
+                actor.RelocationCompletionCandidate is { } candidate
+                && candidate.RelocationId == stage.Envelope.AggregateId
+            )
+                actor.ClearRelocationCompletionCandidate(candidate);
         return true;
     }
 }

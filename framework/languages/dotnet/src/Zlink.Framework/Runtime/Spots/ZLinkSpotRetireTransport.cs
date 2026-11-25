@@ -2663,10 +2663,14 @@ internal sealed record TargetStage(
             return;
         _authorityPublication = publication.ToFrozenDictionary();
         foreach (var actor in ActorStates)
+        {
+            var authority = GetPublishedActorAuthority(actor.RuntimeActorId);
+            actor.TrackRelocationCompletion(authority.Relocation);
             Node.Node.SetLocalActorAuthority(
                 actor.NativeActorRef!.Value,
-                TargetActorAuthorityOwnerGeneration(actor.RuntimeActorId)
+                authority.AuthorityOwnerGeneration
             );
+        }
     }
 
     internal ZLinkAuthoritySnapshot GetPublishedActorAuthority(ZLinkActorId actorId) =>

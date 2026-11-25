@@ -2198,6 +2198,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
     {
         if (stage.AuthorityPublished)
             return;
+        stage.ActorState.TrackRelocationCompletion(publication.Relocation);
         // The target commit ends the Restore (MeshNode §5.1).
         stage.Admission.Release();
         var actorRef =
@@ -2311,6 +2312,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     if (
                         hasDurableRequests
                         && runtime.TryFinishDurableActorCompletion(
+                            stage.ActorState,
                             prefix,
                             stage.Envelope,
                             owner,
@@ -3802,6 +3804,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             .ConfigureAwait(false);
         if (hasDurableRequests)
             _ = TryFinishDurableActorCompletion(
+                actorState,
                 prefix,
                 relocationIdentity,
                 targetOwner,

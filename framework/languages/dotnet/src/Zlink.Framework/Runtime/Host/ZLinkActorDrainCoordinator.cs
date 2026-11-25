@@ -21,7 +21,11 @@ internal sealed class ZLinkActorDrainCoordinator(
         var logger = services.GetService<ILogger<ZLinkFrameworkMaintenanceRuntime>>();
         foreach (var state in actorSessions.SnapshotStates())
         {
-            if (state.Actor is null || state.NativeActorRef is not { } actorRef)
+            if (
+                state.Actor is null
+                || state.NativeActorRef is not { } actorRef
+                || state.RelocationCompletionCandidate is not { Target: { } target } candidate
+            )
                 continue;
             var authority = await store
                 .ReadAuthorityAsync(
@@ -32,10 +36,17 @@ internal sealed class ZLinkActorDrainCoordinator(
             if (
                 authority is ZLinkAuthorityReadResult.Found found
                 && found.Snapshot.Allocation.Descriptor.Rid == actorRef.NodeRid
+                && found.Snapshot.Relocation?.Target == target
+                && ZLinkAuthorityRelocation.MatchesCommittedTarget(
+                    found.Snapshot,
+                    candidate.RelocationId,
+                    target.AttemptGeneration
+                )
                 && ZLinkRelocationCompletionStore.CompletionBlocker(found.Snapshot, logger)
                     is not null
             )
                 return true;
+            state.ClearRelocationCompletionCandidate(candidate);
         }
         return false;
     }
